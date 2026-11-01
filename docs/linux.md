@@ -97,17 +97,29 @@ sudo tailscale set --operator=$USER
 Aiden changes only its scoped `/api/aiden/v1` HTTPS Serve path and preserves
 unrelated Serve configuration. Without the operator grant, status remains
 readable but Aiden reports the permission requirement instead of claiming an
-uncertain connection.
+uncertain connection. On a headless server, `aiden remote check` lists each
+Tailscale step (including this operator grant) with its fix.
 
 ## Platform behavior
 
 The workspace agent, providers, local models, MCP, skills, Web Search,
+web page reading with extract mode,
 schedules, terminal, Git, file editor, generative UI artifacts, workspace
-artifacts, diagnostics,
+artifacts, coding follow-through (background jobs, followed pull requests and
+`/until` checks), diagnostics,
 Gemini voice transcription, remote access, notifications, profile, themes, and
 native subagents use the same contracts as macOS. Linux-specific integrations include:
 
-- native distro window chrome and conventional File/Edit/View/Window/Help menus;
+- Aiden's own title bar: no separate desktop title bar or menu bar strip.
+  Minimize, maximize/restore and close sit at the right end of Aiden's top bar,
+  the main menu button (☰) at the left opens the File, Edit, View, Go, Chat,
+  Window and Help menus, their keyboard shortcuts keep working, and dragging or
+  double-clicking empty top-bar space moves or maximizes the window. Turn on
+  **Settings → Appearance → Window → Use system title bar** to get the
+  desktop's own title bar and the classic menu bar back after a restart. Tiling
+  window managers (sway, Hyprland, i3, niri and similar) use the system title
+  bar unless you turn that switch off. Aiden's buttons always sit on the right
+  and do not follow the desktop's button-layout setting;
 - Ctrl-based app and global shortcuts, including the Wayland Global Shortcuts
   portal on desktops that implement it;
 - Vulkan disabled on Wayland sessions to avoid Chromium's Ozone incompatibility
@@ -133,7 +145,9 @@ build. Their settings, navigation, onboarding promises, helper bundles, and
 chat controls are omitted. Bot computers (a macOS VM per Bot) need a Mac with
 Apple silicon, so on Linux the Settings → Bot computers page, the Bot
 profile's Computer section, the Bot panel's Computer tab and the onboarding
-tour's Bot computers tile do not appear, and no Lume code runs. Global dictation remains available when the desktop can register its
+tour's Bot computers tile do not appear, and no Lume code runs. Connectors
+served by a Mac app (iMCP) are not offered: Settings → Connectors leaves out
+their cards, and a saved one carried over from a Mac never runs. Global dictation remains available when the desktop can register its
 shortcut, but the transcript is copied to the clipboard instead of using the
 macOS Accessibility auto-paste transaction. To use hold-to-dictate, choose Hold
 in Settings → Voice and assign a shortcut in your desktop’s Global Shortcuts
@@ -177,6 +191,8 @@ package or use the extraction command above. When reporting a Linux issue,
 include the distribution, architecture, desktop environment, X11/Wayland
 session type, package format, and the exact error shown by Aiden.
 
-### Headless CLI durable Bots
+### Headless server
 
-The standalone CLI supports an explicit `aiden bots enable-durable` migration followed by a daemon restart. It preserves legacy chats and journals, requires the existing profile/credential authority, and exposes only the supported Remote capabilities. See [migration, recovery and capability limits](cli-durable-bots.md).
+On a Linux box with no display, build and run the headless server (`aiden serve`) from a clone and pair your phone or Mac with it; see [the server guide](../packages/cli/README.md). It has no interactive terminal UI. `aiden service install` runs it as a systemd user service that starts at boot, reachable on the local network, over Tailscale, or both.
+
+The server supports an explicit `aiden bots enable-durable` migration followed by a daemon restart. It preserves legacy chats and journals, requires the existing profile/credential authority, and exposes only the supported Remote capabilities. See [migration, recovery and capability limits](cli-durable-bots.md).

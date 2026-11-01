@@ -28,7 +28,26 @@ import { workspaceStore, accessFor } from "./workspaces.ts";
 import { recordUsage } from "./usage-ledger.ts";
 import { messageText } from "./sessions.ts";
 import { GenerationTimelineProjector } from "../../../main/services/generation-timeline.js";
+import type { GenerationCancellationOrigin } from "../../../renderer/shared/generation-timeline.js";
 import { mcpToolActivityLabel } from "../../../main/services/mcp-tool-identity.js";
+
+/**
+ * The approval summary a paired phone shows. A call with only a command or path reads
+ * like the desktop host's ("Run command: npm test"); anything else stays the exact
+ * request, so nothing the call would do is hidden.
+ */
+export function daemonApprovalSummary(toolName: string, input: unknown): string {
+  const args = input !== null && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : undefined;
+  const only = (key: string) => {
+    const value = args && Object.keys(args).length === 1 ? args[key] : undefined;
+    return typeof value === "string" && value.trim() ? value : undefined;
+  };
+  const readable = toolName === "bash" ? only("command") && `Run command: ${only("command")}`
+    : toolName === "read" ? only("path") && `Read file: ${only("path")}`
+      : toolName === "ls" ? only("path") && `List folder: ${only("path")}`
+        : undefined;
+  return readable || `${toolName}: ${JSON.stringify(input)}`;
+}
 
 /** One daemon owns this store. CLI imports always copy its journals into new sessions. */
 export function createDaemonChats(agentDir: string) {
@@ -38,15 +57,17 @@ export function createDaemonChats(agentDir: string) {
   const activity = new ChatActivityRegistry(() => {});
   const admission = new ChatTurnAdmission();
   const deletion = new ChatDeletionGate();
-  const active = new Map<string, { streamId: string; ownerId: string; workspaceId?: string; abort: AbortController; session?: AgentSession; settled: Promise<void>; finish(): void; release(): void }>();
+  const active = new Map<string, { streamId: string; ownerId: string; workspaceId?: string; abort: AbortController; cancellationOrigin?: GenerationCancellationOrigin; session?: AgentSession; settled: Promise<void>; finish(): void; release(): void }>();
   const reserved = new Set<string>();
   const idleWaiters = new Map<string, Set<() => void>>();
   const wakeIdle = (id: string) => { for (const wake of idleWaiters.get(id) ?? []) wake(); idleWaiters.delete(id); };
   const approvals = new Map<string, { ownerId: string; resolve(allowed: boolean): void }>();
+  // Set once shutdown begins: no ingress (phone, Telegram, socket, Bot) may start a turn while it drains.
+  let closed = false;
   const sessionPath = (id: string) => join(root, "journals", `${createHash("sha256").update(id).digest("hex")}.jsonl`);
   const llmClient = {
     beginChatTurn(chatId: string, streamId: string, ownerId: string) {
-      if (deletion.isDeleting(chatId) || new Set([...reserved, ...active.keys()]).size >= 3) return null;
+      if (closed || deletion.isDeleting(chatId) || new Set([...reserved, ...active.keys()]).size >= 3) return null;
       const lease = admission.tryBegin(chatId, streamId, ownerId, active.has(chatId));
       if (lease) {
         reserved.add(chatId);
@@ -67,7 +88,14 @@ export function createDaemonChats(agentDir: string) {
       }
       return true;
     },
-    async cancelChat(id: string) { admission.releaseChat(id); const entry = active.get(id); entry?.abort.abort(); await entry?.session?.abort(); },
+    /** Stops the chat's turn; the first stop's origin is what its timeline records, as on the desktop. */
+    async cancelChat(id: string, origin: GenerationCancellationOrigin = "chat_deletion") {
+      admission.releaseChat(id); const entry = active.get(id);
+      if (entry && !entry.abort.signal.aborted) entry.cancellationOrigin ??= origin;
+      entry?.abort.abort(); await entry?.session?.abort();
+    },
+    /** A Bot the person paused: its reply ends as their Stop, and the chat is kept. */
+    async stopChatWork(id: string) { await llmClient.cancelChat(id, "user_stop"); return llmClient.waitForChatIdle(id); },
     approve(id: string, decision: "allow" | "deny", ownerId: string) {
       const pending = approvals.get(id); if (!pending || pending.ownerId !== ownerId) return false;
       approvals.delete(id); pending.resolve(decision === "allow"); return true;
@@ -75,10 +103,10 @@ export function createDaemonChats(agentDir: string) {
     cancel(streamId: string, ownerId: string) {
       const pair = [...active.entries()].find(([, entry]) => entry.streamId === streamId && entry.ownerId === ownerId);
       if (!pair) return false;
-      void llmClient.cancelChat(pair[0]); return true;
+      void llmClient.cancelChat(pair[0], "user_stop").catch(() => {}); return true;
     },
     async start(streamId: string, params: ChatStartParams, owner: ChatGenerationOwner, options: { usageSource: UsageRequestSource; turnId?: string; botAudienceId?: string; onTurnAccepted?(): void }) {
-      if (owner.isDestroyed() || !admission.owns(params.chatId, options.turnId ?? streamId, owner.documentId)) return false;
+      if (closed || owner.isDestroyed() || !admission.owns(params.chatId, options.turnId ?? streamId, owner.documentId)) return false;
       let finish!: () => void;
       const settled = new Promise<void>((resolve) => { finish = resolve; });
       let releaseFile: () => void;
@@ -100,12 +128,16 @@ export function createDaemonChats(agentDir: string) {
       let unsubscribe = () => {};
       let botAdmission: BotRuntimeAuthorityAdmission | undefined;
       let removeBotAbort = () => {};
-      const disposeOwner = owner.onInvalidated(() => { entry.abort.abort(); void entry.session?.abort(); });
-      const timer = setTimeout(() => { entry.abort.abort(); void entry.session?.abort(); }, 300_000);
+      const disposeOwner = owner.onInvalidated(() => { entry.abort.abort(); void entry.session?.abort().catch(() => {}); });
+      const timer = setTimeout(() => { entry.abort.abort(); void entry.session?.abort().catch(() => {}); }, 300_000);
       const send: typeof owner.send = (channel, payload) => { if (!owner.isDestroyed()) owner.send(channel, payload); };
       const produced: AssistantMessage[] = [];
       let content = "", separator = false, persisted = false;
       const timeline = new GenerationTimelineProjector(streamId, (value) => send("chat:timeline", { streamId, timeline: value }));
+      // Extensions open their resources (MCP pool, memory store) before the session exists; a turn that
+      // fails before then still runs their shutdown handlers and closers.
+      const shutdownHandlers: ((event: { type: "session_shutdown"; reason: "quit" }) => unknown)[] = [];
+      const closers: (() => Promise<void>)[] = [];
       try {
         const chat = await chatStore.get(params.chatId);
         if (!chat) throw new Error("The chat is unavailable.");
@@ -115,7 +147,7 @@ export function createDaemonChats(agentDir: string) {
           await bots.assertNotPaused(chat.botId);
           botAdmission = await bots.authority.admit({ audienceId: options.botAudienceId, botId: chat.botId, chatId: chat.id });
           assertBotRuntimeProviderSelection(botAdmission.authority.provider, { providerId: params.providerId, model: params.model });
-          const cancel = () => { entry.abort.abort(); void entry.session?.abort(); };
+          const cancel = () => { entry.abort.abort(); void entry.session?.abort().catch(() => {}); };
           botAdmission.signal.addEventListener("abort", cancel, { once: true });
           removeBotAbort = () => botAdmission?.signal.removeEventListener("abort", cancel);
           if (botAdmission.signal.aborted) cancel();
@@ -139,15 +171,17 @@ export function createDaemonChats(agentDir: string) {
         const registeredTools: { readonly name: string; readonly label?: string }[] = [];
         // Activity shows MCP tools by their server label, not the generated name.
         timeline.setToolLabels((toolName) => mcpToolActivityLabel([...botTools, ...registeredTools], toolName));
-        const extensions: InlineExtension[] = botAdmission || !workspace.folderPath ? [] : [
-          // A corrupt settings file or wedged shared DB must degrade to
-          // no-memory, never brick the generation (desktop parity: llm-client
-          // warns and continues without memory).
-          await createMemoryInlineExtension({ agentDir, workspaceRoot: cwd, readOnly: unattended })
-            .catch((error: unknown) => {
-              process.stderr.write(`[daemon-chats] memory unavailable: ${error instanceof Error ? error.message : error}\n`);
-              return { name: "aiden-memory", factory: () => undefined };
-            }),
+        // A corrupt settings file or wedged shared DB must degrade to
+        // no-memory, never brick the generation (desktop parity: llm-client
+        // warns and continues without memory).
+        const memory = botAdmission || !workspace.folderPath ? undefined : await createMemoryInlineExtension({ agentDir, workspaceRoot: cwd, readOnly: unattended })
+          .catch((error: unknown) => {
+            process.stderr.write(`[daemon-chats] memory unavailable: ${error instanceof Error ? error.message : error}\n`);
+            return { name: "aiden-memory", factory: () => undefined };
+          });
+        if (memory && "close" in memory && memory.close) closers.push(memory.close);
+        const extensions: InlineExtension[] = !memory ? [] : [
+          memory,
           createTodoInlineExtension({ latestContext: () => undefined }),
           createMcpExtension(agentDir),
           createAdvisorInlineExtension({ agentDir, latestContext: () => undefined }),
@@ -162,6 +196,10 @@ export function createDaemonChats(agentDir: string) {
           factory: (pi) => (typeof extension === "function" ? extension : extension.factory)(new Proxy(pi, { get(target, key, receiver) {
             if (key === "registerTool") return (tool: Parameters<typeof pi.registerTool>[0]) => {
               additionalNames.push(tool.name); registeredTools.push(tool); target.registerTool(tool);
+            };
+            if (key === "on") return (event: string, handler: (event: { type: "session_shutdown"; reason: "quit" }) => unknown) => {
+              if (event === "session_shutdown") shutdownHandlers.push(handler);
+              return (target.on as (event: string, handler: unknown) => void)(event, handler);
             };
             return Reflect.get(target, key, receiver);
           } })),
@@ -193,7 +231,7 @@ export function createDaemonChats(agentDir: string) {
                 approvals.set(approvalId, { ownerId: owner.documentId, resolve: settle });
                 entry.abort.signal.addEventListener("abort", cancel, { once: true });
                 if (entry.abort.signal.aborted) cancel();
-                else send("chat:approval", { streamId, approvalId, toolCallId: event.toolCallId, toolName: event.toolName, summary: `${event.toolName}: ${original}` });
+                else send("chat:approval", { streamId, approvalId, toolCallId: event.toolCallId, toolName: event.toolName, summary: daemonApprovalSummary(event.toolName, event.input) });
               });
               await assertAuthority();
               if (!allowed || JSON.stringify(event.input) !== original || accessFor(agentDir, cwd) === "none") return { block: true, reason: "The tool request was denied, changed or expired." };
@@ -246,7 +284,7 @@ export function createDaemonChats(agentDir: string) {
         send("chat:done", { streamId, content, chat: updated, timeline: finalTimeline }); return true;
       } catch (error) {
         const cancelled = entry.abort.signal.aborted;
-        const finalTimeline = timeline.finish(cancelled ? "cancelled" : "failed");
+        const finalTimeline = cancelled ? timeline.finish("cancelled", entry.cancellationOrigin) : timeline.finish("failed");
         if (!persisted && (content || produced.length)) {
           await chatStore.appendMessage(params.chatId, { role: "assistant", content, timeline: finalTimeline }).catch(() => {
             process.stderr.write("aiden: Could not persist the partial response.\n");
@@ -258,12 +296,15 @@ export function createDaemonChats(agentDir: string) {
         if (entry.session) {
           try { await entry.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); }
           finally { entry.session.dispose(); }
+        } else {
+          for (const handler of shutdownHandlers) await Promise.resolve().then(() => handler({ type: "session_shutdown", reason: "quit" })).catch(() => {});
         }
+        await Promise.allSettled(closers.map((close) => close()));
         for (const message of produced) await recordUsage(agentDir, options.usageSource, message).catch(() => {});
       }
   }
   return { chatStore, llmClient, activity, admission, deletion, sessionPath,
     setBots(runtime: CliBotGenerationRuntime) { bots = runtime; },
-    async stop() { const ids = new Set([...reserved, ...active.keys()]); admission.releaseAll(); await Promise.allSettled([...ids].map((id) => llmClient.cancelChat!(id))); await Promise.all([...ids].map((id) => llmClient.waitForChatIdle(id))); },
+    async stop() { closed = true; const ids = new Set([...reserved, ...active.keys()]); admission.releaseAll(); await Promise.allSettled([...ids].map((id) => llmClient.cancelChat(id, "application_shutdown"))); await Promise.all([...ids].map((id) => llmClient.waitForChatIdle(id))); },
   };
 }

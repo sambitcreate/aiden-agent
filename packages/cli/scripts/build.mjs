@@ -15,14 +15,13 @@
  *    AIDEN_CODING_AGENT_DIR, project resources under .aiden/.
  */
 
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import { spawnSync } from "node:child_process";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { patchPiOAuthBranding } from "../../../scripts/patch-pi-oauth-branding.mjs";
-import { patchPiAiToolCache } from "../../../scripts/patch-pi-ai-tool-cache.mjs";
 import { vendorGenerativeUiLibraries } from "../../../scripts/vendor-generative-ui-libs.mjs";
 
 const pkgDir = dirname(fileURLToPath(import.meta.url)) + "/..";
@@ -49,18 +48,10 @@ if (piAiPkg === undefined) {
 	throw new Error("Could not locate @earendil-works/pi-ai. Run npm install in packages/cli first.");
 }
 await patchPiOAuthBranding(resolve(pkgDir, "../.."), piAiPkg);
-// The #11142 backport changes runtime behavior, so patch every pi-ai copy the
-// bundle could resolve, not just the first.
-for (const candidate of [
-	join(pkgDir, "node_modules", "@earendil-works", "pi-ai"),
-	join(piAgentPkg, "node_modules", "@earendil-works", "pi-ai"),
-]) {
-	if (existsSync(join(candidate, "package.json"))) await patchPiAiToolCache(resolve(pkgDir, "../.."), candidate);
-}
 const banner = {
 	js: 'import { createRequire as __piCreateRequire } from "node:module"; const require = __piCreateRequire(import.meta.url);',
 };
-// Durable Bots explicitly pin chord and pi-durable to the desktop 1.3.0 line.
+// Durable Bots explicitly pin chord and pi-durable to the desktop 1.4.0 line.
 // Both are bundled; no Pi runtime package is allowed as an external.
 const allowedExternalPackages = new Set([
 	"@silvia-odwyer/photon-node",
@@ -110,40 +101,6 @@ const credentialStorePlugin = {
       const original = "options.credentials ?? DefaultAuthStorage.create(options.authPath)";
       if (!source.includes(original)) throw new Error("Pi credential integration changed; review the upstream upgrade.");
       return { contents: `import { createCliProviderCredentials } from ${JSON.stringify(join(pkgDir, "src/provider-credentials.ts"))};\n` + source.replace(original, 'options.credentials ?? createCliProviderCredentials(options.authPath ?? join(getAgentDir(), "auth.json"))'), loader: "js", resolveDir: dirname(args.path) };
-    });
-  },
-};
-
-// Pi's public main API cannot add another automatic skill root. Keep Aiden's
-// desktop roots in the bundled loader, after Pi resolves the session cwd and
-// project trust. Fail the build when a Pi upgrade changes these integration points.
-const skillDiscoveryPlugin = {
-  name: "aiden-skill-discovery",
-  setup(build) {
-    build.onLoad({ filter: /pi-coding-agent\/dist\/core\/resource-loader\.js$/ }, (args) => {
-      let source = readFileSync(args.path, "utf8");
-      const original = "        const skillPaths = this.noSkills\n";
-      if (source.split(original).length !== 2) throw new Error("Pi skill loading changed; review the Aiden trust integration.");
-      source = source.replace(original, `        const aidenSkills = this.noSkills ? [] : desktopSkillDiscoveryPaths(homedir(), this.cwd, this.settingsManager.isProjectTrusted());
-        for (const skill of aidenSkills) {
-            metadataByPath.set(skill.path, { source: "auto", scope: skill.scope, origin: "top-level", baseDir: skill.baseDir });
-        }
-${original}`);
-      const existing = "this.mergePaths([...cliEnabledSkills, ...enabledSkills], this.additionalSkillPaths)";
-      if (source.split(existing).length !== 2) throw new Error("Pi skill path composition changed; review the Aiden trust integration.");
-      source = source.replace(existing, "this.mergePaths([...cliEnabledSkills, ...enabledSkills], [...this.additionalSkillPaths, ...aidenSkills.map((skill) => skill.path)])");
-      return { contents: `import { homedir } from "node:os";\nimport { desktopSkillDiscoveryPaths } from ${JSON.stringify(join(pkgDir, "src/skill-paths.ts"))};\n` + source, loader: "js", resolveDir: dirname(args.path) };
-    });
-    build.onLoad({ filter: /pi-coding-agent\/dist\/core\/trust-manager\.js$/ }, (args) => {
-      const source = readFileSync(args.path, "utf8");
-      const original = "    const configDir = join(currentDir, CONFIG_DIR_NAME);\n";
-      if (source.split(original).length !== 2) throw new Error("Pi project trust detection changed; review the Aiden trust integration.");
-      const replacement = `${original}    const claudeSkillsDir = join(currentDir, ".claude", "skills");
-    if (claudeSkillsDir !== join(homeDir, ".claude", "skills") && existsSync(claudeSkillsDir)) {
-        return true;
-    }
-`;
-      return { contents: source.replace(original, replacement), loader: "js", resolveDir: dirname(args.path) };
     });
   },
 };
@@ -284,7 +241,7 @@ const dedupeRepoPackagesPlugin = {
 			}
 			const owner = owningPackage(resolved.path);
 			if (!owner) return undefined;
-			canonicalPackages ??= indexCanonicalPackages(resolve(pkgDir, "node_modules"));
+			canonicalPackages ??= indexCanonicalPackages(realpathSync(resolve(pkgDir, "node_modules")));
 			const canonicalDir = canonicalPackages.get(`${owner.name}@${owner.version}`);
 			if (!canonicalDir || canonicalDir === owner.dir) return undefined;
 			return { path: join(canonicalDir, relative(owner.dir, resolved.path)), sideEffects: resolved.sideEffects };
@@ -318,7 +275,6 @@ function commonBuildOptions() {
 		platform: "node",
 		plugins: [
 			credentialStorePlugin,
-			skillDiscoveryPlugin,
 			aidenRelativeTsRewritePlugin,
 			lazyJitiPlugin,
 			httpsProxyAgentNamedExportPlugin,
@@ -560,19 +516,13 @@ writeFileSync(
 );
 
 // pi resolves built-in assets relative to the app package dir, expecting them
-// under src/ when a src directory exists. Mirror the published layout.
+// under src/ when a src directory exists. Mirror the published layout. Pi's
+// own dark/light themes stay: its session HTML export reads them.
 const builtinThemeDir = join(appDir, "src", "modes", "interactive", "theme");
 mkdirSync(builtinThemeDir, { recursive: true });
-cpSync(join(pkgDir, "themes", "builtin"), builtinThemeDir, { recursive: true });
-
-const bundledThemesDir = join(appDir, "themes");
-mkdirSync(bundledThemesDir, { recursive: true });
-for (const file of ["slate-dark", "slate-light", "berry-dark", "berry-light", "moss-dark", "moss-light"]) {
-	cpSync(join(pkgDir, "themes", `${file}.json`), join(bundledThemesDir, `${file}.json`));
+for (const name of ["dark.json", "light.json"]) {
+	cpSync(join(piAgentPkg, "dist", "modes", "interactive", "theme", name), join(builtinThemeDir, name));
 }
-const assetsDir = join(appDir, "src", "modes", "interactive", "assets");
-mkdirSync(assetsDir, { recursive: true });
-cpSync(join(piAgentPkg, "dist", "modes", "interactive", "assets"), assetsDir, { recursive: true });
 
 const exportDir = join(appDir, "src", "core", "export-html");
 mkdirSync(exportDir, { recursive: true });
@@ -606,8 +556,6 @@ Aiden's CLI connects MCP servers from \`aiden-mcp.json\` in the agent directory 
 | \`aiden mcp preset <id>\` | Add a built-in preset |
 | \`aiden mcp login <id>\` / \`aiden mcp logout <id>\` | Sign in to an OAuth server in the browser (the URL is printed), or sign out. Sign-ins are stored encrypted |
 | \`aiden mcp remove <id>\` | Remove a server and its stored sign-in |
-
-Inside a session, \`/mcp\` runs the same commands (sign in from a terminal).
 `;
 writeFileSync(join(appDir, "docs", "mcp.md"), AIDEN_MCP_DOC);
 function patchPiDoc(name, patches) {
@@ -624,7 +572,7 @@ patchPiDoc("cli.md", [
 	["pi mcp <list|login|logout> [options]\n", "aiden mcp <list|presets|add|preset|login|logout|remove>\n"],
 	["Loads an extension file or directory, or a built-in extension such as `builtin:mcp`, and is repeatable.", "Loads an extension file or directory, and is repeatable. Aiden turns Pi's built-in MCP extension off; see [MCP Servers](mcp.md)."],
 	["Disables discovered, configured, and built-in extensions. Explicit `-e` paths still load, so `pi -ne -e builtin:mcp` keeps only the built-in MCP support.", "Disables discovered, configured, and built-in extensions. Explicit `-e` paths still load."],
-	["Disables the built-in MCP support for this run: no servers connect, and there are no MCP tools or `/mcp`. It does not affect an extension that replaces the built-in MCP support.", "Aiden always passes it: Pi's built-in MCP support stays off. Aiden's own MCP servers (`aiden-mcp.json`) are not affected."],
+	["Disables the built-in MCP support for this run: no servers connect, and there are no MCP tools or `/mcp`. It does not affect an extension that replaces the built-in MCP support.", "Pi's built-in MCP support is always off in Aiden. Aiden's own MCP servers (`aiden-mcp.json`) are not affected."],
 	[/\n## MCP commands\n[\s\S]*$/u, `\n## MCP commands\n\n${AIDEN_MCP_DOC.split("\n").slice(2).join("\n")}`],
 ]);
 patchPiDoc("configuration.md", [
@@ -715,18 +663,18 @@ writeFileSync(
 
 chmodSync(join(appDir, "cli.js"), 0o755);
 
-// Test-only self-check entry (outside the app root so it never ships in the
-// package): reports registered Aiden extensions/tools from a real session.
+// Test-only entry (outside the app root so it never ships in the package):
+// the modules the parity suite drives directly.
 const testEntriesResult = await build({
 	...commonBuildOptions(),
-	entryPoints: { selfcheck: join(pkgDir, "src", "selfcheck.ts"), "parity-test-api": join(pkgDir, "src", "parity-test-api.ts") },
+	entryPoints: { "parity-test-api": join(pkgDir, "src", "parity-test-api.ts") },
 	outdir: resolve(pkgDir, "dist"),
 	splitting: false,
 });
 assertNoMcpSdkClient(testEntriesResult.metafile);
 
 // Count everything that ships, not just the bundler's outputs: the copied
-// docs, themes, generative-ui libraries, catalog and native helpers are most
+// docs, generative-ui libraries, catalog and native helpers are most
 // of the bytes.
 let files = 0;
 let bytes = 0;

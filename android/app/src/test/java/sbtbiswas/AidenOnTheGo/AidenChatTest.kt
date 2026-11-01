@@ -52,6 +52,7 @@ import sbtbiswas.AidenOnTheGo.features.chat.AidenChatViewModel
 import sbtbiswas.AidenOnTheGo.features.chat.AidenForeignRunAttachPolicy
 import sbtbiswas.AidenOnTheGo.features.chat.AidenVisualSnapshotRefreshPolicy
 import sbtbiswas.AidenOnTheGo.features.chat.aidenEligibleImageAttachments
+import sbtbiswas.AidenOnTheGo.features.chat.aidenSendRecoveryMessage
 import sbtbiswas.AidenOnTheGo.features.chat.aidenUnsupportedHtmlArtifacts
 import sbtbiswas.AidenOnTheGo.features.chat.aidenVisibleMessageAttachments
 import sbtbiswas.AidenOnTheGo.features.chat.aidenVisualDisplay
@@ -270,6 +271,24 @@ class AidenChatTest {
             ),
             recap.items.map { recap.answer(it) },
         )
+    }
+
+    @Test
+    fun canonicalFixtureWebExtractRecapDecodesFromTheTimelineEvent() {
+        val root = Json.parseToJsonElement(javaClass.classLoader!!.getResource("contract.json")!!.readText()).jsonObject
+        val timelineEvent = root.getValue("events").jsonArray.map { it.jsonObject }
+            .single { it.getValue("type").jsonPrimitive.content == "timeline" }
+        val timeline = json.decodeFromJsonElement(
+            AidenGenerationTimeline.serializer(),
+            timelineEvent.getValue("payload").jsonObject.getValue("timeline"),
+        )
+        val recap = timeline.steps.firstNotNullOf { it.extractionRecap }
+        assertEquals("acme.example", recap.host)
+        assertEquals(
+            listOf(AidenWebExtractRecap.Status.EXTRACTED, AidenWebExtractRecap.Status.UNCERTAIN, AidenWebExtractRecap.Status.ABSENT),
+            recap.fields.map { it.status },
+        )
+        assertEquals("Pro is \$20 per month, billed monthly.", recap.fields.first().sourceLine)
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -1539,6 +1558,368 @@ class AidenChatTest {
         }
     }
 
+    private val extractedPriceJson =
+        """{"name":"pro_monthly","status":"extracted","value":"20","confidence":0.97,"sourceLine":"Pro is ${'$'}20 per month."}"""
+
+    private fun extractRecapJson(vararg fields: String, extra: String = "") =
+        """{"version":1,"host":"acme.example","cut":false$extra,"fields":[${fields.joinToString(",")}]}"""
+
+    private fun extractTimelineJson(
+        extraction: String = extractRecapJson(extractedPriceJson),
+        toolName: String = "web_fetch",
+        status: String = "completed"
+    ) = """{"version":3,"generationId":"generation-pages","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[""" +
+        """{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"web_search","label":"Search the web","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},""" +
+        """{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"$toolName","label":"Fetch web page","status":"$status","startedAt":1100,"updatedAt":1500,"finishedAt":1500,"contentOffset":7,"detail":"acme.example","extraction":$extraction},""" +
+        """{"id":"tool-3","order":2,"kind":"tool","toolCallId":"call-3","toolName":"read_file","label":"Read file","status":"completed","startedAt":1500,"updatedAt":1600,"finishedAt":1600,"contentOffset":7}]}"""
+
+    @Test
+    fun extractedValuesFollowTheLineThatReadThemAndThePageStaysInTheTally() {
+        val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(extractTimelineJson(extractRecapJson(
+            extractedPriceJson,
+            """{"name":"team_yearly","status":"uncertain","value":"1399","confidence":0.92,"notFound":true}""",
+            """{"name":"seats","status":"uncertain","value":"50","confidence":0.4,"sourceLine":"Up to 50 seats."}""",
+            """{"name":"enterprise","status":"null"}"""
+        )))
+        val recap = timeline.steps[1].extractionRecap
+        assertNotNull(recap)
+        assertEquals(
+            listOf(
+                AidenWebExtractRecap.Status.EXTRACTED, AidenWebExtractRecap.Status.UNCERTAIN,
+                AidenWebExtractRecap.Status.UNCERTAIN, AidenWebExtractRecap.Status.ABSENT
+            ),
+            recap!!.fields.map { it.status }
+        )
+        assertEquals(listOf("pro monthly", "team yearly", "seats", "enterprise"), recap.fields.map { it.label })
+        assertEquals("Pro is $20 per month.", recap.fields[0].sourceLine)
+        assertEquals(true, recap.fields[1].notFound)
+        assertNull(recap.fields[3].value)
+
+        val rows = AidenChronologicalProjection.rows("Before.After.", "", timeline)!!
+        assertEquals(
+            listOf("TEXT:Before.", "TOOL:tool-1,tool-2,tool-3", "EXTRACTION:tool-2", "TEXT:After."),
+            rows.map { row -> "${row.kind}:${row.text.ifEmpty { row.steps.joinToString(",") { it.id } }}" }
+        )
+        assertEquals(recap, rows[2].extraction)
+        assertEquals(rows.size, rows.map { it.id }.toSet().size)
+
+        // The page read stays an activity line and counts in the tally.
+        assertEquals("Explored 1 file, 1 web search, 1 web page", AidenAgentActivityPresentation.summary(timeline))
+        assertEquals("Fetched web page acme.example", AidenAgentActivityPresentation.line(timeline.steps[1]))
+        assertEquals(3, AidenAgentActivityPresentation.activityTimeline(timeline).steps.size)
+        assertEquals(listOf("tool-2"), AidenAgentActivityPresentation.extractionSteps(timeline).map { it.id })
+
+        // The chat cache re-encodes the step; the recap survives the round trip.
+        val cached = json.decodeFromString<AidenGenerationTimeline>(json.encodeToString(timeline))
+        assertEquals(recap, cached.steps[1].extractionRecap)
+        assertFalse(wireJson.encodeToString(timeline.steps[0]).contains("extraction"))
+
+        // A failed extraction carries its reason and no fields.
+        val failed = wireJson.decodeFromString<AidenGenerationTimeline>(
+            extractTimelineJson(extractRecapJson(extra = ""","error":"quota""""))
+        ).steps[1].extractionRecap
+        assertEquals(AidenWebExtractRecap.Failure.QUOTA, failed?.error)
+        assertTrue(failed!!.fields.isEmpty())
+    }
+
+    @Test
+    fun malformedOrMisplacedExtractRecapIsDroppedButThePageStaysAnActivityLine() {
+        val malformed = listOf(
+            "no fields and no error" to extractRecapJson(),
+            "an error with fields" to extractRecapJson(extractedPriceJson, extra = ""","error":"quota""""),
+            "unknown error" to extractRecapJson(extra = ""","error":"teapot""""),
+            "seventeen fields" to extractRecapJson(*Array(17) { """{"name":"f$it","status":"null"}""" }),
+            "duplicate names" to extractRecapJson(extractedPriceJson, extractedPriceJson),
+            "extracted without its page line" to extractRecapJson("""{"name":"pro","status":"extracted","value":"20","confidence":0.9}"""),
+            "extracted marked not found" to extractRecapJson("""{"name":"pro","status":"extracted","value":"20","confidence":0.9,"sourceLine":"Pro is 20.","notFound":true}"""),
+            "absent with a value" to extractRecapJson("""{"name":"pro","status":"null","value":"20"}"""),
+            "notFound false" to extractRecapJson("""{"name":"pro","status":"uncertain","notFound":false}"""),
+            "confidence above one" to extractRecapJson("""{"name":"pro","status":"uncertain","confidence":1.2}"""),
+            "string confidence" to extractRecapJson("""{"name":"pro","status":"uncertain","confidence":"0.9"}"""),
+            "field name with a space" to extractRecapJson("""{"name":"pro monthly","status":"null"}"""),
+            "field name starting with a digit" to extractRecapJson("""{"name":"1price","status":"null"}"""),
+            "newline in a source line" to extractRecapJson("""{"name":"pro","status":"uncertain","sourceLine":"Pro is\n20"}"""),
+            "double space in a value" to extractRecapJson("""{"name":"pro","status":"uncertain","value":"20  USD"}"""),
+            "no-break space in a value" to extractRecapJson("""{"name":"pro","status":"uncertain","value":"20 USD"}"""),
+            "value over 200 characters" to extractRecapJson("""{"name":"pro","status":"uncertain","value":"${"9".repeat(201)}"}"""),
+            "null value" to extractRecapJson("""{"name":"pro","status":"uncertain","value":null}"""),
+            "unknown status" to extractRecapJson("""{"name":"pro","status":"maybe"}"""),
+            "future version" to """{"version":2,"host":"acme.example","cut":false,"fields":[$extractedPriceJson]}""",
+            "string cut" to """{"version":1,"host":"acme.example","cut":"no","fields":[$extractedPriceJson]}""",
+            "not an object" to "\"acme.example\"",
+            "null" to "null"
+        )
+        for ((case, extraction) in malformed) {
+            val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(extractTimelineJson(extraction))
+            val step = timeline.steps[1]
+            assertNull(case, step.extraction)
+            assertEquals(case, "web_fetch", step.toolName)
+            val rows = AidenChronologicalProjection.rows("Before.After.", "", timeline)!!
+            assertTrue(case, rows.none { it.kind == AidenChronologicalRow.Kind.EXTRACTION })
+        }
+
+        // Boundary values the host accepts still decode.
+        val boundary = extractRecapJson(
+            """{"name":"pro","status":"uncertain","value":"${"😀".repeat(200)}"}""",
+            *Array(15) { """{"name":"f$it","status":"null"}""" }
+        )
+        assertEquals(16, wireJson.decodeFromString<AidenGenerationTimeline>(extractTimelineJson(boundary))
+            .steps[1].extractionRecap?.fields?.size)
+
+        // A recap on another tool or an unfinished page is ignored.
+        for ((toolName, status) in listOf("web_search" to "completed", "web_fetch" to "failed")) {
+            val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(
+                extractTimelineJson(toolName = toolName, status = status)
+            )
+            assertNull(timeline.steps[1].extractionRecap)
+            assertTrue(AidenAgentActivityPresentation.extractionSteps(timeline).isEmpty())
+        }
+    }
+
+    private val recordingRecapJson =
+        """{"id":"recording-0f1e2d3c-4b5a-4678-9abc-def012345678","mimeType":"video/mp4","durationMs":12400,"sizeBytes":1048576}"""
+
+    private fun recordingTimelineJson(
+        recording: String = recordingRecapJson,
+        toolName: String = "browser_recording_stop",
+        status: String = "completed"
+    ) = """{"version":3,"generationId":"generation-recording","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[""" +
+        """{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"browser_recording_start","label":"Start browser recording","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},""" +
+        """{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"$toolName","label":"Stop browser recording","status":"$status","startedAt":1100,"updatedAt":1500,"finishedAt":1500,"contentOffset":7,"recording":$recording},""" +
+        """{"id":"tool-3","order":2,"kind":"tool","toolCallId":"call-3","toolName":"read_file","label":"Read file","status":"completed","startedAt":1500,"updatedAt":1600,"finishedAt":1600,"contentOffset":7}]}"""
+
+    @Test
+    fun canonicalFixtureBrowserRecordingStepCarriesItsRecap() {
+        val root = Json.parseToJsonElement(javaClass.classLoader!!.getResource("contract.json")!!.readText()).jsonObject
+        assertTrue(root.getValue("contractRevision").jsonPrimitive.content.toInt() >= 46)
+        val section = root.getValue("browserRecordings").jsonObject
+        val step = wireJson.decodeFromJsonElement(AidenAgentStep.serializer(), section.getValue("step"))
+        val recap = step.recordingRecap
+        assertNotNull(recap)
+        assertEquals("recording-0f1e2d3c-4b5a-4678-9abc-def012345678", recap!!.id)
+        assertEquals("video/mp4", recap.mimeType)
+        assertEquals("mp4", recap.fileExtension)
+        assertEquals("0:12", recap.durationLabel)
+        assertEquals("1.0 MB", recap.sizeLabel)
+        // The route the Mac serves names the chat and the recap's own id.
+        assertEquals(
+            "/chats/chat_fixture_01/recordings/${recap.id}",
+            section.getValue("recordingPath").jsonPrimitive.content
+        )
+    }
+
+    @Test
+    fun browserRecordingFollowsTheLineThatSavedItAndStaysInTheTally() {
+        val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(recordingTimelineJson())
+        val recap = timeline.steps[1].recordingRecap
+        assertNotNull(recap)
+        assertEquals(12_400L, recap!!.durationMs)
+        assertEquals(1_048_576L, recap.sizeBytes)
+
+        val rows = AidenChronologicalProjection.rows("Before.After.", "", timeline)!!
+        assertEquals(
+            listOf("TEXT:Before.", "TOOL:tool-1,tool-2,tool-3", "RECORDING:tool-2", "TEXT:After."),
+            rows.map { row -> "${row.kind}:${row.text.ifEmpty { row.steps.joinToString(",") { it.id } }}" }
+        )
+        assertEquals(recap, rows[2].recording)
+        assertEquals(rows.size, rows.map { it.id }.toSet().size)
+
+        // The stop stays an activity line, and fallback transcripts list its card.
+        assertEquals(3, AidenAgentActivityPresentation.activityTimeline(timeline).steps.size)
+        assertEquals(listOf("tool-2"), AidenAgentActivityPresentation.recordingSteps(timeline).map { it.id })
+        assertTrue(AidenAgentActivityPresentation.extractionSteps(timeline).isEmpty())
+
+        // The chat cache re-encodes the step; the recap survives the round trip.
+        val cached = json.decodeFromString<AidenGenerationTimeline>(json.encodeToString(timeline))
+        assertEquals(recap, cached.steps[1].recordingRecap)
+        assertFalse(wireJson.encodeToString(timeline.steps[0]).contains("\"recording\":"))
+    }
+
+    @Test
+    fun aPageReadAndARecordingInOneGroupEachFollowTheirOwnLine() {
+        val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(
+            """{"version":3,"generationId":"generation-both","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[""" +
+                """{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"browser_recording_stop","label":"Stop browser recording","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":0,"recording":$recordingRecapJson},""" +
+                """{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"web_fetch","label":"Fetch web page","status":"completed","startedAt":1100,"updatedAt":1500,"finishedAt":1500,"contentOffset":0,"detail":"acme.example","extraction":${extractRecapJson(extractedPriceJson)}}]}"""
+        )
+        val rows = AidenChronologicalProjection.rows("Done.", "", timeline)!!
+        assertEquals(
+            listOf("TOOL:tool-1,tool-2", "RECORDING:tool-1", "EXTRACTION:tool-2", "TEXT:Done."),
+            rows.map { row -> "${row.kind}:${row.text.ifEmpty { row.steps.joinToString(",") { it.id } }}" }
+        )
+    }
+
+    @Test
+    fun malformedOrMisplacedRecordingRecapIsDroppedButTheStopStaysAnActivityLine() {
+        val id = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678"
+        fun recordingJson(
+            recordingId: String = "\"$id\"",
+            mimeType: String = "\"video/mp4\"",
+            durationMs: String = "12400",
+            sizeBytes: String = "1048576",
+            extra: String = ""
+        ) = """{"id":$recordingId,"mimeType":$mimeType,"durationMs":$durationMs,"sizeBytes":$sizeBytes$extra}"""
+        val malformed = listOf(
+            "uppercase hex in the id" to recordingJson(recordingId = "\"recording-0F1E2D3C-4b5a-4678-9abc-def012345678\""),
+            "id without its prefix" to recordingJson(recordingId = "\"0f1e2d3c-4b5a-4678-9abc-def012345678\""),
+            "id with a path" to recordingJson(recordingId = "\"recording-0f1e2d3c-4b5a-4678-9abc-def012345678/x\""),
+            "numeric id" to recordingJson(recordingId = "7"),
+            "quicktime" to recordingJson(mimeType = "\"video/quicktime\""),
+            "uppercase type" to recordingJson(mimeType = "\"VIDEO/MP4\""),
+            "type with parameters" to recordingJson(mimeType = "\"video/webm; codecs=vp9\""),
+            "negative length" to recordingJson(durationMs = "-1"),
+            "length over six minutes" to recordingJson(durationMs = "360001"),
+            "fractional length" to recordingJson(durationMs = "12400.5"),
+            "string length" to recordingJson(durationMs = "\"12400\""),
+            "null length" to recordingJson(durationMs = "null"),
+            "boolean size" to recordingJson(sizeBytes = "true"),
+            "empty file" to recordingJson(sizeBytes = "0"),
+            "file over 128 MiB" to recordingJson(sizeBytes = "134217729"),
+            "size beyond a safe integer" to recordingJson(sizeBytes = "9007199254740993"),
+            "an extra key" to recordingJson(extra = ""","path":"/Users/me/rec.mp4""""),
+            "a missing key" to """{"id":"$id","mimeType":"video/mp4","durationMs":12400}""",
+            "not an object" to "\"$id\"",
+            "an array" to "[]",
+            "null" to "null"
+        )
+        for ((case, recording) in malformed) {
+            val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(recordingTimelineJson(recording))
+            val step = timeline.steps[1]
+            assertNull(case, step.recording)
+            assertEquals(case, "browser_recording_stop", step.toolName)
+            val rows = AidenChronologicalProjection.rows("Before.After.", "", timeline)!!
+            assertTrue(case, rows.none { it.kind == AidenChronologicalRow.Kind.RECORDING })
+            assertEquals(case, listOf("tool-1", "tool-2", "tool-3"),
+                rows.single { it.kind == AidenChronologicalRow.Kind.TOOL }.steps.map { it.id })
+        }
+
+        // Boundary values the desktop accepts still decode, including a whole number written as JSON reads it.
+        val accepted = listOf(
+            recordingJson(durationMs = "0", sizeBytes = "1"),
+            recordingJson(durationMs = "360000", sizeBytes = "134217728"),
+            recordingJson(mimeType = "\"video/webm\""),
+            recordingJson(durationMs = "12400.0"),
+            recordingJson(sizeBytes = "1.048576e6")
+        )
+        for (recording in accepted) {
+            assertNotNull(recording, wireJson.decodeFromString<AidenGenerationTimeline>(recordingTimelineJson(recording))
+                .steps[1].recordingRecap)
+        }
+        assertEquals("webm", wireJson.decodeFromString<AidenGenerationTimeline>(
+            recordingTimelineJson(recordingJson(mimeType = "\"video/webm\""))
+        ).steps[1].recordingRecap?.fileExtension)
+
+        // A recap on another tool or an unfinished stop is ignored.
+        for ((toolName, status) in listOf("browser_recording_start" to "completed", "browser_recording_stop" to "failed")) {
+            val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(
+                recordingTimelineJson(toolName = toolName, status = status)
+            )
+            assertNull(timeline.steps[1].recordingRecap)
+            assertTrue(AidenAgentActivityPresentation.recordingSteps(timeline).isEmpty())
+            assertTrue(AidenChronologicalProjection.rows("Before.After.", "", timeline)!!
+                .none { it.kind == AidenChronologicalRow.Kind.RECORDING })
+        }
+    }
+
+    @Test
+    fun recordingLabelsReadAsTheDesktopCardDoes() {
+        val durations = listOf(
+            0L to "0:00", 499L to "0:00", 500L to "0:01", 12_400L to "0:12",
+            59_499L to "0:59", 59_500L to "1:00", 90_000L to "1:30", 360_000L to "6:00"
+        )
+        for ((milliseconds, label) in durations) {
+            assertEquals("$milliseconds", label, AidenBrowserRecordingRecap.durationLabel(milliseconds))
+        }
+        val sizes = listOf(
+            1L to "1 KB", 511L to "1 KB", 1_536L to "2 KB", 655_360L to "640 KB",
+            1_048_575L to "1024 KB", 1_048_576L to "1.0 MB", 1_258_291L to "1.2 MB",
+            1_310_720L to "1.3 MB", 134_217_728L to "128.0 MB"
+        )
+        for ((bytes, label) in sizes) {
+            assertEquals("$bytes", label, AidenBrowserRecordingRecap.sizeLabel(bytes))
+        }
+    }
+
+    @Test
+    fun playReadsTheRecordingIntoTheCacheAndA404SaysItIsGone() {
+        val directory = kotlin.io.path.createTempDirectory("aiden-recording-").toFile()
+        val recordings = File(directory, "recordings")
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val scopeJob = Job()
+        val present = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678"
+        val gone = "recording-11111111-2222-4333-8444-555555555555"
+        val video = ByteArray(4_096) { (it % 251).toByte() }
+        val initial = AidenChat(
+            id = "chat-recording", workspaceId = "workspace-recording", title = "Recording",
+            messages = listOf(AidenChatMessage("reply-one", AidenChatRole.ASSISTANT, "Recorded", createdAt = Instant.EPOCH)),
+            createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1"
+        )
+        val grants = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ)
+        val wireJson = Json(json) { explicitNulls = false }
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-recording","name":"Recording Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":["chat-browser-recordings-v1"],"connectionMode":"lan","serverTime":"2026-10-27T12:00:00Z"}""")
+                "/api/aiden/v1/workspaces" -> MockResponse().setBody("""{"workspaces":[]}""")
+                "/api/aiden/v1/chats/chat-recording" -> MockResponse().setBody(wireJson.encodeToString(initial))
+                "/api/aiden/v1/chats/chat-recording/recordings/$present" -> MockResponse()
+                    .setHeader("Content-Type", "video/mp4")
+                    .setHeader("Cache-Control", "no-store")
+                    .setHeader("X-Content-Type-Options", "nosniff")
+                    .setBody(okio.Buffer().write(video))
+                else -> MockResponse().setResponseCode(404).setHeader("Content-Type", "application/json")
+                    .setBody("""{"error":{"code":"not_found","message":"Recording not found.","requestId":"req_1","retryable":false}}""")
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-recording", deviceId = "device-recording", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic", capabilities = grants
+                ), null)
+                val cache = AidenChatCache(directory)
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(
+                    installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob),
+                    browserRecordingDir = recordings
+                )
+                coordinator.refreshClient()
+                withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
+                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                viewModels.put("recording", model)
+                assertTrue(model.canPlayBrowserRecordings)
+
+                // A stale file from an earlier Play is dropped before the next one is read.
+                recordings.mkdirs()
+                File(recordings, "$gone.webm").writeBytes(byteArrayOf(1))
+                val loaded = model.browserRecording(AidenBrowserRecordingRecap(present, "video/mp4", 12_400, video.size.toLong()))
+                val ready = loaded as AidenBrowserRecordingLoad.Ready
+                assertEquals("video/mp4", ready.recording.mimeType)
+                assertEquals(File(recordings, "$present.mp4"), ready.recording.file)
+                assertArrayEquals(video, ready.recording.file.readBytes())
+                assertEquals(listOf("$present.mp4"), recordings.list()!!.sorted())
+
+                assertEquals(
+                    AidenBrowserRecordingLoad.Missing,
+                    model.browserRecording(AidenBrowserRecordingRecap(gone, "video/mp4", 1_000, 10))
+                )
+                // Nothing is left behind for the recording the Mac no longer has.
+                assertTrue(recordings.list()!!.isEmpty())
+                viewModels.clearAndJoin()
+            }
+        } finally {
+            scopeJob.cancel()
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
     private fun fixtureVisualMessage(): AidenChatMessage {
         val data = javaClass.classLoader!!.getResourceAsStream("contract.json")!!.bufferedReader().use { it.readText() }
         val chat = wireJson.decodeFromJsonElement(AidenChat.serializer(), Json.parseToJsonElement(data).jsonObject.getValue("chat"))
@@ -1564,6 +1945,73 @@ class AidenChatTest {
         assertNull(visuals[1].layout)
         assertEquals("Plan options\nSolo: \$12.00\nTeam: \$60.00", visuals[1].fallbackText)
         assertTrue(message.isWireSafe)
+    }
+
+    @Test
+    fun eachImageSitsBeneathTheStepThatProducedIt() {
+        // Revision 44: an assistant image names the step that made it.
+        val wire = """
+            {"id":"m1","role":"assistant","text":"Before.Middle.After.","createdAt":"2026-08-18T19:00:01.000Z",
+             "attachments":[
+               {"id":"shared_a","name":"Shared.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-2"},
+               {"id":"shown","name":"Shown.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-1"},
+               {"id":"loose","name":"Loose.png","mimeType":"image/png","kind":"image","size":10},
+               {"id":"odd","name":"Odd.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-0"},
+               {"id":"typed","name":"Typed.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":7}],
+             "timeline":{"version":3,"generationId":"g","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[
+               {"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"display_image","label":"Display image","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},
+               {"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"share_image","label":"Share image","status":"completed","startedAt":1100,"updatedAt":1200,"finishedAt":1200,"contentOffset":14}]}}
+        """.trimIndent()
+        val message = json.decodeFromString<AidenChatMessage>(wire)
+        val images = message.attachments.orEmpty()
+        assertEquals(listOf("call-2", "call-1", null, null, null), images.map { it.placedToolCallId })
+        assertTrue("a malformed step id never drops the image", message.isWireSafe)
+
+        val rows = AidenChronologicalProjection.rows(message.text, "", message.timeline, images = images)!!
+        assertEquals(
+            listOf("TEXT:Before.", "TOOL:call-1", "IMAGES:shown", "TEXT:Middle.", "TOOL:call-2", "IMAGES:shared_a", "TEXT:After."),
+            rows.map { row ->
+                when (row.kind) {
+                    AidenChronologicalRow.Kind.TEXT -> "TEXT:" + row.text
+                    AidenChronologicalRow.Kind.TOOL -> "TOOL:" + row.steps.joinToString(",") { it.toolCallId.orEmpty() }
+                    AidenChronologicalRow.Kind.IMAGES -> "IMAGES:" + row.images.joinToString(",") { it.id }
+                    else -> "${row.kind}:"
+                }
+            }
+        )
+        assertEquals(rows.size, rows.map { it.id }.toSet().size)
+        // Only images without a step are left for the strip after the reply.
+        assertEquals(setOf("shown", "shared_a"), AidenChronologicalProjection.placedImageIds(rows))
+
+        // While the reply streams, a generate_image placeholder sits beneath its step,
+        // split from the next step exactly as its image will be once the reply commits,
+        // so nothing moves at the hand-off.
+        val live = json.decodeFromString<AidenGenerationTimeline>(
+            """{"version":3,"generationId":"g","status":"running","startedAt":1000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"generate_image","label":"Generate image","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"web_search","label":"Search","status":"running","startedAt":1100,"updatedAt":1200,"contentOffset":7}]}"""
+        )
+        fun describe(rows: List<AidenChronologicalRow>) = rows.map { row ->
+            when (row.kind) {
+                AidenChronologicalRow.Kind.TEXT -> "TEXT:" + row.text
+                AidenChronologicalRow.Kind.TOOL -> "TOOL:" + row.steps.joinToString(",") { it.toolCallId.orEmpty() }
+                AidenChronologicalRow.Kind.IMAGES -> "IMAGES:" + row.images.joinToString(",") { it.id }
+                AidenChronologicalRow.Kind.IMAGE_SLOT -> "SLOT:" + row.imageSlot
+                else -> "${row.kind}:"
+            }
+        }
+        val liveRows = AidenChronologicalProjection.rows("Before.Here it is.", "", live, imageSlots = listOf("call-1", "call-7"))!!
+        assertEquals(
+            listOf("TEXT:Before.", "TOOL:call-1", "SLOT:call-1", "TOOL:call-2", "TEXT:Here it is."),
+            describe(liveRows)
+        )
+        assertEquals(setOf("call-1"), AidenChronologicalProjection.placedImageSlots(liveRows))
+        val generated = AidenMessageAttachment(
+            id = "generated", name = "Image.png", mimeType = "image/png", kind = AidenAttachmentKind.IMAGE, size = 10,
+            toolCallId = "call-1"
+        )
+        assertEquals(
+            listOf("TEXT:Before.", "TOOL:call-1", "IMAGES:generated", "TOOL:call-2", "TEXT:Here it is."),
+            describe(AidenChronologicalProjection.rows("Before.Here it is.", "", live, images = listOf(generated))!!)
+        )
     }
 
     @Test
@@ -2108,6 +2556,81 @@ class AidenChatTest {
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test fun selectedAttachmentPreparationKeepsMainResponsiveAndSendReservedThroughCancellation() =
         assertFailedSendDraft(checkPreparation = true)
+
+    @Test
+    fun missingFolderRefusalShowsTheMacsReasonAndTheSameMessageSendsOnceItIsBack() {
+        val directory = kotlin.io.path.createTempDirectory("aiden-missing-folder-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val sendKeys = java.util.concurrent.CopyOnWriteArrayList<String?>()
+        val folderBack = java.util.concurrent.atomic.AtomicBoolean(false)
+        val refusal = "The folder for this workspace was moved or deleted. Restore it on your Mac, then send again."
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val initialChat = AidenChat(
+            id = "chat-folder", workspaceId = "workspace-folder", title = "Missing folder",
+            messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH,
+            revision = "revision-folder"
+        )
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
+                "/api/aiden/v1/chats/chat-folder/turns" -> {
+                    sendKeys.add(request.getHeader("Idempotency-Key"))
+                    if (folderBack.get()) {
+                        MockResponse().setResponseCode(503).setBody("""{"error":{"code":"internal_error","message":"Try again","requestId":"request-folder-2","retryable":true}}""")
+                    } else {
+                        MockResponse().setResponseCode(409).setBody("""{"error":{"code":"workspace_unavailable","message":"$refusal","requestId":"request-folder","retryable":false}}""")
+                    }
+                }
+                "/api/aiden/v1/chats/chat-folder" -> MockResponse().setBody(json.encodeToString(initialChat))
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(
+                    AidenPairingExchange(
+                        instanceId = "instance-folder", deviceId = "device-folder",
+                        endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test",
+                        credential = "synthetic-credential",
+                        capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
+                    ), null
+                )
+                val drafts = AidenChatDraftStore(directory)
+                val cache = AidenChatCache(directory)
+                val coordinator = AidenRemoteCoordinator(
+                    installations, directory, cache, drafts,
+                    scope = CoroutineScope(dispatcher + Job().apply { cancel() })
+                )
+                coordinator.refreshClient()
+                val model = AidenChatViewModel(initialChat.id, coordinator, cache, drafts, initialChat)
+                viewModels.put("chat", model)
+                yield()
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                model.updateDraft("Fix the header")
+                model.send()
+                withTimeout(5_000) { model.isStarting.first { !it } }
+                // Nothing ran on the Mac, so this is a refusal, not an unknown delivery.
+                assertEquals(refusal, model.presentedError.value)
+                assertNull(model.pendingSend.value)
+                assertEquals("Fix the header", model.draft.value)
+                assertTrue(model.chat.value!!.messages.isEmpty())
+                assertTrue(model.canSend)
+                folderBack.set(true)
+                model.send()
+                withTimeout(5_000) { model.isStarting.first { !it } }
+                assertEquals(2, sendKeys.size)
+            }
+        } finally {
+            runBlocking(dispatcher) { viewModels.clearAndJoin() }
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
 
     private fun assertFailedSendDraft(newerText: String = "", purgeWhileSending: Boolean = false, checkPreparation: Boolean = false) {
         val directory = kotlin.io.path.createTempDirectory("aiden-failed-send-").toFile()
@@ -3323,11 +3846,117 @@ class AidenChatTest {
         )
 
         assertTrue(AidenApprovalPresentation.isAutomation(approval.toolName))
-        assertEquals("Create this automation?", AidenApprovalPresentation.title(approval.toolName))
-        assertEquals("Create a daily report", AidenApprovalPresentation.oneLineSummary(approval.summary))
+        // Scheduled-task titles match the Mac's card.
+        assertEquals("Save this scheduled task?", AidenApprovalPresentation.headline(approval.toolName, approval.summary))
+        assertEquals("Change this automation?", AidenApprovalPresentation.headline("edit_automation", approval.summary))
         assertTrue(AidenApprovalPresentation.requiresDesktopConfirmation(approval))
         assertFalse(AidenApprovalPresentation.requiresDesktopConfirmation(approval.copy(hostCanAllow = true, canAllow = true)))
-        assertEquals("Approval Required", AidenApprovalPresentation.title("run_command"))
+        assertEquals("Approval needed", AidenApprovalPresentation.title("run_command"))
+    }
+
+    @Test
+    fun testApprovalCardNamesTheActionAndShowsTheExactRequest() {
+        // Desktop hosts prefix the request with the tool's name; the title says it instead.
+        assertEquals("Run this command?", AidenApprovalPresentation.headline("run_command", "Run command: npm test"))
+        assertEquals(
+            "find ~/Downloads\n  -type f",
+            AidenApprovalPresentation.requestedAction("run_command", "Run command: find ~/Downloads\n  -type f")
+        )
+        assertEquals("Edit forecast.ts?", AidenApprovalPresentation.headline("edit_file", "Edit file: src/forecast.ts"))
+        assertEquals("src/forecast.ts", AidenApprovalPresentation.requestedAction("edit_file", "Edit file: src/forecast.ts"))
+        assertEquals("Write todo.md?", AidenApprovalPresentation.headline("write_file", "Create or replace file: notes/todo.md"))
+        // The CLI daemon's raw request stays whole when it has no readable form.
+        assertEquals("edit: {\"path\":\"a.ts\"}", AidenApprovalPresentation.requestedAction("edit", "edit: {\"path\":\"a.ts\"}"))
+        assertEquals("Edit files?", AidenApprovalPresentation.headline("edit", "edit: {\"path\":\"a.ts\"}"))
+        assertEquals("Run this command?", AidenApprovalPresentation.headline("bash", "Run command: ls -la"))
+        assertEquals("ls -la", AidenApprovalPresentation.requestedAction("bash", "Run command: ls -la"))
+        // A prefix is only removed for the tool that writes it.
+        assertEquals("Run command: rm -rf /", AidenApprovalPresentation.requestedAction("notion__search", "Run command: rm -rf /"))
+        assertEquals("Approval needed", AidenApprovalPresentation.headline("notion__search", "Search Notion"))
+        assertEquals("Review requested action", AidenApprovalPresentation.requestedAction("run_command", " \n\t "))
+        assertEquals("Run command:", AidenApprovalPresentation.requestedAction("run_command", "Run command: "))
+    }
+
+    @Test
+    fun testRememberedApprovalsSayWhatTheyCover() {
+        // The Mac remembers a command exactly, but a file by its path, whatever the change.
+        assertEquals("This exact command, until Aiden quits", AidenApprovalPresentation.scopeDetail(AidenApprovalScope.CHAT, "run_command"))
+        assertEquals("This exact command in this workspace", AidenApprovalPresentation.scopeDetail(AidenApprovalScope.ALWAYS, "run_command"))
+        assertEquals("Any edit to this file, until Aiden quits", AidenApprovalPresentation.scopeDetail(AidenApprovalScope.CHAT, "edit_file"))
+        assertEquals("Any write to this file in this workspace", AidenApprovalPresentation.scopeDetail(AidenApprovalScope.ALWAYS, "write_file"))
+        assertNull(AidenApprovalPresentation.scopeDetail(AidenApprovalScope.ONCE, "edit_file"))
+    }
+
+    @Test
+    fun testDeniedCallsAreSkippedAndPendingApprovalsAreNotCountedAsWork() {
+        fun step(index: Int, toolName: String, status: AidenAgentStepStatus) = AidenAgentStep(
+            id = "tool-$index",
+            order = index,
+            kind = AidenAgentStep.Kind.TOOL,
+            toolCallId = "call-$index",
+            toolName = toolName,
+            label = "Tool",
+            status = status,
+            startedAt = 1000.0,
+            updatedAt = 2000.0,
+            finishedAt = 2000.0,
+            contentOffset = 0,
+            durationMs = 1000.0
+        )
+        fun timeline(status: AidenGenerationTimelineStatus, steps: List<AidenAgentStep>) = AidenGenerationTimeline(
+            version = 3,
+            generationId = "gen_skipped",
+            status = status,
+            startedAt = 1000.0,
+            finishedAt = if (status == AidenGenerationTimelineStatus.RUNNING) null else 2000.0,
+            steps = steps
+        )
+        // The same sentences as the desktop activity header.
+        assertEquals(
+            "Skipped 1 command",
+            AidenAgentActivityPresentation.summary(
+                timeline(AidenGenerationTimelineStatus.COMPLETED, listOf(step(0, "run_command", AidenAgentStepStatus.BLOCKED)))
+            )
+        )
+        assertEquals(
+            "Explored 1 file, skipped 2 file changes",
+            AidenAgentActivityPresentation.summary(
+                timeline(
+                    AidenGenerationTimelineStatus.COMPLETED,
+                    listOf(
+                        step(0, "read_file", AidenAgentStepStatus.COMPLETED),
+                        step(1, "edit_file", AidenAgentStepStatus.BLOCKED),
+                        step(2, "write_file", AidenAgentStepStatus.BLOCKED)
+                    )
+                )
+            )
+        )
+        assertEquals(
+            "Ran 1 command, skipped 2 actions",
+            AidenAgentActivityPresentation.summary(
+                timeline(
+                    AidenGenerationTimelineStatus.COMPLETED,
+                    listOf(
+                        step(0, "run_command", AidenAgentStepStatus.COMPLETED),
+                        step(1, "run_command", AidenAgentStepStatus.BLOCKED),
+                        step(2, "web_fetch", AidenAgentStepStatus.BLOCKED)
+                    )
+                )
+            )
+        )
+        // A stopped call may have run partway, so it still counts.
+        assertEquals(
+            "Ran 1 command",
+            AidenAgentActivityPresentation.summary(
+                timeline(AidenGenerationTimelineStatus.CANCELLED, listOf(step(0, "run_command", AidenAgentStepStatus.CANCELLED)))
+            )
+        )
+        assertEquals(
+            "Waiting for approval",
+            AidenAgentActivityPresentation.summary(
+                timeline(AidenGenerationTimelineStatus.RUNNING, listOf(step(0, "run_command", AidenAgentStepStatus.AWAITING_APPROVAL)))
+            )
+        )
     }
 
     @Test
@@ -4150,6 +4779,149 @@ class AidenChatTest {
             io.close()
         }
     }
+
+    private fun rateLimitedTurn(retryable: Boolean, message: String = "Aiden Agent is busy.", retryAfterSeconds: Int? = null) =
+        MockResponse().setResponseCode(429).setBody(
+            """{"error":{"code":"rate_limited","message":"$message","requestId":"req-busy","retryable":$retryable""" +
+                (retryAfterSeconds?.let { ""","details":{"retryAfterSeconds":$it}""" } ?: "") + "}}"
+        )
+
+    private fun acceptedTurn(n: Int) = MockResponse().setResponseCode(202).setBody(
+        """{"turnId":"turn-$n","streamId":"stream-$n","status":"queued","message":${forkWireJson.encodeToString(
+            AidenChatMessage("accepted-$n", AidenChatRole.USER, "Hello", createdAt = Instant.EPOCH.plusSeconds(10))
+        )}}"""
+    )
+
+    /** Routes the send endpoints, answering each turn POST with [answer] by its 1-based count. */
+    private fun withTurnHarness(
+        answer: (Int) -> MockResponse,
+        block: suspend CoroutineScope.(AidenChatViewModel, java.util.concurrent.LinkedBlockingQueue<RecordedRequest>, CountDownLatch) -> Unit,
+        expectedTurns: Int
+    ) {
+        val turns = java.util.concurrent.LinkedBlockingQueue<RecordedRequest>()
+        val arrived = CountDownLatch(expectedTurns)
+        val count = java.util.concurrent.atomic.AtomicInteger(0)
+        withForkHarness(emptyList(), { request ->
+            val path = request.requestUrl!!.encodedPath
+            when {
+                path == "/api/aiden/v1/chats/${forkSource.id}/turns" -> {
+                    turns.add(request)
+                    answer(count.incrementAndGet()).also { arrived.countDown() }
+                }
+                path == "/api/aiden/v1/chats/${forkSource.id}" -> MockResponse().setBody(forkWireJson.encodeToString(forkSource))
+                path.endsWith("/events") -> MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE)
+                else -> null
+            }
+        }) { harness ->
+            val model = harness.open(forkSource.id, forkSource)
+            block(model, turns, arrived)
+        }
+    }
+
+    @Test
+    fun aBusyMacSendIsResentAfterTheServerDelayUnderAFreshKey() = withTurnHarness(
+        answer = { n -> if (n == 1) rateLimitedTurn(retryable = true, retryAfterSeconds = 4) else acceptedTurn(n) },
+        expectedTurns = 2,
+        block = { model, turns, _ ->
+            val waits = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            model.rateLimitedSendRetryDelay = { waits += it; yield() }
+            model.updateDraft("Hello")
+            model.send()
+            withTimeout(5_000) { model.chat.first { chat -> chat?.messages?.any { it.id == "accepted-2" } == true } }
+
+            assertEquals("the resend waits the server's Retry-After", listOf(4_000L), waits)
+            val refused = turns.poll()!!
+            val resent = turns.poll()!!
+            assertNull(turns.poll())
+            // The Mac settled the refused key as rejected, so only a fresh key can carry the resend.
+            assertNotEquals(refused.getHeader("Idempotency-Key"), resent.getHeader("Idempotency-Key"))
+            assertEquals(refused.body.readUtf8(), resent.body.readUtf8())
+            assertNull("a busy Mac is not reported as a failed send", model.presentedError.value)
+            assertNull(model.pendingSend.value)
+            assertFalse(model.isWaitingToRetryRateLimitedSend.value)
+            assertEquals("", model.draft.value)
+        }
+    )
+
+    private fun sendRecoveryNotice(model: AidenChatViewModel) = aidenSendRecoveryMessage(
+        model.sendRecoveryError.value,
+        model.pendingSend.value,
+        model.isWaitingToRetryRateLimitedSend.value,
+        model.isPendingSendRefusedBecauseBusy.value
+    )
+
+    private val dropTurnAnswers = java.util.concurrent.atomic.AtomicBoolean(true)
+
+    @Test
+    fun busyMacResendsStopAfterTheirLimitAndLeaveRetryToThePerson() = withTurnHarness(
+        answer = { n ->
+            when {
+                n <= 1 + AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES -> rateLimitedTurn(retryable = true)
+                dropTurnAnswers.get() -> MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                else -> acceptedTurn(n)
+            }
+        },
+        expectedTurns = 1 + AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES,
+        block = { model, turns, arrived ->
+            val refusals = 1 + AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES
+            val waits = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            model.rateLimitedSendRetryDelay = { waits += it; yield() }
+            model.updateDraft("Hello")
+            model.send()
+            withContext(Dispatchers.IO) { check(arrived.await(5, TimeUnit.SECONDS)) }
+            withTimeout(5_000) { model.isStarting.first { !it } }
+
+            assertEquals(AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES, waits.size)
+            assertFalse(model.isWaitingToRetryRateLimitedSend.value)
+            assertNull(model.presentedError.value)
+            assertTrue("the send stays saved for the person's Retry", model.pendingSend.value?.canRetry() == true)
+            assertTrue(model.canRetrySend)
+            assertEquals(
+                "the Mac refused every attempt, so the notice says it is busy rather than that delivery is unknown",
+                "Aiden Agent is still busy. Your message wasn’t sent; try again in a moment.",
+                sendRecoveryNotice(model)
+            )
+
+            // The person's Retry clears the busy notice; this time the answer is lost.
+            model.send(retry = true)
+            assertFalse(model.isPendingSendRefusedBecauseBusy.value)
+            withTimeout(5_000) {
+                while (turns.size < refusals + 1) yield()
+                model.isStarting.first { !it }
+            }
+            assertNotNull("an unconfirmed send stays saved", model.pendingSend.value)
+            assertEquals(
+                "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window.",
+                sendRecoveryNotice(model)
+            )
+
+            dropTurnAnswers.set(false)
+            model.send(retry = true)
+            withTimeout(5_000) { model.chat.first { chat -> chat?.messages?.any { it.id.startsWith("accepted-") } == true } }
+            val keys = turns.map { it.getHeader("Idempotency-Key") }
+            assertEquals("every refused attempt was replaced by a fresh key", refusals + 1, keys.toSet().size)
+            assertEquals("a send whose answer was lost replays its key", keys[refusals], keys.last())
+            assertNull(model.pendingSend.value)
+        }
+    )
+
+    @Test
+    fun aRateLimitTheMacMarksFinalStillFailsTheSend() = withTurnHarness(
+        answer = { rateLimitedTurn(retryable = false, message = "Daily limit reached", retryAfterSeconds = 5) },
+        expectedTurns = 1,
+        block = { model, turns, _ ->
+            val waits = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            model.rateLimitedSendRetryDelay = { waits += it; yield() }
+            model.updateDraft("Hello")
+            model.send()
+            assertEquals("Daily limit reached", withTimeout(5_000) { model.presentedError.first { it != null } })
+            withTimeout(5_000) { model.isStarting.first { !it } }
+            assertNull(model.pendingSend.value)
+            assertTrue(waits.isEmpty())
+            assertEquals(1, turns.size)
+            assertEquals("the refused text returns to the composer", "Hello", model.draft.value)
+        }
+    )
 
     @Test
     fun aForkTheMacRejectedRetriesWithAFreshIdempotencyKey() {

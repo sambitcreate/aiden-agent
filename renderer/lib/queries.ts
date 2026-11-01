@@ -37,6 +37,7 @@ import {
   usageApi,
   voiceApi,
   webSearchApi,
+  webFetchApi,
   workspacesApi,
 } from "./ipc";
 import type { BotDefinition } from "../shared/bots";
@@ -64,12 +65,15 @@ export const queryKeys = {
   /** Every Bot's live summary (the sidebar rows); `botLiveSummary(id)` is one Bot's. */
   botLiveSummaries: ["bot-live-summary"] as const,
   botLiveSummary: (id: string) => ["bot-live-summary", id] as const,
+  /** One Bot's routines (the Routines panel); `["bot-routines"]` matches every Bot's. */
+  botRoutines: (id: string) => ["bot-routines", id] as const,
   botCapabilityCatalog: ["bot-capability-catalog"] as const,
   botAccess: (id: string | undefined) => ["bot-access", id ?? "none"] as const,
   botTelegramBinding: (id: string | undefined) => ["bot-telegram-binding", id ?? "none"] as const,
   botTelegramTargets: ["bot-telegram-targets"] as const,
   chatsIn: (workspaceId: string | undefined) => ["chats", workspaceId ?? "all"] as const,
   chat: (id: string) => ["chat", id] as const,
+  workspaceFolderPresence: (workspaceId: string) => ["workspace-folder-presence", workspaceId] as const,
   settings: ["settings"] as const,
   shortcuts: ["shortcuts"] as const,
   assistantConfig: ["assistantConfig"] as const,
@@ -91,9 +95,11 @@ export const queryKeys = {
   mcpLiveStatus: ["mcpLiveStatus"] as const,
   mcpDependents: (serverId: string) => ["mcpDependents", serverId] as const,
   mcpLaunchApprovals: ["mcpLaunchApprovals"] as const,
+  mcpMacAppStatus: (presetId: string) => ["mcpMacAppStatus", presetId] as const,
   mcpToolList: (serverId: string, toolsRevision: string | undefined) => ["mcpToolList", serverId, toolsRevision ?? null] as const,
   exa: ["exa"] as const,
   webSearch: ["webSearch"] as const,
+  webFetch: ["webFetch"] as const,
   telegram: ["telegram"] as const,
   aidenRemote: ["aidenRemote"] as const,
   aidenRemotePairingRequests: ["aidenRemotePairingRequests"] as const,
@@ -101,6 +107,7 @@ export const queryKeys = {
   localModels: ["localModels"] as const,
   voiceResolution: ["voiceResolution"] as const,
   workspaces: ["workspaces"] as const,
+  workspaceMemoryFacts: (workspaceId: string) => ["workspace-memory-facts", workspaceId] as const,
   git: (workspaceId: string | undefined) => ["git", workspaceId ?? "none"] as const,
   gitPullRequestStatus: (workspaceId: string | undefined) =>
     ["git-pull-request-status", workspaceId ?? "none"] as const,
@@ -116,6 +123,8 @@ export const queryKeys = {
     ["workspace-repository-identity", workspaceId ?? "none"] as const,
   chatPullRequests: (chatId: string | undefined) =>
     ["chat-pull-requests", chatId ?? "none"] as const,
+  chatFollowThrough: (chatId: string | undefined) =>
+    ["chat-follow-through", chatId ?? "none"] as const,
   chatCurrentPullRequest: (chatId: string | undefined) =>
     ["chat-current-pull-request", chatId ?? "none"] as const,
   chatPullRequestsSidebar: (chatIds: readonly string[]) =>
@@ -128,6 +137,8 @@ export const queryKeys = {
     ["gitWorktrees", workspaceId ?? "none"] as const,
   skillCatalog: (workspaceId: string | undefined) =>
     ["skillCatalog", workspaceId ?? "none"] as const,
+  workspaceSkillChoices: (workspaceId: string | undefined) =>
+    ["workspaceSkillChoices", workspaceId ?? "none"] as const,
   modelInfo: (providerId: string | undefined) => ["modelInfo", providerId ?? "none"] as const,
 };
 
@@ -571,6 +582,16 @@ export function useChatPullRequests(chatId: string | undefined, enabled = true) 
   });
 }
 
+/** A chat's background jobs, followed pull requests and check; `chats:follow-through-changed` invalidates it. */
+export function useChatFollowThrough(chatId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.chatFollowThrough(chatId),
+    queryFn: () => chatsApi.followThrough(chatId as string),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 30_000,
+  });
+}
+
 export function useChatCurrentPullRequest(chatId: string | undefined, enabled = true) {
   return useQuery({
     queryKey: queryKeys.chatCurrentPullRequest(chatId),
@@ -620,6 +641,15 @@ export function useDiscoveredSkills(workspaceId: string | undefined) {
     enabled: Boolean(workspaceId),
     staleTime: 30_000,
     refetchOnWindowFocus: true,
+  });
+}
+
+export function useWorkspaceSkillChoices(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.workspaceSkillChoices(workspaceId),
+    queryFn: () => skillsApi.workspaceChoices(workspaceId as string),
+    enabled: Boolean(workspaceId),
+    staleTime: 30_000,
   });
 }
 
@@ -853,6 +883,21 @@ export function useMcpLaunchApprovals() {
   );
 }
 
+/**
+ * Whether a Mac app connector's app is installed and open. Read fresh each
+ * time setup opens and when the window regains focus, since the person
+ * installs or opens the app outside Aiden.
+ */
+export function useMcpMacAppStatus(presetId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.mcpMacAppStatus(presetId),
+    queryFn: () => mcpApi.macAppStatus(presetId),
+    enabled,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+  });
+}
+
 /** Schedules and Bots that depend on a server; fetched when a confirmation needs them. */
 export function useMcpDependents(serverId: string | undefined) {
   return useQuery({
@@ -874,6 +919,11 @@ export function useWebSearch() {
 
 /** Compatibility name for Settings callers that prefer an explicit suffix. */
 export const useWebSearchSettings = useWebSearch;
+
+/** Reading web pages and extract mode; never holds a key. */
+export function useWebFetch() {
+  return useQuery({ queryKey: queryKeys.webFetch, queryFn: webFetchApi.get });
+}
 
 export function useTelegramSettings() {
   return useQuery({ queryKey: queryKeys.telegram, queryFn: telegramApi.get });

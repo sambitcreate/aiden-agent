@@ -4,7 +4,6 @@ import { afterEach, beforeEach, mock, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Composer } from "./composer";
-import { ReasoningBlock } from "./reasoning-block";
 import { TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
 import { APPEARANCE_CHANGE_EVENT, applyAppearanceConfig, cacheAppearance } from "../lib/appearance-runtime";
@@ -78,20 +77,6 @@ test("idle modifier Enter sends normally and Shift+Enter never sends", async () 
   assert.deepEqual(sent, ["send"]);
 });
 
-test("reasoning automatic visibility follows lifecycle while manual choices persist", () => {
-  const view = render(<ReasoningBlock content="Provider reasoning" automaticOpen />);
-  const toggle = screen.getByRole("button", { name: "Thinking" });
-  view.rerender(<ReasoningBlock content="Provider reasoning" automaticOpen={false} />);
-  assert.equal(toggle.getAttribute("aria-expanded"), "false");
-  fireEvent.click(toggle);
-  view.rerender(<ReasoningBlock content="Provider reasoning" automaticOpen={false} />);
-  assert.equal(toggle.getAttribute("aria-expanded"), "true");
-  assert.equal(view.container.querySelector("[data-disclosure-layout]")?.getAttribute("data-disclosure-layout"), "full");
-  fireEvent.click(toggle);
-  view.rerender(<ReasoningBlock content="Provider reasoning" automaticOpen />);
-  assert.equal(toggle.getAttribute("aria-expanded"), "false");
-});
-
 const completed: GenerationTimeline = {
   version: 3, generationId: "mode-run", startedAt: 1, finishedAt: 2, status: "completed",
   steps: [{ kind: "tool", id: "read", order: 0, toolName: "read_file", toolCallId: "read", label: "Read file", status: "completed", startedAt: 1, updatedAt: 2, target: "prefs.json" }],
@@ -114,13 +99,16 @@ test("activity levels distinguish collapsed, retained ticker, detailed trail and
   assert.equal(disclosure.open, false);
 });
 
-test("automatically closing a focused reasoning preview returns focus to its header", () => {
-  const view = render(<ReasoningBlock content="Readable details" automaticOpen />);
-  const preview = screen.getByRole("region", { name: "Model reasoning" });
-  act(() => preview.focus());
-  assert.equal(document.activeElement, preview);
-  view.rerender(<ReasoningBlock content="Readable details" automaticOpen={false} />);
-  assert.equal(document.activeElement, screen.getByRole("button", { name: "Thinking" }));
+test("automatically closing a focused activity trail returns focus to its header", () => {
+  const view = render(<ActivityFeed timeline={completed} mode="detailed" retainDetails />);
+  const section = view.container.querySelector("details")!;
+  const trail = section.querySelector<HTMLElement>('[role="list"]')!;
+  trail.tabIndex = -1;
+  act(() => trail.focus());
+  assert.equal(document.activeElement, trail);
+  view.rerender(<ActivityFeed timeline={completed} mode="detailed" />);
+  assert.equal(section.open, false);
+  assert.equal(document.activeElement, section.querySelector("summary"));
 });
 
 test("live preferences survive route remounts when browser storage cannot save", async () => {
@@ -193,13 +181,13 @@ test("automatic folding never scrolls back to an offscreen historical trail", ()
   assert.equal(restores, 0, "a displaced header above the viewport must not steal the scroll position");
 });
 
-test("automatic reasoning folds ignore headers covered by the toolbar but restore visible pinned headers", () => {
+test("automatic folds ignore headers covered by the toolbar but restore visible pinned headers", () => {
   let restores = 0;
-  const content = (open: boolean) => <div data-follow="false" style={{ "--scroll-area-sticky-top": "52px" } as React.CSSProperties}><ReasoningBlock content="Readable details" automaticOpen={open} /></div>;
+  const content = (open: boolean) => <div data-follow="false" style={{ "--scroll-area-sticky-top": "52px" } as React.CSSProperties}><ActivityFeed timeline={completed} mode="detailed" retainDetails={open} /></div>;
   const view = render(content(true));
   const viewport = view.container.querySelector<HTMLElement>("[data-follow]")!;
-  const header = screen.getByRole("button", { name: "Thinking" });
-  const section = header.parentElement!;
+  const section = view.container.querySelector("details")!;
+  const header = section.querySelector("summary")!;
   viewport.getBoundingClientRect = () => ({ top: 0, bottom: 500 }) as DOMRect;
   section.getBoundingClientRect = () => ({ top: -168 }) as DOMRect;
   header.getBoundingClientRect = () => ({ top: -24, bottom: 12 }) as DOMRect;

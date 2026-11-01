@@ -145,7 +145,27 @@ export type LmStudioEndpoint = {
    * the test streams one delta at a time, available only on the deterministic model.
    */
   enqueueStreamedReply?: (prompt: string) => StreamedReplyController;
+  /**
+   * Turns away the next `count` agent completions whose prompt contains
+   * `prompt` with `429` and these headers, as a provider at its rate limit
+   * does, available only on the deterministic model.
+   */
+  rateLimitCompletions?: (prompt: string, count: number, headers: Record<string, string>) => void;
+  /**
+   * Fails the next `count` agent completions whose prompt contains `prompt`
+   * with `status`: a server error as a provider having a bad moment sends, or
+   * a client error such as a rejected key. Deterministic model only.
+   */
+  failCompletions?: (prompt: string, count: number, status: number) => void;
+  /**
+   * Answers the agent completions of the conversation that contains `prompt`
+   * with these parts in order, each ending at the model's output limit, with a
+   * dropped connection, or normally. Deterministic model only.
+   */
+  cutOffCompletions?: (prompt: string, parts: readonly CutOffCompletionPart[]) => void;
 };
+
+export type CutOffCompletionPart = { text: string; end: "length" | "drop" | "stop" };
 
 export type StreamedReplyController = {
   /** Sends one content delta, or buffers it until the completion request arrives. */
@@ -341,6 +361,9 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
   };
   let holding = false;
   const held = new Set<() => void>();
+  const rateLimits: Array<{ prompt: string; remaining: number; headers: Record<string, string> }> = [];
+  const serverFailures: Array<{ prompt: string; remaining: number; status: number }> = [];
+  const cutOffScripts: Array<{ prompt: string; parts: CutOffCompletionPart[] }> = [];
   const scenarios: Array<{ script: DeterministicToolScenario; state: DeterministicToolScenarioState; id: string }> = [];
   const enqueueToolScenario = (scenario: DeterministicToolScenario): DeterministicToolScenarioState => {
     if (!scenario.prompt.trim() || scenario.calls.length > 16 || scenarios.length >= 8) {
@@ -400,7 +423,7 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
               }
             : undefined,
         );
-        const completion = body as { messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }>; tools?: Array<{ function?: { name?: string } }> } | null;
+        const completion = body as { messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }>; tools?: Array<{ function?: { name?: string; description?: string } }> } | null;
         // pi-ai forwards tool-result images as a follow-up user message; that
         // carrier is not the user's prompt.
         const latestUser = [...(completion?.messages ?? [])]
@@ -409,6 +432,48 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
         const userText = typeof latestUser?.content === "string"
           ? latestUser.content
           : JSON.stringify(latestUser?.content ?? "");
+        const rateLimit = completion?.tools?.length
+          ? rateLimits.find((limit) => limit.remaining > 0 && userText.includes(limit.prompt))
+          : undefined;
+        if (rateLimit) {
+          rateLimit.remaining -= 1;
+          response.writeHead(429, { ...rateLimit.headers, "content-type": "application/json; charset=utf-8" });
+          response.end(JSON.stringify({ error: { message: "Rate limit reached for requests", type: "rate_limit_exceeded" } }));
+          return;
+        }
+        const serverFailure = completion?.tools?.length
+          ? serverFailures.find((failure) => failure.remaining > 0 && userText.includes(failure.prompt))
+          : undefined;
+        if (serverFailure) {
+          serverFailure.remaining -= 1;
+          response.writeHead(serverFailure.status, { "content-type": "application/json; charset=utf-8" });
+          response.end(JSON.stringify({ error: { message: "The fixture turned this request away", type: "fixture_error" } }));
+          return;
+        }
+        // A continuation's latest user message is Aiden's request to continue,
+        // so a cut-off script follows the whole conversation, not that message.
+        const conversation = JSON.stringify(
+          (completion?.messages ?? []).filter(({ role }) => role === "user").map(({ content }) => content),
+        );
+        const cutOff = completion?.tools?.length
+          ? cutOffScripts.find((script) => script.parts.length > 0 && conversation.includes(script.prompt))
+          : undefined;
+        if (cutOff) {
+          const part = cutOff.parts.shift()!;
+          response.writeHead(200, {
+            "cache-control": "no-store",
+            "content-type": "text/event-stream; charset=utf-8",
+          });
+          response.write(streamedChunk({ role: "assistant", content: part.text }, null));
+          if (part.end === "drop") {
+            // Let the text reach the client before the connection goes away.
+            setTimeout(() => response.destroy(), 100);
+            return;
+          }
+          response.write(streamedChunk({}, part.end));
+          response.end("data: [DONE]\n\n");
+          return;
+        }
         const streamed = streamedReplies.find((reply) => !reply.response && userText.includes(reply.prompt));
         if (streamed && completion?.tools?.length) {
           streamed.response = response;
@@ -436,6 +501,15 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
           }
           const call = script.calls[next]!;
           if (!completion.tools.some((tool) => tool.function?.name === call.name)) {
+            // A tool held back until loaded: load it first, as a real model
+            // does from the `load_tools` catalog, then make the scripted call.
+            const loadId = `${id}-load-${next}`;
+            const catalog = completion.tools.find((tool) => tool.function?.name === "load_tools")?.function?.description ?? "";
+            const loaded = (completion.messages ?? []).some(({ role, tool_call_id }) => role === "tool" && tool_call_id === loadId);
+            if (!loaded && catalog.includes(`- ${call.name}:`)) {
+              sendCompletion({ id: loadId, name: "load_tools", arguments: { names: [call.name] } });
+              return;
+            }
             state.error = `The real generation did not advertise required tool ${call.name}.`;
             sendCompletion({ text: state.error });
             return;
@@ -485,6 +559,22 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
     },
     enqueueToolScenario,
     enqueueStreamedReply,
+    rateLimitCompletions: (prompt, count, headers) => {
+      if (!prompt.trim() || !Number.isInteger(count) || count < 1) throw new Error("A rate limit needs a prompt and a positive count.");
+      rateLimits.push({ prompt, remaining: count, headers: { ...headers } });
+    },
+    failCompletions: (prompt, count, status) => {
+      if (!prompt.trim() || !Number.isInteger(count) || count < 1 || status < 400 || status === 429) {
+        throw new Error("A failure needs a prompt, a positive count and a 4xx (not 429) or 5xx status.");
+      }
+      serverFailures.push({ prompt, remaining: count, status });
+    },
+    cutOffCompletions: (prompt, parts) => {
+      if (!prompt.trim() || parts.length === 0 || cutOffScripts.some((script) => script.prompt === prompt)) {
+        throw new Error("A cut-off script needs a unique prompt and at least one part.");
+      }
+      cutOffScripts.push({ prompt, parts: parts.map((part) => ({ ...part })) });
+    },
     server,
   };
 }
@@ -696,6 +786,33 @@ export async function finishLmStudioOnboarding(page: Page): Promise<void> {
       name: /^Selected model: .+\. Choose a model\.$/u,
     }),
   ).toBeVisible();
+}
+
+/**
+ * Moves the new chat into a workspace with no folder. A fresh install starts
+ * in No workspace, which has a hidden folder, so folder-free states need a
+ * folderless workspace of their own.
+ */
+export async function chooseFolderlessWorkspace(page: Page, name = "Notes"): Promise<void> {
+  await page.evaluate(async (workspaceName) => {
+    const bridge = (
+      window as unknown as {
+        aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+      }
+    ).aidenAPI.ipc;
+    await bridge.invoke("workspaces:create", { name: workspaceName, permission: "ask" });
+  }, name);
+  await page.reload();
+  const picker = page.getByRole("button", { name: "Choose a workspace" });
+  await picker.click();
+  const option = page.getByRole("option", { name: new RegExp(`^${name}`, "u") });
+  await option.click();
+  await expect(picker).toHaveText(name);
+  // Let the menu finish closing and the composer settle before the caller moves on.
+  await expect(option).toHaveCount(0);
+  await expect(page.getByText(`What should we build in ${name}?`)).toBeVisible();
+  await page.locator("textarea").focus();
+  await expect(page.locator("textarea")).toBeFocused();
 }
 
 /**

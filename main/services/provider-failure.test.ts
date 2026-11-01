@@ -72,6 +72,8 @@ test("provider failures map to a closed privacy-safe category", () => {
     ["request-failed", `503 model service unavailable ${PRIVATE_CANARY}`, "service_unavailable"],
     ["request-failed", `404 model gemini-old is not found or unavailable ${PRIVATE_CANARY}`, "invalid_request"],
     ["request-failed", `429 rate limit ${PRIVATE_CANARY}`, "rate_limit"],
+    ["request-failed", `You have hit your ChatGPT usage limit (plus plan). Try again in ~42 min. ${PRIVATE_CANARY}`, "rate_limit"],
+    ["request-failed", "Claude is still at its usage limit, and Aiden stopped waiting for it a few minutes ago.", "rate_limit"],
     ["request-failed", `401 unauthorized ${PRIVATE_CANARY}`, "authentication"],
     ["request-failed", `API key not valid. ${PRIVATE_CANARY}`, "authentication"],
     ["request-failed", `insufficient_quota ${PRIVATE_CANARY}`, "quota"],

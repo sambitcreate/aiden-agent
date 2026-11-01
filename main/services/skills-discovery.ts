@@ -9,6 +9,8 @@
 //   - Legacy: <root>/<skill>/SKILL.md
 //   - Nested: <root>/skills/<skill>/SKILL.md
 //   - Aiden native: <root>/{skill,skills}/<skill>/SKILL.md
+// Enabled installed Claude Code plugins contribute namespaced skills at lower
+// priority than ordinary folders within their workspace/global source.
 // Workspace skills win over global skills of the same name.
 
 import * as fs from "fs/promises";
@@ -21,6 +23,7 @@ import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import { AIDEN_DIR_NAME, aidenConfigDir } from "./aiden-config-dir.js";
 import { projectDiagnosticError } from "./diagnostics-contract.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
+import { claudePluginSkillRoots } from "./claude-plugin-skill-roots.js";
 import type { DiscoveredSkill } from "./types.js";
 
 interface Frontmatter {
@@ -35,7 +38,7 @@ interface Frontmatter {
  * the document to JS: unrelated metadata and aliases must not be expanded or
  * allowed to overwrite the skill's identity. Invalid files are skipped alone.
  */
-function parseSkillMd(input: string): { frontmatter: Frontmatter; body: string } | null {
+export function parseSkillMd(input: string): { frontmatter: Frontmatter; body: string } | null {
   const raw = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input; // strip BOM if present
   const opening = raw.match(/^---[\t ]*\r?\n/);
   if (!opening) return { frontmatter: {}, body: raw.trim() };
@@ -86,9 +89,14 @@ function parseSkillMd(input: string): { frontmatter: Frontmatter; body: string }
 
 interface ScanConfig {
   root: string;
-  searches: Array<{ base: string; maxDepth: number }>;
+  /**
+   * `baseSkill` lets the search base itself be a skill (its own SKILL.md at
+   * depth 0). Collections leave it off, so only `<name>/SKILL.md` counts.
+   */
+  searches: Array<{ base: string; maxDepth: number; baseSkill?: boolean }>;
   source: DiscoveredSkill["source"];
   priority: number;
+  namespace?: string;
 }
 
 export const SKILL_DISCOVERY_LIMITS = Object.freeze({
@@ -264,7 +272,7 @@ async function* boundedSkillPaths(
       entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
       for (const entry of entries) {
         const relative = path.join(current.relative, entry.name);
-        if (entry.file && entry.name === "SKILL.md" && current.depth >= 1) {
+        if (entry.file && entry.name === "SKILL.md" && (current.depth >= 1 || search.baseSkill === true)) {
           yield relative;
         } else if (entry.directory && current.depth < search.maxDepth) {
           queue.push({
@@ -337,14 +345,18 @@ async function scanPatterns(
       if (!parsed) continue;
       const { frontmatter, body } = parsed;
       const entryName = path.basename(path.dirname(skillMd));
-      const name = (frontmatter.name || entryName).trim();
+      const plainName = (frontmatter.name || entryName).trim();
+      const name = config.namespace ? `${config.namespace}:${plainName}` : plainName;
       const instructions = body || frontmatter.description || "";
-      if (!name || !instructions) continue;
+      if (!plainName || !instructions) continue;
+      // The namespace prefix can push an authored name past the catalog's
+      // identity limit; leave such a plugin skill out rather than list it as invalid.
+      if (config.namespace && Array.from(name.normalize("NFKC")).length > SLASH_LIMITS.safeNameCharacters) continue;
 
       skills.push({
         // Priority preserves .aiden > .claude > .agents within each source;
         // the resolved path keeps identities unique within that tier.
-        id: `${config.source}:${String(config.priority).padStart(2, "0")}:${skillMd}`,
+        id: `${config.source}:${String(config.priority).padStart(2, "0")}:${config.namespace ? `${config.namespace}:` : ""}${skillMd}`,
         name,
         description: (frontmatter.description || "").trim(),
         instructions,
@@ -424,6 +436,8 @@ async function scanAllSkillCandidates(
     );
   }
 
+  roots.push(...(await pluginScanConfigs(home, workspaceRoot)));
+
   try {
     roots.sort(
       (left, right) =>
@@ -457,6 +471,20 @@ async function scanAllSkillCandidates(
     });
     return [];
   }
+}
+
+async function pluginScanConfigs(home: string, workspaceRoot?: string): Promise<ScanConfig[]> {
+  const seen = new Set<string>();
+  return (await claudePluginSkillRoots(home, workspaceRoot)).filter((plugin) => {
+    const key = JSON.stringify([plugin.scope, plugin.namespace, plugin.root]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map((plugin) => ({
+    root: plugin.root, searches: plugin.searches, source: plugin.scope, priority: 30, namespace: plugin.namespace,
+  })).sort((left, right) =>
+    (left.source === "workspace" ? 0 : 1) - (right.source === "workspace" ? 0 : 1) ||
+    left.root.localeCompare(right.root) || left.namespace.localeCompare(right.namespace));
 }
 
 const DISCOVERY_CACHE_TTL_MS = 5_000;

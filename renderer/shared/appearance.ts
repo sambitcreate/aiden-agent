@@ -1,3 +1,5 @@
+import { isLinuxTitleBarPreference, type LinuxTitleBarPreference } from "./window-chrome.js";
+
 export type AppearanceMode = "system" | "light" | "dark";
 export type AppearanceScheme = "light" | "dark";
 export type ThemePresetId =
@@ -76,6 +78,8 @@ export interface AppearanceConfig {
   workDetails: WorkDetailsMode;
   workDetailsCollapseTiming: WorkDetailsCollapseTiming;
   busySendBehavior: BusySendPreference;
+  /** Linux only: Aiden's own title bar, the desktop's, or Aiden's unless a tiling window manager runs. Applies on the next launch. */
+  linuxTitleBar: LinuxTitleBarPreference;
 }
 
 export interface AppearancePreviewSnapshot {
@@ -456,6 +460,7 @@ const DEFAULT_APPEARANCE: AppearanceConfig = {
   workDetails: "standard",
   workDetailsCollapseTiming: "completion",
   busySendBehavior: "queue",
+  linuxTitleBar: "auto",
 };
 
 export function createDefaultAppearanceConfig(): AppearanceConfig {
@@ -566,6 +571,7 @@ export function normalizeAppearanceConfig(value: unknown): AppearanceConfig {
     workDetails: isWorkDetailsMode(value.workDetails) ? value.workDetails : fallback.workDetails,
     workDetailsCollapseTiming: isWorkDetailsCollapseTiming(value.workDetailsCollapseTiming) ? value.workDetailsCollapseTiming : fallback.workDetailsCollapseTiming,
     busySendBehavior: isBusySendPreference(value.busySendBehavior) ? value.busySendBehavior : fallback.busySendBehavior,
+    linuxTitleBar: isLinuxTitleBarPreference(value.linuxTitleBar) ? value.linuxTitleBar : fallback.linuxTitleBar,
   };
 }
 
@@ -620,6 +626,10 @@ export function parseAppearanceConfig(value: unknown): AppearanceConfig {
   // Older settings and exports predate the inline visuals preference.
   if (value.inlineVisuals !== undefined && !isInlineVisualsMode(value.inlineVisuals)) {
     throw new Error("Inline visuals mode is unsupported.");
+  }
+  // Older settings and exports predate the Linux title bar preference.
+  if (value.linuxTitleBar !== undefined && !isLinuxTitleBarPreference(value.linuxTitleBar)) {
+    throw new Error("Linux title bar preference is unsupported.");
   }
   const verifyVariant = (variant: unknown, label: string) => {
     if (!isRecord(variant)) throw new Error(`${label} theme must be an object.`);

@@ -1,18 +1,19 @@
 // Settings controls for MCP servers that sit beside save/remove: browser
 // sign-in (Authorize), cancelling a waiting sign-in, signing out, testing an unsaved draft, listing the
-// schedules and Bots that depend on a server, and reading live status.
+// schedules and Bots that depend on a server, reading live status, and
+// finding or opening the Mac app behind a Mac app connector (iMCP).
 // Dependencies are injected so the IPC contract is exercised without Electron.
 
 import { parseMcpServer } from "./phase2-parse.js";
 import { asString } from "./voice-codec.js";
-import { assertMcpPresetServer } from "../services/mcp-presets.js";
+import { assertMcpPresetServer, getMcpPreset, type MacAppMcpPreset } from "../services/mcp-presets.js";
 import {
   mcpCredentialConnectionSnapshot,
   sameMcpCredentialConnection,
 } from "../services/mcp-credential-cleanup-core.js";
 import type { McpServerDependents } from "../services/mcp-dependents.js";
 import type { McpLiveStatus } from "../services/mcp-status-events.js";
-import type { McpPendingLaunchApproval, McpStatus, McpToolSummary } from "../../renderer/shared/mcp-status.js";
+import type { McpMacAppStatus, McpPendingLaunchApproval, McpStatus, McpToolSummary } from "../../renderer/shared/mcp-status.js";
 import type { McpServer } from "../services/types.js";
 
 /** Longest API key a draft test accepts; matches what a pasted key can be. */
@@ -62,6 +63,10 @@ export interface McpControlDependencies<Event> {
   approveLaunch(server: McpServer, fingerprint: string): Promise<boolean>;
   /** Whether a saved local server may run (Settings tests of the saved command are gated like any launch). */
   launchApproved(server: McpServer): Promise<boolean>;
+  /** Where a Mac app connector's app is installed and whether it is open. Read-only. */
+  macAppStatus(preset: MacAppMcpPreset): Promise<McpMacAppStatus>;
+  /** Open the installed app: only because the person chose Open in Settings. */
+  openMacApp(preset: MacAppMcpPreset): Promise<void>;
 }
 
 const INACTIVE = "MCP changes must come from the active application document.";
@@ -76,6 +81,13 @@ function sameDestination(saved: McpServer, draft: McpServer): boolean {
     (draft.transport === "stdio"
       ? saved.command === draft.command && JSON.stringify(saved.args ?? []) === JSON.stringify(draft.args ?? [])
       : saved.url === draft.url);
+}
+
+/** Only a catalog connector served by a Mac app is looked up or opened. */
+function macAppPreset(value: unknown): MacAppMcpPreset {
+  const preset = getMcpPreset(asString(value, "presetId"));
+  if (preset?.transport !== "stdio") throw new Error("This connector isn’t served by a Mac app.");
+  return preset;
 }
 
 function notConnected(error: string): McpStatus {
@@ -209,5 +221,18 @@ export function registerMcpControlHandlers<Event>(deps: McpControlDependencies<E
   deps.handle("mcp:toolList", (event, id: unknown) => {
     live(event);
     return deps.toolList(asString(id, "id")) ?? null;
+  });
+
+  deps.handle("mcp:macAppStatus", async (event, presetId: unknown) => {
+    live(event);
+    return deps.macAppStatus(macAppPreset(presetId));
+  });
+
+  deps.handle("mcp:openMacApp", async (event, presetId: unknown) => {
+    const isCurrent = live(event);
+    const preset = macAppPreset(presetId);
+    await deps.openMacApp(preset);
+    if (!isCurrent()) throw new Error(INACTIVE);
+    return { opened: true };
   });
 }

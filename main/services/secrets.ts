@@ -3,7 +3,6 @@
 
 import * as fs from "fs/promises";
 import * as path from "path";
-import { randomUUID } from "node:crypto";
 import { app, logger } from "../platform.js";
 import { secureStorage } from "./secure-storage.js";
 import {
@@ -21,6 +20,7 @@ import {
   type SecretKeyMap,
 } from "./secret-map-core.js";
 import { readRegularUtf8File } from "./regular-file-read.js";
+import { writeFileAtomic } from "./durable-fs.js";
 import { MAX_PROVIDER_KEY_LENGTH } from "./types.js";
 import { assertProviderCredentialLength } from "./provider-credential-rotation-core.js";
 import { invalidateBotRuntimeInventoryAuthority } from "./bot-runtime-inventory-lease.js";
@@ -45,11 +45,35 @@ async function filePath(): Promise<string> {
   return path.join(userDataPath, FILE);
 }
 
+/**
+ * The parsed ciphertext map, reused while the file's identity, size and
+ * timestamps are unchanged. Key checks run on every model request, so a stat
+ * replaces a full read and parse; any rewrite (ours or another writer's)
+ * changes the stamp and forces a fresh read. Values stay encrypted here.
+ */
+let parsedMapCache: { stamp: string; map: KeyMap } | null = null;
+
+async function fileStamp(target: string): Promise<string | null> {
+  const info = await fs.lstat(target, { bigint: true });
+  // Anything but a regular file goes through the strict reader, which refuses it.
+  if (!info.isFile()) return null;
+  return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+}
+
 async function readMap(): Promise<KeyMap> {
   try {
-    const data = await readRegularUtf8File(await filePath());
-    return parseSecretKeyMap(JSON.parse(data));
+    const target = await filePath();
+    const stamp = await fileStamp(target);
+    if (stamp !== null && parsedMapCache?.stamp === stamp) {
+      return parseSecretKeyMap(parsedMapCache.map);
+    }
+    parsedMapCache = null;
+    // Read after the stamp: content newer than the stamp only costs a re-read.
+    const map = parseSecretKeyMap(JSON.parse(await readRegularUtf8File(target)));
+    if (stamp !== null) parsedMapCache = { stamp, map: parseSecretKeyMap(map) };
+    return map;
   } catch (error) {
+    parsedMapCache = null;
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
     throw error;
   }
@@ -57,30 +81,20 @@ async function readMap(): Promise<KeyMap> {
 
 async function writeMap(map: KeyMap, isCurrent: MutationGuard = () => true): Promise<void> {
   const destination = await filePath();
-  const staged = path.join(
-    path.dirname(destination),
-    `.${path.basename(destination)}.${randomUUID()}.tmp`,
-  );
+  parsedMapCache = null;
   try {
-    await fs.writeFile(staged, JSON.stringify(map, null, 2), { encoding: "utf-8", mode: 0o600 });
-    const stagedHandle = await fs.open(staged, "r");
-    try {
-      await stagedHandle.sync();
-    } finally {
-      await stagedHandle.close();
-    }
-    assertMutationCurrent(isCurrent);
-    invalidateBotRuntimeInventoryAuthority("provider_credential");
-    await fs.rename(staged, destination);
-    invalidateBotRuntimeInventoryAuthority("provider_credential");
-    const directoryHandle = await fs.open(path.dirname(destination), "r");
-    try {
-      await directoryHandle.sync();
-    } finally {
-      await directoryHandle.close();
-    }
+    await writeFileAtomic(destination, JSON.stringify(map, null, 2), {
+      mode: 0o600,
+      beforePublish: async () => {
+        assertMutationCurrent(isCurrent);
+        invalidateBotRuntimeInventoryAuthority("provider_credential");
+      },
+    });
   } finally {
-    await fs.rm(staged, { force: true }).catch(() => undefined);
+    // Invalidate again once the rename may have happened, even if the
+    // directory flush failed afterwards: the new keys can already be read.
+    parsedMapCache = null;
+    invalidateBotRuntimeInventoryAuthority("provider_credential");
   }
 }
 

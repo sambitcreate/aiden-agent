@@ -40,9 +40,9 @@ async function loadComposer() {
     "../lib/queries":
       "export const useSettings=()=>({}); export const useDiscoveredSkills=(scope)=>{ (globalThis.__composerSkillScopes ??= []).push(scope ?? null); return {}; };",
     "../lib/command-system":
-      "export const useCommandSystem=()=>({canExecute:()=>false,execute:()=>false});",
+      "export const useCommandSystem=()=>({canExecute:()=>false,execute:()=>false,binding:()=>null}); export const useCommandHandler=()=>{};",
     "../lib/ipc":
-      "export const attachmentsApi=globalThis.__composerAttachmentFixture.api; export const browserApi={onEvent: callback => { globalThis.__composerAttachmentFixture.browserEvent=callback; return ()=>{}; }};",
+      "export const attachmentsApi=globalThis.__composerAttachmentFixture.api; export const browserApi={onEvent: callback => { globalThis.__composerAttachmentFixture.browserEvent=callback; return ()=>{}; }}; export const chatsApi={setDoneWhenCheck: async (...args) => { (globalThis.__composerFollowThrough ??= []).push(['until', ...args]); }, followPullRequest: async (...args) => { (globalThis.__composerFollowThrough ??= []).push(['follow', ...args]); }};",
     "./git-branch-picker": "export const GitBranchPicker=()=>null;",
     "./workspace-picker": "export const WorkspacePicker=()=>null;",
     "./composer-context-bar":
@@ -50,7 +50,9 @@ async function loadComposer() {
     "./use-composer-context-chips":
       "export const useComposerContextChips=()=>({chips:{workspace:true,machine:false,branch:false,changesBadge:0,pullRequest:false,barMode:'full'},pullRequestAnnouncement:''});",
     "./chat-pull-requests": "export const ChatPullRequestsChip=()=>null;",
+    "./follow-through-chips": "export const FollowThroughChips=()=>null;",
     "./busy-send-button": "export const BusySendButton=()=>null;",
+    "./provider-icon": "export const ProviderIcon=()=>null;",
   };
   await build({
     entryPoints: [path.resolve("renderer/components/composer.tsx")],
@@ -834,5 +836,98 @@ test("mounted Composer fills in an argument command when picked and runs it from
     mounted.restore();
     Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
     Reflect.deleteProperty(globalThis, "__composerToasts");
+  }
+});
+
+test("mounted Composer sets a /until check only for a chat with folder access, and clears the command once it is set", async () => {
+  const mounted = installDom();
+  Object.assign(window, { setTimeout, clearTimeout });
+  Object.getPrototypeOf(mounted.container).scrollIntoView = () => {};
+  Object.assign(globalThis, {
+    __composerToasts: [],
+    __composerFollowThrough: [],
+    __composerAttachmentFixture: {
+      api: {
+        pickAndRead: async () => ({ attachments: [], skipped: 0 }),
+        readDroppedFiles: async () => [],
+        readClipboardImages: async () => [],
+      },
+    },
+  });
+  const loaded = await loadComposer();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(mounted.container);
+  const sent: string[] = [];
+  const toasts = () => ((globalThis as { __composerToasts?: string[] }).__composerToasts ??= []);
+  const calls = () => ((globalThis as { __composerFollowThrough?: unknown[][] }).__composerFollowThrough ??= []);
+  const textarea = () => mounted.container.getElementsByTagName("textarea")[0];
+  const draft = () => handlers(textarea()).value as unknown as string;
+  const type = (value: string) =>
+    React.act(async () => {
+      handlers(textarea()).onChange({
+        target: { value, selectionStart: value.length, selectionEnd: value.length },
+      });
+    });
+  const pressEnter = () =>
+    React.act(async () => {
+      await handlers(textarea()).onKeyDown({
+        key: "Enter",
+        shiftKey: false,
+        repeat: false,
+        defaultPrevented: false,
+        nativeEvent: { isComposing: false },
+        preventDefault() {},
+        stopPropagation() {},
+      });
+    });
+  const renderWith = (permission: "none" | "full") =>
+    React.act(async () =>
+      root.render(
+        <loaded.Composer
+          chatId="until-chat"
+          ready
+          hasMessages
+          freezeWhileSending={false}
+          sessionChat={
+            { id: "until-chat", title: "Chat", createdAt: 0, updatedAt: 0, messages: [] } as unknown as React.ComponentProps<
+              typeof Composer
+            >["sessionChat"]
+          }
+          workspace={
+            { id: "workspace", name: "Workspace", folderPath: "/tmp/storefront", permission } as React.ComponentProps<
+              typeof Composer
+            >["workspace"]
+          }
+          inputRef={React.createRef<HTMLTextAreaElement>()}
+          isGenerating={false}
+          onStop={() => {}}
+          onSend={async (value) => {
+            sent.push(value);
+          }}
+        />,
+      ),
+    );
+  try {
+    await renderWith("none");
+    await type("/until npm test");
+    await pressEnter();
+    assert.deepEqual(calls(), [], "no check is set without folder access");
+    assert.deepEqual(sent, [], "and the command is not sent as chat text");
+    assert.ok(mounted.container.textContent?.includes("Turn on folder access for this chat first."), "the composer says why");
+
+    await renderWith("full");
+    await type("/until npm test");
+    await pressEnter();
+    assert.deepEqual(calls(), [["until", "until-chat", "npm test"]]);
+    assert.deepEqual(sent, []);
+    assert.equal(draft(), "", "the command leaves the composer once the check is set");
+    assert.deepEqual(toasts(), ["Aiden runs npm test after each answer until it passes, 5 checks at most."]);
+  } finally {
+    await React.act(async () => root.unmount());
+    await loaded.cleanup();
+    mounted.restore();
+    Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+    Reflect.deleteProperty(globalThis, "__composerToasts");
+    Reflect.deleteProperty(globalThis, "__composerFollowThrough");
   }
 });

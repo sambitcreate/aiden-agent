@@ -7,6 +7,7 @@ import {
 } from "./skill-registry-core.js";
 import type { DiscoveredSkill, Skill } from "./types.js";
 import type { BotResolvedSkill } from "./bot-capability-inventory-ports.js";
+import { botSkillContentFingerprint } from "./bot-skill-approvals.js";
 
 export interface BotSkillInventoryDependencies {
   isEnabled?(): Promise<boolean>;
@@ -15,6 +16,13 @@ export interface BotSkillInventoryDependencies {
   botId?: string;
   loadBotHomePath?(): Promise<string>;
   discover(workspaceRoot?: string): Promise<readonly DiscoveredSkill[]>;
+  /**
+   * Skills in the Bot's home load only when the person approved that exact
+   * content. Absent: none load (fail closed).
+   */
+  isHomeSkillApproved?(stableId: string, contentFingerprint: string): Promise<boolean>;
+  /** Home skills found but not approved, for one review card each. */
+  onUnapprovedHomeSkills?(skills: readonly DiscoveredSkill[]): void;
 }
 
 function configuredCandidate(skill: Skill): SkillRegistryCandidate {
@@ -67,9 +75,14 @@ async function resolvedBotSkills(
   if (dependencies.isEnabled && !(await dependencies.isEnabled())) {
     return { key, skills: [] };
   }
-  const workspaceDiscovered = home
+  const homeSkills = home
     ? (await dependencies.discover(home)).filter(({ source }) => source === "workspace")
     : [];
+  const approval = await Promise.all(homeSkills.map(async (skill) =>
+    (await dependencies.isHomeSkillApproved?.(skill.id, botSkillContentFingerprint(skill))) === true));
+  const workspaceDiscovered = homeSkills.filter((_skill, index) => approval[index]);
+  const unapproved = homeSkills.filter((_skill, index) => !approval[index]);
+  if (unapproved.length) dependencies.onUnapprovedHomeSkills?.(unapproved);
   if (dependencies.isEnabled && !(await dependencies.isEnabled())) {
     return { key, skills: [] };
   }

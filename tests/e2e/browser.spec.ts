@@ -429,7 +429,7 @@ test("file links in an agent reply open in the Aiden browser and Files", async (
   await expect(page.getByRole("textbox", { name: "Edit thermostat/style.css" })).toHaveValue("h1 { color: tomato; }");
 });
 
-test("browser recording produces a real bounded WebM artifact", async ({ aiden }) => {
+test("browser recording produces a real bounded MP4 that every client can play", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   const opened = await command(page, { action: "create" });
@@ -438,18 +438,20 @@ test("browser recording produces a real bounded WebM artifact", async ({ aiden }
     await command(page, { action: "record_start", tabId, fps: 10 });
     await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.recording).toBe(true);
     const stopped = await command(page, { action: "record_stop", tabId });
-    expect(stopped.recording?.mimeType).toContain("video/webm");
+    // H.264 MP4 plays on the phones as well as here; WebM is only the fallback.
+    expect(stopped.recording?.mimeType).toBe("video/mp4");
+    expect(stopped.recording!.path.endsWith(".mp4")).toBe(true);
     const bytes = await readFile(stopped.recording!.path);
-    expect([...bytes.subarray(0, 4)]).toEqual([0x1a, 0x45, 0xdf, 0xa3]);
+    expect(bytes.subarray(4, 8).toString("ascii")).toBe("ftyp");
     expect(stopped.recording!.sizeBytes).toBe(bytes.length);
     const decoded = await page.evaluate(async (base64) => {
       const video = document.createElement("video");
-      const url = URL.createObjectURL(new Blob([Uint8Array.from(atob(base64), character => character.charCodeAt(0))], { type: "video/webm" }));
+      const url = URL.createObjectURL(new Blob([Uint8Array.from(atob(base64), character => character.charCodeAt(0))], { type: "video/mp4" }));
       try {
         return await new Promise<{ width: number; height: number }>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error("Recorded WebM did not decode a video frame.")), 8_000);
+          const timer = setTimeout(() => reject(new Error("Recorded MP4 did not decode a video frame.")), 8_000);
           video.onloadeddata = () => { clearTimeout(timer); resolve({ width: video.videoWidth, height: video.videoHeight }); };
-          video.onerror = () => { clearTimeout(timer); reject(new Error(video.error?.message || "Recorded WebM could not be decoded.")); };
+          video.onerror = () => { clearTimeout(timer); reject(new Error(video.error?.message || "Recorded MP4 could not be decoded.")); };
           video.src = url;
           video.load();
         });
@@ -463,6 +465,36 @@ test("browser recording produces a real bounded WebM artifact", async ({ aiden }
     expect(decoded.height).toBeGreaterThan(0);
   }
   await command(page, { action: "close", tabId });
+});
+
+test("an agent's browser recording shows in the chat and plays there", async ({ aiden }) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  const folder = path.join(aiden.workspaceDir, "recorded");
+  await mkdir(folder, { recursive: true });
+  await writeFile(path.join(folder, "index.html"), "<!doctype html><title>Recorded page</title><h1>Recorded</h1>");
+  const prompt = "Record the recorded page for me.";
+  const scenario = lmStudio.enqueueToolScenario!({ prompt, calls: [
+    { name: "browser", arguments: {} },
+    { name: "browser_open", arguments: { path: "recorded/index.html", reuseExistingTab: false } },
+    { name: "browser_recording_start", arguments: {} },
+    { name: "browser_recording_stop", arguments: {} },
+  ], finalText: "Here is the recording." });
+  await page.locator("textarea").first().fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("Here is the recording.", { exact: true }).first()).toBeVisible({ timeout: 45_000 });
+  expect(scenario.error).toBeUndefined();
+  const panelClose = page.getByRole("button", { name: "Close environment panel", exact: true });
+  if (await panelClose.isVisible()) await panelClose.click();
+
+  const card = page.getByRole("region", { name: /^Browser recording, \d+:\d\d$/u });
+  await expect(card).toBeVisible();
+  await expect(card.getByText(/\d+:\d\d · \d+(\.\d)? (KB|MB)/u)).toBeVisible();
+  await card.getByRole("button", { name: "Play" }).click();
+  const video = card.locator("video");
+  await expect(video).toBeVisible();
+  // The card hands the player this Mac's own MP4, and it decodes a frame.
+  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.videoWidth), { timeout: 10_000 }).toBeGreaterThan(0);
 });
 
 test("guest identity headers match the renderer's navigator.userAgentData", async ({ aiden }) => {

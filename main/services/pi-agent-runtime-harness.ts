@@ -1,7 +1,11 @@
+import { MODEL_CALL_RETRY_POLICY } from "./model-call-retry.js";
+import { createSideBySideToolPolicy } from "./side-by-side-tools.js";
+import { cutOffContinuationMessage, keptCutOffReply, type CutOffReason } from "./cut-off-reply.js";
 import { verificationIdentity } from "./pi-verification-store.js";
 import { hostCommandObservation } from "./pi-host-command-observation.js";
 import { toolOutputScope } from "./tool-output-store.js";
 import { recordAttendedToolArguments } from "./assistant/tool-loop-guard.js";
+import { AIDEN_PI_CLIENT_IDENTITY } from "./pi-client-identity.js";
 import { Agent, runToolCall, type AgentToolCallOutcome, type AgentTurnDecision, type AfterToolCallContext, type AfterToolCallResult, type AgentEvent, type AgentMessage, type AgentOptions, type AgentState, type AgentTool, type BeforeToolCallContext, type BeforeToolCallResult } from "@earendil-works/pi-agent-core";
 import { type AgentHarnessResources, type AgentHarnessStreamOptions, type AgentHarnessStreamOptionsPatch, formatSkillsForSystemPrompt } from "./pi-legacy-harness.js";
 import {
@@ -138,7 +142,11 @@ export interface PiAgentRuntimeExtension {
   onEvent?: (event: AgentEvent, signal: AbortSignal) => Promise<void> | void;
 }
 
-export interface PiAgentRuntimeHarnessOptions extends Omit<AgentOptions, "toolExecution"> {
+/**
+ * Pi's own `identity` option (the request `ClientIdentity`) is fixed by the
+ * host to `AIDEN_PI_CLIENT_IDENTITY`; `identity` here is the runtime identity.
+ */
+export interface PiAgentRuntimeHarnessOptions extends Omit<AgentOptions, "toolExecution" | "identity"> {
   extensions?: readonly PiAgentRuntimeExtension[];
   /** Fully resolved immutable contributions for one foreground operation. */
   contributions?: PiRuntimeContributionSnapshot;
@@ -227,13 +235,13 @@ export type PiRuntimeTerminalOutcome = (
       kind: "completed";
       finalMessage: AssistantMessage;
       finalMessageWasAbandoned?: false;
-      attempts: 1 | 2;
+      attempts: number;
     }
   | {
       kind: "app_cancelled";
       finalMessage?: AssistantMessage;
       finalMessageWasAbandoned?: boolean;
-      attempts: 0 | 1 | 2;
+      attempts: number;
     }
   | {
       kind: "provider_failed";
@@ -243,14 +251,14 @@ export type PiRuntimeTerminalOutcome = (
       providerFailure?: ProviderFailureV1;
       /** True only when recovery removed finalMessage from the Pi branch. */
       finalMessageWasAbandoned?: boolean;
-      attempts: 0 | 1 | 2;
+      attempts: number;
     }
   | {
       kind: "host_failed";
       faultKind: PiRuntimeHostFaultKind;
       finalMessage?: AssistantMessage;
       finalMessageWasAbandoned?: boolean;
-      attempts: 0 | 1 | 2;
+      attempts: number;
     }) & { emergencyProjection?: Exclude<GenerationEmergencyProjection, { kind: "none" }> };
 
 export interface PiRuntimeSessionBinding {
@@ -285,14 +293,40 @@ export type PiRuntimeRunInput =
   | { kind: "continue-durable-tail" }
   | { kind: "append-and-run"; message: AgentMessage };
 
+/** Every provider retry of a run of failures plus one compact-and-retry. */
+const PI_RUNTIME_MAX_ATTEMPTS = MODEL_CALL_RETRY_POLICY.maxRetries + 2;
+
+export interface PiRuntimeRetryEvent {
+  /** The try about to start, from 2. */
+  attempt: number;
+  /** The most tries this run of failures may take. */
+  maxAttempts: number;
+  reason: "provider" | "overflow";
+  delayMs: number;
+  /** The failed reply's text stays, and the next try continues it. */
+  keepsPartial?: boolean;
+}
+
+export interface PiRuntimeContinueEvent {
+  /** 1 for the first continuation of this run. */
+  continuation: number;
+  maxContinuations: number;
+  reason: CutOffReason;
+}
+
 export interface PiRuntimeRunOptions {
   /** Opens the host's visible-turn transaction after prior-tail repair. */
   beforeDurableTurn?: (signal: AbortSignal) => Promise<void> | void;
-  onRetry?: (event: {
-    attempt: 2;
-    reason: "provider" | "overflow";
-    delayMs: number;
-  }) => Promise<void> | void;
+  onRetry?: (event: PiRuntimeRetryEvent) => Promise<void> | void;
+  /**
+   * Continue a reply cut off by the output limit or by a stream that dropped
+   * after it started, keeping what it wrote, up to this many times per run.
+   * Unset or 0 keeps the earlier behavior: the output limit ends the run and
+   * a dropped stream retries from the start of that reply.
+   */
+  maxCutOffContinuations?: number;
+  /** Called before the continuation is sent; a dropped stream also reports its retry. */
+  onContinue?: (event: PiRuntimeContinueEvent) => Promise<void> | void;
 }
 
 export interface PiRuntimeQueueOptions {
@@ -889,6 +923,8 @@ export class PiAgentRuntimeHarness {
   private appCancelRequested = false;
   /** An abort() that arrived while no managed run was active; the next run honours it. */
   private pendingAbort = false;
+  /** Set by abortForShutdown: the cancelled run's operation is recorded as interrupted. */
+  private shutdownInterrupted = false;
   private managedAbortController: AbortController | undefined;
   private lastManagedOutcome: PiRuntimeTerminalOutcome | undefined;
   private managedRunning = false;
@@ -1136,6 +1172,7 @@ export class PiAgentRuntimeHarness {
         }
       : agentOptions.streamFn;
 
+    const sideBySideTools = createSideBySideToolPolicy();
     const finishTurnExtensions = extensions.filter((extension) => extension.finishTurn !== undefined);
     const hostFinishTurn = agentOptions.finishTurn;
     const finishTurn: AgentOptions["finishTurn"] =
@@ -1170,9 +1207,19 @@ export class PiAgentRuntimeHarness {
       ...agentOptions,
       ...(providerStreamFn ? { streamFn: providerStreamFn } : {}),
       initialState,
-      // Aiden tools share workspace, scheduler, and external-service state.
-      // Pi defaults to parallel execution, so the host must state this policy.
-      toolExecution: "sequential",
+      // Aiden tools share workspace, scheduler, and external-service state,
+      // so only reads run side by side; every other tool is marked sequential
+      // on each request, which keeps its whole batch one call at a time.
+      toolExecution: "parallel",
+      prepareRequest: async (request, signal) => {
+        const hostUpdate = await agentOptions.prepareRequest?.(request, signal);
+        const context = hostUpdate?.context ?? request.context;
+        return {
+          ...hostUpdate,
+          context: { ...context, tools: sideBySideTools(context.tools ?? []) },
+        };
+      },
+      identity: AIDEN_PI_CLIENT_IDENTITY,
       finishTurn,
       transformContext:
         options.transformContext || extensions.some((extension) => extension.transformContext)
@@ -1866,16 +1913,20 @@ export class PiAgentRuntimeHarness {
         once: true,
       });
 
-    let attempts: 0 | 1 | 2 = 0;
+    let attempts = 0;
+    let continuations = 0;
+    const maxContinuations = Math.max(0, options.maxCutOffContinuations ?? 0);
     const cancelled = () => this.appCancelRequested || abortController.signal.aborted;
     const finish = async (outcome: PiRuntimeTerminalOutcome): Promise<PiRuntimeTerminalOutcome> => {
       let finalized = outcome;
+      const interruptedByShutdown = this.shutdownInterrupted;
+      this.shutdownInterrupted = false;
       try {
         await this.finishEffectOperation(
           outcome.kind === "completed"
             ? "completed"
             : outcome.kind === "app_cancelled"
-              ? "app_cancelled"
+              ? interruptedByShutdown ? "interrupted" : "app_cancelled"
               : outcome.kind === "provider_failed"
                 ? "provider_failed"
                 : "host_failed",
@@ -1937,6 +1988,45 @@ export class PiAgentRuntimeHarness {
             : {}),
       });
       return projectedClosed;
+    };
+    // Cut-off replies: the kept text and the request to continue it join the
+    // live context and the journal, so later turns replay what was shown.
+    const appendCutOffMessages = async (
+      messages: AgentMessage[],
+      finalMessage: AssistantMessage,
+    ): Promise<PiRuntimeTerminalOutcome | undefined> => {
+      this.agent.state.messages = [...this.agent.state.messages, ...messages];
+      this.pendingDurableMessages.push(...messages);
+      this.capturedTurnMessages.push(...messages.map((message) => structuredClone(message)));
+      try {
+        await this.flushDurableMessages();
+      } catch {
+        return await finish(
+          cancelled()
+            ? { kind: "app_cancelled", finalMessage, attempts }
+            : { kind: "host_failed", faultKind: this.managedHostFault ?? "session", finalMessage, attempts },
+        );
+      }
+      return undefined;
+    };
+    const continueCutOffReply = async (
+      reason: CutOffReason,
+      finalMessage: AssistantMessage,
+    ): Promise<PiRuntimeTerminalOutcome | undefined> => {
+      continuations += 1;
+      const event: PiRuntimeContinueEvent = { continuation: continuations, maxContinuations, reason };
+      const hook = await waitForManagedHook(
+        Promise.resolve().then(() => options.onContinue?.(event)),
+        abortController.signal,
+      );
+      if (hook.error) {
+        this.reportFault({ source: "lifecycle_subscriber", error: toError(hook.error) });
+        return await finish({ kind: "host_failed", faultKind: "lifecycle", finalMessage, attempts });
+      }
+      if (hook.cancelled || cancelled()) {
+        return await finish({ kind: "app_cancelled", finalMessage, attempts });
+      }
+      return await appendCutOffMessages([cutOffContinuationMessage()], finalMessage);
     };
     this.runtimeEvents?.setAttempt(0);
     this.runtimeEvents?.emit({ type: "run_start", input: input.kind });
@@ -2146,7 +2236,7 @@ export class PiAgentRuntimeHarness {
             attempts,
           });
         }
-        attempts = (attempts + 1) as 1 | 2;
+        attempts += 1;
         this.runtimeEvents?.setAttempt(attempts);
         this.lastAssistantMessage = undefined;
         try {
@@ -2271,7 +2361,20 @@ export class PiAgentRuntimeHarness {
           ) {
             this.capturedTurnMessages.pop();
           }
-          if (attempts >= 2) {
+          // A stream that dropped after the reply started keeps its text.
+          const kept =
+            compactionResult.compacted !== true && continuations < maxContinuations
+              ? keptCutOffReply(assistant, "dropped")
+              : undefined;
+          const retry: PiRuntimeRetryEvent = {
+            attempt: compactionResult.retryAttempt ?? attempts + 1,
+            maxAttempts: compactionResult.maxAttempts ?? Math.max(2, attempts + 1),
+            reason: compactionResult.compacted === true ? "overflow" : "provider",
+            delayMs: compactionResult.retryDelayMs ?? 0,
+            ...(kept ? { keepsPartial: true } : {}),
+          };
+          // The coordinator bounds each kind of retry; this also bounds them together.
+          if (retry.attempt > PI_RUNTIME_MAX_ATTEMPTS) {
             if (
               !cancelled() &&
               compactionResult.failureCode !== "session-failed" &&
@@ -2293,20 +2396,22 @@ export class PiAgentRuntimeHarness {
               attempts,
             });
           }
-          const delayMs = compactionResult.retryDelayMs ?? 0;
+          if (kept) {
+            // Kept before the wait, so a Stop during it still leaves the text in the journal.
+            const stopped = await appendCutOffMessages([kept], assistant);
+            if (stopped) return stopped;
+          }
+          const delayMs = retry.delayMs;
           this.runtimeEvents?.emit({
             type: "retry",
-            attempt: 2,
-            reason: compactionResult.compacted === true ? "overflow" : "provider",
+            attempt: retry.attempt,
+            maxAttempts: retry.maxAttempts,
+            reason: retry.reason,
             delayMs,
           });
           const retryHook = await waitForManagedHook(
             Promise.resolve().then(() =>
-              options.onRetry?.({
-                attempt: 2,
-                reason: compactionResult.compacted === true ? "overflow" : "provider",
-                delayMs,
-              }),
+              options.onRetry?.(retry),
             ),
             abortController.signal,
           );
@@ -2340,6 +2445,12 @@ export class PiAgentRuntimeHarness {
               attempts,
             });
           }
+          if (kept) {
+            const stopped = await continueCutOffReply("dropped", assistant);
+            if (stopped) return stopped;
+          }
+          // The loop counts this try as `retry.attempt`.
+          attempts = retry.attempt - 1;
           continue;
         }
 
@@ -2402,6 +2513,11 @@ export class PiAgentRuntimeHarness {
           });
         }
         if (assistant.stopReason === "length") {
+          if (continuations < maxContinuations && keptCutOffReply(assistant, "output-limit")) {
+            const stopped = await continueCutOffReply("output-limit", assistant);
+            if (stopped) return stopped;
+            continue;
+          }
           return await finish({
             kind: "provider_failed",
             reason: "output-limit",
@@ -2543,6 +2659,15 @@ export class PiAgentRuntimeHarness {
       ),
     ).then((results) => results.flat());
     return { messages, late };
+  }
+
+  /**
+   * Cancels like abort(), but records the run as interrupted rather than
+   * cancelled: the app is quitting, so the person can resume it next launch.
+   */
+  abortForShutdown(): void {
+    this.shutdownInterrupted = true;
+    this.abort();
   }
 
   abort(): void {
@@ -2750,7 +2875,7 @@ export class PiAgentRuntimeHarness {
   }
 
   private async finishEffectOperation(
-    state: Exclude<DurablePiRuntimeOperationState, "running" | "interrupted">,
+    state: Exclude<DurablePiRuntimeOperationState, "running">,
   ): Promise<void> {
     const binding = this.durability?.effects;
     const operation = this.activeEffectOperation;

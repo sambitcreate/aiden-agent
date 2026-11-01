@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import os from "node:os";
 import {
   hasPlaintextMcpFields,
   isMcpFieldSecretMarker,
@@ -321,6 +322,38 @@ test("connection credentials: approval first, stored values filled in, preset ke
     /added outside Aiden/u,
   );
   assert.equal(filled, false, "nothing is resolved for a launch that may not run");
+});
+
+test("connection credentials: a closed Mac app connector fails at once, only after its launch is approved", async () => {
+  const { resolveMcpConnectionCredentials } = await import("./mcp-connection-credentials.js");
+  const { getMcpPreset, macAppServerCommands } = await import("./mcp-presets.js");
+  const imcp = getMcpPreset("imcp")!;
+  assert.ok(imcp.transport === "stdio");
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  try {
+    const record: McpServer = {
+      id: "preset-imcp", name: "iMCP", transport: "stdio", presetId: "imcp", enabled: true,
+      command: macAppServerCommands(imcp.macApp, os.homedir())[0], args: [],
+    };
+    const checked: string[] = [];
+    const deps = (approved: boolean, open: boolean) => ({
+      isLaunchApproved: async () => { checked.push("approval"); return approved; },
+      isMacAppOpen: async () => { checked.push("open"); return open; },
+      resolveFieldSecrets: async (server: McpServer) => server,
+      presetKey: async () => null,
+      isCurrent: () => true,
+      missingKey: () => "",
+    });
+    await assert.rejects(resolveMcpConnectionCredentials(record, deps(true, false)), /iMCP isn’t open\. Open iMCP, then try again\./u);
+    assert.deepEqual(checked.splice(0), ["approval", "open"]);
+    // An unapproved launch is reported as such, without probing the app.
+    await assert.rejects(resolveMcpConnectionCredentials(record, deps(false, true)), /added outside Aiden/u);
+    assert.deepEqual(checked.splice(0), ["approval"]);
+    assert.deepEqual(await resolveMcpConnectionCredentials(record, deps(true, true)), record);
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
 });
 
 test("moving plain-text values into the keychain survives the config snapshot listener without clearing credentials", async () => {

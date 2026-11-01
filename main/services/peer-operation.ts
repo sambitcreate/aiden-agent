@@ -12,6 +12,7 @@ import {
   type PeerRequest,
 } from "./peer-transport.js";
 import {
+  AIDEN_REMOTE_CONTEXT_MODEL_ID,
   parseAidenRemoteBotConnectionRequestReceipt,
   parseAidenRemoteBotHandoffAnswerReceipt,
   parseAidenRemoteBotHandoffAnswerRequest,
@@ -20,6 +21,7 @@ import {
   parseAidenRemoteBotQuestionAnswerReceipt,
   parseAidenRemoteBotSession,
   parseAidenRemoteBotSessionStateView,
+  parseAidenRemoteChatContextPressure,
   parseAidenRemoteChatForkResult,
   parseAidenRemoteChatProjection,
   parseAidenRemoteChatSummaryPage,
@@ -37,6 +39,8 @@ const OPERATION_FIELDS = new Set([
   "query",
   "botId",
   "turnId",
+  "providerId",
+  "modelId",
   "body",
   "idempotencyKey",
   "revision",
@@ -49,6 +53,9 @@ const PUBLIC_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 const STAGED_ATTACHMENT_ID = /^att_[A-Za-z0-9_-]{43}$/u;
 /** A Bot question's or hand-off's durable wait id, as the host's answer routes accept it. */
 const BOT_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
+
+/** Operations whose answer is bounded image bytes, not JSON. */
+export const PEER_BINARY_OPERATIONS: ReadonlySet<string> = new Set(["attachmentContent", "botSessionImage"]);
 
 /** Run-control operations reconcile from the host feed's run state. */
 export const PEER_RUN_OPERATIONS: ReadonlySet<string> = new Set([
@@ -139,7 +146,7 @@ export async function peerOperationResult(
 ): Promise<unknown> {
   const input = peerRecord(operation);
   const name = peerText(input.operation, 40);
-  if (name === "attachmentContent") return binaryContent(value);
+  if (PEER_BINARY_OPERATIONS.has(name)) return binaryContent(value);
   if (name === "server") {
     const { peerRoutes: _mainOnlyRoutes, ...projection } = peerRecord(value);
     await validatePeerResponse(name, projection);
@@ -162,6 +169,8 @@ export async function peerOperationResult(
     name === "forkSummarySkip"
   )
     return parseAidenRemoteChatProjection(value, "Peer chat");
+  if (name === "contextPressure")
+    return parseAidenRemoteChatContextPressure(value, "Peer chat context pressure");
   if (name === "forkChat")
     return parseAidenRemoteChatForkResult(value, "Peer chat fork");
   if (name === "forkSummaryCancel") return forkSummaryCancelled(value);
@@ -175,13 +184,29 @@ export async function peerOperationResult(
   return value;
 }
 
+/**
+ * A query value as the host reads it back. Hosts before contract revision 41
+ * refuse any `%` in a URL, so what they could read stays literal: a space
+ * travels as `+` (which every host decodes) and the separators ids and
+ * cursors use (`: @ / $ , ; =`) are left as they are; the host splits each
+ * pair at its first `=`. Only a character that can't travel literally
+ * (`& + # %`, quotes, accents, emoji) is percent-encoded, which revision 41
+ * hosts accept.
+ */
+export function hostQueryValue(value: string): string {
+  return encodeURIComponent(value)
+    .replace(/%(3A|40|2F|24|2C|3B|3D)/giu, (escape) => decodeURIComponent(escape))
+    .replace(/'/gu, "%27")
+    .replace(/%20/gu, "+");
+}
+
 function query(entries: [string, string | undefined][]): string {
   const present = entries.filter(
     (entry): entry is [string, string] => entry[1] !== undefined,
   );
   return present.length === 0
     ? ""
-    : `?${present.map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join("&")}`;
+    : `?${present.map(([key, value]) => `${key}=${hostQueryValue(value)}`).join("&")}`;
 }
 
 /** Renderer selects a closed operation, never an arbitrary URL, header or credential. */
@@ -267,6 +292,22 @@ export function peerOperationRequest(
     case "skills":
       path = `/chats/${id()}/skills`;
       break;
+    case "contextPressure": {
+      // A model pair travels whole, or not at all: the host prices the chat's own model then.
+      if ((input.providerId === undefined) !== (input.modelId === undefined))
+        throw new Error("Invalid peer context model.");
+      path = `/chats/${id()}/context`;
+      if (input.providerId !== undefined) {
+        // The host takes no percent-encoding, so the ids go literally or not at all.
+        const literal = (raw: unknown) => {
+          if (typeof raw !== "string" || !AIDEN_REMOTE_CONTEXT_MODEL_ID.test(raw))
+            throw new Error("Invalid peer context model.");
+          return raw;
+        };
+        path += `?providerId=${literal(input.providerId)}&modelId=${literal(input.modelId)}`;
+      }
+      break;
+    }
     case "tasks":
       path = `/chats/${id()}/tasks`;
       break;
@@ -304,6 +345,9 @@ export function peerOperationRequest(
     case "botSession":
       path = `/bots/${id()}/session`;
       break;
+    case "botSessionImage":
+      path = `/bots/${id()}/session/images/${item()}`;
+      break;
     case "createChat":
       path = "/chats";
       method = "POST";
@@ -337,6 +381,11 @@ export function peerOperationRequest(
     case "selectFolder":
       path = "/workspace-browser/selections";
       method = "POST";
+      break;
+    case "cloneWorkspace":
+      path = "/workspaces";
+      method = "POST";
+      needsKey = true;
       break;
     case "createWorkspace":
       path = "/workspaces";
@@ -495,5 +544,6 @@ export function peerOperationRequest(
     ...(needsKey ? { idempotencyKey: token(input.idempotencyKey, 16) } : {}),
     ...(needsRevision ? { revision: token(input.revision, 1) } : {}),
     ...(maxBodyBytes !== undefined ? { maxBodyBytes } : {}),
+    ...(operation === "cloneWorkspace" ? { timeoutMs: 115_000 } : {}),
   };
 }

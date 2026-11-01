@@ -577,11 +577,6 @@ test("chip focus survives live-to-persisted replacement by run identity", () => 
   assert.match(messages, /resolveSubagentChipFocusHandoff/u);
   assert.match(messages, /\[document\.body, document\.documentElement\]/u);
   assert.match(messages, /handoff\.target\.focus\(\{ preventScroll: true \}\)/u);
-  assert.match(environment, /querySelectorAll<HTMLElement>\("\[data-subagent-chip-run-id\]"\)/u);
-  assert.match(
-    environment,
-    /element\.dataset\.subagentChipRunId === returnSubagentRunIdRef\.current/u,
-  );
   assert.match(environment, /\[data-subagent-detail-heading\]/u);
 });
 

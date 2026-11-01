@@ -110,12 +110,60 @@ function parseInstant(value: unknown): string | undefined {
 }
 
 /**
+ * The agent marks the option it recommends by ending its label with
+ * "(Recommended)". The label itself stays the answer's wire identity; cards
+ * show the text before the marker with a separate tag, and preselect it.
+ */
+const RECOMMENDED_LABEL_SUFFIX = /\s*\(recommended\)$/iu;
+
+export function parseRecommendedOptionLabel(label: string): { text: string; recommended: boolean } {
+  const text = label.replace(RECOMMENDED_LABEL_SUFFIX, "");
+  return text && text !== label ? { text, recommended: true } : { text: label, recommended: false };
+}
+
+/** An option label as the person reads it: without the "(Recommended)" marker. */
+export function askUserOptionDisplayLabel(label: string): string {
+  return parseRecommendedOptionLabel(label).text;
+}
+
+/**
+ * The starting answer for a question whose options carry the recommended
+ * marker: the first marked option of a single choice, or every marked option
+ * of a multi-select. Undefined when nothing is marked.
+ */
+export function recommendedAskUserAnswer(
+  question: AskUserQuestionV1,
+  questionIndex: number,
+): AskUserQuestionAnswerV1 | undefined {
+  const marked = question.options
+    .map((option) => option.label)
+    .filter((label) => parseRecommendedOptionLabel(label).recommended);
+  if (marked.length === 0) return undefined;
+  return question.multiSelect
+    ? { questionIndex, kind: "multi", selected: marked }
+    : { questionIndex, kind: "option", answer: marked[0]! };
+}
+
+/** Starting answers for a whole questionnaire, keyed by question index. */
+export function recommendedAskUserAnswers(
+  questions: readonly AskUserQuestionV1[],
+): Map<number, AskUserQuestionAnswerV1> {
+  const answers = new Map<number, AskUserQuestionAnswerV1>();
+  questions.forEach((question, index) => {
+    const answer = recommendedAskUserAnswer(question, index);
+    if (answer) answers.set(index, answer);
+  });
+  return answers;
+}
+
+/**
  * Plain-text rendering of an owner's answers, shared by the agent tool result
  * and the late-reply follow-up message.
  */
 export function formatAskUserQuestionAnswers(
   questions: readonly AskUserQuestionV1[],
   answers: readonly AskUserQuestionAnswerV1[],
+  label: (label: string) => string = (value) => value,
 ): string {
   const byIndex = new Map(answers.map((answer) => [answer.questionIndex, answer]));
   return questions
@@ -123,9 +171,9 @@ export function formatAskUserQuestionAnswers(
       const answer = byIndex.get(index);
       if (!answer) return `${index + 1}. ${question.question}\nAnswer: Skipped`;
       if (answer.kind === "multi") {
-        return `${index + 1}. ${question.question}\nAnswer: ${answer.selected.join(", ")}`;
+        return `${index + 1}. ${question.question}\nAnswer: ${answer.selected.map(label).join(", ")}`;
       }
-      return `${index + 1}. ${question.question}\nAnswer: ${answer.answer}`;
+      return `${index + 1}. ${question.question}\nAnswer: ${answer.kind === "option" ? label(answer.answer) : answer.answer}`;
     })
     .join("\n\n");
 }
@@ -145,7 +193,8 @@ export function summarizeAskUserQuestionResponse(
   const answerText = (index: number) => {
     const answer = byIndex.get(index);
     if (!answer) return "Skipped";
-    return answer.kind === "multi" ? answer.selected.join(", ") : answer.answer;
+    if (answer.kind === "multi") return answer.selected.map(askUserOptionDisplayLabel).join(", ");
+    return answer.kind === "option" ? askUserOptionDisplayLabel(answer.answer) : answer.answer;
   };
   if (questions.length === 1) return answerText(0);
   return questions.map((question, index) => `${question.header}: ${answerText(index)}`).join("\n");
@@ -161,7 +210,8 @@ export function formatLateAskUserQuestionFollowUp(
   answers: readonly AskUserQuestionAnswerV1[],
 ): string | undefined {
   if (answers.length === 0) return undefined;
-  return `Answering your earlier question, which expired before I replied:\n\n${formatAskUserQuestionAnswers(questions, answers)}`;
+  // Sent as the person's own message, so it reads without the marker.
+  return `Answering your earlier question, which expired before I replied:\n\n${formatAskUserQuestionAnswers(questions, answers, askUserOptionDisplayLabel)}`;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -204,22 +254,26 @@ export function parseAskUserQuestions(value: unknown): AskUserQuestionV1[] | und
     ) {
       return undefined;
     }
+    // Labels are compared as the person reads them, without the
+    // "(Recommended)" marker, so two options never look the same.
     const labels = new Set<string>();
     const options: AskUserQuestionOptionV1[] = [];
     for (const candidateOption of input.options) {
       const option = record(candidateOption);
       const label = boundedString(option?.label, ASK_USER_MAX_LABEL_LENGTH);
       const description = boundedString(option?.description, ASK_USER_MAX_DESCRIPTION_LENGTH);
+      const shown = label === undefined ? undefined : askUserOptionDisplayLabel(label);
       if (
         !option ||
         !label ||
+        !shown ||
         !description ||
-        labels.has(label) ||
-        RESERVED_OPTION_LABELS.has(label)
+        labels.has(shown) ||
+        RESERVED_OPTION_LABELS.has(shown)
       ) {
         return undefined;
       }
-      labels.add(label);
+      labels.add(shown);
       options.push({ label, description });
     }
     seenQuestions.add(question);
@@ -392,7 +446,9 @@ export function buildAskUserQuestionRecap(
       };
       const answer = byIndex.get(index);
       if (!answer) return { ...base, kind: "skipped", answers: [] };
-      if (answer.kind === "multi") return { ...base, kind: "multi", answers: [...answer.selected] };
+      if (answer.kind === "multi") {
+        return { ...base, kind: "multi", answers: answer.selected.map(askUserOptionDisplayLabel) };
+      }
       if (answer.kind === "custom") {
         const text = stripUnsafeControls(answer.answer);
         return {
@@ -401,7 +457,7 @@ export function buildAskUserQuestionRecap(
           answers: [clipRecapText(text, ASK_USER_RECAP_MAX_CUSTOM_LENGTH)],
         };
       }
-      return { ...base, kind: "option", answers: [answer.answer] };
+      return { ...base, kind: "option", answers: [askUserOptionDisplayLabel(answer.answer)] };
     }),
   });
 }

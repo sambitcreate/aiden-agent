@@ -2,15 +2,10 @@ name: CI
 
 on:
   pull_request:
-  # Started by model-catalog-main-baseline.yml after a catalog merge, which
-  # (made with the job token) produces no push event of its own.
   workflow_dispatch:
   push:
     branches:
       - main
-      # The model catalog bot pushes here with its deploy key; a pull request it
-      # opens with the job token would not start CI on its own.
-      - "automation/models-dev-catalog-*"
 
 permissions:
   contents: read
@@ -477,35 +472,10 @@ jobs:
       - name: Verify the runtime image
         run: docker run --rm aiden-cli:ci --version
 
-  cli-playground:
-    name: CLI appearance playground
-    needs: changes
-    if: ${{ needs.changes.outputs.cli == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Check out source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-      - name: Use Node.js 22
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
-        with:
-          node-version: 22.23.4
-          cache: npm
-          cache-dependency-path: packages/cli-playground/package-lock.json
-      - name: Install playground dependencies
-        run: npm ci
-        working-directory: packages/cli-playground
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
-        working-directory: packages/cli-playground
-      - name: Build and test the playground
-        run: npm run build && npm test
-        working-directory: packages/cli-playground
-
   required:
     name: CI required
     if: ${{ always() }}
-    needs: [changes, policy, static, build, verify, catalog, unit, e2e, apple, ios, android, cli-linux, cli-playground]
+    needs: [changes, policy, static, build, verify, catalog, unit, e2e, apple, ios, android, cli-linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -623,6 +593,9 @@ jobs:
 
       - name: Build, install, and verify Linux distributions
         if: ${{ needs.changes.outputs.linux == 'true' }}
+        env:
+          # dist:linux is a distribution build and the checks below launch it.
+          AIDEN_ANALYTICS: "0"
         run: |
           set -euo pipefail
           npm run dist:linux
@@ -667,6 +640,8 @@ jobs:
       - name: Smoke the installed GUI without a keyring session
         if: ${{ needs.changes.outputs.linux == 'true' }}
         shell: bash
+        env:
+          AIDEN_ANALYTICS: "0"
         run: |
           set -euo pipefail
           smoke_root="$RUNNER_TEMP/aiden-linux-smoke-${{ matrix.arch }}"

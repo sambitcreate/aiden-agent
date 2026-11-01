@@ -520,6 +520,100 @@ class AidenBotSessionControllerTest {
         assertTrue(transport.sends.isEmpty())
     }
 
+    /**
+     * Revision 45: an image the Bot shared is read from the Mac when it is drawn, once while the
+     * chat is open; a failed read is tried again, and an id the transcript doesn't hold is never asked for.
+     */
+    @Test
+    fun aSharedImageIsReadOnceAndAFailedReadIsTriedAgain() = runTest {
+        val image = AidenBotSessionEntry.SharedImage(id = "entry_7", name = "chart.png", mimeType = "image/png", size = 4)
+        val withImage = needsModelSession.copy(state = AidenBotSessionState.IDLE, entries = listOf(image))
+        val bytes = byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47)
+        val transport = object : AidenBotSessionTransport by FakeTransport(withImage) {
+            val reads = mutableListOf<String>()
+            var held: ByteArray? = null
+            override suspend fun session(botId: String) = withImage
+            override suspend fun sharedImage(botId: String, entryId: String): ByteArray {
+                reads += entryId
+                return held ?: throw IOException("offline")
+            }
+        }
+        val controller = AidenBotSessionController(withImage.botId, transport, backgroundScope)
+        controller.refetch()
+
+        assertNull("the Mac couldn't send it yet", controller.sharedImageData(image.id))
+        transport.held = bytes
+        assertTrue(bytes.contentEquals(controller.sharedImageData(image.id)))
+        assertTrue(bytes.contentEquals(controller.sharedImageData(image.id)))
+        assertEquals("one failed read, then one read kept for the chat", listOf(image.id, image.id), transport.reads)
+
+        assertNull(controller.sharedImageData("entry_99"))
+        assertEquals("an id the transcript doesn't hold never reaches the Mac", 2, transport.reads.size)
+    }
+
+    /**
+     * Revision 45: shared images stay within a byte budget. The oldest drawn image is dropped and
+     * read again when it is drawn next; an image the transcript no longer shows is dropped; closing
+     * the chat lets every image go.
+     */
+    @Test
+    fun sharedImagesStayWithinTheirBudgetAndAreReadAgainAfterBeingDropped() = runTest {
+        fun image(id: String) = AidenBotSessionEntry.SharedImage(id = id, name = "$id.png", mimeType = "image/png", size = 4)
+        var shown = needsModelSession.copy(state = AidenBotSessionState.IDLE, entries = listOf(image("entry_1"), image("entry_2"), image("entry_3")))
+        val transport = object : AidenBotSessionTransport by FakeTransport(shown) {
+            val reads = mutableListOf<String>()
+            override suspend fun session(botId: String) = shown
+            override suspend fun sharedImage(botId: String, entryId: String): ByteArray {
+                reads += entryId
+                return ByteArray(4) { entryId.last().code.toByte() }
+            }
+        }
+        // Room for two 4-byte images.
+        val controller = AidenBotSessionController(shown.botId, transport, backgroundScope, sharedImageBudgetBytes = 8)
+        controller.refetch()
+
+        controller.sharedImageData("entry_1")
+        controller.sharedImageData("entry_2")
+        controller.sharedImageData("entry_1")
+        assertEquals("both fit, so the second draw of entry_1 is kept", listOf("entry_1", "entry_2"), transport.reads)
+        controller.sharedImageData("entry_3")
+        controller.sharedImageData("entry_2")
+        assertEquals(
+            "entry_3 pushed out the least recently drawn image, entry_2, which is read again",
+            listOf("entry_1", "entry_2", "entry_3", "entry_2"),
+            transport.reads
+        )
+        assertTrue(ByteArray(4) { '2'.code.toByte() }.contentEquals(controller.sharedImageData("entry_2")))
+
+        // entry_2 leaves the transcript: once another image is read, it is no longer kept.
+        shown = shown.copy(entries = listOf(image("entry_3"), image("entry_4")))
+        controller.refetch()
+        controller.sharedImageData("entry_4")
+        assertNull("an image the transcript no longer shows is not read", controller.sharedImageData("entry_2"))
+
+        controller.stopFollowing()
+        controller.sharedImageData("entry_3")
+        assertEquals("closing the chat dropped what it held", "entry_3", transport.reads.last())
+    }
+
+    /** The viewer caches pictures app-wide by attachment id, so the same entry id in two Bots draws two pictures. */
+    @Test
+    fun sharedImagesOfTwoBotsNeverShareAViewerId() = runTest {
+        val image = AidenBotSessionEntry.SharedImage(id = "entry_7", name = "chart.png", mimeType = "image/png", size = 4)
+        val one = AidenBotSessionController("bot-one", FakeTransport(needsModelSession), backgroundScope)
+        val two = AidenBotSessionController("bot-two", FakeTransport(needsModelSession), backgroundScope)
+        val first = one.sharedImageAttachment(image)
+        val second = two.sharedImageAttachment(image)
+        assertNotEquals(first.id, second.id)
+        assertEquals(first.id, one.sharedImageAttachment(image).id)
+        assertTrue("the viewer still accepts the id", first.isWireSafe && second.isWireSafe)
+        val otherMac = AidenBotSessionController(
+            "bot-one", FakeTransport(needsModelSession), backgroundScope,
+            sessionKey = AidenBotSessionKey("instance-b", "device-b", "bot-one")
+        )
+        assertNotEquals(first.id, otherMac.sharedImageAttachment(image).id)
+    }
+
     @Test
     fun aLostSendKeepsItsKeyAndGoesOutAgainWhileConnected() = runTest {
         val idle = needsModelSession.copy(state = AidenBotSessionState.IDLE)
@@ -2226,6 +2320,47 @@ class AidenBotSessionControllerTest {
         assertFalse(controller.state.value.outbox.single().unheld)
     }
 
+    // A message taken on an earlier visit can have its entry beyond the window a snapshot carries.
+    // Coming back, it never sits at the bottom as Sent for the grace; one sent on this visit still waits it out.
+    @Test
+    fun aMessageTakenOnAnEarlierVisitThatTheMacNoLongerShowsDoesNotFlashBack() = runTest {
+        val sessions = AidenBotSessionStore(null, io = { it.run() })
+        val transport = FakeTransport(runningSession)
+        transport.receiptIds += "21"
+        val first = AidenBotSessionController(
+            runningSession.botId, transport, backgroundScope, activitySupported = true, sessionKey = chatKey, store = sessions
+        )
+        first.refetch()
+        runCurrent()
+        assertTrue(first.send("Plan lunch"))
+        runCurrent()
+        assertEquals(AidenBotOutgoingStatus.SENT, first.state.value.outbox.single().status)
+        first.stopFollowing()
+        runCurrent()
+
+        val next = AidenBotSessionController(
+            runningSession.botId, transport, backgroundScope, activitySupported = true, sessionKey = chatKey, store = sessions
+        )
+        assertEquals("it waits for the Mac's word", listOf("Plan lunch"), next.state.value.outgoing.map { it.text })
+        next.refetch()
+        runCurrent()
+        assertTrue("nothing on the Mac shows it: no Sent bubble", next.state.value.outgoing.isEmpty())
+        next.stopFollowing()
+        runCurrent()
+
+        // Open again before its grace ran out: it stays hidden while connecting.
+        val third = AidenBotSessionController(
+            runningSession.botId, transport, backgroundScope, activitySupported = true, sessionKey = chatKey, store = sessions
+        )
+        assertTrue(third.state.value.outgoing.isEmpty())
+        // The Mac lists it after all: its own Queued bubble stands for it, with no copy beside it.
+        val queued = AidenBotQueuedMessage("21", AidenStreamInputMode.QUEUE, "Plan lunch")
+        third.handle(snapshotOf(runningSession.copy(seq = runningSession.seq + 1, queued = listOf(queued))))
+        assertEquals("21", third.state.value.outbox.single().queuedId)
+        assertEquals(listOf(queued), third.state.value.queued)
+        assertTrue(third.state.value.outgoing.isEmpty())
+    }
+
     // Controller polish: a frozen request refused for the Bot's state keeps its key for Try again.
     @Test
     fun aFrozenMessageTheBotCantTakeKeepsItsKey() = runTest {
@@ -2386,6 +2521,50 @@ class AidenBotSessionControllerTest {
         assertFalse(controller.answerHandoff(AidenBotHandoffOutcome.SKIPPED))
         assertNull("answered on the Mac or withdrawn", controller.state.value.handoff)
         assertEquals(AidenBotSessionController.HANDOFF_EXPIRED, controller.state.value.actionError)
+    }
+
+    @Test
+    fun aCardThatTakesNoNoteHoldsTheComposerAndIsAnsweredOnlyBare() = runTest {
+        val noNote = handoffSession.copy(handoff = handoffSession.handoff!!.copy(takesNote = false))
+        val transport = HandoffTransport(noNote)
+        val controller = AidenBotSessionController(noNote.botId, transport, backgroundScope)
+        controller.refetch()
+        assertEquals(AidenBotComposerMode.HELD_FOR_NO_NOTE, controller.state.value.composerMode)
+        assertFalse("a code typed here would reach the Bot", controller.state.value.composerEnabled)
+        assertFalse(controller.state.value.composerAnswersHandoff)
+
+        assertFalse(controller.answerHandoff(AidenBotHandoffOutcome.DONE, "123456"))
+        assertTrue("a note never leaves the phone for this card", transport.answers.isEmpty())
+        assertNotEquals("the card still waits", null, controller.state.value.handoff)
+
+        assertTrue(controller.answerHandoff(AidenBotHandoffOutcome.DONE))
+        assertEquals(AidenBotHandoffAnswerRequest(AidenBotHandoffOutcome.DONE), transport.answers.single().request)
+        assertEquals(AidenBotComposerMode.MESSAGE, controller.state.value.composerMode)
+    }
+
+    @Test
+    fun aStepOnTheBotsOwnScreenIsFinishedOnTheMacOrAnsweredDone() = runTest {
+        val onMac = handoffSession.copy(handoff = handoffSession.handoff!!.copy(openUrl = null, onMac = true))
+        val transport = HandoffTransport(onMac)
+        val controller = AidenBotSessionController(onMac.botId, transport, backgroundScope)
+        controller.refetch()
+        assertEquals("a note still marks the step done", AidenBotComposerMode.HANDOFF_NOTE, controller.state.value.composerMode)
+
+        transport.opened = true
+        assertTrue(controller.finishHandoffOnMac())
+        assertEquals(AidenBotHandoffMacPrompt(onMac.handoff!!.waitId, opened = true), controller.state.value.handoffMacPrompt)
+        assertNotEquals("the card stays", null, controller.state.value.handoff)
+
+        assertTrue(controller.answerHandoff(AidenBotHandoffOutcome.DONE))
+        assertEquals(AidenBotHandoffAnswerRequest(AidenBotHandoffOutcome.DONE), transport.answers.single().request)
+    }
+
+    @Test
+    fun aPlainStepIsNotSentToTheMac() = runTest {
+        val transport = HandoffTransport(handoffSession)
+        val controller = AidenBotSessionController(handoffSession.botId, transport, backgroundScope)
+        controller.refetch()
+        assertFalse("a step on the person's own page opens on the phone", controller.finishHandoffOnMac())
     }
 
     @Test

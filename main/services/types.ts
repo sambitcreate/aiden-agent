@@ -1,5 +1,6 @@
 import type { McpExposure } from "../../renderer/shared/mcp-exposure.js";
 import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
+import type { BotRoutineFailure } from "../../renderer/shared/bot-routine-failure.js";
 import type { BotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
 import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import type { CompactionEngine, CompactionModelOverrides } from "../../renderer/shared/compaction.js";
@@ -23,6 +24,7 @@ import type { ChatForkLineageV1 } from "../../renderer/shared/chat-copy-contract
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import type { WebSearchSettingsV2 } from "./web-search-provider-registry-core.js";
+import type { WebFetchSettingsV1 } from "../../renderer/shared/web-fetch-settings.js";
 import type { HiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
 import type { ModelPadMetric, ModelPadPlacements } from "../../renderer/shared/model-pad-preferences.js";
 
@@ -145,6 +147,14 @@ export interface Workspace {
   permission: WorkspacePermission;
   /** Workspace-scoped durable memory. Omitted means enabled. */
   memoryEnabled?: boolean;
+  /**
+   * Skills (by canonical name) switched off for this workspace's chats. The
+   * model can't see or call them here; typing `$skill` still runs one.
+   * Omitted means every skill that is on in Settings is on here too.
+   */
+  disabledSkills?: string[];
+  /** Connector (MCP server) ids this workspace's chats can't use. Omitted means none. */
+  disabledMcpServerIds?: string[];
   /** Present only for worktrees created and owned by Aiden. */
   managedWorktree?: ManagedWorktree;
   /**
@@ -152,6 +162,12 @@ export interface Workspace {
    * `~/aiden/<slug>` folder). Device-local; Remote projections leave it out.
    */
   scratch?: true;
+  /**
+   * Set on the hidden workspace behind a "No workspace" chat: one per chat, in
+   * Aiden's app-data `chats/` folder, using global settings. Never listed as a
+   * workspace row or choice. Device-local; Remote projections leave it out.
+   */
+  noWorkspace?: true;
   createdAt: number;
   updatedAt: number;
 }
@@ -340,7 +356,7 @@ export interface ChatMessage {
   htmlArtifacts?: ChatHtmlArtifactV1[];
   /** Producing tool call per HTML artifact, so it renders at that point in the reply. */
   htmlArtifactPlacements?: HtmlArtifactPlacementV1[];
-  /** Producing generate_image call per generated image attachment. */
+  /** Producing call (generate_image, display_image or share_image) per image attachment. */
   imagePlacements?: ChatImagePlacementV1[];
   /** Native (render_ui) visuals, drawn from Aiden's component catalog. */
   uiVisuals?: ChatUiVisualV1[];
@@ -348,6 +364,8 @@ export interface ChatMessage {
   visualSnapshots?: VisualSnapshotRefV1[];
   /** Safe display-only provenance for an explicitly invoked skill. */
   skill?: SkillProvenanceV1;
+  /** A user-role follow-up notice (job ended, pull request news, check result), drawn as a card. */
+  notice?: import("../../renderer/shared/agent-notices.js").AgentNoticeV1;
   /** Renderer-safe tool milestones associated with this assistant response. */
   timeline?: GenerationTimeline;
   /** Content-free turn duration and provider-reported token totals for the footer. */
@@ -524,7 +542,14 @@ export interface ScheduledTask {
     requestId: string;
     prompt: string;
     name: string;
+    /**
+     * Set when this entry is a delayed retry of a failed fire rather than a
+     * scheduled fire. `fireTime` is when the retry becomes due.
+     */
+    retry?: { failedRunId: string; attempt: 1 | 2 };
   }>;
+  /** When a Bot routine was last turned back on; failure streaks count only runs after it. */
+  enabledAt?: number;
   lastRunAt?: number;
   workspaceId?: string;
   providerId?: string;
@@ -557,6 +582,8 @@ export interface ScheduledTask {
   routineSchedule?: BotRoutineSchedule;
   /** The Bot proposal an accepted routine came from; accepting it again returns this task. */
   sourceProposalId?: string;
+  /** Main-owned: a one-time routine the Bot set for itself with `wake_up`, not one the person made. Set once. */
+  wakeUp?: BotWakeUpMarker;
   notify: boolean;
   lastResult?: ScheduledRunResult;
   lastError?: string;
@@ -574,6 +601,12 @@ export interface ScheduledRun {
   reason?: ScheduledRunSkipReason;
   output: string;
   error?: string;
+  /** Why an otherwise indistinguishable failure happened. Bot routines only. */
+  failure?: BotRoutineFailure;
+  /** The reply claimed a step worked that failed (spec §5 S5). Names only, bounded. */
+  claimCheck?: { stepIds: string[]; toolNames: string[] };
+  /** The Bot's behavior fingerprint when the run was sent (spec §4.4). */
+  fingerprint?: string;
   chatId?: string;
 }
 
@@ -606,7 +639,14 @@ export interface ScheduledTaskInput {
   routineSchedule?: BotRoutineSchedule;
   /** Main-owned: the Bot proposal this routine was accepted from. Set once, at creation. */
   sourceProposalId?: string;
+  /** Main-owned: the Bot set this one-time routine for itself (`wake_up`). Set once, at creation. */
+  wakeUp?: BotWakeUpMarker;
   notify?: boolean;
+}
+
+/** A Bot's own wake-up: when the Bot set it, for the "You set this wake-up at …" framing. */
+export interface BotWakeUpMarker {
+  setAt: number;
 }
 
 export interface ScheduledTaskSettings {
@@ -755,6 +795,16 @@ export interface AppSettings {
   compactionModelOverrides?: CompactionModelOverrides;
   /** Explicit opt-in to paid cache refreshes during active foreground runs. */
   cacheWarmingEnabled?: boolean;
+  /** Longest wait, in hours, for a usage limit to clear before a reply fails; 0 turns waiting off. Absent means 6. */
+  usageLimitWaitHours?: import("../../renderer/shared/usage-limits.js").UsageLimitWaitHours;
+  /**
+   * Settings → Bots: routine runs go ahead with Ask first steps and connected-app
+   * changes instead of waiting for the person. Never lowers Hand off to me rules,
+   * the password and money rules, or chat turns. Absent means off.
+   */
+  botRoutinesGoAhead?: boolean;
+  /** Settings → Limits & spending: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
+  spendingLimits?: import("../../renderer/shared/spending.js").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
@@ -773,6 +823,8 @@ export interface AppSettings {
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;
+  /** Versioned web page reading (`web_fetch`) and extract mode; keys stay main-owned. */
+  webFetch?: WebFetchSettingsV1;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;
   /** Whether Google is exposed for voice only or for both chat models and voice. */

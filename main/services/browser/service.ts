@@ -9,6 +9,7 @@ import {
   type Session,
 } from "electron";
 import { BrowserBackgroundThrottling } from "./background-throttling.js";
+import { PIP_FRAME_INTERVAL_MS, PIP_SCREENCAST, PipFeed } from "./pip-feed.js";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -98,6 +99,8 @@ import {
 } from "./credential-fields.js";
 import { configureBrowserPermissionHandlers } from "./permission-policy.js";
 import { configStore } from "../config-store.js";
+import { browserRecordingBytesMatch, browserRecordingsFolder, findBrowserRecording } from "./recordings.js";
+import { browserRecordingExtension } from "../../../renderer/shared/browser-recording.js";
 import { writeFileAtomic } from "../durable-fs.js";
 import { projectDiagnosticError } from "../diagnostics-contract.js";
 import { writeDiagnosticEvent } from "../diagnostic-journal.js";
@@ -176,8 +179,18 @@ interface LiveTab {
   attached?: BrowserWindow;
   floatingViewport?: BrowserTab["viewport"];
   pip?: BrowserWindow;
+  /** Only while the screencast is unavailable (DevTools is open). */
   pipTimer?: ReturnType<typeof setInterval>;
+  pipFeed?: PipFeed;
+  /** The throttling lease and window hosting that keep the page rendering for the preview. */
+  pipLease?: () => void;
+  pipUnhost?: () => void;
   recording?: RecordingSession;
+  /**
+   * A recording the five-minute limit stopped. The next stop returns it (or its
+   * error) instead of refusing, so the caller still gets the video it asked for.
+   */
+  autoStopped?: Promise<BrowserRecording>;
   pendingRecorder?: BrowserWindow;
   visible: boolean;
   /** Actions and captures running on this tab; while any is, a hidden tab stays in its window. */
@@ -274,7 +287,6 @@ export class BrowserService {
   private readonly tabs = new Map<string, LiveTab>();
   private readonly popupOwners = new Map<number, { workspaceId: string; ownerDocumentId: string }>();
   private readonly sessions = new Map<string, Session>();
-  private readonly recordings = new Map<string, BrowserRecording>();
   private readonly terminalTails = new Map<string, string>();
   private readonly agentFileAcquisitions = new Map<string, Set<AbortController>>();
   private profiles: BrowserProfile[] = clone(BUILT_IN_BROWSER_PROFILES);
@@ -858,6 +870,14 @@ export class BrowserService {
       tab.navigationCommand = undefined;
       tab.queue.interrupt();
       tab.backgroundThrottling.reset();
+      // A crash also ends an open Picture in Picture: its screencast died with
+      // the renderer, and the replacement starts hidden, where it paints nothing.
+      if (tab.pip) {
+        this.endPictureInPicture(tab);
+        if (!tab.pip.isDestroyed()) tab.pip.destroy();
+        tab.pip = undefined;
+        tab.state.pictureInPicture = false;
+      }
       // A crashed renderer cannot keep producing screencast frames. Finalize
       // the recorder instead of leaving it alive through an unrelated recovery.
       if (tab.recording) void this.stopRecording(tab).catch(() => {});
@@ -1060,8 +1080,10 @@ export class BrowserService {
         });
         tab.network = tab.network.slice(-200);
       }
-      if (method === "Page.screencastFrame") this.recordFrame(tab, params);
+      if (method === "Page.screencastFrame") this.screencastFrame(tab, params);
     });
+    // Opening DevTools detaches the debugger, which ends the screencast.
+    wc.debugger.on("detach", () => this.pipLostScreencast(tab));
     wc.on("destroyed", () => {
       if (!tab.closing) this.close(tab);
     });
@@ -1254,7 +1276,7 @@ export class BrowserService {
     tab.queue.interrupt();
     tab.backgroundThrottling.reset();
     this.detach(tab);
-    if (tab.pipTimer) clearInterval(tab.pipTimer);
+    this.endPictureInPicture(tab);
     this.cancelCrashRecovery(tab);
     if (tab.pip && !tab.pip.isDestroyed()) tab.pip.destroy();
     if (tab.recording) {
@@ -1304,6 +1326,9 @@ export class BrowserService {
         workspace.removeOwner = undefined;
         workspace.owner = undefined;
         void browserFileService.closeForWorkspace(workspaceId).catch(() => {});
+        // Nothing left to show a reopened window: the next use builds a fresh entry.
+        if (!workspace.state.tabs.length && !workspace.state.history.length && !workspace.state.servers.length)
+          this.workspaces.delete(workspaceId);
       }
   }
   closeForWorkspace(workspaceId: string): void {
@@ -1850,11 +1875,78 @@ export class BrowserService {
     tab.state.floating = enabled;
     if (publish) this.emit(tab.state.workspaceId);
   }
+  /** Stops feeding the Picture in Picture window; the window itself is the caller's. */
+  private endPictureInPicture(tab: LiveTab): void {
+    if (tab.pipTimer) clearInterval(tab.pipTimer);
+    tab.pipTimer = undefined;
+    const feed = tab.pipFeed;
+    tab.pipFeed = undefined;
+    feed?.dispose();
+    tab.pipLease?.();
+    tab.pipLease = undefined;
+    tab.pipUnhost?.();
+    tab.pipUnhost = undefined;
+    // A recording keeps its own screencast running.
+    if (feed && !tab.recording && !tab.closing)
+      void this.send(tab, "Page.stopScreencast").catch(() => {});
+  }
+  private ackScreencastFrame(tab: LiveTab, sessionId: unknown): void {
+    const wc = tab.view.webContents;
+    if (!wc.isDestroyed() && wc.debugger.isAttached())
+      void wc.debugger.sendCommand("Page.screencastFrameAck", { sessionId }).catch(() => {});
+  }
+  private screencastFrame(tab: LiveTab, params: Record<string, any>): void {
+    const feed = tab.pipFeed;
+    // Picture in Picture alone paces the screencast by holding the ack until
+    // it paints; a recording needs every frame, so it acknowledges at once.
+    const pipPaces = Boolean(feed) && !tab.recording;
+    if (!pipPaces) this.ackScreencastFrame(tab, params.sessionId);
+    this.recordFrame(tab, params);
+    feed?.push(params.data, params.sessionId, pipPaces);
+  }
+  /**
+   * The capture loop Picture in Picture uses on Linux, and falls back to when
+   * the tab's debugger is unavailable (DevTools is open): a PNG capture every 250 ms.
+   */
+  private pipCaptureLoop(tab: LiveTab, pip: BrowserWindow, paint: (source: string) => Promise<unknown>): void {
+    const current = () => tab.pip === pip && !pip.isDestroyed() && !tab.closing;
+    let pending = false;
+    let lastFrame = "";
+    const frame = async () => {
+      if (pending || !current()) return;
+      // A hidden or minimized preview has no viewer; skip the capture.
+      if (lastFrame && (!pip.isVisible() || pip.isMinimized())) return;
+      pending = true;
+      try {
+        const image = await this.capture(tab);
+        const source = `data:${image.mimeType};base64,${image.data}`;
+        // A static page re-encodes to the same frame; skip the repaint.
+        if (current() && source !== lastFrame) {
+          await paint(source);
+          lastFrame = source;
+        }
+      } catch {
+        /* A cold or navigating page retries on the next frame. */
+      } finally {
+        pending = false;
+      }
+    };
+    if (tab.pipTimer) clearInterval(tab.pipTimer);
+    tab.pipTimer = setInterval(() => void frame(), PIP_FRAME_INTERVAL_MS);
+  }
+  /** The debugger went away (DevTools opened): keep the preview alive by capturing instead. */
+  private pipLostScreencast(tab: LiveTab): void {
+    const pip = tab.pip;
+    const feed = tab.pipFeed;
+    if (!pip || pip.isDestroyed() || !feed || tab.closing) return;
+    tab.pipFeed = undefined;
+    feed.dispose();
+    this.pipCaptureLoop(tab, pip, (source) =>
+      pip.webContents.executeJavaScript(`document.querySelector('img').src=${JSON.stringify(source)}`),
+    );
+  }
   private async pictureInPicture(tab: LiveTab, enabled: boolean): Promise<void> {
-    if (tab.pipTimer) {
-      clearInterval(tab.pipTimer);
-      tab.pipTimer = undefined;
-    }
+    this.endPictureInPicture(tab);
     if (tab.pip && !tab.pip.isDestroyed()) tab.pip.destroy();
     tab.pip = undefined;
     tab.state.pictureInPicture = enabled;
@@ -1878,8 +1970,7 @@ export class BrowserService {
     const current = () => tab.pip === pip && !pip.isDestroyed() && !tab.closing;
     pip.once("closed", () => {
       if (tab.pip !== pip) return;
-      if (tab.pipTimer) clearInterval(tab.pipTimer);
-      tab.pipTimer = undefined;
+      this.endPictureInPicture(tab);
       tab.pip = undefined;
       tab.state.pictureInPicture = false;
       this.emit(tab.state.workspaceId);
@@ -1894,35 +1985,50 @@ export class BrowserService {
       throw error;
     }
     if (!current()) return;
-    let pending = false;
-    let lastFrame = "";
-    const frame = async () => {
-      if (pending || !current()) return;
-      // A hidden or minimized preview has no viewer; skip the capture.
-      if (lastFrame && (!pip.isVisible() || pip.isMinimized())) return;
-      pending = true;
-      try {
-        const image = await this.capture(tab);
-        const source = `data:${image.mimeType};base64,${image.data}`;
-        // A static page re-encodes to the same frame; skip the repaint.
-        if (current() && source !== lastFrame) {
-          await pip.webContents.executeJavaScript(
-            `document.querySelector('img').src=${JSON.stringify(source)}`,
-          );
-          lastFrame = source;
-        }
-      } catch {
-        /* A cold or navigating page retries on the next frame. */
-      } finally {
-        pending = false;
-      }
-    };
-    await frame();
-    if (current()) tab.pipTimer = setInterval(() => void frame(), 250);
+    const paint = (source: string) =>
+      pip.webContents.executeJavaScript(`document.querySelector('img').src=${JSON.stringify(source)}`);
+    // A still page sends no screencast frame until it changes; show it now.
+    try {
+      const image = await this.capture(tab);
+      if (current()) await paint(`data:${image.mimeType};base64,${image.data}`);
+    } catch {
+      /* A cold page shows its first screencast frame instead. */
+    }
+    if (!current()) return;
+    // Linux hosts every tab invisibly for capture; its screencast behind a
+    // hidden host window is unverified, so it keeps the capture loop.
+    if (process.platform === "linux") {
+      this.pipCaptureLoop(tab, pip, paint);
+      return;
+    }
+    // Keep the page rendering for the preview's lifetime, even as a hidden tab
+    // or behind a minimized window: without both, Chromium stops the screencast.
+    tab.pipLease = tab.backgroundThrottling.acquire();
+    tab.pipUnhost = this.hostWhileActive(tab);
+    // Chromium encodes changed frames off the main thread; this only paints them.
+    const feed = new PipFeed({
+      paint: async (data) => {
+        if (current()) await paint(`data:image/jpeg;base64,${data}`);
+      },
+      ack: (sessionId) => this.ackScreencastFrame(tab, sessionId),
+      viewing: () => current() && pip.isVisible() && !pip.isMinimized(),
+    });
+    tab.pipFeed = feed;
+    pip.on("show", () => feed.resume());
+    pip.on("restore", () => feed.resume());
+    // A recording's screencast already feeds the preview.
+    if (tab.recording) return;
+    try {
+      await this.send(tab, "Page.startScreencast", { ...PIP_SCREENCAST });
+    } catch {
+      if (tab.pipFeed === feed) this.pipLostScreencast(tab);
+    }
   }
   private async startRecording(tab: LiveTab, fps: number, signal?: AbortSignal): Promise<void> {
     if (tab.recording) throw new Error("This browser tab is already recording.");
     browserBoundedNumber(fps, 1, 60, "Recording frame rate");
+    // A new recording supersedes an unclaimed automatic stop; its file stays on disk.
+    tab.autoStopped = undefined;
     const recorder = new BrowserWindow({
       show: false,
       width: 32,
@@ -1962,9 +2068,9 @@ export class BrowserService {
             canvas.height=${Math.max(1, Math.min(1080, bounds.height))};
             const context=canvas.getContext('2d');
             const stream=canvas.captureStream(${fps});
-            const mime=MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm';
-            const media=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:4000000});
-            const state=globalThis.__aidenRecording={canvas,media,chunks:[],stream,bytes:0,error:null};
+            const mime=['video/mp4;codecs=avc1.42E01E','video/webm;codecs=vp9','video/webm'].find(type=>MediaRecorder.isTypeSupported(type))||'video/webm';
+            const media=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:4000000,...(mime.startsWith('video/mp4')?{videoKeyFrameIntervalDuration:1000}:{})});
+            const state=globalThis.__aidenRecording={canvas,media,chunks:[],stream,bytes:0,error:null,type:mime.startsWith('video/mp4')?'video/mp4':'video/webm'};
             media.ondataavailable=e=>{
               if(!e.data.size)return;
               state.bytes+=e.data.size;
@@ -1989,6 +2095,8 @@ export class BrowserService {
         signal,
       );
       // Hidden renderers may not composite a changed canvas until explicitly captured.
+      // The MP4 muxer writes nothing until a keyframe, so MP4 asks for one each
+      // second: the first frame shows up as bytes and the size limit keeps working.
       // Readiness is encoded data, not elapsed time: immediate Stop must yield a video.
       const firstFrameDeadline = Date.now() + 5_000;
       while (true) {
@@ -2021,11 +2129,15 @@ export class BrowserService {
         recorder,
         pending: Promise.resolve(),
         stopTimer: setTimeout(() => {
-          void this.stopRecording(tab).catch(() => {});
+          const stopped = this.stopRecording(tab);
+          stopped.catch(() => {});
+          tab.autoStopped = stopped;
         }, 5 * 60_000),
       };
       tab.recording = recording;
       tab.state.recording = true;
+      // The recording acknowledges every frame; give back any the preview held.
+      tab.pipFeed?.releaseAcks();
       try {
         await this.send(
           tab,
@@ -2049,11 +2161,6 @@ export class BrowserService {
     }
   }
   private recordFrame(tab: LiveTab, params: Record<string, any>): void {
-    const wc = tab.view.webContents;
-    if (!wc.isDestroyed() && wc.debugger.isAttached())
-      void wc.debugger
-        .sendCommand("Page.screencastFrameAck", { sessionId: params.sessionId })
-        .catch(() => {});
     const recording = tab.recording;
     if (
       !recording ||
@@ -2082,39 +2189,47 @@ export class BrowserService {
   }
   private async stopRecording(tab: LiveTab): Promise<BrowserRecording> {
     const recording = tab.recording;
-    if (!recording) throw new Error("This browser tab is not recording.");
+    if (!recording) {
+      const autoStopped = tab.autoStopped;
+      tab.autoStopped = undefined;
+      if (autoStopped) return autoStopped;
+      throw new Error("This browser tab is not recording.");
+    }
     tab.recording = undefined;
     tab.state.recording = false;
     clearTimeout(recording.stopTimer);
     try {
-      await this.send(tab, "Page.stopScreencast").catch(() => {});
+      // An open Picture in Picture keeps the screencast; it paces it from here on.
+      if (!tab.pipFeed) await this.send(tab, "Page.stopScreencast").catch(() => {});
       await recording.pending;
       if (recording.failed) throw new Error(recording.failed);
-      const base64 = await browserDeadline(
+      const encoded: unknown = await browserDeadline(
         recording.recorder.webContents.executeJavaScript(
-          `(async () => { const state=globalThis.__aidenRecording; if(state.media.state!=='inactive') await new Promise(resolve=>{state.media.onstop=resolve;state.media.stop();}); for(const track of state.stream.getTracks())track.stop(); if(state.error)throw new Error(state.error); const blob=new Blob(state.chunks,{type:'video/webm'}); return await new Promise(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.readAsDataURL(blob);}); })()`,
+          `(async () => { const state=globalThis.__aidenRecording; if(state.media.state!=='inactive') await new Promise(resolve=>{state.media.onstop=resolve;state.media.stop();}); for(const track of state.stream.getTracks())track.stop(); if(state.error)throw new Error(state.error); const blob=new Blob(state.chunks,{type:state.type}); const data=await new Promise(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.readAsDataURL(blob);}); return {type:state.type,data}; })()`,
         ),
         15_000,
       );
-      if (typeof base64 !== "string" || base64.length > RECORDING_MAX_BYTES * 1.4)
+      const output = (encoded ?? {}) as { type?: unknown; data?: unknown };
+      const mimeType = output.type === "video/mp4" ? "video/mp4" : output.type === "video/webm" ? "video/webm" : undefined;
+      const base64 = output.data;
+      if (!mimeType || typeof base64 !== "string" || base64.length > RECORDING_MAX_BYTES * 1.4)
         throw new Error("Recording output is invalid or too large.");
       const bytes = Buffer.from(base64, "base64");
-      if (bytes.length < 16 || !bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])))
+      if (bytes.length < 16 || !browserRecordingBytesMatch(bytes, mimeType))
         throw new Error(
           "The browser did not produce a video frame. Wait for the page to render and record again.",
         );
-      const folder = path.join(app.getPath("userData"), "browser", "recordings");
+      const folder = browserRecordingsFolder(app.getPath("userData"));
       await fs.mkdir(folder, { recursive: true, mode: 0o700 });
-      const target = path.join(folder, `${recording.id}.webm`);
+      const target = path.join(folder, `${recording.id}.${browserRecordingExtension(mimeType)}`);
       await fs.writeFile(target, bytes, { mode: 0o600 });
       const result = {
         id: recording.id,
         path: target,
-        mimeType: "video/webm",
+        mimeType,
         durationMs: Date.now() - recording.started,
         sizeBytes: bytes.length,
       };
-      this.recordings.set(result.id, result);
       return result;
     } finally {
       if (!recording.recorder.isDestroyed()) recording.recorder.destroy();
@@ -2470,7 +2585,8 @@ export class BrowserService {
         break;
       }
       case "reveal_recording": {
-        const recording = this.recordings.get(command.recordingId);
+        // Every finished recording is on disk under its id, from this launch or an earlier one.
+        const recording = await findBrowserRecording(app.getPath("userData"), command.recordingId);
         if (!recording) throw new Error("This recording is no longer available.");
         shell.showItemInFolder(recording.path);
         break;

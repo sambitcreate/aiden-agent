@@ -26,12 +26,14 @@ import { Type } from "@earendil-works/pi-ai";
 import { VERSION, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { McpServer } from "../../../main/services/types.js";
 import { MCP_PRESETS, getMcpPreset, serverFromPreset, assertMcpPresetServer } from "../../../main/services/mcp-presets.js";
-import { markMcpAgentTool, mcpAgentToolNames } from "../../../main/services/mcp-tool-identity.js";
+import { markMcpAgentTool, mcpAgentToolNames, mcpServerToolPrefix } from "../../../main/services/mcp-tool-identity.js";
+import { snapshotMcpServerInstructions } from "../../../main/services/mcp-server-instructions.js";
+import type { PiToolDiscoveryMetadata } from "../../../main/services/pi-tool-discovery.js";
 import { executeMcpAgentTool } from "../../../main/services/mcp-tool-result.js";
 import { normalizeMcpToolInputSchema } from "../../../main/services/mcp-tool-schema.js";
 import { tagMcpAgentTool } from "../../../main/services/mcp-agent-tool-descriptor.js";
 import { callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "../../../main/services/mcp-tool-inventory.js";
-import { JsonStore, readJson, splitArgs } from "./state.ts";
+import { JsonStore, readJson } from "./state.ts";
 import { insightCredentials } from "./credentials.ts";
 
 import { isRetiredMcpServerEntry, withoutRetiredMcpServers } from "../../../renderer/shared/mcp-retired-servers.js";
@@ -255,7 +257,7 @@ function cliOAuthRuntime(agentDir: string, server: McpServer, options: { openBro
     get: () => readOAuthSession(agentDir, server),
     set: (_serverId, session, isCurrent) => credentials.write(id, JSON.stringify(session), isCurrent),
     clear: (_serverId, isCurrent) => credentials.delete(id, isCurrent),
-    // Token saves compare and set under the writer lease: a TUI and `aiden serve` share this file.
+    // Token saves compare and set under the writer lease: `aiden mcp` commands and `aiden serve` share this file.
     update: (_serverId, mutate, isCurrent) => credentials.update(id, (serialized) => {
       const next = mutate(parseStoredOAuthSession(server, serialized));
       return next && JSON.stringify(next);
@@ -312,7 +314,8 @@ async function deleteClientSecret(agentDir: string, server: McpServer | undefine
 export async function mcpCommand(agentDir: string, args: string[]) {
   const [action = "list", value] = args, store = storeFor(agentDir);
   await pruneRetiredMcpServers(agentDir);
-  if (action === "presets") return MCP_PRESETS;
+  // A Mac app connector (iMCP) is set up in the desktop app, which finds and checks the app.
+  if (action === "presets") return MCP_PRESETS.filter((preset) => preset.transport === "http");
   if (action === "list") return (await store.load()).map(({ headers: _headers, env: _env, oauthClientSecret, ...server }) => ({ ...server, ...(oauthClientSecret === undefined ? {} : { hasOAuthClientSecret: true }) }));
   if (action === "login") {
     const server = (await store.load()).find((item) => item.id === value);
@@ -338,6 +341,7 @@ export async function mcpCommand(agentDir: string, args: string[]) {
     if (!value) throw new Error("Provide a server JSON file or preset id.");
     const preset = action === "preset" ? getMcpPreset(value) : undefined;
     if (action === "preset" && !preset) throw new Error("MCP preset not found.");
+    if (preset?.transport === "stdio") throw new Error(`Set up ${preset.name} in Settings → Connectors in the Aiden desktop app on your Mac.`);
     const parsed = validateMcpServer(preset ? serverFromPreset(preset) : JSON.parse(readFileSync(value, "utf8")));
     const existing = (await store.load()).find((item) => item.id === parsed.id);
     const server = await storeClientSecret(agentDir, parsed, existing);
@@ -502,11 +506,23 @@ export function createCliMcpPool(agentDir: string, options: { child?: boolean } 
   async function agentTools(server: McpServer, signal?: AbortSignal) {
     // A server switched off for the model offers nothing; hidden tools are withheld.
     if (!mcpServerOffersTools(server)) return [];
-    const { tools } = await inventory(server, signal);
+    const { tools, client } = await inventory(server, signal);
     // Same names as the desktop: disambiguated against every configured server and the full inventory.
-    const names = mcpAgentToolNames(server, await listServers(), tools.map(({ name }) => name));
+    const configured = await listServers();
+    const names = mcpAgentToolNames(server, configured, tools.map(({ name }) => name));
+    const offered = mcpToolsOfferedToModel(server, tools);
+    // The server's namespace record, as on the desktop: the `mcp_servers`
+    // section and codemode's describeNamespace read it. The tool-name prefix is its handle.
+    const instructions = snapshotMcpServerInstructions(server, offered.map((tool) => ({ name: names.get(tool.name)! })), client.instructions);
+    const discovery: PiToolDiscoveryMetadata = Object.freeze({
+      ...(server.description ? { description: server.description.slice(0, 1024) } : {}),
+      namespace: `mcp:${createHash("sha256").update(server.id).digest("hex").slice(0, 24)}`,
+      label: server.name.slice(0, 64) || "MCP service",
+      alias: mcpServerToolPrefix(server, configured),
+      ...(instructions ? { instructions: instructions.instructions } : {}),
+    });
     // Identity for grant joins, plus the exact tools/list entry for live schema/effect checks.
-    return mcpToolsOfferedToModel(server, tools).map((tool) => tagMcpAgentTool(markMcpAgentTool({ name: names.get(tool.name)!, label: `${server.name}: ${tool.name}`, description: [server.description, tool.description ?? tool.name].filter(Boolean).join("\n\n"),
+    return offered.map((tool) => tagMcpAgentTool(markMcpAgentTool({ name: names.get(tool.name)!, label: `${server.name}: ${tool.name}`, discovery, description: [server.description, tool.description ?? tool.name].filter(Boolean).join("\n\n"),
       parameters: Type.Unsafe<Record<string, unknown>>(normalizeMcpToolInputSchema(tool.inputSchema)),
       execute: async (_id: string, input: unknown, signal?: AbortSignal) => {
         const current = await inventory(server, signal);
@@ -533,20 +549,12 @@ export function createCliMcpPool(agentDir: string, options: { child?: boolean } 
 }
 
 /**
- * Aiden's MCP servers for one session, and its `/mcp` command. Registering
- * `/mcp` is also what turns Pi's built-in MCP extension off: Pi leaves out a
- * replaceable built-in whose command another extension registers, so the
- * native `mcp.json` / `mcp-auth.json` stack never loads and `aiden-mcp.json`
- * is the CLI's only MCP configuration. `connect: false` registers the command
- * alone (child sessions).
+ * Aiden's MCP servers for one daemon session. `aiden-mcp.json` is the CLI's
+ * only MCP configuration: daemon sessions load no Pi extensions, so Pi's
+ * native `mcp.json` / `mcp-auth.json` stack never loads.
  */
-export function createMcpExtension(agentDir: string, options: { startupBudgetMs?: number; connect?: boolean } = {}): InlineExtension {
+export function createMcpExtension(agentDir: string, options: { startupBudgetMs?: number } = {}): InlineExtension {
   return { name: "aiden-mcp", async factory(pi) {
-    pi.registerCommand("mcp", { description: "Aiden MCP servers: list, presets, add <file>, preset <id>, logout <id>, remove <id> (sign in with aiden mcp login <id> in a terminal)", handler: async (args, ctx) => {
-      const parsed = splitArgs(args); if (parsed[0] === "login") throw new Error("Run aiden mcp login <id> in a terminal.");
-      ctx.ui.notify(JSON.stringify(await mcpCommand(agentDir, parsed), null, 2), "info");
-    } });
-    if (options.connect === false) return;
     const pool = createCliMcpPool(agentDir);
     pi.on("session_shutdown", () => pool.close());
     let servers: McpServer[];
@@ -559,8 +567,11 @@ export function createMcpExtension(agentDir: string, options: { startupBudgetMs?
       catch (error) { return { server, tools: undefined, error }; }
     }));
     for (const result of results) {
-      if (result.tools) for (const tool of result.tools) pi.registerTool(tool);
-      else process.stderr.write(`aiden: MCP ${result.server.id} unavailable (${errorText(result.error)}). Check its configuration or sign in.\n`);
+      if (!result.tools) {
+        process.stderr.write(`aiden: MCP ${result.server.id} unavailable (${errorText(result.error)}). Check its configuration or sign in.\n`);
+        continue;
+      }
+      for (const tool of result.tools) pi.registerTool(tool);
     }
   } };
 }

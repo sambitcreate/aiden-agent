@@ -18,6 +18,7 @@ import { isToolStep, type AgentStep, type GenerationTimeline } from "../shared/g
 import type { WorkDetailsMode } from "../shared/appearance";
 import { workDetailsOpen } from "../lib/work-details";
 import { DisclosureCollapseBoundary } from "./disclosure-collapse-boundary";
+import { pauseWhenUnseen } from "../lib/offscreen-pause";
 
 const EXIT_MS = 180;
 /** Rows kept in the collapsed ticker. The topmost sits under the fade mask. */
@@ -82,6 +83,7 @@ function TickerRow({ step }: { step: AgentStep }) {
       data-activity-stage={activityLine(step).stage}
     >
       <span
+        ref={active ? pauseWhenUnseen : undefined}
         className={`activity-feed-detail-label min-w-0 truncate text-mini text-secondary ${
           active ? "agent-thinking-shimmer" : ""
         }`}
@@ -187,6 +189,7 @@ export function ActivityFeed({
         <Text
           variant="small-strong"
           color="secondary"
+          ref={running ? pauseWhenUnseen : undefined}
           className={`activity-feed-summary-label min-w-0 flex-1 truncate ${
             running ? "agent-thinking-shimmer" : ""
           }`}

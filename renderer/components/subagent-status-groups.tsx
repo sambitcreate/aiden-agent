@@ -2,11 +2,13 @@
 // outcome. Completed runs stay folded behind one disclosure row.
 
 import * as React from "react";
+import { useNowSecond } from "../lib/second-clock";
 import { ChevronRight, Square } from "lucide-react";
 import { groupSubagentRunsByStatus, type SubagentRunStatusGroup } from "../lib/subagent-panel-state";
 import {
-  isSubagentRunViewStateActive,
   subagentElapsedLabel,
+  subagentRoleLabel,
+  subagentStoppableSnapshot,
   type SubagentRunView,
 } from "../lib/subagent-view-state";
 import { cn } from "../lib/ui-utils";
@@ -29,30 +31,6 @@ const NO_STOP_ERRORS: Readonly<Record<string, string>> = {};
 
 const ROW =
   "grid min-h-11 w-full grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-2.5 rounded-control px-2.5 py-1 text-left text-regular text-primary outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection motion-reduce:transition-none";
-
-/** Wall-clock time, refreshed once a second through one interval only while `live` is true. */
-function useNow(live: boolean): number {
-  const [now, setNow] = React.useState(() => Date.now());
-  React.useEffect(() => {
-    if (!live) return;
-    setNow(Date.now());
-    const interval = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(interval);
-  }, [live]);
-  return now;
-}
-
-/** Stop applies to foreground runs that are still working, the same rule as the subagent detail. */
-function stoppableSnapshot(run: SubagentRunView): SubagentRunSnapshot | undefined {
-  const snapshot = run.snapshot;
-  if (!snapshot || !isSubagentRunViewStateActive(run.state)) return undefined;
-  return snapshot.version === 2 && snapshot.execution === "foreground" ? snapshot : undefined;
-}
-
-function roleLabel(run: SubagentRunView): string | null {
-  if (run.role === "unknown") return null;
-  return run.role.charAt(0).toUpperCase() + run.role.slice(1);
-}
 
 function secondaryLine(run: SubagentRunView): { text: string; error: boolean } {
   const snapshot = run.snapshot;
@@ -81,8 +59,8 @@ function RunRow({
   onOpen: SubagentStatusGroupsProps["onOpen"];
   onStop: SubagentStatusGroupsProps["onStop"];
 }) {
-  const stoppable = stoppableSnapshot(run);
-  const role = roleLabel(run);
+  const stoppable = subagentStoppableSnapshot(run);
+  const role = subagentRoleLabel(run.role);
   const line = secondaryLine(run);
   const elapsed = subagentElapsedLabel(run, now);
   const stop = () => {
@@ -189,7 +167,7 @@ export function SubagentStatusGroups({
   const groups = React.useMemo(() => groupSubagentRunsByStatus(runs), [runs]);
   const stopPending = React.useMemo(() => new Set(stopPendingRunIds), [stopPendingRunIds]);
   const live = groups.some((group) => group.id === "running" || group.id === "needs_attention");
-  const now = useNow(live);
+  const now = useNowSecond(live);
 
   return (
     <div className="flex flex-col">

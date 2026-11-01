@@ -67,6 +67,9 @@ import {
 import { botApplicationService } from "../services/bot-application-service-main.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
+import { piRuntimeEffectStore } from "../services/pi-runtime-effect-store.js";
+import { chatReplyInterrupted, latestInterruptedRun } from "../services/interrupted-reply.js";
+import { interruptedWaits } from "../services/interrupted-waits-main.js";
 import { loadDurableTodoSnapshot } from "../services/rpiv-todo/snapshot.js";
 import {
   chatContextPressure,
@@ -187,6 +190,38 @@ export function registerChatHistoryHandlers(): void {
   ipcMain.handle("chats:get", async (_event, id: unknown) =>
     chatApplicationService.get(asString(id, "id")),
   );
+
+  // True when the chat's last reply was cut short by a quit or crash.
+  ipcMain.handle("chats:replyInterrupted", async (_event, id: unknown) => {
+    const chatId = asString(id, "id");
+    try {
+      await piRuntimeEffectStore.initialize();
+      return await chatReplyInterrupted(piRuntimeEffectStore, chatId);
+    } catch {
+      // Unreadable run history only hides the Resume offer.
+      return false;
+    }
+  });
+
+  // Saved waits too old to offer leave the disk at launch.
+  void interruptedWaits.prune().catch(() => undefined);
+
+  // The questions or approvals the interrupted reply was waiting on, questions first.
+  ipcMain.handle("chats:interruptedWaits", async (_event, id: unknown) => {
+    const chatId = asString(id, "id");
+    try {
+      await piRuntimeEffectStore.initialize();
+      const run = await latestInterruptedRun(piRuntimeEffectStore, chatId);
+      return run ? await interruptedWaits.forRun(chatId, run.startedAt) : [];
+    } catch {
+      // Unreadable history only leaves the plain Resume card.
+      return [];
+    }
+  });
+
+  ipcMain.handle("chats:dismissInterruptedWait", async (_event, id: unknown, waitId: unknown) => {
+    await interruptedWaits.forget(asString(waitId, "waitId"), asString(id, "id"));
+  });
 
   ipcMain.handle("chats:todoSnapshot", async (event, id: unknown) => {
     const owner = rendererDocumentOwner(
@@ -316,6 +351,8 @@ export function registerChatHistoryHandlers(): void {
   ipcMain.handle("chats:rename", rendererChats.rename);
 
   ipcMain.handle("chats:renameWithFoundationModels", rendererChats.renameWithFoundationModels);
+
+  ipcMain.handle("chats:setModel", rendererChats.setModel);
 
   ipcMain.handle("chats:retryForkSummary", async (_event, input: unknown) =>
     chatForRenderer(await forkSummaryService.retry(parseChatOnlyRequest(input).chatId)),

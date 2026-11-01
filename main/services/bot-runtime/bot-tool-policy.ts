@@ -18,11 +18,13 @@ import type { BotOrdinaryCapabilityKind } from "../bot-capability-catalog-core.j
 import type { SubagentMcpRemoteTool } from "../subagents/subagent-mcp-read.js";
 import { summarizeToolCall } from "../coding-tools.js";
 import { SHARE_IMAGE_TOOL_NAME } from "../share-image-tool.js";
+import { SKILL_TOOL_NAME } from "../skill-registry-core.js";
 import { INSPECT_IMAGE_TOOL_NAME } from "../vision-analysis-tool-core.js";
 import { SUGGEST_CONNECTION_TOOL_NAME } from "../bot-runtime-tools/suggest-connection.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
 import { BOT_HANDOFF_TOOL_NAME, BOT_SIGN_IN_TOOL_NAME } from "../../../renderer/shared/bot-handoffs.js";
 import { BOT_INTRO_REQUEST_PREFIX } from "./bot-intro.js";
+import { BOT_WAKE_UP_TOOL_NAME } from "../../../renderer/shared/bot-wake-ups.js";
 import { BROWSER_BOT_OMITTED_TOOLS, BROWSER_TOOL_NAMES, isBrowserToolName } from "../browser-tools.js";
 import { BOT_BROWSER_GATEWAY_TOOL } from "./bot-tool-disclosure.js";
 import { BOT_COMPUTER_SHELL_TOOL_NAME, BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
@@ -32,6 +34,8 @@ export const SUBAGENT_TOOL = "subagent";
 export const ROUTINE_TOOL = BOT_ROUTINES_TOOL_NAME;
 /** Per-routine notepad (`bot-routine-notes.ts`); offered only to routine runs. */
 export const ROUTINE_NOTES_TOOL = "routine_notes";
+/** A Bot's own bounded wake-ups (`bot-wake-ups/`); offered only on turns a person started. */
+export const WAKE_UP_TOOL = BOT_WAKE_UP_TOOL_NAME;
 
 /** Everything the policy needs about one Bot, read fresh for each decision. */
 export interface BotToolFacts {
@@ -46,6 +50,11 @@ export interface BotToolFacts {
   mcpTools(): Promise<ReadonlyMap<string, BotRuntimeMcpToolAuthority>>;
   /** Model-facing skill tool names, joined against the current catalog and registry. Throws on drift. */
   skillToolNames(): Promise<ReadonlySet<string>>;
+  /**
+   * The internal skill identity (one of `skillToolNames`) that the `skill`
+   * tool's `name` argument loads, or `undefined` when no granted skill matches.
+   */
+  skillToolKeyFor?(name: string): Promise<string | undefined>;
   /**
    * The live tools/list entry of a granted MCP tool (its title, description
    * and annotations), for the rules classifier. `undefined` when `name` is not
@@ -82,6 +91,8 @@ const UNATTENDED_WITHHELD = new Set<string>([
   BOT_SIGN_IN_TOOL_NAME,
   BOT_BROWSER_GATEWAY_TOOL,
   ...BROWSER_TOOL_NAMES,
+  // A skill needs the person's OK on a card (spec 2026-10-27 §7 L2).
+  "propose_skill",
 ]);
 
 /**
@@ -96,6 +107,14 @@ export function botIngressAllowsTool(name: string, requestIds: readonly (string 
   // run a person's message joined, never sees it.
   if (name === ROUTINE_NOTES_TOOL) {
     return requestIds.length > 0 && requestIds.every((requestId) => botTurnOf(requestId).routine);
+  }
+  // A wake-up is the Bot's answer to a person: no routine, event, catch-up or
+  // wake-up run sets another one, so a Bot cannot keep itself awake.
+  if (name === WAKE_UP_TOOL) {
+    return requestIds.every((requestId) => {
+      const turn = botTurnOf(requestId);
+      return !turn.routine && !turn.intro;
+    });
   }
   return requestIds.every((requestId) => {
     const turn = botTurnOf(requestId);
@@ -116,7 +135,12 @@ function verdict(allowed: boolean, reason: string): BotToolVerdict {
 }
 
 /** Whether the Bot may use `name` now. */
-export async function botToolVerdict(name: string, facts: BotToolFacts, turn: BotToolTurn = {}): Promise<BotToolVerdict> {
+export async function botToolVerdict(
+  name: string,
+  facts: BotToolFacts,
+  turn: BotToolTurn = {},
+  args?: unknown,
+): Promise<BotToolVerdict> {
   const { authority } = facts;
   if (name === INSPECT_IMAGE_TOOL_NAME) {
     return verdict(!facts.supportsImages && authority.visionProvider !== undefined, "Image understanding is off for this Bot.");
@@ -170,9 +194,20 @@ export async function botToolVerdict(name: string, facts: BotToolFacts, turn: Bo
     );
   }
   if (name === SUGGEST_CONNECTION_TOOL_NAME) return { allowed: true };
+  // The per-Bot switch decides whether it is offered at all; ingress keeps it to a person's turns.
+  if (name === WAKE_UP_TOOL) return verdict(turn.routine !== true, "Wake-ups are off for this Bot turn.");
   // Writes only the routine's own notes; ingress (`botIngressAllowsTool`) keeps it to routine runs.
   if (name === ROUTINE_NOTES_TOOL) return { allowed: true };
-  if ((await facts.skillToolNames()).has(name)) return { allowed: true };
+  // The one `skill` tool loads only the granted skills it was built from.
+  if (name === SKILL_TOOL_NAME) {
+    const granted = await facts.skillToolNames();
+    if (granted.size === 0) return { allowed: false, reason: "No skills are enabled for this Bot." };
+    // At call time the named skill itself must still be granted.
+    const requested = (args as { name?: unknown } | undefined)?.name;
+    if (args === undefined || typeof requested !== "string") return { allowed: true };
+    const key = await facts.skillToolKeyFor?.(requested);
+    return verdict(key !== undefined && granted.has(key), "This skill is not enabled for this Bot.");
+  }
   if ((await facts.mcpTools()).has(name)) return { allowed: true };
   return { allowed: false, reason: "This tool is not available to this Bot." };
 }

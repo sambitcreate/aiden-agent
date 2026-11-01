@@ -1,4 +1,5 @@
 import AVFoundation
+import AVKit
 import Accessibility
 import CryptoKit
 import ImageIO
@@ -418,6 +419,18 @@ enum AidenChatModelAuthority {
                 thinkingLevel: selectedThinkingLevel
             )
         }
+        // A chat that already has messages keeps its own model. The remembered
+        // per-host choice (passed only until the user picks in this chat)
+        // seeds a new chat, or one whose model this phone can't use.
+        if remembered != nil, !chat.messages.isEmpty, let own = ownSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: selectedProviderId,
+            selectedModelId: selectedModelId,
+            selectedThinkingLevel: selectedThinkingLevel
+        ) {
+            return own
+        }
         if let remembered = rememberedSelection(remembered, in: catalog) {
             return remembered
         }
@@ -460,6 +473,26 @@ enum AidenChatModelAuthority {
             return String(localized: "This chat used \(agentLabel), which runs only on your Mac. Replies from here use \(replyModelLabel).")
         }
         return String(localized: "This chat used \(agentLabel), which runs only on your Mac. Choose a model for replies from here.")
+    }
+
+    /// The chat's own provider/model pair, when the host still offers it.
+    /// Hidden models stay usable here, as they do for existing chats on the Mac.
+    static func ownSelection(
+        chat: AidenChat,
+        catalog: AidenModelCatalog,
+        selectedProviderId: String?,
+        selectedModelId: String?,
+        selectedThinkingLevel: String?
+    ) -> AidenChatModelSelection? {
+        guard let providerId = chat.providerId,
+              let modelId = chat.modelId,
+              let provider = catalog.providers.first(where: { $0.id == providerId }),
+              let model = provider.models.first(where: { $0.id == modelId }) else { return nil }
+        let keepsLevel = selectedProviderId == providerId && selectedModelId == modelId
+        let thinkingLevel = (keepsLevel ? selectedThinkingLevel : nil).flatMap { level in
+            model.thinkingLevels?.contains(level) == true ? level : nil
+        } ?? model.effectiveThinkingLevel
+        return AidenChatModelSelection(providerId: providerId, modelId: modelId, thinkingLevel: thinkingLevel)
     }
 
     /// The per-host remembered choice applies only while the host's current
@@ -1132,6 +1165,14 @@ final class AidenWorkspaceChatsModel {
 }
 
 enum AidenDraftSendReconciliation {
+    /// A turn the Mac refused without running it: the phone drops the saved attempt and shows the
+    /// Mac's reason. A 409 is settled only for `workspace_unavailable` (a moved or deleted folder),
+    /// which the Mac sends before anything runs; other conflicts may have an unknown outcome.
+    static func refusalSettlesSend(status: Int, code: AidenRemoteErrorCode) -> Bool {
+        [400, 401, 403, 404, 413, 422, 429].contains(status)
+            || (status == 409 && code == AidenRemoteErrorCode(rawValue: "workspace_unavailable"))
+    }
+
     static func failedDraft(submitted: String, current: String) -> String {
         guard !current.isEmpty else { return submitted }
         guard current != submitted else { return current }
@@ -1286,24 +1327,104 @@ final class AidenChatViewModel {
     @ObservationIgnored private var turnAttempts = AidenTurnAttemptTracker()
     private(set) var pendingSend: AidenChatDraftStore.PendingSend?
     private(set) var sendRecoveryError: String?
+    /// A send the Mac refused with a retryable 429 is sent again on its own
+    /// after the server's delay, this many times in a row before Retry is
+    /// left to the person.
+    static let maxRateLimitedSendRetries = 3
+    @ObservationIgnored private var rateLimitedSendRetries = 0
+    @ObservationIgnored private var rateLimitedSendRetryTask: Task<Void, Never>?
+    /// Waits out a retryable 429 before sending again; tests shorten it.
+    @ObservationIgnored var rateLimitedSendRetrySleep: @Sendable (Duration) async throws -> Void = {
+        try await Task.sleep(for: $0)
+    }
+    /// The Mac was busy and the saved send will go out again on its own.
+    private(set) var isWaitingToRetryRateLimitedSend = false
+    /// The Mac kept refusing the saved send with a retryable 429 until the
+    /// automatic resends ran out. Nothing was appended, so Retry is safe.
+    private(set) var isPendingSendRefusedBecauseBusy = false
     var canRetrySend: Bool {
         pendingSend?.canRetry() == true && isConnected && coordinator.activeInstanceId == instanceId && !isStarting && !isSubmittingRunInput && !isRestoringStream && (pendingSend?.streamId != nil || (activeStreamID == nil && !isStreaming))
     }
     var sendRecoveryMessage: String? {
         if let sendRecoveryError { return sendRecoveryError }
         guard let pendingSend, !isStarting, !isSubmittingRunInput else { return nil }
+        if isWaitingToRetryRateLimitedSend {
+            return "Aiden Agent is busy. Your message will be sent again in a moment."
+        }
+        if isPendingSendRefusedBecauseBusy, pendingSend.canRetry() {
+            return "Aiden Agent is still busy. Your message wasn’t sent; try again in a moment."
+        }
         return pendingSend.canRetry()
             ? "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
             : "Couldn’t confirm delivery. The retry window has ended. Check the conversation on your desktop before sending another message."
     }
     func discardPendingSend() async {
         guard !isStarting, !isSubmittingRunInput, let session = draftSession else { return }
+        cancelRateLimitedSendRetry()
+        rateLimitedSendRetries = 0
         do {
             try await draftStore.savePendingSend(nil, session: session)
             pendingSend = nil
             sendRecoveryError = nil
             turnAttempts.reset()
         } catch { presentedError = error.localizedDescription }
+    }
+
+    private func cancelRateLimitedSendRetry() {
+        rateLimitedSendRetryTask?.cancel()
+        rateLimitedSendRetryTask = nil
+        isWaitingToRetryRateLimitedSend = false
+        isPendingSendRefusedBecauseBusy = false
+    }
+
+    /// The Mac refused `attempt` with a retryable 429 before running it, and
+    /// settled its Idempotency-Key as rejected, so that key cannot be sent
+    /// again. The same request is saved again under a fresh key
+    /// and sent once the server's delay has passed. Returns `false` when the
+    /// fresh attempt could not be saved, leaving the failure terminal.
+    private func scheduleRateLimitedSendRetry(
+        replacing attempt: AidenChatDraftStore.PendingSend,
+        error: AidenRemoteClientError,
+        session: AidenChatDraftStore.Session,
+        context: AidenRemoteRequestContext
+    ) async -> Bool {
+        await draftStore.settlePendingSend(key: attempt.key, session: session)
+        turnAttempts.reset()
+        let fresh = AidenChatDraftStore.PendingSend(
+            deviceId: attempt.deviceId,
+            request: attempt.request,
+            key: turnAttempts.key(for: attempt.request),
+            createdAt: Date(),
+            attachments: attempt.attachments
+        )
+        do {
+            try await draftStore.savePendingSend(fresh, session: session)
+        } catch {
+            turnAttempts.reset()
+            return false
+        }
+        pendingSend = fresh
+        // The resend belongs to the pairing that authorized this message; a
+        // re-pair while the record was being saved leaves Retry to the person.
+        guard coordinator.isCurrent(context), rateLimitedSendRetries < Self.maxRateLimitedSendRetries else {
+            isPendingSendRefusedBecauseBusy = true
+            return true
+        }
+        let delay: Duration = error.serverRetryAfterSeconds.map { .seconds($0) }
+            ?? .milliseconds(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: rateLimitedSendRetries))
+        rateLimitedSendRetries += 1
+        rateLimitedSendRetryTask?.cancel()
+        isWaitingToRetryRateLimitedSend = true
+        let sleep = rateLimitedSendRetrySleep
+        let key = fresh.key
+        rateLimitedSendRetryTask = Task { [weak self] in
+            do { try await sleep(delay) } catch { return }
+            guard let self, !Task.isCancelled, self.pendingSend?.key == key else { return }
+            self.rateLimitedSendRetryTask = nil
+            self.isWaitingToRetryRateLimitedSend = false
+            await self.send(retry: true, automatic: true, authority: context)
+        }
+        return true
     }
     /// The fork request whose outcome is still unknown, replayed with the
     /// same Idempotency-Key so a lost response never yields a second fork.
@@ -1314,6 +1435,7 @@ final class AidenChatViewModel {
     @ObservationIgnored private var draftGeneration: UInt64 = 0
     @ObservationIgnored private var composerGeneration: UInt64 = 0
     @ObservationIgnored private var didConsumeVoiceLaunch = false
+    @ObservationIgnored private let voiceLaunchContext: AidenRemoteRequestContext?
     @ObservationIgnored private var uploadTask: Task<Int, Never>?
     @ObservationIgnored private var ownedUploadReferences: [String: (AidenAttachmentReference, AidenRemoteRequestContext, AidenRemoteClient)] = [:]
     @ObservationIgnored private var attachmentCleanupTasks: [String: Task<Void, Never>] = [:]
@@ -1520,6 +1642,7 @@ final class AidenChatViewModel {
             liveActivities: liveActivities ?? .shared
         )
         modelPreferenceContext = try? coordinator.requestContext(for: preferenceInstanceId)
+        voiceLaunchContext = try? coordinator.requestContext(for: preferenceInstanceId)
         self.networkPath = networkPath ?? AidenNetworkPathMonitor.shared.availability
         self.chat = chat
         self.allowsMutations = allowsMutations
@@ -1551,6 +1674,7 @@ final class AidenChatViewModel {
     init(readOnlyFixture chat: AidenChat) {
         runtime = .readOnlyFixture
         modelPreferenceContext = nil
+        voiceLaunchContext = nil
         networkPath = nil
         self.chat = chat
         allowsMutations = false
@@ -1978,6 +2102,7 @@ final class AidenChatViewModel {
             let session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id)
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             draftSession = session
+            isPendingSendRefusedBecauseBusy = false
             do { pendingSend = try await draftStore.loadPendingSend(session: session, deviceId: context.deviceId) }
             catch { sendRecoveryError = "The saved send could not be read. Check the conversation on your desktop before dismissing it and sending again." }
             if draft.isEmpty, pendingAttachments.isEmpty, !isPreparingAttachments, !isUploadingAttachment, !isStarting,
@@ -2600,6 +2725,7 @@ final class AidenChatViewModel {
             }
             skipsSnapshot = false
             guard isCurrentProgressObservation(generation, context: context) else { return }
+            var serverRequestedDelay = 0
             do {
                 let events = try coordinator.remoteClient(for: context).progressEvents(
                     chatId: chat.id,
@@ -2646,9 +2772,16 @@ final class AidenChatViewModel {
                 }
                 isTaskProgressStale = taskProgress != nil
                 isAgentRosterStale = agentRoster != nil
+                // A full progress-connection pool answers 429 with a delay;
+                // reconnecting sooner would only be refused again.
+                serverRequestedDelay = AidenStreamNetworkRecovery.serverRequestedDelayMilliseconds(after: error)
             }
             do {
-                _ = try await recovery.recoverAfterProbeFailure(onBackoff: {}, onWaiting: { _ in })
+                _ = try await recovery.recoverAfterProbeFailure(
+                    minimumDelayMilliseconds: serverRequestedDelay,
+                    onBackoff: {},
+                    onWaiting: { _ in }
+                )
             } catch {
                 return
             }
@@ -2858,21 +2991,26 @@ final class AidenChatViewModel {
         rememberExplicitModelSelection()
     }
 
-    /// An explicit composer choice becomes this paired Mac's remembered
-    /// default for later Workspace chats and launches.
+    /// An explicit composer choice stays with this chat. In a new chat (no
+    /// messages yet) it becomes this paired Mac's remembered default for later
+    /// Workspace chats and launches. In an existing chat it is kept for that
+    /// chat alone until its next send, so reopening the chat still shows it and
+    /// the model other chats start with never changes.
     private func rememberExplicitModelSelection() {
         hasExplicitModelSelection = true
         guard !isReadOnlyFixture, !isRemoved, !chat.isBotChat,
               let context = modelPreferenceContext,
               coordinator.isCurrent(context) else { return }
-        modelPreferenceStore.remember(
-            AidenChatModelSelection(
-                providerId: selectedProviderId,
-                modelId: selectedModelId,
-                thinkingLevel: selectedThinkingLevel
-            ),
-            for: context.instanceId
+        let selection = AidenChatModelSelection(
+            providerId: selectedProviderId,
+            modelId: selectedModelId,
+            thinkingLevel: selectedThinkingLevel
         )
+        if chat.messages.isEmpty {
+            modelPreferenceStore.remember(selection, for: context.instanceId)
+        } else {
+            modelPreferenceStore.rememberChat(selection, for: context.instanceId, chatID: chat.id)
+        }
     }
 
     func setBotVisionModelSelection(_ selection: AidenBotModelSelection?) {
@@ -2904,6 +3042,17 @@ final class AidenChatViewModel {
     }
 
     func send(retry: Bool = false) async {
+        await send(retry: retry, automatic: false, authority: nil)
+    }
+
+    /// `authority` is the pairing that authorized an automatic resend; it is
+    /// never swapped for a newer pairing of the same Mac.
+    private func send(retry: Bool, automatic: Bool, authority: AidenRemoteRequestContext?) async {
+        if !automatic {
+            // A person's own send or Retry replaces a scheduled resend.
+            cancelRateLimitedSendRetry()
+            rateLimitedSendRetries = 0
+        }
         if retry, let mode = pendingSend?.inputMode { await submitRunInput(mode, retry: true); return }
         guard !isReadOnlyPresentation else { return }
         let retryAttempt = retry ? pendingSend : nil
@@ -2923,7 +3072,10 @@ final class AidenChatViewModel {
             presentedError = String(localized: "The selected model can’t read images. Choose an image-capable model, then try again.")
             return
         }
-        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
+        guard let context = authority ?? (try? coordinator.requestContext(for: instanceId)),
+              coordinator.isCurrent(context) else { return }
+        // A saved send is only ever sent with the device credential it was made under.
+        if let retryAttempt, retryAttempt.deviceId != context.deviceId { return }
         let submittedAttachments = retryAttempt?.attachments ?? pendingAttachments
         let submittedSkill = selectedSkill
         let modelSelection = turnModelSelection
@@ -2990,12 +3142,25 @@ final class AidenChatViewModel {
             try await draftStore.savePendingSend(attempt, session: session)
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             pendingSend = attempt
+            isPendingSendRefusedBecauseBusy = false
             guard attempt.canRetry(), coordinator.isCurrent(context) else { throw AidenRemoteClientError.invalidResponse }
             let response = try await coordinator.remoteClient(for: context).startTurn(
                 chatId: chat.id,
                 request: request,
                 idempotencyKey: idempotencyKey
             )
+            // The Mac now holds this pick as the chat's own model.
+            if !chat.isBotChat {
+                modelPreferenceStore.forgetChat(
+                    for: context.instanceId,
+                    chatID: chat.id,
+                    matching: AidenChatModelSelection(
+                        providerId: request.providerId,
+                        modelId: request.modelId,
+                        thinkingLevel: request.thinkingLevel
+                    )
+                )
+            }
             guard !isRemoved else { return }
             for reference in submittedAttachments { ownedUploadReferences.removeValue(forKey: reference.id) }
             let stream = AidenChatCache.ActiveStream(
@@ -3069,7 +3234,9 @@ final class AidenChatViewModel {
             }
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             pendingSend = nil
+            isPendingSendRefusedBecauseBusy = false
             turnAttempts.reset()
+            rateLimitedSendRetries = 0
             if chat.messages.contains(where: { $0.id == optimisticID }) {
                 messageRenderIDs[response.message.id] = optimisticID
             }
@@ -3106,11 +3273,20 @@ final class AidenChatViewModel {
                 current: pendingAttachments
             )
             streamState = nil
-            if case AidenRemoteClientError.server(let status, _) = error,
-               [400, 401, 403, 404, 413, 422, 429].contains(status), let session = draftSession {
+            if let rateLimit = error as? AidenRemoteClientError, rateLimit.isRetryableRateLimit,
+               let session = draftSession,
+               await scheduleRateLimitedSendRetry(replacing: attempt, error: rateLimit, session: session, context: context) {
+                // The Mac was only busy: keep the send and try it again.
+                return
+            }
+            if case AidenRemoteClientError.server(let status, let body) = error,
+               AidenDraftSendReconciliation.refusalSettlesSend(status: status, code: body.code),
+               let session = draftSession {
                 await draftStore.settlePendingSend(key: attempt.key, session: session)
                 pendingSend = nil
+                isPendingSendRefusedBecauseBusy = false
                 turnAttempts.reset()
+                rateLimitedSendRetries = 0
             }
             if pendingSend == nil { presentedError = error.localizedDescription }
             coordinator.haptics.play(.error, scope: hapticScope)
@@ -3479,6 +3655,46 @@ final class AidenChatViewModel {
         }
     }
 
+    // MARK: - Browser recordings (contract revision 46)
+
+    /// The paired Mac announces `chat-browser-recordings-v1`, so an MP4
+    /// browser recording can be read and played on the phone.
+    var supportsBrowserRecordings: Bool {
+        guard !isReadOnlyFixture, !isRemoved,
+              coordinator.activeInstanceId == instanceId,
+              let server = coordinator.server else { return false }
+        return server.supportsChatBrowserRecordings
+    }
+
+    /// Reads one recording this chat's timeline names from the Mac and saves
+    /// it to a temporary file for the player. Only an MP4 whose served type
+    /// matches its recap is played.
+    func browserRecording(_ recording: AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad {
+        guard supportsBrowserRecordings, recording.playsOnPhone,
+              let context = try? coordinator.requestContext(for: instanceId) else { return .failed }
+        do {
+            let video = try await coordinator.remoteClient(for: context).browserRecording(
+                chatId: chat.id,
+                recordingId: recording.id
+            )
+            guard !isRemoved, coordinator.isCurrent(context), video.mimeType == recording.mimeType else {
+                return .failed
+            }
+            let data = video.data
+            let file = try await Task.detached(priority: .userInitiated) {
+                try AidenBrowserRecordingFile.write(data, for: recording)
+            }.value
+            guard !isRemoved, coordinator.isCurrent(context) else {
+                AidenBrowserRecordingFile.remove(file)
+                return .failed
+            }
+            return .ready(file)
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return .failed }
+            return AidenBrowserRecordingLoad.failure(after: error)
+        }
+    }
+
     /// Adds a follow-up the person confirmed in the viewer to the composer.
     /// It is never sent by itself.
     @discardableResult
@@ -3516,7 +3732,8 @@ final class AidenChatViewModel {
     func startVoiceForLaunch(if requested: Bool, start: () async -> Void) async {
         guard requested, !didConsumeVoiceLaunch else { return }
         didConsumeVoiceLaunch = true
-        guard !isReadOnlyPresentation, !isRemoved, !isStreaming, pendingQuestion == nil else { return }
+        guard !isReadOnlyPresentation, !isRemoved, isConnected, !isStreaming, pendingQuestion == nil,
+              let context = voiceLaunchContext, coordinator.isCurrent(context), !Task.isCancelled else { return }
         await start()
     }
 
@@ -3639,6 +3856,7 @@ final class AidenChatViewModel {
                 createdAt: Date(), attachments: [], streamId: streamID, inputMode: mode)
             try await draftStore.savePendingSend(pending, session: session)
             pendingSend = pending
+            isPendingSendRefusedBecauseBusy = false
             guard pending.canRetry(), coordinator.isCurrent(context) else { throw AidenRemoteClientError.invalidResponse }
             let result = try await coordinator.remoteClient(for: context).submitStreamInput(
                 id: streamID,
@@ -3666,6 +3884,7 @@ final class AidenChatViewModel {
             }
             guard retained, !isRemoved, coordinator.isCurrent(context) else { return }
             pendingSend = nil
+            isPendingSendRefusedBecauseBusy = false
             if lastRunInputAttempt == attempt { lastRunInputAttempt = nil }
             if AidenRunInputPresentation.consumesDraft(result) {
                 if retry { consumeRunInputDraft(text) } else { persistDraftNow() }
@@ -4115,6 +4334,15 @@ final class AidenChatViewModel {
     }
 
     private func resolveModelSelection() {
+        // An unsent pick made in this chat before it was last closed wins
+        // like a pick made now.
+        if !hasExplicitModelSelection, !isReadOnlyFixture, !chat.isBotChat, !chat.messages.isEmpty,
+           let pick = modelPreferenceStore.chatSelection(for: instanceId, chatID: chat.id) {
+            selectedProviderId = pick.providerId
+            selectedModelId = pick.modelId
+            selectedThinkingLevel = pick.thinkingLevel
+            hasExplicitModelSelection = true
+        }
         let selection = AidenChatModelAuthority.resolvedSelection(
             chat: chat,
             catalog: catalog,
@@ -4320,6 +4548,7 @@ final class AidenChatViewModel {
                     let message = error.localizedDescription
                     do {
                         _ = try await recovery.recoverAfterProbeFailure(
+                            minimumDelayMilliseconds: AidenStreamNetworkRecovery.serverRequestedDelayMilliseconds(after: error),
                             onBackoff: { [weak self] in
                                 guard let self, !self.isRemoved, self.activeStreamID == streamID else { return }
                                 self.showRecoveryWarning(message)
@@ -5380,6 +5609,7 @@ struct AidenChatDetailView: View {
     @State private var simulators = AidenChatSimulatorsModel()
     @State private var simulatorViewer: AidenSimulatorViewerModel?
     @State private var simulatorRefreshEpoch = 0
+    @State private var spending = AidenSpendingNoticeModel()
     let autoStartVoice: Bool
     let allowsMutations: Bool
     /// Opens a chat this one was forked into. Nil hides the fork actions,
@@ -5480,6 +5710,9 @@ struct AidenChatDetailView: View {
         .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
+        .task(id: spendingRefreshKey) {
+            await spending.refresh(owner: spendingOwner, transport: spendingTransport)
+        }
         .task(id: chatLoadEpoch) {
             // Loads on appear and after each return from the background. A
             // newer epoch cancels an older load still in flight.
@@ -5736,7 +5969,8 @@ struct AidenChatDetailView: View {
                 visualViewerAvailable: model.supportsVisualViewer,
                 onVisualPrompt: model.isReadOnlyPresentation ? nil : { (prompt: String) -> Void in
                     _ = model.appendVisualPrompt(prompt)
-                }
+                },
+                browserRecordingsAvailable: model.supportsBrowserRecordings
             )
             .equatable()
             if model.showsLiveResponse {
@@ -5768,8 +6002,40 @@ struct AidenChatDetailView: View {
         return "\(model.chat.id)|\(chatLoadEpoch)|\(simulatorRefreshEpoch)|\(available)"
     }
 
+    /// Revision 47: a Workspace chat's total, or a Bot chat's month.
+    private var spendingOwner: AidenSpendingOwner {
+        model.chat.botId.map(AidenSpendingOwner.bot) ?? .chat(model.chat.id)
+    }
+
+    private var spendingTransport: AidenSpendingTransport? {
+        guard let coordinator, coordinator.server?.supportsSpendingLimits == true else { return nil }
+        return try? coordinator.remoteClient()
+    }
+
+    /// Re-read after each reply settles and after a send the Mac refused.
+    private var spendingRefreshKey: String {
+        [
+            model.chat.id,
+            coordinator?.activeInstanceId ?? "",
+            String(coordinator?.server?.supportsSpendingLimits == true),
+            String(model.isStreaming),
+            String(model.chat.messages.count),
+            model.sendRecoveryMessage ?? "",
+        ].joined(separator: "|")
+    }
+
     private var composer: some View {
         VStack(spacing: 0) {
+            if let current = spending.spending, allowsMutations {
+                AidenSpendingNotice(
+                    spending: current,
+                    botName: nil,
+                    isAllowing: spending.isAllowing,
+                    canAllow: coordinator?.server?.capabilities.contains(model.chat.isBotChat ? .botWrite : .chatWrite) == true,
+                    errorMessage: spending.errorMessage,
+                    onAllowMore: { Task { await spending.allowMore(transport: spendingTransport) } }
+                )
+            }
             if let message = model.sendRecoveryMessage {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(message).font(.footnote).accessibilityAddTraits(.updatesFrequently)
@@ -6264,10 +6530,13 @@ private struct AidenSettledMessageRows: View, Equatable {
     var visualViewerAvailable = false
     /// Adds a follow-up confirmed in the visual viewer to the composer.
     var onVisualPrompt: ((String) -> Void)? = nil
+    /// The Mac announces `chat-browser-recordings-v1` (revision 46).
+    var browserRecordingsAvailable = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil) &&
         lhs.visualViewerAvailable == rhs.visualViewerAvailable &&
+        lhs.browserRecordingsAvailable == rhs.browserRecordingsAvailable &&
         (lhs.onVisualPrompt == nil) == (rhs.onVisualPrompt == nil) &&
         (lhs.onFork == nil) == (rhs.onFork == nil) &&
         lhs.forkAvailability == rhs.forkAvailability &&
@@ -6354,7 +6623,12 @@ private struct AidenSettledMessageRows: View, Equatable {
                     await model.visualDocument(visualId: visualID, appearance: appearance)
                 }
                 : nil,
-            onVisualPrompt: onVisualPrompt
+            onVisualPrompt: onVisualPrompt,
+            loadBrowserRecording: browserRecordingsAvailable
+                ? { (recording: AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad in
+                    await model.browserRecording(recording)
+                }
+                : nil
         )
         .equatable()
         .padding(.top, topPadding)
@@ -6382,6 +6656,8 @@ struct AidenMessageView: View, Equatable {
     /// Present while the Mac announces `chat-visual-viewer-v1` (revision 35).
     var loadVisualDocument: ((String, AidenVisualViewerAppearance) async -> AidenVisualDocumentLoad)? = nil
     var onVisualPrompt: ((String) -> Void)? = nil
+    /// Present while the Mac announces `chat-browser-recordings-v1` (revision 46).
+    var loadBrowserRecording: ((AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad)? = nil
     @State private var selectTextRequest: AidenSelectTextRequest?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -6398,7 +6674,8 @@ struct AidenMessageView: View, Equatable {
             lhs.imageArrivalRevealAttachmentID == rhs.imageArrivalRevealAttachmentID &&
             lhs.appControlsAvailable == rhs.appControlsAvailable &&
             (lhs.loadVisualDocument == nil) == (rhs.loadVisualDocument == nil) &&
-            (lhs.onVisualPrompt == nil) == (rhs.onVisualPrompt == nil)
+            (lhs.onVisualPrompt == nil) == (rhs.onVisualPrompt == nil) &&
+            (lhs.loadBrowserRecording == nil) == (rhs.loadBrowserRecording == nil)
     }
 
     private var selectableText: String {
@@ -6515,22 +6792,40 @@ struct AidenMessageView: View, Equatable {
 
     }
 
+    /// A committed assistant reply's rows in the order they happened, with each
+    /// visual and image beneath the step that made it; nil without a usable timeline.
+    private var messageChronologicalRows: [AidenChronologicalRow]? {
+        guard message.role == .assistant, presentationStyle != .botMessages else { return nil }
+        return AidenChronologicalProjection.rows(
+            text: message.text,
+            reasoning: message.reasoning ?? "",
+            timeline: message.timeline,
+            visuals: AidenChatVisualPresentation.rowVisuals(in: message),
+            images: AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
+        )
+    }
+
     private var messageContent: some View {
         VStack(
             alignment: message.role == .user ? .trailing : .leading,
             spacing: 10
         ) {
-            if message.role == .assistant,
-               presentationStyle != .botMessages,
-               let rows = AidenChronologicalProjection.rows(
-                   text: message.text,
-                   reasoning: message.reasoning ?? "",
-                   timeline: message.timeline,
-                   visuals: AidenChatVisualPresentation.rowVisuals(in: message)
-               ) {
-                AidenChronologicalTranscript(rows: rows, active: false) { visual in
-                    AnyView(visualRow(visual))
-                }
+            if let rows = messageChronologicalRows {
+                AidenChronologicalTranscript(
+                    rows: rows,
+                    active: false,
+                    visualContent: { visual in AnyView(visualRow(visual)) },
+                    loadRecording: loadBrowserRecording,
+                    imageContent: { images in
+                        AnyView(AidenMessageImageAttachmentsView(
+                            attachments: images,
+                            edge: AidenMessageMediaEdge.forRole(message.role),
+                            loadData: loadAttachmentImage,
+                            revealAttachmentID: imageArrivalRevealAttachmentID,
+                            onArrivalRevealed: onImageArrivalRevealed
+                        ))
+                    }
+                )
             } else {
             if message.role == .assistant, let reasoning = message.reasoning, !reasoning.isEmpty {
                 AidenReasoningCard(text: reasoning, label: "Thought", active: false)
@@ -6551,6 +6846,16 @@ struct AidenMessageView: View, Equatable {
                         AidenQuestionnaireRecapView(recap: recap)
                     }
                 }
+                ForEach(AidenAgentActivityPresentation.extractionSteps(timeline)) { step in
+                    if let recap = step.extraction {
+                        AidenWebExtractRecapView(recap: recap)
+                    }
+                }
+                ForEach(AidenAgentActivityPresentation.recordingSteps(timeline)) { step in
+                    if let recording = step.recording {
+                        AidenBrowserRecordingCardView(recording: recording, load: loadBrowserRecording)
+                    }
+                }
             }
             if !visibleText.isEmpty {
                 messageText
@@ -6562,13 +6867,16 @@ struct AidenMessageView: View, Equatable {
                 }
             }
             }
-            // Snapshots appear once, inline at their visual, never in the strip.
+            // Snapshots appear once, inline at their visual, never in the strip,
+            // and images drawn beneath their step leave it too.
             let attachments = AidenChatVisualPresentation.stripAttachments(for: message)
             if !attachments.isEmpty {
                 let imageAttachments = AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
-                if !imageAttachments.isEmpty {
+                let placedImageIDs = messageChronologicalRows.map(AidenChronologicalProjection.placedImageIDs) ?? []
+                let trailingImages = imageAttachments.filter { !placedImageIDs.contains($0.id) }
+                if !trailingImages.isEmpty {
                     AidenMessageImageAttachmentsView(
-                        attachments: imageAttachments,
+                        attachments: trailingImages,
                         edge: AidenMessageMediaEdge.forRole(message.role),
                         loadData: loadAttachmentImage,
                         revealAttachmentID: imageArrivalRevealAttachmentID,
@@ -6946,7 +7254,9 @@ private struct AidenAttachmentGallerySelection: Identifiable {
     let id: String
 }
 
-private struct AidenMessageImageAttachmentsView: View {
+/// An inline image (or a deck of them) that opens the full-screen viewer with
+/// Save to Photos. Shared by chat messages and the images a Bot shares.
+struct AidenMessageImageAttachmentsView: View {
     @Environment(AidenHapticCenter.self) private var haptics
     @Environment(\.aidenReduceMotion) private var reduceMotion
     let attachments: [AidenMessageAttachment]
@@ -7808,6 +8118,13 @@ private struct AidenLiveResponseView: View {
     @Bindable var model: AidenChatViewModel
     let presentationStyle: AidenChatPresentationStyle
 
+    /// Plays a browser recording while the Mac serves them (revision 46).
+    private var liveRecordingLoader: ((AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad)? {
+        guard model.supportsBrowserRecordings else { return nil }
+        let model = model
+        return { recording in await model.browserRecording(recording) }
+    }
+
     private var botReply: AidenBotReplyProjection? {
         guard presentationStyle == .botMessages else { return nil }
         return AidenBotReplyProjection.resolve(
@@ -7843,8 +8160,16 @@ private struct AidenLiveResponseView: View {
         return AidenChronologicalProjection.rows(
             text: model.liveText,
             reasoning: model.reasoning,
-            timeline: model.activityTimeline
+            timeline: model.activityTimeline,
+            imageSlots: imageGenerationItems.map(\.id)
         )
+    }
+
+    /// The live reply's image placeholders; each sits beneath its step when the
+    /// transcript is chronological, like the image it becomes.
+    private var imageGenerationItems: [AidenImageGenerationPlaceholderItem] {
+        guard model.isLiveReplyUnsettled else { return [] }
+        return AidenImageGenerationPlaceholderState.items(model.activityTimeline)
     }
 
     private var activity: (label: String, mark: AidenActivityMarkKind) {
@@ -7961,10 +8286,30 @@ private struct AidenLiveResponseView: View {
                         AidenQuestionnaireRecapView(recap: recap)
                     }
                 }
+                ForEach(AidenAgentActivityPresentation.extractionSteps(model.activityTimeline)) { step in
+                    if let recap = step.extraction {
+                        AidenWebExtractRecapView(recap: recap)
+                    }
+                }
+                ForEach(AidenAgentActivityPresentation.recordingSteps(model.activityTimeline)) { step in
+                    if let recording = step.recording {
+                        AidenBrowserRecordingCardView(recording: recording, load: liveRecordingLoader)
+                    }
+                }
             }
 
             if let chronologicalRows {
-                AidenChronologicalTranscript(rows: chronologicalRows, active: model.isLiveReplyUnsettled)
+                AidenChronologicalTranscript(
+                    rows: chronologicalRows,
+                    active: model.isLiveReplyUnsettled,
+                    loadRecording: liveRecordingLoader,
+                    imageSlotContent: { call in
+                        AnyView(ForEach(imageGenerationItems.filter { $0.id == call }) { item in
+                            AidenImageGenerationPlaceholderView(item: item)
+                                .transition(.opacity)
+                        })
+                    }
+                )
                     .contextMenu {
                         if !visibleText.isEmpty {
                             Button {
@@ -7983,11 +8328,10 @@ private struct AidenLiveResponseView: View {
                     }
             }
 
-            if model.isLiveReplyUnsettled {
-                ForEach(AidenImageGenerationPlaceholderState.items(model.activityTimeline)) { item in
-                    AidenImageGenerationPlaceholderView(item: item)
-                        .transition(.opacity)
-                }
+            let placedSlots = chronologicalRows.map(AidenChronologicalProjection.placedImageSlots) ?? []
+            ForEach(imageGenerationItems.filter { !placedSlots.contains($0.id) }) { item in
+                AidenImageGenerationPlaceholderView(item: item)
+                    .transition(.opacity)
             }
 
             if let visualizingLabel,
@@ -8001,11 +8345,13 @@ private struct AidenLiveResponseView: View {
             if let approval = model.pendingApproval {
                 AidenApprovalCard(
                     summary: approval.summary,
+                    toolName: approval.toolName,
                     kind: approval.kind,
                     canRespond: approval.canRespond,
                     hasRequiredWriteCapability: approval.hasRequiredWriteCapability,
                     canAllow: approval.canAllow,
                     scopes: approval.scopes,
+                    schedule: approval.schedule,
                     onDeny: { Task { await model.respondToApproval(.deny, approvalID: approval.id) } },
                     onAllow: { scope in
                         Task { await model.respondToApproval(.allow, approvalID: approval.id, scope: scope) }
@@ -8045,167 +8391,407 @@ private struct AidenLiveResponseView: View {
     }
 }
 
-/// Shared with the Bot session chat (`AidenBotSessionChatView`).
+/// Shared with the Bot session chat (`AidenBotSessionChatView`). Matches the
+/// desktop card: an icon tile, the action as a question, the exact request in a
+/// code block, and two equal buttons with the remembered scopes behind Allow's
+/// chevron. A `schedule_task` approval with a valid revision 39 `schedule` card
+/// shows the structured schedule in place of the request.
 struct AidenApprovalCard: View {
     @Environment(\.aidenPalette) private var palette
-    @Environment(\.aidenReduceMotion) private var reduceMotion
-    @State private var isExpanded = false
+    @Environment(\.locale) private var locale
+    @Environment(\.calendar) private var calendar
+    @Environment(\.timeZone) private var timeZone
 
     let summary: String
+    var toolName: String = ""
     let kind: AidenApprovalKind
     let canRespond: Bool
     let hasRequiredWriteCapability: Bool
     let canAllow: Bool
     let scopes: [AidenApprovalScope]
+    /// Contract revision 39: display-only. Nil, or any tool but `schedule_task`,
+    /// keeps the summary card.
+    var schedule: AidenApprovalSchedule? = nil
     let onDeny: () -> Void
     let onAllow: (AidenApprovalScope) -> Void
 
     private var broaderScopes: [AidenApprovalScope] { scopes.filter { $0 != .once } }
 
-    private let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+    private let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+    private let wellShape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+
+    private var request: String {
+        kind == .scheduledTask ? summary : AidenApprovalPresentation.requestedAction(toolName: toolName, summary: summary)
+    }
+
+    /// The next run reads in the phone's own zone, locale and clock style.
+    private var scheduleCard: AidenScheduleCardPresentation? {
+        var calendar = calendar
+        calendar.timeZone = timeZone
+        return AidenApprovalSchedule.card(schedule, toolName: toolName).map {
+            AidenScheduleCardPresentation($0, now: Date(), calendar: calendar, locale: locale)
+        }
+    }
+
+    private var limit: AidenApprovalLimit? {
+        AidenApprovalPresentation.limit(
+            kind: kind,
+            canRespond: canRespond,
+            hasRequiredWriteCapability: hasRequiredWriteCapability,
+            canAllow: canAllow
+        )
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "shield")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(palette.warning)
-                    .frame(width: 32, height: 32)
-                    .background(palette.warning.opacity(0.12), in: Circle())
-                    .accessibilityHidden(true)
+        let card = scheduleCard
+        VStack(spacing: 0) {
+            Image(systemName: card == nil ? AidenApprovalPresentation.symbol(toolName: toolName, kind: kind) : "calendar.badge.clock")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(palette.onFillAccent)
+                .frame(width: 44, height: 44)
+                .background(palette.fillAccent, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(AidenApprovalPresentation.title(for: kind))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(palette.foreground)
+            Text(card?.title ?? AidenApprovalPresentation.headline(toolName: toolName, kind: kind, summary: summary))
+                .font(.headline)
+                .foregroundStyle(palette.foreground)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 12)
+                .accessibilityAddTraits(.isHeader)
 
-                    Text(AidenApprovalPresentation.detail(for: kind))
-                        .font(.caption)
-                        .foregroundStyle(palette.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            if kind == .scheduledTask {
-                Text(summary)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(palette.foreground)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .accessibilityLabel("Scheduled task proposal")
-                    .accessibilityValue(summary)
+            if let card {
+                AidenScheduleApprovalDetails(card: card)
+                    .padding(.top, 14)
             } else {
-                Button {
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                        isExpanded.toggle()
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        Text(AidenApprovalPresentation.oneLineSummary(summary))
-                            .font(.caption.monospaced())
-                            .foregroundStyle(palette.foreground)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                        Image(systemName: "chevron.right")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(palette.secondary)
-                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    }
-                    .padding(.horizontal, 10)
-                    .frame(height: 36)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .accessibilityLabel("Requested action")
-                .accessibilityValue(AidenApprovalPresentation.oneLineSummary(summary))
-                .accessibilityHint(isExpanded ? "Collapses action details" : "Expands action details")
-
-                if isExpanded {
-                    Text(summary)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(palette.secondary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
+                AidenApprovalFoldingText(
+                    text: request,
+                    font: .subheadline.monospaced(),
+                    accessibilityLabel: kind == .scheduledTask ? "Scheduled task proposal" : "Requested action"
+                )
+                .padding(14)
+                .background(palette.canvas, in: wellShape)
+                .padding(.top, 14)
             }
 
-            if !canRespond {
-                Label("This paired device can review approvals but cannot respond.", systemImage: "lock.fill")
-                    .font(.caption)
-                    .foregroundStyle(palette.secondary)
-            } else if kind == .scheduledTask && !hasRequiredWriteCapability {
-                Label("Schedule write access is required to approve this task.", systemImage: "lock.fill")
-                    .font(.caption)
-                    .foregroundStyle(palette.secondary)
-            } else if kind == .scheduledTask && !canAllow {
-                Label("This task must be approved on your paired desktop.", systemImage: "desktopcomputer")
-                    .font(.caption)
-                    .foregroundStyle(palette.secondary)
+            Group {
+                if let limit {
+                    Label(limit.text, systemImage: limit.symbol)
+                } else if card != nil {
+                    Text(AidenScheduleCardPresentation.footnote)
+                } else {
+                    Text(AidenApprovalPresentation.detail(for: kind))
+                }
             }
+            .font(.footnote)
+            .foregroundStyle(palette.secondary)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 12)
 
             if canRespond {
-                HStack(spacing: 8) {
-                    Spacer(minLength: 0)
-
+                HStack(spacing: 10) {
                     Button(action: onDeny) {
                         Text(AidenApprovalPresentation.denyTitle(for: kind))
-                            .font(.caption.weight(.semibold))
+                            .font(.body.weight(.semibold))
                             .foregroundStyle(palette.foreground)
-                            .padding(.horizontal, 13)
-                            .frame(height: 34)
+                            .frame(maxWidth: .infinity, minHeight: 50)
+                            .contentShape(Capsule())
                             .aidenApprovalActionGlass()
                     }
                     .buttonStyle(.plain)
-                    .padding(.vertical, 5)
-
-                    if canAllow && !broaderScopes.isEmpty {
-                        Menu {
-                            ForEach(broaderScopes, id: \.self) { scope in
-                                Button(AidenApprovalPresentation.scopeTitle(scope)) { onAllow(scope) }
-                            }
-                        } label: {
-                            Image(systemName: "ellipsis")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.foreground)
-                                .frame(width: 34, height: 34)
-                                .aidenApprovalActionGlass()
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.vertical, 5)
-                        .accessibilityLabel("More allow options")
-                        .accessibilityHint("Remember this exact action for this chat or always")
-                    }
 
                     if canAllow {
-                        Button { onAllow(.once) } label: {
-                            Text(AidenApprovalPresentation.allowTitle(for: kind))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.onFillAccent)
-                                .padding(.horizontal, 13)
-                                .frame(height: 34)
-                                .aidenApprovalActionGlass(tint: palette.fillAccent)
+                        allowButton
+                    }
+                }
+                .padding(.top, 16)
+            }
+        }
+        .padding(16)
+        // Shadow only the surface: on the whole card it also blurs every glyph inside.
+        .background {
+            shape
+                .fill(palette.raised)
+                .shadow(color: palette.foreground.opacity(0.08), radius: 12, y: 4)
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var allowLabel: some View {
+        Text(AidenApprovalPresentation.allowTitle(for: kind))
+            .font(.body.weight(.semibold))
+            .foregroundStyle(palette.onFillAccent)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+    }
+
+    @ViewBuilder
+    private var allowButton: some View {
+        if broaderScopes.isEmpty {
+            Button { onAllow(.once) } label: {
+                allowLabel
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .contentShape(Capsule())
+                    .aidenApprovalActionGlass(tint: palette.fillAccent)
+            }
+            .buttonStyle(.plain)
+        } else {
+            HStack(spacing: 0) {
+                Button { onAllow(.once) } label: {
+                    allowLabel
+                        .padding(.leading, 8)
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Rectangle()
+                    .fill(palette.onFillAccent.opacity(0.25))
+                    .frame(width: 1, height: 22)
+                    .accessibilityHidden(true)
+
+                Menu {
+                    ForEach(broaderScopes, id: \.self) { scope in
+                        Button { onAllow(scope) } label: {
+                            Text(AidenApprovalPresentation.scopeTitle(scope))
+                            if let detail = AidenApprovalPresentation.scopeDetail(scope, toolName: toolName) {
+                                Text(detail)
+                            }
                         }
-                        .buttonStyle(.plain)
-                        .padding(.vertical, 5)
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.footnote.weight(.bold))
+                        .foregroundStyle(palette.onFillAccent)
+                        .frame(width: 44, height: 50)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("More ways to allow")
+                .accessibilityHint("Remember this approval for this chat or always")
+            }
+            .aidenApprovalActionGlass(tint: palette.fillAccent)
+        }
+    }
+}
+
+/// A request, instructions or script on an approval card. Past six lines it
+/// folds behind Show all; expanded, it scrolls in a bounded box (the Bot chat
+/// keeps the card in its footer) with a Scroll for more cue while text is hidden.
+private struct AidenApprovalFoldingText: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+    @State private var isExpanded = false
+    @State private var hasMoreBelow = false
+
+    let text: String
+    let font: Font
+    let accessibilityLabel: String
+
+    /// Lines the text shows before Show all.
+    private let collapsedLines = 6
+    /// About twelve lines: the most expanded text takes before it scrolls.
+    private let expandedMaxHeight: CGFloat = 240
+
+    private var isLong: Bool {
+        text.count > 320 || text.split(whereSeparator: \.isNewline).count > collapsedLines
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if isExpanded {
+                ViewThatFits(in: .vertical) {
+                    textView
+                    ScrollView { textView }
+                        .scrollIndicators(.visible)
+                        .scrollIndicatorsFlash(onAppear: true)
+                        // Only overflowing text gets here, and it opens at the top.
+                        .onAppear { hasMoreBelow = true }
+                        .onDisappear { hasMoreBelow = false }
+                        .onScrollGeometryChange(for: Bool.self) { geometry in
+                            geometry.visibleRect.maxY < geometry.contentSize.height - 1
+                        } action: { _, more in
+                            hasMoreBelow = more
+                        }
+                }
+                .frame(maxHeight: expandedMaxHeight, alignment: .top)
+            } else {
+                textView
+            }
+
+            if isLong {
+                HStack(spacing: 8) {
+                    Button(isExpanded ? "Show less" : "Show all") {
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                            isExpanded.toggle()
+                        }
+                    }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .buttonStyle(.plain)
+
+                    Spacer(minLength: 0)
+
+                    // The end of long text must never sit hidden without a cue.
+                    if isExpanded && hasMoreBelow {
+                        Label("Scroll for more", systemImage: "arrow.down")
+                            .font(.footnote)
+                            .foregroundStyle(palette.secondary)
                     }
                 }
             }
         }
-        .padding(12)
-        .background(palette.raised, in: shape)
-        .overlay(shape.stroke(palette.foreground.opacity(0.08), lineWidth: 0.5))
-        .shadow(color: palette.foreground.opacity(0.08), radius: 8, y: 3)
-        .accessibilityElement(children: .contain)
+    }
+
+    private var textView: some View {
+        Text(text)
+            .font(font)
+            .foregroundStyle(palette.foreground)
+            .lineLimit(isExpanded || !isLong ? nil : collapsedLines)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityValue(text)
+    }
+}
+
+/// Contract revision 39: the body of a scheduled-task approval with a
+/// `schedule` card. What runs and when, then where, with what access and model,
+/// then the instructions or script and a note when it will not run on its own.
+private struct AidenScheduleApprovalDetails: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    let card: AidenScheduleCardPresentation
+
+    private let wellShape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+    /// Row separators start under the label, past the icon column.
+    private let rowInset: CGFloat = 14 + 22 + 10
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 0) {
+                hero
+                    .padding(14)
+                Divider()
+                    .padding(.leading, 14)
+                ForEach(Array(card.rows.enumerated()), id: \.element.id) { index, row in
+                    if index > 0 {
+                        Divider()
+                            .padding(.leading, rowInset)
+                    }
+                    rowView(row)
+                }
+            }
+            .background(palette.canvas, in: wellShape)
+
+            if let content = card.content {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(card.contentTitle)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(palette.secondary)
+                        .accessibilityHidden(true)
+                    AidenApprovalFoldingText(
+                        text: content,
+                        font: card.contentIsScript ? .subheadline.monospaced() : .subheadline,
+                        accessibilityLabel: card.contentTitle
+                    )
+                    if card.isTruncated {
+                        Label(AidenScheduleCardPresentation.truncatedNote, systemImage: "scissors")
+                            .font(.footnote)
+                            .foregroundStyle(palette.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(palette.canvas, in: wellShape)
+            }
+
+            if let note = card.note {
+                Label {
+                    Text(note.text)
+                        .foregroundStyle(note.isWarning ? palette.foreground : palette.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: note.symbol)
+                        .foregroundStyle(note.isWarning ? palette.warning : palette.secondary)
+                }
+                .font(.footnote)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(note.isWarning ? palette.warning.opacity(0.14) : palette.canvas, in: wellShape)
+                .accessibilityElement(children: .combine)
+            }
+        }
+    }
+
+    private var hero: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(card.name)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(palette.foreground)
+                .lineLimit(2)
+            Text(card.cadence)
+                .font(.body)
+                .foregroundStyle(palette.foreground)
+                .fixedSize(horizontal: false, vertical: true)
+            if let nextRun = card.nextRun {
+                Label("Next run \(nextRun)", systemImage: "clock")
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+                    .padding(.top, 3)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func rowView(_ row: AidenScheduleCardPresentation.Row) -> some View {
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 12))
+        return HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: row.symbol)
+                .font(.subheadline)
+                .foregroundStyle(row.isWarning ? palette.warning : palette.secondary)
+                .frame(width: 22)
+            layout {
+                Text(row.label)
+                    .font(.subheadline)
+                    .foregroundStyle(palette.secondary)
+                if !stacked {
+                    Spacer(minLength: 0)
+                }
+                if row == card.access {
+                    accessChip(row)
+                } else {
+                    Text(row.value)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(palette.foreground)
+                        .multilineTextAlignment(stacked ? .leading : .trailing)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(row.accessibilityLabel)
+    }
+
+    /// Read-only sits on a neutral soft fill; Full access on a warning one. The
+    /// text stays foreground: light-mode warning orange is too faint to read.
+    private func accessChip(_ row: AidenScheduleCardPresentation.Row) -> some View {
+        Text(row.value)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(palette.foreground)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 3)
+            .background((row.isWarning ? palette.warning : palette.secondary).opacity(0.14), in: Capsule())
     }
 }
 
@@ -8223,11 +8809,37 @@ struct AidenQuestionCard: View {
     let prompt: AidenPendingQuestion
     let onSubmit: (AidenQuestionRespondRequest) -> Void
 
-    @State private var draft = AidenQuestionComposerDraft()
+    @State private var draft: AidenQuestionComposerDraft
+
+    init(
+        model: AidenChatViewModel? = nil,
+        prompt: AidenPendingQuestion,
+        onSubmit: @escaping (AidenQuestionRespondRequest) -> Void
+    ) {
+        self.model = model
+        self.prompt = prompt
+        self.onSubmit = onSubmit
+        // Callers key the card by prompt id, so a new prompt starts fresh.
+        _draft = State(initialValue: AidenQuestionComposerDraft(questions: prompt.questions))
+    }
 
     var stopButton: AidenChatStopButton? { model.map { AidenChatStopButton(model: $0) } }
 
     private var answers: [AidenQuestionAnswer] { draft.answers(for: prompt.questions) }
+
+    private var hint: String {
+        let recommended = !AidenQuestionAnswerDraft.recommendedSelections(for: prompt.questions).isEmpty
+        switch (prompt.questions.count > 1, recommended) {
+        case (true, true):
+            return String(localized: "Recommended answers are already selected. Questions you leave blank are skipped.")
+        case (true, false):
+            return String(localized: "Answer what you can — unanswered questions are skipped.")
+        case (false, true):
+            return String(localized: "The recommended answer is already selected. Change it or type your own.")
+        case (false, false):
+            return String(localized: "Choose an option or type your own answer.")
+        }
+    }
 
     private func binding(for index: Int) -> Binding<String> {
         Binding(
@@ -8252,9 +8864,7 @@ struct AidenQuestionCard: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(palette.foreground)
 
-                        Text(prompt.questions.count > 1
-                             ? String(localized: "Answer what you can — unanswered questions are skipped.")
-                             : String(localized: "Choose an option or type your own answer."))
+                        Text(hint)
                             .font(.caption)
                             .foregroundStyle(palette.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -8305,6 +8915,7 @@ struct AidenQuestionCard: View {
 
                         ForEach(question.options, id: \.label) { option in
                             let selected = draft.selections[index]?.contains(option.label) == true
+                            let label = AidenQuestionAnswerDraft.recommendedLabel(option.label)
                             Button {
                                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
                                     draft.toggle(option.label, questions: prompt.questions)
@@ -8319,9 +8930,19 @@ struct AidenQuestionCard: View {
                                         .frame(width: 20)
                                         .accessibilityHidden(true)
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text(option.label)
-                                            .font(.callout)
-                                            .foregroundStyle(palette.foreground)
+                                        HStack(spacing: 6) {
+                                            Text(label.text)
+                                                .font(.callout)
+                                                .foregroundStyle(palette.foreground)
+                                            if label.recommended {
+                                                Text("Recommended")
+                                                    .font(.caption2.weight(.semibold))
+                                                    .foregroundStyle(palette.accent)
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .background(palette.accent.opacity(0.12), in: Capsule())
+                                            }
+                                        }
                                         Text(option.description)
                                             .font(.caption)
                                             .foregroundStyle(palette.secondary)
@@ -8338,7 +8959,9 @@ struct AidenQuestionCard: View {
                                 selected ? palette.accent.opacity(0.10) : palette.canvas,
                                 in: RoundedRectangle(cornerRadius: 10, style: .continuous)
                             )
-                            .accessibilityLabel(option.label)
+                            .accessibilityLabel(label.recommended
+                                ? String(localized: "\(label.text), recommended")
+                                : label.text)
                             .accessibilityValue(selected
                                 ? String(localized: "Selected")
                                 : String(localized: "Not selected"))
@@ -8475,6 +9098,12 @@ private struct AidenChronologicalTranscript: View {
     let active: Bool
     /// Draws a committed message's visual rows; the live stream has none.
     var visualContent: ((AidenChatVisual) -> AnyView)? = nil
+    /// Present while the Mac serves browser recordings (revision 46).
+    var loadRecording: ((AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad)? = nil
+    /// Draws a committed message's images beneath their step; the live stream has none.
+    var imageContent: (([AidenMessageAttachment]) -> AnyView)? = nil
+    /// Draws a live `generate_image` placeholder beneath its step.
+    var imageSlotContent: ((String) -> AnyView)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -8505,8 +9134,20 @@ private struct AidenChronologicalTranscript: View {
                     if let recap = row.steps.first?.questionnaire {
                         AidenQuestionnaireRecapView(recap: recap)
                     }
+                case .extraction:
+                    if let recap = row.steps.first?.extraction {
+                        AidenWebExtractRecapView(recap: recap)
+                    }
+                case .recording:
+                    if let recording = row.steps.first?.recording {
+                        AidenBrowserRecordingCardView(recording: recording, load: loadRecording)
+                    }
                 case .visual(let visual):
                     visualContent?(visual)
+                case .images(let images):
+                    imageContent?(images)
+                case .imageSlot(let call):
+                    imageSlotContent?(call)
                 }
             }
         }
@@ -8566,6 +9207,258 @@ struct AidenQuestionnaireRecapView: View {
             Text(verbatim: label)
                 .font(.subheadline)
                 .foregroundStyle(.tertiary)
+        }
+    }
+}
+
+/// The values a `web_fetch` extract call read, under its activity line: each
+/// name and value with the page line it came from, so the owner can check a
+/// number against its source without opening the page. Guesses and values
+/// the page does not have are labelled as such, never shown as read.
+struct AidenWebExtractRecapView: View {
+    @Environment(\.aidenPalette) private var palette
+    let recap: AidenWebExtractRecap
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label {
+                Text(verbatim: recap.host)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } icon: {
+                Image(systemName: "globe")
+                    .imageScale(.small)
+            }
+            .font(.footnote)
+            .foregroundStyle(palette.secondary)
+
+            if let failure = recap.error {
+                Text(verbatim: "Couldn\u{2019}t read the values: \(failure.message). The page was read instead.")
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+            } else {
+                ForEach(recap.fields) { field in
+                    fieldRow(field)
+                }
+            }
+
+            if recap.cut {
+                Text("Only the first part of the page was read.")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text(verbatim: "Values read from \(recap.host)"))
+    }
+
+    private func fieldRow(_ field: AidenWebExtractRecap.Field) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(verbatim: field.label)
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
+            value(for: field)
+            source(for: field)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private func value(for field: AidenWebExtractRecap.Field) -> some View {
+        switch field.status {
+        case .absent:
+            Text("Not on the page")
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+        case .extracted:
+            Text(verbatim: field.value ?? "")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(palette.foreground)
+        case .uncertain:
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if let value = field.value {
+                    Text(verbatim: value)
+                        .font(.subheadline)
+                        .foregroundStyle(palette.secondary)
+                }
+                Text("Guess")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(palette.warning)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(palette.warning.opacity(0.12), in: Capsule())
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func source(for field: AidenWebExtractRecap.Field) -> some View {
+        if field.status != .absent {
+            if let line = field.sourceLine {
+                Text(verbatim: "\u{201C}\(line)\u{201D}")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else if field.notFound == true {
+                Text("Not found on the page")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+}
+
+/// The video the agent recorded of a browser tab, under its activity line
+/// (contract revision 46). The bytes stay on the Mac until Play is pressed;
+/// a WebM fallback, or a Mac that does not serve recordings, is watched on
+/// the Mac instead.
+struct AidenBrowserRecordingCardView: View {
+    @Environment(\.aidenPalette) private var palette
+    let recording: AidenBrowserRecordingRecap
+    /// Present while the Mac announces `chat-browser-recordings-v1`.
+    var load: ((AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad)? = nil
+    @State private var isLoading = false
+    @State private var failure: AidenBrowserRecordingLoad?
+    @State private var playback: AidenBrowserRecordingPlayback?
+    /// The saved copy the player is showing, removed when it closes.
+    @State private var lastPlayedFile: URL?
+
+    private var playsHere: Bool { load != nil && recording.playsOnPhone }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: "video")
+                    .imageScale(.small)
+                    .foregroundStyle(palette.secondary)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Browser recording")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(palette.foreground)
+                    Text(verbatim: "\(recording.durationLabel) \u{00B7} \(recording.sizeLabel)")
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text(verbatim: recording.accessibilityLabel))
+                Spacer(minLength: 8)
+                if playsHere {
+                    playButton
+                }
+            }
+            if !playsHere {
+                Text(verbatim: AidenBrowserRecordingLoad.watchOnMacMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+            } else if let failure {
+                Text(verbatim: failure == .missing
+                    ? AidenBrowserRecordingLoad.missingMessage
+                    : AidenBrowserRecordingLoad.failedMessage)
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text(verbatim: recording.accessibilityLabel))
+        .fullScreenCover(item: $playback, onDismiss: {
+            // The copy on the phone exists only while it plays.
+            if let file = lastPlayedFile { AidenBrowserRecordingFile.remove(file) }
+            lastPlayedFile = nil
+        }) { item in
+            AidenBrowserRecordingPlayerView(url: item.url)
+        }
+    }
+
+    private var playButton: some View {
+        Button {
+            Task { await play() }
+        } label: {
+            HStack(spacing: 6) {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "play.fill")
+                        .imageScale(.small)
+                }
+                Text(isLoading ? "Loading\u{2026}" : "Play")
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(palette.accent)
+            .frame(minHeight: 32)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isLoading)
+        .accessibilityLabel(Text(verbatim: "Play browser recording, \(recording.durationLabel)"))
+    }
+
+    @MainActor
+    private func play() async {
+        guard let load, !isLoading else { return }
+        isLoading = true
+        failure = nil
+        let result = await load(recording)
+        isLoading = false
+        switch result {
+        case .ready(let url):
+            lastPlayedFile = url
+            playback = AidenBrowserRecordingPlayback(url: url)
+        case .missing, .failed:
+            failure = result
+        }
+    }
+}
+
+/// One presentation of the player for a saved recording file.
+struct AidenBrowserRecordingPlayback: Identifiable, Equatable {
+    let url: URL
+    var id: String { url.path }
+}
+
+/// The recording full screen with the system playback controls.
+private struct AidenBrowserRecordingPlayerView: View {
+    @Environment(\.dismiss) private var dismiss
+    let url: URL
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                if let player {
+                    VideoPlayer(player: player)
+                        .accessibilityLabel("Browser recording")
+                }
+            }
+            .navigationTitle("Browser recording")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .onAppear {
+            guard player == nil else { return }
+            let player = AVPlayer(url: url)
+            self.player = player
+            player.play()
+        }
+        .onDisappear {
+            player?.pause()
+            player = nil
         }
     }
 }
@@ -8772,19 +9665,23 @@ private struct AidenVisualRowView: View {
     }
 }
 
+/// A one-row view of reasoning that never opens or closes on its own. While
+/// the model thinks, the row shows the latest finished line in place, so a fast
+/// turn with many short thoughts never moves the transcript. Opening it is the
+/// reader's choice.
 private struct AidenReasoningCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     let text: String
     let label: String
     let active: Bool
-    @State private var isExpanded = true
-    @State private var userControlled = false
+    @State private var isExpanded = false
+    /// Keeps its last text once thinking ends so the line can fade out in place.
+    @State private var liveLine = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                userControlled = true
                 withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
                     isExpanded.toggle()
                 }
@@ -8793,7 +9690,25 @@ private struct AidenReasoningCard: View {
                     Text(label)
                         .font(.caption.weight(.semibold))
                         .aidenActivityShimmer(active)
-                    Spacer(minLength: 6)
+                        .layoutPriority(1)
+                    ZStack(alignment: .leading) {
+                        if !liveLine.isEmpty {
+                            Text(liveLine)
+                                .id(liveLine)
+                                .transition(.asymmetric(
+                                    insertion: .opacity.combined(with: .offset(y: 4)),
+                                    removal: .opacity
+                                ))
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .opacity(active && !isExpanded ? 1 : 0)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: active)
+                    .accessibilityHidden(true)
                     Image(systemName: "chevron.right")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(palette.secondary)
@@ -8820,16 +9735,16 @@ private struct AidenReasoningCard: View {
         .padding(.horizontal, 12)
         .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .accessibilityElement(children: .contain)
-        .task {
-            guard active else {
-                isExpanded = false
-                return
-            }
-            try? await Task.sleep(for: .seconds(1))
-            guard !Task.isCancelled, !userControlled else { return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
-                isExpanded = false
-            }
+        .onChange(of: text, initial: true) { refreshLiveLine() }
+        .onChange(of: active) { refreshLiveLine() }
+    }
+
+    private func refreshLiveLine() {
+        guard active else { return }
+        let line = AidenAgentActivityPresentation.latestReasoningLine(text)
+        guard !line.isEmpty, line != liveLine else { return }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
+            liveLine = line
         }
     }
 }
@@ -10068,7 +10983,9 @@ extension AidenChatViewModel {
             canAllow: canAllow,
             scopes: canAllow && kind == .action
                 ? AidenApprovalScope.offered(approval.scopes?.map(\.rawValue))
-                : [.once]
+                : [.once],
+            toolName: approval.toolName,
+            schedule: AidenApprovalSchedule.card(approval.schedule, toolName: approval.toolName)
         )
     }
 

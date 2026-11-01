@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import protocol from "../../protocol/aiden-remote/v1/openapi.json";
 import contract from "../../protocol/aiden-remote/v1/fixtures/contract.json";
-import { peerOperationRequest, peerOperationResult } from "./peer-operation.js";
+import { hostQueryValue, peerOperationRequest, peerOperationResult } from "./peer-operation.js";
+import { isSafeEncodedQuery } from "./aiden-remote-router.js";
+import { peerRequestUrl } from "./peer-transport.js";
 
 type Endpoint = {
   operationId?: string;
@@ -56,6 +58,7 @@ test("expanded peer operations resolve to the contract's routes, not arbitrary U
     [{ operation: "runRespondQuestion", resourceId: "run_1", itemId: "prompt_1", idempotencyKey: KEY }, "respondRunQuestion"],
     [{ operation: "runInputs", resourceId: "run_1", idempotencyKey: KEY }, "submitRunInput"],
     [{ operation: "createBotChat", resourceId: "bot_1", idempotencyKey: KEY }, "createBotChat"],
+    [{ operation: "botSessionImage", resourceId: "bot_1", itemId: "entry_7" }, "getBotSessionImage"],
     [{ operation: "uploadAttachment", resourceId: "chat_1", body: { name: "a.txt" } }, "uploadChatAttachment"],
     [{ operation: "removeAttachment", resourceId: "chat_1", itemId: `att_${"A".repeat(43)}` }, "removeChatAttachment"],
     [{ operation: "botSession", resourceId: "bot_1" }, "getBotSession"],
@@ -247,14 +250,21 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
   assert.equal(content.mimeType, "image/png");
   assert.deepEqual([...content.bytes], [...png]);
   assert.ok(!Buffer.isBuffer(content.bytes));
-  for (const invalid of [
-    { mimeType: "text/html", data: png },
-    { mimeType: "image/png", data: Buffer.alloc(0) },
-    { mimeType: "image/png", data: "iVBOR" },
-  ])
-    await assert.rejects(
-      peerOperationResult({ operation: "attachmentContent" }, invalid),
-    );
+  // A Bot's shared image (revision 45) comes back the same way.
+  const shared = (await peerOperationResult(
+    { operation: "botSessionImage" },
+    { mimeType: "image/jpeg", data: png },
+  )) as { mimeType: string; bytes: Uint8Array };
+  assert.deepEqual([shared.mimeType, [...shared.bytes]], ["image/jpeg", [...png]]);
+  for (const operation of ["attachmentContent", "botSessionImage"])
+    for (const invalid of [
+      { mimeType: "text/html", data: png },
+      { mimeType: "image/png", data: Buffer.alloc(0) },
+      { mimeType: "image/png", data: "iVBOR" },
+    ])
+      await assert.rejects(
+        peerOperationResult({ operation }, invalid),
+      );
 });
 
 test("fork operations reach the contract's fork routes with the headers each one declares", () => {
@@ -426,4 +436,81 @@ test("the host's real Bot session, send receipt and controls pass this Mac's con
   await assert.rejects(
     peerOperationResult({ operation: "botResume", resourceId: "bot_1" }, fixtures.botSessionSend!.response),
   );
+});
+
+test("a context pressure read names the host's route, and its model pair travels whole and literal", async () => {
+  const own = peerOperationRequest({ operation: "contextPressure", resourceId: "chat_1" });
+  assert.equal(contractRoute(own.method ?? "GET", own.path)?.operationId, "getChatContextPressure");
+  assert.equal(own.path.includes("?"), false);
+
+  const priced = peerOperationRequest({
+    operation: "contextPressure",
+    resourceId: "chat_1",
+    providerId: "custom:local",
+    modelId: "org/model-large:free@2026",
+  });
+  const route = contractRoute(priced.method ?? "GET", priced.path);
+  assert.equal(route?.operationId, "getChatContextPressure");
+  assert.equal(route?.query.get("providerId"), "custom:local");
+  assert.equal(route?.query.get("modelId"), "org/model-large:free@2026");
+  // The host refuses any percent-encoded URL, so nothing is encoded, here or
+  // when the transport resolves the route against the host's endpoint.
+  assert.equal(priced.path.includes("%"), false);
+  const everyAllowed = peerOperationRequest({
+    operation: "contextPressure",
+    resourceId: "chat_1",
+    providerId: "aZ09._~:@/!$()*,;-",
+    modelId: "m",
+  });
+  const sent = peerRequestUrl("https://studio.example.ts.net/api/aiden/v1", everyAllowed.path);
+  assert.equal(`${sent.pathname}${sent.search}`.includes("%"), false);
+  assert.equal(new URLSearchParams(sent.search).get("providerId"), "aZ09._~:@/!$()*,;-");
+
+  for (const malformed of [
+    { providerId: "custom:local" },
+    { modelId: "model-1" },
+    { providerId: "p", modelId: "model one" },
+    { providerId: "p&modelId=x", modelId: "m" },
+    { providerId: "p", modelId: "o'brien" },
+    { providerId: "p", modelId: "" },
+    { providerId: "p", modelId: "m".repeat(257) },
+  ])
+    assert.throws(
+      () => peerOperationRequest({ operation: "contextPressure", resourceId: "chat_1", ...malformed }),
+      JSON.stringify(malformed),
+    );
+});
+
+test("a context pressure answer is checked against the contract before it reaches the renderer", async () => {
+  const answer = contract.chatContextPressure;
+  assert.deepEqual(await peerOperationResult({ operation: "contextPressure" }, answer), answer);
+  const unknown = { chatId: "chat_1", pressure: null };
+  assert.deepEqual(await peerOperationResult({ operation: "contextPressure" }, unknown), unknown);
+  for (const refused of [
+    {},
+    { chatId: "chat_1" },
+    { ...answer, pressure: { ...answer.pressure, breakdown: { categories: [], deferred: [] } } },
+    { ...answer, pressure: { ...answer.pressure, promptCache: { ttlMs: 1, lastRequestAt: 1 } } },
+    { ...answer, pressure: { ...answer.pressure, contextTokens: -5 } },
+  ])
+    await assert.rejects(peerOperationResult({ operation: "contextPressure" }, refused), JSON.stringify(refused));
+});
+
+test("a Bot search reaches the host exactly as typed, and plain words still work on older hosts", () => {
+  const endpoint = "https://studio.example.ts.net/api/aiden/v1";
+  const sent = (search: string) => {
+    const url = peerRequestUrl(endpoint, peerOperationRequest({ operation: "botConversations", query: search }).path);
+    return url.search.slice(1);
+  };
+  for (const search of ["plan week", "release notes & more", "café ☕ 100% done+", "it's #1 = best", "a/b:c@d"]) {
+    const query = sent(search);
+    // The host's own URL rule, then the way it reads the value.
+    assert.equal(isSafeEncodedQuery(query), true, search);
+    assert.equal(new URLSearchParams(query).get("query"), search, search);
+  }
+  // Hosts before revision 41 refuse any `%`; spaces and id separators never need one.
+  for (const search of ["plan week", "team: ops/weekly", "Q3, Q4; done"]) {
+    assert.equal(sent(search).includes("%"), false, search);
+  }
+  assert.equal(hostQueryValue("plan week"), "plan+week");
 });

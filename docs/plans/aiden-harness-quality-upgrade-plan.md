@@ -8,7 +8,7 @@ Improve Aiden's ability to complete work, recover from failures, show what was v
 
 Keep the active Pi packages pinned at **1.3.0** during the initial work. Preserve the frozen `@aiden/pi-legacy-harness` alias at **0.87.1**. The changes belong primarily to Aiden's runtime integration, tools, memory, clients, and evaluation infrastructure. Use existing Pi hooks and Aiden's immutable runtime contribution snapshots. Do not fork Pi, patch installed dependencies, replace the runtime with Harness², or combine a provider upgrade with a harness experiment.
 
-If an upstream defect or missing public API prevents a slice, reproduce it independently and use the separate Pi upgrade gate below. The current dependency record is [Pi 1.3.0 project memory](../../.memory/pi-1.3.0-upgrade.md).
+If an upstream defect or missing public API prevents a slice, reproduce it independently and use the separate Pi upgrade gate below. The current dependency record is [Pi 1.4.0 project memory](../../.memory/pi-1.4.0-upgrade.md); the pins moved from 1.3.0 through the separate gate below on 2026-10-26, with no harness policy change.
 
 ## Evidence and baseline
 
@@ -146,7 +146,7 @@ Report per-task outcomes and variation, with the baseline always eligible. Keep 
 
 ### H3 — Bring durable Bot sessions to the CLI deliberately
 
-First document the portable-service boundary and profile ownership model. Target reuse of the desktop durable Bot-session core through CLI process, credential, and notification adapters. Audit the bundled dependency graph for Electron imports. If portability requires adding a Pi package, pin it to the audited 1.3.0 line and evaluate the addition separately; do not silently upgrade existing packages.
+First document the portable-service boundary and profile ownership model. Target reuse of the desktop durable Bot-session core through CLI process, credential, and notification adapters. Audit the bundled dependency graph for Electron imports. If portability requires adding a Pi package, pin it to the audited desktop line (1.4.0 since 2026-10-26) and evaluate the addition separately; do not silently upgrade existing packages.
 
 Preserve Bot homes, grants, schedules, and chats. Define explicit migration with backup/recovery before changing legacy Bot chat handling; never launch unattended work during migration. Negotiate session/routine/preset/memory/proactivity features only when their endpoints are wired and accepted.
 
@@ -257,3 +257,7 @@ Integration refreshed through origin/main4eb306584 (merge d1ff95802); only docum
 H4: older settled text rows use browser containment; artifact/interactive rows and the latest 32 remain normal. Three paired production-package runs improved 2,000-message median opening 18.3% (1,282→1,047 ms), with 50-message regression 2.1% (139→142 ms); declared 15%/20%-or-25 ms targets pass. Active-stream input 42–49 ms with measured server-emitted deltas passes 100 ms target. Fresh review corrections and Electron find/keyboard/copy/scroll/handoff/wide-artifact checks are recorded in [the performance report](../research/harness-transcript-performance.md). All rows remain mounted; no heap/battery benefit claimed.43 renderer tests and initial-JS budget pass; signed release acceptance stays separate.
 
 Merge (2026-10-21): merged `origin/main` (#560–#566, #568, #572, #576) into the branch. Pre-merge review fixes: lifecycle receipt publication is best effort (an unreadable receipt file, a deleted chat or a failed write no longer fails startup or turns a finished run into a host failure) and startup receipt catch-up runs in the background, limited to operations within receipt retention; the attended tool guard no longer treats a filesystem/HTTP "permission denied" error as a terminal user denial. Merged at the owner's request without waiting for H2c, which stays open with H5b.
+
+## Note, 2026-10-27: Bot lessons
+
+The Bot autonomy branch (`docs/superpowers/specs/2026-10-27-bot-autonomy-design.md` §7) uses the H5a lesson vocabulary (cue, lesson, component, evidence, helped/hurt/no effect/confounded, NO_ENTRY) in its own store, `main/services/bot-lessons/`, because `WorkflowEvidenceStore` is keyed to chats and needs host receipts that Bot runs do not produce. H5b's workflow-improvement UI is unchanged by it.

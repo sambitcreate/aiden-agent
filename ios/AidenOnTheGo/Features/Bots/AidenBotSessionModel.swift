@@ -46,7 +46,8 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
     aidenBotActivitySupported(server: coordinator.server, installation: coordinator.installationStore.activeInstallation)
 }
 
-/// Which of `bot:cards`, `bot:activity` and `bot:handoffs` the pairing holds.
+/// Which of `bot:cards`, `bot:activity`, `bot:handoffs`, `bot:handoff-notes`,
+/// `bot:handoff-on-mac` and `bot:images` the pairing holds.
 /// The Mac shapes a Bot session feed by these (its cards, Chat activity,
 /// hand-offs and the paused state) when the feed opens, and keeps that shape
 /// for the feed's life. A Bot chat can open from the pairing's saved features
@@ -54,7 +55,7 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
 /// the chat reopens a feed that opened without one
 /// (`AidenBotSessionModel.reopenFeed()`; Android parity).
 func aidenBotSessionFeedGrants(_ installation: AidenInstallation?) -> Set<AidenRemoteCapability> {
-    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs].filter { installation?.hasNegotiatedAccess(to: $0) == true })
+    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages].filter { installation?.hasNegotiatedAccess(to: $0) == true })
 }
 
 /// How a Bot chat is opened. A host advertising `bot-durable-session-v1`
@@ -135,6 +136,15 @@ protocol AidenBotSessionTransport: Sendable {
     func pauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView
     /// Revision 37: `DELETE /bots/{botId}/pause`.
     func unpauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView
+    /// Revision 45 (`bot:images`): the bytes of an image the Bot shared.
+    func botSessionImage(botId: String, entryId: String) async throws -> Data
+    /// Revision 42 (`bot:issues`): carry out one action a card offers.
+    func actOnBotIssue(
+        botId: String,
+        issueId: String,
+        request: AidenBotIssueActRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotIssueActReceipt
 }
 
 extension AidenBotSessionTransport {
@@ -166,6 +176,21 @@ extension AidenBotSessionTransport {
     func unpauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
         throw AidenRemoteClientError.invalidResponse
     }
+
+    /// A transport without shared images has none to read, as a Mac without `bot:images`.
+    func botSessionImage(botId: String, entryId: String) async throws -> Data {
+        throw AidenRemoteClientError.invalidResponse
+    }
+
+    /// A transport without issues refuses them, as a Mac without `bot:issues` does.
+    func actOnBotIssue(
+        botId: String,
+        issueId: String,
+        request: AidenBotIssueActRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotIssueActReceipt {
+        throw AidenRemoteClientError.invalidResponse
+    }
 }
 
 extension AidenRemoteClient: AidenBotSessionTransport {}
@@ -175,9 +200,12 @@ struct AidenBotHandoffMacPrompt: Equatable, Sendable {
     let waitId: String
     /// The Mac brought the hand-off forward; otherwise no Aiden window could show it.
     let opened: Bool
+    /// A sign-in, or (revision 43) a step on the Bot's own screen.
+    var signIn: Bool = true
 
     var text: String {
-        opened ? AidenBotSessionCopy.finishSigningInOnMac : AidenBotSessionCopy.openAidenOnMac
+        if signIn { return opened ? AidenBotSessionCopy.finishSigningInOnMac : AidenBotSessionCopy.openAidenOnMac }
+        return opened ? AidenBotSessionCopy.finishStepOnMac : AidenBotSessionCopy.openAidenOnMacForStep
     }
 }
 
@@ -221,6 +249,8 @@ enum AidenBotSessionCopy {
     static let handoffOpen = "Open"
     static let handoffNotePlaceholder = "Add a note and send to mark it done"
     static let signInPlaceholder = "Finish signing in on your Mac, or skip it."
+    /// Revision 40: a password-or-code card takes no note, so the composer waits.
+    static let handoffNoNotePlaceholder = "Enter it yourself, then tap Done."
     static let handoffExpired = "That card was already answered or closed."
     static let handoffNotSent = "That answer wasn’t sent. Please try again."
     static let handoffNoteTooLong = "Keep the note under 4,000 characters."
@@ -228,11 +258,26 @@ enum AidenBotSessionCopy {
     static let handoffFilesWait = "Send files after you answer the card."
     static let finishSigningInOnMac = "Finish signing in on your Mac."
     static let openAidenOnMac = "Open Aiden on your Mac to finish signing in."
+    /// Revision 43: a step on the Bot's own browser or computer.
+    static let finishStepOnMac = "Finish this step on your Mac."
+    static let openAidenOnMacForStep = "Open Aiden on your Mac to finish this step."
+    static let handoffOnMacDetail = "This step is on the Bot’s own screen on your Mac."
     static let pauseBot = "Pause Bot"
     static let resumeBot = "Resume Bot"
     static func pausedTitle(_ name: String) -> String { "\(name) is paused." }
     static func pausedDetail(_ name: String) -> String { "\(name) won’t reply or run routines until you resume it." }
     static func pausedPlaceholder(_ name: String) -> String { "\(name) is paused" }
+
+    // Revision 42 (`bot:issues`), shared with desktop and Android.
+    static let issueNeedsYou = "Needs you"
+    /// A card whose only action opens the Mac's own settings.
+    static let issueOpenOnMac = "Open on your Mac"
+    static let issueOpenChat = "Open chat"
+    static let issueResumeRoutine = "Resume routine"
+    static let issueStop = "Stop"
+    static let issueKeepWaiting = "Keep waiting"
+    static let issueStale = "This card changed. Pull to refresh and try again."
+    static let issueNotSent = "That didn’t reach your Mac. Please try again."
 
     static let memoryUpdated = "Memory updated"
     static let proposalTitle = "Add a routine?"
@@ -407,6 +452,10 @@ struct AidenBotOutgoingMessage: Equatable, Identifiable, Sendable {
     /// queued list caps at 20 and the Mac leaves out inputs it can't classify,
     /// so one snapshot is not proof: it goes only after a grace period.
     fileprivate var unheldSince: Date?
+    /// An earlier visit or launch saw the Mac take it. Its entry may sit beyond
+    /// the transcript window a snapshot carries, so it never draws as its own
+    /// bubble while nothing on the Mac shows it.
+    fileprivate var takenBeforeVisit = false
 
     fileprivate var submissionId: String? {
         if case let .sent(id) = status { return id }
@@ -429,6 +478,14 @@ struct AidenBotOutgoingMessage: Equatable, Identifiable, Sendable {
         echoSubmissionID = nil
     }
 
+    /// A message on its way looks sent at once; "Sending…" shows only once it
+    /// has waited this long for the Mac (offline, or a slow Mac).
+    static let sendingCaptionDelay: TimeInterval = 2
+
+    static func showsSendingCaption(sentAt: Date, now: Date) -> Bool {
+        now.timeIntervalSince(sentAt) >= sendingCaptionDelay
+    }
+
     /// Whether the Mac may hold it, so its echo can stand in for it.
     fileprivate var mayHaveReachedMac: Bool {
         guard request != nil else { return false }
@@ -439,7 +496,7 @@ struct AidenBotOutgoingMessage: Equatable, Identifiable, Sendable {
 
 /// How the chat draws an outgoing message (R14).
 enum AidenBotOutgoingLook: Equatable {
-    /// Faded, "Sending…".
+    /// On its way: drawn as sent, with "Sending…" once it has waited a moment.
     case sending
     /// The Mac took it; its own entry replaces it shortly.
     case sent
@@ -1031,6 +1088,56 @@ private final class AidenBotRequestRace<T: Sendable>: @unchecked Sendable {
     }
 }
 
+/// Revision 45 (`bot:images`): the bytes of images a Bot shared, kept while
+/// its chat is open within a byte budget. The least recently drawn image goes
+/// first; one that is dropped is read from the Mac again the next time it is
+/// drawn. An image larger than the whole budget is never kept.
+struct AidenSharedImageBytes {
+    /// About four of the largest images the Mac sends (8 MiB each).
+    static let defaultMaxBytes = 32 * 1024 * 1024
+
+    let maxBytes: Int
+    private var images: [String: Data] = [:]
+    /// Least recently drawn first.
+    private var order: [String] = []
+    private(set) var byteCount = 0
+
+    init(maxBytes: Int = Self.defaultMaxBytes) { self.maxBytes = maxBytes }
+
+    mutating func data(for id: String) -> Data? {
+        guard let data = images[id] else { return nil }
+        order.removeAll { $0 == id }
+        order.append(id)
+        return data
+    }
+
+    mutating func insert(_ data: Data, for id: String) {
+        remove(id)
+        guard data.count <= maxBytes else { return }
+        images[id] = data
+        order.append(id)
+        byteCount += data.count
+        while byteCount > maxBytes, let oldest = order.first, oldest != id { remove(oldest) }
+    }
+
+    /// Drops every image the transcript no longer shows.
+    mutating func retainOnly(_ ids: Set<String>) {
+        for id in order where !ids.contains(id) { remove(id) }
+    }
+
+    mutating func removeAll() {
+        images = [:]
+        order = []
+        byteCount = 0
+    }
+
+    private mutating func remove(_ id: String) {
+        guard let data = images.removeValue(forKey: id) else { return }
+        order.removeAll { $0 == id }
+        byteCount -= data.count
+    }
+}
+
 @MainActor
 @Observable
 final class AidenBotSessionModel {
@@ -1039,6 +1146,8 @@ final class AidenBotSessionModel {
         /// Revision 37 (`bot:handoffs`). Pausing is the Bot profile's own
         /// call, made without showing a pause the Mac hasn't confirmed.
         case answerHandoff, openHandoffOnMac, unpause
+        /// Revision 42 (`bot:issues`): one action a "Needs you" card offers.
+        case actIssue
     }
 
     let botID: String
@@ -1065,6 +1174,10 @@ final class AidenBotSessionModel {
     private(set) var approval: AidenRemoteBotApproval?
     /// Revision 37 (`bot:handoffs`): the hand-off the Bot is waiting on, or nil.
     private(set) var handoff: AidenRemoteBotHandoff?
+    /// Revision 42 (`bot:issues`): the Bot's "Needs you" cards, oldest first.
+    private(set) var issues: [AidenRemoteBotIssue] = []
+    /// The card an action is on its way for, so its buttons wait.
+    private(set) var actingIssue: AidenRemoteBotIssue?
     /// What the Mac said after Finish on your Mac, for the hand-off it names.
     private(set) var handoffMacPrompt: AidenBotHandoffMacPrompt?
     private(set) var epoch: String?
@@ -1084,6 +1197,8 @@ final class AidenBotSessionModel {
     private(set) var isAttaching = false
     /// The bytes of each staged photo, for its thumbnail; never written to disk.
     @ObservationIgnored private var attachmentImages: [String: Data] = [:]
+    /// Revision 45: images the Bot shared, kept in memory within a budget while this chat is open; never written to disk.
+    @ObservationIgnored private var sharedImages: AidenSharedImageBytes
     /// The Bot's Chat activity wording, from its detail.
     var wording: AidenBotChatActivityWording = .follows
     /// What the running turn is doing (revision 30), or nil.
@@ -1117,6 +1232,9 @@ final class AidenBotSessionModel {
     @ObservationIgnored private var retainedApproval: (waitId: String, decision: AidenApprovalDecision, key: UUID)?
     @ObservationIgnored private var retainedHandoff: (waitId: String, request: AidenBotHandoffAnswerRequest, key: UUID)?
     @ObservationIgnored private var retainedHandoffOpen: (waitId: String, key: UUID)?
+    /// Revision 42: the request UUID of a card action, kept per card and action
+    /// so a retried tap replays the Mac's receipt instead of running twice.
+    @ObservationIgnored private var retainedIssueActions: [String: (request: AidenBotIssueActRequest, key: UUID)] = [:]
     /// Called when a hand-off frame (never a snapshot) names a new wait, so
     /// the chat can alert a person who has left it (G24).
     @ObservationIgnored var onHandoffArrived: ((AidenRemoteBotHandoff) -> Void)?
@@ -1146,6 +1264,7 @@ final class AidenBotSessionModel {
     @ObservationIgnored private var questionWrites = 0
     @ObservationIgnored private var approvalWrites = 0
     @ObservationIgnored private var handoffWrites = 0
+    @ObservationIgnored private var issueWrites = 0
 
     private enum Intent { case none, requested, acknowledged }
 
@@ -1167,9 +1286,11 @@ final class AidenBotSessionModel {
         outboxStore: AidenBotOutboxStore? = .shared,
         retryDelays: [Duration] = [.seconds(1), .seconds(4)],
         requestLimit: Duration = .seconds(12),
+        sharedImageBudget: Int = AidenSharedImageBytes.defaultMaxBytes,
         now: @escaping () -> Date = { Date() }
     ) {
         self.botID = botID
+        self.sharedImages = AidenSharedImageBytes(maxBytes: sharedImageBudget)
         self.transport = transport
         self.cacheKey = cacheKey
         self.cache = cache
@@ -1191,7 +1312,9 @@ final class AidenBotSessionModel {
         message.deferred = false
         message.dropEcho()
         message.queuedID = nil
-        message.unheldSince = nil
+        // Unheld when last seen stays hidden until the Mac shows it again; its grace starts over.
+        message.unheldSince = message.unheldSince == nil ? nil : now
+        message.takenBeforeVisit = message.submissionId != nil
         if message.status == .sending, isExpired(message, now: now) { message.expire() }
         return message
     }
@@ -1208,6 +1331,7 @@ final class AidenBotSessionModel {
         released = true
         backoffTask?.cancel()
         flushTask?.cancel()
+        sharedImages.removeAll()
     }
 
     var state: AidenBotSessionStateKind? { stateView?.state }
@@ -1230,7 +1354,9 @@ final class AidenBotSessionModel {
     private var isConnected: Bool { hasLoaded && !isStreamDown }
 
     /// The outgoing messages to draw after the transcript and the Mac's Queued bubbles.
-    var outgoing: [AidenBotOutgoingMessage] { outbox.filter { !$0.echoed && !isShownAsQueued($0) } }
+    var outgoing: [AidenBotOutgoingMessage] {
+        outbox.filter { !$0.echoed && !isShownAsQueued($0) && !($0.takenBeforeVisit && $0.unheldSince != nil) }
+    }
 
     private func isShownAsQueued(_ message: AidenBotOutgoingMessage) -> Bool {
         guard let id = message.queuedID else { return false }
@@ -1469,6 +1595,9 @@ final class AidenBotSessionModel {
             handoffWrites += 1
             if next?.waitId != handoffMacPrompt?.waitId { handoffMacPrompt = nil }
             if let next, next.waitId != previous { onHandoffArrived?(next) }
+        case let .issues(next):
+            issues = next
+            issueWrites += 1
         case .closed:
             return .closed
         }
@@ -1549,9 +1678,11 @@ final class AidenBotSessionModel {
         question = session.question
         approval = session.approval
         handoff = session.handoff
+        issues = session.issues
         questionWrites += 1
         approvalWrites += 1
         handoffWrites += 1
+        issueWrites += 1
         if session.handoff?.waitId != handoffMacPrompt?.waitId { handoffMacPrompt = nil }
         activity = session.activity
         queued = session.queued
@@ -2003,6 +2134,95 @@ final class AidenBotSessionModel {
         }
     }
 
+    // MARK: Bot issues (revision 42, `bot:issues`)
+
+    /// The cards the chat shows: the host's open issues. A settled card is
+    /// kept out of the transcript, as the Mac shows it as a quiet line.
+    var openIssues: [AidenRemoteBotIssue] { issues.filter { !$0.resolved } }
+
+    var canActOnIssue: Bool {
+        hasLoaded && !inFlight.contains(.actIssue)
+    }
+
+    /// The button label for one action a card offers.
+    static func issueActionTitle(_ action: AidenBotIssueAction) -> String {
+        switch action.kind {
+        case .openChat: AidenBotSessionCopy.issueOpenChat
+        case .resumeRoutine: AidenBotSessionCopy.issueResumeRoutine
+        case .stopRun: AidenBotSessionCopy.issueStop
+        case .keepWaiting: AidenBotSessionCopy.issueKeepWaiting
+        }
+    }
+
+    /// Carries out one action a card offers (revision 42). The Mac settles the
+    /// card and sends the new list; a settling action drops the card here at
+    /// once and puts it back if the request didn't reach the Mac (R18). The
+    /// request UUID survives an ambiguous failure, so retrying the same tap
+    /// replays the Mac's receipt; another action is a new request.
+    /// `open_chat` opens nothing new on a phone (it is already the Bot's
+    /// chat): the Mac is told so its own view agrees, and the card stays.
+    /// Returns false when the action was refused or not sent.
+    @discardableResult
+    func actOnIssue(_ issue: AidenRemoteBotIssue, action: AidenBotIssueAction) async -> Bool {
+        guard canActOnIssue, !issue.resolved,
+              issues.contains(where: { $0.id == issue.id && !$0.resolved }),
+              issue.actions.contains(where: { $0 == action }),
+              let request = try? AidenBotIssueActRequest(action: action) else { return false }
+        let settles = action.kind != .openChat
+        let actionKey = "\(issue.id):\(action.kind.rawValue):\(action.routineId ?? "")"
+        let key: UUID
+        if let retained = retainedIssueActions[actionKey], retained.request == request {
+            key = retained.key
+        } else {
+            key = UUID()
+            retainedIssueActions[actionKey] = (request, key)
+        }
+        let mark = issueWrites
+        let index = issues.firstIndex { $0.id == issue.id }
+        actingIssue = issue
+        inFlight.insert(.actIssue)
+        defer {
+            inFlight.remove(.actIssue)
+            if actingIssue?.id == issue.id { actingIssue = nil }
+        }
+        if settles { issues.removeAll { $0.id == issue.id } }
+        /// Put the card back where it was when the action did not reach the Mac.
+        func restore() {
+            guard settles, issueWrites == mark, !issues.contains(where: { $0.id == issue.id }) else { return }
+            if let index, index <= issues.count {
+                issues.insert(issue, at: index)
+            } else {
+                issues.append(issue)
+            }
+        }
+        do {
+            let receipt = try await aidenBotWithin(requestLimit) { [transport, botID] in
+                try await transport.actOnBotIssue(
+                    botId: botID,
+                    issueId: issue.id,
+                    request: request,
+                    idempotencyKey: key
+                )
+            }
+            retainedIssueActions[actionKey] = nil
+            // `not_open` means nothing waits any more: the card stays gone.
+            if receipt.result == .notOpen, settles { issueWrites += 1 }
+            return true
+        } catch {
+            if !aidenBotSessionFailureIsAmbiguous(error) { retainedIssueActions[actionKey] = nil }
+            if case let AidenRemoteClientError.server(_, body) = error,
+               ["operation_stale", "invalid_request"].contains(body.code.rawValue) {
+                restore()
+                errorMessage = AidenBotSessionCopy.issueStale
+                return false
+            }
+            restore()
+            if error is CancellationError { return false }
+            errorMessage = AidenBotSessionCopy.issueNotSent
+            return false
+        }
+    }
+
     // MARK: Hand-offs (revision 37, `bot:handoffs`)
 
     var canAnswerHandoff: Bool {
@@ -2010,8 +2230,13 @@ final class AidenBotSessionModel {
     }
 
     /// While a step (not a sign-in) waits, the composer's text is its note:
-    /// Send marks the step done (desktop parity).
-    var composerAnswersHandoff: Bool { handoff?.kind == .action }
+    /// Send marks the step done (desktop parity). A card that takes no note
+    /// (revision 40) holds the composer instead (`composerHeldForNoNote`).
+    var composerAnswersHandoff: Bool { handoff?.kind == .action && handoff?.takesNote != false }
+
+    /// Revision 40: a password-or-code card waits. A code typed in the
+    /// composer would reach the Bot, so the composer waits for Done or Skip.
+    var composerHeldForNoNote: Bool { handoff?.kind == .action && handoff?.takesNote == false }
 
     /// Answers the waiting hand-off: Done or Skip, with an optional note. A
     /// sign-in is finished on the Mac, so a phone can only skip it. The card
@@ -2025,6 +2250,8 @@ final class AidenBotSessionModel {
         guard canAnswerHandoff, let shown = handoff else { return false }
         if outcome == .done, shown.kind == .signIn { return false }
         let trimmed = rawNote?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // A card that takes no note is answered bare: a code typed as a note never leaves the phone.
+        if !trimmed.isEmpty, !shown.takesNote { return false }
         guard trimmed.unicodeScalars.count <= AidenBotHandoffWire.maxNoteLength,
               let request = try? AidenBotHandoffAnswerRequest(outcome: outcome, note: trimmed.isEmpty ? nil : trimmed) else {
             errorMessage = AidenBotSessionCopy.handoffNoteTooLong
@@ -2099,7 +2326,9 @@ final class AidenBotSessionModel {
                 try await transport.openBotHandoffOnMac(botId: botID, waitId: waitId, idempotencyKey: key)
             }
             retainedHandoffOpen = nil
-            if handoff?.waitId == waitId { handoffMacPrompt = AidenBotHandoffMacPrompt(waitId: waitId, opened: receipt.opened) }
+            if handoff?.waitId == waitId {
+                handoffMacPrompt = AidenBotHandoffMacPrompt(waitId: waitId, opened: receipt.opened, signIn: shown.kind == .signIn)
+            }
         } catch {
             if !aidenBotSessionFailureIsAmbiguous(error) { retainedHandoffOpen = nil }
             if error is CancellationError { return }
@@ -2457,6 +2686,32 @@ final class AidenBotSessionModel {
     }
 
     // MARK: Connect cards
+
+    /// Revision 45 (`bot:images`): the bytes of an image the Bot shared, or nil
+    /// when the Mac can't send it (it left the chat, or the phone is offline).
+    /// Images are kept while this chat is open, within a byte budget and only
+    /// while the transcript still shows them; one that was dropped, or whose
+    /// read failed, is read again the next time it is drawn.
+    func sharedImageData(entryId: String) async -> Data? {
+        if let cached = sharedImages.data(for: entryId) { return cached }
+        guard shownSharedImageIDs.contains(entryId) else { return nil }
+        guard let data = try? await aidenBotWithin(requestLimit, { [transport, botID] in
+            try await transport.botSessionImage(botId: botID, entryId: entryId)
+        }) else { return nil }
+        sharedImages.retainOnly(shownSharedImageIDs)
+        sharedImages.insert(data, for: entryId)
+        return data
+    }
+
+    /// Tests only: bytes of shared images held now.
+    var sharedImageByteCount: Int { sharedImages.byteCount }
+
+    private var shownSharedImageIDs: Set<String> {
+        Set(entries.compactMap { entry in
+            if case let .sharedImage(image) = entry { return image.id }
+            return nil
+        })
+    }
 
     func requestConnection(pluginId: String) async {
         guard !sentConnectionRequests.contains(pluginId),

@@ -16,7 +16,11 @@ import type {
 export type ScheduledRunTrigger =
   | { kind: "automatic"; fireTime: number }
   | { kind: "manual"; key: string }
-  | { kind: "catch_up"; missedRunId: string; missedAt: number };
+  | { kind: "catch_up"; missedRunId: string; missedAt: number }
+  /** A delayed retry of a failed Bot routine fire, replayed from its pending entry. */
+  | { kind: "retry"; requestId: string; failedRunId: string; attempt: 1 | 2 }
+  /** An event routine's run: what happened, as untrusted data for the Bot. */
+  | { kind: "event"; eventId: string; source: "file_change" | "webhook" | "watch"; payload: string };
 
 interface ScheduleExecutionLike {
   run(task: ScheduledTask, runId?: string, trigger?: ScheduledRunTrigger): Promise<ScheduledRun>;
@@ -354,6 +358,15 @@ export function createScheduleServiceCore(
           : undefined;
         if (options.automatic && options.recovery && !pendingFire)
           throw new UnclaimableScheduledFire(`Routine ${taskId} has no pending fire to recover.`);
+        // A retry replayed after the routine's next regular fire came due (the
+        // Mac slept, Aiden was closed) is stale: that fire replaces it.
+        if (
+          pendingFire?.retry &&
+          ((task.nextRunAt !== undefined && task.nextRunAt <= Date.now()) || (task.lastRunAt ?? 0) > pendingFire.fireTime)
+        ) {
+          await store.settleRoutineFire(task.id, pendingFire.requestId);
+          throw new UnclaimableScheduledFire(`Routine ${taskId}'s retry was replaced by its next fire.`);
+        }
         const claimed = options.automatic && !options.recovery
           ? await advanceBeforeRun(task, fireTime!, isCurrent)
           : task;
@@ -364,7 +377,9 @@ export function createScheduleServiceCore(
           dependencies.broadcast({ taskId: task.id });
         }
         state.executionStarted = true;
-        const trigger: ScheduledRunTrigger = options.automatic
+        const trigger: ScheduledRunTrigger = pendingFire?.retry
+          ? { kind: "retry", requestId: pendingFire.requestId, ...pendingFire.retry }
+          : options.automatic
           ? { kind: "automatic", fireTime: fireTime! }
           : options.catchUp ?? { kind: "manual", key: options.runId ?? `${Date.now()}-${++manualRunSequence}` };
         const executionTask = pendingFire
@@ -517,8 +532,15 @@ export function createScheduleServiceCore(
         if (pendingRecoveryQueued.get(taskId) === recoveryToken) pendingRecoveryQueued.delete(taskId);
         if (isCurrent()) {
           try {
-            const remaining = (await store.get(taskId))?.pendingRoutineFires?.length ?? 0;
-            if (!remaining) pendingRetryAt.delete(taskId);
+            const pending = (await store.get(taskId))?.pendingRoutineFires ?? [];
+            const nowMs = Date.now();
+            const nextRetry = pending.every((fire) => fire.retry && fire.fireTime > nowMs)
+              ? Math.min(...pending.map((fire) => fire.fireTime))
+              : undefined;
+            if (!pending.length) pendingRetryAt.delete(taskId);
+            // Only delayed retries remain: wait for the first one to come due
+            // instead of backing off as if recovery had failed.
+            else if (nextRetry !== undefined) pendingRetryAt.set(taskId, { at: nextRetry, failures: 0 });
             else {
               const failures = Math.min((pendingRetryAt.get(taskId)?.failures ?? 0) + 1, 4);
               pendingRetryAt.set(taskId, {
@@ -564,6 +586,12 @@ export function createScheduleServiceCore(
     pendingRetryTimer = undefined;
     pendingRecoveryQueued.clear();
     pendingRetryAt.clear();
+  }
+
+  async function rearmCurrentTask(previous: ScheduledTask | undefined): Promise<void> {
+    if (!previous?.enabled) return;
+    const current = await store.get(previous.id);
+    if (current?.enabled) await schedule(current);
   }
 
   return {
@@ -737,7 +765,13 @@ export function createScheduleServiceCore(
         if (options.signal?.aborted) {
           return rollbackCancellation(task.updatedAt);
         }
-        await schedule(task);
+        try {
+          await schedule(task);
+        } catch (error) {
+          // Cancellation can refuse the scheduling write after the save committed.
+          if (!options.signal?.aborted) throw error;
+          return rollbackCancellation((await store.get(task.id))?.updatedAt ?? task.updatedAt);
+        }
         const latest = (await store.get(task.id)) ?? task;
         if (options.signal?.aborted) {
           return rollbackCancellation(latest.updatedAt);
@@ -764,7 +798,12 @@ export function createScheduleServiceCore(
           if (current?.enabled) await schedule(current);
           throwIfAborted(options.signal, "removal");
         }
-        await store.remove(id);
+        try {
+          await store.remove(id);
+        } catch (error) {
+          await rearmCurrentTask(current);
+          throw error;
+        }
         dependencies.broadcast({ taskId: id, removed: true });
       });
     },
@@ -785,7 +824,13 @@ export function createScheduleServiceCore(
           if (current?.enabled) await schedule(current);
           throwIfAborted(options.signal, "pause");
         }
-        const task = await store.setEnabled(id, false);
+        let task: ScheduledTask;
+        try {
+          task = await store.setEnabled(id, false);
+        } catch (error) {
+          await rearmCurrentTask(current);
+          throw error;
+        }
         if (options.signal?.aborted) {
           if (current) {
             const restored = await store.setEnabled(id, current.enabled);
@@ -820,7 +865,11 @@ export function createScheduleServiceCore(
           await restore();
           throwIfAborted(options.signal, "resume");
         }
-        await schedule(task);
+        try {
+          await schedule(task);
+        } catch (error) {
+          if (!options.signal?.aborted) throw error;
+        }
         if (options.signal?.aborted) {
           stopJob(id);
           await restore();

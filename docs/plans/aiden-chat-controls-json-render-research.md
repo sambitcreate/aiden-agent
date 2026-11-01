@@ -1,6 +1,8 @@
 # Interactive Aiden controls inside chat
 
 Status: **Bounded profile merged in [PR #312](https://github.com/sambitcreate/aiden-agent/pull/312) (2026-10-15) and shipped in 0.57.0. Physical release acceptance remains open.**
+
+2026-10-30: the CLI TUI surfaces in this specification (`/help-aiden`, `/aiden-app`, `/aiden-settings` and terminal panels) were removed when the CLI became a [serve-only headless server](aiden-serve-only-cli.md); `aiden app help|status|get|set` remains for Memory, Web Search and Skills.
 Date: 2026-10-03.
 Implementation update: the bounded MVP described in the [parent plan](aiden-app-knowledge-actions-plan.md#implemented-contract-and-evidence) is implemented. Exact shipped DTOs supersede the proposed names below: assistant `appPanels`, `AppControlPanel` version 1, current host snapshots and four-field typed operations. json-render core/React 0.21.0 renders only the host-assembled desktop template. Native clients and CLI use their existing native controls. Automated acceptance is tracked on PR #312; physical release acceptance remains open.
 
@@ -218,7 +220,7 @@ Detailed behavioral oracles:
 - Desktop fake-provider chat produces a Memory panel; click its switch; observe the actual gate and persisted state; reopen chat/relaunch and verify refreshed state. Extend existing e2e surface tests rather than grepping JSX/source.
 - SwiftUI/Compose view tests operate controls and assert accessible names, states, pending/error behavior and service results. Shared semantic fixtures validate enum/value compatibility. Run both native focused suites and paired-device acceptance; report emulator versus physical evidence separately.
 - Mid-operation unpair/revoke/host switch/workspace delete: effect stays with its original target or is denied, never migrates. No mutation from notifications or background receipt hydration.
-- Disabling Skills while generation is active: future skill effects stop and panel receipt reaches the UI despite model cancellation. Memory/Web Search tool admission reflects saved enablement with honest timing.
+- Disabling Skills while generation is active: future skill effects stop and panel receipt reaches the UI despite model cancellation. Memory/Web Search tool admission reflects saved enablement with honest timing. (Superseded 2026-10-27: turning Skills off no longer cancels running replies; it applies from the next skill call. See `aiden-app-knowledge-actions-plan.md`.)
 - CLI real TUI fixture: focus/keyboard change and persisted result; external fake app tool cannot escape None. Headless descriptors cannot execute or wait for a nonexistent interactive prompt.
 - Export/package: no grant/credential in copied chat, artifact or telemetry; relocated bundles contain only shipped help; private plans/memory omitted. Long histories hydrate only visible panels with bounded subscriptions.
 

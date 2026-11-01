@@ -36,6 +36,7 @@ import { parseGenerationTimeline } from "../../renderer/shared/generation-timeli
 import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
+import { parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
 import { parseChatHtmlArtifacts, parseChatImagePlacements, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
 import { parseChatUiVisualV1, parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
@@ -889,6 +890,10 @@ export function createChatStore(
           message.role === "user"
             ? parseSkillProvenanceV1(message.skill)
             : undefined,
+        notice:
+          message.role === "user"
+            ? parseAgentNoticeV1(message.notice)
+            : undefined,
       };
     });
     if (policy !== "pure") {
@@ -1473,6 +1478,10 @@ export function createChatStore(
               message.role === "user"
                 ? parseSkillProvenanceV1(message.skill)
                 : undefined,
+            notice:
+              message.role === "user"
+                ? parseAgentNoticeV1(message.notice)
+                : undefined,
             providerFailure:
               message.role === "assistant"
                 ? parseProviderFailureV1(message.providerFailure)
@@ -1612,6 +1621,36 @@ export function createChatStore(
         const resolvedProviderId = await resolveProviderId(providerId);
         if (!resolvedProviderId || !model.trim()) {
           throw new Error("A Bot model selection requires a provider and model.");
+        }
+        if (chat.providerId === resolvedProviderId && chat.model === model) return chat;
+        chat.providerId = resolvedProviderId;
+        chat.model = model;
+        await writeChatAndMeta(chat);
+        return chat;
+      });
+    },
+
+    /**
+     * Change the model an ordinary chat answers with. It is this chat's own
+     * choice: other chats and the app's model for new chats stay as they are,
+     * and neither the history nor the sidebar order changes.
+     */
+    async setChatModelSelection(
+      id: string,
+      providerId: string,
+      model: string,
+      assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
+    ): Promise<Chat> {
+      return shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
+        if (!chat) throw new Error(`Chat ${id} not found`);
+        await assertCurrent(chat);
+        if (chat.botId) {
+          throw new Error("A Bot chat's model changes in the Bot's settings.");
+        }
+        const resolvedProviderId = await resolveProviderId(providerId);
+        if (!resolvedProviderId || !model.trim()) {
+          throw new Error("A chat model selection requires a provider and model.");
         }
         if (chat.providerId === resolvedProviderId && chat.model === model) return chat;
         chat.providerId = resolvedProviderId;
@@ -1842,6 +1881,10 @@ export function createChatStore(
           skill:
             message.role === "user"
               ? parseSkillProvenanceV1(message.skill)
+              : undefined,
+          notice:
+            message.role === "user"
+              ? parseAgentNoticeV1(message.notice)
               : undefined,
           timeline:
             message.role === "assistant"

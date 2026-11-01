@@ -3,6 +3,8 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { isCodexAuthenticationFailure } from "../codex-auth-failure.js";
 import { providerFailureFromTerminalOutcome } from "../provider-failure.js";
+import { classifyUsageLimit, usageLimitSafeErrorText, type ProviderResponseObservation } from "../usage-limit-core.js";
+import { usageLimitObservedOptions } from "../usage-limit-stream.js";
 import {
   isSubagentInferenceParentMessage,
   compactAssistantMessageEvent,
@@ -117,14 +119,28 @@ parentPort.on("message", (messageEvent) => {
         message.model.api === "anthropic-messages"
           ? anthropicMessagesApi()
           : openAICompletionsApi();
-      const stream = (builtIn ?? compatibility).streamSimple(message.model, normalizeContext(message.context), {
-        ...message.options,
-        signal: cancellation.signal,
-        onPayload: (payload) => invokeHook("payload", payload),
-        onResponse: async (response) => {
-          await invokeHook("response", response);
-        },
-      });
+      // The provider's own error text stays here; a usage limit crosses as a
+      // provider-free description so the app can still wait it out.
+      let observation: ProviderResponseObservation | undefined;
+      const stream = (builtIn ?? compatibility).streamSimple(
+        message.model,
+        normalizeContext(message.context),
+        usageLimitObservedOptions(
+          message.model,
+          {
+            ...message.options,
+            signal: cancellation.signal,
+            onPayload: (payload) => invokeHook("payload", payload),
+            onResponse: async (response) => {
+              await invokeHook("response", response);
+            },
+          },
+          true,
+          (seen) => {
+            observation = seen;
+          },
+        ),
+      );
       let sequence = 0;
       let terminalSent = false;
       for await (const event of stream) {
@@ -137,7 +153,10 @@ parentPort.on("message", (messageEvent) => {
                   errorMessage:
                     event.reason === "aborted"
                       ? "The isolated provider request was cancelled."
-                      : "The isolated provider request failed.",
+                      : (usageLimitSafeErrorText(
+                          classifyUsageLimit({ errorMessage: event.error.errorMessage, observation, now: Date.now() }),
+                          Date.now(),
+                        ) ?? "The isolated provider request failed."),
                 },
               }
             : event;

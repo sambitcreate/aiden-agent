@@ -50,8 +50,8 @@ export interface HtmlArtifactPlacementV1 {
 }
 
 /**
- * Which generate_image call produced a generated image attachment, so the
- * image renders at that call's activity row. Lenient like the HTML placements.
+ * Which call (generate_image, display_image or share_image) produced an image
+ * attachment, so the image renders at that call's activity row. Lenient like the HTML placements.
  */
 export interface ChatImagePlacementV1 {
   attachmentId: string;

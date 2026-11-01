@@ -50,6 +50,7 @@ export const appHandlers = {
         dictationHoldSetup: linuxDictationHoldSetupAvailable(),
         dictationHoldTrigger: linuxDictationHoldTriggerDescription(),
         nativeShare: host.nativeShare,
+        macAppConnectors: host.macAppConnectors,
         appleFoundationModels: host.appleFoundationModels,
         devices: devicesEnabled(),
         ...studioCapabilities(),

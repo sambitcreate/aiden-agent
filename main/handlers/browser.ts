@@ -1,4 +1,4 @@
-import { shell } from "electron";
+import { app, shell } from "electron";
 import { ipcMain } from "../platform.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { browserService } from "../services/browser/service.js";
@@ -7,6 +7,7 @@ import { configStore } from "../services/config-store.js";
 import { externalUrl } from "../services/browser/core.js";
 import { resolveExternalWorkspaceDocument } from "../services/browser/external-document.js";
 import type { BrowserCommand } from "../../renderer/shared/browser.js";
+import { findBrowserRecording, readBrowserRecording } from "../services/browser/recordings.js";
 
 export function registerBrowserHandlers(): void {
   ipcMain.handle("browser:get-state", async (event, workspaceId: unknown) => {
@@ -47,6 +48,21 @@ export function registerBrowserHandlers(): void {
     } finally {
       cleanup();
     }
+  });
+  // A recording the agent made, played in its chat. Only the recorder's own
+  // ids are opened, from Aiden's own folder; a chat names them in its timeline.
+  ipcMain.handle("browser:recording", async (event, recordingId: unknown) => {
+    rendererDocumentOwner(event, () => new Error("Recordings require the active application document."));
+    if (typeof recordingId !== "string") throw new Error("A recording id is required.");
+    const recording = await readBrowserRecording(app.getPath("userData"), recordingId);
+    return recording ? { mimeType: recording.mimeType, data: new Uint8Array(recording.data) } : null;
+  });
+  ipcMain.handle("browser:reveal-recording", async (event, recordingId: unknown) => {
+    rendererDocumentOwner(event, () => new Error("Recordings require the active application document."));
+    if (typeof recordingId !== "string") throw new Error("A recording id is required.");
+    const recording = await findBrowserRecording(app.getPath("userData"), recordingId);
+    if (!recording) throw new Error("This recording is no longer on this computer.");
+    shell.showItemInFolder(recording.path);
   });
   ipcMain.handle("browser:link-preference", (event) => {
     rendererDocumentOwner(event, () => new Error("Link settings require the active application document."));

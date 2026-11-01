@@ -338,3 +338,9 @@ test("memory does not index visual snapshots as attachments", () => {
   assert.ok(sources.includes("photo-1"));
   assert.equal(sources.some((source) => source?.startsWith("visual-snapshot_")), false);
 });
+
+test("No workspace chats share the default workspace's memory whatever their hidden folder", () => {
+  const scope = memoryScopeForChat(chat({ workspaceId: "hidden-1" }), "/data/chat-folders/kind-fern-hike", true);
+  assert.deepEqual(scope, { kind: "workspace", id: "default" });
+  assert.deepEqual(memoryScopeForChat(chat({ workspaceId: "default" })), scope);
+});

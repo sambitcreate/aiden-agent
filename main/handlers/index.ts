@@ -35,6 +35,10 @@ import { registerFormFillHandlers } from "./form-fill.js";
 import { registerModelInsightsHandlers } from "./model-insights.js";
 import { registerImageGenerationHandlers } from "./image-generation.js";
 import { registerModelPaceHandlers } from "./model-pace.js";
+import { registerUsageLimitHandlers } from "./usage-limits.js";
+import { registerSpendingHandlers } from "./spending.js";
+import { registerAnalyticsHandlers } from "./analytics.js";
+import { analyticsService } from "../services/analytics/analytics-main.js";
 import { registerDictationHandlers } from "./dictation.js";
 import { registerScheduledTaskHandlers } from "./scheduled-tasks.js";
 import { registerAssistantHandlers } from "./assistant.js";
@@ -52,6 +56,7 @@ import { botComputerHandlerDependencies } from "../services/bot-computers/bot-co
 import { registerDiagnosticHandlers } from "./diagnostics.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { registerBtwHandlers } from "./btw.js";
+import { registerFollowThroughHandlers } from "./follow-through.js";
 import { registerTtsHandlers } from "./tts.js";
 import { registerDeviceHandlers } from "./devices.js";
 import { registerDesignHandlers } from "./design/register.js";
@@ -59,6 +64,8 @@ import { registerCreateImagesIpc } from "./create-images/index.js";
 import { initializeAdvisorRuntime } from "../services/advisor-runtime-main.js";
 import { initializeForkSummaries } from "../services/fork-summary-service-main.js";
 import { modelPaceRecorder } from "../services/model-pace-runtime.js";
+import { usageLimits } from "../services/usage-limit-main.js";
+import { spending } from "../services/spending-main.js";
 
 import { ipcMain, logger } from "../platform.js";
 
@@ -111,6 +118,18 @@ export function registerHandlers(): void {
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     recorder: modelPaceRecorder,
   });
+  registerUsageLimitHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    limits: usageLimits,
+  });
+  registerSpendingHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    spending,
+  });
+  registerAnalyticsHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    analytics: analyticsService(),
+  });
   registerDictationHandlers();
   registerScheduledTaskHandlers();
   // Bot routines are scheduled tasks owned by a Bot; they exist only where Bots do.
@@ -127,6 +146,7 @@ export function registerHandlers(): void {
   registerLocalRunIpc();
   if (hostPlatformCapabilities().bots) registerBotHandlers();
   registerBtwHandlers();
+  registerFollowThroughHandlers();
   registerTtsHandlers();
   registerDeviceHandlers();
   // A no-op unless the designStudio capability is on.
@@ -134,11 +154,4 @@ export function registerHandlers(): void {
   registerCreateImagesIpc();
 
   logger.info("handlers", "✓ IPC handlers registered");
-
-  // TODO: Add more handlers here using ipcMain.handle()
-  // Example:
-  // ipcMain.handle('file:read', async (event, path) => {
-  //   const fs = await import('fs/promises');
-  //   return await fs.readFile(path, 'utf-8');
-  // });
 }

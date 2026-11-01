@@ -77,6 +77,19 @@ Deferred from this pass, with the reason:
 - A-7 and A-8: the New chat FAB needs the chat list to be loaded (creating a chat needs the Mac anyway), and the connecting banner is already the quiet raised row from PR #374 with no top-bar indicator to replace it.
 - Desktop workspace chats were already optimistic (`chat-message-queue`); nothing changed there.
 
+## Follow-up: sends that look sent (2026-10-27)
+
+The owner still felt a delay after pressing Send in a Bot chat. The message did appear at once, but faded with "Sending…" until the Mac accepted it, and on the Mac that waits for `bots:send` to resolve the Bot's model, rebuild its tools and connectors (`registry.refresh()`) and its system prompt before the input is admitted. The fade turning solid read as the moment the message was sent.
+
+- Desktop: the echo is drawn exactly like the entry it becomes (same row, Copy and Reply), and says "Sending…" only once main has taken more than 2 s to accept it. A message sent while the Bot works shows as Queued at once. The Bot's "Getting ready" line shows from the send (as on the phones), and an interrupted card leaves with the send that dismisses it; a failed send drops the echo and the line and brings the card back. A failed send now shows one error toast instead of two (the pane and the composer both used to toast).
+- Desktop send motion (asked by the owner the same day): the sent words arc from where they sat in the composer into their bubble (across first, then up, each axis easing in and out) in 90 ms (the owner asked for under 100 ms) while the bubble's fill comes in. A floating copy makes the trip (the transcript clips anything over the composer) and the real bubble holds its place unseen until it lands; an entry that answers the send meanwhile waits unseen too, so the swap never shows twice. Anything drawn after that entry first (a reply that starts fast) ends the motion at once, so the message never sits below its own reply. Reduce Motion skips it.
+- iOS and Android: a message on its way is drawn as sent, with "Sending…" only once it has waited 2 s (offline, or a slow Mac). Queued, Steer and "Couldn't send · Try again" are unchanged; the phones already showed "Getting ready" at once.
+- Not changed: how fast the Mac admits a send. Reusing the Bot's tool set and prompt between sends is a possible follow-up.
+
+## Follow-up: no "Sending…" on desktop Bots (2026-10-28)
+
+The owner still saw "Sending…" under a desktop Bot message when the Mac took more than 2 s to admit it, and asked that the message simply read as sent. The desktop echo no longer has a slow label: it looks sent from the press, and the "Getting ready" line below the transcript is the only sign of a slow start. A failed send still drops the echo and shows its error. The phones keep their 2 s "Sending…" (offline is a real state there); the Mac's admission time is unchanged.
+
 ## Out of scope for this pass
 
 Desktop read snapshots that survive a relaunch (cache-first plan D1, D3), the model catalog disk caches on both phones, Files/Git caches (I7, A5), and the paired-Mac remote Bot open on old hosts. These stay on the cache-first plan.

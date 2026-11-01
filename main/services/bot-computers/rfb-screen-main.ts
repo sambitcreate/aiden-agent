@@ -19,7 +19,11 @@ import { connectRfb, type RfbClient } from "./rfb-client.js";
 import { createRfbScreen, type BotComputerImageEncoder } from "./rfb-screen.js";
 import { BotComputerError, type BotComputerConnection, type BotComputerScreenFactory } from "./types.js";
 
-/** BGRA pixels to PNG or JPEG with Electron's `nativeImage`, scaled down to at most `maxWidth` wide. */
+/**
+ * BGRA pixels to PNG or JPEG with Electron's `nativeImage`, scaled down to at
+ * most `maxWidth` wide. `createFromBitmap` copies the pixels and runs before
+ * the encoder first yields, as the screen's live framebuffer requires.
+ */
 export function nativeImageEncoder(native: {
   createFromBitmap(buffer: Buffer, options: { width: number; height: number }): NativeImage;
 }): BotComputerImageEncoder {

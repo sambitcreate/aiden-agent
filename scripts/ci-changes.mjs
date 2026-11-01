@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 // - desktop: static, verify, unit lanes, Electron E2E
 // - apple: the Apple Foundation Models Swift package
 // - ios / android: the native mobile clients
-// - cli: the headless CLI container and the CLI appearance playground
+// - cli: the headless CLI container
 // - linux: Linux packaging, Fedora RPM, and the Linux E2E gate (not required)
 // - catalog: model catalog contracts plus the desktop unit lanes (the runtime
 //   reads model limits from the catalog). Implied by desktop, and the only area
@@ -149,7 +149,7 @@ function classifyPath(path) {
   }
 
   // Shared renderer code must exercise every consumer, including the CLI
-  // themes and the mobile appearance contract. Check this before the rest of
+  // bundle and the mobile appearance contract. Check this before the rest of
   // renderer/, which is desktop-only.
   if (path.startsWith("renderer/shared/")) {
     return { areas: fullAreas(), kind: "shared" };
@@ -167,9 +167,6 @@ function classifyPath(path) {
   // and both native clients' contract tests.
   if (path.startsWith("protocol/")) {
     return scoped("protocol", ["desktop", "cli", "ios", "android"], path);
-  }
-  if (path.startsWith("packages/cli-playground/")) {
-    return scoped("cli", ["cli"], path);
   }
   // The desktop unit lanes also run the CLI package tests on macOS.
   if (path.startsWith("packages/cli/")) {
@@ -348,7 +345,7 @@ export function detectChangedAreas(options = {}) {
   const headSha = envValue(environment, options.headSha, "HEAD_SHA");
   const cwd = options.cwd ?? process.cwd();
   const spawn = options.spawn ?? defaultSpawnSync;
-  // A push that creates a branch (the catalog bot's automation branches) has no
+  // A push that creates a branch has no
   // previous tip. Classify it by everything it adds over main instead.
   if (eventName === "push" && typeof baseSha === "string" && /^0+$/u.test(baseSha) && validGitRef(headSha)) {
     const mergeBase = invokeGit(spawn, ["merge-base", "origin/main", headSha], cwd);

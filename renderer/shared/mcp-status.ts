@@ -56,6 +56,19 @@ export interface McpPendingLaunchApproval {
   env: { name: string; value?: string; unavailable?: true }[];
 }
 
+/** Whether the Mac app behind a Mac app connector (iMCP) is installed and open. */
+export interface McpMacAppStatus {
+  /** False where Aiden doesn't run on a Mac; nothing was looked up. */
+  supported: boolean;
+  installed: boolean;
+  /** The installed app's server: the only command its connection may run. */
+  command?: string;
+  /** The installed app's version, when its Info.plist states one. */
+  version?: string;
+  /** The app is running, so its server can answer. */
+  open: boolean;
+}
+
 export interface McpDependent {
   id: string;
   name: string;

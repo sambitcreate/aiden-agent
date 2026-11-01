@@ -1054,6 +1054,26 @@ test("a list that fails to refresh stays on screen with the failure above it, an
   assert.equal(calls.filter((call) => call.channel === "bots:files:read").length, 0, "Try again read nothing else");
 });
 
+test("a Bot's turn ending re-reads the open Files list, so a file it just wrote shows without Refresh", async () => {
+  let written = false;
+  await mountBotChat({
+    ...FILE_HANDLERS,
+    "bots:files:list": () => {
+      const list = FILE_HANDLERS["bots:files:list"]();
+      return written
+        ? { ...list, entries: [...list.entries, { path: "lists/todo.md", name: "todo.md", parentPath: "lists", depth: 1, kind: "file" }] }
+        : list;
+    },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
+  fireEvent.click(panelTab("Files"));
+  const files = await within(botPanel()).findByRole("list", { name: "Files" });
+  assert.equal(within(files).queryByText("todo.md"), null);
+  written = true;
+  act(() => emitBotTestNotification("bots:changed", { botId: "bot-1", session: { state: "idle" } }));
+  assert.ok(await within(botPanel()).findByText("todo.md"));
+});
+
 const FILE_CHAT = [
   { id: "u1", type: "user", text: "Write my grocery list", imageCount: 0 },
   { id: "f1", type: "file", path: "lists/groceries.md", operation: "written" },

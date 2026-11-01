@@ -18,14 +18,14 @@ The first, second and fourth preferences are additive `AppearanceConfig` v1 fiel
 
 | Mode | Automatic work presentation |
 | --- | --- |
-| Compact | Summary headers; reasoning and full trails are available on demand. |
-| Standard | Bounded reasoning and the existing three-row activity ticker during a run; the selected timing decides when retained previews fold. |
-| Detailed | Reasoning previews and expanded tool activity for the eligible exchange; older automatic details fold. |
-| Verbose | Automatic reasoning previews and full activity trails throughout history; manual disclosure still wins. |
+| Compact | Summary headers; full trails are available on demand. |
+| Standard | The existing three-row activity ticker during a run; the selected timing decides when retained previews fold. |
+| Detailed | Expanded tool activity for the eligible exchange; older automatic details fold. |
+| Verbose | Full activity trails throughout history; manual disclosure still wins. |
 
 On completion folds automatic previews when the turn completes. On next message retains the latest exchange until another ordinary message enters the saved transcript. Assistant continuations stay in the latest exchange. Drafts, uncommitted local queued rows and failed sends never consume eligibility. A new prompt admitted during live-to-saved handoff folds the previous reply in that same handoff.
 
-The one-second reasoning-preview timer is removed. Automatic reasoning remains bounded; manual expansion flows at full height. Running status, shimmer and announcements derive from real lifecycle rather than whether a section is open. Errors and claim-check outcomes keep their existing attention behavior. Final answers, intermediate prose, images, visuals, attachments, question recaps and approval controls retain their independent placement. Stable row keys preserve answer and artifact identity.
+Reasoning is outside the modes. When this work was merged with main (2026-11-01), main's steady Thinking row (#653: one row that only the reader opens, rolling the latest finished sentence while the model thinks) was kept, because opening reasoning automatically made the pinned transcript jump. Running status, shimmer and announcements derive from real lifecycle rather than whether a section is open. Errors and claim-check outcomes keep their existing attention behavior. Final answers, intermediate prose, images, visuals, attachments, question recaps and approval controls retain their independent placement. Stable row keys preserve answer and artifact identity.
 
 Bot Quiet/Summary/Detailed settings continue deciding which activity exists. The global mode adjusts automatic disclosure for Detailed Bots, and timing retains recaps across routine/background continuations until the next user entry. Manual choices persist. These are desktop-local preferences; native clients retain their own presentation and Remote carries no new fields or revision.
 

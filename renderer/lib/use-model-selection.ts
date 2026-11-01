@@ -1,11 +1,13 @@
-// App-wide provider+model selection, persisted in localStorage (UI preference,
-// not routed state). Defaults once when no selection exists, but never silently
-// reroutes an existing selection to another provider.
+// The app's model for new chats, persisted in localStorage (UI preference, not
+// routed state). Defaults once when no selection exists, but never silently
+// reroutes an existing selection to another provider. A chat that already has
+// messages keeps its own model (stored on the chat); picking a model there
+// changes only that chat, never this selection.
 
 import * as React from "react";
 import { isUsable } from "./model-picker-data";
 import type { AppSettings, Provider } from "./types";
-import { telegramApi } from "./ipc";
+import { onNotification, settingsApi, telegramApi } from "./ipc";
 import { firstVisibleModelForProvider, isModelHidden } from "../shared/model-visibility";
 
 const PROVIDER_KEY = "aiden-agent.providerId";
@@ -114,11 +116,109 @@ export function subscribeModelSelection(listener: (selection: ModelSelection) =>
   };
 }
 
+/**
+ * The model an open chat answers with. A chat that owns its model (it already
+ * has messages) uses the pair stored on it; an empty chat, or one that never
+ * recorded a model, follows the app's model for new chats.
+ */
+export function chatModelSelection(
+  chat: { providerId?: string; model?: string } | null | undefined,
+  chatOwnsModel: boolean,
+  appSelection: ModelSelection,
+): ModelSelection {
+  if (chatOwnsModel && chat?.providerId && chat.model) {
+    return { providerId: chat.providerId, model: chat.model };
+  }
+  return appSelection;
+}
+
+/**
+ * The open chat whose own model a model change elsewhere (the command palette)
+ * should change instead of the app's model for new chats.
+ */
+export interface ActiveChatModelTarget {
+  chatId: string;
+  selection: ModelSelection;
+  select(providerId: string, model: string): void;
+}
+
+let activeChatModelTarget: ActiveChatModelTarget | null = null;
+const activeChatModelTargetListeners = new Set<() => void>();
+
+/** Register the open chat as the model target; returns its unregister. */
+export function setActiveChatModelTarget(target: ActiveChatModelTarget): () => void {
+  activeChatModelTarget = target;
+  activeChatModelTargetListeners.forEach((listener) => listener());
+  return () => {
+    if (activeChatModelTarget !== target) return;
+    activeChatModelTarget = null;
+    activeChatModelTargetListeners.forEach((listener) => listener());
+  };
+}
+
+export function readActiveChatModelTarget(): ActiveChatModelTarget | null {
+  return activeChatModelTarget;
+}
+
+function subscribeActiveChatModelTarget(listener: () => void): () => void {
+  activeChatModelTargetListeners.add(listener);
+  return () => activeChatModelTargetListeners.delete(listener);
+}
+
+export function useActiveChatModelTarget(): ActiveChatModelTarget | null {
+  return React.useSyncExternalStore(
+    subscribeActiveChatModelTarget,
+    readActiveChatModelTarget,
+    () => null,
+  );
+}
+
 export function persistModelSelection(providerId: string, model: string): void {
+  const previous = readModelSelection();
   localStorage.setItem(PROVIDER_KEY, providerId);
   localStorage.setItem(MODEL_KEY, model);
   modelSelectionRevision += 1;
   window.dispatchEvent(new Event(MODEL_SELECTION_CHANGED_EVENT));
+  // Keep the host's copy current so Aiden's "Model for new chats" control and
+  // paired phones see the pick at once, not after the next chat starts.
+  if (providerId && model && (previous.providerId !== providerId || previous.model !== model)) {
+    void Promise.resolve()
+      .then(() => settingsApi.set({ lastProviderId: providerId, lastModel: model }))
+      .catch(() => undefined);
+  }
+}
+
+/**
+ * At startup, make the host's copy match this window's new-chat model. Sends
+ * never write it, so this keeps Aiden's "Model for new chats" control and
+ * paired phones on the pick the desktop will really use, even if the two drifted
+ * apart while the app was closed or before the copy existed.
+ */
+export async function mirrorNewChatModelToHost(api: {
+  get(): Promise<Pick<AppSettings, "lastProviderId" | "lastModel">>;
+  set(patch: Pick<AppSettings, "lastProviderId" | "lastModel">): Promise<unknown>;
+}): Promise<void> {
+  const host = await api.get();
+  // Read the pick after the host answers: one made while the read was pending
+  // is newer than anything captured before it.
+  const selection = readModelSelection();
+  if (!selection.providerId || !selection.model) return;
+  if (host.lastProviderId === selection.providerId && host.lastModel === selection.model) return;
+  await api.set({ lastProviderId: selection.providerId, lastModel: selection.model });
+}
+
+/** Follow a new-chat model the host changed (Aiden's chat control). */
+export function subscribeHostNewChatModel(
+  subscribe: typeof onNotification,
+): () => void {
+  return subscribe("settings:new-chat-model-changed", (payload: unknown) => {
+    if (!payload || typeof payload !== "object") return;
+    const { providerId, model } = payload as Record<string, unknown>;
+    if (typeof providerId !== "string" || typeof model !== "string" || !providerId || !model) return;
+    const current = readModelSelection();
+    if (current.providerId === providerId && current.model === model) return;
+    persistModelSelection(providerId, model);
+  });
 }
 
 export function useModelSelection(

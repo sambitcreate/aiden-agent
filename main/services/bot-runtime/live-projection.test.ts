@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
@@ -20,6 +20,7 @@ import { createBotSessionService, type BotSessionRuntime, type BotSessionService
 import {
   BOT_CONNECT_CARD_ENTRY_KIND,
   createBotLiveProjection,
+  createQueuedInputClassifier,
   liveBotActivity,
   liveQueuedInputIds,
   liveQueuedMessages,
@@ -29,6 +30,10 @@ import {
 } from "./live-projection.js";
 import { createBotQuestions } from "./bot-questions.js";
 import { createBotHandoffs } from "./bot-handoffs.js";
+import { createBotIssueService, type BotIssueService } from "../bot-issues/service.js";
+import { BOT_ISSUES_FILE, createBotIssueStore, type BotIssueStore } from "../bot-issues/store.js";
+import { botSessionDirectory } from "../bot-routine-notes.js";
+import type { BotIssue } from "../../../renderer/shared/bot-issues.js";
 import { createBotTurnIntents, stopWithIntents, wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { spawnHarnessChild } from "./test-support/child.js";
 import { countingTool, recordingDeps } from "./test-support/fixtures.js";
@@ -541,6 +546,160 @@ test("a routine proposal is one card that shows its newest decision", () => {
       ["2", "Daily check-in", "pending", undefined],
     ],
   );
+});
+
+test("a host-raised issue is one card that settles by its newest status", () => {
+  const issue = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    botId: "bot:a",
+    kind: "routine_failed",
+    dedupeKey: "routine:r1:failed",
+    title: "Couldn’t finish the morning briefing",
+    body: "The model was unavailable.",
+    routineId: "r1",
+    actions: [{ kind: "resume_routine", routineId: "r1" }],
+    createdAt: 1_000,
+    ...extra,
+  });
+  const entries = projectBotTranscript([
+    { id: 1, kind: "aiden.bot-issue", data: issue("i-1") },
+    { id: 2, kind: "aiden.bot-issue-status", data: { issueId: "i-1", resolution: "superseded", resolvedAt: 2_000 } },
+    { id: 3, kind: "aiden.bot-issue-status", data: { issueId: "i-1", resolution: "fixed", resolvedAt: 3_000 } },
+    { id: 4, kind: "aiden.bot-issue", data: issue("i-2", { dedupeKey: "routine:r2:failed", routineId: "r2" }) },
+    { id: 5, kind: "aiden.bot-issue", data: issue("i-3", { title: "x".repeat(81) }) },
+  ] as never);
+  assert.deepEqual(
+    entries.map((entry) => (entry.type === "issue" ? [entry.id, entry.issue.id, entry.status, entry.at] : entry.type)),
+    [
+      ["1", "i-1", "fixed", 1_000],
+      ["4", "i-2", "open", 1_000],
+    ],
+    "the newest settlement wins and a malformed issue is left out",
+  );
+});
+
+test("an open issue marks the Bot as needing the person; resolving it clears that", async () => {
+  let rows: BotIssue[] = [];
+  const store: BotIssueStore = {
+    async read() {
+      return rows;
+    },
+    async change(_botId, apply) {
+      const { issues, result } = apply(rows);
+      rows = [...issues];
+      return result;
+    },
+    async forgetBot() {
+      rows = [];
+    },
+  };
+  const issues: BotIssueService = createBotIssueService({
+    store,
+    appendEntry: async () => undefined,
+    funnel: { deliver: async () => "sent" },
+    actions: {
+      resumeRoutine: async () => "resumed",
+      stopRun: async () => undefined,
+      snoozeStall: () => undefined,
+      openSettings: () => undefined,
+    },
+    now: () => 1_000,
+  });
+  const live = await start(createFauxModels([fauxAssistantMessage("Hello.")]), {
+    projection: {
+      issuePending: async (botId) => (await issues.list(botId, { open: true })).length > 0,
+    },
+  });
+  try {
+    assert.equal((await live.projection.summary("bot:a")).needsYou, false);
+    await issues.raise({
+      botId: "bot:a",
+      kind: "routine_failed",
+      dedupeKey: "routine:r1:failed",
+      title: "Couldn’t finish the morning briefing",
+      body: "The model was unavailable.",
+      routineId: "r1",
+      actions: [{ kind: "resume_routine", routineId: "r1" }],
+    });
+    assert.equal((await live.projection.summary("bot:a")).needsYou, true, "the sidebar says Needs you");
+    await issues.resolve("bot:a", "routine:r1:failed", "fixed");
+    assert.equal((await live.projection.summary("bot:a")).needsYou, false, "settled, the row clears");
+  } finally {
+    await live.close();
+  }
+});
+
+test("a malformed or another Bot's issue row never breaks the Bot’s Needs you state", async () => {
+  const profile = tempProfile();
+  const directory = botSessionDirectory(profile, "bot:a");
+  const file = path.join(directory, BOT_ISSUES_FILE);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(
+    file,
+    JSON.stringify([
+      { id: "not-an-issue" },
+      {
+        id: "i-other",
+        botId: "bot:b",
+        kind: "routine_failed",
+        dedupeKey: "routine:r9:failed",
+        title: "Another Bot’s problem",
+        body: "",
+        actions: [],
+        createdAt: 1,
+      },
+      {
+        id: "i-long-title",
+        botId: "bot:a",
+        kind: "routine_failed",
+        dedupeKey: "routine:r8:failed",
+        title: "x".repeat(400),
+        body: "",
+        actions: [],
+        createdAt: 2,
+      },
+    ]),
+  );
+
+  const issues: BotIssueService = createBotIssueService({
+    store: createBotIssueStore({ profileDir: () => profile }),
+    appendEntry: async () => undefined,
+    funnel: { deliver: async () => "sent" },
+    actions: {
+      resumeRoutine: async () => "resumed",
+      stopRun: async () => undefined,
+      snoozeStall: () => undefined,
+      openSettings: () => undefined,
+    },
+    now: () => 1_000,
+  });
+  const live = await start(createFauxModels([fauxAssistantMessage("Hello.")]), {
+    projection: {
+      issuePending: async (botId) => (await issues.list(botId, { open: true })).length > 0,
+    },
+  });
+  try {
+    assert.equal((await live.projection.summary("bot:a")).needsYou, false, "unreadable rows never reach the sidebar");
+    assert.deepEqual(await issues.list("bot:a"), [], "and listing reads past them");
+
+    const raised = await issues.raise({
+      botId: "bot:a",
+      kind: "routine_failed",
+      dedupeKey: "routine:r1:failed",
+      title: "Couldn’t finish the morning briefing",
+      body: "The model was unavailable.",
+      routineId: "r1",
+      actions: [{ kind: "resume_routine", routineId: "r1" }],
+    });
+    assert.equal((await live.projection.summary("bot:a")).needsYou, true, "a usable raise still needs the person");
+    assert.deepEqual(
+      (JSON.parse(readFileSync(file, "utf8")) as Array<{ id: string }>).map((row) => row.id),
+      [raised.id],
+      "the next write drops the rows no reader can use",
+    );
+  } finally {
+    await live.close();
+  }
 });
 
 test("a hidden prompt never shows, but its reply does", async () => {
@@ -1732,6 +1891,45 @@ test("while classifying fails, a cached routine stays hidden and the person's cl
     unsubscribe();
   } finally {
     await live.close();
+  }
+});
+
+test("a retry timer that fires early never opens the classification pause before its time", async (t) => {
+  // A busy event loop schedules timers from a stale loop time, so a timer can
+  // fire before the classifier's own clock reaches the end of the pause.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let clock = 1_000;
+  const callsAt: number[] = [];
+  let retries = 0;
+  const classifier = createQueuedInputClassifier({
+    classify: async () => {
+      callsAt.push(clock);
+      throw new Error("inspect failed");
+    },
+    now: () => clock,
+    retryMs: 150,
+    report: () => undefined,
+    retry: () => {
+      retries += 1;
+    },
+  });
+  const docs = { "pi.inbox": { items: [{ id: "desk-3", mode: "followUp" }] } };
+  try {
+    assert.deepEqual([...(await classifier.personal(docs))], []);
+    // The timer fires on schedule while the classifier's clock has only moved 100 ms.
+    clock += 100;
+    t.mock.timers.tick(150);
+    assert.equal(retries, 0, "an early timer does not call for a retry");
+    await classifier.personal(docs);
+    assert.deepEqual(callsAt, [1_000], "no classification inside the pause");
+    // Once the pause is over by the classifier's clock, the retry comes without a new frame.
+    clock += 50;
+    t.mock.timers.tick(50);
+    assert.equal(retries, 1);
+    await classifier.personal(docs);
+    assert.deepEqual(callsAt, [1_000, 1_150]);
+  } finally {
+    classifier.close();
   }
 });
 

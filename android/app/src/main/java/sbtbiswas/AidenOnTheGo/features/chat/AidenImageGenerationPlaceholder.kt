@@ -260,23 +260,30 @@ internal object AidenImageGenerationPlaceholderState {
     }
 
     /**
-     * The one attachment of a settled message that plays the arrival reveal: its first
-     * listed image (visual snapshots excluded). Attachments carry no tool association, so
-     * when the turn also completed a `display_image` call the generated image cannot be
-     * told apart and nothing reveals.
+     * The one attachment of a settled message that plays the arrival reveal: the first
+     * image a completed `generate_image` call produced (contract revision 44 names each
+     * image's call). From an older host, whose attachments carry no call, it is the first
+     * listed image (visual snapshots excluded), and nothing reveals when the turn also
+     * completed a `display_image` call, since the generated image cannot be told apart.
      */
     fun arrivalRevealAttachmentId(message: AidenChatMessage): String? {
         if (message.role != AidenChatRole.ASSISTANT) return null
         val steps = message.timeline?.steps ?: return null
         if (steps.none { it.isGenerateImage() && it.status == AidenAgentStepStatus.COMPLETED }) return null
+        val visuals = message.visuals.orEmpty()
+        val images = aidenEligibleImageAttachments(aidenVisibleMessageAttachments(message.attachments.orEmpty(), visuals), visuals)
+        if (images.any { it.placedToolCallId != null }) {
+            val generateCalls = steps.mapNotNullTo(HashSet()) { step ->
+                step.toolCallId.takeIf { step.isGenerateImage() && step.status == AidenAgentStepStatus.COMPLETED }
+            }
+            return images.firstOrNull { it.placedToolCallId in generateCalls }?.id
+        }
         if (steps.any {
                 it.kind == AidenAgentStep.Kind.TOOL && it.toolName == DISPLAY_IMAGE_TOOL_NAME &&
                     it.status == AidenAgentStepStatus.COMPLETED
             }
         ) return null
-        val visuals = message.visuals.orEmpty()
-        val visible = aidenVisibleMessageAttachments(message.attachments.orEmpty(), visuals)
-        return aidenEligibleImageAttachments(visible, visuals).firstOrNull()?.id
+        return images.firstOrNull()?.id
     }
 
     private fun AidenAgentStep.isGenerateImage(): Boolean =

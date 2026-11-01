@@ -15,6 +15,7 @@ import {
   mergeBotSteps,
   type BotRecapStep,
 } from "./bot-activity-steps";
+import { pauseWhenUnseen } from "../../lib/offscreen-pause";
 
 const LIVE_ROWS = 3;
 
@@ -36,7 +37,7 @@ export function BotStepRow({ step, size = "mini" }: { step: BotRecapStep; size?:
   const line = botStepLine(step);
   return (
     <div role="listitem" className={`flex min-w-0 items-start ${STEP_ROW_SIZE[size]}`}>
-      <span className={`min-w-0 break-words ${line.active ? "agent-thinking-shimmer" : ""}`}>
+      <span ref={line.active ? pauseWhenUnseen : undefined} className={`min-w-0 break-words ${line.active ? "agent-thinking-shimmer" : ""}`}>
         <span className={`${toneClass(line.tone)} font-medium`}>{line.text}</span>
         {line.detail ? <span className="text-tertiary"> · {line.detail}</span> : null}
       </span>
@@ -85,7 +86,7 @@ export function BotActivityRecap({
           aria-hidden="true"
           className={`size-3.5 shrink-0 transition-transform duration-150 motion-reduce:transition-none ${open ? "rotate-90" : ""}`}
         />
-        <span className={`min-w-0 truncate ${live ? "agent-thinking-shimmer" : ""}`}>{header}</span>
+        <span ref={live ? pauseWhenUnseen : undefined} className={`min-w-0 truncate ${live ? "agent-thinking-shimmer" : ""}`}>{header}</span>
         {issueText ? <span className="shrink-0 text-red">{issueText}</span> : null}
         {blockedText ? <span className="shrink-0 text-support-warning">{blockedText}</span> : null}
       </button>

@@ -1,4 +1,10 @@
-import { createHash } from "node:crypto";
+import type { ManagedWorktreeRootIdentity } from "./managed-worktree-file-io.js";
+import { capturePeerProjectRoot, assertPeerProjectRoot, createPeerProjectFile } from "./peer-project-file-io.js";
+import { createHash, randomUUID } from "node:crypto";
+import path from "node:path";
+import { parsePeerProjectClone, PEER_PROJECT_CLONE_TIMEOUT_MS, type PeerProjectCloneRequest } from "../../renderer/shared/peer-project-clone.js";
+import { parseCloneUrl } from "../../renderer/shared/workspace-intake.js";
+import type { WorkspaceIntakeService } from "./workspace-intake.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenIdempotencyLedger,
@@ -108,10 +114,15 @@ export function projectAidenRemoteWorkspace(
 function parseCreate(value: unknown):
   | { mode: "folderless"; name: string }
   | { mode: "scratch" }
-  | { mode: "selected-folder"; selection: string; name?: string } {
+  | { mode: "selected-folder"; selection: string; name?: string }
+  | PeerProjectCloneRequest {
   const record = ownRecord(value);
   if (!record || typeof record.mode !== "string") {
     throw new AidenRemoteServiceError("invalid_request", "The workspace creation request is invalid.", 400);
+  }
+  if (record.mode === "clone") {
+    try { return parsePeerProjectClone(record); }
+    catch { throw new AidenRemoteServiceError("invalid_request", "The project clone or environment file selection is invalid.", 400); }
   }
   if (record.mode === "folderless") {
     if (!exactKeys(record, ["mode", "name"]) || !boundedString(record.name, 120)) {
@@ -218,10 +229,13 @@ export class AidenRemoteWorkspaceService {
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
       notifyChanged?: () => void;
+      clone?: WorkspaceIntakeService["clone"];
     },
   ) {
     this.idempotency = options.idempotency ?? new AidenIdempotencyLedger();
   }
+
+  get supportsClone(): boolean { return Boolean(this.options.clone); }
 
   private async executeIdempotent<T>(
     scope: { deviceId: string; route: string; resourceId: string; key: string },
@@ -293,6 +307,7 @@ export class AidenRemoteWorkspaceService {
     deviceId: string,
     idempotencyKey: string,
     input: unknown,
+    signal?: AbortSignal,
   ): Promise<AidenRemoteWorkspaceProjection> {
     if (!IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)) {
       throw new AidenRemoteServiceError("invalid_request", "Idempotency-Key is invalid.", 400);
@@ -309,7 +324,54 @@ export class AidenRemoteWorkspaceService {
         parsed,
         async () => {
           let workspace: Workspace;
-          if (parsed.mode === "folderless") {
+          if (parsed.mode === "clone") {
+            if (!this.options.clone) throw new AidenRemoteServiceError("not_found", "Project cloning is unavailable on this host.", 404);
+            const selection = await this.options.browser.consumeSelection(deviceId, parsed.selection);
+            const current = () => this.options.browser.revalidateConsumedSelection(deviceId, selection);
+            await current();
+            const controller = new AbortController();
+            const cancel = () => controller.abort();
+            signal?.addEventListener("abort", cancel, { once: true });
+            if (signal?.aborted) cancel();
+            const deadline = setTimeout(cancel, PEER_PROJECT_CLONE_TIMEOUT_MS);
+            deadline.unref?.();
+            try {
+              const remote = parseCloneUrl(parsed.url);
+              if (!remote.ok) throw new AidenRemoteServiceError("invalid_request", "The repository remote is invalid.", 400);
+              const destination = path.join(selection.canonicalPath, remote.repoName);
+              let child: ManagedWorktreeRootIdentity | undefined;
+              const repository = await this.options.clone({ url: remote.url, destination }, {
+                cloneId: randomUUID(), signal: controller.signal, onProgress: () => undefined,
+                beforePublish: async staged => {
+                  const root = await capturePeerProjectRoot(staged);
+                  child = { ...root, path: destination };
+                  await current();
+                  await assertPeerProjectRoot(root);
+                  for (const file of parsed.files) {
+                    controller.signal.throwIfAborted();
+                    await createPeerProjectFile(root, file.name, file.content, controller.signal);
+                  }
+                  await current();
+                },
+                beforeRegister: async () => { await current(); },
+                registration: {
+                  assertCurrent: async identity => {
+                    await current();
+                    if (!child || identity.canonicalPath !== child.path || identity.filesystemDevice !== child.device || identity.filesystemInode !== child.inode) throw new Error("The cloned project folder changed before registration.");
+                    await assertPeerProjectRoot(child);
+                  },
+                },
+              });
+              if (!repository.ok) throw new AidenRemoteServiceError("invalid_request", repository.code === "cancelled" ? "Project clone was stopped. Check the host project list before trying again." : repository.code === "register-failed" ? "The repository was cloned, but it could not be registered. Check the destination computer before retrying." : repository.reason, 400);
+              workspace = repository.workspace;
+            } catch (error) {
+              if (error instanceof AidenRemoteServiceError) throw error;
+              throw new AidenRemoteServiceError("invalid_request", "The project could not be cloned with the selected environment files. Nothing existing was overwritten. Check the host project list before retrying.", 400);
+            } finally {
+              clearTimeout(deadline);
+              signal?.removeEventListener("abort", cancel);
+            }
+          } else if (parsed.mode === "folderless") {
             workspace = await this.options.application.create({
               name: parsed.name,
               permission: "ask",

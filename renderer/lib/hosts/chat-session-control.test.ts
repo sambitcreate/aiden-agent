@@ -31,6 +31,7 @@ function deferred<T>() {
  * can lose the acknowledgement of the next request.
  */
 class FakeHost implements HostChatAdapter {
+  readonly sendBodies: HostChatSendInput[] = [];
   readonly hostId = "host-b";
   current: HostChatStatus = { availability: "online", generation: 1 };
   granted = new Set<HostChatCapability>(ALL);
@@ -100,6 +101,7 @@ class FakeHost implements HostChatAdapter {
   }
   async send(chatId: string, input: HostChatSendInput): Promise<HostChatTurnReceipt> {
     this.calls.push(`send:${chatId}`);
+    this.sendBodies.push(input);
     if (this.dropNextSend) {
       this.dropNextSend = false;
       throw new HostChatControlError({ code: "outcome_unknown", message: "lost" });
@@ -487,4 +489,20 @@ test("a second fork cannot replace an uncertain fork and restart retries the ori
   assert.equal(fork.id, "fork_1");
   assert.equal(new Set(keys).size, 1, "a recreated renderer must use the original fork identity");
   assert.equal(disk.length, 0);
+});
+
+test("a retried send repeats the model and effort it was first sent with", async () => {
+  const { host, control } = session();
+  host.loseNextAck = true;
+  await assert.rejects(
+    control.send("Go deeper", { model: { providerId: "acme", modelId: "deep" }, thinkingLevel: "high" }),
+    { code: "outcome_unknown" },
+  );
+  await control.retryUnresolved();
+  assert.equal(host.sendBodies.length, 2);
+  for (const body of host.sendBodies) {
+    assert.deepEqual(body.model, { providerId: "acme", modelId: "deep" });
+    assert.equal(body.thinkingLevel, "high");
+  }
+  assert.equal(host.sendBodies[0]?.idempotencyKey, host.sendBodies[1]?.idempotencyKey, "one turn, same key");
 });

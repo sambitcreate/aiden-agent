@@ -168,7 +168,7 @@ test("rules Aiden can't read say the Bot won't take the steps they check, until 
   const list = await mount();
   assert.match(
     (await screen.findByRole("alert")).textContent ?? "",
-    /Planner’s saved rules couldn’t be read, so Planner won’t take any step its rules check\. Change a rule below to start again from these defaults\./u,
+    /Planner’s saved rules couldn’t be read, so Planner won’t take any step its rules check\. Change a rule below to start again from these defaults\. Aiden keeps a copy of the damaged file, rules\.json\.unreadable, in Planner’s folder\./u,
   );
   assert.ok(within(row(list, "Permanently delete something")).getByText("Ask first"), "the editor shows what a change starts from");
   await assert.rejects(store.rules(bot.id), "the Bot's calls still can't read them");
@@ -197,4 +197,25 @@ test("where Bots have their own computers, the rules say they read the Bot's sta
   rulesIpc();
   await mount();
   assert.equal(screen.queryByText(note), null);
+});
+
+test("under the rules, the profile says what routines do with Ask first steps and links to Settings → Bots", async () => {
+  for (const goAhead of [false, true]) {
+    installBotTestIpc({
+      "bots:rules:get": (botId) => ({ botId: String(botId), revision: 0, rules: [] }),
+      "settings:get": () => ({ botRoutinesGoAhead: goAhead }),
+    });
+    const { router } = await mountWithBotRouter(<BotRules bot={bot} />, { initialPath: "/bots/bot-1" });
+    await screen.findByText(
+      goAhead
+        ? /In routines, Ask first steps go ahead without asking\./u
+        : /In routines, Planner skips Ask first steps and tells you in its reply\./u,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Change this for every Bot" }));
+    await waitFor(() => {
+      assert.equal(router.state.location.pathname, "/settings");
+      assert.equal((router.state.location.search as { section?: string }).section, "bots");
+    });
+    cleanup();
+  }
 });

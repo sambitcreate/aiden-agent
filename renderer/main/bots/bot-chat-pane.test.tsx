@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { BotChatRoute } from "../bot-chat-route";
+import { settleBotPendingSends } from "./bot-chat-pane";
 import { BotPanelHandoff } from "./bot-panel-handoff";
 import { mountWithBotRouter } from "./test-providers";
 import { toast } from "../../components/ui";
@@ -327,6 +328,49 @@ test("a Bot without an AI model asks for one and sends nothing", async () => {
   assert.equal(calls.some((call) => call.channel === "bots:send"), false);
 });
 
+test("a Bot over its monthly spending limit sends nothing until Allow more", async () => {
+  const month = { ownerKind: "bot", ownerId: "bot-1", period: "month", limitUsd: 20, extraUsd: 0 } as const;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot(),
+    "bots:send": () => ({ submissionId: "s", deduped: false }),
+    "spending:status": () => ({ ...month, spentUsd: 20.4, state: "reached" }),
+    "spending:allowMore": () => ({ ...month, extraUsd: 20, spentUsd: 20.4, state: "under" }),
+  });
+  const reached = "Planner reached its $20.00 spending limit this month.";
+  // The composer's status line says why it can't send, alongside the notice.
+  await waitFor(() => assert.equal(screen.getAllByText(reached).length, 2));
+  const blocked = document.querySelector("textarea")!;
+  fireEvent.change(blocked, { target: { value: "One more thing" } });
+  fireEvent.keyDown(blocked, { key: "Enter" });
+  assert.equal(screen.queryByRole("button", { name: "Send message" })?.hasAttribute("disabled") ?? true, true);
+  assert.equal(calls.some((call) => call.channel === "bots:send"), false);
+
+  fireEvent.click(screen.getByRole("button", { name: "Allow $20.00 more" }));
+  const box = await screen.findByPlaceholderText("Ask Planner");
+  fireEvent.change(box, { target: { value: "One more thing" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
+});
+
+test("a Bot at its monthly limit can send again once its month starts over, without Allow more", async () => {
+  const month = { ownerKind: "bot", ownerId: "bot-1", period: "month", limitUsd: 20, extraUsd: 0 } as const;
+  const periodEnd = Date.now() + 300;
+  let reads = 0;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot(),
+    "bots:send": () => ({ submissionId: "s", deduped: false }),
+    "spending:status": () =>
+      ++reads === 1
+        ? { ...month, spentUsd: 20.4, state: "reached", periodStart: periodEnd - 30 * 86_400_000, periodEnd }
+        : { ...month, spentUsd: 0, state: "under", periodStart: periodEnd, periodEnd: periodEnd + 30 * 86_400_000 },
+  });
+  await waitFor(() => assert.equal(screen.getAllByText("Planner reached its $20.00 spending limit this month.").length, 2));
+  const box = await screen.findByPlaceholderText("Ask Planner", undefined, { timeout: 3_000 });
+  fireEvent.change(box, { target: { value: "New month" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
+});
+
 test("a connect card answered with Not now reads Not connected and stays put", async () => {
   await mountChat({
     "bots:live:subscribe": () =>
@@ -480,6 +524,24 @@ test("the status line follows live activity, and hides while the reply's words s
   act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 2, type: "partial", text: "Eggs and milk." }));
   await waitFor(() => assert.equal(screen.queryByText("Reading") === null, true));
   assert.equal(screen.queryByText("Writing") === null, true, "the words themselves are the signal");
+});
+
+test("a long turn shows its elapsed time on the status line and one Stop, the composer's", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [userEntry("u1", "Do you have access to my messages?")],
+        state: { kind: "running", submissionId: "s1" },
+        activity: { phase: "thinking", startedAt: Date.now() - 25_000 },
+      }),
+    "bots:stop": () => ({ kind: "idle" }),
+  });
+  const line = await screen.findByRole("group", { name: "Thinking" });
+  assert.match(line.textContent ?? "", /· 2\ds/u);
+  const stops = screen.getAllByRole("button", { name: /^Stop/u });
+  assert.deepEqual(stops.map((button) => button.getAttribute("aria-label")), ["Stop generating"], "the line doesn't repeat the composer's Stop");
+  fireEvent.click(stops[0]!);
+  await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:stop").map((call) => call.args), [["bot-1"]]));
 });
 
 test("one status region stays mounted from an idle chat through streaming, so each new line is announced", async () => {
@@ -810,7 +872,7 @@ const CHECK_IN_PROPOSAL = {
   name: "Daily check-in",
   prompt: "Check in briefly with one or two things worth knowing today.",
   schedule: { kind: "daily" as const, time: "09:00" },
-  timezone: "UTC",
+  timezone: "America/New_York",
   label: "Every day at 9:00 AM",
 };
 
@@ -852,7 +914,7 @@ test("a routine proposal shows its name, schedule and prompt, and Add routine ac
   });
   const card = await screen.findByRole("group", { name: "Routine suggestion: Daily check-in" });
   assert.ok(within(card).getByText("Add a routine?"));
-  assert.ok(within(card).getByText("Daily check-in · Every day at 9:00 AM"));
+  assert.ok(within(card).getByText("Daily check-in · Every day at 9:00 AM · Eastern Time"));
   assert.ok(within(card).getByText(CHECK_IN_PROPOSAL.prompt));
 
   fireEvent.click(within(card).getByRole("button", { name: "Add routine" }));
@@ -861,7 +923,7 @@ test("a routine proposal shows its name, schedule and prompt, and Add routine ac
   await waitFor(() => assert.equal(responds().length, 1));
   assert.deepEqual(responds()[0]!.args[0], { botId: "bot-1", proposalId: "proposal-1", decision: "accept" });
   respond({ status: "accepted", routineId: "task-9" });
-  assert.ok(await within(card).findByText("Added ✓ · Every day at 9:00 AM"));
+  assert.ok(await within(card).findByText("Added ✓ · Every day at 9:00 AM · Eastern Time"));
   assert.equal(within(card).queryByRole("button") === null, true, "a settled card has no actions");
   assert.equal(responds().length, 1, "a second click while it was answering sent nothing");
 });
@@ -872,11 +934,12 @@ test("Not now dismisses a routine proposal, and the card reads Not added", async
     "bots:live:subscribe": () => snapshot({ entries: [proposalEntry("pending")] }),
     "bots:routineProposals:respond": () => ({ status: "dismissed" }),
   });
-  const card = await screen.findByRole("group", { name: "Routine suggestion: Daily check-in" });
-  fireEvent.click(within(card).getByRole("button", { name: "Not now" }));
-  assert.ok(await within(card).findByText("Not added"));
+  fireEvent.click(within(await screen.findByRole("group", { name: "Routine suggestion: Daily check-in" })).getByRole("button", { name: "Not now" }));
+  // Not now asks why, once and optionally; the reason travels with the answer.
+  fireEvent.click(within(screen.getByRole("group", { name: "Routine suggestion: Daily check-in" })).getByRole("button", { name: "Already have this" }));
+  assert.ok(await within(screen.getByRole("group", { name: "Routine suggestion: Daily check-in" })).findByText("Not added"));
   const respond = calls.find((call) => call.channel === "bots:routineProposals:respond")!;
-  assert.deepEqual(respond.args[0], { botId: "bot-1", proposalId: "proposal-1", decision: "dismiss" });
+  assert.deepEqual(respond.args[0], { botId: "bot-1", proposalId: "proposal-1", decision: "dismiss", reason: "already_have" });
 });
 
 test("a failed answer keeps the proposal answerable, and one answered elsewhere arrives settled", async () => {
@@ -901,7 +964,7 @@ test("a failed answer keeps the proposal answerable, and one answered elsewhere 
     type: "entry",
     entry: proposalEntry("accepted", "task-9"),
   }));
-  assert.ok(await screen.findByText("Added ✓ · Every day at 9:00 AM"));
+  assert.ok(await screen.findByText("Added ✓ · Every day at 9:00 AM · Eastern Time"));
 });
 
 test("a queued message shows faded as Queued, and Remove withdraws that one submission", async () => {
@@ -1431,7 +1494,7 @@ test("a sign-in page that couldn't open says so, and the card keeps waiting", as
   }
 });
 
-test("a sent message shows at once as a pending echo, which settles when its entry arrives", async () => {
+test("a sent message shows at once as a sent message with Getting ready, and the echo settles into its entry", async () => {
   let answer: (result: unknown) => void = () => undefined;
   const calls = await mountChat({
     "bots:live:subscribe": () => snapshot(),
@@ -1442,7 +1505,10 @@ test("a sent message shows at once as a pending echo, which settles when its ent
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
   const echo = await screen.findByText("Plan dinner");
   assert.ok(echo.closest("[data-bot-pending-send]"), "the message is on screen before main answers");
-  assert.ok(screen.getByText("Sending…"));
+  assert.ok(echo.closest("[data-bot-message]"), "it is a message like any other, with Copy and Reply");
+  assert.equal(screen.queryByText("Sending…"), null, "a quick send never says Sending…");
+  // The Bot shows it is starting before main answers.
+  await waitFor(() => assert.equal(announced(), "Getting ready"));
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
   answer({ submissionId: "s1", deduped: false });
   act(() => emitBotTestNotification("bots:live:event", {
@@ -1454,6 +1520,174 @@ test("a sent message shows at once as a pending echo, which settles when its ent
   }));
   await waitFor(() => assert.equal(document.querySelector("[data-bot-pending-send]"), null));
   assert.equal(screen.getAllByText("Plan dinner").length, 1, "the echo gave way to the entry, not doubled it");
+});
+
+test("a send still moving into place keeps its echo when its entry arrives, and settles once it lands", () => {
+  const pending = [
+    { requestId: "r1", text: "Plan dinner", seen: new Set(["u0"]), at: 0, queued: false, accepted: true },
+    { requestId: "r2", text: "Plan lunch", seen: new Set(["u0"]), at: 0, queued: false, accepted: true },
+  ];
+  const arrived = snapshot({ entries: [userEntry("u0", "Plan dinner"), userEntry("u1", "Plan dinner"), userEntry("u2", "Plan lunch")] });
+  assert.deepEqual(
+    settleBotPendingSends(pending, arrived, new Set(["r1"])).map((send) => send.requestId),
+    ["r1"],
+    "the moving send waits; the other settles into its entry",
+  );
+  assert.deepEqual(settleBotPendingSends(pending, arrived).map((send) => send.requestId), []);
+  // An entry that was already on screen when the echo was made never settles it.
+  assert.deepEqual(
+    settleBotPendingSends(pending.slice(0, 1), snapshot({ entries: [userEntry("u0", "Plan dinner")] })).map((send) => send.requestId),
+    ["r1"],
+  );
+});
+
+/** Lets a send move from the composer, under motion the test finishes itself. */
+function installSendMotion(): { land: () => void; restore: () => void } {
+  const rect = HTMLTextAreaElement.prototype.getBoundingClientRect;
+  const animate = Element.prototype.animate;
+  const moving: Animation[] = [];
+  HTMLTextAreaElement.prototype.getBoundingClientRect = () => new DOMRect(16, 600, 480, 40);
+  Element.prototype.animate = function () {
+    const animation = {
+      onfinish: null,
+      oncancel: null,
+      cancel: () => animation.oncancel?.(new Event("cancel") as AnimationPlaybackEvent),
+    } as unknown as Animation;
+    moving.push(animation);
+    return animation;
+  };
+  return {
+    land: () => moving.splice(0).forEach((animation) => animation.onfinish?.(new Event("finish") as AnimationPlaybackEvent)),
+    restore: () => {
+      HTMLTextAreaElement.prototype.getBoundingClientRect = rect;
+      Element.prototype.animate = animate;
+    },
+  };
+}
+
+test("a send moving into place holds its entry until it lands, and a reply that comes first ends the motion above it", async (t) => {
+  const motion = installSendMotion();
+  t.after(motion.restore);
+  await mountChat({
+    "bots:live:subscribe": () => snapshot(),
+    "bots:send": () => ({ submissionId: "s1", deduped: false }),
+  });
+  const send = async (text: string) => {
+    fireEvent.change(await screen.findByPlaceholderText("Ask Planner"), { target: { value: text } });
+    fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+    await screen.findByText(text);
+    // The copy starts moving on the next frame.
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  };
+  // The moving copy floats outside the chat, hidden from assistive tech.
+  const inChat = (text: string) => screen.queryAllByText(text).filter((node) => !node.closest("[aria-hidden='true']"));
+  let seq = 0;
+  const arrive = (entry: BotTranscriptEntry) =>
+    act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: ++seq, type: "entry", entry }));
+
+  await send("Plan dinner");
+  arrive(userEntry("u1", "Plan dinner"));
+  assert.equal(inChat("Plan dinner").length, 1, "the entry waits unseen while the words move");
+  assert.ok(inChat("Plan dinner")[0]?.closest("[data-bot-pending-send]"));
+  act(() => motion.land());
+  await waitFor(() => assert.equal(document.querySelector("[data-bot-pending-send]"), null));
+  assert.equal(screen.getAllByText("Plan dinner").length, 1, "once it lands the copy is gone and the entry takes its place");
+
+  await send("Plan lunch");
+  arrive(userEntry("u2", "Plan lunch"));
+  arrive(assistantEntry("a2", "Soup at noon."));
+  await waitFor(() => assert.equal(document.querySelector("[data-bot-pending-send]"), null));
+  assert.equal(screen.getAllByText("Plan lunch").length, 1, "the moving copy is gone");
+  const message = screen.getByText("Plan lunch");
+  const reply = screen.getByText("Soup at noon.");
+  assert.ok(
+    message.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING,
+    "the message stays above its reply, never below it",
+  );
+});
+
+test("a send main is slow to accept looks sent and says Getting ready, never Sending…", async () => {
+  let answer: (result: unknown) => void = () => undefined;
+  await mountChat({
+    "bots:live:subscribe": () => snapshot(),
+    "bots:send": () => new Promise((resolve) => (answer = resolve)),
+  });
+  const box = await screen.findByPlaceholderText("Ask Planner");
+  fireEvent.change(box, { target: { value: "Plan dinner" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  await screen.findByText("Plan dinner");
+  assert.ok((await screen.findAllByText("Getting ready")).length > 0);
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+  assert.equal(screen.queryByText("Sending…"), null, "a slow send still never says Sending…");
+  assert.ok(screen.getAllByText("Getting ready").length > 0, "the status line carries the wait");
+  await act(async () => answer({ submissionId: "s1", deduped: false }));
+  assert.ok(screen.getByText("Plan dinner"), "the message stays until its entry arrives");
+});
+
+test("a message sent while the Bot works shows as Queued at once", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [userEntry("u1", "Plan Lisbon")],
+        state: { kind: "running", submissionId: "s1" },
+        activity: { phase: "thinking", startedAt: Date.now() },
+      }),
+    "bots:send": () => new Promise(() => undefined),
+  });
+  const box = await screen.findByPlaceholderText("Ask Planner");
+  fireEvent.change(box, { target: { value: "And Porto" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  const echo = await screen.findByText("And Porto");
+  assert.ok(echo.closest("[data-bot-queued]"), "it waits for the reply like the Mac's own Queued message");
+  assert.ok(screen.getByText("Queued"));
+});
+
+test("a Steer sent while the Bot works shows as sent at once, not Queued", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [userEntry("u1", "Plan Lisbon")],
+        state: { kind: "running", submissionId: "s1" },
+        activity: { phase: "thinking", startedAt: Date.now() },
+      }),
+    "bots:send": () => new Promise(() => undefined),
+  });
+  const box = await screen.findByPlaceholderText("Ask Planner");
+  fireEvent.change(box, { target: { value: "Keep it under 100 euros" } });
+  fireEvent.contextMenu(await screen.findByRole("button", { name: "Queue message" }));
+  fireEvent.click(await screen.findByRole("menuitemradio", { name: /Steer/u }));
+  const echo = await screen.findByText("Keep it under 100 euros");
+  await waitFor(() =>
+    assert.equal((calls.find((call) => call.channel === "bots:send")?.args[0] as { whenBusy?: string }).whenBusy, "steer"),
+  );
+  assert.ok(echo.closest("[data-bot-pending-send]"), "a steer joins the reply, so it looks sent");
+  assert.equal(echo.closest("[data-bot-queued]"), null);
+  assert.equal(screen.queryByText("Queued"), null);
+});
+
+test("a send that fails takes back Getting ready, and an interrupted card left with the send comes back", async () => {
+  const errors = captureErrorToasts();
+  try {
+    let fail: (error: Error) => void = () => undefined;
+    await mountChat({
+      "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "s0" } }),
+      "bots:send": () => new Promise((_resolve, reject) => (fail = reject)),
+    });
+    await screen.findByRole("group", { name: "Planner was interrupted" });
+    const box = await screen.findByPlaceholderText("Ask Planner");
+    fireEvent.change(box, { target: { value: "Start over" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+    await waitFor(() => assert.equal(announced(), "Getting ready"));
+    assert.equal(screen.queryByRole("group", { name: "Planner was interrupted" }), null, "the send replaces the paused turn");
+    fail(new Error("Error invoking remote method 'bots:send': Error: Bots are starting."));
+    await screen.findByRole("group", { name: "Planner was interrupted" });
+    assert.equal(document.querySelector("[data-bot-pending-send]"), null);
+    await waitFor(() => assert.equal(announced(), ""));
+    // One error, said once.
+    await waitFor(() => assert.deepEqual(errors.shown, ["Bots are starting."]));
+  } finally {
+    errors.restore();
+  }
 });
 
 test("a send that fails drops its echo, and the same words sent again replay the same request id", async () => {

@@ -18,10 +18,13 @@ import {
   RadioGroupItem,
   Text,
 } from "../../components/ui";
+import { useNavigate } from "@tanstack/react-router";
 import { useAppCapabilities } from "../../lib/app-capabilities";
+import { useSettings } from "../../lib/queries";
 import type { BotDefinition } from "../../shared/bots";
 import {
   BOT_RULE_TEXT_MAX_CHARS,
+  botRoutinesGoAhead,
   botRuleBehaviorLabel,
   botRuleLabel,
   isBotRuleBehavior,
@@ -38,6 +41,10 @@ const ROW_CLASS =
   "relative flex w-full min-w-0 items-center gap-3 px-4 py-3 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator";
 const ACTION_ROW_CLASS =
   "relative flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-45 motion-reduce:transition-none";
+
+/** An inline link to Settings → Bots, in the secondary text under the rules. */
+const SETTINGS_LINK_CLASS =
+  "rounded-control text-primary underline decoration-separator underline-offset-2 hover:text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring";
 
 /** How a rule reads in the editor: built-in rules by their label, the person's own as "When Ada wants to …". */
 function ruleTitle(bot: RuleBot, rule: BotRule): string {
@@ -59,6 +66,10 @@ export function BotRules({ bot }: { bot: RuleBot }) {
   const rules = useBotRules(bot.id);
   const { apply, busy } = useBotRuleChange(bot.id);
   const { botComputers } = useAppCapabilities();
+  const settings = useSettings();
+  const goAhead = botRoutinesGoAhead(settings.data);
+  const navigate = useNavigate();
+  const openBotSettings = () => void navigate({ to: "/settings", search: { section: "bots" } });
   const [problem, setProblem] = React.useState<string | null>(null);
   const [editing, setEditingState] = React.useState<BotRule | "new" | null>(null);
   const [editorSession, setEditorSession] = React.useState(0);
@@ -87,10 +98,10 @@ export function BotRules({ bot }: { bot: RuleBot }) {
           </Text>
         </Callout>
       ) : rules.data?.unreadable ? (
-        // Main fails closed on a rules file it can't parse; the next change replaces it.
+        // Main fails closed on a rules file it can't parse; the next change keeps a copy and replaces it.
         <Callout color="red" role="alert" className="mb-3">
           <Text variant="small-strong" color="red">
-            {bot.name}’s saved rules couldn’t be read, so {bot.name} won’t take any step its rules check. Change a rule below to start again from these defaults.
+            {bot.name}’s saved rules couldn’t be read, so {bot.name} won’t take any step its rules check. Change a rule below to start again from these defaults. Aiden keeps a copy of the damaged file, rules.json.unreadable, in {bot.name}’s folder.
           </Text>
         </Callout>
       ) : null}
@@ -147,6 +158,14 @@ export function BotRules({ bot }: { bot: RuleBot }) {
         </button>
       </div>
       <Text as="p" variant="small" color="secondary" className="mt-2 px-4 text-pretty">
+        {goAhead
+          ? "In routines, Ask first steps go ahead without asking. "
+          : `In routines, ${bot.name} skips Ask first steps and tells you in its reply. `}
+        <button type="button" className={SETTINGS_LINK_CLASS} onClick={openBotSettings}>
+          Change this for every Bot
+        </button>
+      </Text>
+      <Text as="p" variant="small" color="secondary" className="mt-1 px-4 text-pretty">
         Rules don’t cover shell commands; the Shell setting does, and commands in a Bot’s own computer follow its Bot computer access.
       </Text>
       {botComputers ? (

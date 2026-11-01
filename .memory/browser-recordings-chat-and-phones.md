@@ -1,0 +1,17 @@
+# Browser recordings in chat and on the phones (Remote revision 46)
+
+Status (2026-10-27): implemented on branch `claude/project-thread-p5v2my-browser-recordings`, stacked on the revision 44 `bot:images` branch (tool audit item 7a). Revision 46 is provisional; re-claim it at merge after whatever `main` holds then (constant `AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION`).
+
+- Recorder (`main/services/browser/service.ts`) now prefers `video/mp4;codecs=avc1.42E01E` (Electron 43's OpenH264), WebM only as a fallback. Trap: Chromium's MP4 muxer writes nothing until a keyframe, so without `videoKeyFrameIntervalDuration: 1000` the first-frame readiness check (bytes > 0) times out and the size limit never fires mid-recording. Files: `userData/browser/recordings/<recording-uuid>.(mp4|webm)`; lookup/read in `main/services/browser/recordings.ts` (id pattern, lstat isFile, magic bytes).
+- A completed `browser_recording_stop` timeline step carries `recording {id, mimeType, durationMs, sizeBytes}` (exact keys; `renderer/shared/browser-recording.ts`). Desktop card `renderer/components/browser-recording-card.tsx` (Play loads bytes over IPC `browser:recording`, Show in Finder via `browser:reveal-recording`).
+- Remote: `GET /chats/{chatId}/recordings/{recordingId}` (chat:read), served only when the chat's own timeline names the id; feature token `chat-browser-recordings-v1` announced while wired (CLI does not wire it).
+- A paired Mac viewing another computer's chat strips the recap (`withoutHostLocalRecaps` in `renderer/lib/hosts/remote-chat-mapper.ts`) because its player reads only local recordings.
+- Phones: iOS plays MP4 with AVKit (WebM says watch on the Mac); Android plays both with VideoView. Neither compiles in the cloud container; CI is the check.
+- e2e: `tests/e2e/browser.spec.ts` has the MP4 recording test and an agent-records-then-plays-in-chat test. For dark screenshots on a branch without the live theme fix, write `aiden-agent.appearance-v1` in localStorage and reload.
+
+## 2026-10-29: automatic stop and the in-memory recording map (audit 09, F6/F7)
+
+- The five-minute automatic stop no longer loses the video: its result is kept on the tab (`LiveTab.autoStopped`) and the next `browser_recording_stop` returns it (once), instead of "not recording". A new `startRecording` clears an unclaimed one; its file stays on disk.
+- The unbounded `recordings` Map in `BrowserService` is gone: `reveal_recording` always reads the disk via `findBrowserRecording`.
+- Closing a window drops its workspace entry only when the entry holds no tabs, history or servers (history is capped at 10 and servers at 12, and they are kept for a reopened window).
+- Covered by `tests/e2e/browser-throttling-native.ts` (stop after the timer fired returns a non-empty video; a second stop rejects).

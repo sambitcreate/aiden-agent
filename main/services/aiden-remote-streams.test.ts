@@ -7,13 +7,13 @@ import test from "node:test";
 import type { ServerResponse } from "node:http";
 import {
   AidenRemoteStreamService,
-  aidenRemoteStreamStoreOptions,
+  mergeAidenRemoteStreamJournal,
   normalizeAidenRemoteStreamSnapshot,
   removeRevokedDeviceStreams,
   type AidenRemoteStreamSnapshot,
 } from "./aiden-remote-streams.js";
+import { AidenRemoteStreamJournal } from "./aiden-remote-stream-journal.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
-import { DataStore } from "./data-store.js";
 
 function assertExactSnapshotBytes(service: AidenRemoteStreamService): void {
   // Independent oracle includes UTF-8 encoding, all JSON punctuation, metadata,
@@ -296,6 +296,40 @@ test("approval scopes reach the host only when offered, allowed and chosen", asy
     "host-deny:deny:once",
     "host-partial:allow:once",
   ]);
+});
+
+test("the desktop card's change preview never reaches a paired phone", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-preview",
+    toolCallId: "call-1",
+    toolName: "edit_file",
+    summary: "Edit file: src/secret.ts",
+    preview: {
+      kind: "file",
+      operation: "edit",
+      path: "src/secret.ts",
+      lines: [{ type: "added", text: "const token = 'preview-only-contents';" }],
+      added: 1,
+      removed: 0,
+      omittedLines: 0,
+    },
+  });
+
+  // The phone gets the summary and can still answer; the file's contents stay on the desktop.
+  const pending = app.service.pendingApproval("device-1", "stream-1");
+  assert.equal(pending?.summary, "Edit file: src/secret.ts");
+  assert.equal(pending?.canAllow, true);
+  const output: string[] = [];
+  const response = Object.assign(new EventEmitter(), {
+    writeHead() { return this; },
+    write(value: string) { output.push(value); return true; },
+    end() { (this as unknown as EventEmitter).emit("finish"); return this; },
+  }) as unknown as ServerResponse;
+  app.service.openEvents("device-1", "stream-1", 0, response);
+  assert.match(output.join(""), /event: approval_required/u);
+  assert.doesNotMatch(JSON.stringify(pending) + output.join(""), /preview-only-contents|"preview"/u);
 });
 
 test("cancel and approval decisions are bound to the owning device and owner identity", async () => {
@@ -582,6 +616,79 @@ test("bounded standard schedule approvals remain mobile-allowable without exposi
   assert.match(app.approvals[0] ?? "", /:allow:/u);
 });
 
+test("a schedule card reaches only a device that asks for one and never changes whether it may allow", () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-schedule",
+    summary: 'Create scheduled task "Inbox monitor" · Every day at 9:00 AM · Full access · MCP Gmail (gmail)',
+    scopes: ["once", "chat"],
+    details: {
+      kind: "scheduled-task",
+      action: "create",
+      taskId: null,
+      expectedUpdatedAt: null,
+      enabled: true,
+      name: "Inbox monitor",
+      prompt: "Summarize inbox changes.",
+      script: null,
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      nextRunAt: 2_000_000_000_000,
+      notify: true,
+      mode: "llm",
+      permission: "full",
+      workspaceId: null,
+      workspaceName: null,
+      mcpServerIds: ["gmail"],
+      mcpServerNames: ["Gmail"],
+      providerId: "local-provider",
+      providerName: "Local Provider",
+      model: "local-model",
+      modelName: "Local Model",
+      legacyGlobalMcp: false,
+      schedulerEnabled: true,
+    },
+  });
+
+  const plain = app.service.pendingApproval("device-1", "stream-1");
+  const carded = app.service.pendingApproval("device-1", "stream-1", { scheduleCard: true });
+  assert.equal(plain?.schedule, undefined);
+  assert.ok(carded?.schedule);
+  const { schedule, ...rest } = carded;
+  assert.deepEqual(rest, plain, "the card is the only difference");
+  assert.equal(carded.details, undefined);
+  assert.equal(carded.canAllow, true);
+  assert.equal(schedule.name, "Inbox monitor");
+  assert.equal(schedule.permission, "full");
+  assert.deepEqual(schedule.connectors, ["Gmail"]);
+  assert.equal(schedule.nextRunAt, new Date(2_000_000_000_000).toISOString());
+  assert.equal(schedule.prompt, "Summarize inbox changes.");
+
+  // Any other approval stays exactly as before, card or no card.
+  const other = app.service.create("device-1", "stream-2", "chat-2", "turn-2");
+  other.owner.send("chat:approval", {
+    approvalId: "approval-run",
+    summary: "Allow shell for this subagent run",
+    details: {
+      kind: "subagent-run-grant",
+      lane: "shell",
+      runId: "run-implementer",
+      childLabel: "Implement checks",
+      workspaceLabel: "Project",
+      worktreeLabel: null,
+      isManagedWorktree: false,
+      workspaceRevisionPrefix: "a".repeat(12),
+      fullHostAccess: true,
+      noRollback: true,
+    },
+  });
+  const hostOnly = app.service.pendingApproval("device-1", "stream-2", { scheduleCard: true });
+  assert.equal(hostOnly?.approvalId, "approval-run");
+  assert.equal(hostOnly?.schedule, undefined);
+  assert.equal(hostOnly?.canAllow, false);
+});
+
 test("approval detail fields outside the declared shape never reach the host, a device or the journal", async () => {
   const app = persistenceFixture(0);
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
@@ -710,8 +817,9 @@ test("empty assistant IDs never poison the durable stream journal", async () => 
     now: () => 1_000,
     cancel: () => true,
     approve: () => true,
-    persist: async (snapshot) => {
-      normalizeAidenRemoteStreamSnapshot(snapshot);
+    persist: async (write) => {
+      normalizeAidenRemoteStreamSnapshot(write.live);
+      if (write.archive) normalizeAidenRemoteStreamSnapshot(write.archive);
       persisted += 1;
     },
   });
@@ -740,7 +848,7 @@ test("unpaired UTF-16 from provider notifications is sanitized before persistenc
     now: () => 1_000,
     cancel: () => true,
     approve: () => true,
-    persist: async (snapshot) => { normalizeAidenRemoteStreamSnapshot(snapshot); },
+    persist: async (write) => { mergeAidenRemoteStreamJournal(write.archive ?? { version: 1, streams: [] }, write.live); },
   });
   const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
   owner.owner.send("chat:delta", { delta: "bad\ud800delta" });
@@ -839,7 +947,7 @@ test("aggregate stream journals stay within the durable snapshot budget", async 
     now: () => 1_000,
     cancel: () => true,
     approve: () => true,
-    persist: async (snapshot) => { normalizeAidenRemoteStreamSnapshot(snapshot); },
+    persist: async (write) => { mergeAidenRemoteStreamJournal(write.archive ?? { version: 1, streams: [] }, write.live); },
   });
   const old = service.create("device-1", "old", "old-chat", "old-turn");
   old.owner.send("chat:done", { chat: { messages: [{ id: "assistant", role: "assistant" }] } });
@@ -877,12 +985,7 @@ test("restart restores terminal journals and marks active work interrupted", () 
 
 test("a journal this build cannot read is kept aside so persistence and revocation keep working", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-streams-"));
-  const openStore = () => new DataStore<AidenRemoteStreamSnapshot>(
-    "streams.json",
-    { version: 1, streams: [] },
-    () => directory,
-    aidenRemoteStreamStoreOptions(),
-  );
+  const openJournal = () => new AidenRemoteStreamJournal("streams.json", () => directory);
   try {
     // Well-formed JSON from a build whose event vocabulary this one rejects.
     const unreadable = JSON.stringify({
@@ -906,14 +1009,14 @@ test("a journal this build cannot read is kept aside so persistence and revocati
       }],
     });
     await fs.writeFile(path.join(directory, "streams.json"), unreadable);
-    const store = openStore();
+    const journal = openJournal();
     const errors: unknown[] = [];
     const service = new AidenRemoteStreamService({
       now: () => 1_000,
       cancel: () => true,
       approve: () => true,
-      snapshot: normalizeAidenRemoteStreamSnapshot(await store.load()),
-      persist: (snapshot) => store.save(snapshot),
+      snapshot: await journal.load(),
+      persist: (write) => journal.save(write),
       onPersistenceError: (error) => errors.push(error),
     });
     service.create("device-1", "stream-1", "chat-1", "turn-1");
@@ -927,7 +1030,7 @@ test("a journal this build cannot read is kept aside so persistence and revocati
     assert.equal(rescues.length, 1);
     assert.equal(await fs.readFile(path.join(directory, rescues[0]!), "utf8"), unreadable);
 
-    const restarted = normalizeAidenRemoteStreamSnapshot(await openStore().load());
+    const restarted = await openJournal().load();
     assert.deepEqual(restarted.streams.map(({ streamId }) => streamId), ["stream-2"]);
     const restored = new AidenRemoteStreamService({
       now: () => 2_000,
@@ -936,6 +1039,44 @@ test("a journal this build cannot read is kept aside so persistence and revocati
       snapshot: restarted,
     });
     assert.equal(restored.turnIdFor("chat-2", "stream-2"), "turn-2");
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a single-file journal from an earlier build restores and is split on the next write", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-streams-"));
+  try {
+    const earlier = new AidenRemoteStreamService({ now: () => 1_000, cancel: () => true, approve: () => true });
+    const finished = earlier.create("device-1", "finished", "chat-1", "turn-1");
+    finished.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+    const running = earlier.create("device-1", "running", "chat-2", "turn-2");
+    running.owner.send("chat:delta", { delta: "Partial" });
+    await fs.writeFile(path.join(directory, "streams.json"), JSON.stringify(earlier.snapshot()));
+
+    const journal = new AidenRemoteStreamJournal("streams.json", () => directory);
+    const service = new AidenRemoteStreamService({
+      now: () => 2_000,
+      cancel: () => true,
+      approve: () => true,
+      snapshot: await journal.load(),
+      persist: (write) => journal.save(write),
+    });
+    assert.equal(service.status("device-1", "finished").state, "done");
+    assert.equal(service.status("device-1", "running").state, "interrupted");
+    service.create("device-1", "next", "chat-3", "turn-3");
+    await service.settlePersistence();
+
+    const restored = new AidenRemoteStreamService({
+      now: () => 3_000,
+      cancel: () => true,
+      approve: () => true,
+      snapshot: await new AidenRemoteStreamJournal("streams.json", () => directory).load(),
+    });
+    assert.equal(restored.status("device-1", "finished").state, "done");
+    assert.equal(restored.status("device-1", "running").state, "interrupted");
+    assert.equal(restored.status("device-1", "next").state, "interrupted");
+    assert.equal(restored.turnIdFor("chat-2", "running"), "turn-2");
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
@@ -2123,7 +2264,7 @@ test("event count and byte trimming keep exact accounting and contiguous newest 
   let now = 1_000;
   // Each delta lands after the folding window so every one is its own event.
   for (let index = 0; index < 4_100; index++) {
-    app.setNow((now += 250));
+    app.setNow((now += 1_000));
     owner.owner.send("chat:delta", { delta: `chunk-${index}` });
   }
   assertExactSnapshotBytes(app.service);
@@ -2132,7 +2273,7 @@ test("event count and byte trimming keep exact accounting and contiguous newest 
   assert.equal(events[0]!.sequence, 6);
   assert.equal(events[events.length - 1]!.payload.text, "chunk-4099");
   for (let index = 0; index < 50; index++) {
-    app.setNow((now += 250));
+    app.setNow((now += 1_000));
     owner.owner.send("chat:delta", { delta: "雪".repeat(100_000) });
   }
   owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant", role: "assistant" }] } });
@@ -2164,18 +2305,25 @@ test("classifier approvals remain deny-only remotely even when details are missi
 });
 
 function persistenceFixture(persistCoalesceMs: number) {
-  const writes: ReturnType<AidenRemoteStreamService["snapshot"]>[] = [];
+  // Each entry is the journal as a restart would read it after that write.
+  const writes: AidenRemoteStreamSnapshot[] = [];
+  const archiveWrites: AidenRemoteStreamSnapshot[] = [];
+  let archive: AidenRemoteStreamSnapshot = { version: 1, streams: [] };
   const service = new AidenRemoteStreamService({
     now: () => 1_000,
     cancel: () => true,
     approve: () => true,
     persistCoalesceMs,
-    persist: async (snapshot) => {
-      writes.push(structuredClone(snapshot));
+    persist: async (write) => {
+      if (write.archive) {
+        archive = structuredClone(write.archive);
+        archiveWrites.push(archive);
+      }
+      writes.push(mergeAidenRemoteStreamJournal(archive, write.live));
     },
   });
   const lastWrittenEvents = () => writes[writes.length - 1]?.streams[0]?.events ?? [];
-  return { service, writes, lastWrittenEvents };
+  return { service, writes, archiveWrites, lastWrittenEvents };
 }
 
 // Lets an already-started persistence write settle without firing timers.
@@ -2256,6 +2404,60 @@ test("tool progress is journaled without waiting for the coalescing window", asy
   await afterPendingWrites();
   const written = app.lastWrittenEvents();
   assert.equal(written[written.length - 1]?.type, "tool_finished");
+});
+
+test("a streaming turn does not rewrite finished streams", async () => {
+  const app = persistenceFixture(0);
+  const earlier = app.service.create("device-1", "earlier", "chat-1", "turn-1");
+  earlier.owner.send("chat:delta", { delta: "x".repeat(10_000) });
+  earlier.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+  await app.service.settlePersistence();
+  const archiveWritesBefore = app.archiveWrites.length;
+  const writesBefore = app.writes.length;
+
+  const owner = app.service.create("device-1", "stream-2", "chat-2", "turn-2");
+  app.service.markRunning("device-1", "stream-2");
+  for (let index = 0; index < 20; index++) {
+    owner.owner.send("chat:delta", { delta: "y" });
+    await afterPendingWrites();
+  }
+  await app.service.settlePersistence();
+
+  assert.ok(app.writes.length > writesBefore);
+  assert.equal(app.archiveWrites.length, archiveWritesBefore, "finished history was not rewritten");
+  const latest = app.writes[app.writes.length - 1]!;
+  assert.deepEqual(latest.streams.map(({ streamId, state }) => [streamId, state]), [
+    ["earlier", "done"],
+    ["stream-2", "running"],
+  ]);
+
+  owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant-2", role: "assistant" }] } });
+  await app.service.settlePersistence();
+  assert.equal(app.archiveWrites.length, archiveWritesBefore + 1, "a finished turn moves to the archive");
+  assert.deepEqual(
+    app.archiveWrites[app.archiveWrites.length - 1]!.streams.map(({ streamId }) => streamId),
+    ["earlier", "stream-2"],
+  );
+});
+
+test("a crash between the two journal writes restores the finished copy", () => {
+  const app = persistenceFixture(0);
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  owner.owner.send("chat:delta", { delta: "Partial" });
+  const live = app.service.snapshot();
+  owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+  const archive = app.service.snapshot();
+
+  const restored = new AidenRemoteStreamService({
+    now: () => 2_000,
+    cancel: () => true,
+    approve: () => true,
+    snapshot: mergeAidenRemoteStreamJournal(archive, live),
+  });
+  const status = restored.status("device-1", "stream-1");
+  assert.equal(status.state, "done");
+  const archived = archive.streams[0]!.events;
+  assert.equal(status.lastSequence, archived[archived.length - 1]!.sequence);
 });
 
 test("settling persistence flushes a pending coalesced write exactly once", async () => {

@@ -13,7 +13,10 @@ import {
   toast,
 } from "../ui";
 import { isInlineVisualsMode, type InlineVisualsMode } from "../../shared/appearance";
+import type { LinuxTitleBarPreference, WindowChrome } from "../../shared/window-chrome";
 import { settingsApi } from "../../lib/ipc";
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { useWindowChrome } from "../../lib/window-chrome";
 import {
   APPEARANCE_CHANGE_EVENT,
   APPEARANCE_INTENT_FAILED_EVENT,
@@ -281,7 +284,24 @@ function ThemeTileGrid({
   );
 }
 
+/**
+ * Whether the switch shows the system title bar. "auto" follows what this
+ * window resolved to (Aiden's, unless a tiling window manager runs).
+ */
+function usesSystemTitleBar(preference: LinuxTitleBarPreference, current: WindowChrome): boolean {
+  return preference === "auto" ? current === "system" : preference === "system";
+}
+
+function systemTitleBarDescription(preference: LinuxTitleBarPreference, current: WindowChrome): string {
+  const base = "Show your desktop's own title bar and menu bar instead of Aiden's window buttons.";
+  return usesSystemTitleBar(preference, current) === (current === "system")
+    ? base
+    : `${base} Takes effect the next time you open Aiden.`;
+}
+
 export function AppearanceSettings() {
+  const capabilities = useAppCapabilities();
+  const windowChrome = useWindowChrome();
   const [config, setConfig] = React.useState<AppearanceConfig>(() => readCachedAppearance() ?? createDefaultAppearanceConfig());
   const [hydrated, setHydrated] = React.useState(false);
   const [saveError, setSaveError] = React.useState<string | null>(null);
@@ -550,7 +570,7 @@ export function AppearanceSettings() {
       <FieldSet title="Chat">
         <ChatPreferenceField
           label="Work details"
-          description="Choose how much reasoning and tool activity to show. Verbose keeps automatic details open in history."
+          description="Choose how much tool activity to show. Verbose keeps it open in history. Thinking always stays one line until you open it."
           value={config.workDetails} labels={WORK_DETAILS_LABELS}
           onChange={(workDetails) => update((current) => ({ ...current, workDetails }))}
         />
@@ -589,6 +609,20 @@ export function AppearanceSettings() {
           </Select>
         </Field>
       </FieldSet>
+      {capabilities.platform === "linux" ? (
+        <FieldSet title="Window">
+          <Field
+            label="Use system title bar"
+            description={systemTitleBarDescription(config.linuxTitleBar, windowChrome)}
+          >
+            <Switch
+              checked={usesSystemTitleBar(config.linuxTitleBar, windowChrome)}
+              onCheckedChange={(checked) => update((current) => ({ ...current, linuxTitleBar: checked ? "system" : "aiden" }))}
+              aria-label="Use system title bar"
+            />
+          </Field>
+        </FieldSet>
+      ) : null}
       <section className="appearance-theme-section appearance-layout-section" aria-labelledby="appearance-chat-width-title">
         <h2 id="appearance-chat-width-title">Chat width</h2>
         <p className="appearance-section-description">Sets how wide messages and the composer can grow in the conversation.</p>

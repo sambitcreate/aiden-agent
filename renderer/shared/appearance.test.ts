@@ -458,6 +458,19 @@ test("inline visuals default to automatic, migrate legacy settings, and reject u
   assert.throws(() => parseAppearanceConfig({ ...legacy, inlineVisuals: "sometimes" }), /inline visuals/i);
 });
 
+test("the Linux title bar preference defaults to automatic, migrates legacy settings, and rejects unknown values", () => {
+  assert.equal(createDefaultAppearanceConfig().linuxTitleBar, "auto");
+  const legacy: Record<string, unknown> = { ...createDefaultAppearanceConfig() };
+  delete legacy.linuxTitleBar;
+  assert.equal(parseAppearanceConfig(legacy).linuxTitleBar, "auto");
+  for (const linuxTitleBar of ["auto", "aiden", "system"] as const) {
+    const stored = { ...createDefaultAppearanceConfig(), linuxTitleBar };
+    assert.equal(parseAppearanceConfig(JSON.parse(JSON.stringify(stored))).linuxTitleBar, linuxTitleBar);
+  }
+  assert.equal(normalizeAppearanceConfig({ linuxTitleBar: "native" }).linuxTitleBar, "auto");
+  assert.throws(() => parseAppearanceConfig({ ...legacy, linuxTitleBar: "native" }), /title bar/i);
+});
+
 test("chat width defaults to the original column, migrates legacy settings, and rejects unknown widths", () => {
   // Existing users keep the 52rem column they had before the preference existed.
   assert.equal(createDefaultAppearanceConfig().chatWidth, "default");

@@ -10,7 +10,7 @@ import { MAX_SUBAGENT_SUMMARY_CHARS } from "../../../main/services/subagents/con
 import { recordUsage } from "./usage-ledger.ts";
 
 /** Inference is isolated; exact tools and approvals remain owned by the parent. */
-export async function runCliSubagent(agentDir: string, input: RunSubagentChildInput, tools: AgentTool[], beforeTool: (name: string, id: string, args: unknown, context?: BeforeToolCallContext) => Promise<void>, diagnostic?: (error: Error) => void) {
+export async function runCliSubagent(agentDir: string, input: RunSubagentChildInput, tools: AgentTool[], beforeTool: (name: string, id: string, args: unknown, context?: BeforeToolCallContext, signal?: AbortSignal) => Promise<void>, diagnostic?: (error: Error) => void) {
   const limits = {
     deadline: input.policy?.deadlineMs ?? DEFAULT_SUBAGENT_CHILD_DEADLINE_MS,
     events: input.policy?.maxEvents ?? MAX_SUBAGENT_CHILD_EVENTS,
@@ -49,7 +49,14 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
           const args = validateToolArguments(tool, toolCall);
           const assistantMessage = messages.at(-1);
           if (!assistantMessage) throw new Error("Child tool call has no assistant turn.");
-          await beforeTool(tool.name, event.id, args, { toolCall, args, assistantMessage, context: { messages, tools } });
+          // A stopped child (deadline, budget, cancel) must not leave the run waiting on an approval gate.
+          await new Promise<void>((resolve, reject) => {
+            const cancelled = () => reject(toolAbort.signal.reason);
+            toolAbort.signal.addEventListener("abort", cancelled, { once: true });
+            if (toolAbort.signal.aborted) cancelled();
+            beforeTool(tool.name, event.id, args, { toolCall, args, assistantMessage, context: { messages, tools } }, toolAbort.signal)
+              .then(resolve, reject).finally(() => toolAbort.signal.removeEventListener("abort", cancelled));
+          });
           if (toolAbort.signal.aborted) throw new Error("Subagent cancelled before tool execution.");
           input.telemetry?.toolStarted(tool.name);
           const result = tool.name === "subagent" && input.executeNested

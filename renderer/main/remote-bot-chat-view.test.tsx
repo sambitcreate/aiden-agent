@@ -4,11 +4,15 @@ import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { createBotTestQueryClient, mountWithBotRouter } from "./bots/test-providers";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
+import { detectedKeyboardPlatform } from "../shared/keybindings";
 import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 import { RemoteBotChatView } from "./remote-bot-chat-view";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  delete document.documentElement.dataset.reduceMotion;
+});
 
 const HOST: PeerHostView = {
   id: "host_a",
@@ -144,12 +148,15 @@ test("Retry on a failed reply from another Mac resends the person's words there,
   assert.deepEqual(sent.body, { text: "Move the dentist" });
 });
 
-test("live frames from the host stream into the chat, and a deny-only approval answers by wait id", async () => {
+test("live frames from the host stream into the chat, and a deny-only approval answers by wait id from the keyboard", async () => {
+  // The streaming reveal holds an unfinished line for a second, as long as findByText waits; Reduce Motion shows it at once.
+  document.documentElement.dataset.reduceMotion = "true";
   const { peerCalls } = await mount();
   await screen.findByText("Two meetings and a dentist.");
   await act(async () => {
     emitBotTestNotification("remote:peer-bot-session", event(4, "state", { state: "running", interrupted: false }));
-    emitBotTestNotification("remote:peer-bot-session", event(5, "partial", { text: "Looking at your calendar" }));
+    // Finish the paragraph so this transport test does not race the unfinished-text reveal deadline.
+    emitBotTestNotification("remote:peer-bot-session", event(5, "partial", { text: "Looking at your calendar\n\n" }));
     emitBotTestNotification(
       "remote:peer-bot-session",
       event(6, "approval", {
@@ -160,7 +167,11 @@ test("live frames from the host stream into the chat, and a deny-only approval a
   assert.ok(await screen.findByText("Looking at your calendar"));
   assert.ok(screen.getByText("Allow it on Studio."));
   assert.equal(screen.queryByRole("button", { name: "Allow" }), null);
-  fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+  // ⌘↩ cannot allow from a device that may only deny; ⌘⌫ still denies (Ctrl off a Mac).
+  const mac = detectedKeyboardPlatform() === "darwin";
+  const allowKey = fireEvent.keyDown(document.body, { key: "Enter", metaKey: mac, ctrlKey: !mac });
+  assert.equal(allowKey, true, "the allow key is left alone");
+  fireEvent.keyDown(document.body, { key: "Backspace", metaKey: mac, ctrlKey: !mac });
   await waitFor(() => {
     const answer = peerCalls().find((call) => call.operation === "respondApproval");
     assert.equal(answer?.resourceId, "w1");
@@ -400,6 +411,24 @@ test("a sign-in is finished on the Bot's own Mac: the card offers Finish there a
   assert.equal(handoffAnswers().length, 0);
 });
 
+test("a password-or-code card from another Mac takes no note: no note box, and Done answers it bare", async () => {
+  const { calls, handoffAnswers } = await mountHandoff({
+    ...RUNNING_WITH_HANDOFF,
+    handoff: { ...BANK_HANDOFF, takesNote: false },
+  });
+  await screen.findByRole("group", { name: "Planner needs you" });
+  assert.equal(screen.queryByPlaceholderText("Add a note and send to mark it done"), null);
+  assert.equal(screen.queryByText(/Planner reads any note you send/u), null);
+  assert.ok(
+    screen.getByText(/This card takes no note, so a password or code never reaches Planner\./u, { selector: "[role=status]" }),
+    "the composer says why it can't send",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  await waitFor(() => assert.equal(handoffAnswers().length, 1));
+  assert.deepEqual(handoffAnswers()[0]!.body, { outcome: "done" });
+  assert.equal(calls.some((call) => call.channel === "remote:peerCall" && (call.args[1] as PeerOperation).operation === "botSend"), false);
+});
+
 test("a paused Bot on another Mac says so, blocks the composer, and Resume lifts the pause there", async () => {
   const { peerCalls } = await mountHandoff(SESSION);
   await screen.findByText("Two meetings and a dentist.");
@@ -455,4 +484,55 @@ test("a host that was unpaired while its Bot was open says so, instead of blamin
   await mountWithBotRouter(<RemoteBotChatView hostId="host_a" botId="bot_1" />, { initialPath: "/bots", queryClient });
   assert.ok(await screen.findByText("This device isn't paired anymore"));
   assert.equal(screen.queryByText("Bot not found"), null);
+});
+
+const PIXEL = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+/** A host that sends this Mac its Bot's shared images (revision 45); `image` answers each byte read. */
+function sharedImageSession(image: (operation: PeerOperation) => unknown) {
+  return {
+    "remote:peerCall": (_hostId: unknown, operation: unknown) => {
+      const call = operation as PeerOperation;
+      if (call.operation === "botSession")
+        return {
+          ok: true,
+          value: {
+            ...SESSION,
+            entries: [
+              ...SESSION.entries,
+              { type: "shared_image", id: "img_1", name: "dentist-map.png", mimeType: "image/png", size: PIXEL.byteLength },
+            ],
+          },
+        };
+      if (call.operation === "botSessionImage") return image(call);
+      return { ok: false, error: { code: "failed", message: `unexpected ${call.operation}` } };
+    },
+  };
+}
+
+test("an image a Bot on another Mac shared draws here once its bytes are read from that Mac", async () => {
+  const { peerCalls } = await mount(
+    { ...HOST, capabilities: [...HOST.capabilities, "bot:images"] },
+    sharedImageSession(() => ({ ok: true, value: { mimeType: "image/png", bytes: new Uint8Array(PIXEL) } })),
+  );
+  const image = (await screen.findByRole("img", { name: "dentist-map.png" })) as HTMLImageElement;
+  assert.equal(image.getAttribute("src"), `data:image/png;base64,${PIXEL.toString("base64")}`);
+  assert.deepEqual(
+    peerCalls()
+      .filter((call) => call.operation === "botSessionImage")
+      .map((call) => [call.resourceId, call.itemId]),
+    [["bot_1", "img_1"]],
+  );
+});
+
+test("a shared image whose bytes cannot be read from the other Mac says what it was instead", async () => {
+  await mount(
+    { ...HOST, capabilities: [...HOST.capabilities, "bot:images"] },
+    sharedImageSession(() => ({ ok: false, error: { code: "not_found", message: "This image is no longer in the Bot's chat." } })),
+  );
+  assert.ok(await screen.findByText(/I shared an image: dentist-map\.png\. Open this chat on its Mac to see it\./));
+  assert.ok(!screen.queryByRole("img", { name: "dentist-map.png" }), "no image drawn");
 });

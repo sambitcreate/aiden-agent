@@ -32,7 +32,11 @@ const defaults: GitExecutableDependencies = {
   },
 };
 
-/** Never execute Apple's install-on-demand Git shim. No dependency on full Xcode. */
+/**
+ * Resolves Git against absolute PATH entries only, so a workspace-relative entry
+ * (`.`, an empty component, `tools`) can never run a repository-planted `git`.
+ * On macOS it also never executes Apple's install-on-demand shim. No dependency on full Xcode.
+ */
 export async function resolveGitExecutable(
   binary: string,
   cwd: string,
@@ -41,7 +45,8 @@ export async function resolveGitExecutable(
   deps: GitExecutableDependencies = defaults,
 ): Promise<string> {
   signal?.throwIfAborted();
-  if (deps.platform !== "darwin") return binary;
+  // Windows lookup (PATHEXT, App Paths) is left to the OS; it never runs from the cwd here.
+  if (deps.platform === "win32") return binary;
   const candidates = binary.includes("/")
     ? [path.resolve(cwd, binary)]
     : (env.PATH ?? "/usr/bin:/bin")
@@ -53,7 +58,7 @@ export async function resolveGitExecutable(
     const executable = await deps.executablePath(candidate);
     signal?.throwIfAborted();
     if (!executable) continue;
-    if (executable !== "/usr/bin/git") return executable;
+    if (deps.platform !== "darwin" || executable !== "/usr/bin/git") return executable;
     try {
       const developerDir = await deps.developerDirectory(env, signal);
       if (path.isAbsolute(developerDir)) {
@@ -120,7 +125,7 @@ export function createGitExecutableResolver(
 
   return async (binary, cwd, env, signal) => {
     signal?.throwIfAborted();
-    if (deps.platform !== "darwin") return binary;
+    if (deps.platform === "win32") return binary;
     const key = JSON.stringify([
       binary.includes("/") ? path.resolve(cwd, binary) : binary,
       env.PATH ?? null,

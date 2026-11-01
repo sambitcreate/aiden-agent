@@ -14,6 +14,8 @@ export type PeerReadOperation =
   | "messagesWindow"
   | "attachmentContent"
   | "skills"
+  /** Contract revision 41: the chat's next-request context pressure (`GET /chats/{chatId}/context`). */
+  | "contextPressure"
   | "tasks"
   | "agents"
   | "streamQuestion"
@@ -22,7 +24,9 @@ export type PeerReadOperation =
   | "botConversations"
   | "botCapabilities"
   /** A Bot's one durable conversation (`GET /bots/{botId}/session`). */
-  | "botSession";
+  | "botSession"
+  /** Contract revision 45 (`bot:images`): one shared image's bytes; `itemId` is its entry. */
+  | "botSessionImage";
 export type PeerWriteOperation =
   | "createChat"
   | "send"
@@ -32,6 +36,7 @@ export type PeerWriteOperation =
   | "respondApproval"
   | "selectFolder"
   | "createWorkspace"
+  | "cloneWorkspace"
   | "markRead"
   | "interruptAgent"
   | "respondQuestion"
@@ -83,13 +88,16 @@ export interface PeerOperation {
   botId?: string;
   /** `agents`: the public turn to read. */
   turnId?: string;
+  /** `contextPressure`: price a host model other than the chat's own; sent only with `modelId`. */
+  providerId?: string;
+  modelId?: string;
   includeArchived?: boolean;
   body?: unknown;
   idempotencyKey?: string;
   revision?: string;
 }
 
-/** `attachmentContent` resolves to bounded image bytes instead of JSON. */
+/** `attachmentContent` and `botSessionImage` resolve to bounded image bytes instead of JSON. */
 export interface PeerAttachmentContent {
   mimeType: "image/png" | "image/jpeg";
   bytes: Uint8Array;

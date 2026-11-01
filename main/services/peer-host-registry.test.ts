@@ -601,6 +601,16 @@ test("a Mac asks for a host's Bot hand-offs in a call of its own, after the rest
   assert.deepEqual((await negotiate(undefined)).bodies, [{ accepts: ["bot:activity"] }]);
   // With nothing else to ask for, the hand-off call still goes alone.
   assert.deepEqual((await negotiate(["chat:read", "bot:read", "bot:write", "bot:handoffs"])).bodies, [{ accepts: ["bot:handoffs"] }]);
+
+  // Revision 40: a host that also lists bot:handoff-notes is asked for it the same way; a v0.61.0 host above never was.
+  const notes = await negotiate([...lists, "bot:handoff-notes"]);
+  assert.deepEqual(notes.bodies, [{ accepts: ["bot:activity"] }, { accepts: ["bot:handoffs"] }, { accepts: ["bot:handoff-notes"] }]);
+  assert.ok(notes.grants.includes("bot:handoff-notes"));
+
+  // Revision 45: a host that lists bot:images is asked for it alone too, so this Mac draws Bots' shared images.
+  const images = await negotiate([...lists, "bot:images"]);
+  assert.deepEqual(images.bodies, [{ accepts: ["bot:activity"] }, { accepts: ["bot:handoffs"] }, { accepts: ["bot:images"] }]);
+  assert.ok(images.grants.includes("bot:images"));
 });
 
 test("a lost opt-in answer is asked again on the next reconnect; a refusal is not", async () => {

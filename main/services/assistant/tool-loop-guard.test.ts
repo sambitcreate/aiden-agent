@@ -90,7 +90,7 @@ test("managed attended recovery publishes removed schemas before emergency conte
     convertToLlm, transformContext: transform,
     initialState: { systemPrompt: "Policy", thinkingLevel: "off", tools: [tool], messages: [user], model },
     durability: { session, initialMessages: [user], appendMessages: appendPiMessages,
-      compaction: { models, model, thinkingLevel: "off", settings: { enabled: false }, retryDelayMs: 0 } },
+      compaction: { models, model, thinkingLevel: "off", settings: { enabled: false }, providerRetry: { enabled: true, maxRetries: 1, baseDelayMs: 0 } } },
     onContextProjection: (projection, options) => projections.push({ tokens: projection.contextTokens, tools: options.tools.length, shouldCompact: projection.shouldCompact }),
     prepareNextTurnWithContext: createPiTurnContextPreparation({
       prepareContext: async (context) => context,
@@ -148,7 +148,7 @@ test("attended recovery ends the run when the model keeps calling a removed tool
     convertToLlm,
     initialState: { systemPrompt: "Policy", thinkingLevel: "off", tools: [tool], messages: [user], model },
     durability: { session, initialMessages: [user], appendMessages: appendPiMessages,
-      compaction: { models, model, thinkingLevel: "off", settings: { enabled: false }, retryDelayMs: 0 } },
+      compaction: { models, model, thinkingLevel: "off", settings: { enabled: false }, providerRetry: { enabled: true, maxRetries: 1, baseDelayMs: 0 } } },
     finishTurn: endRunAfterIgnoredToolRecovery(() => recoveryRequested),
     prepareNextTurnWithContext: createPiTurnContextPreparation({
       prepareContext: async (context) => context,

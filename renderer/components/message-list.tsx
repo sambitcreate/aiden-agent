@@ -2,7 +2,8 @@ import { AppControlsPanel } from "./app-controls-panel";
 // Renders the transcript: persisted messages + the in-progress streaming reply.
 
 import * as React from "react";
-import { Callout, Text } from "./ui";
+import { Button, Callout, Text } from "./ui";
+import { cn } from "../lib/ui-utils";
 import { AidenActivityMark } from "./aiden-activity-mark";
 import { ActivityFeed } from "./activity-feed";
 import { useAppearancePreference } from "../lib/use-appearance-preference";
@@ -10,6 +11,7 @@ import { latestWorkDetailsStart } from "../lib/work-details";
 import type { WorkDetailsMode } from "../shared/appearance";
 import { EventPresence } from "./event-presence";
 import { SafeMessageBubble } from "./message-bubble";
+import { AgentNoticeCard } from "./agent-notice-card";
 import type { ReadAloudActionProps } from "./read-aloud-button";
 import { MessageForkContextMenu, type MessageForkAction } from "./fork-message-button";
 import { MessageActions } from "./message-actions";
@@ -27,10 +29,14 @@ import { turnFooterItems } from "../shared/assistant-turn-stats";
 import {
   activityTimelineFragment,
   assistantPresentationRows,
+  isExtractionStep,
+  isRecordingStep,
   isQuestionnaireStep,
   clampLiveTimelineToContent,
 } from "../lib/assistant-message-presentation";
 import { AskUserQuestionRecap } from "./ask-user-question-recap";
+import { WebExtractRecap } from "./web-extract-recap";
+import { BrowserRecordingCard } from "./browser-recording-card";
 import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { ChatArtifactV1, ChatHtmlArtifactV1, HtmlArtifactLayout } from "../shared/chat-artifacts";
@@ -49,11 +55,13 @@ import {
 import { chatsApi } from "../lib/ipc";
 import { ImageScanPlaceholder, useImageGenerationSlots } from "./image-generation-placeholder";
 import { imageGenerationRowSlots, type ImageGenerationSlot } from "../lib/image-generation-slots";
+import { withInferredImagePlacements } from "../shared/image-placements";
 import { activityPresentationDelay, type AgentActivity } from "../lib/agent-activity";
 import {
   captureSubagentChipFocus,
   resolveSubagentChipFocusHandoff,
   retainSubagentChipFocusAfterPointerDown,
+  SUBAGENT_CHIP_FOCUS_SELECTOR,
   type SubagentChipFocusCapture,
 } from "../lib/subagent-panel-state";
 import {
@@ -62,7 +70,13 @@ import {
   type GenerationTimeline,
 } from "../shared/generation-timeline";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
-import { providerFailurePresentation, type ProviderFailureV1 } from "../shared/provider-failure";
+import {
+  PROVIDER_FAILURE_ACTION_LABELS,
+  providerFailureAction,
+  providerFailurePresentation,
+  type ProviderFailureAction,
+  type ProviderFailureV1,
+} from "../shared/provider-failure";
 import {
   htmlArtifactSlots,
   reuseUnchangedArtifactLists,
@@ -70,6 +84,7 @@ import {
   type VisualDrafts,
   htmlArtifactTranscriptPlan,
 } from "../lib/html-artifact-transcript";
+import { pauseWhenUnseen } from "../lib/offscreen-pause";
 
 const EMPTY_CHAT_ARTIFACTS: readonly ChatArtifactV1[] = [];
 interface MessageListProps {
@@ -83,7 +98,7 @@ interface MessageListProps {
   streamingArtifacts?: readonly ChatArtifactV1[];
   /**
    * Producing toolCallId per live artifact: HTML visuals by mediaId
-   * (render_artifact) and generated images by attachment id (generate_image).
+   * (render_artifact) and images by attachment id (generate_image, display_image, share_image).
    */
   streamingArtifactPlacements?: ReadonlyMap<string, string>;
   /** mediaIds of live visuals the model asked to span the chat pane. */
@@ -108,9 +123,15 @@ interface MessageListProps {
   onOpenSubagent: (runId: string, trigger: HTMLButtonElement) => void;
   /** Current active generation phase, derived from real stream/tool state. */
   agentActivity: AgentActivity | null;
+  /** Retry now while the reply waits for a provider usage limit. */
+  onRetryUsageLimit?: () => void;
   error: string | null;
   /** Message id whose whole response may host the read-aloud action. */
   readAloudMessageId?: string;
+  /** The latest failed reply's next steps; older failure cards show none. */
+  failureActions?: ProviderFailureActions & { messageId: string };
+  /** Offers Resume after the last message; set only while the transcript is idle. */
+  interruptedReply?: InterruptedReplyActions;
   readAloud?: ReadAloudActionProps;
   /** Fork the chat at a settled message; absent where forking is unsupported. */
   onFork?: (messageId: string, position: ChatForkPosition) => void;
@@ -120,6 +141,11 @@ interface MessageListProps {
   onForkWithSummary?: (messageId: string, position: ChatForkPosition) => void;
   /** This fork's summary card, placed after the last copied message. */
   forkSummary?: { afterMessageId: string; node: React.ReactNode };
+  /**
+   * Save to Downloads and Copy image on settled replies. They read the chat
+   * this Mac stores, so a chat stored on a paired host turns them off.
+   */
+  storedImageActions?: boolean;
   /**
    * False where nothing comes before the first prompt shown, and editing it
    * in a fork is refused (a paired Mac's chat): that prompt offers no fork.
@@ -145,7 +171,7 @@ interface AssistantResponseProps {
   fork?: MessageForkAction;
   /** Save and copy actions for images stored in this (settled) response. */
   imageActions?: MessageImageActions;
-  /** Generated image attachment id → the generate_image toolCallId that produced it. */
+  /** Image attachment id → the toolCallId of the call that produced it. */
   imagePlacements?: ReadonlyMap<string, string>;
   /** HTML visuals this response owns, placed after their producing tool row. */
   visuals?: readonly ChatHtmlArtifactV1[];
@@ -171,6 +197,21 @@ const EMPTY_UI_DRAFTS: UiDrafts = new Map();
 const EMPTY_VISUALS: readonly ChatHtmlArtifactV1[] = [];
 const EMPTY_PLACEMENTS: ReadonlyMap<string, string> = new Map();
 const EMPTY_WIDE_VISUALS: ReadonlySet<string> = new Set();
+
+/**
+ * Whether a reply is running, for visuals' follow-up confirmations. A context
+ * rather than a prop, so a turn starting or ending updates the visuals alone
+ * instead of re-rendering every memoized transcript row.
+ */
+const VisualFollowUpBusyContext = React.createContext(false);
+
+function FollowUpAwareHtmlArtifactFrame(props: Omit<React.ComponentProps<typeof HtmlArtifactFrame>, "followUpBusy">) {
+  return <HtmlArtifactFrame {...props} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
+}
+
+function FollowUpAwareAidenUiBlock(props: Omit<React.ComponentProps<typeof AidenUiBlock>, "followUpBusy">) {
+  return <AidenUiBlock {...props} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
+}
 
 type RenderVisual = (
   artifact: ChatHtmlArtifactV1,
@@ -216,7 +257,7 @@ function AssistantResponse({
     streaming ? clampLiveTimelineToContent(timeline, content.length) : timeline,
     reasoning ?? "",
   );
-  // Generated images and their placeholders sit at their generate_image row.
+  // Images and generate_image placeholders sit at their producing call's row.
   const imageSlots = imageGenerationRowSlots(
     timeline ? rows : null,
     imageGeneration.slots,
@@ -265,8 +306,20 @@ function AssistantResponse({
   const active =
     streaming && !streamComplete && (reasoningActive || (!timeline && !content));
   const reasoningLabel = reasoningActivityLabel(timeline, active);
+  // One action row closes the turn, after its last row. While the reply
+  // streams it is laid out but hidden there, so a new paragraph never moves it.
+  const actions = content ? (
+    <MessageActions
+      copyText={content}
+      readAloud={readAloud}
+      hidden={streaming && !streamComplete}
+      footer={footer}
+      fork={streaming ? undefined : fork}
+    />
+  ) : (
+    proselessActions(footer, fork)
+  );
   const showReasoning = Boolean(reasoning);
-  const reasoningOpen = timeline?.status === "failed" || timeline?.status === "cancelled" || workDetails === "verbose" || (workDetails !== "compact" && ((streaming && !streamComplete) || retainWorkDetails));
   if (!rows || !timeline) {
     const activityTimeline = timeline
       ? activityTimelineFragment(
@@ -282,6 +335,12 @@ function AssistantResponse({
         {null /* the chronological layout's leading subagent slot */}
         {[
           <ActivityFeed key="activity" timeline={activityTimeline} animate={streaming} mode={workDetails} retainDetails={retainWorkDetails || (streaming && !streamComplete)} />,
+          ...(timeline?.steps.filter(isExtractionStep).map((step) => (
+            <WebExtractRecap key={`extraction-${step.id}`} recap={step.extraction} />
+          )) ?? []),
+          ...(timeline?.steps.filter(isRecordingStep).map((step) => (
+            <BrowserRecordingCard key={`recording-${step.id}`} recording={step.recording} />
+          )) ?? []),
           ...(timeline?.steps.filter(isQuestionnaireStep).map((step) => (
             <AskUserQuestionRecap key={`questionnaire-${step.id}`} recap={step.questionnaire} />
           )) ?? []),
@@ -293,7 +352,6 @@ function AssistantResponse({
               streaming={streaming && !streamComplete}
               active={active}
               label={reasoningLabel}
-              automaticOpen={reasoningOpen}
             />
           ) : null,
           content ? (
@@ -304,16 +362,14 @@ function AssistantResponse({
               streaming={streaming}
               streamComplete={streamComplete}
               onStreamHandoffComplete={onStreamHandoffComplete}
-              readAloud={readAloud}
-              footer={footer}
-              fork={fork}
+              showCopy={false}
             />
           ) : null,
         ]}
         {media}
-        {!content ? proselessActions(footer, fork) : null}
         {visualNodes(slots.trailing)}
         {uiNodes(uiSlots.trailing, false)}
+        {actions}
       </>
     );
   }
@@ -341,12 +397,17 @@ function AssistantResponse({
               streaming={stepActive}
               active={stepActive}
               label={reasoningActivityLabel(activityTimelineFragment(timeline, [row.step]), stepActive)}
-              automaticOpen={reasoningOpen}
             />
           );
         }
         if (row.kind === "questionnaire") {
           return <AskUserQuestionRecap key={row.key} recap={row.step.questionnaire} />;
+        }
+        if (row.kind === "extraction") {
+          return <WebExtractRecap key={row.key} recap={row.step.extraction} />;
+        }
+        if (row.kind === "recording") {
+          return <BrowserRecordingCard key={row.key} recording={row.step.recording} />;
         }
         if (row.kind === "activity") {
           return (
@@ -381,18 +442,14 @@ function AssistantResponse({
             streamComplete={streamComplete}
             textClosed={index < rows.length - 1}
             onStreamHandoffComplete={isLastText ? onStreamHandoffComplete : undefined}
-            showCopy={isLastText}
-            copyText={content}
-            readAloud={isLastText ? readAloud : undefined}
-            footer={isLastText ? footer : undefined}
-            fork={isLastText ? fork : undefined}
+            showCopy={false}
           />
         );
       })}
       {media}
-      {lastTextIndex < 0 ? proselessActions(footer, fork) : null}
       {visualNodes(slots.trailing)}
       {uiNodes(uiSlots.trailing, false)}
+      {actions}
     </>
   );
 }
@@ -400,12 +457,7 @@ function AssistantResponse({
 /** A reply with only attachments or activity still needs its fork action. */
 function proselessActions(footer: React.ReactNode, fork: MessageForkAction | undefined): React.ReactNode {
   if (!fork) return footer ?? null;
-  // The reply's media sits above, so hovering this row reveals the action.
-  return (
-    <div className="group">
-      <MessageActions copyText="" footer={footer} fork={fork} />
-    </div>
-  );
+  return <MessageActions copyText="" footer={footer} fork={fork} />;
 }
 
 function settledTurnFooter(message: ChatMessage): React.ReactNode {
@@ -426,6 +478,8 @@ interface SettledMessageRowProps {
    */
   live?: AssistantResponseProps;
   readAloud?: ReadAloudActionProps;
+  /** Present only on the latest failed reply. */
+  failureActions?: ProviderFailureActions;
   subagentsEnabled: boolean;
   onOpenSubagent: (runId: string, trigger: HTMLButtonElement) => void;
   /** Stable across renders so settled rows stay memoized. */
@@ -442,6 +496,8 @@ interface SettledMessageRowProps {
   uiVisuals?: readonly ChatUiVisualV1[];
   /** Stable; receives the owning message so local state can be remembered. */
   renderSettledUiVisual?: (visual: ChatUiVisualV1, message: ChatMessage) => React.ReactNode;
+  /** False for a chat stored on a paired host: Save and Copy read this Mac's chats. */
+  storedImageActions?: boolean;
 }
 
 /**
@@ -456,6 +512,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   message,
   live,
   readAloud,
+  failureActions,
   subagentsEnabled,
   onOpenSubagent,
   onFork,
@@ -465,6 +522,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   renderVisual,
   uiVisuals,
   renderSettledUiVisual,
+  storedImageActions = true,
 }: SettledMessageRowProps) {
   const placements = message?.htmlArtifactPlacements;
   const visualPlacements = React.useMemo(
@@ -480,7 +538,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     [message, renderSettledUiVisual],
   );
   const fork = React.useMemo<MessageForkAction | undefined>(() => {
-    if (!message || !onFork || (message.role !== "user" && message.role !== "assistant")) {
+    if (!message || !onFork || (message.role !== "user" && message.role !== "assistant") || message.notice) {
       return undefined;
     }
     const position: ChatForkPosition = message.role === "user" ? "before" : "after";
@@ -493,15 +551,30 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     };
   }, [forkDisabledReason, message, onFork, onForkWithSummary]);
   const assistant = Boolean(live) || message?.role === "assistant";
-  const imageActions = React.useMemo(() => ({ chatId }), [chatId]);
-  const storedImagePlacements = message?.imagePlacements;
-  const imagePlacements = React.useMemo(
-    () => new Map((storedImagePlacements ?? []).map((p) => [p.attachmentId, p.toolCallId])),
-    [storedImagePlacements],
+  const imageActions = React.useMemo(
+    () => (storedImageActions ? { chatId } : undefined),
+    [chatId, storedImageActions],
   );
+  const storedImagePlacements = message?.imagePlacements;
+  const messageTimeline = message?.role === "assistant" ? message.timeline : undefined;
+  const messageAttachments = message?.attachments;
+  const imagePlacements = React.useMemo(
+    () =>
+      withInferredImagePlacements(
+        messageTimeline,
+        messageAttachments ?? [],
+        new Map((storedImagePlacements ?? []).map((p) => [p.attachmentId, p.toolCallId])),
+      ),
+    [messageAttachments, messageTimeline, storedImagePlacements],
+  );
+  const contained =
+    deferOffscreenLayout && !visuals?.length && !uiVisuals?.length && !message?.attachments?.length && !message?.appPanels?.length;
   const row = (
-    <div className={deferOffscreenLayout && !visuals?.length && !uiVisuals?.length && !message?.attachments?.length && !message?.appPanels?.length
-      ? "transcript-settled-contained flex min-w-0 flex-col gap-3" : "flex min-w-0 flex-col gap-3"}>
+    // Hovering anywhere on a reply reveals the action row at its end.
+    <div
+      data-transcript-reply={assistant ? "" : undefined}
+      className={`${contained ? "transcript-settled-contained " : ""}${assistant ? "group/reply " : ""}flex min-w-0 flex-col gap-3`}
+    >
       {live ? (
         <AssistantResponse {...live} workDetails={workDetails} retainWorkDetails={retainWorkDetails} streaming />
       ) : !message ? null : message.role === "assistant" ? (
@@ -533,9 +606,11 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
           />
           {message.appPanels?.map((panel) => <AppControlsPanel key={panel.id} panel={panel} chatId={chatId} />)}
           {message.providerFailure ? (
-            <ProviderFailureCallout failure={message.providerFailure} />
+            <ProviderFailureCallout failure={message.providerFailure} actions={failureActions} />
           ) : null}
         </>
+      ) : message.notice ? (
+        <AgentNoticeCard notice={message.notice} content={message.content} />
       ) : (
         <SafeMessageBubble
           role={message.role}
@@ -556,8 +631,71 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   );
 });
 
-export function ProviderFailureCallout({ failure }: { failure: ProviderFailureV1 }) {
+export interface ProviderFailureActions {
+  onAction: (action: ProviderFailureAction) => void;
+  onSwitchModel?: () => void;
+  /**
+   * Which actions this chat can take. A chat on a paired Mac can try again or
+   * continue, but compaction and provider settings live on that Mac. Omitted
+   * means every action.
+   */
+  supports?: (action: ProviderFailureAction) => boolean;
+  /** An action is already running; the buttons wait for it. */
+  busy?: boolean;
+}
+
+export type InterruptedReplyActions = {
+  onResume: () => void;
+  /** True while Resume is sending. */
+  busy?: boolean;
+  /** What the reply was waiting for approval to do. Approvals are never carried over a restart. */
+  approvalSummaries?: readonly string[];
+};
+
+/** Shown after the last message when Aiden quit or crashed mid-reply; Resume is never automatic. */
+export function InterruptedReplyCallout({ actions }: { actions: InterruptedReplyActions }) {
+  return (
+    <Callout role="status" data-interrupted-reply="true">
+      <Text variant="small-strong">This reply was interrupted</Text>
+      {actions.approvalSummaries?.length ? (
+        <>
+          <Text variant="small" color="secondary" className="mt-0.5 block">
+            Aiden closed while waiting for your approval, so this didn’t run:
+          </Text>
+          <ul className="mt-1 flex flex-col gap-0.5" aria-label="Waiting for approval">
+            {actions.approvalSummaries.map((summary, index) => (
+              <li key={index} className="break-words text-small text-primary">
+                {summary}
+              </li>
+            ))}
+          </ul>
+          <Text variant="small" color="secondary" className="mt-1 block">
+            Resume to pick up where it stopped.
+          </Text>
+        </>
+      ) : (
+        <Text variant="small" color="secondary" className="mt-0.5 block">
+          Aiden closed before it finished. Resume to pick up where it stopped.
+        </Text>
+      )}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button size="small" disabled={actions.busy} onClick={actions.onResume}>
+          Resume
+        </Button>
+      </div>
+    </Callout>
+  );
+}
+
+export function ProviderFailureCallout({
+  failure,
+  actions,
+}: {
+  failure: ProviderFailureV1;
+  actions?: ProviderFailureActions;
+}) {
   const presentation = providerFailurePresentation(failure);
+  const action = providerFailureAction(failure);
   return (
     <Callout color="red" role="alert" aria-atomic="true" data-provider-failure={failure.category}>
       <Text variant="small-strong" color="red">
@@ -566,6 +704,25 @@ export function ProviderFailureCallout({ failure }: { failure: ProviderFailureV1
       <Text variant="small" color="secondary" className="mt-0.5 block">
         {presentation.description}
       </Text>
+      {actions && (actions.supports?.(action) !== false || actions.onSwitchModel) ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {actions.supports?.(action) !== false ? (
+            <Button
+              size="small"
+              disabled={actions.busy}
+              data-provider-failure-action={action}
+              onClick={() => actions.onAction(action)}
+            >
+              {PROVIDER_FAILURE_ACTION_LABELS[action]}
+            </Button>
+          ) : null}
+          {actions.onSwitchModel ? (
+            <Button variant="transparent" size="small" disabled={actions.busy} onClick={actions.onSwitchModel}>
+              Switch model
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
     </Callout>
   );
 }
@@ -630,14 +787,18 @@ export function MessageList({
   subagentsEnabled,
   onOpenSubagent,
   agentActivity,
+  onRetryUsageLimit,
   error,
   readAloudMessageId,
+  failureActions,
+  interruptedReply,
   readAloud,
   onFork,
   forkDisabledReason = null,
   onForkWithSummary,
   forkSummary,
   forkBeforeFirstPrompt = true,
+  storedImageActions = true,
 }: MessageListProps) {
   const workDetails = useAppearancePreference("workDetails");
   const collapseTiming = useAppearancePreference("workDetailsCollapseTiming");
@@ -759,54 +920,51 @@ export function MessageList({
   );
   const renderVisual = React.useCallback(
     (artifact: ChatHtmlArtifactV1, placementCallId?: string, layout?: HtmlArtifactLayout) => (
-      <HtmlArtifactFrame
+      <FollowUpAwareHtmlArtifactFrame
         key={`html:${artifact.mediaId}`}
         chatId={chatId}
         artifact={artifact}
         onGuestPrompt={stableVisualPrompt}
-        followUpBusy={visualFollowUpBusy}
         placementCallId={placementCallId}
         layout={layout}
       />
     ),
-    [chatId, stableVisualPrompt, visualFollowUpBusy],
+    [chatId, stableVisualPrompt],
   );
 
   const renderLiveUiVisual = React.useCallback<RenderUiVisual>(
     (visual, draft) => (
-      <AidenUiBlock
+      <FollowUpAwareAidenUiBlock
         key={`ui:${visual.id}`}
         visual={visual}
         draft={draft}
-        followUpBusy={visualFollowUpBusy}
         onAction={(action) => {
           if (action.kind === "send") stableVisualPrompt(action.text, visual.id);
         }}
       />
     ),
-    [stableVisualPrompt, visualFollowUpBusy],
+    [stableVisualPrompt],
   );
   const renderSettledUiVisual = React.useCallback(
     (visual: ChatUiVisualV1, message: ChatMessage) => (
-      <AidenUiBlock
+      <FollowUpAwareAidenUiBlock
         key={`ui:${visual.id}`}
         visual={visual}
         attachments={message.attachments}
-        followUpBusy={visualFollowUpBusy}
         onAction={(action) => {
           if (action.kind === "send") stableVisualPrompt(action.text, visual.id);
         }}
         onStateChange={(state) => scheduleUiVisualStateSave(chatId, message.id, visual.id, state)}
       />
     ),
-    [chatId, stableVisualPrompt, visualFollowUpBusy],
+    [chatId, stableVisualPrompt],
   );
 
   React.useEffect(() => {
     const captureFocusedChip = (target: EventTarget | null) => {
       const chip =
         target instanceof Element
-          ? target.closest<HTMLElement>("[data-subagent-chip-run-id]")
+          ? target.closest<HTMLElement>(SUBAGENT_CHIP_FOCUS_SELECTOR)
           : null;
       if (chip && transcriptRef.current?.contains(chip)) {
         chipFocusCaptureRef.current = captureSubagentChipFocus(chip);
@@ -848,7 +1006,7 @@ export function MessageList({
       chipFocusCaptureRef.current,
       document.activeElement,
       [document.body, document.documentElement],
-      root.querySelectorAll<HTMLElement>("[data-subagent-chip-run-id]"),
+      root.querySelectorAll<HTMLElement>(SUBAGENT_CHIP_FOCUS_SELECTOR),
     );
     if (handoff.action === "clear") {
       chipFocusCaptureRef.current = null;
@@ -862,9 +1020,15 @@ export function MessageList({
 
 
   const transcriptRows: React.ReactNode[] = [];
-  const summaryRows = forkWithSummaryEnabled ? forkSummaryRows(messages) : null;
-  const unforkablePromptId =
-    forkEnabled && !forkBeforeFirstPrompt ? messages.find((message) => message.role === "user")?.id : undefined;
+  // Streaming frames re-render the list without changing saved messages.
+  const summaryRows = React.useMemo(
+    () => (forkWithSummaryEnabled ? forkSummaryRows(messages) : null),
+    [forkWithSummaryEnabled, messages],
+  );
+  const unforkablePromptId = React.useMemo(
+    () => (forkEnabled && !forkBeforeFirstPrompt ? messages.find((message) => message.role === "user")?.id : undefined),
+    [forkBeforeFirstPrompt, forkEnabled, messages],
+  );
   // The persisted copy of the reply still on screen waits until the live row
   // hands over, then takes the live row's key: one reply, settled in place.
   const settlingMessageId = streamingRowVisible ? persistedHandoffMessageId : null;
@@ -972,6 +1136,7 @@ export function MessageList({
         deferOffscreenLayout={messageIndex < messages.length - 32}
         message={message}
         readAloud={readAloudMessageId === message.id ? readAloud : undefined}
+        failureActions={failureActions?.messageId === message.id ? failureActions : undefined}
         subagentsEnabled={subagentsEnabled}
         onOpenSubagent={onOpenSubagent}
         onFork={forkEnabled && message.id !== unforkablePromptId ? stableOnFork : undefined}
@@ -981,6 +1146,7 @@ export function MessageList({
         renderVisual={renderVisual}
         uiVisuals={uiByMessage.get(message.id)}
         renderSettledUiVisual={renderSettledUiVisual}
+        storedImageActions={storedImageActions}
       />,
     );
     if (forkSummary?.afterMessageId === message.id) {
@@ -989,42 +1155,57 @@ export function MessageList({
   }
 
   if (streamingRowVisible && settlingIndex < 0) transcriptRows.push(liveRow);
+  if (interruptedReply && !streamingRowVisible) {
+    transcriptRows.push(<InterruptedReplyCallout key="interrupted-reply" actions={interruptedReply} />);
+  }
   React.useLayoutEffect(() => {
     settledReplyKeysRef.current = settledReplyKeys;
   });
 
   return (
     <MessageAttachmentPreviewProvider>
-      <div
-        ref={transcriptRef}
-        className="aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
-        data-subagent-chip-focus-scope="true"
-      >
-        {transcriptRows}
+      <VisualFollowUpBusyContext.Provider value={visualFollowUpBusy}>
+        <div
+          ref={transcriptRef}
+          className="aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
+          data-subagent-chip-focus-scope="true"
+        >
+          {transcriptRows}
 
-        <AgentActivityTransition activity={agentActivity} />
+          <AgentActivityTransition activity={agentActivity} onRetryUsageLimit={onRetryUsageLimit} />
 
-        <EventPresence present={Boolean(error)}>
-          {error ? (
-            <Callout color="red" role="alert" aria-atomic="true">
-              <Text variant="small-strong" color="red">
-                Generation failed
-              </Text>
-              <Text variant="small" color="secondary" className="mt-0.5 block">
-                {error}
-              </Text>
-            </Callout>
-          ) : null}
-        </EventPresence>
-      </div>
+          <EventPresence present={Boolean(error)}>
+            {error ? (
+              <Callout color="red" role="alert" aria-atomic="true">
+                <Text variant="small-strong" color="red">
+                  Generation failed
+                </Text>
+                <Text variant="small" color="secondary" className="mt-0.5 block">
+                  {error}
+                </Text>
+              </Callout>
+            ) : null}
+          </EventPresence>
+        </div>
+      </VisualFollowUpBusyContext.Provider>
     </MessageAttachmentPreviewProvider>
   );
 }
 
-function AgentActivityTransition({ activity }: { activity: AgentActivity | null }) {
+function AgentActivityTransition({
+  activity,
+  onRetryUsageLimit,
+}: {
+  activity: AgentActivity | null;
+  onRetryUsageLimit?: () => void;
+}) {
   const [current, setCurrent] = React.useState(activity);
   React.useEffect(() => {
-    if (current?.phase === activity?.phase && current?.label === activity?.label) return;
+    if (
+      current?.phase === activity?.phase &&
+      current?.label === activity?.label &&
+      current?.canRetryNow === activity?.canRetryNow
+    ) return;
     const delay = activityPresentationDelay(
       current,
       activity,
@@ -1036,16 +1217,20 @@ function AgentActivityTransition({ activity }: { activity: AgentActivity | null 
     }
     const timer = window.setTimeout(() => setCurrent(activity), delay);
     return () => window.clearTimeout(timer);
-  }, [activity?.phase, activity?.label, activity?.mark, current]);
+  }, [activity?.phase, activity?.label, activity?.mark, activity?.canRetryNow, current]);
 
   if (!current) return null;
+  const retry = current.phase === "limited" && current.canRetryNow && onRetryUsageLimit;
   return (
     <div
       role="status"
       aria-live="polite"
       // One fixed-height line: the label swaps on presentation timers, and a
       // wrapping label would move the bottom edge the transcript follows.
-      className="agent-activity-layer agent-event-in flex h-6 w-fit max-w-full items-center gap-2"
+      className={cn(
+        "agent-activity-layer agent-event-in flex w-fit max-w-full items-center gap-2",
+        current.phase === "limited" ? "h-7" : "h-6",
+      )}
       data-agent-activity={current.phase}
     >
       <AidenActivityMark mark={current.mark} size={20} className="shrink-0 text-primary" />
@@ -1053,6 +1238,13 @@ function AgentActivityTransition({ activity }: { activity: AgentActivity | null 
         variant="small"
         color="secondary"
         title={current.label}
+        ref={
+          current.phase === "thinking" ||
+          current.phase === "loading" ||
+          current.phase === "visualizing"
+            ? pauseWhenUnseen
+            : undefined
+        }
         className={
           current.phase === "thinking" ||
           current.phase === "loading" ||
@@ -1063,6 +1255,11 @@ function AgentActivityTransition({ activity }: { activity: AgentActivity | null 
       >
         {current.label}
       </Text>
+      {retry ? (
+        <Button variant="transparent" size="small" className="-my-0.5 shrink-0" onClick={onRetryUsageLimit}>
+          Retry now
+        </Button>
+      ) : null}
     </div>
   );
 }

@@ -1,6 +1,8 @@
+import { PEER_PROJECT_CLONE_FEATURE } from "../../renderer/shared/peer-project-clone.js";
 import type { remoteAppControls } from "./aiden-remote-app-controls.js";
 import type { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
 import { projectBotDetailForAudience, projectBotSummaryForAudience } from "./aiden-remote-bot-handoffs.js";
+import { projectBotSummaryIssuesForAudience } from "./aiden-remote-bot-issues.js";
 import { AIDEN_REMOTE_PROVIDER_CREATE_FEATURE, type AidenRemoteProviderService } from "./aiden-remote-providers.js";
 import { AidenRemoteTtsService, REMOTE_TTS_FEATURE } from "./aiden-remote-tts.js";
 import { createHash, randomBytes } from "node:crypto";
@@ -42,9 +44,12 @@ import {
   AIDEN_REMOTE_BOT_PROACTIVE_FEATURE,
   AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
   AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
+  AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
+  AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   AIDEN_REMOTE_BOT_ACTIVITY_FEATURE,
   AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE,
   AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
+  AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   AIDEN_REMOTE_CHAT_TASKS_FEATURE,
@@ -60,6 +65,9 @@ import {
   AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE,
   AIDEN_REMOTE_CHAT_VISUALS_FEATURE,
   AIDEN_REMOTE_CHAT_VISUAL_VIEWER_FEATURE,
+  AIDEN_REMOTE_CHAT_BROWSER_RECORDINGS_FEATURE,
+  AIDEN_REMOTE_CHAT_CONTEXT_PRESSURE_FEATURE,
+  AIDEN_REMOTE_CONTEXT_MODEL_ID,
   AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT,
   AIDEN_REMOTE_CONTRACT_REVISION,
   AIDEN_REMOTE_HOST_EVENTS_FEATURE,
@@ -67,11 +75,13 @@ import {
   AIDEN_REMOTE_RUN_CONTROL_FEATURE,
   AIDEN_REMOTE_RUN_STREAMS_FEATURE,
   AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE,
+  AIDEN_REMOTE_SPENDING_LIMITS_FEATURE,
   parseAidenRemoteBotConversationQuery,
   parseAidenRemoteDeviceCapabilitiesUpdateRequest,
   parseAidenRemoteJson,
   parseAidenRemoteQuestionRespondRequest,
   type AidenRemoteBotDetail,
+  type AidenRemoteBotSummary,
   type AidenRemoteCapability,
   type AidenRemoteProgressCapability,
   type AidenRemoteBotConversationQuery,
@@ -109,6 +119,7 @@ import type { AidenRemoteBotFileService } from "./aiden-remote-bot-files.js";
 import type { AidenRemoteGitService } from "./aiden-remote-git.js";
 import type { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
 import type { AidenRemoteMemorySettingsService } from "./aiden-remote-memory-settings.js";
+import type { AidenRemoteSpendingService } from "./aiden-remote-spending.js";
 import type { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
 import { MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES } from "./aiden-remote-attachments.js";
@@ -167,6 +178,11 @@ type AidenRemoteRouterDeviceRegistry = {
 };
 
 export interface AidenRemoteRouterDependencies {
+  /**
+   * A Bot event routine's link (spec 2026-10-27 §6 P1). Unauthenticated
+   * except for the token in the path; absent, the route is `not_found`.
+   */
+  botRoutineWebhook?(request: { token: string; contentType?: string; body: Uint8Array }): Promise<{ status: number }>;
   instanceId: string;
   displayName(): string;
   appVersion: string;
@@ -184,7 +200,7 @@ export interface AidenRemoteRouterDependencies {
     AidenRemotePairingRequestService,
     "accepting" | "create" | "reveal" | "poll" | "cancel"
   >;
-  workspaces?: Pick<AidenRemoteWorkspaceService, "list" | "get" | "create" | "update" | "remove">;
+  workspaces?: Pick<AidenRemoteWorkspaceService, "list" | "get" | "create" | "update" | "remove"> & { supportsClone?: boolean };
   workspaceBrowser?: Pick<
     AidenRemoteWorkspaceBrowserService,
     "listRoots" | "listChildren" | "createSelection"
@@ -192,7 +208,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure">>;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -253,6 +269,11 @@ export interface AidenRemoteRouterDependencies {
   appControls?: typeof remoteAppControls;
   providers?: Pick<AidenRemoteProviderService, "create">;
   memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
+  /**
+   * Spending limits (contract revision 47). Absent: the spending routes are
+   * `not_found` and phones are not told `spending-limits-v1`.
+   */
+  spending?: Pick<AidenRemoteSpendingService, "chat" | "bot" | "allowMoreChat" | "allowMoreBot">;
   usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
   readAloud?: Pick<AidenRemoteTtsService, "status" | "start" | "read" | "stop">;
   speech?: Pick<
@@ -322,6 +343,12 @@ export interface AidenRemoteRouterDependencies {
         | "pause"
         | "unpause"
         | "supportsHandoffs"
+        // Contract revision 45 (`bot:images`).
+        | "sharedImage"
+        | "supportsSharedImages"
+        // Contract revision 42 (`bot:issues`).
+        | "actIssue"
+        | "supportsIssues"
       >
     >;
   /**
@@ -388,10 +415,12 @@ export type AidenRemoteRouteLabel =
   | "botSession"
   | "botAttachment"
   | "botSessionEvents"
+  | "botSessionImage"
   | "botQuestionAnswer"
   | "botHandoffAnswer"
   | "botHandoffOpenOnMac"
   | "botPause"
+  | "botIssueAct"
   | "botRoutines"
   | "botConnectionRequests"
   | "botMemory"
@@ -404,6 +433,7 @@ export type AidenRemoteRouteLabel =
   | "botAvatar"
   | "botFiles"
   | "botFile"
+  | "botSpending"
   | "workspaces"
   | "workspace"
   | "workspaceBrowserRoots"
@@ -430,9 +460,12 @@ export type AidenRemoteRouteLabel =
   | "chatAgents"
   | "chatAgentInterrupt"
   | "chatSkills"
+  | "chatContext"
   | "chatProgressEvents"
   | "chatAttachment"
   | "chatVisualDocument"
+  | "chatBrowserRecording"
+  | "chatSpending"
   | "turns"
   | "models"
   | "stream"
@@ -453,11 +486,13 @@ export type AidenRemoteRouteLabel =
   | "runApprovalRespond"
   | "runQuestionRespond"
   | "runInputs"
+  | "botRoutineWebhook"
   | "unknown";
 
 /** Canonical template(s) for every router route label. */
 export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel, readonly string[]>> = {
   health: ["/health"],
+  botRoutineWebhook: ["/hooks/bot-routines/:token"],
   pairingManualBootstrap: ["/pairing/manual-bootstrap"],
   pairingExchange: ["/pairing/exchange"],
   pairingRequests: ["/pairing/requests"],
@@ -477,10 +512,12 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   ],
   botAttachment: ["/bots/:botId/attachments", "/bots/:botId/attachments/:attachmentId"],
   botSessionEvents: ["/bots/:botId/session/events"],
+  botSessionImage: ["/bots/:botId/session/images/:entryId"],
   botQuestionAnswer: ["/bots/:botId/questions/:waitId/answer"],
   botHandoffAnswer: ["/bots/:botId/handoffs/:waitId/answer"],
   botHandoffOpenOnMac: ["/bots/:botId/handoffs/:waitId/open-on-mac"],
   botPause: ["/bots/:botId/pause"],
+  botIssueAct: ["/bots/:botId/issues/:issueId/act"],
   botRoutines: ["/bots/:botId/routines", "/bots/:botId/routines/:routineId"],
   botConnectionRequests: ["/bots/:botId/connection-requests"],
   botMemory: ["/bots/:botId/memory", "/bots/:botId/memory/edits"],
@@ -493,6 +530,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   botFiles: ["/bot-conversations/:chatId/files"],
   botFile: ["/bot-conversations/:chatId/files/:fileId"],
   botAvatar: ["/bots/:botId/avatar", "/bots/:botId/avatar/:avatarRevision"],
+  botSpending: ["/bots/:botId/spending", "/bots/:botId/spending/allow-more"],
   workspaces: ["/workspaces"],
   workspace: ["/workspaces/:id"],
   workspaceBrowserRoots: ["/workspace-browser/roots"],
@@ -528,6 +566,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   chatAgents: ["/chats/:id/agents"],
   chatAgentInterrupt: ["/chats/:id/agents/:agentId/interrupt"],
   chatSkills: ["/chats/:id/skills"],
+  chatContext: ["/chats/:id/context"],
   chatProgressEvents: ["/chats/:id/progress/events"],
   chatAttachment: [
     "/chats/:id/attachments",
@@ -535,6 +574,8 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
     "/chats/:id/attachments/:attachmentName/content",
   ],
   chatVisualDocument: ["/chats/:id/visuals/:visualId/document"],
+  chatBrowserRecording: ["/chats/:id/recordings/:recordingId"],
+  chatSpending: ["/chats/:id/spending", "/chats/:id/spending/allow-more"],
   turns: ["/chats/:id/turns"],
   models: ["/models"],
   stream: ["/streams/:streamId"],
@@ -791,7 +832,36 @@ function writeError(
       ...(error.details ? { details: error.details } : {}),
     },
   };
+  // The envelope carries the wait for Aiden clients; the standard header lets
+  // generic HTTP stacks honor it too.
+  const retryAfter = error.details?.retryAfterSeconds;
+  if (retryAfter !== undefined && Number.isFinite(retryAfter) && retryAfter > 0) {
+    response.setHeader("retry-after", String(Math.ceil(retryAfter)));
+  }
   writeJson(response, error.status, envelope);
+}
+
+function requireEmptyJsonObject(body: unknown): void {
+  if (body === null || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length > 0) {
+    throw new AidenRemoteServiceError("invalid_request", "This request takes an empty JSON object.", 400);
+  }
+}
+
+const BOT_ROUTINE_WEBHOOK_MAX_BYTES = 16_384;
+
+/** The raw body, or undefined once it passes `maximumBytes`. */
+async function readRawBody(request: IncomingMessage, maximumBytes: number): Promise<Uint8Array | undefined> {
+  const declared = request.headers["content-length"];
+  if (typeof declared === "string" && (!/^\d+$/u.test(declared) || Number(declared) > maximumBytes)) return undefined;
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.length;
+    if (bytes > maximumBytes) return undefined;
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
 }
 
 async function readJsonBody(
@@ -1080,6 +1150,19 @@ async function runChatMutation<T>(
   }
 }
 
+/** Every `%` starts a hex escape, the escapes decode as UTF-8, and none is a control character. */
+export function isSafeEncodedQuery(query: string): boolean {
+  if (!query.includes("%")) return true;
+  if (/%(?![0-9A-Fa-f]{2})/u.test(query)) return false;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(query.replace(/\+/gu, " "));
+  } catch {
+    return false;
+  }
+  return !hasAsciiControl(decoded);
+}
+
 function requestTarget(
   request: IncomingMessage,
   acceptStrippedBasePath: boolean,
@@ -1089,7 +1172,6 @@ function requestTarget(
     !raw ||
     raw.length > MAX_REQUEST_URL_LENGTH ||
     raw.includes("#") ||
-    raw.includes("%") ||
     raw.includes("\\") ||
     hasAsciiControl(raw)
   ) {
@@ -1101,6 +1183,16 @@ function requestTarget(
   }
   const query = raw.indexOf("?");
   const path = query < 0 ? raw : raw.slice(0, query);
+  // Paths are never percent-decoded, so an encoded segment can't hide a
+  // traversal. Query values may be encoded (a search with spaces or accents),
+  // but only as well-formed UTF-8 escapes that decode to no control character.
+  if (path.includes("%") || (query >= 0 && !isSafeEncodedQuery(raw.slice(query + 1)))) {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The request URL is invalid.",
+      400,
+    );
+  }
   if (
     !path.startsWith("/") ||
     path.includes("//") ||
@@ -1221,6 +1313,30 @@ function chatAgentsQuery(query: string): { turnId?: string } {
     );
   }
   return { turnId };
+}
+
+/**
+ * `GET /chats/{chatId}/context` takes no query (the chat's own model), or
+ * exactly `providerId` and `modelId` together (contract revision 41).
+ */
+function chatContextQuery(query: string): { providerId: string; modelId: string } | undefined {
+  if (!query) return undefined;
+  const invalid = () =>
+    new AidenRemoteServiceError("invalid_request", "The chat context query is invalid.", 400);
+  const params = new URLSearchParams(query);
+  if (
+    params.size !== 2 ||
+    params.getAll("providerId").length !== 1 ||
+    params.getAll("modelId").length !== 1
+  ) {
+    throw invalid();
+  }
+  const providerId = params.get("providerId")!;
+  const modelId = params.get("modelId")!;
+  // A selection is limited to the characters model ids use
+  // (`org/model:tag@version` included), whether sent literally or encoded.
+  if (!AIDEN_REMOTE_CONTEXT_MODEL_ID.test(providerId) || !AIDEN_REMOTE_CONTEXT_MODEL_ID.test(modelId)) throw invalid();
+  return { providerId, modelId };
 }
 
 function chatSummariesQuery(query: string): { limit: number; cursor?: string } {
@@ -1390,8 +1506,31 @@ function selectionLocation(value: unknown): string {
   return (value as { location: string }).location;
 }
 
-function sourceIdentity(request: IncomingMessage): string {
+function isLoopbackAddress(address: string | undefined): boolean {
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
+function singleHeader(request: IncomingMessage, name: string): string | undefined {
+  const value = request.headers[name];
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * The key for per-source pairing budgets. Tailscale Serve proxies every
+ * tailnet peer through one loopback socket, so on that listener the peer is
+ * named by the headers tailscaled sets (it replaces any client-sent copies):
+ * the forwarded tailnet address, else the tailnet login. Pairing secrets are
+ * high-entropy, so these budgets only keep one device from crowding out
+ * others; they are not what protects the secret.
+ */
+function sourceIdentity(request: IncomingMessage, tailscale: boolean): string {
   const address = request.socket.remoteAddress ?? "unknown";
+  if (tailscale && isLoopbackAddress(address)) {
+    const forwarded = singleHeader(request, "x-forwarded-for")?.split(",").pop()?.trim();
+    if (forwarded && /^[0-9A-Fa-f:.]{2,45}$/u.test(forwarded)) return `tailscale:${forwarded}`;
+    const login = singleHeader(request, "tailscale-user-login")?.trim();
+    if (login && /^[\x21-\x7e]{1,128}$/u.test(login)) return `tailscale-user:${login}`;
+  }
   return address.length <= 128 ? address : "unknown";
 }
 
@@ -1488,8 +1627,10 @@ export interface AidenRemoteServerFeatureSupport {
   messagesWindow: boolean;
   visuals: boolean;
   visualViewer: boolean;
+  browserRecordings: boolean;
   fork: boolean;
   forkSummary: boolean;
+  contextPressure: boolean;
   hostEvents: boolean;
   runs: boolean;
   pairingRequests: boolean;
@@ -1502,7 +1643,9 @@ export interface AidenRemoteServerFeatureSupport {
   botProactive: boolean;
   botActivity: boolean;
   botAttachments: boolean;
+  spending: boolean;
   mobileSimulators: boolean;
+  workspaceClone?: boolean;
 }
 
 /**
@@ -1521,6 +1664,7 @@ export function aidenRemoteServerFeatures(
   return [
     ...(phone && support.appControls ? ["chat-ui-panels-v1"] : []),
     ...(phone && support.appControlsEnabled ? ["chat-ui-panels-enabled-v1"] : []),
+    ...(desktop && support.workspaceClone ? [PEER_PROJECT_CLONE_FEATURE] : []),
     ...(desktop && support.peerRoutes ? ["peer-routes-v1"] : []),
     ...(phone && support.providers ? [AIDEN_REMOTE_PROVIDER_CREATE_FEATURE] : []),
     ...(phone && support.readAloud ? [REMOTE_TTS_FEATURE] : []),
@@ -1538,12 +1682,15 @@ export function aidenRemoteServerFeatures(
       : []),
     ...(support.visuals ? [AIDEN_REMOTE_CHAT_VISUALS_FEATURE] : []),
     ...(support.visualViewer ? [AIDEN_REMOTE_CHAT_VISUAL_VIEWER_FEATURE] : []),
+    ...(support.browserRecordings ? [AIDEN_REMOTE_CHAT_BROWSER_RECORDINGS_FEATURE] : []),
     ...(support.fork ? [AIDEN_REMOTE_CHAT_FORK_FEATURE] : []),
     ...(support.forkSummary ? [AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE] : []),
     // Host-wide features are announced to desktops only.
     ...(desktop && support.hostEvents ? [AIDEN_REMOTE_HOST_EVENTS_FEATURE] : []),
     ...(desktop && support.runs ? [AIDEN_REMOTE_RUN_STREAMS_FEATURE, AIDEN_REMOTE_RUN_CONTROL_FEATURE] : []),
     ...(desktop && support.pairingRequests ? [AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE] : []),
+    // The composer context meter for a paired Mac's chat (contract revision 41).
+    ...(desktop && support.contextPressure ? [AIDEN_REMOTE_CHAT_CONTEXT_PRESSURE_FEATURE] : []),
     // Phones get only the phone-scoped run subset (contract revision 24).
     ...(phone && support.runs ? [AIDEN_REMOTE_PHONE_RUN_CONTROL_FEATURE] : []),
     // Bots rework (contract revision 25): each token is announced only
@@ -1560,6 +1707,8 @@ export function aidenRemoteServerFeatures(
     ...(support.botActivity ? [AIDEN_REMOTE_BOT_ACTIVITY_FEATURE] : []),
     // Bot message attachments (contract revision 33).
     ...(support.botAttachments ? [AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE] : []),
+    // Spending limits (contract revision 47): the Mac shows its own notices.
+    ...(phone && support.spending ? [AIDEN_REMOTE_SPENDING_LIMITS_FEATURE] : []),
     // The phone simulator viewer (contract revision 26); sharing consent is reported by `/simulators`.
     ...(phone && support.mobileSimulators ? [AIDEN_REMOTE_MOBILE_SIMULATORS_FEATURE] : []),
   ];
@@ -1674,6 +1823,16 @@ function botActivityWired(dependencies: AidenRemoteRouterDependencies): boolean 
   return dependencies.botSessions?.supportsActivity === true && dependencies.bots?.supportsChatActivity === true;
 }
 
+/** Revision 39: schedule cards ride on stream approvals and phone run approvals. */
+function scheduleCardsWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return Boolean(dependencies.streams || dependencies.hostRuns);
+}
+
+/** The `schedule` card is sent only to a device that opted in and may read schedules. */
+function holdsScheduleCards(device: Pick<AidenRemoteRouterAuthenticatedDevice, "capabilities">): boolean {
+  return device.capabilities.has("schedule:cards") && device.capabilities.has("schedule:read");
+}
+
 /**
  * Revision 37: the hand-off answer, open-on-Mac and pause routes and the
  * holder projection ship together, or not at all.
@@ -1695,6 +1854,36 @@ function holdsBotHandoffs(
   return device.capabilities.has("bot:handoffs") && botHandoffsWired(dependencies);
 }
 
+/** Whether this device is also told when a hand-off card takes no note (revision 40). */
+function holdsBotHandoffNotes(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
+  return device.capabilities.has("bot:handoff-notes") && holdsBotHandoffs(device, dependencies);
+}
+
+/** Whether this device is also told when a hand-off step is on the Bot's own screen (revision 43). */
+function holdsBotHandoffOnMac(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
+  return device.capabilities.has("bot:handoff-on-mac") && holdsBotHandoffs(device, dependencies);
+}
+
+/** Revision 45: shared-image entries and their byte route ship together, or not at all. */
+function botImagesWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  const sessions = dependencies.botSessions;
+  return sessions?.supportsSharedImages === true && typeof sessions.sharedImage === "function";
+}
+
+/** Whether this device is sent `shared_image` entries (revision 45). */
+function holdsBotImages(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
+  return device.capabilities.has("bot:images") && botImagesWired(dependencies);
+}
+
 /** A revision-37 route: not_found where unwired, capability_denied without `bot:handoffs`. */
 function requireBotHandoffs(
   device: AidenRemoteRouterAuthenticatedDevice,
@@ -1705,6 +1894,47 @@ function requireBotHandoffs(
   }
   requireDeviceCapabilities(device, ["bot:read", "bot:handoffs"]);
   return dependencies.botSessions!;
+}
+
+/**
+ * Revision 42: the issue act route and the holder projection ship together,
+ * or not at all.
+ */
+function botIssuesWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  const sessions = dependencies.botSessions;
+  return sessions?.supportsIssues === true && typeof sessions.actIssue === "function";
+}
+
+/** Whether this device is sent revision-42 issue shapes. */
+function holdsBotIssues(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
+  return device.capabilities.has("bot:issues") && botIssuesWired(dependencies);
+}
+
+/** A revision-42 route: not_found where unwired, capability_denied without `bot:issues`. */
+function requireBotIssues(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): NonNullable<AidenRemoteRouterDependencies["botSessions"]> {
+  if (!botIssuesWired(dependencies)) {
+    throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+  }
+  requireDeviceCapabilities(device, ["bot:read", "bot:issues"]);
+  return dependencies.botSessions!;
+}
+
+/** One Bot summary as this device reads it: `paused` (revision 37) and `issueCount` (revision 42). */
+function botSummaryForAudience(
+  summary: AidenRemoteBotSummary,
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): AidenRemoteBotSummary {
+  return projectBotSummaryIssuesForAudience(
+    projectBotSummaryForAudience(summary, { handoffs: holdsBotHandoffs(device, dependencies) }),
+    { issues: holdsBotIssues(device, dependencies) },
+  );
 }
 
 /** Revision 33: uploads, removals and `attachmentIds` ship together, or not at all. */
@@ -1728,7 +1958,10 @@ function writeBotDetail(
   device: AidenRemoteRouterAuthenticatedDevice,
   dependencies: AidenRemoteRouterDependencies,
 ): void {
-  const projected = projectBotDetailForAudience(detail, { handoffs: holdsBotHandoffs(device, dependencies) });
+  const projected = projectBotSummaryIssuesForAudience(
+    projectBotDetailForAudience(detail, { handoffs: holdsBotHandoffs(device, dependencies) }),
+    { issues: holdsBotIssues(device, dependencies) },
+  );
   if (device.capabilities.has("bot:activity")) {
     writeJson(response, status, projected);
     return;
@@ -1758,6 +1991,16 @@ function advertisedServerCapabilities(
     ...(device.acceptsBotCapabilities === true && botHandoffsWired(dependencies)
       ? AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES
       : []),
+    // Revision 45: offered only while shared images and their route are wired.
+    ...(device.acceptsBotCapabilities === true && botImagesWired(dependencies)
+      ? AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES
+      : []),
+    // Revision 42: offered only while the issue act route is wired.
+    ...(device.acceptsBotCapabilities === true && botIssuesWired(dependencies)
+      ? AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES
+      : []),
+    // Revision 39: a display opt-in for any device type while approvals are served.
+    ...(scheduleCardsWired(dependencies) ? AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES : []),
     ...(device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
           progressCapabilitySupported(dependencies, capability),
@@ -1923,6 +2166,30 @@ export function createAidenRemoteRequestHandler(
         );
         return device;
       };
+      const webhookMatch = /^\/hooks\/bot-routines\/([A-Za-z0-9_-]{20,100})$/u.exec(path);
+      if (webhookMatch) {
+        route = "botRoutineWebhook";
+        // No body says whether a link exists: an unwired host is a plain 404.
+        if (!dependencies.botRoutineWebhook) {
+          response.writeHead(404, { "cache-control": "no-store" }).end();
+          return;
+        }
+        if (request.method !== "POST") {
+          response.writeHead(405, { allow: "POST" }).end();
+          return;
+        }
+        requireNoQuery(query);
+        const body = await readRawBody(request, BOT_ROUTINE_WEBHOOK_MAX_BYTES);
+        const answer = body === undefined
+          ? { status: 413 }
+          : await dependencies.botRoutineWebhook({
+            token: webhookMatch[1]!,
+            ...(typeof request.headers["content-type"] === "string" ? { contentType: request.headers["content-type"] } : {}),
+            body,
+          });
+        response.writeHead(answer.status, { "cache-control": "no-store" }).end();
+        return;
+      }
       if (request.method === "GET" && path === "/health") {
         route = "health";
         const detail = healthDetailQuery(query);
@@ -1948,7 +2215,7 @@ export function createAidenRemoteRequestHandler(
         route = "pairingExchange";
         const result = await dependencies.pairing.exchange(
           await readJsonBody(request),
-          sourceIdentity(request),
+          sourceIdentity(request, dependencies.acceptStrippedBasePath === true),
         );
         writeJson(response, 200, result);
         return;
@@ -1974,7 +2241,7 @@ export function createAidenRemoteRequestHandler(
         const secret = pairingSecretHeader(request);
         if (route === "pairingRequests" && request.method === "POST") {
           const created = await service.create(await readJsonBody(request, 2_048), {
-            source: sourceIdentity(request),
+            source: sourceIdentity(request, dependencies.acceptStrippedBasePath === true),
             transport: dependencies.acceptStrippedBasePath === true ? "tailscale" : "lan",
           });
           writeJson(response, 201, created);
@@ -2043,6 +2310,7 @@ export function createAidenRemoteRequestHandler(
             : {}),
           connectionMode: dependencies.connectionMode(),
           features: aidenRemoteServerFeatures(device, {
+            workspaceClone: dependencies.workspaces?.supportsClone === true,
             appControls: Boolean(dependencies.appControls),
             appControlsEnabled: (await dependencies.appControls?.enabled()) === true,
             peerRoutes: peerRoutes !== undefined,
@@ -2060,8 +2328,11 @@ export function createAidenRemoteRequestHandler(
             messagesWindow: Boolean(dependencies.chats?.messagesWindow),
             visuals: Boolean(dependencies.chats),
             visualViewer: Boolean(dependencies.chats?.visualDocument) && dependencies.chats?.supportsVisualViewer === true,
+            browserRecordings:
+              Boolean(dependencies.chats?.browserRecording) && dependencies.chats?.supportsBrowserRecordings === true,
             fork: Boolean(dependencies.chats?.fork) && dependencies.chats?.supportsForks === true,
             forkSummary: Boolean(dependencies.chats?.fork) && dependencies.chats?.supportsForkSummaries === true,
+            contextPressure: Boolean(dependencies.chats?.contextPressure) && dependencies.chats?.supportsContextPressure === true,
             hostEvents: hostCapabilitySupported(dependencies, "host:events"),
             runs: hostCapabilitySupported(dependencies, "runs:observe"),
             pairingRequests: Boolean(dependencies.pairingRequests),
@@ -2074,6 +2345,7 @@ export function createAidenRemoteRequestHandler(
             botProactive: dependencies.botSessions?.supportsProactive === true,
             botActivity: botActivityWired(dependencies),
             botAttachments: botAttachmentsWired(dependencies),
+            spending: Boolean(dependencies.spending),
             mobileSimulators: Boolean(dependencies.simulators?.host("mobile")),
           }),
           serverTime: new Date(dependencies.now()).toISOString(),
@@ -2146,6 +2418,21 @@ export function createAidenRemoteRequestHandler(
             if (!botHandoffsWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Bot hand-offs are unavailable on this Aiden installation.", 404);
             }
+          } else if ((AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 45: an opt-in to shared-image entries, offered only while their route is wired.
+            if (!botImagesWired(dependencies)) {
+              throw new AidenRemoteServiceError("not_found", "Bot images are unavailable on this Aiden installation.", 404);
+            }
+          } else if ((AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 42: an opt-in to issue cards, offered only while their route is wired.
+            if (!botIssuesWired(dependencies)) {
+              throw new AidenRemoteServiceError("not_found", "Bot issues are unavailable on this Aiden installation.", 404);
+            }
+          } else if ((AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 39: a display opt-in for scheduled-task approvals; it never changes canAllow.
+            if (!scheduleCardsWired(dependencies)) {
+              throw new AidenRemoteServiceError("not_found", "Schedule cards are unavailable on this Aiden installation.", 404);
+            }
           } else if (capability === "simulators:control") {
             // Refuse non-desktops first so they never learn whether this Mac has simulators.
             if (device.type !== "mac" && device.type !== "linux") {
@@ -2217,10 +2504,9 @@ export function createAidenRemoteRequestHandler(
         }
         requireNoQuery(query);
         const list = await dependencies.bots.list();
-        const audience = { handoffs: holdsBotHandoffs(device, dependencies) };
         writeJson(response, 200, {
           ...list,
-          bots: list.bots.map((summary) => projectBotSummaryForAudience(summary, audience)),
+          bots: list.bots.map((summary) => botSummaryForAudience(summary, device, dependencies)),
         });
         return;
       }
@@ -2411,7 +2697,7 @@ export function createAidenRemoteRequestHandler(
         const result = await botSessionsOrNotFound(dependencies).createFromPreset(device.id, key, body);
         writeJson(response, result.created ? 201 : 200, {
           ...result,
-          bot: projectBotSummaryForAudience(result.bot, { handoffs: holdsBotHandoffs(device, dependencies) }),
+          bot: botSummaryForAudience(result.bot, device, dependencies),
         });
         return;
       }
@@ -2430,6 +2716,10 @@ export function createAidenRemoteRequestHandler(
             cards: device.capabilities.has("bot:cards"),
             activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
             handoffs: holdsBotHandoffs(device, dependencies),
+            handoffNotes: holdsBotHandoffNotes(device, dependencies),
+            handoffOnMac: holdsBotHandoffOnMac(device, dependencies),
+            images: holdsBotImages(device, dependencies),
+            issues: holdsBotIssues(device, dependencies),
           }),
         );
         return;
@@ -2451,8 +2741,28 @@ export function createAidenRemoteRequestHandler(
             cards: device.capabilities.has("bot:cards"),
             activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
             handoffs: holdsBotHandoffs(device, dependencies),
+            handoffNotes: holdsBotHandoffNotes(device, dependencies),
+            handoffOnMac: holdsBotHandoffOnMac(device, dependencies),
+            images: holdsBotImages(device, dependencies),
+            issues: holdsBotIssues(device, dependencies),
           },
         );
+        return;
+      }
+      const botSessionImageMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/session\/images\/([A-Za-z0-9._:-]{1,128})$/u.exec(path);
+      if (botSessionImageMatch && request.method === "GET") {
+        requireNoQuery(query);
+        route = "botSessionImage";
+        const device = await authenticate(request, dependencies.devices, "bot:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!botImagesWired(dependencies)) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        // The image is part of the Bot's transcript: reading it is a chat read.
+        requireDeviceCapabilities(device, ["chat:read", "bot:images"]);
+        const image = await dependencies.botSessions!.sharedImage!(botSessionImageMatch[1]!, botSessionImageMatch[2]!);
+        writeAttachmentContent(response, { bytes: image.bytes, mimeType: image.mimeType });
         return;
       }
       const botMessagesMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/messages$/u.exec(path);
@@ -2583,6 +2893,22 @@ export function createAidenRemoteRequestHandler(
         );
         return;
       }
+      const botIssueActMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/issues\/([A-Za-z0-9._:-]{1,160})\/act$/u.exec(path);
+      if (botIssueActMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "botIssueAct";
+        const body = await readJsonBody(request);
+        const device = await authenticate(request, dependencies.devices, "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const sessions = requireBotIssues(device, dependencies);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        writeJson(
+          response,
+          200,
+          await sessions.actIssue!(device.id, botIssueActMatch[1]!, botIssueActMatch[2]!, key, body),
+        );
+        return;
+      }
       const botPauseMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/pause$/u.exec(path);
       if (botPauseMatch && (request.method === "POST" || request.method === "DELETE")) {
         requireNoQuery(query);
@@ -2599,6 +2925,30 @@ export function createAidenRemoteRequestHandler(
           request.method === "POST"
             ? await sessions.pause!(device.id, botPauseMatch[1]!, key, body, { handoffs: true })
             : await sessions.unpause!(device.id, botPauseMatch[1]!, key, { handoffs: true }),
+        );
+        return;
+      }
+      const botSpendingReadMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/spending$/u.exec(path);
+      const botSpendingAllowMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/spending\/allow-more$/u.exec(path);
+      const botSpendingMatch = request.method === "GET" ? botSpendingReadMatch : request.method === "POST" ? botSpendingAllowMatch : null;
+      if (botSpendingMatch) {
+        requireNoQuery(query);
+        route = "botSpending";
+        const allowMore = botSpendingMatch === botSpendingAllowMatch;
+        if (allowMore) requireEmptyJsonObject(await readJsonBody(request, 64));
+        const device = await authenticate(request, dependencies.devices, allowMore ? "bot:write" : "bot:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (allowMore) requireDeviceCapabilities(device, ["bot:read"]);
+        if (!dependencies.spending) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(
+          response,
+          200,
+          allowMore
+            ? await dependencies.spending.allowMoreBot(
+                botSpendingMatch[1]!,
+                requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u),
+              )
+            : await dependencies.spending.bot(botSpendingMatch[1]!),
         );
         return;
       }
@@ -2703,7 +3053,9 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await botSessionFeature(dependencies, "routineNotificationFeed")(params.get("since") ?? undefined),
+          await botSessionFeature(dependencies, "routineNotificationFeed")(params.get("since") ?? undefined, {
+            issues: holdsBotIssues(device, dependencies),
+          }),
         );
         return;
       }
@@ -2881,11 +3233,18 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.workspaces) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(
-          response,
-          201,
-          await dependencies.workspaces.create(device.id, key, body),
-        );
+        const cloning = body !== null && typeof body === "object" && (body as { mode?: unknown }).mode === "clone";
+        if (cloning && (!isDesktopDevice(device) || !device.capabilities.has("workspace:browse"))) throw new AidenRemoteServiceError("capability_denied", "Cloning projects requires a paired desktop with folder browsing access.", 403);
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        if (cloning) {
+          response.once("close", abort);
+          if (response.destroyed || request.aborted) abort();
+        }
+        try {
+          const result = await dependencies.workspaces.create(device.id, key, body, controller.signal);
+          if (!controller.signal.aborted) writeJson(response, 201, result);
+        } finally { response.off("close", abort); }
         return;
       }
       const workspaceMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})$/u.exec(path);
@@ -3678,6 +4037,20 @@ export function createAidenRemoteRequestHandler(
         );
         return;
       }
+      const chatContextMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/context$/u.exec(path);
+      if (chatContextMatch && request.method === "GET") {
+        route = "chatContext";
+        const selection = chatContextQuery(query);
+        const device = await authenticate(request, dependencies.devices, "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        const chats = dependencies.chats;
+        if (!chats?.contextPressure || chats.supportsContextPressure !== true) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        await requireChatAccess(chats, device, chatContextMatch[1]!, "read");
+        writeJson(response, 200, await chats.contextPressure(chatContextMatch[1]!, selection));
+        return;
+      }
       const chatProgressEventsMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/progress\/events$/u.exec(path);
       if (chatProgressEventsMatch && request.method === "GET") {
         route = "chatProgressEvents";
@@ -3805,6 +4178,22 @@ export function createAidenRemoteRequestHandler(
         );
         return;
       }
+      const browserRecordingMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/recordings\/([A-Za-z0-9._:-]{1,128})$/u.exec(path);
+      if (browserRecordingMatch && request.method === "GET") {
+        requireNoQuery(query);
+        route = "chatBrowserRecording";
+        const device = await authenticate(request, dependencies.devices, "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.chats?.browserRecording || dependencies.chats.supportsBrowserRecordings !== true) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        await requireChatAccess(dependencies.chats, device, browserRecordingMatch[1]!, "read");
+        writeAttachmentContent(
+          response,
+          await dependencies.chats.browserRecording(browserRecordingMatch[1]!, browserRecordingMatch[2]!),
+        );
+        return;
+      }
       const visualDocumentMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/visuals\/([A-Za-z0-9._:-]{1,256})\/document$/u.exec(path);
       if (visualDocumentMatch && request.method === "GET") {
         route = "chatVisualDocument";
@@ -3824,6 +4213,33 @@ export function createAidenRemoteRequestHandler(
           response,
           request,
           await dependencies.chats.visualDocument(visualDocumentMatch[1]!, visualDocumentMatch[2]!, appearance),
+        );
+        return;
+      }
+      const chatSpendingReadMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/spending$/u.exec(path);
+      const chatSpendingAllowMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/spending\/allow-more$/u.exec(path);
+      const chatSpendingMatch = request.method === "GET" ? chatSpendingReadMatch : request.method === "POST" ? chatSpendingAllowMatch : null;
+      if (chatSpendingMatch) {
+        requireNoQuery(query);
+        route = "chatSpending";
+        const allowMore = chatSpendingMatch === chatSpendingAllowMatch;
+        // Allow more takes `{}`: the If-Match revision is what it acts on.
+        if (allowMore) requireEmptyJsonObject(await readJsonBody(request, 64));
+        const device = await authenticate(request, dependencies.devices, allowMore ? "chat:write" : "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.spending || !dependencies.chats) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        await requireChatAccess(dependencies.chats, device, chatSpendingMatch[1]!, allowMore ? "write" : "read");
+        writeJson(
+          response,
+          200,
+          allowMore
+            ? await dependencies.spending.allowMoreChat(
+                chatSpendingMatch[1]!,
+                requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u),
+              )
+            : await dependencies.spending.chat(chatSpendingMatch[1]!),
         );
         return;
       }
@@ -3863,6 +4279,7 @@ export function createAidenRemoteRequestHandler(
         const pending = dependencies.streams.pendingApproval(
           device.id,
           streamApprovalMatch[1]!,
+          { scheduleCard: holdsScheduleCards(device) },
         );
         const requiredCapability = pending
           ? dependencies.streams.approvalRequiredCapability(
@@ -4039,7 +4456,12 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "host:events");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.hostFeed) throw hostRunsUnavailable();
-        await dependencies.hostFeed.open(device, cursor, response, admitDevice(device.id));
+        await dependencies.hostFeed.open(
+          { id: device.id, capabilities: device.capabilities, botHandoffs: holdsBotHandoffs(device, dependencies) },
+          cursor,
+          response,
+          admitDevice(device.id),
+        );
         return;
       }
       const chatMessagesMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/messages$/u.exec(path);

@@ -93,6 +93,15 @@ test("does not steal commands from editable controls except explicit commands", 
     resolveCommandForKeyEvent(event("b", "KeyB"), bindings, { ...base, editable: true }),
     "sidebar.toggle",
   );
+  // Switching chats works from the message box, where focus usually is.
+  assert.equal(
+    resolveCommandForKeyEvent(event("3", "Digit3"), bindings, { ...base, editable: true }),
+    "chat.jump.3",
+  );
+  assert.equal(
+    resolveCommandForKeyEvent(event("}", "BracketRight", true), bindings, { ...base, editable: true }),
+    "chat.next",
+  );
   assert.equal(
     resolveCommandForKeyEvent(event("s", "KeyS"), bindings, {
       ...base,
@@ -184,8 +193,36 @@ test("palette omits studio commands while their capability is off", () => {
   );
 });
 
+test("chat actions show in the palette only while something on screen can run them", () => {
+  const capabilities = { designStudio: true, createImages: true };
+  const nothingOnScreen = paletteCommands(capabilities, () => false).map(({ id }) => id);
+  assert.ok(!nothingOnScreen.includes("chat.rename"));
+  assert.ok(!nothingOnScreen.includes("chat.stop"));
+  assert.ok(!nothingOnScreen.includes("tools.browser"));
+  // App-wide commands stay listed whether or not a handler is mounted yet.
+  assert.ok(nothingOnScreen.includes("settings.open"));
+  assert.ok(nothingOnScreen.includes("chat.search"));
+
+  const renameOnly = paletteCommands(capabilities, (id) => id === "chat.rename").map(({ id }) => id);
+  assert.ok(renameOnly.includes("chat.rename"));
+  assert.ok(!renameOnly.includes("chat.delete"));
+});
+
 test("studio commands never reserve a shortcut", () => {
   const bindings = effectiveBindings(undefined);
   assert.equal(bindings["design.open"], null);
   assert.equal(bindings["images.open"], null);
+});
+
+test("⌘/ opens the keyboard list from the message box too", () => {
+  const bindings = effectiveBindings(undefined);
+  assert.equal(
+    resolveCommandForKeyEvent(event("/", "Slash"), bindings, { ...base, editable: true }, "darwin"),
+    "shortcuts.show",
+  );
+  assert.equal(
+    resolveCommandForKeyEvent(event("/", "Slash"), bindings, { ...base, terminal: true }, "darwin"),
+    null,
+    "the terminal keeps it",
+  );
 });

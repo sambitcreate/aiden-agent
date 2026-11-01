@@ -5,6 +5,8 @@ import {
 } from "../../renderer/shared/compaction.js";
 import {
   GENERATION_TIMELINE_VERSION,
+  boundGenerationTimelineSteps,
+  emptyGenerationTimelineFolds,
   isTerminalAgentStep,
   isToolStep,
   type AgentStep,
@@ -23,6 +25,8 @@ import {
   ASK_USER_QUESTION_TOOL_NAME,
   parseAskUserQuestionRecap,
 } from "../../renderer/shared/ask-user-question.js";
+import { WEB_FETCH_TOOL_NAME, parseWebExtractRecap } from "../../renderer/shared/web-extract.js";
+import { BROWSER_RECORDING_STOP_TOOL_NAME, parseBrowserRecordingRecap } from "../../renderer/shared/browser-recording.js";
 
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_TARGET_LENGTH = 240;
@@ -208,6 +212,16 @@ function safeDetail(value: unknown): string | undefined {
   return cleaned || undefined;
 }
 
+function safeWebHost(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const input = value.trim();
+  try {
+    return safeDetail(new URL(/^[a-z][a-z\d+.-]*:\/\//iu.test(input) ? input : `https://${input}`).hostname);
+  } catch {
+    return undefined;
+  }
+}
+
 const IMAGE_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u;
 
 /**
@@ -287,6 +301,28 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Draw visual", detail: safeDetail(values.title) };
     case "run_command":
       return { label: "Run command", detail: safeDetail(values.description) };
+    // The job's label, never its command; pull request links stay out of the feed.
+    case "background_job":
+      return {
+        label:
+          values.action === "start"
+            ? "Start background job"
+            : values.action === "stop"
+              ? "Stop background job"
+              : values.action === "read"
+                ? "Read background job output"
+                : "List background jobs",
+        detail: values.action === "start" ? safeDetail(values.description) : undefined,
+      };
+    case "follow_pull_request":
+      return {
+        label:
+          values.action === "stop"
+            ? "Stop following pull request"
+            : values.action === "list"
+              ? "List followed pull requests"
+              : "Follow pull request",
+      };
     case "share_image":
       return { label: "Share image", target: path };
     case "generate_image":
@@ -333,7 +369,8 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
     case "move_file":
       return { label: "Move file", target: path };
     case "web_fetch":
-      return { label: "Fetch web page" };
+      // The host only: a path or query can carry a token.
+      return { label: "Fetch web page", detail: safeWebHost(values.url) };
     case "agent_subagents":
       return { label: "Run subagents" };
     case "agent_tool":
@@ -348,6 +385,7 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
 export class GenerationTimelineProjector {
   private readonly timeline: GenerationTimeline;
   private readonly stepIndex = new Map<string, number>();
+  private readonly folds = emptyGenerationTimelineFolds();
   private toolSequence = 0;
   private thinkingSequence = 0;
   private thinkingMergeFloor = 0;
@@ -729,10 +767,17 @@ export class GenerationTimelineProjector {
     return this.snapshot();
   }
 
+  /**
+   * The projector keeps every step; what it publishes stays within the step
+   * limit every reader accepts, so a long run keeps its trail once saved.
+   */
   snapshot(): GenerationTimeline {
     return {
       ...this.timeline,
-      steps: this.timeline.steps.map((step) => ({ ...step }) as AgentStep),
+      steps: boundGenerationTimelineSteps(
+        this.timeline.steps.map((step) => ({ ...step }) as AgentStep),
+        this.folds,
+      ),
     };
   }
 
@@ -783,6 +828,14 @@ export class GenerationTimelineProjector {
         if (step.toolName === ASK_USER_QUESTION_TOOL_NAME) {
           const questionnaire = parseAskUserQuestionRecap(resultDetails);
           if (questionnaire) step.questionnaire = questionnaire;
+        }
+        if (step.toolName === WEB_FETCH_TOOL_NAME) {
+          const extraction = parseWebExtractRecap(resultDetails);
+          if (extraction) step.extraction = extraction;
+        }
+        if (step.toolName === BROWSER_RECORDING_STOP_TOOL_NAME) {
+          const recording = parseBrowserRecordingRecap(record(resultDetails).recording);
+          if (recording) step.recording = recording;
         }
       } else {
         const issue = safeToolIssue(resultDetails);
