@@ -85,6 +85,8 @@ In a new chat with a repository-root project selected, open the machine menu and
 choose **Add this project to another machine…**. Pick a connected desktop that
 supports project cloning (contract revision 48), then browse its approved folders and choose the parent
 folder for the new repository. The target uses its own Git authentication.
+The item is not offered in a No workspace chat, a scratch folder, or any folder
+outside a Git repository.
 
 Environment files may contain secrets. All choices start unchecked. Select only
 files you want on that computer. Aiden offers ignored root-level `.env*` and

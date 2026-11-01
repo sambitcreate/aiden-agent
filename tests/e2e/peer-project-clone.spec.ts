@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
@@ -13,10 +14,14 @@ const STUDIO = {
   capabilities: ["workspace:manage", "workspace:browse"],
 };
 
-test("Add this project to another machine is offered only for a project folder, and starts with no environment file chosen", async ({ aiden }) => {
+test("Add this project to another machine is offered only for a Git project, and starts with no environment file chosen", async ({ aiden }) => {
   const { page } = aiden;
-  // HOME is the test root, so ~/widget resolves inside it.
-  await mkdir(path.join(aiden.rootDir, "widget"));
+  // HOME is the test root, so ~/widget and ~/notes resolve inside it.
+  const widget = path.join(aiden.rootDir, "widget");
+  await mkdir(widget);
+  execFileSync("git", ["init", "-q"], { cwd: widget });
+  // A plain folder, like a scratch workspace, is not a repository.
+  await mkdir(path.join(aiden.rootDir, "notes"));
   await finishLmStudioOnboarding(page);
   await aiden.app.evaluate(({ ipcMain }, host) => {
     const status = { hostId: host.id, generation: 1, state: { kind: "connected", since: Date.now() }, feed: "live", stale: false };
@@ -46,15 +51,25 @@ test("Add this project to another machine is offered only for a project folder, 
   await expect(addProject).toHaveCount(0);
   await page.keyboard.press("Escape");
 
-  // Move the draft into a project folder.
-  await page.getByRole("button", { name: "Choose a workspace" }).click();
-  const search = page.getByRole("combobox", { name: "Search workspaces" });
-  await expect(search).toBeFocused();
-  await search.fill("~/widget");
-  await expect(page.getByRole("option", { name: /^Open \/.*widget/u })).toHaveAttribute("aria-selected", "true");
-  await page.keyboard.press("Enter");
-  await expect(search).toHaveCount(0);
+  const openFolder = async (name: string) => {
+    await page.getByRole("button", { name: "Choose a workspace" }).click();
+    const search = page.getByRole("combobox", { name: "Search workspaces" });
+    await expect(search).toBeFocused();
+    await search.fill(`~/${name}`);
+    await expect(page.getByRole("option", { name: new RegExp(`^Open \\/.*${name}`, "u") })).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Enter");
+    await expect(search).toHaveCount(0);
+  };
 
+  // A folder outside a repository has no project to clone either.
+  await openFolder("notes");
+  await machine.click();
+  await expect(page.getByRole("menuitemradio", { name: "Mac Studio" })).toBeVisible();
+  await expect(addProject).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  // Move the draft into a Git project.
+  await openFolder("widget");
   await machine.click();
   await addProject.click();
   const dialog = page.getByRole("dialog", { name: "Add project to another machine" });

@@ -3775,8 +3775,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     <RemoteMachinePicker
                       machines={newChatMachines}
                       selected="local"
-                      // Only a project folder can be cloned; a No workspace chat has none to offer.
-                      onAddProject={effectiveWorkspace?.folderPath && !isNoWorkspace(effectiveWorkspace) ? () => setCloningProject(true) : undefined}
+                      // Only a Git project can be cloned. A No workspace chat, a scratch
+                      // folder or any other folder outside a repository has none to offer.
+                      onAddProject={
+                        effectiveWorkspace?.folderPath && !isNoWorkspace(effectiveWorkspace) && git.data?.isRepo === true
+                          ? () => setCloningProject(true)
+                          : undefined
+                      }
                       disabled={isGenerating || isStartingGeneration}
                       onSelect={(machine) => {
                         if (machine !== "local") void navigate({ to: "/host/$hostId/new", params: { hostId: machine } });
