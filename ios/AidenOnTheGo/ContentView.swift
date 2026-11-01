@@ -280,7 +280,9 @@ struct ContentView: View {
             candidates = AidenIntentCatalogStore.shared.load().workspaces.filter { $0.instanceId == instanceID }
         }
         let available = candidates.filter { !archived.contains($0.id) }
-        let selected = request.workspaceId ?? AidenProductNavigationStore.shared.selectedWorkspace(for: instanceID)
+        // A chat's own hidden folder is listed under the Chats home, so match against that.
+        let selected = (request.workspaceId ?? AidenProductNavigationStore.shared.selectedWorkspace(for: instanceID))
+            .map { AidenNoWorkspace.groupID(for: $0, in: coordinator.workspaces) }
         guard let workspace = selected.flatMap({ id in available.first { $0.id == id } })
                 ?? (request.workspaceId == nil ? available.first : nil) else {
             coordinator.presentedError = String(localized: "Open this installation and choose an available workspace before starting a chat.")

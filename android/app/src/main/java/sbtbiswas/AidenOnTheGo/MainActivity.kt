@@ -189,7 +189,9 @@ class MainActivity : ComponentActivity() {
                             .map { sbtbiswas.AidenOnTheGo.intents.AidenIntentWorkspaceRecord(it.id, instanceId.orEmpty(), it.name) }
                     } else catalog.workspaces.filter { it.instanceId == instanceId }
                     val available = candidates.filterNot { coordinator.archiveStore.isArchived(it.id, instanceId) }
-                    val selected = request.workspaceId ?: instanceId?.let(navigationStore::selectedWorkspaceId)
+                    // A chat's own hidden folder is listed under the Chats home, so match against that.
+                    val selected = (request.workspaceId ?: instanceId?.let(navigationStore::selectedWorkspaceId))
+                        ?.let { sbtbiswas.AidenOnTheGo.models.AidenNoWorkspace.groupId(it, workspaces) }
                     val workspace = available.firstOrNull { it.id == selected }
                         ?: if (request.workspaceId == null) available.firstOrNull() else null
                     clearPendingNavigation()
