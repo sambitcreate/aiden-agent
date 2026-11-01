@@ -4802,6 +4802,11 @@ export class GitService {
     return setAside;
   }
 
+  /** Delete a worktree record already moved out of Git's list. */
+  private async discardSetAsideRecord(setAside: string): Promise<void> {
+    await fs.rm(setAside, { recursive: true, force: true });
+  }
+
   /**
    * After a failed restore that kept its folder, make the checkout's Git
    * record match the workspace's record again, so "delete the folder, then
@@ -7010,7 +7015,9 @@ export class GitService {
         if (staleRecord) await this.restoreQuarantinedPath(staleRecord.setAside, staleRecord.gitDir);
         throw error;
       }
-      if (staleRecord) await fs.rm(staleRecord.setAside, { recursive: true, force: true });
+      // The old record is out of Git's list already; failing to delete it only
+      // leaves a stray folder in the Git directory, never a stranded checkout.
+      if (staleRecord) await this.discardSetAsideRecord(staleRecord.setAside).catch(() => undefined);
       // The folder this call made, so a rollback never touches a replacement.
       const added = await fs.lstat(target).catch(() => undefined);
       let owned: { gitDir: string; token: string } | undefined;

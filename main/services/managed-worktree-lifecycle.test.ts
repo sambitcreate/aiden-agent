@@ -1167,6 +1167,30 @@ test("a folder put back from the Trash just before the new checkout keeps its Gi
   );
 });
 
+test("a restore finishes when Git's old record cannot be deleted afterwards", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "aiden/stuck-record");
+  await fs.rm(created.path, { recursive: true, force: true });
+  service["discardSetAsideRecord"] = async () => {
+    throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+  };
+  let recorded: string | undefined;
+  const restored = await service.restoreDeletedManagedWorktreeCheckout(
+    repository, root, created.path, "aiden/stuck-record", created.worktreeGitDir, created.ownershipToken, "",
+    async (worktree) => { recorded = worktree.ownershipToken; },
+  );
+  assert.equal(recorded, restored.ownershipToken, "the new identity is still recorded");
+  assert.equal(
+    await service.managedWorktreeUsable(
+      repository, restored.path, "aiden/stuck-record", restored.worktreeGitDir, restored.ownershipToken,
+      restored.worktreeDevice, restored.worktreeInode,
+    ),
+    true,
+  );
+});
+
 test("a workspace in a subfolder the branch no longer has is not restored", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);
