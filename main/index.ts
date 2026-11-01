@@ -121,7 +121,7 @@ import { startDesignStudio } from "./services/design/startup-core.js";
 import { createImagesRuntime } from "./services/create-images/main.js";
 import { ImageQuitCoverage, imageRunsAllowQuit } from "./services/create-images/quit-confirm-core.js";
 import { registerStudioAssetProtocol } from "./services/studio-assets/protocol.js";
-import { startStudioAssets } from "./services/studio-assets/startup-core.js";
+import { installStudioAssetProtocol, startStudioAssets } from "./services/studio-assets/startup-core.js";
 import { studioAssetGrants, studioAssetStore } from "./services/studio-assets/main.js";
 import { subagentRunStore } from "./services/subagents/subagent-run-store.js";
 import { flushSubagentRuntimeDiagnostics } from "./services/subagents/subagent-runtime-diagnostics.js";
@@ -2286,6 +2286,14 @@ if (!ownsSingleInstanceLock) {
       nativeTheme.themeSource = normalizeAppearanceConfig(
         (await configStore.getSettings()).appearance,
       ).mode;
+      // Before the window loads: a document only gets the custom-scheme image
+      // loaders that exist when it commits. The store itself opens below.
+      installStudioAssetProtocol({
+        enabled: studioAssetsEnabled(),
+        store: studioAssetStore,
+        grants: studioAssetGrants,
+        registerProtocol: registerStudioAssetProtocol,
+      });
       initialMainWindow = createMainWindow({ startupAdmissionHeld: true });
       // Observed below after reconciliation; never an unhandled rejection.
       initialMainWindow.catch(() => undefined);
@@ -2325,8 +2333,6 @@ if (!ownsSingleInstanceLock) {
       await startStudioAssets({
         enabled: studioAssetsEnabled(),
         store: studioAssetStore,
-        grants: studioAssetGrants,
-        registerProtocol: registerStudioAssetProtocol,
         onError: (error) =>
           logger.warn(
             "studio",

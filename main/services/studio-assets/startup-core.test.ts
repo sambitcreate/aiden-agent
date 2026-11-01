@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import { StudioAssetGrants } from "./delivery-core.js";
-import { startStudioAssets } from "./startup-core.js";
+import { installStudioAssetProtocol, startStudioAssets } from "./startup-core.js";
 import { StudioAssetStore } from "./store.js";
 import { fakeThumbnailer, pngBytes } from "./test-fixture.js";
 
@@ -25,6 +25,12 @@ async function setup(t: TestContext) {
   const handlers: Array<(request: Request) => Promise<Response>> = [];
   const errors: unknown[] = [];
   return {
+    owner: {
+      id: 1,
+      documentId: "1:1:main",
+      isDestroyed: () => false,
+      onInvalidated: () => () => undefined,
+    },
     parent,
     root,
     store,
@@ -32,20 +38,21 @@ async function setup(t: TestContext) {
     handlers,
     errors,
     rootResolved: () => rootResolved,
-    start: (enabled: boolean, over: Partial<Parameters<typeof startStudioAssets>[0]> = {}) =>
-      startStudioAssets({
+    install: (enabled: boolean) =>
+      installStudioAssetProtocol({
         enabled,
         store,
         grants,
         registerProtocol: (handler) => handlers.push(handler),
-        onError: (error) => errors.push(error),
-        ...over,
       }),
+    start: (enabled: boolean) =>
+      startStudioAssets({ enabled, store, onError: (error) => errors.push(error) }),
   };
 }
 
 test("with the studio flags off nothing is registered and no files are created", async (t) => {
   const f = await setup(t);
+  assert.equal(f.install(false), false);
   assert.equal(await f.start(false), false);
   assert.equal(f.handlers.length, 0);
   assert.equal(f.rootResolved(), false);
@@ -54,41 +61,38 @@ test("with the studio flags off nothing is registered and no files are created",
   await f.store.close();
 });
 
-test("with a studio flag on the store opens, then the handler serves granted assets", async (t) => {
+test("the handler installs before the store opens and serves granted assets once it has", async (t) => {
   const f = await setup(t);
-  assert.equal(await f.start(true), true);
+  // Installed synchronously at window creation, ahead of the reconcile chain:
+  // no store file yet, and a request without a grant fails closed.
+  assert.equal(f.install(true), true);
   assert.equal(f.handlers.length, 1);
+  assert.equal(f.rootResolved(), false);
+  const early = await f.handlers[0]!(new Request(`aiden-asset://grant/${"A".repeat(43)}`));
+  assert.equal(early.status, 404);
+
+  assert.equal(await f.start(true), true);
   const db = await fs.stat(path.join(f.root, "assets-v1.sqlite"));
   assert.ok(db.isFile());
-  // The installed handler serves from the store and grants it was wired with.
+  // The same early handler now reads the opened store.
   const asset = await f.store.put({ bytes: pngBytes(8, 8, 9) });
-  const owner = {
-    id: 1,
-    documentId: "1:1:main",
-    isDestroyed: () => false,
-    onInvalidated: () => () => undefined,
-  };
-  const response = await f.handlers[0]!(new Request(f.grants.issue(owner, asset.assetId, "original")));
-  assert.equal(response.status, 200);
-  assert.equal(response.headers.get("content-type"), "image/png");
+  const original = await f.handlers[0]!(new Request(f.grants.issue(f.owner, asset.assetId, "original")));
+  assert.equal(original.status, 200);
+  assert.equal(original.headers.get("content-type"), "image/png");
+  const thumb = await f.handlers[0]!(new Request(f.grants.issue(f.owner, asset.assetId, "thumb-512")));
+  assert.equal(thumb.status, 200);
+  assert.ok((await thumb.arrayBuffer()).byteLength > 0);
 });
 
-test("the handler is still installed when the store cannot open, and answers 503", async (t) => {
+test("when the store cannot open the installed handler answers 503", async (t) => {
   const f = await setup(t);
+  f.install(true);
   // A file where the store root belongs makes the directory creation fail.
   await fs.writeFile(f.root, "not a directory");
-  const started = await f.start(true);
-  assert.equal(started, false);
+  assert.equal(await f.start(true), false);
   assert.equal(f.errors.length, 1);
   assert.equal(f.store.status(), "failed");
-  assert.equal(f.handlers.length, 1);
-  const owner = {
-    id: 1,
-    documentId: "1:1:main",
-    isDestroyed: () => false,
-    onInvalidated: () => () => undefined,
-  };
-  const url = f.grants.issue(owner, "a".repeat(64), "original");
+  const url = f.grants.issue(f.owner, "a".repeat(64), "original");
   const response = await f.handlers[0]!(new Request(url));
   assert.equal(response.status, 503);
   assert.equal(response.headers.get("cache-control"), "no-store");

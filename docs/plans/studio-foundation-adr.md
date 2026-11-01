@@ -219,6 +219,8 @@ if (studioAssetsEnabled()) {
 
 The singletons live in `studio-assets/main.ts`, where the root is `app.getPath("userData")/studio-assets` and is resolved lazily. With the flags off, no directory or database is created. Protocol requests are not IPC, so startup admission (`startup-ipc-admission.ts:22-46`) does not hold them. They cannot arrive early anyway, because grants are only issued by feature IPC, and that IPC is admitted after this point. DS and CI stores initialize next to this block.
 
+*Amendment (2026-10-31):* the handler cannot wait for the reconcile chain. The main window starts loading before that chain runs, and Chromium binds a document's custom-scheme subresource loaders when the document commits. A handler installed later is unknown to that page, so every `aiden-asset:` image failed with `net::ERR_UNKNOWN_URL_SCHEME` until a reload. `installStudioAssetProtocol` (`studio-assets/startup-core.ts`) now installs the handler immediately before `createMainWindow`, and `startStudioAssets` only opens the store in the position above. Requests that arrive before the store opens carry no grant, so they get 404; if the store fails to open, requests get 503.
+
 ## F-D9 Test lanes **(deviation)**
 
 **Today.** `scripts/ci-test-registry.json` has exactly three unit lanes (`core-git`, `runtime-subagents`, `renderer-other`). They are hard-coded in the `.github/workflows/ci.yml:227` matrix and asserted in `scripts/ci-test-registry.test.mjs:20-24`. Every file reachable from `pretest:serial`/`test:serial` must belong to exactly one lane (`validateRegistry`, `ci-test-registry.mjs:403-421`).
