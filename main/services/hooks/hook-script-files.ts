@@ -80,6 +80,8 @@ export interface HookCommandWord {
   commandPosition: boolean;
   /** The file an output redirection (`>`, `>>`, `&>`) writes. */
   outputTarget?: boolean;
+  /** The file an input redirection (`<`, or `<>`, which also writes) reads. */
+  inputTarget?: boolean;
 }
 
 export interface HookCommandScan {
@@ -135,7 +137,7 @@ export function scanHookCommand(command: string): HookCommandScan {
     }
     if (redirect) {
       // A redirection's target is a file, never the program, and leaves the command position alone.
-      words.push({ text: current, commandPosition: false, ...(redirect === "output" ? { outputTarget: true } : {}) });
+      words.push({ text: current, commandPosition: false, ...(redirect === "output" ? { outputTarget: true } : { inputTarget: true }) });
       redirect = undefined;
       current = "";
       return;
@@ -196,7 +198,9 @@ export function scanHookCommand(command: string): HookCommandScan {
       while (index + 1 < command.length && "<>&|".includes(command[index + 1] as string)) index += 1;
       const operator = command.slice(start, index + 1);
       // `>&2` and `<&0` duplicate a descriptor rather than naming a file.
-      if (!/[<>]&$/u.test(operator)) redirect = operator.includes(">") ? "output" : "input";
+      // `<>` opens its file for reading too (`sh <> ./x.sh` runs it), so only a
+      // redirection with no `<` writes without reading.
+      if (!/[<>]&$/u.test(operator)) redirect = operator.includes(">") && !operator.includes("<") ? "output" : "input";
       continue;
     }
     if (COMMAND_SEPARATORS.has(char)) {
@@ -269,10 +273,11 @@ export function unfollowedCommands(scan: HookCommandScan): string[] {
 export function hookCommandWords(command: string): string[] {
   const words: string[] = [];
   let program = "";
-  for (const { text, commandPosition, outputTarget } of scanHookCommand(command).words) {
+  for (const { text, commandPosition, outputTarget, inputTarget } of scanHookCommand(command).words) {
     if (commandPosition && !ASSIGNMENT.test(text)) program = path.basename(text);
     if (!text || outputTarget) continue;
-    if (program === "tee" && !commandPosition) continue;
+    // `tee`'s own operands are files it writes; a file redirected into it is still read.
+    if (program === "tee" && !commandPosition && !inputTarget) continue;
     words.push(text);
     const equals = text.indexOf("=");
     if (equals > 0 && equals < text.length - 1) words.push(text.slice(equals + 1));

