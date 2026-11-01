@@ -93,6 +93,23 @@ test("a change to an asset in the same folder reports the watched page", async (
   assert.deepEqual(updates[1]?.paths, ["design/hero.html"], "assets in a subfolder count too");
 });
 
+test("rewriting one page reloads only that page, not the other pages in its folder", async (t) => {
+  const root = await workspace(t, {
+    "design/hero.html": "<p>hero</p>",
+    "design/about.html": "<p>about</p>",
+  });
+  const { instance, updates } = watcher(t);
+  await instance.set("chat-1", root, ["design/hero.html", "design/about.html"]);
+  await streamStarted();
+  await fsp.writeFile(path.join(root, "design/hero.html"), "<p>hero 2</p>");
+  await eventually(() => updates.length >= 1);
+  await sleep(DESIGN_WATCH_DEBOUNCE_MS + 100);
+  assert.deepEqual(
+    updates.map((update) => update.paths),
+    [["design/hero.html"]],
+  );
+});
+
 test("replacing the watched set closes the old watchers", async (t) => {
   const root = await workspace(t, { "a/one.html": "1", "b/two.html": "2" });
   const { instance, updates, open } = watcher(t);

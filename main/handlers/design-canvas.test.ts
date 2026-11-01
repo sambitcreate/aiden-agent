@@ -281,7 +281,7 @@ test("a workspace removed or re-pointed while the grant is issued leaves no live
 });
 
 /** A stand-in for a window's page: records captures and reports pixel sizes like Electron. */
-function fakeWindow(content: { width: number; height: number }, scale = 1) {
+function fakeWindow(content: { width: number; height: number }, scale = 1, zoom = 1) {
   const captured: Array<{ x: number; y: number; width: number; height: number }> = [];
   const image = (width: number, height: number): DesignCanvasCaptureImage => ({
     isEmpty: () => width === 0 || height === 0,
@@ -294,6 +294,7 @@ function fakeWindow(content: { width: number; height: number }, scale = 1) {
   });
   const window: DesignCanvasCaptureWindow = {
     getContentSize: () => [content.width, content.height],
+    getZoomFactor: () => zoom,
     capturePage: async (rect) => {
       captured.push(rect);
       return image(Math.round(rect.width * scale), Math.round(rect.height * scale));
@@ -313,6 +314,18 @@ test("a capture comes from the asking window, clamped to its content", async (t)
   assert.deepEqual(mine.captured, [{ x: 0, y: 700, width: 361, height: 100 }]);
   assert.deepEqual(other.captured, []);
   assert.deepEqual(result, { dataUrl: "data:image/png;base64,361x100" });
+});
+
+test("a zoomed-in page captures the frame it shows, not the area its page coordinates name", async (t) => {
+  // The page's rectangles are CSS pixels; at 125% zoom each one covers 1.25 window points.
+  const page = fakeWindow({ width: 1000, height: 800 }, 1, 1.25);
+  const { invoke } = await fixture(t, { windowFor: () => page.window });
+  await invoke("designCanvas:capture", { x: 100, y: 100, width: 200, height: 100 });
+  await invoke("designCanvas:capture", { x: 700, y: 600, width: 200, height: 100 });
+  assert.deepEqual(page.captured, [
+    { x: 125, y: 125, width: 250, height: 125 },
+    { x: 875, y: 750, width: 125, height: 50 },
+  ]);
 });
 
 test("a capture is a PNG no larger than 1024 px on its longest side", async (t) => {

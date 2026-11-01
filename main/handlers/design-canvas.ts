@@ -41,8 +41,10 @@ export interface DesignCanvasCaptureImage {
 
 /** The asking window's page, as `designCanvas:capture` sees it. */
 export interface DesignCanvasCaptureWindow {
-  /** Content width and height in CSS pixels. */
+  /** Content width and height in window points (device-independent pixels). */
   getContentSize(): number[];
+  /** The page's zoom; a CSS pixel covers this many window points. */
+  getZoomFactor?(): number;
   capturePage(rect: { x: number; y: number; width: number; height: number }): Promise<DesignCanvasCaptureImage>;
 }
 
@@ -229,7 +231,10 @@ function clampCaptureRect(
   const { x, y, width, height } = rect as Record<string, unknown>;
   const numbers = [x, y, width, height];
   if (!numbers.every((value) => typeof value === "number" && Number.isFinite(value))) return null;
-  const [left, top, w, h] = numbers as number[];
+  // The page measures in CSS pixels; the capture takes window points.
+  const zoom = window.getZoomFactor?.() ?? 1;
+  const scale = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+  const [left, top, w, h] = (numbers as number[]).map((value) => value * scale);
   if (w! <= 0 || h! <= 0) return null;
   const [contentWidth = 0, contentHeight = 0] = window.getContentSize();
   const x0 = Math.max(0, Math.floor(left!));

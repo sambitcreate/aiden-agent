@@ -29,6 +29,7 @@ export function registerDesignCanvasIpc(): void {
       if (!window || window.isDestroyed()) return null;
       return {
         getContentSize: () => window.getContentSize(),
+        getZoomFactor: () => window.webContents.getZoomFactor(),
         capturePage: (rect) => window.webContents.capturePage(rect),
       };
     },

@@ -72,7 +72,10 @@ export class DesignFileWatcher {
           const name = filename === null ? null : String(filename);
           // Editors and git churn hidden files; they never change what a frame shows.
           if (name?.split(/[\\/]/u).some((segment) => segment.startsWith("."))) return;
-          this.queue(chatId, generation, paths);
+          // A watched page that changed reloads alone; anything else in the folder
+          // (a stylesheet, an image, an unnamed event) may feed every page there.
+          const page = name === null ? undefined : paths.find((relative) => path.posix.basename(relative) === name);
+          this.queue(chatId, generation, page ? [page] : paths);
         });
         // A folder removed while watched errors once; the frame shows its own missing state.
         handle.on("error", () => handle.close());
