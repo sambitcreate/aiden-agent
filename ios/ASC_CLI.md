@@ -178,3 +178,11 @@ Useful lifecycle cadences:
 - Daily during internal/external testing: TestFlight mode for the exact app/build, notifying when counts, newest timestamps, or fingerprints change; inspect sensitive content only interactively in App Store Connect.
 
 Do not create a placeholder automation for build `2`: it is already terminal `VALID` and `IN_BETA_TESTING`. For a future upload, create a processing monitor only after that upload has an exact build resource ID, then stop/archive it when the watched state is terminal.
+
+## Offline recovery hotfix — 2026-11-01
+
+[PR #688](https://github.com/sambitcreate/aiden-agent/pull/688) merged as `1f9f466f8dfa6589f081c5177500fde0777ee7e4` after exact-head CI and both bot reviews passed. It adds **Switch connection** to the iOS disconnected recovery panel.
+
+The first upload, build `40`, was rejected with `90534` because the local Xcode 27.0 beta (`27A5194q`) is unsupported by App Store Connect. The IPA's app and widget distribution signatures, team, bundle identifiers, build numbers, and `get-task-allow=false` were verified before upload; the rejection was an SDK/toolchain issue. The other installed Xcode, 27.1 (`27A9269`), is also a beta despite its ordinary `Xcode.app` filename. Check the exact Xcode build against Apple's release listing before preparing a local distribution archive.
+
+The replacement was dispatched through the existing main-only [internal TestFlight workflow](https://github.com/sambitcreate/aiden-agent/actions/runs/41265478289) from the merged commit, with the build number selected from current App Store Connect state. The next safe number after the rejected upload is `41`. Build `39` remains the available internal candidate until the replacement processes and is assigned to `Internal Testers`.
