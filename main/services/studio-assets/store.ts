@@ -148,11 +148,17 @@ const SCHEMA = `
   CREATE INDEX holds_by_asset ON holds(asset_id);
   PRAGMA user_version=1;
 `;
-// Assets re-indexed from blobs after the index was lost. Their holds could not be
-// recovered, and one feature holding an asset again says nothing about its other
-// owners, so GC never collects them. Additive, so it is created on every open of a
-// version-1 database.
-const RECOVERED_SCHEMA = "CREATE TABLE IF NOT EXISTS recovered (asset_id TEXT PRIMARY KEY REFERENCES assets(id));";
+// `recovered`: assets re-indexed from blobs after the index was lost. Their holds
+// could not be recovered, and one feature holding an asset again says nothing about
+// its other owners, so GC never collects them. `recovery_pending`: one row while a
+// rebuild has not finished re-indexing, written with a fresh schema and cleared in
+// the transaction that inserts the recovered rows, so a rebuild interrupted by an
+// error or exit resumes on the next open instead of deleting the blobs as orphans.
+// Additive, so they are created on every open of a version-1 database.
+const RECOVERY_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS recovered (asset_id TEXT PRIMARY KEY REFERENCES assets(id));
+  CREATE TABLE IF NOT EXISTS recovery_pending (id INTEGER PRIMARY KEY CHECK (id = 1));
+`;
 const THUMBNAIL_EDGES: readonly StudioAssetThumbnailEdge[] = [256, 512];
 
 function toRecord(row: AssetRow): StudioAssetRecord {
@@ -230,17 +236,18 @@ export class StudioAssetStore {
     await fs.mkdir(path.join(root, "thumbs"), { recursive: true, mode: 0o700 });
     const file = path.join(root, DATABASE_FILE);
     let db: DatabaseSync;
-    // True when this open created the schema: the file was missing or was just
-    // quarantined, so every blob on disk lost its row and may be re-indexed.
-    let rebuilt: boolean;
+    // True while a rebuild is unfinished: the file was missing or was just
+    // quarantined (now or on an earlier open whose re-index never completed), so
+    // every blob on disk may have lost its row and may be re-indexed.
+    let recovering: boolean;
     try {
-      ({ db, created: rebuilt } = openDatabase(file));
+      ({ db, recovering } = openDatabase(file));
     } catch (error) {
       if (!isUnusableDatabase(error)) throw error;
       // The database only indexes content-addressed blobs, so a fresh one can
       // be rebuilt from them by the sweep below. Keep the old file for diagnosis.
       const quarantined = await quarantineDatabase(file, this.now());
-      ({ db, created: rebuilt } = openDatabase(file));
+      ({ db, recovering } = openDatabase(file));
       this.options.onWarning?.(
         `The studio asset database could not be read and was moved aside as ${path.basename(quarantined)}; rebuilding it from stored images.`,
         error,
@@ -258,7 +265,7 @@ export class StudioAssetStore {
     // Housekeeping is best effort: a failed pass must not disable a store whose
     // database opened, and the next start (or an explicit collection) retries it.
     try {
-      await this.exclusive(() => this.sweepOrphanFiles(rebuilt));
+      await this.exclusive(() => this.sweepOrphanFiles(recovering));
       await this.collectGarbage();
     } catch (error) {
       this.options.onError?.(error);
@@ -652,14 +659,14 @@ export class StudioAssetStore {
   }
 
   /**
-   * Reconcile files with rows after a crash or a lost database. Only when the
-   * database was just rebuilt is a blob without a row re-indexed (its bytes must
+   * Reconcile files with rows after a crash or a lost database. Only while a
+   * rebuild is pending is a blob without a row re-indexed (its bytes must
    * still hash to its name and pass image validation) and marked recovered. On an
    * ordinary open a blob without a row is a put that crashed before its insert or
    * a GC that deleted the row before the file, so it is removed, as are staging
    * files and thumbnails without a row.
    */
-  private async sweepOrphanFiles(rebuilt: boolean): Promise<void> {
+  private async sweepOrphanFiles(recovering: boolean): Promise<void> {
     const blobs = path.join(this.root, "blobs");
     const touched = new Set<string>();
     const recovered: Array<{
@@ -677,7 +684,7 @@ export class StudioAssetStore {
         const staged = entry.startsWith(".") && entry.endsWith(".tmp");
         if (!staged && (!isStudioAssetId(entry) || this.row(entry))) continue;
         const file = path.join(directory, entry);
-        if (rebuilt && !staged && shard.name === entry.slice(0, 2)) {
+        if (recovering && !staged && shard.name === entry.slice(0, 2)) {
           const record = await this.revalidateBlob(file, entry);
           if (record) {
             recovered.push(record);
@@ -688,9 +695,10 @@ export class StudioAssetStore {
         touched.add(directory);
       }
     }
-    if (recovered.length > 0) {
+    if (recovering) {
       const now = this.now();
       this.transaction((db) => {
+        db.prepare("DELETE FROM recovery_pending").run();
         const insert = db.prepare(
           "INSERT OR IGNORE INTO assets (id, media_type, bytes, width, height, created_at, touched_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         );
@@ -700,6 +708,8 @@ export class StudioAssetStore {
           mark.run(asset.id);
         }
       });
+    }
+    if (recovered.length > 0) {
       this.options.onWarning?.(
         `Re-indexed ${recovered.length} stored studio ${recovered.length === 1 ? "image" : "images"} that had no database entry.`,
       );
@@ -754,9 +764,10 @@ export class StudioAssetStore {
 
 /**
  * Open (creating as 0600 if missing) and check the schema; closes the handle on failure.
- * `created` is true when this call created the schema.
+ * `recovering` is true when a rebuild is pending: this call created the schema, or an
+ * earlier open did and its re-index never finished.
  */
-function openDatabase(file: string): { db: DatabaseSync; created: boolean } {
+function openDatabase(file: string): { db: DatabaseSync; recovering: boolean } {
   // Create the file private before SQLite does, so it never exists with the
   // default 0644 mode. SQLite gives -wal and -shm the main file's mode.
   closeSync(openSync(file, "a", 0o600));
@@ -768,14 +779,14 @@ function openDatabase(file: string): { db: DatabaseSync; created: boolean } {
     const { user_version: version } = db.prepare("PRAGMA user_version").get() as {
       user_version: number;
     };
-    const created = Number(version) === 0;
-    if (created) {
-      db.exec(`BEGIN IMMEDIATE; ${SCHEMA} COMMIT;`);
+    if (Number(version) === 0) {
+      db.exec(`BEGIN IMMEDIATE; ${SCHEMA} ${RECOVERY_SCHEMA} INSERT INTO recovery_pending (id) VALUES (1); COMMIT;`);
     } else if (Number(version) !== 1) {
       throw new UnsupportedSchemaError();
     }
-    db.exec(RECOVERED_SCHEMA);
-    return { db, created };
+    db.exec(RECOVERY_SCHEMA);
+    const recovering = db.prepare("SELECT 1 FROM recovery_pending").get() !== undefined;
+    return { db, recovering };
   } catch (error) {
     db.close();
     throw error;

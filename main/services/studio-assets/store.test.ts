@@ -532,6 +532,41 @@ test("a lost database is rebuilt from stored blobs, which stay readable and in g
   assert.deepEqual(await restarted.collectGarbage(), { deletedAssets: 1, freedBytes: fresh.bytes });
 });
 
+test("a rebuild interrupted before it re-indexes resumes on the next start instead of deleting images", { skip: process.getuid?.() === 0 && "root ignores directory permissions" }, async (t) => {
+  const errors: unknown[] = [];
+  const f = await fixture(t, {}, { onError: (error) => errors.push(error) });
+  const image = await f.store.put({ bytes: pngBytes(10, 10, 1) });
+  f.store.retain({ kind: "images-workflow", id: "wf-1" }, [image.assetId]);
+  await f.store.close();
+  await removeDatabase(f.root);
+
+  // The rebuild's blob scan fails (an unreadable shard stands in for any I/O error
+  // or an exit mid-scan); the store still opens, without the image indexed.
+  const shard = path.join(f.root, "blobs", image.assetId.slice(0, 2));
+  await fs.chmod(shard, 0o000);
+  t.after(() => fs.chmod(shard, 0o700).catch(() => undefined));
+  const failed = await f.open();
+  assert.equal(errors.length, 1);
+  assert.equal(failed.get(image.assetId), undefined);
+  await failed.close();
+
+  await fs.chmod(shard, 0o700);
+  const restarted = await f.open();
+  assert.equal((await restarted.read(image.assetId)).bytes.byteLength, image.bytes);
+  f.advance(3 * HOUR);
+  assert.deepEqual(await restarted.collectGarbage(), { deletedAssets: 0, freedBytes: 0 }, "it is protected as recovered");
+
+  // Once the rebuild finished, later starts are ordinary again.
+  await restarted.close();
+  const stray = pngBytes(11, 11, 6);
+  const strayId = createHash("sha256").update(stray).digest("hex");
+  await fs.mkdir(path.join(f.root, "blobs", strayId.slice(0, 2)), { recursive: true });
+  await fs.writeFile(path.join(f.root, "blobs", strayId.slice(0, 2), strayId), stray);
+  const ordinary = await f.open();
+  assert.equal(ordinary.get(strayId), undefined);
+  assert.deepEqual(await f.blobFiles(), [image.assetId]);
+});
+
 test("a quota refusal says how much space recovered images keep, since deleting items never frees it", async (t) => {
   const f = await fixture(t, { maxAssets: 2 });
   const recovered = await f.store.put({ bytes: pngBytes(10, 10, 1) });
