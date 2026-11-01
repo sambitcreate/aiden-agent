@@ -1041,7 +1041,11 @@ test("a failed restore never deletes an ignored file written while it was undoin
     const result = await run(...args);
     if (armed && args[1].includes("status") && args[1].includes("--ignored=matching")) {
       armed = false;
-      backupWritten = await fs.writeFile(path.join(created.path, "editor-backup.txt"), "backup\n").then(() => true, () => false);
+      // The checkout has been set aside by now: the editor writes into the
+      // folder the check just looked at, wherever it is.
+      const workTree = args[1].find((arg: string) => arg.startsWith("--work-tree="))?.slice("--work-tree=".length) ?? args[0];
+      await fs.writeFile(path.join(workTree, "editor-backup.txt"), "backup\n");
+      backupWritten = true;
     }
     return result;
   };
@@ -1055,9 +1059,36 @@ test("a failed restore never deletes an ignored file written while it was undoin
     ),
   );
   assert.equal(armed, false, "the rollback looked at the folder");
-  if (backupWritten) {
-    assert.equal(await fs.readFile(path.join(created.path, "editor-backup.txt"), "utf8"), "backup\n", "the backup survives");
-  }
+  assert.equal(backupWritten, true);
+  assert.equal(await fs.readFile(path.join(created.path, "editor-backup.txt"), "utf8"), "backup\n", "the backup survives in the worktree's place");
+});
+
+test("a restore leaves alone a folder put back from the Trash while it was checking for room", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "aiden/trash");
+  await fs.writeFile(path.join(created.path, ".gitignore"), ".env\n");
+  await git(created.path, ["add", ".gitignore"]);
+  await git(created.path, ["commit", "-m", "Ignore .env"]);
+  await fs.writeFile(path.join(created.path, ".env"), "SECRET=1\n");
+  const trash = path.join(await temporaryDirectory(t), "in-the-trash");
+  await fs.rename(created.path, trash);
+  // The person puts the folder back while Aiden measures the checkout.
+  const measure = service.managedWorktreeCheckoutBytes.bind(service);
+  service.managedWorktreeCheckoutBytes = async (...args) => {
+    const bytes = await measure(...args);
+    await fs.rename(trash, created.path);
+    return bytes;
+  };
+  await assert.rejects(
+    service.restoreDeletedManagedWorktreeCheckout(
+      repository, root, created.path, "aiden/trash", created.worktreeGitDir, created.ownershipToken, "",
+      async () => undefined,
+    ),
+    /already there/u,
+  );
+  assert.equal(await fs.readFile(path.join(created.path, ".env"), "utf8"), "SECRET=1\n", "the ignored file it held is kept");
 });
 
 test("a failed restore puts the folder back when a late write stops its removal", async (t) => {

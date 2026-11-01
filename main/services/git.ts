@@ -6916,6 +6916,12 @@ export class GitService {
       const checkoutBytes = await this.managedWorktreeCheckoutBytes(repo.topLevel, head);
       await checkWorktreeAllocation(root, repo.commonDir, checkoutBytes);
       if (stale) {
+        // Checked again here, after the slow size and space checks: a folder
+        // put back from the Trash meanwhile holds work (ignored files too)
+        // that a plain `worktree remove` of a clean checkout would delete.
+        if ((await this.pathExists(stale.path)) || (await this.pathExists(target))) {
+          throw new GitServiceError("command_failed", "The worktree folder is already there.");
+        }
         // The folder is gone, so this only clears Git's record of it. Without
         // --force, Git refuses if a folder with changes reappeared meanwhile.
         try {
