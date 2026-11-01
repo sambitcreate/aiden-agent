@@ -574,6 +574,33 @@ test("a blocked prompt the person retries once the hook lets it through reaches 
   assert.ok(context.indexOf("Staging is deploying now.") > promptAt, "and it comes before its reply");
 });
 
+test("a follow-up turn that starts from Aiden's own notice runs SessionStart but never screens the notice", async () => {
+  resetWorkspaceChatSessionsForTests();
+  let writes = 0;
+  const store = {
+    async setPromptHookBlock(): Promise<boolean> {
+      writes += 1;
+      return true;
+    },
+  };
+  const { dispatcher, calls } = fakeDispatcher({
+    SessionStart: { additionalContext: fenced("branch: main"), ranHooks: ["start"] },
+    UserPromptSubmit: { blockPrompt: true, reason: "no prompts today", ranHooks: ["scan"] },
+  });
+  const context = await runPromptIntakeHooks({
+    target: { chatId: "follow-up-notice" },
+    dispatch: createWorkspaceChatHooks({ chatId: "follow-up-notice" }, dispatcher).dispatch,
+    hasPriorMessages: false,
+    prompt: { id: "notice-1", content: "The background task finished.", notice: { version: 1, kind: "task" } },
+    store,
+    idempotencyKeys: { userPromptSubmit: "UserPromptSubmit:follow-up-notice:1" },
+    onStoreError: () => assert.fail("nothing is written"),
+  });
+  assert.deepEqual(calls.map((call) => call.event), ["SessionStart"]);
+  assert.match(context ?? "", /branch: main/u);
+  assert.equal(writes, 0, "the notice is never marked blocked");
+});
+
 test("a prompt stays out of the model's context when writing its blocked mark fails", async (t) => {
   resetWorkspaceChatSessionsForTests();
   let writes = 0;

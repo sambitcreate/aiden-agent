@@ -191,6 +191,8 @@ export function scanHookCommand(command: string): HookCommandScan {
     }
     if (char === "$" && command[index + 1] === "(") {
       end();
+      // `>&$(./x.sh)`: the substitution runs a command; only its output names the target.
+      redirect = undefined;
       atCommand = true;
       index += 1;
       continue;
@@ -215,6 +217,8 @@ export function scanHookCommand(command: string): HookCommandScan {
     }
     if (COMMAND_SEPARATORS.has(char)) {
       end();
+      // A redirection still waiting for its target (``>`./x.sh` ``) never claims the next command.
+      redirect = undefined;
       atCommand = true;
       continue;
     }

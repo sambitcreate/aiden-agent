@@ -108,6 +108,18 @@ test("a script fed to a shell through a redirection is pinned, even through tee 
   }
 });
 
+test("a script run to build a redirection's target is pinned, not mistaken for the file written", async (t) => {
+  const root = await workspace(t);
+  for (const command of [": >&$(./target.sh)", ": > $(./target.sh)", ": >`./target.sh`", ": 2>&$(./target.sh)"]) {
+    await fs.writeFile(path.join(root, "target.sh"), "printf 1\n");
+    const first = await scan(root, command);
+    assert.deepEqual(first.paths, ["target.sh"], command);
+    const before = digestWithScriptFiles("base", first.files);
+    await fs.writeFile(path.join(root, "target.sh"), "touch proof.txt; printf 1\n");
+    assert.notEqual(digestWithScriptFiles("base", (await scan(root, command)).files), before, command);
+  }
+});
+
 test("commands whose code the scan can't follow are named", () => {
   const cases: Array<[string, string[]]> = [
     ["cd sub && ./run.sh", ["cd"]],

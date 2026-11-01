@@ -467,6 +467,8 @@ export interface PromptIntakeMessage {
   id?: string;
   content: string;
   hookBlocked?: unknown;
+  /** Set on Aiden's own follow-up notice, which UserPromptSubmit never screens. */
+  notice?: unknown;
 }
 
 export interface PromptIntakeInput {
@@ -510,7 +512,9 @@ export async function runPromptIntakeHooks(input: PromptIntakeInput): Promise<st
       : undefined;
     if (sessionStart?.stopTurn) throw new Error(hookStopMessage(sessionStart));
     if (source) markWorkspaceChatSessionStarted(input.target);
-    const promptSubmit = prompt
+    // A follow-up turn starts from Aiden's own notice, not the person's words,
+    // so it isn't screened (as a notice queued mid-run isn't either).
+    const promptSubmit = prompt && prompt.notice === undefined
       ? await dispatch(
           "UserPromptSubmit",
           { prompt: prompt.content },

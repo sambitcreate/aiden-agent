@@ -322,6 +322,15 @@ A deferred tool (listed in `load_tools`, so it costs no tokens until it's used) 
 | 4 | Opt-in import from `.claude/settings.json`, Claude plugin `hooks/hooks.json` and Codex config, converted with per-hook approval. | Import fixtures for the superpowers and Codex plugin hooks on this Mac |
 | 5 | Remote revision for a native `hook` step kind and hook status on iOS and Android (read-only). | iOS, Android and fixture contract tests together |
 
+Status of the exit criteria (2026-11-01): the two Playwright flows for phases 1 and 2 were not added. Behavioral suites cover the same claims instead:
+
+- A hook blocking a tool: `main/services/workspace-chat-hooks.test.ts` ("PreToolUse deny blocks with the hooks' names and reason…") and `main/services/agent-surface-hooks.test.ts`.
+- The approval card: `renderer/components/chat-approval-card.test.tsx` renders the hook card and its allow-once, matcher, script-file and malformed-proposal states.
+- Phone approval being refused: `main/services/aiden-remote-host-runs.test.ts` and `main/services/aiden-remote-streams.test.ts`.
+- Owner review: light and dark screenshots of the hook cards, the approval confirmation, the detail sheet and the blocked-prompt mark, captured from a component harness and attached to the PR.
+
+An end-to-end Playwright flow for each remains a follow-up.
+
 ## 12. Docs and test obligations
 
 - New guide `docs/hooks.md`, covering the format, events, payloads, aliases, trust model and examples.
