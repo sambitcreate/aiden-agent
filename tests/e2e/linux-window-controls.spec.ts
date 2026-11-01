@@ -1,7 +1,14 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { ElectronApplication, Locator, Page } from "@playwright/test";
-import { expect, finishLmStudioOnboarding, test, waitForToastsToClear } from "./fixtures";
+import {
+  E2E_PROFILE_NAME,
+  expect,
+  finishLmStudioOnboarding,
+  skipBotsOnboardingStep,
+  test,
+  waitForToastsToClear,
+} from "./fixtures";
 
 // Aiden's own Linux title bar: no desktop frame or menu bar, Aiden-drawn
 // window controls in the 52px top bar, and the system title bar as an opt-out.
@@ -141,6 +148,50 @@ test.describe("Aiden title bar", () => {
     await expect(windowControls(page)).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Main menu" })).toHaveCount(0);
     expect(await menuBarVisible(aiden.app)).toBe(true);
+  });
+});
+
+test.describe("Aiden title bar during setup", () => {
+  test.use({ portableConfigSeed: "empty" });
+
+  test("the window controls stay on top of setup's own dialogs", async ({ aiden }) => {
+    const { app, page } = aiden;
+    const onboarding = page.locator('section[aria-label="Set up Aiden"]');
+    await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
+    await onboarding.getByRole("button", { name: /^Next/u }).click();
+    await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
+    await onboarding.getByRole("button", { name: /^Next/u }).click();
+    await skipBotsOnboardingStep(onboarding);
+    await onboarding.getByRole("button", { name: "What’s sent" }).click();
+    const sheet = page.getByRole("dialog", { name: "What’s sent" });
+    await expect(sheet).toBeVisible();
+
+    // The modal hides the rest of the app from assistive tech, but each
+    // window button is still what a press at its centre lands on.
+    const controls = page.locator("[data-window-controls]");
+    for (const label of ["Minimize", "Maximize", "Close"]) {
+      const box = (await controls.locator(`button[aria-label="${label}"]`).boundingBox())!;
+      const hit = await page.evaluate(
+        ({ x, y }) => document.elementFromPoint(x, y)?.closest("button")?.getAttribute("aria-label") ?? null,
+        { x: box.x + box.width / 2, y: box.y + box.height / 2 },
+      );
+      expect(hit, label).toBe(label);
+    }
+
+    await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      const calls = { count: 0 };
+      (globalThis as { __minimizeCalls?: typeof calls }).__minimizeCalls = calls;
+      window.minimize = () => {
+        calls.count += 1;
+      };
+    });
+    await controls.locator('button[aria-label="Minimize"]').click();
+    await expect
+      .poll(() => app.evaluate(() => (globalThis as { __minimizeCalls?: { count: number } }).__minimizeCalls?.count))
+      .toBe(1);
+    // A window action is not a press outside the dialog.
+    await expect(sheet).toBeVisible();
   });
 });
 

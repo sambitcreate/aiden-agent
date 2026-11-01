@@ -91,8 +91,9 @@ export function WindowControls() {
       role="group"
       aria-label="Window"
       data-window-controls
-      // Above dialogs and onboarding (z-60) so the window can always be closed.
-      className="no-drag pointer-events-auto fixed right-0 top-0 z-[70] flex h-13 items-center gap-1 pl-1 pr-3"
+      // Above every dialog layer, including setup's own dialogs (z-70), so the
+      // window can always be minimized or closed.
+      className="no-drag pointer-events-auto fixed right-0 top-0 z-[80] flex h-13 items-center gap-1 pl-1 pr-3"
       // A window action is not a click outside an open dialog or popover: keep
       // the press from reaching their outside-press listeners on the document,
       // so minimizing never closes a dialog and loses what was typed in it.
