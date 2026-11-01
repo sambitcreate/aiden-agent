@@ -261,8 +261,9 @@ function isMobileSimulatorCapability(
 
 /**
  * Opt-ins negotiated after pairing (`bot:cards`, `bot:activity`,
- * `bot:handoffs`, `schedule:cards`, `chat:new-worktree`): any device type,
- * and never more authority than the device's own grants already carry.
+ * `bot:handoffs`, `schedule:cards`, `chat:jobs`, `chat:new-worktree`): any
+ * device type, and never more authority than the device's own grants already
+ * carry.
  */
 function isOptInCapability(
   value: unknown,

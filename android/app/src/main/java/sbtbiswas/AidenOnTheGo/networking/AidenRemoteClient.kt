@@ -83,7 +83,7 @@ class AidenRemoteClient(
     val endpoint: String,
     val credential: String?,
     val customOkHttpClient: OkHttpClient? = null
-) : AidenSpendingTransport {
+) : AidenSpendingTransport, AidenBackgroundJobTransport {
     constructor(
         installation: AidenInstallation,
         credential: String,
@@ -638,6 +638,24 @@ class AidenRemoteClient(
     override suspend fun spending(owner: AidenSpendingOwner): AidenSpendingStatus =
         executeRequest(spendingPath(owner)) { bytes -> decodeSpending(bytes) }
 
+    /** Revision 49 (`chat:jobs`): what the agent left running for the chat on the Mac. */
+    override suspend fun backgroundJobs(chatId: String): AidenBackgroundJobs {
+        AidenBotWire.validateIdentifier(chatId, "chatId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+        return executeRequest("/chats/$chatId/jobs") { bytes -> AidenBackgroundJobs.decode(String(bytes, Charsets.UTF_8)) }
+    }
+
+    /** Stops a job and everything it started; returns the chat's list once it has ended. */
+    override suspend fun stopBackgroundJob(chatId: String, jobId: String): AidenBackgroundJobs {
+        AidenBotWire.validateIdentifier(chatId, "chatId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+        if (!AidenBackgroundJob.ID.matches(jobId)) throw AidenRemoteClientException.InvalidResponse()
+        return executeRequest(
+            "/chats/$chatId/jobs/$jobId/stop",
+            method = "POST",
+            bodyJson = "{}",
+            retryConnectionFailure = false
+        ) { bytes -> AidenBackgroundJobs.decode(String(bytes, Charsets.UTF_8)) }
+    }
+
     /** Adds the limit once more; the revision makes a repeated tap a `revision_conflict`. */
     override suspend fun allowMoreSpending(owner: AidenSpendingOwner, revision: String): AidenSpendingStatus {
         if (revision.isEmpty() || revision.length > 128 || revision.any { it.code !in 0x21..0x7e }) {
@@ -952,7 +970,7 @@ class AidenRemoteClient(
     }
 
     /**
-     * Revision 49 (`chat:new-worktree`, with `git:write`): the Mac makes a worktree named from
+     * Revision 50 (`chat:new-worktree`, with `git:write`): the Mac makes a worktree named from
      * [text], the chat's first message, and moves the still-empty chat [id] into it. It sends
      * nothing; the turn follows as usual. The same key and chat find the worktree an earlier
      * attempt made.

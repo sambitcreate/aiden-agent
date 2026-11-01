@@ -131,7 +131,14 @@ internal fun aidenShouldRequestBotIssues(server: AidenServer, installation: Aide
     aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ISSUES, server, installation)
 
 /**
- * Revision 49: a Mac that offers `chat:new-worktree` in `serverCapabilities` is asked for it, in a
+ * Revision 49: a Mac that offers `chat:jobs` in `serverCapabilities` is asked for it, in a call
+ * of its own after `bot:issues`, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestChatJobs(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.CHAT_JOBS, server, installation)
+
+/**
+ * Revision 50: a Mac that offers `chat:new-worktree` in `serverCapabilities` is asked for it, in a
  * call of its own after `bot:issues`, unless [installation] already holds it.
  */
 internal fun aidenShouldRequestChatNewWorktree(server: AidenServer, installation: AidenInstallation): Boolean =
@@ -216,7 +223,24 @@ internal suspend fun aidenRequestBotIssues(
     )
 
 /**
- * Revision 49: asks [server] for `chat:new-worktree` alone, exactly as [aidenRequestScheduleCards]
+ * Revision 49: asks [server] for `chat:jobs` alone, exactly as [aidenRequestScheduleCards] asks
+ * for `schedule:cards`. A Mac that refuses it (400 or 404) leaves the pairing as it was; its chats
+ * then show no background jobs on this phone.
+ */
+internal suspend fun aidenRequestChatJobs(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestChatJobs(server, installation)) listOf(AidenRemoteCapability.CHAT_JOBS) else emptyList(),
+        client,
+        stillCurrent
+    )
+
+/**
+ * Revision 50: asks [server] for `chat:new-worktree` alone, exactly as [aidenRequestScheduleCards]
  * asks for `schedule:cards`. A Mac that refuses it (400 or 404) leaves the pairing as it was; its
  * new chats then show no New worktree chip on this phone.
  */
@@ -578,7 +602,15 @@ class AidenRemoteCoordinator(
                     server = imagesServer,
                     request = ::aidenRequestBotIssues
                 )
-                // Revision 49: `chat:new-worktree` goes alone too, last.
+                // Revision 49: `chat:jobs` goes alone too, last.
+                val negotiatedServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = issuesServer,
+                    request = ::aidenRequestChatJobs
+                )
+                // Revision 50: `chat:new-worktree` goes alone too, last.
                 val negotiatedServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,

@@ -13276,7 +13276,7 @@ private final class AidenStreamRecoveryFixture: @unchecked Sendable {
     }
 }
 
-/// A Mac that offers New worktree (revision 49) for the empty chat in
+/// A Mac that offers New worktree (revision 50) for the empty chat in
 /// workspace-1, and answers the worktree request as the test chooses.
 private final class AidenNewWorktreeMacFixture: @unchecked Sendable {
     enum Setup: Sendable { case moves, refuses, neverAnswers }

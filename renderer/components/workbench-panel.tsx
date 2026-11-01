@@ -15,6 +15,7 @@ import {
   storedWorkbenchWidth,
   type PanelWidthBounds,
 } from "../lib/environment-panel-layout";
+import { useTrailingWindowControlsClearance } from "../lib/window-chrome";
 
 export interface WorkbenchWidthState {
   /** The person's preferred width; the rendered width is resolved against the container. */
@@ -105,8 +106,14 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
   const toggleShortcut = useShortcutLabel("environment.toggle");
   const toggleShortcutBinding = useShortcutBinding("environment.toggle");
   const tabMenuSelectionRef = React.useRef(false);
+  const headerRef = React.useRef<HTMLElement>(null);
+  const trailingClearance = useTrailingWindowControlsClearance(headerRef);
   return (
-    <header className="drag-region flex h-13 shrink-0 items-center gap-1 border-b border-separator px-2">
+    <header
+      ref={headerRef}
+      className="drag-region flex h-13 shrink-0 items-center gap-1 border-b border-separator px-2"
+      style={trailingClearance ? { paddingRight: trailingClearance + 4 } : undefined}
+    >
       <div className="no-drag flex min-w-0 flex-1 gap-1 overflow-x-auto py-1" role="tablist" aria-label={tabListLabel}>
         {tabs.map((entry, index) => {
           const Icon = entry.icon;

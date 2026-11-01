@@ -10,7 +10,6 @@ import {
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
-import { WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL } from "../../renderer/shared/workspace-folder-presence.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import {
   isToolStep,
@@ -1214,7 +1213,7 @@ export class AidenRemoteChatService {
       spendingRefusal?: (chat: Pick<Chat, "id" | "botId">) => Promise<string | undefined>;
       attachments?: AidenRemoteAttachmentStore;
       /**
-       * Contract revision 49: makes (or, for the same chat, finds again) the
+       * Contract revision 50: makes (or, for the same chat, finds again) the
        * managed worktree a phone's first message asked for, from the chat's
        * workspace. Absent: `chat:new-worktree` is neither offered nor served.
        * Errors it throws as `AidenRemoteServiceError` reach the phone as they
@@ -1239,10 +1238,11 @@ export class AidenRemoteChatService {
        */
       deviceSupportsQuestionPrompts?: (deviceId: string) => Promise<boolean>;
       /**
-       * Whether a workspace's folder was moved or deleted, so a paired device
-       * hears why before its message is stored. Absent: never refused here.
+       * Why a workspace's turns are refused when its folder (or its managed
+       * worktree's checkout) was moved or deleted, so a paired device hears
+       * why before its message is stored. Undefined, or absent: not refused.
        */
-      workspaceFolderMissing?: (workspaceId: string) => Promise<boolean>;
+      workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
@@ -1904,7 +1904,7 @@ export class AidenRemoteChatService {
   }
 
   /**
-   * Contract revision 49: put an empty chat in a new managed worktree made
+   * Contract revision 50: put an empty chat in a new managed worktree made
    * from its workspace, named from the message about to be sent, so that
    * message runs there. The worktree is keyed by the chat, so a retry never
    * makes a second one. An empty chat that is already in the worktree made
@@ -2478,18 +2478,14 @@ export class AidenRemoteChatService {
             // this check is enforced on the generation: it checks again once
             // registered, and the pause stops the chat's running work.
             await this.refuseIfBotPaused(authoritative);
-            if (
-              workspaceId &&
-              !authoritative.botId &&
-              (await this.options.workspaceFolderMissing?.(workspaceId)) === true
-            ) {
+            const folderRefusal =
+              workspaceId && !authoritative.botId
+                ? await this.options.workspaceFolderRefusal?.(workspaceId)
+                : undefined;
+            if (folderRefusal) {
               // Nothing ran, so the same send runs once the folder is back.
               throw new AidenOperationNotExecutedError(
-                new AidenRemoteServiceError(
-                  "workspace_unavailable",
-                  WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL,
-                  409,
-                ),
+                new AidenRemoteServiceError("workspace_unavailable", folderRefusal, 409),
               );
             }
             taken = parsed.attachmentIds === undefined

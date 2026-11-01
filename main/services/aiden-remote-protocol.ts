@@ -204,6 +204,18 @@ export const AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION = 47 as const;
 export const AIDEN_REMOTE_WORKSPACE_CLONE_CONTRACT_REVISION = 48 as const;
 /**
  * Contract revision 49 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION`):
+ * a chat's background jobs on phones (`chat:jobs`, an opt-in capability
+ * rather than a feature token, because phones already hear the most feature
+ * tokens shipped clients accept). `GET /chats/{chatId}/jobs` lists what the
+ * agent left running for the chat (dev servers, watchers, long test runs)
+ * with the TCP ports each serves on the Mac; `POST
+ * /chats/{chatId}/jobs/{jobId}/stop` with `{}` stops one and returns the
+ * list. Older phones see nothing new.
+ */
+export const AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION = 49 as const;
+/**
+ * Contract revision 50 (provisional; re-claim the next revision after `main`'s
  * at merge by changing only `AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION`):
  * New worktree on phones (`chat:new-worktree`, an opt-in capability rather
  * than a feature token, because phones already hear the most feature tokens
@@ -213,7 +225,7 @@ export const AIDEN_REMOTE_WORKSPACE_CLONE_CONTRACT_REVISION = 48 as const;
  * moves the still-empty chat into it, so the first message runs there. Older
  * phones see nothing new.
  */
-export const AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION = 49 as const;
+export const AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION = 50 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -440,7 +452,16 @@ export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
 export const AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES = ["schedule:cards"] as const;
 
 /**
- * Contract revision 49: a device holding `chat:new-worktree` may put an empty
+ * Contract revision 49: a device holding `chat:jobs` may list a chat's
+ * background jobs (`GET /chats/{chatId}/jobs`, which also needs `chat:read`)
+ * and stop one (`POST /chats/{chatId}/jobs/{jobId}/stop`, which also needs
+ * `chat:write`). It is offered only while the host runs background jobs
+ * (macOS and Linux), and widens nothing a chat grant does not already allow.
+ */
+export const AIDEN_REMOTE_CHAT_JOB_CAPABILITIES = ["chat:jobs"] as const;
+
+/**
+ * Contract revision 50: a device holding `chat:new-worktree` may put an empty
  * chat in a new managed worktree (`POST /chats/{chatId}/worktree`, which also
  * needs `chat:write` and `git:write`). It is offered only while the host can
  * create worktrees, and widens nothing those grants do not already allow.
@@ -449,12 +470,15 @@ export const AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES = ["chat:new-worktree"]
 
 /**
  * Every opt-in a paired device may persist. Each changes what a device is
- * shown; `chat:new-worktree` also opens its route, which still needs the
- * device's chat and Git write grants and so widens nothing they allow.
+ * shown; `chat:jobs` opens its two routes, which still need the chat grant
+ * (`chat:read`, `chat:write`), and `chat:new-worktree` opens its route, which
+ * still needs the device's chat and Git write grants, so neither widens what
+ * those grants allow.
  */
 export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
 ] as const;
 
@@ -470,6 +494,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
 ] as const;
 
@@ -489,6 +514,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
+  ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
 ] as const;
 
@@ -2038,7 +2064,9 @@ export interface AidenRemoteContractFixture {
   browserRecordings?: AidenRemoteBrowserRecordingsFixture;
   /** Revision 47 (`spending-limits-v1`): spending status, Allow more and the refusals. */
   spending?: AidenRemoteSpendingFixture;
-  /** Revision 49 (`chat:new-worktree`): an empty chat moved into a new worktree, and a chat with messages refused. */
+  /** Revision 49 (`chat:jobs`): a chat's jobs, a stop, and an unknown job. */
+  backgroundJobs?: AidenRemoteBackgroundJobsFixture;
+  /** Revision 50 (`chat:new-worktree`): an empty chat moved into a new worktree, and a chat with messages refused. */
   chatNewWorktree?: AidenRemoteChatNewWorktreeFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
@@ -7788,6 +7816,13 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     spending = parseSpendingFixture(value.spending);
   }
+  let backgroundJobs: AidenRemoteBackgroundJobsFixture | undefined;
+  if (value.backgroundJobs !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION) {
+      throw new Error(`Background job fixtures require contract revision ${AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION}.`);
+    }
+    backgroundJobs = parseBackgroundJobsFixture(value.backgroundJobs);
+  }
   let chatNewWorktree: AidenRemoteChatNewWorktreeFixture | undefined;
   if (value.chatNewWorktree !== undefined) {
     if (contractRevision < AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION) {
@@ -7894,6 +7929,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(botImages ? { botImages } : {}),
     ...(browserRecordings ? { browserRecordings } : {}),
     ...(spending ? { spending } : {}),
+    ...(backgroundJobs ? { backgroundJobs } : {}),
     ...(chatNewWorktree ? { chatNewWorktree } : {}),
   };
 }
@@ -8010,10 +8046,133 @@ function parseSpendingFixture(value: unknown): AidenRemoteSpendingFixture {
   return fixture;
 }
 
+/** Revision 49: one of a chat's background jobs as a phone sees it. */
+export interface AidenRemoteBackgroundJob {
+  /** `job_` and 8 hex digits. */
+  id: string;
+  /** The agent's short label, else the command. */
+  label: string;
+  state: "running" | "exited" | "failed" | "stopped";
+  startedAt: string;
+  endedAt?: string;
+  /** How a job that ended by itself exited; absent when it is unknown. */
+  exitCode?: number;
+  /** Why a stopped job was stopped. */
+  endReason?: "agent" | "person" | "output-limit" | "chat-deleted" | "access-changed" | "app-quit";
+  /** A `run_command` call left it running; it has no exit code. */
+  fromCommand?: true;
+  /** TCP ports it listens on, on the Mac, while it runs. */
+  ports: number[];
+}
+
+export interface AidenRemoteBackgroundJobs {
+  /** Newest first: what runs, then what ended recently. */
+  jobs: AidenRemoteBackgroundJob[];
+}
+
+export const AIDEN_REMOTE_BACKGROUND_JOB_STATES = ["running", "exited", "failed", "stopped"] as const;
+export const AIDEN_REMOTE_BACKGROUND_JOB_END_REASONS = [
+  "agent",
+  "person",
+  "output-limit",
+  "chat-deleted",
+  "access-changed",
+  "app-quit",
+] as const;
+export const AIDEN_REMOTE_MAX_BACKGROUND_JOBS = 40;
+export const AIDEN_REMOTE_MAX_BACKGROUND_JOB_LABEL = 200;
+export const AIDEN_REMOTE_MAX_BACKGROUND_JOB_PORTS = 5;
+const AIDEN_REMOTE_BACKGROUND_JOB_ID = /^job_[0-9a-f]{8}$/u;
+
+function backgroundJobTime(record: Record<string, unknown>, key: string): string {
+  const text = requiredString(record, key);
+  if (!Number.isFinite(Date.parse(text))) throw new Error(`Background job ${key} must be a time.`);
+  return text;
+}
+
+/** Revision 49: `GET /chats/{chatId}/jobs` and the stop response. */
+export function parseAidenRemoteBackgroundJobs(value: unknown): AidenRemoteBackgroundJobs {
+  if (!isRecord(value)) throw new Error("Background jobs must be an object.");
+  assertExactKeys(value, ["jobs"], "Background jobs");
+  if (!Array.isArray(value.jobs) || value.jobs.length > AIDEN_REMOTE_MAX_BACKGROUND_JOBS) {
+    throw new Error("Background jobs must be a short list.");
+  }
+  const ids = new Set<string>();
+  const jobs = value.jobs.map((item): AidenRemoteBackgroundJob => {
+    if (!isRecord(item)) throw new Error("A background job must be an object.");
+    assertExactKeys(item, ["id", "label", "state", "startedAt", "endedAt", "exitCode", "endReason", "fromCommand", "ports"], "Background job");
+    const id = requiredString(item, "id");
+    if (!AIDEN_REMOTE_BACKGROUND_JOB_ID.test(id) || ids.has(id)) throw new Error("A background job id is invalid or repeated.");
+    ids.add(id);
+    const label = requiredString(item, "label");
+    if (characterLength(label) > AIDEN_REMOTE_MAX_BACKGROUND_JOB_LABEL) throw new Error("A background job label is too long.");
+    const state = enumMember(item.state, AIDEN_REMOTE_BACKGROUND_JOB_STATES, "Background job state");
+    const running = state === "running";
+    if (running !== (item.endedAt === undefined)) throw new Error("Only an ended background job has endedAt.");
+    if (item.exitCode !== undefined && (state === "running" || state === "stopped" || !Number.isSafeInteger(item.exitCode))) {
+      throw new Error("Only a job that exited by itself carries its exit code.");
+    }
+    if ((item.endReason !== undefined) !== (state === "stopped")) throw new Error("Only a stopped background job has an end reason.");
+    if (item.fromCommand !== undefined && item.fromCommand !== true) throw new Error("fromCommand is true when present.");
+    if (item.fromCommand === true && state === "failed") throw new Error("A job a command left running has no exit code to fail on.");
+    if (
+      !Array.isArray(item.ports) ||
+      item.ports.length > AIDEN_REMOTE_MAX_BACKGROUND_JOB_PORTS ||
+      item.ports.some((port) => !Number.isSafeInteger(port) || (port as number) < 1 || (port as number) > 65_535) ||
+      (!running && item.ports.length > 0)
+    ) {
+      throw new Error("Background job ports must be a few TCP ports, only while it runs.");
+    }
+    return {
+      id,
+      label,
+      state,
+      startedAt: backgroundJobTime(item, "startedAt"),
+      ...(item.endedAt !== undefined ? { endedAt: backgroundJobTime(item, "endedAt") } : {}),
+      ...(item.exitCode !== undefined ? { exitCode: item.exitCode as number } : {}),
+      ...(item.endReason !== undefined
+        ? { endReason: enumMember(item.endReason, AIDEN_REMOTE_BACKGROUND_JOB_END_REASONS, "Background job end reason") }
+        : {}),
+      ...(item.fromCommand === true ? { fromCommand: true as const } : {}),
+      ports: [...(item.ports as number[])],
+    };
+  });
+  return { jobs };
+}
+
+export interface AidenRemoteBackgroundJobsFixture {
+  list: AidenRemoteBackgroundJobs;
+  stop: { jobId: string; request: Record<string, never>; response: AidenRemoteBackgroundJobs };
+  /** Stop or read of a job the chat does not have. */
+  notFound: AidenRemoteErrorEnvelope;
+}
+
+function parseBackgroundJobsFixture(value: unknown): AidenRemoteBackgroundJobsFixture {
+  if (!isRecord(value)) throw new Error("Background jobs fixture must be an object.");
+  assertExactKeys(value, ["list", "stop", "notFound"], "Background jobs fixture");
+  if (!isRecord(value.stop)) throw new Error("Background job stop fixture must be an object.");
+  assertExactKeys(value.stop, ["jobId", "request", "response"], "Background job stop fixture");
+  const jobId = requiredString(value.stop, "jobId");
+  if (!isRecord(value.stop.request) || Object.keys(value.stop.request).length > 0) throw new Error("Stop takes an empty object.");
+  const fixture: AidenRemoteBackgroundJobsFixture = {
+    list: parseAidenRemoteBackgroundJobs(value.list),
+    stop: { jobId, request: {}, response: parseAidenRemoteBackgroundJobs(value.stop.response) },
+    notFound: parseErrorEnvelopeFixture(value.notFound, "Background job not found"),
+  };
+  if (!fixture.list.jobs.some((job) => job.id === jobId && job.state === "running")) {
+    throw new Error("The stop fixture stops a running job from the list.");
+  }
+  if (fixture.stop.response.jobs.find((job) => job.id === jobId)?.state !== "stopped") {
+    throw new Error("After a stop the job is stopped.");
+  }
+  if (fixture.notFound.error.code !== "not_found") throw new Error("An unknown job is not_found.");
+  return fixture;
+}
+
 /** Longest message text `POST /chats/{chatId}/worktree` takes; only its first words name the branch. */
 export const AIDEN_REMOTE_MAX_NEW_WORKTREE_TEXT = 4_000;
 
-/** Revision 49: the body of `POST /chats/{chatId}/worktree`. */
+/** Revision 50: the body of `POST /chats/{chatId}/worktree`. */
 export interface AidenRemoteChatNewWorktreeRequest {
   /** The first message, about to be sent; the branch is named from it (`aiden/<words>`). */
   text: string;
@@ -8029,7 +8188,7 @@ export function parseAidenRemoteChatNewWorktreeRequest(value: unknown): AidenRem
   return { text };
 }
 
-/** Revision 49: the response of `POST /chats/{chatId}/worktree`. */
+/** Revision 50: the response of `POST /chats/{chatId}/worktree`. */
 export interface AidenRemoteChatNewWorktreeResponse {
   /** The chat, now in the worktree's workspace and still without messages. */
   chat: AidenRemoteChatProjection;

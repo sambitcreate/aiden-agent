@@ -59,7 +59,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
-/** Contract revision 49 (`chat:new-worktree`), read from the fixture every client shares. */
+/** Contract revision 50 (`chat:new-worktree`), read from the fixture every client shares. */
 class AidenNewWorktreeTest {
     private val fixture: JsonObject by lazy {
         val text = requireNotNull(javaClass.classLoader?.getResourceAsStream("contract.json")) { "contract.json" }

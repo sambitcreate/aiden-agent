@@ -20,12 +20,14 @@ import {
   AIDEN_REMOTE_CONTRACT_REVISION,
   AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
   parseAidenRemoteSpendingStatus,
+  parseAidenRemoteBackgroundJobs,
   parseAidenRemoteChatNewWorktreeResponse,
   type AidenRemoteCapability,
   type AidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AidenOperationNotExecutedError } from "./aiden-remote-operation-contract.js";
+import type { BackgroundJobView } from "../../renderer/shared/background-jobs.js";
 import { VISUAL_VIEWER_CSP } from "../../renderer/shared/visual-viewer.js";
 import { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
 import { AidenRemoteBotService } from "./aiden-remote-bots.js";
@@ -116,7 +118,9 @@ async function fixture(options: {
   contextPressure?: { chatId: string; pressure: Record<string, unknown> | null };
   /** The host's spending ledger (contract revision 47). */
   spending?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["spending"];
-  /** The host makes worktrees for phones' first messages (contract revision 49). */
+  /** The host's background jobs (contract revision 49). */
+  backgroundJobs?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["backgroundJobs"];
+  /** The host makes worktrees for phones' first messages (contract revision 50). */
   newWorktrees?: boolean;
 } = {}) {
   const logs: unknown[] = [];
@@ -276,6 +280,7 @@ async function fixture(options: {
               capability !== "bot:images" &&
               capability !== "bot:issues" &&
               capability !== "schedule:cards" &&
+              capability !== "chat:jobs" &&
               capability !== "chat:new-worktree",
           )
         ) {
@@ -581,6 +586,7 @@ async function fixture(options: {
         },
     ...(options.providers ? { providers: options.providers } : {}),
     ...(options.spending ? { spending: options.spending } : {}),
+    ...(options.backgroundJobs ? { backgroundJobs: options.backgroundJobs } : {}),
     models: {
       list: async () => ({
         providers: [{
@@ -1276,6 +1282,78 @@ test("browser recordings are served to chat readers as no-store video", async ()
     assert.equal((await fetch(`${cli.base}/chats/chat-1/recordings/${recording}`, { headers })).status, 404);
   } finally {
     await cli.close();
+  }
+});
+
+test("chat:jobs is offered while the host runs background jobs, and a holder lists a chat's jobs and stops one", async () => {
+  const { AidenRemoteBackgroundJobService } = await import("./aiden-remote-background-jobs.js");
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const now = Date.now();
+  const views: BackgroundJobView[] = [
+    { id: "job_00000001", chatId: "chat-1", workspaceId: "workspace-1", command: "npm run build", state: "failed", exitCode: 1, startedAt: now - 90_000, endedAt: now - 60_000, outputBytes: 10 },
+    { id: "job_1a2b3c4d", chatId: "chat-1", workspaceId: "workspace-1", command: "npm run dev", description: "Run the dev server", state: "running", startedAt: now - 120_000, outputBytes: 10, ports: [5173] },
+    { id: "job_5e6f7a8b", chatId: "chat-1", workspaceId: "workspace-1", command: "node api.js &", origin: "command", state: "running", startedAt: now - 5_000, outputBytes: 0, ports: [3000] },
+  ];
+  const stopped: string[] = [];
+  const jobs = new AidenRemoteBackgroundJobService({
+    list: (chatId) => (chatId === "chat-1" ? views.map((view) => ({ ...view })) : []),
+    stop: async (chatId, jobId) => {
+      stopped.push(`${chatId}:${jobId}`);
+      const view = views.find((job) => job.id === jobId)!;
+      Object.assign(view, { state: "stopped", endReason: "person", endedAt: Date.now(), ports: undefined });
+    },
+  });
+  const negotiate = {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ accepts: ["chat:jobs"] }),
+  };
+  for (const wired of [true, false]) {
+    const app = await fixture({
+      capabilities: ["server:read", "chat:read", "chat:write"],
+      acceptsProgressCapabilities: true,
+      deviceType: "iphone",
+      ...(wired ? { backgroundJobs: jobs } : {}),
+    });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.serverCapabilities.includes("chat:jobs"), wired);
+      assert.equal(server.features.some((feature: string) => feature.includes("job")), false, "no feature token is spent on it");
+      const listed = await fetch(`${app.base}/chats/chat-1/jobs`, { headers });
+      // Unwired hosts have no route; a wired host refuses a device that has not opted in.
+      assert.equal(listed.status, wired ? 403 : 404);
+      assert.equal((await fetch(`${app.base}/device/capabilities`, negotiate)).status, wired ? 200 : 404);
+    } finally {
+      await app.close();
+    }
+  }
+
+  const reader = await fixture({ capabilities: ["server:read", "chat:read", "chat:jobs"], deviceType: "android", backgroundJobs: jobs });
+  const holder = await fixture({ capabilities: ["server:read", "chat:read", "chat:write", "chat:jobs"], deviceType: "iphone", backgroundJobs: jobs });
+  const stop = (base: string, jobId: string, body = "{}") =>
+    fetch(`${base}/chats/chat-1/jobs/${jobId}/stop`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body });
+  try {
+    const list = parseAidenRemoteBackgroundJobs(await (await fetch(`${reader.base}/chats/chat-1/jobs`, { headers })).json());
+    assert.deepEqual(list.jobs.map((job) => job.id), ["job_5e6f7a8b", "job_1a2b3c4d", "job_00000001"], "running first, newest first");
+    assert.deepEqual(list.jobs.map((job) => job.ports), [[3000], [5173], []]);
+    assert.equal(list.jobs[0]!.fromCommand, true);
+    assert.equal(list.jobs[1]!.label, "Run the dev server");
+    assert.equal(list.jobs[2]!.exitCode, 1);
+
+    assert.equal((await stop(reader.base, "job_1a2b3c4d")).status, 403, "stopping needs chat:write");
+    assert.equal((await stop(holder.base, "job_1a2b3c4d", JSON.stringify({ force: true }))).status, 400);
+    const unknown = await stop(holder.base, "job_99999999");
+    assert.equal(unknown.status, 404);
+    assert.equal((await unknown.json()).error.code, "not_found");
+    assert.deepEqual(stopped, []);
+
+    const after = parseAidenRemoteBackgroundJobs(await (await stop(holder.base, "job_1a2b3c4d")).json());
+    assert.deepEqual(stopped, ["chat-1:job_1a2b3c4d"]);
+    const job = after.jobs.find((entry) => entry.id === "job_1a2b3c4d")!;
+    assert.deepEqual([job.state, job.endReason, job.ports], ["stopped", "person", []]);
+  } finally {
+    await reader.close();
+    await holder.close();
   }
 });
 
@@ -4134,7 +4212,7 @@ const ROUTE_METHOD_CANDIDATES = ["GET", "POST", "PUT", "PATCH", "DELETE"] as con
  * Instantiate a declared route template with one concrete request path. `:param`
  * segments receive tokens that satisfy the matching capture grammars in the
  * router (plain ids accept `x1`; `:fileId`, `:attachmentId`, and
- * `:avatarRevision` carry required prefixes; the git/scheduled `:action`
+ * `:avatarRevision` and `:jobId` carry required prefixes; the git/scheduled `:action`
  * families require one of their fixed action literals).
  */
 function concreteRequestPath(template: string): string {
@@ -4151,6 +4229,8 @@ function concreteRequestPath(template: string): string {
           return `att_${"a".repeat(43)}`;
         case ":avatarRevision":
           return `avatar_revision_${"a".repeat(32)}`;
+        case ":jobId":
+          return template.includes("/jobs/") ? "job_0000000a" : `x${parameterIndex}`;
         case ":segment":
         case ":offset":
           return "0";

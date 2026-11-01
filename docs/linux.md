@@ -110,7 +110,16 @@ artifacts, coding follow-through (background jobs, followed pull requests and
 Gemini voice transcription, remote access, notifications, profile, themes, and
 native subagents use the same contracts as macOS. Linux-specific integrations include:
 
-- native distro window chrome and conventional File/Edit/View/Window/Help menus;
+- Aiden's own title bar: no separate desktop title bar or menu bar strip.
+  Minimize, maximize/restore and close sit at the right end of Aiden's top bar,
+  the main menu button (☰) at the left opens the File, Edit, View, Go, Chat,
+  Window and Help menus, their keyboard shortcuts keep working, and dragging or
+  double-clicking empty top-bar space moves or maximizes the window. Turn on
+  **Settings → Appearance → Window → Use system title bar** to get the
+  desktop's own title bar and the classic menu bar back after a restart. Tiling
+  window managers (sway, Hyprland, i3, niri and similar) use the system title
+  bar unless you turn that switch off. Aiden's buttons always sit on the right
+  and do not follow the desktop's button-layout setting;
 - Ctrl-based app and global shortcuts, including the Wayland Global Shortcuts
   portal on desktops that implement it;
 - Vulkan disabled on Wayland sessions to avoid Chromium's Ozone incompatibility

@@ -211,8 +211,13 @@ data class AidenServer(
     val supportsBotIssues: Boolean
         get() = offersBotIssues && capabilities.contains(AidenRemoteCapability.BOT_ISSUES)
 
+    /** Offered and held (revision 49): a Workspace chat lists what it has running on the Mac. */
+    val supportsBackgroundJobs: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.CHAT_JOBS) == true &&
+            capabilities.contains(AidenRemoteCapability.CHAT_JOBS)
+
     /**
-     * Offered and held (revision 49), with `git:write` and `chat:write`: an empty Workspace chat
+     * Offered and held (revision 50), with `git:write` and `chat:write`: an empty Workspace chat
      * may start in a new worktree on the Mac.
      */
     val supportsNewWorktrees: Boolean

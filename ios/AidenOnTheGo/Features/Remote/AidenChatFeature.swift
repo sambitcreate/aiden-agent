@@ -1455,7 +1455,7 @@ final class AidenChatViewModel {
     /// later refresh keeps earlier pages the reader loaded.
     @ObservationIgnored private var hasSettledTranscriptWindow = false
     private(set) var isStarting = false
-    /// Revision 49: the first message starts this chat in a new worktree on
+    /// Revision 50: the first message starts this chat in a new worktree on
     /// the Mac. Shown only while `offersNewWorktree`.
     var startsInNewWorktree = false
     /// The Mac is making the worktree; the message waits above a Cancel.
@@ -3189,7 +3189,7 @@ final class AidenChatViewModel {
         let idempotencyKey = attempt.key
         do {
             if makesWorktree {
-                // Revision 49: the Mac makes the worktree and moves this empty
+                // Revision 50: the Mac makes the worktree and moves this empty
                 // chat into it before the message is sent there.
                 let key = worktreeAttempt?.text == text ? worktreeAttempt!.key : UUID()
                 worktreeAttempt = (text, key)
@@ -5703,6 +5703,8 @@ struct AidenChatDetailView: View {
     @State private var simulatorViewer: AidenSimulatorViewerModel?
     @State private var simulatorRefreshEpoch = 0
     @State private var spending = AidenSpendingNoticeModel()
+    @State private var backgroundJobs = AidenBackgroundJobsModel()
+    @State private var showsBackgroundJobs = false
     let autoStartVoice: Bool
     let allowsMutations: Bool
     /// Opens a chat this one was forked into. Nil hides the fork actions,
@@ -5803,6 +5805,19 @@ struct AidenChatDetailView: View {
         .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
+        .task(id: backgroundJobsRefreshKey) {
+            // Not pushed: read after each reply settles, and every few seconds
+            // while something runs or the list is open. Only while the app
+            // is in front: a backgrounded app never polls the Mac.
+            guard scenePhase == .active else { return }
+            await backgroundJobs.refresh(chatId: model.chat.id, transport: backgroundJobsTransport)
+            while !Task.isCancelled, backgroundJobsTransport != nil,
+                  backgroundJobs.runningCount > 0 || showsBackgroundJobs {
+                try? await Task.sleep(for: .seconds(showsBackgroundJobs ? 3 : 10))
+                guard !Task.isCancelled else { return }
+                await backgroundJobs.refresh(chatId: model.chat.id, transport: backgroundJobsTransport)
+            }
+        }
         .task(id: newWorktreeRefreshKey) {
             await model.refreshNewWorktreeRepository()
         }
@@ -5848,6 +5863,13 @@ struct AidenChatDetailView: View {
         .sheet(item: $botSheet) { botSheetContent($0) }
         .sheet(item: $progressSheet) { progressSheet in
             AidenChatProgressSheet(kind: progressSheet, model: model)
+        }
+        .sheet(isPresented: $showsBackgroundJobs) {
+            AidenBackgroundJobsSheet(
+                model: backgroundJobs,
+                canStop: allowsMutations && coordinator?.server?.capabilities.contains(.chatWrite) == true,
+                onStop: { jobId in Task { await backgroundJobs.stop(jobId, transport: backgroundJobsTransport) } }
+            )
         }
         .sheet(item: $forkSummaryRequest) { request in
             AidenForkSummarySheet { focus in
@@ -6108,7 +6130,27 @@ struct AidenChatDetailView: View {
         return try? coordinator.remoteClient()
     }
 
-    /// Revision 49: New worktree sits beside the composer's chips until the
+    /// Revision 49: a Workspace chat's background jobs, once this phone holds `chat:jobs`.
+    private var backgroundJobsTransport: AidenBackgroundJobTransport? {
+        guard !model.chat.isBotChat, let coordinator,
+              coordinator.server?.capabilities.contains(.chatJobs) == true else { return nil }
+        return try? coordinator.remoteClient()
+    }
+
+    private var backgroundJobsRefreshKey: String {
+        [
+            model.chat.id,
+            coordinator?.activeInstanceId ?? "",
+            String(coordinator?.server?.capabilities.contains(.chatJobs) == true),
+            String(model.isStreaming),
+            String(model.chat.messages.count),
+            String(chatLoadEpoch),
+            String(showsBackgroundJobs),
+            String(scenePhase == .active),
+        ].joined(separator: "|")
+    }
+
+    /// Revision 50: New worktree sits beside the composer's chips until the
     /// chat's first message, and stays hidden while that message is on its way.
     private var showsNewWorktreeChip: Bool {
         allowsMutations && model.offersNewWorktree && !model.isSettingUpWorktree
@@ -6159,12 +6201,15 @@ struct AidenChatDetailView: View {
             if model.isSettingUpWorktree {
                 AidenNewWorktreeSetupRow { model.cancelWorktreeSetup() }
             }
-            if simulators.deviceCount > 0 || showsNewWorktreeChip {
+            if simulators.deviceCount > 0 || backgroundJobs.runningCount > 0 || showsNewWorktreeChip {
                 HStack(spacing: 8) {
                     if simulators.deviceCount > 0 {
                         AidenSimulatorDeviceButton(count: simulators.deviceCount) {
                             simulatorViewer = simulators.makeViewer(coordinator: coordinator)
                         }
+                    }
+                    AidenBackgroundJobsChip(running: backgroundJobs.runningCount) {
+                        showsBackgroundJobs = true
                     }
                     if showsNewWorktreeChip {
                         AidenNewWorktreeChip(isOn: $model.startsInNewWorktree)

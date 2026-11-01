@@ -35,7 +35,7 @@ import { createChatStore } from "./chat-store-core.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 import type { VisualViewerAppearance, VisualViewerSource } from "./visual-viewer-document.js";
 import { HostRunRegistry } from "./host-run-registry.js";
-import { workspaceFolderMissing } from "./workspace-folder-presence.js";
+import { workspaceFolderRemoteRefusal } from "./workspace-folder-presence.js";
 
 const ONE_PIXEL_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
@@ -70,7 +70,7 @@ function fixture(
     botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
     botPaused?: (botId: string) => Promise<boolean>;
     spendingRefusal?: (chat: { id: string; botId?: string }) => Promise<string | undefined>;
-    workspaceFolderMissing?: (workspaceId: string) => Promise<boolean>;
+    workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
@@ -289,8 +289,8 @@ function fixture(
       fixtureOptions.botTurnAuthorityPreflight ?? (async () => undefined),
     ...(fixtureOptions.botPaused ? { botPaused: fixtureOptions.botPaused } : {}),
     ...(fixtureOptions.spendingRefusal ? { spendingRefusal: fixtureOptions.spendingRefusal } : {}),
-    ...(fixtureOptions.workspaceFolderMissing
-      ? { workspaceFolderMissing: fixtureOptions.workspaceFolderMissing }
+    ...(fixtureOptions.workspaceFolderRefusal
+      ? { workspaceFolderRefusal: fixtureOptions.workspaceFolderRefusal }
       : {}),
     ...(fixtureOptions.attachments ? { attachments: fixtureOptions.attachments } : {}),
     ...(fixtureOptions.isTitlePending ? { isTitlePending: fixtureOptions.isTitlePending } : {}),
@@ -1779,9 +1779,10 @@ test("a phone turn in a workspace whose folder moved is refused before it is sto
   try {
     await mkdir(folderPath);
     const app = fixture(chat(), {
-      workspaceFolderMissing: async (workspaceId) =>
-        workspaceId === "workspace-1" &&
-        (await workspaceFolderMissing({ name: "Project", folderPath, permission: "ask" })),
+      workspaceFolderRefusal: async (workspaceId) =>
+        workspaceId === "workspace-1"
+          ? workspaceFolderRemoteRefusal({ name: "Project", folderPath, permission: "ask" })
+          : undefined,
     });
     await rename(folderPath, moved);
 

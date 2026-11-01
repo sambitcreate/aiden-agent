@@ -1,5 +1,5 @@
 {
-  "contractRevision": 49,
+  "contractRevision": 50,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -1555,7 +1555,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 49,
+    "contractRevision": 50,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -3379,6 +3379,78 @@
         "details": {
           "currentRevision": "sp_fixture_chat_2"
         }
+      }
+    }
+  },
+  "backgroundJobs": {
+    "list": {
+      "jobs": [
+        {
+          "id": "job_1a2b3c4d",
+          "label": "Run the dev server",
+          "state": "running",
+          "startedAt": "2026-10-29T09:00:00.000Z",
+          "ports": [5173]
+        },
+        {
+          "id": "job_5e6f7a8b",
+          "label": "npm run api > api.log &",
+          "state": "running",
+          "startedAt": "2026-10-29T08:58:00.000Z",
+          "fromCommand": true,
+          "ports": [3000, 5173]
+        },
+        {
+          "id": "job_00000001",
+          "label": "Run the unit tests",
+          "state": "failed",
+          "startedAt": "2026-10-29T08:50:00.000Z",
+          "endedAt": "2026-10-29T08:52:10.000Z",
+          "exitCode": 1,
+          "ports": []
+        }
+      ]
+    },
+    "stop": {
+      "jobId": "job_1a2b3c4d",
+      "request": {},
+      "response": {
+        "jobs": [
+          {
+            "id": "job_5e6f7a8b",
+            "label": "npm run api > api.log &",
+            "state": "running",
+            "startedAt": "2026-10-29T08:58:00.000Z",
+            "fromCommand": true,
+            "ports": [3000, 5173]
+          },
+          {
+            "id": "job_1a2b3c4d",
+            "label": "Run the dev server",
+            "state": "stopped",
+            "startedAt": "2026-10-29T09:00:00.000Z",
+            "endedAt": "2026-10-29T09:05:00.000Z",
+            "endReason": "person",
+            "ports": []
+          },
+          {
+            "id": "job_00000001",
+            "label": "Run the unit tests",
+            "state": "failed",
+            "startedAt": "2026-10-29T08:50:00.000Z",
+            "endedAt": "2026-10-29T08:52:10.000Z",
+            "exitCode": 1,
+            "ports": []
+          }
+        ]
+      }
+    },
+    "notFound": {
+      "error": {
+        "code": "not_found",
+        "message": "This chat has no such background job.",
+        "requestId": "request_fixture_41",
+        "retryable": false
       }
     }
   }

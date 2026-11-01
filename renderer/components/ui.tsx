@@ -16,7 +16,7 @@ import {
 } from "radix-ui";
 import { Command as CommandPrimitive } from "cmdk";
 import { createPortal } from "react-dom";
-import { ArrowDownToLine, PanelLeft, Check, ChevronDown, Search } from "lucide-react";
+import { ArrowDownToLine, PanelLeft, Check, ChevronDown, Menu, Search } from "lucide-react";
 import { Toaster as SonnerToaster, toast } from "sonner";
 import { reportRendererDiagnostic } from "../lib/dev-log";
 import {
@@ -42,6 +42,13 @@ import {
   type CompactSidebarFocusState,
 } from "../lib/compact-sidebar-focus";
 import { ariaKeyShortcut } from "../shared/keybindings";
+import {
+  collapsedHeaderInset,
+  leadingClusterOffset,
+  useTrailingWindowControlsClearance,
+  useWindowChrome,
+} from "../lib/window-chrome";
+import { windowControlsApi } from "../lib/ipc";
 
 export { toast };
 export function Toaster(props: React.ComponentProps<typeof SonnerToaster>) {
@@ -410,10 +417,13 @@ const SplitContext = React.createContext<{
 
 /**
  * Left padding that keeps a full-width header clear of the window controls and
- * the leading sidebar-toggle/history cluster while the sidebar is collapsed.
- * The cluster starts at 90px and holds up to three 28px actions.
+ * the leading sidebar-toggle/history cluster while the sidebar is collapsed,
+ * or undefined while it is open. See `collapsedHeaderInset` for the geometry.
  */
-export const SPLIT_VIEW_COLLAPSED_HEADER_INSET = 190;
+export function useSplitViewCollapsedHeaderInset(): number | undefined {
+  const chrome = useWindowChrome();
+  return React.useContext(SplitContext)?.collapsed === true ? collapsedHeaderInset(chrome) : undefined;
+}
 
 /** Whether the leading sidebar is collapsed, for full-height chrome that must clear the window controls. */
 export function useSplitViewCollapsed(): boolean {
@@ -602,6 +612,7 @@ function SplitViewRoot({
     };
   }, [collapseKey, compactOpen, leadingAnchor]);
 
+  const chrome = useWindowChrome();
   const splitContext = React.useMemo(
     () => ({ collapsed, toggle, leadingAnchor }),
     [collapsed, toggle, leadingAnchor],
@@ -674,10 +685,12 @@ function SplitViewRoot({
           ref={setLeadingAnchor}
           inert={contentModalOpen ? true : undefined}
           aria-hidden={contentModalOpen ? true : undefined}
+          data-leading-cluster
           className={cn(
-            "absolute left-[90px] top-0 z-40 flex h-13 items-center gap-0.5",
+            "absolute top-0 z-40 flex h-13 items-center gap-0.5",
             contentModalOpen && "pointer-events-none",
           )}
+          style={{ left: leadingClusterOffset(chrome) }}
         />
       </div>
     </SplitContext.Provider>
@@ -685,17 +698,48 @@ function SplitViewRoot({
 }
 
 /**
+ * Linux main menu: with Aiden's own title bar there is no menu bar, so this
+ * opens the same File, Edit, View, Go, Chat, Window and Help menus as a popup.
+ */
+function WindowMenuButton() {
+  const open = (event: React.MouseEvent<HTMLButtonElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    void windowControlsApi.showMenu({ x: rect.left, y: rect.bottom + 4 }).catch(() => {
+      toast.error("Aiden couldn't open the menu.");
+    });
+  };
+  return (
+    <Button
+      iconOnly
+      size="small"
+      variant="bar"
+      data-window-menu
+      className="no-drag"
+      aria-label="Main menu"
+      aria-haspopup="menu"
+      title="Main menu"
+      onClick={open}
+    >
+      <Menu />
+    </Button>
+  );
+}
+
+/**
  * The sidebar toggle, portaled beside the window controls so it stays put
  * whether the sidebar is open or collapsed. `children` follow it in the same
- * cluster (history navigation).
+ * cluster (history navigation). With Aiden's Linux title bar the main menu
+ * button leads the cluster.
  */
 function SidebarToggle({ children }: { children?: React.ReactNode }) {
   const context = React.useContext(SplitContext);
+  const chrome = useWindowChrome();
   const shortcut = useShortcutLabel("sidebar.toggle");
   const shortcutBinding = useShortcutBinding("sidebar.toggle");
   if (!context) return null;
   const cluster = (
     <>
+      {chrome === "aiden" ? <WindowMenuButton /> : null}
       <Button
         iconOnly
         size="small"
@@ -1017,7 +1061,9 @@ export function ScrollArea({
   const jumpSettleTimerRef = React.useRef(0);
   const autoScrollRef = React.useRef(autoScrollToBottom);
   const streamingRef = React.useRef(streaming);
-  const split = React.useContext(SplitContext);
+  const collapsedInset = useSplitViewCollapsedHeaderInset();
+  const headerRef = React.useRef<HTMLElement>(null);
+  const trailingClearance = useTrailingWindowControlsClearance(headerRef);
 
   autoScrollRef.current = autoScrollToBottom;
   streamingRef.current = streaming;
@@ -1297,7 +1343,11 @@ export function ScrollArea({
       <header
         data-toolbar
         className="scroll-area-header drag-region relative flex min-h-13 items-center gap-3 px-4 transition-[padding] duration-300 ease-emphasized motion-reduce:transition-none"
-        style={{ paddingLeft: split?.collapsed ? SPLIT_VIEW_COLLAPSED_HEADER_INSET : undefined }}
+        ref={headerRef}
+        style={{
+          paddingLeft: collapsedInset,
+          paddingRight: trailingClearance ? trailingClearance + 4 : undefined,
+        }}
       >
         <div className="no-drag flex shrink-0 items-center">{leading}</div>
         <div className="flex min-w-0 flex-1 items-center gap-2">

@@ -72,6 +72,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "app:command",
   "app:navigate",
   "app:update-state",
+  /** The main window's maximize or full-screen state changed: `WindowControlsState`. Linux Aiden title bar only. */
+  "app:window-state",
   "assistant-live:event",
   "chat:approval",
   "chat:artifact",
