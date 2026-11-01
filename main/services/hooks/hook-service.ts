@@ -648,7 +648,9 @@ export function createHookService(deps: HookServiceDeps): HookService {
       matcher,
       handler: validation.handler,
       scope,
-      source: origin === "agent" ? "agent" : scope.kind === "bot" ? "bot" : "settings",
+      // An edit keeps who added the hook: an approved agent edit of the owner's
+      // hook must not make it one the agent may switch off.
+      source: existing?.source ?? (origin === "agent" ? "agent" : scope.kind === "bot" ? "bot" : "settings"),
     });
     const summary = summarizeHook(definition);
     return {
