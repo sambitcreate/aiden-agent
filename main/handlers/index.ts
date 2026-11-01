@@ -9,6 +9,7 @@ import { appHandlers } from "./app.js";
 import { registerProviderHandlers } from "./providers.js";
 import { registerAcpHarnessHandlers } from "./acp-harnesses.js";
 import { registerChatHistoryHandlers } from "./chats.js";
+import { registerDesignWindowHandlers } from "./design-window.js";
 import { registerChatGenerationHandlers } from "./chat.js";
 import { registerWorkspaceHandlers } from "./workspaces.js";
 import { registerPullRequestHandlers } from "./pull-requests.js";
@@ -85,6 +86,7 @@ export function registerHandlers(): void {
   registerAppControlHandlers();
   registerAcpHarnessHandlers();
   registerChatHistoryHandlers();
+  registerDesignWindowHandlers();
   registerChatGenerationHandlers();
   registerWorkspaceHandlers();
   registerPullRequestHandlers();

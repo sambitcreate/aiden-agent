@@ -17,7 +17,7 @@ import {
 import { queryKeys, useChats } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { TerminalDrawer } from "../components/terminal-drawer";
-import { EnvironmentWorkbench } from "../components/environment-panel";
+import { DesignWorkbench } from "../design/design-layout";
 import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { withForkLineage } from "../lib/chat-copy-view";
@@ -114,7 +114,11 @@ export function ChatLayout() {
       }
       sidebarSize={{ default: 272, min: 236, max: 340 }}
     >
-      <EnvironmentWorkbench suppressed={onRemoteHost || studioSurface || botsSurface}>
+      <DesignWorkbench
+        chatId={activeRemoteChat ? undefined : params.chatId}
+        allowed={!onRemoteHost && !studioSurface && !botsSurface}
+        suppressed={onRemoteHost || studioSurface || botsSurface}
+      >
         <div className="flex h-full min-h-0 flex-col">
           <div className="min-h-0 flex-1 overflow-hidden">
             <Outlet />
@@ -127,7 +131,7 @@ export function ChatLayout() {
             <TerminalDrawer />
           )}
         </div>
-      </EnvironmentWorkbench>
+      </DesignWorkbench>
     </SplitView>
   );
 }

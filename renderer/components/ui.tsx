@@ -405,6 +405,7 @@ export const FieldLabel = Label;
 const SplitContext = React.createContext<{
   collapsed: boolean;
   toggle: () => void;
+  setCollapsed: (collapsed: boolean) => void;
   leadingAnchor: HTMLDivElement | null;
 } | null>(null);
 
@@ -418,6 +419,18 @@ export const SPLIT_VIEW_COLLAPSED_HEADER_INSET = 190;
 /** Whether the leading sidebar is collapsed, for full-height chrome that must clear the window controls. */
 export function useSplitViewCollapsed(): boolean {
   return React.useContext(SplitContext)?.collapsed === true;
+}
+
+/**
+ * The leading sidebar's collapsed state and a setter that persists like the
+ * toggle does, for layouts that collapse it for room. Null outside a SplitView.
+ */
+export function useSplitViewSidebar(): { collapsed: boolean; setCollapsed: (collapsed: boolean) => void } | null {
+  const context = React.useContext(SplitContext);
+  return React.useMemo(
+    () => (context ? { collapsed: context.collapsed, setCollapsed: context.setCollapsed } : null),
+    [context],
+  );
 }
 
 type SplitViewProps = React.PropsWithChildren<{
@@ -477,6 +490,13 @@ function SplitViewRoot({
     localStorage.setItem(collapseKey, next ? "1" : "0");
     setCollapsed(next);
   }, [collapseKey, collapsed]);
+  const setPersistedCollapsed = React.useCallback(
+    (next: boolean) => {
+      localStorage.setItem(collapseKey, next ? "1" : "0");
+      setCollapsed(next);
+    },
+    [collapseKey],
+  );
   useCommandHandler("sidebar.toggle", toggle, !contentModalOpen);
 
   React.useEffect(() => {
@@ -603,8 +623,8 @@ function SplitViewRoot({
   }, [collapseKey, compactOpen, leadingAnchor]);
 
   const splitContext = React.useMemo(
-    () => ({ collapsed, toggle, leadingAnchor }),
-    [collapsed, toggle, leadingAnchor],
+    () => ({ collapsed, toggle, setCollapsed: setPersistedCollapsed, leadingAnchor }),
+    [collapsed, toggle, setPersistedCollapsed, leadingAnchor],
   );
 
   return (

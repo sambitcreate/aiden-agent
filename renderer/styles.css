@@ -2815,6 +2815,13 @@ textarea {
   margin-inline: auto;
 }
 
+/* Design mode's narrow chat column fills its width; the dock pill sits over
+   the canvas instead, so the column only keeps a small gutter. */
+[data-design-mode] {
+  --chat-content-max-width: none;
+  --aiden-dock-gutter: 16px;
+}
+
 /* The pane around the transcript column is the size container wide inline
    visuals measure against (`cqi`), so they can grow past the column. */
 [data-scroll-content]:has(> .chat-content-column) {
