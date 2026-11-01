@@ -514,26 +514,22 @@ test("a lost database is rebuilt from stored blobs, which stay readable and in g
   assert.deepEqual(await restarted.collectGarbage(), { deletedAssets: 0, freedBytes: 0 });
   assert.deepEqual((await f.blobFiles()).sort(), [large.assetId, small.assetId].sort());
 
-  // Once a feature holds one again it follows the normal lifecycle: released, it is
-  // collectable after the grace. The never-reclaimed one stays.
+  // One holder coming back says nothing about the asset's other owners (a duplicated
+  // workflow re-holds an image its untouched original still uses), so neither retain
+  // nor replaceHolder makes a recovered asset collectable again.
   restarted.retain({ kind: "design", id: "project-1" }, [large.assetId]);
   restarted.release({ kind: "design", id: "project-1" }, [large.assetId]);
-  f.advance(2 * HOUR);
-  assert.deepEqual(await restarted.collectGarbage(), { deletedAssets: 1, freedBytes: large.bytes });
-  assert.deepEqual(await f.blobFiles(), [small.assetId]);
-});
+  const workflow = { kind: "images-workflow", id: "wf-copy" } as const;
+  restarted.replaceHolder(workflow, [small.assetId]);
+  restarted.replaceHolder(workflow, []);
+  f.advance(3 * HOUR);
+  assert.deepEqual(await restarted.collectGarbage(), { deletedAssets: 0, freedBytes: 0 });
+  assert.deepEqual((await f.blobFiles()).sort(), [large.assetId, small.assetId].sort());
 
-test("replaceHolder also returns a recovered asset to the normal lifecycle", async (t) => {
-  const f = await fixture(t);
-  const asset = await f.store.put({ bytes: pngBytes(10, 10, 4) });
-  await f.store.close();
-  await removeDatabase(f.root);
-  const reopened = await f.open();
-  const workflow = { kind: "images-workflow", id: "wf-1" } as const;
-  reopened.replaceHolder(workflow, [asset.assetId]);
-  reopened.replaceHolder(workflow, []);
+  // Assets put after the rebuild follow the normal lifecycle.
+  const fresh = await restarted.put({ bytes: pngBytes(12, 12, 9) });
   f.advance(2 * HOUR);
-  assert.deepEqual(await reopened.collectGarbage(), { deletedAssets: 1, freedBytes: asset.bytes });
+  assert.deepEqual(await restarted.collectGarbage(), { deletedAssets: 1, freedBytes: fresh.bytes });
 });
 
 test("an unindexed blob that is not an accepted image is removed even when its name matches", async (t) => {

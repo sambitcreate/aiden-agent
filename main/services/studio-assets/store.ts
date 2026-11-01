@@ -138,8 +138,9 @@ const SCHEMA = `
   PRAGMA user_version=1;
 `;
 // Assets re-indexed from blobs after the index was lost. Their holds could not be
-// recovered, so GC leaves them alone until a feature holds them again (any retain
-// clears the mark). Additive, so it is created on every open of a version-1 database.
+// recovered, and one feature holding an asset again says nothing about its other
+// owners, so GC never collects them. Additive, so it is created on every open of a
+// version-1 database.
 const RECOVERED_SCHEMA = "CREATE TABLE IF NOT EXISTS recovered (asset_id TEXT PRIMARY KEY REFERENCES assets(id));";
 const THUMBNAIL_EDGES: readonly StudioAssetThumbnailEdge[] = [256, 512];
 
@@ -451,11 +452,9 @@ export class StudioAssetStore {
     const key = holderKey(holder);
     this.transaction((db) => {
       const insert = db.prepare("INSERT OR IGNORE INTO holds (holder, asset_id) VALUES (?, ?)");
-      const unmark = db.prepare("DELETE FROM recovered WHERE asset_id = ?");
       for (const assetId of new Set(assetIds)) {
         this.requireRow(assetId);
         insert.run(key, assetId);
-        unmark.run(assetId);
       }
     });
   }
@@ -500,11 +499,7 @@ export class StudioAssetStore {
         touch.run(now, assetId);
       }
       const insert = db.prepare("INSERT OR IGNORE INTO holds (holder, asset_id) VALUES (?, ?)");
-      const unmark = db.prepare("DELETE FROM recovered WHERE asset_id = ?");
-      for (const assetId of next) {
-        insert.run(key, assetId);
-        unmark.run(assetId);
-      }
+      for (const assetId of next) insert.run(key, assetId);
     });
   }
 
