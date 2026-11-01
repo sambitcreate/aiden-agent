@@ -1430,7 +1430,8 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
 
   // Local Mark read covers only the output the row rendered, so a reply that
   // lands mid-click stays unread.
-  // False when the chat holds no message the row's output names.
+  // False when the chat holds no message the row's output names, or the host
+  // wrote no marker.
   const sendLocalChatRead = async (chat: ChatMeta): Promise<boolean> => {
     // Always read the chat afresh: a cached copy can predate the reply the row shows.
     const session = await qc.fetchQuery({
@@ -1440,8 +1441,8 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     });
     const through = session ? markReadThroughMessageId(session.messages, chat.lastAssistantAt) : null;
     if (!through) return false;
-    await chatsApi.markRead(chat.id, through);
-    return true;
+    // The host writes no marker when the chat or that message is gone by now.
+    return await chatsApi.markRead(chat.id, through);
   };
   const markLocalChatRead = async (chat: ChatMeta) => {
     try {

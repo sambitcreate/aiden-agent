@@ -417,11 +417,13 @@ test("a failed clear still re-arms, and a wake check after a clock jump clears a
   let now = 1_000;
   let failPublish = false;
   const timers = manualTimers();
+  const logged: unknown[] = [];
   const store = new ChatTriageStore(() => root, {
     now: () => now,
     onChange: () => {
       if (failPublish) throw new Error("broadcast failed");
     },
+    logError: (_message, error) => logged.push(error),
     ...timers,
   });
   t.after(() => store.dispose());
@@ -439,6 +441,7 @@ test("a failed clear still re-arms, and a wake check after a clock jump clears a
   await waitFor(() => timers.live().length === 1);
   failPublish = false;
   assert.equal((await store.get("soon"))?.snoozedUntil, undefined);
+  assert.equal(logged.length, 1, "the failed announcement of the snooze ending is logged");
   // A far snooze is checked at least once a minute, so a clock change is caught.
   assert.equal(timers.live()[0]!.ms, SNOOZE_WAKE_CHECK_MS);
 

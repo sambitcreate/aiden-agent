@@ -251,7 +251,12 @@ export class ChatTriageStore {
         }
         return any;
       });
-      if (changed) await this.publish();
+      if (!changed) return;
+      try {
+        await this.publish();
+      } catch (error) {
+        this.options.logError?.("Could not announce a chat's snooze ending.", error);
+      }
     } finally {
       this.arm();
     }
