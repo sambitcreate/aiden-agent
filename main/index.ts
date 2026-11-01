@@ -16,7 +16,11 @@ import path from "node:path";
 import { registerHandlers } from "./handlers/index.js";
 import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
 import { chatTriage, startChatTriage, stopChatTriage } from "./services/chat-triage-main.js";
-import { startInboxDockBadge, stopInboxDockBadge } from "./services/inbox-dock-badge-main.js";
+import {
+  registerInboxDockBadgeIpc,
+  startInboxDockBadge,
+  stopInboxDockBadge,
+} from "./services/inbox-dock-badge-main.js";
 import { chatReadMarkers } from "./services/chat-read-markers-main.js";
 import { forgetChatInboxState } from "./services/chat-application-service.js";
 import { terminalService } from "./services/terminal.js";
@@ -1445,6 +1449,14 @@ ipcMain.handle("app:setDockIcon", async (event, value: unknown) => {
   if (value !== "aiden" && value !== "monochrome")
     throw new Error("Invalid Dock icon preference.");
   return applyDockIconPreference(value);
+});
+
+// The Inbox switch and view, reported by the main window only.
+registerInboxDockBadgeIpc({
+  isMainWindow: (event) =>
+    !!mainWindow &&
+    !mainWindow.isDestroyed() &&
+    event.sender.id === mainWindow.webContents.id,
 });
 
 function openExternalUrl(value: string): void {

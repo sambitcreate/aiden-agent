@@ -984,6 +984,12 @@ export interface BotLiveProjection {
   refreshActivity(botId: string): Promise<void>;
   /** Preview, time and state for a list row. */
   summary(botId: string): Promise<BotLiveSummary>;
+  /**
+   * The summary's `needsYou` alone, without reading the transcript: an open
+   * question, hand-off, approval or issue, and never for an unavailable Bot
+   * with no open feed. The Dock badge reads it on every recount.
+   */
+  needsYou(botId: string): Promise<boolean>;
   /** Stop every feed (the Bot was deleted, or the app is quitting). */
   close(botId?: string): Promise<void>;
 }
@@ -1382,6 +1388,16 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     });
   }
 
+  /** Whether the person owes this Bot an answer: the same sources the chat shows. */
+  async function needsYouNow(botId: string): Promise<boolean> {
+    return (
+      (deps.question?.(botId) ?? null) !== null ||
+      (deps.handoff?.(botId) ?? null) !== null ||
+      deps.approvalPending?.(botId) === true ||
+      (await deps.issuePending?.(botId)) === true
+    );
+  }
+
   return {
     async subscribe(botId, sink) {
       const subscriber: Subscriber = { sink, pending: [], overflowed: false, scheduled: false, closed: false };
@@ -1469,14 +1485,17 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       await syncHandoff(feed);
     },
 
+    async needsYou(botId) {
+      const feed = feeds.get(botId);
+      if (!feed || feed.ended) {
+        if ((await deps.state(botId)).kind === "unavailable") return false;
+      }
+      return needsYouNow(botId);
+    },
+
     async summary(botId) {
       // Read right before each return, so a slow summary never reports a stale wait. It uses the
       // same sources as the chat, so a row agrees with it whether or not a chat is open.
-      const needsYouNow = async () =>
-        (deps.question?.(botId) ?? null) !== null ||
-        (deps.handoff?.(botId) ?? null) !== null ||
-        deps.approvalPending?.(botId) === true ||
-        (await deps.issuePending?.(botId)) === true;
       const feed = feeds.get(botId);
       if (feed && !feed.ended) {
         await feed.queue;
@@ -1486,7 +1505,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
           preview: preview?.text ?? null,
           updatedAt: preview?.at ?? null,
           state: feed.state,
-          needsYou: await needsYouNow(),
+          needsYou: await needsYouNow(botId),
           lastReplyAt: botLastReplyAt(feed.entries),
         };
       }
@@ -1502,7 +1521,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         preview: preview?.text ?? null,
         updatedAt: preview?.at ?? null,
         state,
-        needsYou: await needsYouNow(),
+        needsYou: await needsYouNow(botId),
         lastReplyAt: botLastReplyAt(entries),
       };
     },

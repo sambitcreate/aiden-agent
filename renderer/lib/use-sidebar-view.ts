@@ -153,9 +153,15 @@ export function useInboxDockBadgeSync(
   React.useEffect(() => {
     if (!available) return;
     // A refused report (an older main with no handler) must never break the
-    // window: there is simply no badge to drive.
+    // window: there is simply no badge to drive. It is logged once per window.
     void Promise.resolve()
       .then(() => report(show))
-      .catch(() => {});
+      .catch((error: unknown) => {
+        if (badgeReportFailureLogged) return;
+        badgeReportFailureLogged = true;
+        console.warn("Could not report the Inbox Dock badge setting.", error);
+      });
   }, [available, report, show]);
 }
+
+let badgeReportFailureLogged = false;

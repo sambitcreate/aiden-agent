@@ -163,7 +163,10 @@ export function badgeSurface(platform: NodeJS.Platform, app: BadgeApp): BadgeSur
 
 export interface InboxBadgeDriverOptions {
   surface: BadgeSurface;
-  /** The current count. Rejections keep the last badge and are reported. */
+  /**
+   * The current count. Rejections keep the last badge and are reported, once
+   * per distinct failure until a count succeeds again.
+   */
   count: () => Promise<number>;
   /** Changes arriving within this window coalesce into one recount. */
   debounceMs?: number;
@@ -184,6 +187,32 @@ export interface InboxBadgeDriver {
 
 export const INBOX_BADGE_DEBOUNCE_MS = 250;
 
+export interface DistinctFailureReporter {
+  /** Report this failure unless the last one reported had the same message. */
+  failed(error: unknown): void;
+  /** It worked again: the next failure is reported whatever it says. */
+  succeeded(): void;
+}
+
+/**
+ * A failure that repeats on every recount (an index too large to read, say)
+ * is logged once, not on every change, until the read works again.
+ */
+export function distinctFailureReporter(report: (error: unknown) => void): DistinctFailureReporter {
+  let last: string | undefined;
+  return {
+    failed(error) {
+      const key = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      if (key === last) return;
+      last = key;
+      report(error);
+    },
+    succeeded() {
+      last = undefined;
+    },
+  };
+}
+
 export function createInboxBadgeDriver(options: InboxBadgeDriverOptions): InboxBadgeDriver {
   const debounceMs = options.debounceMs ?? INBOX_BADGE_DEBOUNCE_MS;
   const setTimer = options.setTimer ?? ((callback, ms) => setTimeout(callback, ms));
@@ -195,6 +224,7 @@ export function createInboxBadgeDriver(options: InboxBadgeDriverOptions): InboxB
   let again = false;
   /** What the badge shows; starts unknown so the first write always lands. */
   let shown: number | undefined;
+  const failures = distinctFailureReporter((error) => options.onError?.(error));
 
   const show = (count: number): void => {
     if (shown === count) return;
@@ -212,10 +242,11 @@ export function createInboxBadgeDriver(options: InboxBadgeDriverOptions): InboxB
     counting = true;
     try {
       const count = await options.count();
+      failures.succeeded();
       // Switched off while counting: the clear already happened and wins.
       if (enabled && !disposed) show(Math.max(0, Math.floor(count)));
     } catch (error) {
-      options.onError?.(error);
+      failures.failed(error);
     } finally {
       counting = false;
     }

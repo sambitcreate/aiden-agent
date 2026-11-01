@@ -272,21 +272,37 @@ test("a change during a count triggers one more count", async () => {
   assert.deepEqual(h.shown, [1, 3]);
 });
 
-test("a failed count keeps the last badge and reports the error; dispose clears", async () => {
-  let fail = false;
+test("a failed count keeps the last badge and reports each distinct failure once; dispose clears", async () => {
+  let failure: string | null = null;
+  let value = 2;
   const h = harness(async () => {
-    if (fail) throw new Error("store unavailable");
-    return 2;
+    if (failure) throw new Error(failure);
+    return value;
   });
   h.driver.setEnabled(true);
   await h.flush();
-  fail = true;
+  failure = "The chat summary index is too large.";
+  for (let i = 0; i < 3; i += 1) {
+    h.driver.invalidate();
+    await h.flush();
+  }
+  assert.deepEqual(h.shown, [2]);
+  assert.equal(h.errors.length, 1, "a failure that repeats on every recount is logged once");
+  failure = "store unavailable";
   h.driver.invalidate();
   await h.flush();
-  assert.deepEqual(h.shown, [2]);
-  assert.equal(h.errors.length, 1);
+  assert.equal(h.errors.length, 2, "a different failure is logged");
+  failure = null;
+  value = 3;
+  h.driver.invalidate();
+  await h.flush();
+  assert.deepEqual(h.shown, [2, 3], "a count that works again updates the badge");
+  failure = "store unavailable";
+  h.driver.invalidate();
+  await h.flush();
+  assert.equal(h.errors.length, 3, "after a success, the same failure is logged again");
   h.driver.dispose();
-  assert.deepEqual(h.shown, [2, 0]);
+  assert.deepEqual(h.shown, [2, 3, 0]);
   h.driver.setEnabled(true);
   assert.equal(h.timers.length, 0, "a disposed driver stays off");
 });

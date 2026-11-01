@@ -52,6 +52,7 @@ function fakeProjection() {
     notifyResuming: () => undefined,
     cancelStopping: () => undefined,
     refreshActivity: async () => undefined,
+    needsYou: async () => true,
     summary: async (botId) => ({
       botId,
       preview: "hi",

@@ -14,6 +14,7 @@ import { hostRunRegistry } from "./host-runs-main.js";
 import {
   badgeSurface,
   createInboxBadgeDriver,
+  distinctFailureReporter,
   inboxBadgeCount,
   type BadgeApp,
   type InboxBadgeDriver,
@@ -38,7 +39,11 @@ const BADGE_CHANNELS: ReadonlySet<string> = new Set([
   "remote:peer-host-state",
 ]);
 
-const BOT_SUMMARY_CONCURRENCY = 4;
+const BOT_READ_CONCURRENCY = 4;
+
+const botFailures = distinctFailureReporter((error) =>
+  logger.warn("inbox", "Could not read Bot attention for the Dock badge.", error),
+);
 
 async function botsNeedingYou(): Promise<string[]> {
   if (!hostPlatformCapabilities().bots) return [];
@@ -50,12 +55,12 @@ async function botsNeedingYou(): Promise<string[]> {
   const waiting: string[] = [];
   let next = 0;
   await Promise.all(
-    Array.from({ length: Math.min(BOT_SUMMARY_CONCURRENCY, ids.length) }, async () => {
+    Array.from({ length: Math.min(BOT_READ_CONCURRENCY, ids.length) }, async () => {
       while (next < ids.length) {
         const id = ids[next++]!;
-        // A summary that can't be read leaves that Bot out, as the host feed does.
-        const summary = await live.summary(id).catch(() => undefined);
-        if (summary?.needsYou) waiting.push(id);
+        // `needsYou` alone, never the transcript: this runs on every recount. A Bot whose
+        // attention can't be read is left out, as the host feed does.
+        if (await live.needsYou(id).catch(() => false)) waiting.push(id);
       }
     }),
   );
@@ -68,10 +73,16 @@ async function readLocal(): Promise<InboxBadgeLocal> {
     configStore.listWorkspaces(),
     chatReadMarkers.snapshot().catch(() => null),
     chatTriage.snapshot().catch(() => null),
-    botsNeedingYou().catch((error: unknown) => {
-      logger.warn("inbox", "Could not read Bot attention for the Dock badge.", error);
-      return [];
-    }),
+    botsNeedingYou().then(
+      (ids) => {
+        botFailures.succeeded();
+        return ids;
+      },
+      (error: unknown) => {
+        botFailures.failed(error);
+        return [];
+      },
+    ),
   ]);
   const workspaceIds = new Set(workspaces.map((workspace) => workspace.id));
   const listed = chats.filter((chat) => isLocalInboxChat(chat, (id) => workspaceIds.has(id)));
@@ -123,10 +134,12 @@ let requested = false;
  * `app:setInboxDockBadge(enabled)`: a window reports whether the badge should
  * show (the Inbox is the sidebar view and its switch is on). The latest report
  * wins, and the badge stays put when every window closes, so the Dock keeps
- * counting with no window open.
+ * counting with no window open. Only the main window reports, as for
+ * `app:setDockIcon`; any other sender is ignored.
  */
-export function registerInboxDockBadgeIpc(): void {
-  ipcMain.handle("app:setInboxDockBadge", (_event, enabled: unknown) => {
+export function registerInboxDockBadgeIpc(options: { isMainWindow: (event: Electron.IpcMainInvokeEvent) => boolean }): void {
+  ipcMain.handle("app:setInboxDockBadge", (event, enabled: unknown) => {
+    if (!options.isMainWindow(event)) return;
     if (typeof enabled !== "boolean") throw new Error("Expected a boolean.");
     requested = enabled;
     driver?.setEnabled(enabled);

@@ -1,7 +1,7 @@
 import "../../main/bots/test-dom";
 import * as React from "react";
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, test } from "node:test";
+import { afterEach, beforeEach, mock, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES, type AppCapabilities } from "../../lib/app-capabilities";
 import { SIDEBAR_PREFERENCES_KEY, useInboxDockBadgeSync, useSidebarView } from "../../lib/use-sidebar-view";
@@ -95,11 +95,11 @@ test("ArrowRight and ArrowDown move forward, wrapping past the last choice, and 
 });
 
 /** Stands in for the app root, which tells main whether to show the badge. */
-function BadgeSyncProbe({ reports }: { reports: boolean[] }) {
+function BadgeSyncProbe({ reports, available = true }: { reports: boolean[]; available?: boolean }) {
   const report = React.useCallback(async (enabled: boolean) => {
     reports.push(enabled);
   }, [reports]);
-  useInboxDockBadgeSync(report, true);
+  useInboxDockBadgeSync(report, available);
   return null;
 }
 
@@ -109,7 +109,7 @@ function renderBadgeSetting(capabilities: Partial<AppCapabilities>, reports: boo
       <h2 id="sidebar-title">Sidebar</h2>
       <SidebarViewPicker labelledBy="sidebar-title" />
       <InboxDockBadgeSetting />
-      <BadgeSyncProbe reports={reports} />
+      <BadgeSyncProbe reports={reports} available={capabilities.badgeCount === true} />
     </AppCapabilitiesProvider>,
   );
 }
@@ -158,8 +158,19 @@ test("Linux names the app icon, and a host with no badge shows no switch", () =>
   assert.equal(screen.queryByRole("switch"), null);
 });
 
-test("a main that refuses the badge report leaves the settings usable", () => {
+test("a host with no badge sends main no reports, whatever the view and switch", async () => {
+  localStorage.setItem(SIDEBAR_PREFERENCES_KEY, JSON.stringify({ view: "inbox", dockBadge: true }));
+  const reports: boolean[] = [];
+  renderBadgeSetting({ platform: "other", badgeCount: false }, reports);
+  fireEvent.click(screen.getByRole("radio", { name: "Recent only" }));
+  fireEvent.click(screen.getByRole("radio", { name: "Inbox (Beta)" }));
+  await lastReport(reports);
+  assert.deepEqual(reports, []);
+});
+
+test("a main that refuses the badge report leaves the settings usable and is logged once", async () => {
   localStorage.setItem(SIDEBAR_PREFERENCES_KEY, JSON.stringify({ view: "inbox" }));
+  const warn = mock.method(console, "warn", () => undefined);
   function RefusingSync() {
     // The preload throws at once for a channel it doesn't expose.
     useInboxDockBadgeSync(() => {
@@ -175,4 +186,12 @@ test("a main that refuses the badge report leaves the settings usable", () => {
   );
   fireEvent.click(screen.getByRole("switch", { name: DOCK_SWITCH }));
   assert.equal(storedDockBadge(), false);
+  fireEvent.click(screen.getByRole("switch", { name: DOCK_SWITCH }));
+  assert.equal(storedDockBadge(), true);
+  await lastReport([]);
+  try {
+    assert.equal(warn.mock.callCount(), 1, "three refused reports, one warning");
+  } finally {
+    warn.mock.restore();
+  }
 });

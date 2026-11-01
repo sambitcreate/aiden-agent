@@ -876,6 +876,44 @@ test("a waiting question reaches subscribers and late joiners, and its answer re
   }
 });
 
+test("needsYou agrees with the summary without reading the transcript of a Bot with no open feed", async () => {
+  let service: BotSessionRuntime | undefined;
+  let transcriptReads = 0;
+  let issueOpen = false;
+  let unavailable = false;
+  const live = await start(createFauxModels([fauxAssistantMessage("Hello.")]), {
+    projection: {
+      conversation: async (botId) => {
+        transcriptReads += 1;
+        return service!.conversation(botId);
+      },
+      state: async (botId) => (unavailable ? { kind: "unavailable", reason: "held_by_live_process" } : service!.state(botId)),
+      issuePending: () => issueOpen,
+    },
+  });
+  service = live.service;
+  try {
+    for (const [open, gone] of [
+      [false, false],
+      [true, false],
+      [true, true],
+    ] as const) {
+      issueOpen = open;
+      unavailable = gone;
+      const before = transcriptReads;
+      const needsYou = await live.projection.needsYou("bot:a");
+      assert.equal(transcriptReads, before, "the cheap read opens no transcript");
+      assert.equal(needsYou, (await live.projection.summary("bot:a")).needsYou, `issue ${open}, unavailable ${gone}`);
+    }
+    issueOpen = true;
+    unavailable = false;
+    assert.equal(await live.projection.needsYou("bot:a"), true, "an open issue needs the person");
+    assert.ok(transcriptReads > 0, "the summary itself still reads the transcript");
+  } finally {
+    await live.close();
+  }
+});
+
 test("a waiting hand-off reaches subscribers and late joiners, reads as waiting, and Done becomes the person's line before the reply", async () => {
   const handoffs = createBotHandoffs();
   const fauxModels = createFauxModels([
