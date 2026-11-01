@@ -230,6 +230,7 @@ class AidenNewWorktreeTest {
         assertTrue(AidenNewWorktreeRetry.spendsKey(refusal(409, AidenRemoteErrorCode("git_capability_denied"))))
         assertTrue(AidenNewWorktreeRetry.spendsKey(refusal(500, AidenRemoteErrorCode.INTERNAL_ERROR)))
         assertTrue(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientException.UnexpectedStatus(502)))
+        assertTrue("an answer the phone could not read would only replay", AidenNewWorktreeRetry.spendsKey(AidenRemoteClientException.InvalidResponse()))
         assertFalse("the Mac is still on it", AidenNewWorktreeRetry.spendsKey(refusal(409, AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT)))
         assertFalse(AidenNewWorktreeRetry.spendsKey(java.net.SocketTimeoutException()))
         assertFalse(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientException.Disconnected()))

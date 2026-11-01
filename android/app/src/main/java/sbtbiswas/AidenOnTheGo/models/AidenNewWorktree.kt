@@ -25,11 +25,13 @@ object AidenNewWorktreeRetry {
      * The Mac keeps each answer under its key for a day, refusals included, so a request it
      * answered needs a new key next time. One that got no answer (no connection, a timeout,
      * Cancel) or that the Mac is still working on keeps its key, so the retry gets what the Mac
-     * did with it.
+     * did with it. An answer this phone could not read spends it too: the Mac would only replay
+     * the same answer under that key.
      */
     fun spendsKey(error: Throwable): Boolean = when (error) {
         is AidenRemoteClientException.Server -> error.body.code != AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT
         is AidenRemoteClientException.UnexpectedStatus,
+        is AidenRemoteClientException.InvalidResponse,
         is AidenRemoteClientException.IdempotencyConflict -> true
         else -> false
     }

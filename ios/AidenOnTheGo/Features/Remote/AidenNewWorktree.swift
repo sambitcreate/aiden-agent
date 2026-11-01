@@ -17,10 +17,12 @@ enum AidenNewWorktreeRetry {
     /// so a request it answered needs a new key next time. One that got no
     /// answer (no connection, a timeout, Cancel) or that the Mac is still
     /// working on keeps its key, so the retry gets what the Mac did with it.
+    /// An answer this phone could not read spends it too: the Mac would only
+    /// replay the same answer under that key.
     static func spendsKey(_ error: Error) -> Bool {
         switch error as? AidenRemoteClientError {
         case .server(_, let body): return body.code.rawValue != "idempotency_in_flight"
-        case .unexpectedStatus: return true
+        case .unexpectedStatus, .invalidResponse: return true
         default: return false
         }
     }
