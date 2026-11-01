@@ -237,6 +237,16 @@ class ManagedWorktreeSnapshotCleanupError extends Error {
  * Shared renderer/remote orchestration for Aiden-owned Git worktrees. All
  * filesystem and Git-admin identity is reloaded from persisted desktop state.
  */
+/**
+ * Room kept for `.worktreeinclude` copies: the provisioner's enforced
+ * maximum, so changing source files cannot outgrow a smaller, racy estimate.
+ * Provisioning is a no-op off macOS until the transfer helper gains a Linux
+ * port, so the reserve is only needed where it can actually run.
+ */
+function provisionedFilesReserve(): number {
+  return process.platform === "darwin" ? MAX_PROVISIONED_BYTES : 0;
+}
+
 export function createWorkspaceWorktreeApplicationService(
   dependencies: WorkspaceWorktreeApplicationDependencies,
 ) {
@@ -257,12 +267,8 @@ export function createWorkspaceWorktreeApplicationService(
     // Admit checkout allocation before creating its directory or Git branch.
     // ensureWorktreeRoot may already have created the empty managed root.
     const estimatedBytes = await dependencies.checkoutBytes(resolved.folderPath, start?.commit);
-    // Reserve the provisioner's enforced maximum, so changing source files
-    // cannot invalidate a smaller, racy pre-copy estimate. Provisioning is a
-    // no-op off macOS until the transfer helper gains a Linux port, so the
-    // reserve is only needed where provisioning can actually run.
-    const provisionedReserve =
-      process.platform === "darwin" ? MAX_PROVISIONED_BYTES : 0;
+    // Reserve room for the `.worktreeinclude` copies too.
+    const provisionedReserve = provisionedFilesReserve();
     const repository = await dependencies.repositoryPaths(resolved.folderPath);
     await dependencies.checkWorktreeAllocation(worktreeRoot, repository.commonDir, estimatedBytes + provisionedReserve);
     const worktree = await dependencies.createWorktree(
@@ -877,6 +883,9 @@ export function createWorkspaceWorktreeApplicationService(
         );
         const provisionedFiles: string[] = [];
         try {
+          // The same room check creation makes before copying: on a nearly
+          // full disk the checkout still comes back, without the copies.
+          await dependencies.checkCreateCapacity(worktree.path, provisionedFilesReserve());
           await dependencies.provisionIncludedFiles({
             sourceRoot: (await dependencies.repositoryPaths(managed.repositoryPath)).topLevel,
             worktreePath: worktree.path,

@@ -82,13 +82,19 @@ notice above the composer offers two actions:
   while the branch still exists, no other worktree has it checked out, no
   Aiden removal of it is pending, and the folder it lived in is still there.
   Under the repository's mutation lock it verifies the old ownership token in
-  Git's admin directory, clears the stale registration with a plain
-  `git worktree remove` (`--force` only on Git versions that need it, and only
-  while the folder is still missing), checks the same branch out again at the
-  same managed path with hooks disabled, writes a new ownership token and saves
-  the workspace record. If any step after `worktree add` fails, the save
-  included, the new checkout is removed again so Restore can be retried. Then
-  `.worktreeinclude` files are copied in again. It never creates, moves or
+  Git's admin directory, clears the stale registration by moving that admin
+  directory out of `worktrees/` in one rename (never `git worktree remove`,
+  which would delete a clean folder put back from the Trash meanwhile), looks
+  for the folder once more and puts the record back if it is there, checks the
+  same branch out again at the same managed path with hooks disabled, writes a
+  new ownership token and saves the workspace record. If any step after
+  `worktree add` fails, the save included, the new checkout is removed again
+  so Restore can be retried. When the folder has to be kept (something was
+  written into it), its new Git record gets the workspace's recorded
+  ownership back, so it stays a working checkout and "delete the folder, then
+  Restore again" works. Then `.worktreeinclude` files are copied in again,
+  after the same room check creation makes; without room the checkout still
+  comes back and the skipped copies are logged. It never creates, moves or
   deletes the branch, so commits survive and uncommitted changes, which went
   with the folder, do not. It refuses a present folder, a foreign token, a
   moved registration, a pending removal, a No Access workspace, a branch that
