@@ -148,7 +148,12 @@ export async function serveCommand(agentDir: string, args: string[]): Promise<vo
   }
   const controller = new AbortController();
   const stop = () => controller.abort();
-  process.once("SIGINT", stop); process.once("SIGTERM", stop);
+  // SIGHUP (terminal or ssh pane closed) drains like SIGINT/SIGTERM instead of killing live turns.
+  // A stray rejection in one turn is logged rather than crashing every other turn the daemon serves.
+  const rejected = (reason: unknown) => { process.stderr.write(`aiden: Unhandled daemon rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}\n`); };
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  for (const name of signals) process.once(name, stop);
+  process.on("unhandledRejection", rejected);
   let pairing: Promise<unknown> | undefined;
   const onReady = () => {
     if (!flags.remote || flags.pair === "off") return;
@@ -165,6 +170,7 @@ export async function serveCommand(agentDir: string, args: string[]): Promise<vo
   } finally {
     controller.abort();
     await pairing;
-    process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop);
+    for (const name of signals) process.removeListener(name, stop);
+    process.removeListener("unhandledRejection", rejected);
   }
 }
