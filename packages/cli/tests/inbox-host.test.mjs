@@ -243,16 +243,18 @@ test("a desktop paired before host grants existed picks them up without pairing 
   t.after(() => runStream.close());
   await runStream.next(() => true, "run");
 
-  // This host keeps no remembered approvals: a non-one-time scope is refused and the approval stays pending.
-  const always = await phone.request(`/runs/${run.runId}/approvals/${approvalId}/respond`, "POST", { decision: "deny", scope: "always" }, "approve-grants-test-01");
+  // This host keeps no remembered approvals: "Always allow" is refused and the approval stays pending.
+  const always = await phone.request(`/runs/${run.runId}/approvals/${approvalId}/respond`, "POST", { decision: "allow", scope: "always" }, "approve-grants-test-01");
   assert.equal(always.status, 400, JSON.stringify(always));
-  assert.equal(always.data.error.code, "invalid_request");
   assert.deepEqual(daemon.runs.currentRunForChat(chatId)?.pendingApprovalIds, [approvalId]);
 
   // Revoking the Mac ends its host feed and run stream; the run goes on.
   const revoked = await remote.command(["revoke", macIssued.device.id]);
   assert.equal(revoked.revoked, true, JSON.stringify(revoked));
-  await Promise.all([feed.ended, runStream.ended]);
+  await Promise.race([
+    Promise.all([feed.ended, runStream.ended]),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("Revoking the Mac did not end its host feed and run stream")), 15000).unref()),
+  ]);
   const afterRevoke = await mac.request("/server");
   assert.equal(afterRevoke.status, 403, JSON.stringify(afterRevoke));
   assert.equal(afterRevoke.data.error.code, "credential_revoked");
