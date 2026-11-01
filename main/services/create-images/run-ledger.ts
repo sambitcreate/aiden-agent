@@ -260,11 +260,12 @@ export interface ImageRunLedgerOptions {
   directory: string;
   now?: () => number;
   /**
-   * The node ids a workflow's document has now, or undefined when the document is gone. Retention
-   * keeps a node's latest output only while that node still exists. Without this option the
-   * ledger cannot see documents and treats every node it has history for as live.
+   * The node ids a workflow's document has now, `"all"` when its file exists but cannot be read
+   * (kept for repair, so nothing of it may be pruned), or undefined when the document is gone.
+   * Retention keeps a node's latest output only while that node still exists. Without this option
+   * the ledger cannot see documents and treats every node it has history for as live.
    */
-  liveNodeIds?: (workflowId: string) => ReadonlySet<string> | undefined;
+  liveNodeIds?: (workflowId: string) => ReadonlySet<string> | "all" | undefined;
   /**
    * When given, a corrupt ledger or one with an unsupported schema is renamed aside (with its
    * -wal and -shm files) and an empty ledger is created; this is told where the old file went.
@@ -523,8 +524,9 @@ export class ImageRunLedger {
 
   /**
    * Keeps the newest `keep` runs, every running run, and each run holding the latest output of a
-   * node that still exists in its workflow's document. A deleted node or workflow keeps nothing,
-   * so retention stays bounded however often node ids change.
+   * node that still exists in its workflow's document (every node, while that document is
+   * unreadable). A deleted node or workflow keeps nothing, so retention stays bounded however often
+   * node ids change.
    */
   pruneRuns(keep = RUN_RETENTION): string[] {
     return this.transaction(() => {
@@ -540,7 +542,8 @@ export class ImageRunLedger {
 
   private isLiveNode(workflowId: string, nodeId: string): boolean {
     if (!this.liveNodeIds) return true;
-    return this.liveNodeIds(workflowId)?.has(nodeId) ?? false;
+    const live = this.liveNodeIds(workflowId);
+    return live === "all" || (live?.has(nodeId) ?? false);
   }
 
   deleteWorkflowRuns(workflowId: string): string[] {

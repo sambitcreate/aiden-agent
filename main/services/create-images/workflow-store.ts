@@ -180,8 +180,13 @@ export class ImageWorkflowStore {
     return found;
   }
 
-  /** The node ids the stored document has now; undefined once the workflow is gone. Synchronous, for retention. */
-  nodeIds(workflowId: string): ReadonlySet<string> | undefined {
+  /**
+   * The node ids the stored document has now, `"all"` while its file exists but cannot be read (it
+   * is kept for repair, so its history must not be pruned), or undefined once the workflow is gone.
+   * Synchronous, for retention.
+   */
+  nodeIds(workflowId: string): ReadonlySet<string> | "all" | undefined {
+    if (this.unreadable.has(workflowId)) return "all";
     return this.facts.get(workflowId)?.nodeIds;
   }
 

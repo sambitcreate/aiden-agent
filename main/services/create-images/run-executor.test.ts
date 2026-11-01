@@ -240,6 +240,33 @@ test("a run with no room left in image storage refuses before claiming, so nothi
   assert.equal(env.ledger.snapshot("run-1")!.run.requestsSent, 0);
 });
 
+test("space that garbage collection can reclaim is collected before the storage check refuses", async (t) => {
+  const env = await fixture(t);
+  // Usage counts unheld assets past their grace until a collection removes them.
+  let used = { assets: 10, bytes: 95 * 1024 * 1024 };
+  let collections = 0;
+  const run = await start(env, workflow([prompt("p"), gen("g")], [link("p", "text", "g", "prompt")]), () => generated(18), {
+    deps: {
+      assets: {
+        read: (assetId) => env.assets.read(assetId),
+        put: (input) => env.assets.put(input),
+        retain: (holder, ids) => env.assets.retain(holder, ids),
+        usage: () => used,
+        collectGarbage: async () => {
+          collections += 1;
+          used = { assets: 2, bytes: 10 * 1024 * 1024 };
+          return { deletedAssets: 8, freedBytes: 85 * 1024 * 1024 };
+        },
+      },
+      storageLimits: { maxAssets: 1_000, maxTotalBytes: 100 * 1024 * 1024 },
+    },
+  });
+  assert.equal(await run.done, "succeeded");
+  assert.equal(collections, 1);
+  assert.equal(run.calls.length, 1);
+  assert.equal(attempts(env).get("g")!.state, "succeeded");
+});
+
 test("a full or failing image store after a paid result is reported as a storage error, not bad output", async (t) => {
   const env = await fixture(t);
   const cases = [

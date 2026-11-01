@@ -18,7 +18,7 @@ export interface RunExecutorDependencies {
   ledger: Pick<ImageRunLedger, "claimProviderRequest" | "finishAttempts" | "finishRun" | "terminateRun" | "snapshot">;
   port: Pick<ImageGenerationPort, "preflight">;
   /** Without `usage` the storage headroom check is skipped; without `release` a fault after retain leaves the hold for pruning. */
-  assets: Pick<StudioAssetStore, "read" | "put" | "retain"> & Partial<Pick<StudioAssetStore, "usage" | "release">>;
+  assets: Pick<StudioAssetStore, "read" | "put" | "retain"> & Partial<Pick<StudioAssetStore, "usage" | "release" | "collectGarbage">>;
   /** The asset store's capacity, for the headroom check. Defaults to STUDIO_ASSET_LIMITS. */
   storageLimits?: Pick<StudioAssetLimits, "maxAssets" | "maxTotalBytes">;
   onChange(): void;
@@ -146,8 +146,22 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
       (attempt) => attempt.nodeId === step.nodeId && attempt.variant === step.variant && attempt.state === "running",
     ) ?? false;
 
-  /** Refuses locally when the store clearly cannot keep one more request's worst-case output. */
-  function storageRefusal(): Pick<AttemptFinish, "errorCode" | "errorMessage"> | undefined {
+  /**
+   * Refuses locally when the store cannot keep one more request's worst-case output. Usage counts
+   * unheld assets past their grace until they are collected, so collect once before refusing.
+   */
+  async function storageRefusal(): Promise<Pick<AttemptFinish, "errorCode" | "errorMessage"> | undefined> {
+    const refusal = storageRefusalNow();
+    if (refusal?.errorCode !== "storage-full" || !deps.assets.collectGarbage) return refusal;
+    try {
+      await deps.assets.collectGarbage();
+    } catch {
+      return refusal;
+    }
+    return storageRefusalNow();
+  }
+
+  function storageRefusalNow(): Pick<AttemptFinish, "errorCode" | "errorMessage"> | undefined {
     if (!deps.assets.usage) return undefined;
     const limits = deps.storageLimits ?? STUDIO_ASSET_LIMITS;
     let usage: { assets: number; bytes: number };
@@ -187,7 +201,12 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
       finish(step, update);
       return { ok: false, state: update.state };
     }
-    const noRoom = storageRefusal();
+    const noRoom = await storageRefusal();
+    if (signal.aborted) {
+      const update = stopped();
+      finish(step, update);
+      return { ok: false, state: update.state };
+    }
     if (noRoom) {
       finish(step, { state: "failed", ...noRoom });
       return { ok: false, state: "failed" };

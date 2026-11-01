@@ -276,6 +276,25 @@ test("retention stays bounded when every run uses fresh node ids, keeping latest
   assert.deepEqual(ledger.pruneRuns(100), ["r5"]);
 });
 
+test("retention keeps every latest output of a workflow whose file is unreadable but kept for repair", async (t) => {
+  let state: ReadonlySet<string> | "all" | undefined = "all";
+  const ledger = open(await directory(t), t, { liveNodeIds: (workflowId) => (workflowId === "wf" ? state : new Set()) });
+  ledger.createRun(run({ runId: "kept", attempts: [{ nodeId: "g1", variant: 0, provider: "openrouter", model: "m" }] }));
+  ledger.finishAttempts([{ runId: "kept", nodeId: "g1", variant: 0, state: "succeeded", output: [out("a")] }]);
+  ledger.finishRun("kept", "succeeded");
+  for (let index = 0; index < 3; index += 1) {
+    const runId = `other${index}`;
+    ledger.createRun(run({ runId, workflowId: "other", attempts: [{ nodeId: `n${index}`, variant: 0, provider: "openrouter", model: "m" }] }));
+    ledger.finishRun(runId, "succeeded");
+  }
+  // The unreadable workflow's last output survives even outside the newest runs.
+  assert.ok(!ledger.pruneRuns(1).includes("kept"));
+  assert.ok(ledger.snapshot("kept"));
+  // Deleted for real, it is pruned like any other.
+  state = undefined;
+  assert.deepEqual(ledger.pruneRuns(1), ["kept"]);
+});
+
 test("a node's latest output follows insertion order, not a wall clock that steps backwards", async (t) => {
   const times = [5_000, 6_000, 7_000, 1_000, 1_100];
   let call = 0;

@@ -230,6 +230,7 @@ test("a hand-edited cycle or dangling edge refuses to open, and the other workfl
   // The unreadable file is reported by count, never by its contents.
   assert.deepEqual(issues.slice(before), ["1 image workflow file could not be read and was left in place."]);
   assert.deepEqual([...reopened.unreadableIds()], [unreadable.id]);
+  assert.equal(reopened.nodeIds(unreadable.id), "all", "retention must keep everything of a file kept for repair");
   const listed = reopened.list().map((entry) => entry.id);
   assert.ok(listed.includes(good.id));
   assert.ok(!listed.includes(unreadable.id), "an unparseable file is left on disk but not indexed");
