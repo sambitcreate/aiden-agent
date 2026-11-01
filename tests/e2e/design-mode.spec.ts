@@ -246,6 +246,114 @@ async function expectHeaderClear(page: Page): Promise<void> {
   expect(problems.found).toEqual([]);
 }
 
+/**
+ * The composer's footer controls each keep their own space inside the composer: "+", the
+ * context meter and Send are all there, no two controls overlap, and none spills outside.
+ */
+async function expectComposerFooterClear(
+  footer: ReturnType<Page["locator"]>,
+): Promise<void> {
+  const problems = await footer.evaluate((row) => {
+    const composer = row.closest(".composer-responsive") ?? row;
+    const bounds = composer.getBoundingClientRect();
+    const shown = (element: Element) => {
+      const box = element.getBoundingClientRect();
+      if (box.width <= 1 || box.height <= 1) return false;
+      if (getComputedStyle(element).visibility === "hidden") return false;
+      for (
+        let node: Element | null = element;
+        node && node !== row;
+        node = node.parentElement
+      ) {
+        if (Number(getComputedStyle(node).opacity) < 0.01) return false;
+      }
+      return true;
+    };
+    const pieces = [...row.querySelectorAll("button")]
+      .filter(shown)
+      .map((element) => ({
+        name:
+          element.getAttribute("aria-label") ||
+          element.textContent?.trim() ||
+          "button",
+        box: element.getBoundingClientRect(),
+      }));
+    const found: string[] = [];
+    for (const { name, box } of pieces) {
+      if (
+        box.left < bounds.left - 0.5 ||
+        box.right > bounds.right + 0.5 ||
+        box.bottom > bounds.bottom + 0.5
+      )
+        found.push(`${name} spills out of the composer`);
+    }
+    for (let a = 0; a < pieces.length; a += 1) {
+      for (let b = a + 1; b < pieces.length; b += 1) {
+        const one = pieces[a].box;
+        const two = pieces[b].box;
+        const overlapX =
+          Math.min(one.right, two.right) - Math.max(one.left, two.left);
+        const overlapY =
+          Math.min(one.bottom, two.bottom) - Math.max(one.top, two.top);
+        if (overlapX > 0.5 && overlapY > 0.5)
+          found.push(`${pieces[a].name} overlaps ${pieces[b].name}`);
+      }
+    }
+    return { found, names: pieces.map((piece) => piece.name) };
+  });
+  const required = [
+    /^Attach files or images$/u,
+    /^Context usage/u,
+    /^(Send|Queue) message$/u,
+  ];
+  for (const name of required)
+    expect(problems.names.some((piece) => name.test(piece))).toBe(true);
+  expect(problems.found).toEqual([]);
+}
+
+/** Two boxes share no area. */
+function apart(
+  one: { x: number; y: number; width: number; height: number },
+  two: { x: number; y: number; width: number; height: number },
+): boolean {
+  return (
+    one.x + one.width <= two.x + 0.5 ||
+    two.x + two.width <= one.x + 0.5 ||
+    one.y + one.height <= two.y + 0.5 ||
+    two.y + two.height <= one.y + 0.5
+  );
+}
+
+/** The canvas's tool rail and zoom controls are on screen, inside the canvas and clear of each other. */
+async function expectCanvasChrome(page: Page): Promise<void> {
+  const tools = designCanvas(page).getByRole("toolbar", {
+    name: "Canvas tools",
+  });
+  const zoom = designCanvas(page).getByRole("toolbar", { name: "Zoom" });
+  await expect(tools).toBeVisible();
+  await expect(zoom).toBeVisible();
+  await expect(tools.getByRole("button").first()).toBeVisible();
+  await expect(zoom.getByRole("button", { name: "Zoom in" })).toBeVisible();
+  const region = (await canvasRegion(page).boundingBox())!;
+  for (const toolbar of [tools, zoom]) {
+    const box = (await toolbar.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(region.x - 0.5);
+    expect(box.x + box.width).toBeLessThanOrEqual(
+      region.x + region.width + 0.5,
+    );
+    expect(box.y).toBeGreaterThanOrEqual(region.y - 0.5);
+    expect(box.y + box.height).toBeLessThanOrEqual(
+      region.y + region.height + 0.5,
+    );
+  }
+  expect(apart((await tools.boundingBox())!, (await zoom.boundingBox())!)).toBe(
+    true,
+  );
+}
+
+const composerFooter = (page: Page) =>
+  page.locator('[data-design-mode="true"] .composer-footer-row').first();
+
 test("design mode puts the chat beside a canvas, stays with its chat and gives the panel back on exit", async ({
   aiden,
 }) => {
@@ -316,6 +424,8 @@ test("design mode puts the chat beside a canvas, stays with its chat and gives t
   ).toBeVisible();
   await expect(sidebarChat(page, DESIGN_CHAT)).toBeVisible();
   await expect(sidebarChat(page, NOTES_CHAT)).toHaveCount(0);
+  await expectCanvasChrome(page);
+  await expectComposerFooterClear(composerFooter(page));
   await capture(page, "1440-design-on");
 
   // Escape belongs to whatever has focus; it never leaves design mode.
@@ -417,6 +527,12 @@ test("design mode puts the chat beside a canvas, stays with its chat and gives t
   await expect(
     page.getByRole("button", { name: /^(Show|Hide) terminal$/u }),
   ).toHaveCount(0);
+  // The composer footer fits the narrow column without drawing one control over another.
+  await expectComposerFooterClear(composerFooter(page));
+  // A truncated title still shows all of itself on hover.
+  await expect(
+    page.locator("[data-chat-title-menu] [title]").first(),
+  ).toHaveAttribute("title", DESIGN_CHAT);
   await capture(page, "1440-chat-360");
   await page.keyboard.press("End");
   await page.keyboard.press(DESIGN_SHORTCUT);
@@ -465,6 +581,9 @@ test("design mode fits narrow windows: split beside the sidebar, stacked below 6
     (await canvasRegion(page).boundingBox())!.width,
   ).toBeGreaterThanOrEqual(320);
   await expect(paneSwitch(page)).toHaveCount(0);
+  // The 320 px canvas keeps its tool rail and zoom controls.
+  await expectCanvasChrome(page);
+  await expectComposerFooterClear(composerFooter(page));
   await capture(page, "1000-split-sidebar-open");
   await page.getByRole("button", { name: "Hide sidebar" }).click();
   await expect(
@@ -474,6 +593,7 @@ test("design mode fits narrow windows: split beside the sidebar, stacked below 6
     "data-design-layout",
     "split",
   );
+  await expectCanvasChrome(page);
   await capture(page, "1000-split-sidebar-collapsed");
 
   // Below 680 px of content the panes stack behind a Chat | Canvas switch. The display cannot
@@ -492,6 +612,7 @@ test("design mode fits narrow windows: split beside the sidebar, stacked below 6
   await expect(banner(page)).toHaveCount(0);
   expect(await windowWidth(app)).toBe(640);
   await expectHeaderClear(page);
+  await expectComposerFooterClear(composerFooter(page));
   await capture(page, "640-stacked-chat");
 
   await paneSwitch(page).getByRole("radio", { name: "Canvas" }).click();
@@ -500,6 +621,7 @@ test("design mode fits narrow windows: split beside the sidebar, stacked below 6
     designCanvas(page).getByText("Designs will appear here."),
   ).toBeVisible();
   await expect(page.locator("textarea").first()).toBeHidden();
+  await expectCanvasChrome(page);
   await capture(page, "640-stacked-canvas");
   await paneSwitch(page).getByRole("radio", { name: "Chat" }).click();
   await expect(page.locator("textarea").first()).toBeVisible();
@@ -517,7 +639,36 @@ test("design mode fits narrow windows: split beside the sidebar, stacked below 6
     page.getByRole("button", { name: "Widen window" }),
   ).toBeVisible();
   expect(await windowWidth(app)).toBe(640);
+  // The banner is part of the top bar: below the header, clear of the Chat | Canvas
+  // switch, and the conversation starts below it instead of underneath it.
+  const bannerBox = (await page.locator("[data-design-banner]").boundingBox())!;
+  const headerBox = (await page
+    .locator('[data-design-mode="true"] .scroll-area-header')
+    .first()
+    .boundingBox())!;
+  expect(bannerBox.y).toBeGreaterThanOrEqual(
+    headerBox.y + headerBox.height - 0.5,
+  );
+  expect(apart(bannerBox, (await paneSwitch(page).boundingBox())!)).toBe(true);
+  const firstMessage = page
+    .locator('[data-design-mode="true"] [data-scroll-content]')
+    .getByText(DESIGN_CHAT)
+    .first();
+  await expect(firstMessage).toBeVisible();
+  expect((await firstMessage.boundingBox())!.y).toBeGreaterThanOrEqual(
+    bannerBox.y + bannerBox.height - 0.5,
+  );
   await capture(page, "640-banner");
+  // The canvas pane starts below the banner too.
+  await paneSwitch(page).getByRole("radio", { name: "Canvas" }).click();
+  await expect(designCanvas(page)).toBeVisible();
+  await expect(banner(page)).toBeVisible();
+  expect((await canvasRegion(page).boundingBox())!.y).toBeGreaterThanOrEqual(
+    bannerBox.y + bannerBox.height - 0.5,
+  );
+  await expectCanvasChrome(page);
+  await paneSwitch(page).getByRole("radio", { name: "Chat" }).click();
+  await expect(page.locator("textarea").first()).toBeVisible();
 
   // Switching chats never resizes either. The design chat scopes the sidebar to its
   // workspace, so step out to All workspaces to reach the other chat.
@@ -591,4 +742,8 @@ test("design mode fits narrow windows: split beside the sidebar, stacked below 6
   await expect(banner(page)).toHaveCount(0);
   await page.keyboard.press(DESIGN_SHORTCUT);
   await expect(designLayout(page)).toHaveAttribute("data-design-layout", "off");
+
+  // Outside design mode a narrow window's composer degrades the same way.
+  await setWindowWidth(app, page, 420);
+  await expectComposerFooterClear(page.locator(".composer-footer-row").first());
 });
