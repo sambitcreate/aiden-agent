@@ -5,7 +5,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import sbtbiswas.AidenOnTheGo.features.workspaces.AidenInboxNotice
 import sbtbiswas.AidenOnTheGo.features.workspaces.AidenInboxNoticeText
 import sbtbiswas.AidenOnTheGo.features.workspaces.AidenInboxRowStatus
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
@@ -16,6 +15,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenInbox
 import sbtbiswas.AidenOnTheGo.models.AidenInboxDuration
 import sbtbiswas.AidenOnTheGo.models.AidenInboxProjection
 import sbtbiswas.AidenOnTheGo.models.AidenInboxRow
+import sbtbiswas.AidenOnTheGo.models.AidenInboxRowOffer
 import sbtbiswas.AidenOnTheGo.models.AidenInboxSection
 import sbtbiswas.AidenOnTheGo.models.AidenSnoozeOption
 import java.time.Duration
@@ -224,13 +224,65 @@ class AidenInboxTest {
         assertEquals(3, settled.triageRevision)
         assertEquals(later, settled.snoozedUntil)
 
-        assertEquals(AidenChatTriageChange.done(false), AidenChatTriageChange.done(true).undo)
-        assertEquals(AidenChatTriageChange.wake, AidenChatTriageChange.snooze(later).undo)
-        assertNull(AidenChatTriageChange.wake.undo)
-        // Done and Snooze are never offered on a row that waits or runs.
-        assertTrue(AidenInbox.offersDoneAndSnooze(chat("idle")))
-        assertFalse(AidenInbox.offersDoneAndSnooze(chat("w", activity = AidenChatSummaryActivity.ACTIVE, rowState = "working")))
-        assertFalse(AidenInbox.offersDoneAndSnooze(chat("a", activity = AidenChatSummaryActivity.ACTIVE, rowState = "needs_approval")))
+    }
+
+    @Test
+    fun rowsOfferWhatTheDesktopOffers() {
+        fun offer(summary: AidenChatSummary, readState: Boolean = true, triage: Boolean = true, isOpen: Boolean = false) =
+            AidenInbox.rowOffer(summary, isOpen, now, supportsReadState = readState, supportsTriage = triage)
+
+        val idle = offer(chat("idle"))
+        assertTrue(idle.done && idle.snooze && !idle.markRead && !idle.alsoMarkRead)
+        // Waiting and running rows offer only Mark read, and only when unread.
+        val working = chat("w", activity = AidenChatSummaryActivity.ACTIVE, rowState = "working", unread = true)
+        assertEquals(AidenInboxRowOffer(markRead = true), offer(working))
+        val approval = chat("a", activity = AidenChatSummaryActivity.ACTIVE, rowState = "needs_approval")
+        assertEquals(AidenInboxRowOffer(), offer(approval))
+        // No chat-triage-v1: Mark read only.
+        assertEquals(AidenInboxRowOffer(markRead = true), offer(chat("u", unread = true), triage = false))
+        assertEquals(AidenInboxRowOffer(), offer(chat("u", unread = true), readState = false, triage = false))
+
+        // Done and Snooze on an unseen failure also read it, so a host
+        // without read markers is offered neither there.
+        val failed = chat("f", unread = true, failed = true)
+        assertEquals(AidenInboxRowOffer(), offer(failed, readState = false))
+        val withRead = offer(failed)
+        assertTrue(withRead.markRead && withRead.done && withRead.snooze && withRead.alsoMarkRead)
+        // Open, the failure is already in view.
+        assertFalse(offer(failed, readState = false, isOpen = true).alsoMarkRead)
+        assertTrue(offer(failed, readState = false, isOpen = true).triage)
+
+        // Each is offered unless the row already holds it; a newer reply
+        // ends a Done hold, so Done is offered again.
+        val done = chat("d", doneAt = now.minusSeconds(600), lastAssistantAt = now.minusSeconds(900))
+        assertFalse(offer(done).done)
+        assertTrue(offer(done).snooze)
+        val replied = chat("r", doneAt = now.minusSeconds(600), lastAssistantAt = now.minusSeconds(60))
+        assertTrue(offer(replied).done)
+        val snoozed = chat("s", snoozedUntil = now.plusSeconds(600))
+        assertFalse(offer(snoozed).snooze)
+        assertTrue(offer(chat("e", snoozedUntil = now.minusSeconds(60))).snooze)
+    }
+
+    @Test
+    fun undoPutsBackWhatTheRowHeldBefore() {
+        val later = now.plusSeconds(3600)
+        val earlier = now.plusSeconds(600)
+        assertEquals(AidenChatTriageChange.done(false), AidenInbox.undo(AidenChatTriageChange.done(true), chat("c"), now))
+        // Done over a row that already held Done is put back as Done.
+        val held = chat("h", doneAt = now.minusSeconds(60))
+        assertEquals(AidenChatTriageChange.done(true), AidenInbox.undo(AidenChatTriageChange.done(true), held, now))
+        assertEquals(AidenChatTriageChange.wake, AidenInbox.undo(AidenChatTriageChange.snooze(later), chat("s"), now))
+        // A snooze over an earlier one still running returns to it; one that ended wakes.
+        assertEquals(
+            AidenChatTriageChange.snooze(earlier),
+            AidenInbox.undo(AidenChatTriageChange.snooze(later), chat("s", snoozedUntil = earlier), now)
+        )
+        assertEquals(
+            AidenChatTriageChange.wake,
+            AidenInbox.undo(AidenChatTriageChange.snooze(later), chat("s", snoozedUntil = now.minusSeconds(1)), now)
+        )
+        assertNull(AidenInbox.undo(AidenChatTriageChange(null, null, null), chat("n"), now))
     }
 
     @Test
@@ -242,28 +294,55 @@ class AidenInboxTest {
 
         val approval = status(chat("a", activity = AidenChatSummaryActivity.ACTIVE, rowState = "needs_approval",
             attentionSince = now.minus(Duration.ofMinutes(12))))
-        assertEquals("Approval" to "12m", approval.label to approval.wait)
+        assertEquals(AidenInboxRowStatus.Kind.APPROVAL to "12m", approval.kind to approval.wait)
         assertEquals(AidenInboxRowStatus.Tone.WARNING, approval.tone)
-        assertEquals("Question", status(chat("q", activity = AidenChatSummaryActivity.ACTIVE, rowState = "needs_input")).label)
-        assertEquals(AidenInboxRowStatus.Tone.DANGER, status(chat("f", unread = true, failed = true)).tone)
-        assertEquals("Working 2m", status(chat("w", activity = AidenChatSummaryActivity.ACTIVE, rowState = "working",
-            runStartedAt = now.minus(Duration.ofMinutes(2)))).label)
+        assertEquals(AidenInboxRowStatus.Kind.QUESTION,
+            status(chat("q", activity = AidenChatSummaryActivity.ACTIVE, rowState = "needs_input")).kind)
+        val failed = status(chat("f", unread = true, failed = true))
+        assertEquals(AidenInboxRowStatus.Kind.FAILED to AidenInboxRowStatus.Tone.DANGER, failed.kind to failed.tone)
+        val working = status(chat("w", activity = AidenChatSummaryActivity.ACTIVE, rowState = "working",
+            runStartedAt = now.minus(Duration.ofMinutes(2))))
+        assertEquals(AidenInboxRowStatus.Kind.WORKING to "2m", working.kind to working.time)
+
+        // Localized short times may put a narrow no-break space before the meridiem.
+        fun plain(text: String?) = text?.replace('\u202F', ' ')
         val snoozed = status(chat("s", snoozedUntil = Instant.parse("2026-09-10T09:00:00Z")))
-        assertEquals("Until Thu 9:00 AM", snoozed.label)
-        assertEquals("Snoozed until Thu 9:00 AM", snoozed.spokenLabel)
+        assertEquals(AidenInboxRowStatus.Kind.SNOOZED, snoozed.kind)
+        assertEquals("Thu 9:00 AM", plain(snoozed.time))
+        // Done comes first while a snooze also runs.
+        val both = status(chat("b", doneAt = now.minusSeconds(60), snoozedUntil = now.plusSeconds(3600)))
+        assertEquals(AidenInboxRowStatus.Kind.DONE, both.kind)
+        // A newer reply ends the Done hold, so the snooze shows.
+        val replied = status(chat("r", doneAt = now.minusSeconds(600), lastAssistantAt = now.minusSeconds(60),
+            snoozedUntil = now.plusSeconds(3600)))
+        assertEquals(AidenInboxRowStatus.Kind.SNOOZED, replied.kind)
+
+        // Updates wait on the reply; Earlier waits on the last change.
+        val update = chat("u", unread = true, updatedAgo = Duration.ofMinutes(2), lastAssistantAt = now.minus(Duration.ofMinutes(40)))
+        val updateRow = AidenInboxRow(update, AidenInbox.placement(update, false, now))
+        assertEquals(AidenInboxSection.UPDATES, updateRow.placement.section)
+        assertEquals("40m", AidenInboxRowStatus.make(updateRow, now, zone, locale).wait)
+        val old = chat("o", updatedAgo = Duration.ofDays(3), lastAssistantAt = now.minus(Duration.ofDays(5)))
+        val oldRow = AidenInboxRow(old, AidenInbox.placement(old, false, now))
+        assertEquals(AidenInboxSection.EARLIER, oldRow.placement.section)
+        assertEquals("3d", AidenInboxRowStatus.make(oldRow, now, zone, locale).wait)
+
         assertEquals(
             "Plan, Workspace, Snoozed until Thu 9:00 AM, Unread",
-            AidenInboxRowStatus.accessibilityName("Plan", "Workspace", snoozed, unread = true)
+            AidenInboxRowStatus.accessibilityName("Plan", "Workspace", "Snoozed until Thu 9:00 AM", null, "Unread")
         )
+        assertEquals("Plan, 5m", AidenInboxRowStatus.accessibilityName("Plan", "", null, "5m", null))
 
-        assertEquals("Marked done", AidenInboxNoticeText.message(
-            AidenInboxNotice.Changed(AidenChatTriageChange.done(true), "c", AidenChatTriageChange.done(false)), now, zone, locale))
-        // Localized short times may put a narrow no-break space before the meridiem.
-        fun plain(text: String) = text.replace('\u202F', ' ')
-        assertEquals("Snoozed until today at 6:00 PM", plain(AidenInboxNoticeText.confirmation(
-            AidenChatTriageChange.snooze(Instant.parse("2026-09-09T18:00:00Z")), now, zone, locale)))
-        assertEquals("Snoozed until Monday at 9:00 AM", plain(AidenInboxNoticeText.confirmation(
-            AidenChatTriageChange.snooze(Instant.parse("2026-09-14T09:00:00Z")), now, zone, locale)))
-        assertTrue(AidenInboxNoticeText.message(AidenInboxNotice.Conflict(), now, zone, locale).contains("another device"))
+        assertEquals(AidenInboxNoticeText.Confirmation.Done,
+            AidenInboxNoticeText.confirmation(AidenChatTriageChange.done(true), now, zone, locale))
+        val today = AidenInboxNoticeText.confirmation(
+            AidenChatTriageChange.snooze(Instant.parse("2026-09-09T18:00:00Z")), now, zone, locale)
+        assertEquals("6:00 PM", plain((today as AidenInboxNoticeText.Confirmation.SnoozedToday).time))
+        val monday = AidenInboxNoticeText.confirmation(
+            AidenChatTriageChange.snooze(Instant.parse("2026-09-14T09:00:00Z")), now, zone, locale)
+        monday as AidenInboxNoticeText.Confirmation.SnoozedOn
+        assertEquals("Monday" to "9:00 AM", monday.day to plain(monday.time))
+        assertEquals(AidenInboxNoticeText.Confirmation.Updated,
+            AidenInboxNoticeText.confirmation(AidenChatTriageChange(pinned = true), now, zone, locale))
     }
 }

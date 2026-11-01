@@ -121,7 +121,9 @@ import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
 import sbtbiswas.AidenOnTheGo.models.AidenUsageSummary
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceCreate
+import sbtbiswas.AidenOnTheGo.navigation.LocalAidenOpenChatId
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSnackbar
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceSidebarOrganization
 import sbtbiswas.AidenOnTheGo.features.shared.AidenReadPresentation
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
@@ -232,8 +234,10 @@ private fun AidenWorkspaceHome(
     val nextChatCursor by viewModel.nextChatCursor.collectAsStateWithLifecycle()
     val isLoadingMoreChats by viewModel.isLoadingMoreChats.collectAsStateWithLifecycle()
     val chatPaginationErrorMessage by viewModel.chatPaginationErrorMessage.collectAsStateWithLifecycle()
-    val canReadSchedules = installations.firstOrNull { it.id == activeInstallationId }
-        ?.hasNegotiatedAccess(AidenRemoteCapability.SCHEDULE_READ) == true
+    val serverInfo by coordinator.serverInfo.collectAsStateWithLifecycle()
+    val activeInstallation = installations.firstOrNull { it.id == activeInstallationId }
+    val canReadSchedules = activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.SCHEDULE_READ) == true
+    val openChatId = LocalAidenOpenChatId.current
 
     var isSearching by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -288,37 +292,44 @@ private fun AidenWorkspaceHome(
     var showsAllInboxEarlier by rememberSaveable(activeInstanceId, sidebarOrganizationRaw) { mutableStateOf(false) }
     var inboxSnoozeChatId by rememberSaveable { mutableStateOf<String?>(null) }
     val workspaceNames = remember(activeWorkspaces) { activeWorkspaces.associate { it.id to it.name } }
-    val inboxProjection = remember(chats, workspaceNames, inboxNow, searchQuery, showsAllInboxEarlier, showsInbox) {
+    val inboxProjection = remember(chats, workspaceNames, inboxNow, searchQuery, showsAllInboxEarlier, showsInbox, openChatId) {
         if (!showsInbox) AidenInboxProjection()
         else AidenInboxProjection.make(
             chats = chats,
             workspaceNames = workspaceNames,
-            openChatId = null,
+            openChatId = openChatId,
             now = inboxNow,
             searchText = searchQuery,
             showAllEarlier = showsAllInboxEarlier
         )
     }
-    val inboxOffers = remember(viewModel) {
-        AidenInboxRowOffers(markRead = viewModel::offersMarkRead, triage = viewModel::offersTriage)
-    }
+    // Keyed on the host's features and the negotiated access, which can
+    // arrive after the list does.
+    val inboxOffers = AidenInboxRowOffers(
+        supportsReadState = serverInfo?.supportsChatReadState == true,
+        supportsTriage = serverInfo?.supportsChatTriage == true &&
+            activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.CHAT_WRITE) == true,
+        openChatId = openChatId
+    )
+    val inboxSwipe = remember(activeInstanceId) { AidenInboxSwipeState() }
     val inboxNotice by viewModel.inboxNotice.collectAsStateWithLifecycle()
-    val inboxUndoLabel = stringResource(R.string.inbox_action_undo)
-    LaunchedEffect(inboxNotice?.id) {
-        val notice = inboxNotice ?: return@LaunchedEffect
-        val undo = (notice as? AidenInboxNotice.Changed)?.undo
-        val result = snackbarHostState.showSnackbar(
-            message = AidenInboxNoticeText.message(notice, Instant.now()),
-            actionLabel = if (undo != null) inboxUndoLabel else null,
-            withDismissAction = true,
-            duration = SnackbarDuration.Short
-        )
-        if (result == SnackbarResult.ActionPerformed && notice is AidenInboxNotice.Changed && undo != null) {
-            viewModel.setInboxTriage(notice.chatId, undo, offersUndo = false)
+    AidenInboxNoticeEffect(
+        notice = inboxNotice,
+        snackbarHostState = snackbarHostState,
+        onUndo = { chatId, undo ->
+            viewModel.setInboxTriage(chatId, undo, isOpen = chatId == openChatId, offersUndo = false)
+        },
+        onDismissed = viewModel::dismissInboxNotice
+    )
+    // Switching how the sidebar is organized drops a notice about the old
+    // list; the first composition (coming back to this screen) does not.
+    var noticeOrganization by remember { mutableStateOf(sidebarOrganizationRaw) }
+    LaunchedEffect(sidebarOrganizationRaw) {
+        if (noticeOrganization != sidebarOrganizationRaw) {
+            noticeOrganization = sidebarOrganizationRaw
+            viewModel.dismissInboxNotice()
         }
-        viewModel.dismissInboxNotice(notice.id)
     }
-    LaunchedEffect(sidebarOrganizationRaw) { viewModel.dismissInboxNotice() }
     val chatListUnavailable = chatListLoadState == AidenChatListLoadState.FAILED
     val chatCreationBlocked = chatListLoadState != AidenChatListLoadState.LOADED
 
@@ -408,7 +419,7 @@ private fun AidenWorkspaceHome(
                 onOpenSettings = onOpenSettings
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { SnackbarHost(snackbarHostState) { data -> AidenSnackbar(data) } },
         floatingActionButton = {
             AnimatedVisibility(
                 visible = !isSearching && !chatCreationBlocked,
@@ -676,9 +687,12 @@ private fun AidenWorkspaceHome(
                             workspaceNames = workspaceNames,
                             now = inboxNow,
                             offers = inboxOffers,
+                            swipe = inboxSwipe,
                             onOpen = onNavigateToChat,
                             onMarkRead = viewModel::markInboxRead,
-                            onDone = { id -> viewModel.setInboxTriage(id, AidenChatTriageChange.done(true)) },
+                            onDone = { id ->
+                                viewModel.setInboxTriage(id, AidenChatTriageChange.done(true), isOpen = id == openChatId)
+                            },
                             onSnooze = { id -> inboxSnoozeChatId = id },
                             onShowMore = { showsAllInboxEarlier = true }
                         )
@@ -752,7 +766,7 @@ private fun AidenWorkspaceHome(
             now = inboxNow,
             onPick = { until ->
                 inboxSnoozeChatId = null
-                viewModel.setInboxTriage(chatId, AidenChatTriageChange.snooze(until))
+                viewModel.setInboxTriage(chatId, AidenChatTriageChange.snooze(until), isOpen = chatId == openChatId)
             },
             onDismiss = { inboxSnoozeChatId = null }
         )

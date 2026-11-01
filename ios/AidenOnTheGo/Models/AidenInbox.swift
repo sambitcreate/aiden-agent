@@ -101,6 +101,20 @@ struct AidenChatInboxSignals: Codable, Equatable, Sendable {
     }
 }
 
+extension AidenChatInboxSignals {
+    /// The row's signals once `chat` is admitted: a chat detail carries no
+    /// triage, but its newest reply is newer output than the row may know of,
+    /// which ends a Done hold and outdates the host's placement.
+    func admitting(_ chat: AidenChat) -> Self {
+        var signals = self
+        guard let newest = chat.messages.filter({ $0.role == .assistant }).map(\.createdAt).max(),
+              newest > (lastAssistantAt ?? .distantPast) else { return signals }
+        signals.lastAssistantAt = newest
+        signals.invalidateHostPlacement()
+        return signals
+    }
+}
+
 /// Where one row sits in the Inbox. `section == nil` means hidden (Done,
 /// snoozed, or older than the recent window).
 struct AidenInboxPlacement: Equatable, Sendable {
@@ -284,11 +298,90 @@ enum AidenInbox {
         }
     }
 
-    /// Done and Snooze are offered unless the row waits on the person or runs,
-    /// as on the desktop (`inboxTriageOffer`).
-    static func offersDoneAndSnooze(_ summary: AidenChatSummary) -> Bool {
-        summary.displayRowState == .idle
+    /// The swipes one Inbox row offers, as the desktop's `inboxTriageOffer`:
+    /// never Done or Snooze on a row that waits on approval or input or is
+    /// running; Done only while the row isn't held done and Snooze only while
+    /// it isn't snoozed; and on unseen failed output Done and Snooze also read
+    /// it, so they are left out on a Mac that takes no read markers. Mark read
+    /// is offered on any unread row of a Mac that takes them.
+    static func rowOffer(
+        for summary: AidenChatSummary,
+        isOpen: Bool,
+        now: Date,
+        supportsReadState: Bool,
+        supportsTriage: Bool
+    ) -> AidenInboxRowOffer {
+        let markRead = summary.unread && supportsReadState
+        guard supportsTriage, summary.displayRowState == .idle else {
+            return AidenInboxRowOffer(markRead: markRead, done: false, snooze: false, alsoMarkRead: false)
+        }
+        let alsoMarkRead = alsoMarksRead(summary, isOpen: isOpen)
+        guard !alsoMarkRead || supportsReadState else {
+            return AidenInboxRowOffer(markRead: markRead, done: false, snooze: false, alsoMarkRead: false)
+        }
+        let hold = triageHold(Signals(summary: summary, isOpen: isOpen), now: now)
+        return AidenInboxRowOffer(markRead: markRead, done: !hold.done, snooze: !hold.snoozed, alsoMarkRead: alsoMarkRead)
     }
+
+    /// Done or Snooze on unseen failed output also reads it, so the row
+    /// doesn't come straight back to Needs you.
+    static func alsoMarksRead(_ summary: AidenChatSummary, isOpen: Bool) -> Bool {
+        summary.displayRowState == .idle && summary.showsFailed && !isOpen
+    }
+
+    /// The write that puts back what `change` changed on `before`, offered as
+    /// Undo: each field the change named goes back to how the row held it.
+    static func undo(of change: AidenChatTriageChange, before: AidenChatSummary, now: Date) -> AidenChatTriageChange? {
+        var inverse = AidenChatTriageChange()
+        let hold = triageHold(Signals(summary: before, isOpen: false), now: now)
+        if change.pinned != nil { inverse.pinned = before.inbox.pinnedAt != nil }
+        if change.done != nil { inverse.done = hold.done }
+        if change.snooze != nil {
+            if hold.snoozed, let until = before.inbox.snoozedUntil {
+                inverse.snooze = .until(until)
+            } else {
+                inverse.snooze = .wake
+            }
+        }
+        return inverse == AidenChatTriageChange() ? nil : inverse
+    }
+
+    /// A refused write's row: each field the write changed goes back to
+    /// `before`, but only while it still shows the optimistic value, so newer
+    /// output, a reload or a later write that landed meanwhile is kept. The
+    /// host's placement comes back only when the whole row is as it was.
+    static func rollingBack(
+        _ current: AidenChatSummary,
+        optimistic: AidenChatSummary,
+        before: AidenChatSummary
+    ) -> AidenChatSummary {
+        var row = current
+        func restore<Value: Equatable>(_ field: WritableKeyPath<AidenChatSummary, Value>) {
+            guard optimistic[keyPath: field] != before[keyPath: field],
+                  current[keyPath: field] == optimistic[keyPath: field] else { return }
+            row[keyPath: field] = before[keyPath: field]
+        }
+        restore(\.inbox.pinnedAt)
+        restore(\.inbox.doneAt)
+        restore(\.inbox.snoozedUntil)
+        restore(\.unread)
+        if row.inbox.bucket == nil, row.inbox.sortAt == nil {
+            var placed = row
+            placed.inbox.bucket = before.inbox.bucket
+            placed.inbox.sortAt = before.inbox.sortAt
+            if placed == before { row = placed }
+        }
+        return row
+    }
+}
+
+/// The swipe actions one Inbox row offers (`AidenInbox.rowOffer`).
+struct AidenInboxRowOffer: Equatable {
+    var markRead: Bool
+    var done: Bool
+    var snooze: Bool
+    /// Done or Snooze also reads the row's unseen failed output.
+    var alsoMarkRead: Bool
 }
 
 /// The Inbox sections for the phone's sidebar, ordered like the desktop's
@@ -481,11 +574,11 @@ extension AidenInbox {
 }
 
 extension AidenChatTriageChange {
-    /// The write that puts the change back, offered as Undo.
-    var undo: AidenChatTriageChange? {
-        if done == true { return .done(false) }
-        if case .until = snooze { return .wake }
-        return nil
+    /// Whether the change takes the row out of the Inbox (Done or a Snooze).
+    var hidesRow: Bool {
+        if done == true { return true }
+        if case .until = snooze { return true }
+        return false
     }
 
     var confirmation: String {

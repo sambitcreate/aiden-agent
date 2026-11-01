@@ -18,6 +18,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
 import java.io.IOException
 import java.time.Instant
+import java.util.UUID
 
 class AidenInboxTriageTest {
     private val now = Instant.parse("2026-09-09T12:00:00Z")
@@ -26,6 +27,7 @@ class AidenInboxTriageTest {
         val rows = mutableMapOf(initial.id to initial)
         val published = mutableListOf<AidenChatSummary>()
         val triageWrites = mutableListOf<Triple<String, AidenChatTriageChange, Int>>()
+        val idempotencyKeys = mutableListOf<UUID>()
         val readWrites = mutableListOf<String>()
         var reloads = 0
         var current = true
@@ -36,7 +38,11 @@ class AidenInboxTriageTest {
             row = { rows[it] },
             publish = { rows[it.id] = it; published += it },
             isCurrent = { current },
-            writeTriage = { id, change, revision -> triageWrites += Triple(id, change, revision); triageAnswer(change) },
+            writeTriage = { id, change, revision, key ->
+                triageWrites += Triple(id, change, revision)
+                idempotencyKeys += key
+                triageAnswer(change)
+            },
             writeRead = { readWrites += it; readAnswer() },
             reload = { reloads += 1 },
             now = { now }
@@ -59,8 +65,12 @@ class AidenInboxTriageTest {
         triageRevision = revision
     )
 
-    private fun conflict() = AidenRemoteClientException.Server(
-        409, AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.REVISION_CONFLICT, "Changed.", "req_1", false)
+    private fun conflict(currentRevision: String? = null) = AidenRemoteClientException.Server(
+        409,
+        AidenRemoteErrorEnvelope.Body(
+            AidenRemoteErrorCode.REVISION_CONFLICT, "Changed.", "req_1", false,
+            details = currentRevision?.let { AidenRemoteErrorEnvelope.Details(currentRevision = it) }
+        )
     )
 
     @Test
@@ -125,12 +135,19 @@ class AidenInboxTriageTest {
         assertEquals(listOf("chat-1"), host.readWrites)
         assertFalse(host.rows.getValue("chat-1").unread)
 
-        // Without read markers the failure stays unseen.
+        // Without read markers Done would hide a failure nobody saw, so
+        // nothing is written and the row stays where it was.
         val older = Host(row(unread = true, failed = true))
         older.triageAnswer = { AidenChatTriageResult("chat-1", 3, now, doneAt = now) }
-        older.triage(now).setTriage("chat-1", AidenChatTriageChange.done(true), readsFailures = false)
+        assertNull(older.triage(now).setTriage("chat-1", AidenChatTriageChange.done(true), readsFailures = false))
+        assertTrue(older.triageWrites.isEmpty())
+        assertTrue(older.published.isEmpty())
+        assertNull(older.rows.getValue("chat-1").doneAt)
+
+        // The open chat's failure is already seen: Done needs no read marker.
+        older.triage(now).setTriage("chat-1", AidenChatTriageChange.done(true), readsFailures = false, isOpen = true)
+        assertEquals(1, older.triageWrites.size)
         assertTrue(older.readWrites.isEmpty())
-        assertTrue(older.rows.getValue("chat-1").unread)
 
         // A refused read marker brings the dot back.
         val refused = Host(row(unread = true, failed = true))
@@ -156,11 +173,80 @@ class AidenInboxTriageTest {
     }
 
     @Test
-    fun aLateAnswerAfterSwitchingHostsLeavesTheNewListAlone() = runBlocking {
+    fun aStaleRevisionIsSentOnceMoreFromTheHostsRevisionWithANewKey() = runBlocking {
+        val host = Host(row())
+        var calls = 0
+        host.triageAnswer = {
+            calls += 1
+            if (calls == 1) throw conflict(currentRevision = "7")
+            AidenChatTriageResult("chat-1", 8, now, doneAt = now)
+        }
+        val notice = host.triage(now).setTriage("chat-1", AidenChatTriageChange.done(true), readsFailures = true)
+        assertTrue(notice is AidenInboxNotice.Changed)
+        assertEquals(listOf(2, 7), host.triageWrites.map { it.third })
+        assertEquals(2, host.idempotencyKeys.toSet().size)
+        assertEquals(8, host.rows.getValue("chat-1").triageRevision)
+        assertEquals(0, host.reloads)
+
+        // A second conflict is a real one: the row goes back and the list reloads.
+        val again = Host(row())
+        again.triageAnswer = { throw conflict(currentRevision = "9") }
+        assertTrue(again.triage(now).setTriage("chat-1", AidenChatTriageChange.done(true), readsFailures = true)
+            is AidenInboxNotice.Conflict)
+        assertEquals(listOf(2, 9), again.triageWrites.map { it.third })
+        assertEquals(1, again.reloads)
+        assertNull(again.rows.getValue("chat-1").doneAt)
+    }
+
+    @Test
+    fun aRefusalPutsBackOnlyWhatTheWriteStillHolds() = runBlocking {
+        val host = Host(row())
+        val gate = CompletableDeferred<Unit>()
+        host.triageAnswer = { gate.await(); throw IOException("offline") }
+        val pending = async {
+            host.triage(now).setTriage("chat-1", AidenChatTriageChange.snooze(now.plusSeconds(3600)), readsFailures = true)
+        }
+        yield()
+        // A reply and a pin land while the snooze is in flight.
+        val reply = now.plusSeconds(5)
+        host.rows["chat-1"] = host.rows.getValue("chat-1").copy(lastAssistantAt = reply, pinnedAt = now)
+        gate.complete(Unit)
+        assertTrue(pending.await() is AidenInboxNotice.TriageFailed)
+        val restored = host.rows.getValue("chat-1")
+        assertNull(restored.snoozedUntil)
+        assertEquals(reply, restored.lastAssistantAt)
+        assertEquals(now, restored.pinnedAt)
+        // The row is not as the host placed it, so its old bucket stays dropped.
+        assertNull(restored.inboxBucket)
+    }
+
+    @Test
+    fun undoPutsBackWhatTheRowHeldBefore() = runBlocking {
+        val earlierSnooze = now.plusSeconds(1800)
+        val host = Host(row().copy(snoozedUntil = earlierSnooze))
+        host.triageAnswer = { AidenChatTriageResult("chat-1", 3, now, snoozedUntil = now.plusSeconds(7200)) }
+        val notice = host.triage(now).setTriage("chat-1", AidenChatTriageChange.snooze(now.plusSeconds(7200)), readsFailures = true)
+            as AidenInboxNotice.Changed
+        // Undo returns to the snooze that was still running, not to awake.
+        assertEquals(AidenChatTriageChange.snooze(earlierSnooze), notice.undo)
+
+        // Done on a row whose earlier Done ended (a newer reply) undoes to not done.
+        val reopened = Host(row().copy(doneAt = now.minusSeconds(600), lastAssistantAt = now.minusSeconds(60)))
+        reopened.triageAnswer = { AidenChatTriageResult("chat-1", 3, now, doneAt = now) }
+        val done = reopened.triage(now).setTriage("chat-1", AidenChatTriageChange.done(true), readsFailures = true)
+            as AidenInboxNotice.Changed
+        assertEquals(AidenChatTriageChange.done(false), done.undo)
+    }
+
+    @Test
+    fun aLateRefusalAfterSwitchingHostsStillPutsBackThatHostsRow() = runBlocking {
+        // [Host.rows] stands for the first host's saved rows, which the write keeps addressing.
         val host = Host(row())
         host.triageAnswer = { host.current = false; throw IOException("gone") }
         assertNull(host.triage(now).setTriage("chat-1", AidenChatTriageChange.done(true), readsFailures = true))
-        // Only the optimistic publish happened; no rollback was written into the new host's list.
-        assertEquals(1, host.published.size)
+        assertNull(host.rows.getValue("chat-1").doneAt)
+        assertEquals(row().inboxBucket, host.rows.getValue("chat-1").inboxBucket)
+        // No snackbar and no reload for a host the phone has left.
+        assertEquals(0, host.reloads)
     }
 }

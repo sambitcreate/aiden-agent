@@ -1069,6 +1069,18 @@ data class AidenChatSummary(
     )
 
     /**
+     * The row after opening [chat]: a reply newer than [lastAssistantAt]
+     * moves it (so a Done hold ends, as on the desktop) and drops the host
+     * placement that described the row before.
+     */
+    fun admittingReplies(chat: AidenChat): AidenChatSummary {
+        val newest = chat.messages.filter { it.role == AidenChatRole.ASSISTANT }.maxOfOrNull { it.createdAt }
+            ?: return this
+        if (lastAssistantAt?.let { !newest.isAfter(it) } == true) return this
+        return copy(lastAssistantAt = newest).withoutHostPlacement()
+    }
+
+    /**
      * The row says Failed in place of the unread dot: the unseen output is a
      * failed turn. Viewing the chat clears unread, and with it Failed.
      */

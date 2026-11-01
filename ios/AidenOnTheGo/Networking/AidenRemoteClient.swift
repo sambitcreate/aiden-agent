@@ -83,7 +83,6 @@ struct AidenSpeechTranscription: Codable, Equatable, Sendable {
     let modelId: String
 }
 
-/// Encodes to `{}` without a message id so the Mac reads through its newest message.
 /// One triage write. Each field present is set; the rest are left alone.
 struct AidenChatTriageChange: Equatable, Sendable {
     enum Snooze: Equatable, Sendable {
@@ -166,6 +165,7 @@ private struct ChatTriageRequest: Encodable {
     private enum CodingKeys: String, CodingKey { case pinned, done, snoozeUntil, ifRevision }
 }
 
+/// Encodes to `{}` without a message id so the Mac reads through its newest message.
 private struct ChatReadRequest: Encodable {
     let throughMessageId: String?
 
@@ -199,7 +199,8 @@ struct AidenServer: Codable, Equatable, Sendable {
     static let chatSkillsFeature = "chat-skills-v1"
     static let chatAgentInterruptFeature = "chat-agent-interrupt-v1"
     static let chatReadStateFeature = "chat-read-state-v1"
-    /// Contract revision 47: `POST /chats/{chatId}/triage` (Pin, Done, Snooze).
+    /// `POST /chats/{chatId}/triage` (Pin, Done, Snooze). Announced to phones
+    /// since the host's `AIDEN_REMOTE_INBOX_SIGNALS_CONTRACT_REVISION`.
     static let chatTriageFeature = "chat-triage-v1"
     static let chatMessagesWindowFeature = "chat-messages-window-v1"
     static let chatMessagesWindowMetadataFeature = "chat-messages-window-metadata-v1"
@@ -837,6 +838,14 @@ enum AidenRemoteClientError: Error, LocalizedError {
     var isRevisionConflict: Bool {
         guard case .server(409, let body) = self else { return false }
         return body.code.rawValue == "revision_conflict"
+    }
+
+    /// The host's triage revision a conflict reported (`details.currentRevision`),
+    /// so a write can be sent once more from it.
+    var conflictingRevision: Int? {
+        guard isRevisionConflict, case .server(_, let body) = self,
+              let text = body.details?.currentRevision, let revision = Int(text), revision >= 0 else { return nil }
+        return revision
     }
 
     /// A 429 the server marked `retryable`. The request was refused before it

@@ -47,10 +47,7 @@ struct AidenChatRowStatusView: View {
             case .needsInput:
                 pill("Reply", systemImage: "questionmark.bubble", tint: palette.accent, label: state.accessibilityLabel)
             case .working:
-                AidenWorkingIndicator(size: 16, tint: palette.accent)
-                    .accessibilityHidden(false)
-                    .accessibilityElement()
-                    .accessibilityLabel(state.accessibilityLabel)
+                AidenWorkingIndicator(size: 16, tint: palette.accent, accessibilityLabel: state.accessibilityLabel)
             case .idle:
                 EmptyView()
             }
@@ -216,7 +213,7 @@ final class AidenHomeModel {
         summary.rowState = existing?.rowState
         summary.unread = false
         summary.lastRunFailed = existing?.lastRunFailed ?? false
-        if let existing { summary.inbox = existing.inbox }
+        if let existing { summary.inbox = existing.inbox.admitting(chat) }
         chats.append(summary)
         chats.sort(by: AidenChatSummaryPage.areInCanonicalOrder)
         persistCurrentSummaries(changedID: chat.id)
@@ -242,65 +239,76 @@ final class AidenHomeModel {
     var inboxNotice: AidenInboxNotice?
 
     /// Mark read from a swipe. The dot clears at once and comes back with a
-    /// banner if the Mac refuses.
+    /// banner if the Mac refuses. A Mac without read markers gets no write.
     func markRead(chatID: String, coordinator: AidenRemoteCoordinator) async {
-        guard let index = chats.firstIndex(where: { $0.id == chatID }), chats[index].unread,
+        guard coordinator.server?.supportsChatReadState == true,
+              let index = chats.firstIndex(where: { $0.id == chatID }), chats[index].unread,
               let context = try? coordinator.requestContext() else { return }
+        let before = chats[index]
         chats[index].unread = false
         chats[index].inbox.invalidateHostPlacement()
+        let optimistic = chats[index]
         persistCurrentSummaries(changedID: chatID)
         do {
             try await coordinator.remoteClient(for: context).markChatRead(id: chatID)
         } catch {
-            guard coordinator.isCurrent(context),
-                  let index = chats.firstIndex(where: { $0.id == chatID }) else { return }
-            chats[index].unread = true
-            persistCurrentSummaries(changedID: chatID)
+            await rollBack(chatID: chatID, optimistic: optimistic, before: before, context: context, coordinator: coordinator)
+            guard coordinator.isCurrent(context) else { return }
             inboxNotice = AidenInboxNotice(message: String(localized: "Couldn’t mark that chat read. Try again once your Mac is reachable."))
         }
     }
 
-    /// Done, Snooze or their undo. The row moves at once; a refusal puts it
-    /// back with a banner, and a stale revision also refreshes the list.
+    /// Done, Snooze or their undo. The row moves at once; a refusal puts back
+    /// what the write changed with a banner, and a stale revision is sent
+    /// once more from the host's revision before it counts as a refusal.
+    /// Done or Snooze on unseen failed output also reads it, as on the
+    /// desktop, so a Mac without read markers is sent neither.
     @discardableResult
     func setTriage(
         _ change: AidenChatTriageChange,
         chatID: String,
         coordinator: AidenRemoteCoordinator,
+        isOpen: Bool = false,
         now: Date = Date(),
         offersUndo: Bool = true
     ) async -> Bool {
         guard let index = chats.firstIndex(where: { $0.id == chatID }),
               let context = try? coordinator.requestContext() else { return false }
         let before = chats[index]
-        // Done on unseen failed output also reads it, as on the desktop.
-        let alsoMarkRead = change.done == true && before.showsFailed
-            && coordinator.server?.supportsChatReadState == true
-        chats[index] = AidenInbox.applyingOptimisticTriage(change, to: before, now: now, alsoMarkRead: alsoMarkRead)
+        let alsoMarkRead = change.hidesRow && AidenInbox.alsoMarksRead(before, isOpen: isOpen)
+        if alsoMarkRead, coordinator.server?.supportsChatReadState != true { return false }
+        let optimistic = AidenInbox.applyingOptimisticTriage(change, to: before, now: now, alsoMarkRead: alsoMarkRead)
+        chats[index] = optimistic
         persistCurrentSummaries(changedID: chatID)
         inboxNotice = nil
         do {
             let client = try coordinator.remoteClient(for: context)
-            let result = try await client.setChatTriage(
-                chatId: chatID,
-                change: change,
-                ifRevision: before.inbox.triageRevision ?? 0
+            let result = try await sendTriage(
+                change,
+                chatID: chatID,
+                ifRevision: before.inbox.triageRevision ?? 0,
+                client: client,
+                context: context,
+                coordinator: coordinator
             )
-            guard coordinator.isCurrent(context),
+            guard coordinator.isCurrent(context), contentContext == context,
                   let index = chats.firstIndex(where: { $0.id == chatID }) else { return true }
             chats[index].inbox.pinnedAt = result.pinnedAt
             chats[index].inbox.doneAt = result.doneAt
             chats[index].inbox.snoozedUntil = result.snoozedUntil
             chats[index].inbox.triageRevision = result.revision > 0 ? result.revision : nil
+            // A bucket the host reported before this write no longer describes the row.
+            chats[index].inbox.invalidateHostPlacement()
             persistCurrentSummaries(changedID: chatID)
-            if offersUndo, let undo = change.undo {
+            if offersUndo, let undo = AidenInbox.undo(of: change, before: before, now: now) {
                 inboxNotice = AidenInboxNotice(message: change.confirmation, undo: undo, chatID: chatID)
             }
             if alsoMarkRead {
                 do {
                     try await client.markChatRead(id: chatID)
                 } catch {
-                    if coordinator.isCurrent(context), let index = chats.firstIndex(where: { $0.id == chatID }) {
+                    if coordinator.isCurrent(context), contentContext == context,
+                       let index = chats.firstIndex(where: { $0.id == chatID }), !chats[index].unread {
                         chats[index].unread = before.unread
                         persistCurrentSummaries(changedID: chatID)
                     }
@@ -308,18 +316,56 @@ final class AidenHomeModel {
             }
             return true
         } catch {
+            await rollBack(chatID: chatID, optimistic: optimistic, before: before, context: context, coordinator: coordinator)
             guard coordinator.isCurrent(context) else { return false }
-            if let index = chats.firstIndex(where: { $0.id == chatID }) {
-                chats[index].inbox = before.inbox
-                chats[index].unread = before.unread
-                persistCurrentSummaries(changedID: chatID)
-            }
             let conflict = (error as? AidenRemoteClientError)?.isRevisionConflict == true
             inboxNotice = AidenInboxNotice(message: conflict
                 ? String(localized: "That chat changed on another device. The Inbox is up to date now.")
                 : String(localized: "Couldn’t update that chat. It’s back where it was."))
             if conflict { await load(coordinator: coordinator) }
             return false
+        }
+    }
+
+    /// One triage write, sent once more from the host's revision when another
+    /// device changed the chat's triage first, as the desktop's rename does.
+    private func sendTriage(
+        _ change: AidenChatTriageChange,
+        chatID: String,
+        ifRevision: Int,
+        client: AidenRemoteClient,
+        context: AidenRemoteRequestContext,
+        coordinator: AidenRemoteCoordinator
+    ) async throws -> AidenChatTriageResult {
+        do {
+            return try await client.setChatTriage(chatId: chatID, change: change, ifRevision: ifRevision)
+        } catch let error as AidenRemoteClientError {
+            guard let current = error.conflictingRevision, coordinator.isCurrent(context) else { throw error }
+            return try await client.setChatTriage(chatId: chatID, change: change, ifRevision: current, idempotencyKey: UUID())
+        }
+    }
+
+    /// Puts back what a refused write changed. After a switch to another Mac
+    /// the old Mac's saved row is put back instead, so it isn't left showing
+    /// a write that never landed.
+    private func rollBack(
+        chatID: String,
+        optimistic: AidenChatSummary,
+        before: AidenChatSummary,
+        context: AidenRemoteRequestContext,
+        coordinator: AidenRemoteCoordinator
+    ) async {
+        if coordinator.isCurrent(context), contentContext == context {
+            guard let index = chats.firstIndex(where: { $0.id == chatID }) else { return }
+            let restored = AidenInbox.rollingBack(chats[index], optimistic: optimistic, before: before)
+            guard restored != chats[index] else { return }
+            chats[index] = restored
+            persistCurrentSummaries(changedID: chatID)
+            return
+        }
+        let writeToken = chatCache.reserveSummaryWrite(instanceId: context.instanceId)
+        try? await chatCache.updateChatSummary(id: chatID, instanceId: context.instanceId, writeToken: writeToken) {
+            AidenInbox.rollingBack($0, optimistic: optimistic, before: before)
         }
     }
 
@@ -435,6 +481,8 @@ final class AidenHomeModel {
             contentContext = context
             summaryCacheGeneration &+= 1
             localSummaryEdits = [:]
+            // A banner and its Undo belong to the Mac they came from.
+            inboxNotice = nil
             persistedLocalGeneration = 0
             chats = []
             nextChatCursor = nil
@@ -1182,26 +1230,27 @@ struct AidenWorkspaceShellView: View {
         }
     }
 
-    /// Mark read is offered only on unread rows of a Mac that takes read
-    /// markers (`chat-read-state-v1`).
-    private func offersMarkRead(_ chat: AidenChatSummary) -> Bool {
-        chat.unread && coordinator.server?.supportsChatReadState == true
-    }
-
-    /// Done and Snooze need `chat-triage-v1`, chat:write, and a row that is
-    /// not waiting on the person or still running.
-    private func offersTriage(_ chat: AidenChatSummary) -> Bool {
-        coordinator.server?.supportsChatTriage == true
-            && coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .chatWrite) == true
-            && AidenInbox.offersDoneAndSnooze(chat)
+    /// The row's swipes: Mark read needs `chat-read-state-v1`; Done and
+    /// Snooze need `chat-triage-v1`, chat:write and the desktop's offer rules.
+    private func inboxOffer(_ chat: AidenChatSummary) -> AidenInboxRowOffer {
+        AidenInbox.rowOffer(
+            for: chat,
+            isOpen: chat.id == selectedSidebarChat?.id,
+            now: inboxClock,
+            supportsReadState: coordinator.server?.supportsChatReadState == true,
+            supportsTriage: coordinator.server?.supportsChatTriage == true
+                && coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .chatWrite) == true
+        )
     }
 
     private func markDone(_ chat: AidenChatSummary) {
-        Task { await homeModel.setTriage(.done(true), chatID: chat.id, coordinator: coordinator) }
+        let isOpen = chat.id == selectedSidebarChat?.id
+        Task { await homeModel.setTriage(.done(true), chatID: chat.id, coordinator: coordinator, isOpen: isOpen) }
     }
 
     private func snooze(_ chat: AidenChatSummary, until date: Date) {
-        Task { await homeModel.setTriage(.snooze(until: date), chatID: chat.id, coordinator: coordinator) }
+        let isOpen = chat.id == selectedSidebarChat?.id
+        Task { await homeModel.setTriage(.snooze(until: date), chatID: chat.id, coordinator: coordinator, isOpen: isOpen) }
     }
 
     private func markRead(_ chat: AidenChatSummary) {
@@ -1981,17 +2030,16 @@ struct AidenWorkspaceShellView: View {
 
     private func inboxRow(_ row: AidenInboxProjection.Row, section: AidenInboxSection) -> some View {
         let chat = row.summary
-        let canTriage = offersTriage(chat)
+        let offer = inboxOffer(chat)
         return AidenInboxListRow(
             row: row,
             section: section,
             workspaceName: activeWorkspaces.first(where: { $0.id == chat.workspaceId })?.name,
             palette: palette,
             actions: AidenInboxRowActions(
-                markRead: offersMarkRead(chat) ? { markRead(chat) } : nil,
-                done: canTriage && chat.inbox.doneAt == nil ? { markDone(chat) } : nil,
-                snooze: canTriage && chat.inbox.snoozedUntil.map { $0 > inboxClock } != true
-                    ? { snoozeCandidate = chat } : nil
+                markRead: offer.markRead ? { markRead(chat) } : nil,
+                done: offer.done ? { markDone(chat) } : nil,
+                snooze: offer.snooze ? { snoozeCandidate = chat } : nil
             ),
             open: { openChat(chat) }
         )

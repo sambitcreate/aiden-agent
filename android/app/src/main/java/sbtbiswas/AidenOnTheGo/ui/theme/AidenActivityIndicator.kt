@@ -10,7 +10,10 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.StrokeCap
@@ -101,11 +104,12 @@ fun AidenWorkingIndicator(
         if (contentDescription != null) this.contentDescription = contentDescription
     }
     val reduceMotion = aidenReduceMotion()
-    val rotation = if (reduceMotion) {
-        0f
+    // The turn is read in the draw phase only, so the ring redraws each frame
+    // without recomposing the row around it.
+    val rotation: State<Float> = if (reduceMotion) {
+        remember { mutableFloatStateOf(0f) }
     } else {
-        val transition = rememberInfiniteTransition(label = "aiden_working_ring")
-        val turn by transition.animateFloat(
+        rememberInfiniteTransition(label = "aiden_working_ring").animateFloat(
             initialValue = 0f,
             targetValue = 360f,
             animationSpec = infiniteRepeatable(
@@ -114,7 +118,6 @@ fun AidenWorkingIndicator(
             ),
             label = "aiden_working_ring_turn"
         )
-        turn
     }
     Box(
         modifier
@@ -125,7 +128,7 @@ fun AidenWorkingIndicator(
                 val inset = stroke / 2f
                 drawArc(
                     color = color.copy(alpha = color.alpha * AidenWorkingIndicatorMotion.ALPHA),
-                    startAngle = rotation - 90f,
+                    startAngle = rotation.value - 90f,
                     sweepAngle = AidenWorkingIndicatorMotion.SWEEP_DEGREES,
                     useCenter = false,
                     topLeft = androidx.compose.ui.geometry.Offset(inset, inset),

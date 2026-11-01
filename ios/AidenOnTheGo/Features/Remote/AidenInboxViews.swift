@@ -2,14 +2,23 @@ import SwiftUI
 
 /// The desktop's Working indicator: an open ring at 60% opacity that turns
 /// once every 1.5 seconds. Reduce Motion leaves it still; the row's text
-/// still says Working.
+/// still says Working. VoiceOver skips it unless it is given
+/// `accessibilityLabel`, for a ring that stands alone.
 struct AidenWorkingIndicator: View {
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.aidenPalette) private var palette
     var size: CGFloat = 12
     var tint: Color?
+    var accessibilityLabel: String?
 
     var body: some View {
+        ring
+            .accessibilityElement()
+            .accessibilityLabel(accessibilityLabel ?? "")
+            .accessibilityHidden(accessibilityLabel == nil)
+    }
+
+    private var ring: some View {
         TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { context in
             Circle()
                 .trim(from: 0, to: 0.75)
@@ -18,7 +27,6 @@ struct AidenWorkingIndicator: View {
         }
         .frame(width: size, height: size)
         .opacity(0.6)
-        .accessibilityHidden(true)
     }
 
     static func angle(at date: Date) -> Double {
@@ -67,14 +75,17 @@ struct AidenInboxRowStatus: Equatable {
             }
             return Self(label: "Working", tone: .working)
         case .pinned, .updates, .earlier:
-            if chat.inbox.doneAt != nil, chat.inbox.snoozedUntil.map({ $0 > now }) != true {
+            // As the desktop: a Done hold first, then a snooze, else the wait.
+            let hold = AidenInbox.triageHold(AidenInbox.Signals(summary: chat, isOpen: false), now: now)
+            if hold.done {
                 return Self(label: "Done", tone: .plain)
             }
-            if let until = chat.inbox.snoozedUntil, until > now {
+            if hold.snoozed, let until = chat.inbox.snoozedUntil {
                 let text = until.formatted(.dateTime.weekday(.abbreviated).hour().minute())
                 return Self(label: "Until \(text)", spokenLabel: "Snoozed until \(text)", tone: .plain)
             }
-            return Self(tone: .plain, wait: AidenInboxDuration.text(since: row.placement.sortAt, now: now))
+            let since = section == .updates ? chat.inbox.lastAssistantAt ?? chat.updatedAt : chat.updatedAt
+            return Self(tone: .plain, wait: AidenInboxDuration.text(since: since, now: now))
         }
     }
 }
@@ -390,17 +401,22 @@ struct AidenInboxFixtureView: View {
     }
 
     private func actions(for chat: AidenChatSummary) -> AidenInboxRowActions {
-        let triage = AidenInbox.offersDoneAndSnooze(chat)
+        let offer = AidenInbox.rowOffer(for: chat, isOpen: false, now: now, supportsReadState: true, supportsTriage: true)
         return AidenInboxRowActions(
-            markRead: chat.unread ? { update(chat.id) { $0.unread = false } } : nil,
-            done: triage && chat.inbox.doneAt == nil ? { apply(.done(true), to: chat.id) } : nil,
-            snooze: triage ? { apply(.snooze(until: now.addingTimeInterval(3600)), to: chat.id) } : nil
+            markRead: offer.markRead ? { update(chat.id) { $0.unread = false } } : nil,
+            done: offer.done ? { apply(.done(true), to: chat, alsoMarkRead: offer.alsoMarkRead) } : nil,
+            snooze: offer.snooze
+                ? { apply(.snooze(until: now.addingTimeInterval(3600)), to: chat, alsoMarkRead: offer.alsoMarkRead) } : nil
         )
     }
 
-    private func apply(_ change: AidenChatTriageChange, to id: String) {
-        update(id) { $0 = AidenInbox.applyingOptimisticTriage(change, to: $0, now: now) }
-        notice = AidenInboxNotice(message: change.confirmation, undo: change.undo, chatID: id)
+    private func apply(_ change: AidenChatTriageChange, to chat: AidenChatSummary, alsoMarkRead: Bool) {
+        update(chat.id) { $0 = AidenInbox.applyingOptimisticTriage(change, to: $0, now: now, alsoMarkRead: alsoMarkRead) }
+        notice = AidenInboxNotice(
+            message: change.confirmation,
+            undo: AidenInbox.undo(of: change, before: chat, now: now),
+            chatID: chat.id
+        )
     }
 
     private func update(_ id: String, _ body: (inout AidenChatSummary) -> Void) {

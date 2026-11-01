@@ -321,11 +321,18 @@ class AidenChatCache(
         summaries.size <= maxSummaryCount &&
         summaries.map { it.id }.toSet().size == summaries.size
 
+    /**
+     * Saves one row. With [keepsWriteOrder] the write takes the instance's
+     * current summary order instead of claiming a newer one, so a list load
+     * already in flight still saves its page (an Inbox swipe while chats
+     * load); the caller then keeps its row over that page itself.
+     */
     @Synchronized
-    fun upsertSummary(summary: AidenChatSummary, instanceId: String) {
+    fun upsertSummary(summary: AidenChatSummary, instanceId: String, keepsWriteOrder: Boolean = false): Boolean {
         val current = summariesForInstance(instanceId).associateBy { it.id }.toMutableMap()
         current[summary.id] = summary
-        saveSummaries(current.values.toList(), instanceId)
+        val writeToken = if (keepsWriteOrder) summaryWriteTokens[instanceId] ?: reserveChatWrite() else reserveChatWrite()
+        return saveSummaries(current.values.toList(), instanceId, writeToken = writeToken)
     }
 
     @Synchronized
@@ -399,7 +406,7 @@ class AidenChatCache(
                 val existing = visibleSummaries[chat.id]
                 val admitted = AidenChatSummary.fromChat(chat, existing?.activity ?: AidenChatSummaryActivity.IDLE)
                     .copy(rowStateWire = existing?.rowStateWire)
-                visibleSummaries[chat.id] = existing?.let(admitted::withInboxSignals) ?: admitted
+                visibleSummaries[chat.id] = existing?.let(admitted::withInboxSignals)?.admittingReplies(chat) ?: admitted
             }
             publishSummaries(instanceId, visibleSummaries.values.toList())
         }

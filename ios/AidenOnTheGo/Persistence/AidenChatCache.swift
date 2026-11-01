@@ -867,7 +867,7 @@ actor AidenChatCache {
         // A chat detail carries no triage; keep the row's, without the host
         // placement that described the row before this update.
         if let existing {
-            reconciled.inbox = existing.inbox
+            reconciled.inbox = existing.inbox.admitting(chat)
             reconciled.inbox.invalidateHostPlacement()
         }
         let summaries = AidenChatSummaryPage.merged(
@@ -877,6 +877,29 @@ actor AidenChatCache {
         try persistChatSummaries(
             SummarySnapshot(summaries: summaries, nextCursor: cached?.nextCursor),
             instanceId: instanceId, writeToken: writeToken, updatedRows: [chat.id: writeToken]
+        )
+    }
+
+    /// Rewrites one saved row, for a write whose answer arrived after the
+    /// person moved to another Mac. Rows written since `writeToken` win.
+    func updateChatSummary(
+        id: String,
+        instanceId: String,
+        writeToken: UInt64,
+        _ update: @Sendable (AidenChatSummary) -> AidenChatSummary
+    ) throws {
+        guard metadataWriteIsRetained(writeToken, instanceId: instanceId),
+              !isChatHidden(instanceId: instanceId, chatId: id),
+              writeToken >= summaryRowAuthority(instanceId: instanceId, chatId: id),
+              let cached = loadChatSummaries(instanceId: instanceId),
+              let index = cached.summaries.firstIndex(where: { $0.id == id }) else { return }
+        var summaries = cached.summaries
+        let updated = update(summaries[index])
+        guard updated != summaries[index] else { return }
+        summaries[index] = updated
+        try persistChatSummaries(
+            SummarySnapshot(summaries: summaries, nextCursor: cached.nextCursor),
+            instanceId: instanceId, writeToken: writeToken, updatedRows: [id: writeToken]
         )
     }
 

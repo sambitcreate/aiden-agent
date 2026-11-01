@@ -218,7 +218,9 @@ final class AidenInboxTests: XCTestCase {
         let done = AidenInbox.applyingOptimisticTriage(.done(true), to: reply, now: now)
         XCTAssertNil(section(done))
         XCTAssertTrue(done.unread, "Done alone leaves the read marker.")
-        let undone = AidenInbox.applyingOptimisticTriage(try XCTUnwrap(AidenChatTriageChange.done(true).undo), to: done, now: now)
+        let undo = try XCTUnwrap(AidenInbox.undo(of: .done(true), before: reply, now: now))
+        XCTAssertEqual(undo, .done(false))
+        let undone = AidenInbox.applyingOptimisticTriage(undo, to: done, now: now)
         XCTAssertEqual(section(undone), .updates)
 
         let failed = summary("failed", minutesAgo: 5, unread: true, failed: true)
@@ -238,9 +240,123 @@ final class AidenInboxTests: XCTestCase {
         let past = AidenInbox.applyingOptimisticTriage(.snooze(until: ago(minutes: 1)), to: reply, now: now)
         XCTAssertNil(past.inbox.snoozedUntil)
 
-        XCTAssertTrue(AidenInbox.offersDoneAndSnooze(reply))
-        XCTAssertFalse(AidenInbox.offersDoneAndSnooze(summary("run", minutesAgo: 1, activity: .active, rowState: .working)))
-        XCTAssertFalse(AidenInbox.offersDoneAndSnooze(summary("ask", minutesAgo: 1, activity: .active, rowState: .needsApproval)))
+    }
+
+    private func offer(
+        _ chat: AidenChatSummary,
+        isOpen: Bool = false,
+        readState: Bool = true,
+        triage: Bool = true
+    ) -> AidenInboxRowOffer {
+        AidenInbox.rowOffer(for: chat, isOpen: isOpen, now: now, supportsReadState: readState, supportsTriage: triage)
+    }
+
+    func testRowOffersFollowTheDesktopsTriageRules() {
+        let reply = summary("reply", minutesAgo: 5, unread: true)
+        XCTAssertEqual(offer(reply), AidenInboxRowOffer(markRead: true, done: true, snooze: true, alsoMarkRead: false))
+        // Rows that wait on the person or run offer Mark read only.
+        for state in [AidenChatRowState.working, .needsApproval, .needsInput] {
+            let row = summary("live", minutesAgo: 1, activity: .active, rowState: state, unread: true)
+            XCTAssertEqual(offer(row), AidenInboxRowOffer(markRead: true, done: false, snooze: false, alsoMarkRead: false), "\(state)")
+        }
+        // Without chat-triage-v1 (or chat:write) there is no Done or Snooze;
+        // without read markers there is no Mark read.
+        XCTAssertEqual(offer(reply, triage: false), AidenInboxRowOffer(markRead: true, done: false, snooze: false, alsoMarkRead: false))
+        XCTAssertEqual(offer(reply, readState: false), AidenInboxRowOffer(markRead: false, done: true, snooze: true, alsoMarkRead: false))
+
+        // Unseen failed output: Done and Snooze also read it, so a Mac
+        // without read markers is offered neither; the open chat is seen.
+        let failed = summary("failed", minutesAgo: 5, unread: true, failed: true)
+        XCTAssertEqual(offer(failed), AidenInboxRowOffer(markRead: true, done: true, snooze: true, alsoMarkRead: true))
+        XCTAssertEqual(offer(failed, readState: false), AidenInboxRowOffer(markRead: false, done: false, snooze: false, alsoMarkRead: false))
+        XCTAssertEqual(offer(failed, isOpen: true, readState: false).done, true)
+
+        // Done follows the hold: a done row with newer output offers Done again.
+        let held = summary("held", minutesAgo: 5, inbox: AidenChatInboxSignals(lastAssistantAt: ago(minutes: 30), doneAt: ago(minutes: 10)))
+        XCTAssertFalse(offer(held).done)
+        XCTAssertTrue(offer(held).snooze)
+        let newer = summary("newer", minutesAgo: 5, inbox: AidenChatInboxSignals(lastAssistantAt: ago(minutes: 5), doneAt: ago(minutes: 10)))
+        XCTAssertTrue(offer(newer).done)
+        // Snooze follows this phone's clock.
+        let snoozed = summary("snoozed", minutesAgo: 5, inbox: AidenChatInboxSignals(snoozedUntil: ahead(minutes: 10)))
+        XCTAssertFalse(offer(snoozed).snooze)
+        let woke = summary("woke", minutesAgo: 5, inbox: AidenChatInboxSignals(snoozedUntil: ago(minutes: 1)))
+        XCTAssertTrue(offer(woke).snooze)
+    }
+
+    func testUndoPutsBackWhatTheRowHeldBefore() {
+        let plain = summary("plain", minutesAgo: 5)
+        XCTAssertEqual(AidenInbox.undo(of: .done(true), before: plain, now: now), .done(false))
+        XCTAssertEqual(AidenInbox.undo(of: .snooze(until: ahead(minutes: 60)), before: plain, now: now), .wake)
+        // A row already snoozed goes back to its earlier snooze, not awake.
+        let snoozed = summary("snoozed", minutesAgo: 5, inbox: AidenChatInboxSignals(snoozedUntil: ahead(minutes: 10)))
+        XCTAssertEqual(
+            AidenInbox.undo(of: .snooze(until: ahead(minutes: 600)), before: snoozed, now: now),
+            .snooze(until: ahead(minutes: 10))
+        )
+        // Undoing a wake of a done row marks it done again.
+        let held = summary("held", minutesAgo: 5, inbox: AidenChatInboxSignals(doneAt: ago(minutes: 1)))
+        XCTAssertEqual(AidenInbox.undo(of: .done(false), before: held, now: now), .done(true))
+        XCTAssertEqual(AidenInbox.undo(of: AidenChatTriageChange(pinned: true), before: plain, now: now), AidenChatTriageChange(pinned: false))
+        XCTAssertNil(AidenInbox.undo(of: AidenChatTriageChange(), before: plain, now: now))
+    }
+
+    func testRollbackRestoresOnlyTheFieldsTheWriteStillHolds() {
+        let before = summary("failed", minutesAgo: 5, unread: true, failed: true,
+                             inbox: AidenChatInboxSignals(bucket: .needsYou, sortAt: ago(minutes: 5),
+                                                          lastAssistantAt: ago(minutes: 5), pinnedAt: ago(minutes: 60)))
+        let optimistic = AidenInbox.applyingOptimisticTriage(.done(true), to: before, now: now, alsoMarkRead: true)
+
+        // Nothing else moved: the row is exactly as it was, host bucket too.
+        XCTAssertEqual(AidenInbox.rollingBack(optimistic, optimistic: optimistic, before: before), before)
+
+        // Newer output arrived meanwhile: its time and run state stay, and the
+        // old host bucket isn't put back over them.
+        var moved = optimistic
+        moved.inbox.lastAssistantAt = ago(minutes: 1)
+        moved.inbox.attentionSince = ago(minutes: 1)
+        moved.inbox.runStartedAt = ago(minutes: 2)
+        let restored = AidenInbox.rollingBack(moved, optimistic: optimistic, before: before)
+        XCTAssertNil(restored.inbox.doneAt)
+        XCTAssertTrue(restored.unread)
+        XCTAssertEqual(restored.inbox.lastAssistantAt, ago(minutes: 1))
+        XCTAssertEqual(restored.inbox.attentionSince, ago(minutes: 1))
+        XCTAssertEqual(restored.inbox.runStartedAt, ago(minutes: 2))
+        XCTAssertNil(restored.inbox.bucket)
+        XCTAssertEqual(restored.inbox.pinnedAt, ago(minutes: 60))
+
+        // A later write (or reload) that changed a field keeps its value.
+        var later = optimistic
+        later.inbox.doneAt = ago(minutes: 0.5)
+        later.unread = true
+        XCTAssertEqual(AidenInbox.rollingBack(later, optimistic: optimistic, before: before).inbox.doneAt, ago(minutes: 0.5))
+    }
+
+    func testOpeningAChatWithANewerReplyEndsItsDoneHold() throws {
+        let held = summary("held", minutesAgo: 30, inbox: AidenChatInboxSignals(
+            bucket: .done, sortAt: ago(minutes: 30), lastAssistantAt: ago(minutes: 30), doneAt: ago(minutes: 20)
+        ))
+        XCTAssertNil(section(held))
+        let chat = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data("""
+        {"id":"held","workspaceId":"alpha","botId":"bot","title":"held","providerId":"p","modelId":"m","createdAt":"2026-08-18T19:00:00Z","updatedAt":"2026-08-18T19:00:00Z",
+        "revision":"rev-2","messages":[
+          {"id":"m1","role":"assistant","text":"old","createdAt":"\(Self.iso(ago(minutes: 30)))"},
+          {"id":"m2","role":"assistant","text":"new","createdAt":"\(Self.iso(ago(minutes: 2)))"},
+          {"id":"m3","role":"user","text":"later","createdAt":"\(Self.iso(ago(minutes: 1)))"}]}
+        """.utf8))
+        var opened = held
+        opened.inbox = held.inbox.admitting(chat)
+        XCTAssertEqual(opened.inbox.lastAssistantAt, ago(minutes: 2))
+        XCTAssertNil(opened.inbox.bucket, "The host's Done bucket no longer describes the row.")
+        XCTAssertEqual(section(opened), .earlier)
+        // Nothing newer: the row's signals are left alone.
+        XCTAssertEqual(opened.inbox.admitting(chat), opened.inbox)
+    }
+
+    private static func iso(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 
     func testSnoozePresetsMatchTheDesktopOnThePhonesCalendar() throws {
@@ -277,7 +393,7 @@ final class AidenInboxTests: XCTestCase {
 
     // MARK: Row text
 
-    func testRowStatusSaysWhatTheDesktopSays() {
+    func testRowStatusSaysWhatTheDesktopSays() throws {
         let approval = summary("approval", minutesAgo: 1, activity: .active, rowState: .needsApproval,
                                inbox: AidenChatInboxSignals(attentionSince: ago(minutes: 125)))
         let run = summary("run", minutesAgo: 1, activity: .active, rowState: .working,
@@ -290,6 +406,19 @@ final class AidenInboxTests: XCTestCase {
         XCTAssertEqual(needs.tone, .warning)
         XCTAssertEqual(needs.wait, "2h")
         XCTAssertEqual(AidenInboxRowStatus.make(projection.working[0], section: .working, now: now).label, "Working 4m")
+
+        // Pinned waits from the chat's last change, not from when it was pinned;
+        // Updates from the newest reply. Done is said before a snooze.
+        let pinned = summary("pinned", minutesAgo: 3, inbox: AidenChatInboxSignals(pinnedAt: ago(minutes: 60 * 26)))
+        let reply = summary("reply", minutesAgo: 3, unread: true, inbox: AidenChatInboxSignals(lastAssistantAt: ago(minutes: 7)))
+        let both = summary("both", minutesAgo: 3, inbox: AidenChatInboxSignals(doneAt: ago(minutes: 1), snoozedUntil: ahead(minutes: 60)))
+        let lists = AidenInboxProjection.make(
+            chats: [pinned, reply, both], workspaceNames: ["alpha": "Alpha"], openChatID: nil, now: now, searchText: "Alpha"
+        )
+        XCTAssertEqual(AidenInboxRowStatus.make(try XCTUnwrap(lists.pinned.first), section: .pinned, now: now).wait, "3m")
+        XCTAssertEqual(AidenInboxRowStatus.make(try XCTUnwrap(lists.updates.first), section: .updates, now: now).wait, "7m")
+        let bothRow = try XCTUnwrap(lists.earlier.first { $0.id == "both" })
+        XCTAssertEqual(AidenInboxRowStatus.make(bothRow, section: .earlier, now: now).label, "Done")
 
         let view = AidenInboxRowView(
             row: projection.needsYou[0], section: .needsYou, workspaceName: "Alpha",

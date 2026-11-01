@@ -189,11 +189,88 @@ object AidenInbox {
     }
 
     /**
-     * Done and Snooze are offered unless the row waits on the person or runs,
-     * as on the desktop (`inboxTriageOffer`).
+     * Done or Snooze on unseen failed output also reads it, as on the
+     * desktop (`inboxTriageOffer`): the open chat is already seen.
      */
-    fun offersDoneAndSnooze(summary: AidenChatSummary): Boolean =
-        summary.displayRowState == AidenChatRowState.IDLE
+    fun alsoMarksRead(summary: AidenChatSummary, isOpen: Boolean): Boolean =
+        summary.displayRowState == AidenChatRowState.IDLE && summary.showsFailed && !isOpen
+
+    /**
+     * The swipe actions one row offers, as on the desktop
+     * (`inboxTriageOffer`). Mark read needs read markers and an unread row,
+     * whatever it waits on. Done and Snooze need `chat-triage-v1` with
+     * chat:write and are never offered on a row that waits on approval or
+     * input or is running; each is offered unless the row already holds it.
+     * Done and Snooze on unseen failed output also read it, so a host
+     * without read markers is offered neither there.
+     */
+    fun rowOffer(
+        summary: AidenChatSummary,
+        isOpen: Boolean,
+        now: Instant,
+        supportsReadState: Boolean,
+        supportsTriage: Boolean
+    ): AidenInboxRowOffer {
+        val markRead = summary.unread && supportsReadState
+        val idle = summary.displayRowState == AidenChatRowState.IDLE
+        if (!supportsTriage || !idle) return AidenInboxRowOffer(markRead = markRead)
+        val alsoMarkRead = alsoMarksRead(summary, isOpen)
+        if (alsoMarkRead && !supportsReadState) return AidenInboxRowOffer(markRead = markRead)
+        val signals = Signals.of(summary, isOpen)
+        return AidenInboxRowOffer(
+            markRead = markRead,
+            done = !holdsDone(signals),
+            snooze = !holdsSnooze(summary.snoozedUntil, now),
+            alsoMarkRead = alsoMarkRead
+        )
+    }
+
+    /**
+     * The write that puts [change] back, built from what the row held
+     * [before] it: Undo of Done re-holds Done only if it held before, Undo of
+     * a Snooze returns to an earlier snooze still running, else wakes.
+     */
+    fun undo(change: AidenChatTriageChange, before: AidenChatSummary, now: Instant): AidenChatTriageChange? {
+        val pinned = change.pinned?.let { before.pinnedAt != null }
+        val done = change.done?.let { holdsDone(Signals.of(before, isOpen = false)) }
+        val snooze = change.snooze?.let {
+            before.snoozedUntil?.takeIf { holdsSnooze(it, now) }
+                ?.let { until -> AidenChatTriageChange.Snooze.Until(until) }
+                ?: AidenChatTriageChange.Snooze.Wake
+        }
+        return AidenChatTriageChange(pinned, done, snooze).takeIf { pinned != null || done != null || snooze != null }
+    }
+
+    /**
+     * Puts back what a refused write changed. Only the fields the write
+     * changed that still hold its optimistic value go back, so newer output,
+     * run times and later writes on [current] stay. The host's old bucket
+     * returns only when the row is then exactly as it was.
+     */
+    fun rollingBack(
+        current: AidenChatSummary,
+        optimistic: AidenChatSummary,
+        before: AidenChatSummary
+    ): AidenChatSummary {
+        var row = current
+        if (optimistic.pinnedAt != before.pinnedAt && current.pinnedAt == optimistic.pinnedAt) {
+            row = row.copy(pinnedAt = before.pinnedAt)
+        }
+        if (optimistic.doneAt != before.doneAt && current.doneAt == optimistic.doneAt) {
+            row = row.copy(doneAt = before.doneAt)
+        }
+        if (optimistic.snoozedUntil != before.snoozedUntil && current.snoozedUntil == optimistic.snoozedUntil) {
+            row = row.copy(snoozedUntil = before.snoozedUntil)
+        }
+        if (optimistic.unread != before.unread && current.unread == optimistic.unread) {
+            row = row.copy(unread = before.unread)
+        }
+        if (row.inboxBucketWire == null && row.inboxSortAtWire == null) {
+            val placed = row.copy(inboxBucketWire = before.inboxBucketWire, inboxSortAtWire = before.inboxSortAtWire)
+            if (placed == before) row = placed
+        }
+        return row
+    }
 
     /**
      * The row a triage write leaves behind, before the host answers. Fields
@@ -228,6 +305,17 @@ object AidenInbox {
             snoozedUntil = result.snoozedUntil,
             triageRevision = result.revision.takeIf { it > 0 }
         ).withoutHostPlacement()
+}
+
+/** The swipe actions one Inbox row offers ([AidenInbox.rowOffer]). */
+data class AidenInboxRowOffer(
+    val markRead: Boolean = false,
+    val done: Boolean = false,
+    val snooze: Boolean = false,
+    /** Done or Snooze also reads the row's unseen failed output. */
+    val alsoMarkRead: Boolean = false
+) {
+    val triage: Boolean get() = done || snooze
 }
 
 /** One Inbox row and where it sits. */
@@ -325,13 +413,8 @@ data class AidenChatTriageChange(
         data object Wake : Snooze
     }
 
-    /** The write that puts the change back, offered as Undo. */
-    val undo: AidenChatTriageChange?
-        get() = when {
-            done == true -> done(false)
-            snooze is Snooze.Until -> wake
-            else -> null
-        }
+    /** Whether the change takes the row out of the Inbox (Done or a Snooze). */
+    val hidesRow: Boolean get() = done == true || snooze is Snooze.Until
 
     companion object {
         fun done(value: Boolean) = AidenChatTriageChange(done = value)
