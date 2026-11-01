@@ -10,7 +10,10 @@ import {
 import { DesignGrantRegistry } from "../services/design-canvas/grants.js";
 import { DesignCanvasStore } from "../services/design-canvas/store.js";
 import {
+  DESIGN_CAPTURE_MAX_SIDE,
   registerDesignCanvasHandlers,
+  type DesignCanvasCaptureImage,
+  type DesignCanvasCaptureWindow,
   type DesignCanvasChat,
   type DesignCanvasUpdated,
 } from "./design-canvas.js";
@@ -41,6 +44,7 @@ async function fixture(
     chats?: Record<string, DesignCanvasChat>;
     roots?: Record<string, string | null>;
     workspaceRoot?: (chat: DesignCanvasChat) => Promise<string | null>;
+    windowFor?: (event: unknown) => DesignCanvasCaptureWindow | null;
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-canvas-handlers-"));
@@ -75,12 +79,14 @@ async function fixture(
     grants,
     workspaceRoot:
       options.workspaceRoot ?? (async (chat) => roots[chat.workspaceId ?? ""] ?? null),
+    windowFor: options.windowFor ?? (() => null),
   });
-  const invoke = async (channel: string, ...args: unknown[]) => {
+  const invokeFrom = async (event: unknown, channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
     if (!handler) throw new Error(`${channel} is not registered`);
-    return handler({}, ...args);
+    return handler(event, ...args);
   };
+  const invoke = (channel: string, ...args: unknown[]) => invokeFrom({}, channel, ...args);
   return {
     root,
     store,
@@ -91,6 +97,7 @@ async function fixture(
     handlers,
     broadcasts,
     invoke,
+    invokeFrom,
     disable: () => (enabled = false),
   };
 }
@@ -253,4 +260,85 @@ test("a workspace removed or re-pointed while the grant is issued leaves no live
     assert.equal(issuedGrants.length, 1);
     assert.equal(grants.resolve(issuedGrants[0]!), null, String(later));
   }
+});
+
+/** A stand-in for a window's page: records captures and reports pixel sizes like Electron. */
+function fakeWindow(content: { width: number; height: number }, scale = 1) {
+  const captured: Array<{ x: number; y: number; width: number; height: number }> = [];
+  const image = (width: number, height: number): DesignCanvasCaptureImage => ({
+    isEmpty: () => width === 0 || height === 0,
+    getSize: () => ({ width, height }),
+    resize: (size) => {
+      const ratio = size.width / width;
+      return image(size.width, size.height ?? Math.round(height * ratio));
+    },
+    toDataURL: () => `data:image/png;base64,${width}x${height}`,
+  });
+  const window: DesignCanvasCaptureWindow = {
+    getContentSize: () => [content.width, content.height],
+    capturePage: async (rect) => {
+      captured.push(rect);
+      return image(Math.round(rect.width * scale), Math.round(rect.height * scale));
+    },
+  };
+  return { window, captured };
+}
+
+test("a capture comes from the asking window, clamped to its content", async (t) => {
+  const mine = fakeWindow({ width: 1200, height: 800 });
+  const other = fakeWindow({ width: 1200, height: 800 });
+  const sender = { sender: "main window" };
+  const { invokeFrom } = await fixture(t, {
+    windowFor: (event) => (event === sender ? mine.window : other.window),
+  });
+  const result = await invokeFrom(sender, "designCanvas:capture", { x: -40, y: 700, width: 400.6, height: 300 });
+  assert.deepEqual(mine.captured, [{ x: 0, y: 700, width: 361, height: 100 }]);
+  assert.deepEqual(other.captured, []);
+  assert.deepEqual(result, { dataUrl: "data:image/png;base64,361x100" });
+});
+
+test("a capture is a PNG no larger than 1024 px on its longest side", async (t) => {
+  const retina = fakeWindow({ width: 2000, height: 1200 }, 2);
+  const { invoke } = await fixture(t, { windowFor: () => retina.window });
+  const result = (await invoke("designCanvas:capture", { x: 0, y: 0, width: 1600, height: 400 })) as {
+    dataUrl: string;
+  };
+  assert.equal(DESIGN_CAPTURE_MAX_SIDE, 1024);
+  assert.equal(result.dataUrl, "data:image/png;base64,1024x256");
+  const small = (await invoke("designCanvas:capture", { x: 0, y: 0, width: 300, height: 200 })) as {
+    dataUrl: string;
+  };
+  assert.equal(small.dataUrl, "data:image/png;base64,600x400", "a small capture is not scaled up or down");
+});
+
+test("an empty, off-window or malformed rectangle captures nothing", async (t) => {
+  const page = fakeWindow({ width: 1000, height: 800 });
+  const { invoke } = await fixture(t, { windowFor: () => page.window });
+  for (const rect of [
+    { x: 0, y: 0, width: 0, height: 100 },
+    { x: 1200, y: 0, width: 100, height: 100 },
+    { x: 0, y: -500, width: 100, height: 100 },
+    { x: Number.NaN, y: 0, width: 100, height: 100 },
+    { x: 0, y: 0, width: Infinity, height: 100 },
+    "0,0,100,100",
+    null,
+  ]) {
+    assert.deepEqual(await invoke("designCanvas:capture", rect), { error: "unavailable" }, JSON.stringify(rect));
+  }
+  assert.deepEqual(page.captured, []);
+});
+
+test("a capture with no window behind the sender, or with the flag off, is refused", async (t) => {
+  const { invoke } = await fixture(t);
+  assert.deepEqual(await invoke("designCanvas:capture", { x: 0, y: 0, width: 10, height: 10 }), {
+    error: "unavailable",
+  });
+  const page = fakeWindow({ width: 1000, height: 800 });
+  const later = await fixture(t, { windowFor: () => page.window });
+  later.disable();
+  await assert.rejects(
+    later.invoke("designCanvas:capture", { x: 0, y: 0, width: 10, height: 10 }),
+    /Design mode is not available/u,
+  );
+  assert.deepEqual(page.captured, []);
 });

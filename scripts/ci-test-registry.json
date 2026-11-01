@@ -984,6 +984,8 @@
         "renderer/design/canvas-keymap-core.test.ts",
         "renderer/design/use-design-canvas.test.tsx",
         "renderer/design/design-canvas-region.test.tsx",
+        "renderer/design/live-set-core.test.ts",
+        "renderer/design/frame-snapshots.test.ts",
         "renderer/components/chat-sidebar-scope.test.tsx",
         "renderer/components/chat-top-bar-design.test.tsx",
         "renderer/shared/design-canvas/schema.test.ts",

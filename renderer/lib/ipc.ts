@@ -2217,4 +2217,7 @@ export const designCanvasApi = {
   /** The chat's `aiden-design://<grant>/` host for framing its workspace files. */
   getDesignCanvasGrant: (chatId: string) =>
     invoke<{ grant: string } | { error: "unavailable" }>("designCanvas:grant", chatId),
+  /** A PNG of this window's own page inside `rect` (CSS pixels), at most 1024 px on a side. */
+  captureDesignFrame: (rect: { x: number; y: number; width: number; height: number }) =>
+    invoke<{ dataUrl: string } | { error: "unavailable" }>("designCanvas:capture", rect),
 };

@@ -22,6 +22,28 @@ export type DesignCanvasChat = Pick<
 /** `designCanvas:grant` reply: an `aiden-design://<grant>/` host, or no access. */
 export type DesignCanvasGrantResult = { grant: string } | { error: "unavailable" };
 
+/** The parts of Electron's NativeImage a frame snapshot uses. */
+export interface DesignCanvasCaptureImage {
+  isEmpty(): boolean;
+  getSize(): { width: number; height: number };
+  resize(options: { width: number; height: number; quality?: "good" | "better" | "best" }): DesignCanvasCaptureImage;
+  /** A `data:image/png;base64,` URL. */
+  toDataURL(): string;
+}
+
+/** The asking window's page, as `designCanvas:capture` sees it. */
+export interface DesignCanvasCaptureWindow {
+  /** Content width and height in CSS pixels. */
+  getContentSize(): number[];
+  capturePage(rect: { x: number; y: number; width: number; height: number }): Promise<DesignCanvasCaptureImage>;
+}
+
+/** `designCanvas:capture` reply. */
+export type DesignCanvasCaptureResult = { dataUrl: string } | { error: "unavailable" };
+
+/** A frame snapshot's longest side, in pixels. */
+export const DESIGN_CAPTURE_MAX_SIDE = 1024;
+
 export const DESIGN_CANVAS_UPDATED_CHANNEL = "designCanvas:updated";
 const UNAVAILABLE = "Design mode is not available.";
 
@@ -34,6 +56,8 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   grants: Pick<DesignGrantRegistry, "issue" | "revokeChat">;
   /** The chat's workspace folder, or null when the chat has no folder to frame. */
   workspaceRoot(chat: DesignCanvasChat): Promise<string | null>;
+  /** The window that sent `event`, or null when it has none (or it is gone). */
+  windowFor(event: Event): DesignCanvasCaptureWindow | null;
 }): void {
   if (!deps.enabled()) return;
 
@@ -98,4 +122,50 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     }
     return { grant };
   });
+
+  // Snapshots a frame's rectangle of the asking window's own page, so a frame
+  // that leaves the live set keeps a picture instead of going blank. A window
+  // can only ever capture itself.
+  deps.handle("designCanvas:capture", async (event, rect): Promise<DesignCanvasCaptureResult> => {
+    if (!deps.enabled()) throw new Error(UNAVAILABLE);
+    const area = clampCaptureRect(rect, deps.windowFor(event));
+    if (!area) return { error: "unavailable" };
+    try {
+      let image = await area.window.capturePage(area.rect);
+      if (image.isEmpty()) return { error: "unavailable" };
+      const { width, height } = image.getSize();
+      const longest = Math.max(width, height);
+      if (longest > DESIGN_CAPTURE_MAX_SIDE) {
+        const ratio = DESIGN_CAPTURE_MAX_SIDE / longest;
+        image = image.resize({
+          width: Math.max(1, Math.round(width * ratio)),
+          height: Math.max(1, Math.round(height * ratio)),
+          quality: "good",
+        });
+      }
+      return { dataUrl: image.toDataURL() };
+    } catch {
+      // The window closed or the page navigated mid-capture: the frame keeps its old picture.
+      return { error: "unavailable" };
+    }
+  });
+}
+
+function clampCaptureRect(
+  rect: unknown,
+  window: DesignCanvasCaptureWindow | null,
+): { window: DesignCanvasCaptureWindow; rect: { x: number; y: number; width: number; height: number } } | null {
+  if (!window || !rect || typeof rect !== "object") return null;
+  const { x, y, width, height } = rect as Record<string, unknown>;
+  const numbers = [x, y, width, height];
+  if (!numbers.every((value) => typeof value === "number" && Number.isFinite(value))) return null;
+  const [left, top, w, h] = numbers as number[];
+  if (w! <= 0 || h! <= 0) return null;
+  const [contentWidth = 0, contentHeight = 0] = window.getContentSize();
+  const x0 = Math.max(0, Math.floor(left!));
+  const y0 = Math.max(0, Math.floor(top!));
+  const x1 = Math.min(contentWidth, Math.ceil(left! + w!));
+  const y1 = Math.min(contentHeight, Math.ceil(top! + h!));
+  if (x1 <= x0 || y1 <= y0) return null;
+  return { window, rect: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 } };
 }

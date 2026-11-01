@@ -1,6 +1,6 @@
 // Production wiring for the design canvas IPC; the handlers live in
 // design-canvas.ts and are tested there.
-import { ipcMain } from "../platform.js";
+import { BrowserWindow, ipcMain } from "../platform.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { chatStore } from "../services/chat-store.js";
 import { configStore } from "../services/config-store.js";
@@ -20,5 +20,13 @@ export function registerDesignCanvasIpc(): void {
     workspaceRoot: async (chat) =>
       (await configStore.getWorkspace(persistedChatWorkspaceId(chat.workspaceId)))?.folderPath ??
       null,
+    windowFor: (event) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (!window || window.isDestroyed()) return null;
+      return {
+        getContentSize: () => window.getContentSize(),
+        capturePage: (rect) => window.webContents.capturePage(rect),
+      };
+    },
   });
 }
