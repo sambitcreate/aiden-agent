@@ -5,13 +5,13 @@ import { DOMParser } from "@xmldom/xmldom";
 import { SidebarPrimaryNav, type SidebarPrimaryNavProps } from "./sidebar-primary-nav";
 
 const noop = () => undefined;
-const ALL = { bots: true, designStudio: true, createImages: true };
+const ALL = { bots: true, createImages: true };
 
 function render(overrides: Partial<SidebarPrimaryNavProps> = {}) {
   const markup = renderToStaticMarkup(
     <SidebarPrimaryNav
       pathname="/chat/chat-1"
-      capabilities={{ bots: true, designStudio: false, createImages: false }}
+      capabilities={{ bots: true, createImages: false }}
       newAgentDisabled={false}
       onNewAgent={noop}
       onNavigate={noop}
@@ -38,28 +38,19 @@ test("with both flags off the nav is exactly New Agent, Scheduled, Bots", () => 
     ["New Agent", "Scheduled", "Bots"],
   );
   assert.deepEqual(
-    render({ capabilities: { bots: false, designStudio: false, createImages: false } }).rows.map(
+    render({ capabilities: { bots: false, createImages: false } }).rows.map(
       ({ title }) => title,
     ),
     ["New Agent", "Scheduled"],
   );
 });
 
-test("each studio row appears only with its own capability, after the existing rows", () => {
+test("the Images row appears only with its capability, after the existing rows, and no Design row exists", () => {
   const titles = (capabilities: SidebarPrimaryNavProps["capabilities"]) =>
     render({ capabilities }).rows.map(({ title }) => title);
-  assert.deepEqual(titles({ bots: true, designStudio: true, createImages: false }), [
-    "New Agent",
-    "Scheduled",
-    "Bots",
-    "Design",
-  ]);
-  assert.deepEqual(titles({ bots: false, designStudio: false, createImages: true }), [
-    "New Agent",
-    "Scheduled",
-    "Images",
-  ]);
-  assert.deepEqual(titles(ALL), ["New Agent", "Scheduled", "Bots", "Design", "Images"]);
+  assert.deepEqual(titles({ bots: false, createImages: true }), ["New Agent", "Scheduled", "Images"]);
+  assert.deepEqual(titles(ALL), ["New Agent", "Scheduled", "Bots", "Images"]);
+  assert.equal(titles(ALL).includes("Design"), false);
 });
 
 test("the current row follows the path, including nested studio routes", () => {
@@ -67,8 +58,8 @@ test("the current row follows the path, including nested studio routes", () => {
     render({ pathname, capabilities: ALL })
       .rows.filter(({ current }) => current === "page")
       .map(({ title }) => title);
-  assert.deepEqual(current("/design"), ["Design"]);
-  assert.deepEqual(current("/design/project-1"), ["Design"]);
+  assert.deepEqual(current("/images"), ["Images"]);
+  assert.deepEqual(current("/design"), []);
   assert.deepEqual(current("/images/workflow-1"), ["Images"]);
   assert.deepEqual(current("/bots/bot-1"), ["Bots"]);
   assert.deepEqual(current("/scheduled"), ["Scheduled"]);

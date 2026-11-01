@@ -954,7 +954,6 @@
         "renderer/lib/composer-submission.test.ts",
         "renderer/lib/context-pressure-feed.test.ts",
         "renderer/lib/expired-cache-return.test.ts",
-        "renderer/lib/design-ipc.test.ts",
         "renderer/lib/device-ax.test.ts",
         "renderer/lib/device-clipboard.test.ts",
         "renderer/lib/device-3d/device-3d.test.ts",

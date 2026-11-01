@@ -59,17 +59,30 @@ test("a changed key shows as changed, and a custom key for a number breaks the r
 });
 
 test("a key given to a Studio command shows only while that Studio is on", () => {
-  const bindings = { ...defaults(), "design.open": "Command+Alt+D" } as Record<
+  const bindings = { ...defaults(), "images.open": "Command+Alt+I" } as Record<
     CommandId,
     string | null
   >;
-  assert.equal(row(shortcutSheet(bindings, { platform: "darwin" }), "Open Design Studio"), null);
+  assert.equal(row(shortcutSheet(bindings, { platform: "darwin" }), "Open Create Images"), null);
   assert.equal(
     row(
-      shortcutSheet(bindings, { platform: "darwin", capabilities: { designStudio: true } }),
-      "Open Design Studio",
+      shortcutSheet(bindings, { platform: "darwin", capabilities: { createImages: true } }),
+      "Open Create Images",
     )?.section,
     "Moving around",
+  );
+});
+
+test("⌘⇧D is not bound to anything", () => {
+  const sections = shortcutSheet(defaults(), { platform: "darwin", capabilities: { createImages: true } });
+  const keys = sections.flatMap((section) =>
+    section.rows.flatMap((entry) => [...entry.keys, ...(entry.alsoKeys ?? [])]),
+  );
+  assert.ok(keys.length > 0);
+  assert.equal(keys.includes("Command+Shift+D"), false);
+  assert.ok(
+    Object.values(defaults()).every((binding) => binding !== "Command+Shift+D"),
+    "no command reserves it either",
   );
 });
 

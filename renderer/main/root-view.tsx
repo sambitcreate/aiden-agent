@@ -202,7 +202,7 @@ function RootContent() {
     void navigate({ to: "/settings" });
   });
   const openStudio = React.useCallback(
-    (to: "/design" | "/images") => {
+    (to: "/images") => {
       if (navigationBlockedReason) {
         toast.info(navigationBlockedReason);
         return;
@@ -211,7 +211,6 @@ function RootContent() {
     },
     [navigate, navigationBlockedReason],
   );
-  useCommandHandler("design.open", () => openStudio("/design"), capabilities.designStudio);
   useCommandHandler("images.open", () => openStudio("/images"), capabilities.createImages);
   const goTo = React.useCallback(
     (to: "/bots" | "/scheduled" | "/profile") => {
