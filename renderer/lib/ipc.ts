@@ -1633,6 +1633,9 @@ export const chatsApi = {
     invoke<{ path: string }>("chats:saveImageToDownloads", { chatId, attachmentId }),
   copyImage: (chatId: string, attachmentId: string) =>
     invoke<boolean>("chats:copyImage", { chatId, attachmentId }),
+  /** A stored image's base64 bytes, to reuse it in a new message. */
+  imageData: (chatId: string, attachmentId: string) =>
+    invoke<{ data: string }>("chats:imageData", { chatId, attachmentId }),
   /** Reveal a file saved by saveImageToDownloads in Finder. */
   showSavedImage: (filePath: string) => invoke<boolean>("chats:showSavedImage", filePath),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>

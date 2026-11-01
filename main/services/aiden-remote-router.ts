@@ -815,15 +815,32 @@ function writeVisualDocument(response: ServerResponse, request: IncomingMessage,
   response.end(body);
 }
 
+/**
+ * Raw attachment bytes. A stored chat image carries its SHA-256, sent as a
+ * strong ETag: the bytes never change for a hash, so a client that kept its
+ * own copy can revalidate with `If-None-Match` and receive an empty 304.
+ */
 function writeAttachmentContent(
   response: ServerResponse,
-  content: { bytes: Buffer; mimeType: string },
+  content: { bytes: Buffer; mimeType: string; sha256?: string },
 ): void {
-  response.writeHead(200, {
+  const headers = {
     ...responseHeaders(content.mimeType),
-    "content-length": String(content.bytes.length),
     "content-security-policy": "default-src 'none'; sandbox",
-  });
+    ...(content.sha256 ? { etag: `"${content.sha256}"` } : {}),
+  };
+  const request = negotiatedRequests.get(response);
+  if (
+    headers.etag &&
+    request?.method === "GET" &&
+    ifNoneMatchSatisfied(request.headers["if-none-match"], headers.etag)
+  ) {
+    const { "content-type": _contentType, ...notModified } = headers;
+    response.writeHead(304, notModified);
+    response.end();
+    return;
+  }
+  response.writeHead(200, { ...headers, "content-length": String(content.bytes.length) });
   response.end(content.bytes);
 }
 

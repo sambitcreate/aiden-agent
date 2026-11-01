@@ -38,6 +38,8 @@ import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
+import { CHAT_IMAGES_DIRECTORY, createChatImageStore, rememberImageHash, type ChatImageStore } from "./chat-image-store.js";
+import { imagePixelSize } from "../../renderer/shared/image-dimensions.js";
 import { parseChatHtmlArtifacts, parseChatImagePlacements, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
 import { parseChatUiVisualV1, parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
 import { isVisualSnapshotAttachmentId, parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
@@ -91,7 +93,35 @@ export interface ChatStoreDurability {
   syncFile?: (target: string) => Promise<void>;
   /** Told once per unreadable payload that was moved aside with its bytes intact. */
   onQuarantine?: () => void;
+  /** Told once per image hash whose file is missing or damaged when a chat is read with its bytes. */
+  onImageUnavailable?: () => void;
+  /** Test seam: the image files store. Defaults to `<chats>/images`. */
+  images?: ChatImageStore;
+  /**
+   * When set, `scheduleImageSweep` (and deleting or clearing a chat) removes
+   * unused image files this long after the last request. Unset, image files
+   * are only removed by an explicit `sweepUnusedImages`.
+   */
+  imageSweepDelayMs?: number;
+  /** Test seam: how long an unused image file is kept. Defaults to a day. */
+  imageSweepGraceMs?: number;
 }
+
+/** Images read back at once when a chat is returned with its bytes. */
+const IMAGE_READ_CONCURRENCY = 4;
+/**
+ * An image file younger than this, or written into a chat by this process
+ * within it, is never swept: the chat naming it may still be on its way to
+ * disk.
+ */
+const IMAGE_SWEEP_GRACE_MS = 24 * 60 * 60 * 1000;
+/** Every image hash a chat file names, whatever state the file is in. */
+const STORED_IMAGE_HASH = /"sha256"\s*:\s*"([0-9a-f]{64})"/gu;
+const IMAGE_SWEEP_MARKER = ".sweep-needed";
+/** The longest wait before retrying a sweep that could not finish. */
+const IMAGE_SWEEP_MAX_RETRY_MS = 60 * 60 * 1000;
+/** Chats whose image lists the image-link handler keeps at once. */
+const STORED_IMAGE_LIST_CACHE = 32;
 
 /** Hidden sibling holding the untouched bytes of a payload that could not be parsed. */
 const QUARANTINED_PAYLOAD =
@@ -136,6 +166,21 @@ export function createChatStore(
   const syncFile = durability.syncFile ?? syncPath;
   const readFile =
     durability.readFile ?? ((target: string) => fs.readFile(target, "utf-8"));
+  const images =
+    durability.images ??
+    createChatImageStore(resolveChatsDir, {
+      syncDirectory: (target) => syncDirectory(target),
+      syncFile: (target) => syncFile(target),
+    });
+  const imageSweepGraceMs = durability.imageSweepGraceMs ?? IMAGE_SWEEP_GRACE_MS;
+  /** When each image hash was last written into a chat by this process. */
+  const imageReferencedAt = new Map<string, number>();
+  const reportedMissingImages = new Set<string>();
+  /** Recently linked chats' image lists, keyed by chat, valid while the chat file is unchanged. */
+  const storedImageLists = new Map<string, { stamp: string; images: Map<string, { mimeType: string; size: number }> }>();
+  let imageSweepTimer: ReturnType<typeof setTimeout> | undefined;
+  let imageSweepRunning: Promise<unknown> | undefined;
+  let imageSweepRetryMs: number | undefined;
   let pendingDirectorySync: string | undefined;
 
   async function syncDirectoryDurably(directory: string): Promise<void> {
@@ -931,9 +976,10 @@ export function createChatStore(
       `.${path.basename(target)}.${randomUUID()}.chat-write.tmp`,
     );
     try {
+      const stored = await withStoredImages(chat);
       // Compact JSON: indentation roughly doubled base64-heavy payloads.
       // Older indented files still parse.
-      await fs.writeFile(staged, JSON.stringify(chat), {
+      await fs.writeFile(staged, JSON.stringify(stored), {
         encoding: "utf-8",
         flag: "wx",
         mode: 0o600,
@@ -945,6 +991,201 @@ export function createChatStore(
     } finally {
       await removeStagedFileDurably(staged, directory);
     }
+  }
+
+  /**
+   * The chat as written to disk: each image's bytes go to the image store
+   * (before the chat file that names them) and the chat keeps only the hash.
+   * The caller's attachments keep their exact shape; their hash is remembered
+   * privately so the window can still be sent a link instead of the bytes.
+   */
+  async function withStoredImages(chat: Chat): Promise<Chat> {
+    let changed = false;
+    const messages: ChatMessage[] = [];
+    for (const message of chat.messages) {
+      if (!message.attachments?.some((attachment) => attachment.kind === "image")) {
+        messages.push(message);
+        continue;
+      }
+      const attachments: Attachment[] = [];
+      for (const attachment of message.attachments) {
+        if (attachment.kind !== "image") {
+          attachments.push(attachment);
+          continue;
+        }
+        let reference: Attachment;
+        if (attachment.data !== undefined) {
+          const sha256 = await images.put(Buffer.from(attachment.data, "base64"));
+          rememberImageHash(attachment, sha256);
+          const pixels = imagePixelSize(attachment.mimeType, attachment.data);
+          const { data: _bytes, url: _link, ...rest } = attachment;
+          reference = { ...rest, sha256, ...(pixels ? { width: pixels.width, height: pixels.height } : {}) };
+        } else {
+          const { url: _link, ...rest } = attachment;
+          reference = rest;
+        }
+        if (reference.sha256) imageReferencedAt.set(reference.sha256, Date.now());
+        attachments.push(reference);
+        changed = true;
+      }
+      messages.push({ ...message, attachments });
+    }
+    return changed ? { ...chat, messages } : chat;
+  }
+
+  /**
+   * Fill in the bytes of every stored image, in place, in the exact shape an
+   * image had before images became files (`sha256`, `width` and `height` move
+   * to a private side table). An image whose file is missing or damaged keeps
+   * its reference and no `data`; it is reported once per hash.
+   */
+  async function withImageData<T extends Chat | null>(chat: T): Promise<T> {
+    if (!chat) return chat;
+    const pending = chat.messages.flatMap((message) =>
+      (message.attachments ?? []).filter(
+        (attachment) => attachment.kind === "image" && attachment.data === undefined && attachment.sha256,
+      ),
+    );
+    let next = 0;
+    const worker = async () => {
+      while (next < pending.length) {
+        const attachment = pending[next++]!;
+        const sha256 = attachment.sha256!;
+        const bytes = await images.read(sha256, attachment.size).catch(() => undefined);
+        if (!bytes) {
+          if (!reportedMissingImages.has(sha256)) {
+            reportedMissingImages.add(sha256);
+            durability.onImageUnavailable?.();
+          }
+          continue;
+        }
+        attachment.data = bytes.toString("base64");
+        delete attachment.sha256;
+        delete attachment.width;
+        delete attachment.height;
+        rememberImageHash(attachment, sha256);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(IMAGE_READ_CONCURRENCY, pending.length) }, worker));
+    return chat;
+  }
+
+  /**
+   * Every image hash named by any file in the chats folder: chats, their
+   * staged writes and quarantined payloads alike, so a chat that cannot be
+   * parsed today still keeps its images. Undefined when a file could not be
+   * read, which cancels the sweep.
+   */
+  async function referencedImageHashes(directory: string): Promise<Set<string> | undefined> {
+    const referenced = new Set<string>();
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      let text: string;
+      try {
+        text = await fs.readFile(path.join(directory, entry.name), "utf-8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        return undefined;
+      }
+      for (const match of text.matchAll(STORED_IMAGE_HASH)) referenced.add(match[1]!);
+    }
+    return referenced;
+  }
+
+  /** Present while a deleted or cleared chat may have left unused image files behind. */
+  async function sweepMarkerPath(): Promise<string> {
+    return path.join(await resolveChatsDir(), CHAT_IMAGES_DIRECTORY, IMAGE_SWEEP_MARKER);
+  }
+
+  async function markImageSweepNeeded(): Promise<void> {
+    const marker = await sweepMarkerPath();
+    try {
+      // Unique per write, so a sweep only ever clears the very mark it read.
+      await fs.writeFile(marker, `${Date.now()} ${randomUUID()}`, { mode: 0o600 });
+    } catch (error) {
+      // No images folder means no image files to clean up.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+
+  async function sweepUnusedImages(
+    options: { onlyWhenNeeded?: boolean } = {},
+  ): Promise<{ removed: number; nextDueInMs?: number; incomplete?: true }> {
+    const directory = await resolveChatsDir();
+    const marker = await sweepMarkerPath();
+    let mark: string | undefined;
+    try {
+      mark = await fs.readFile(marker, "utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (options.onlyWhenNeeded && mark === undefined) return { removed: 0 };
+    try {
+      await fs.access(path.join(directory, CHAT_IMAGES_DIRECTORY));
+    } catch {
+      return { removed: 0 };
+    }
+    const referenced = await referencedImageHashes(directory);
+    // A chat file could not be read, so nothing is known to be unused yet.
+    if (!referenced) return mark === undefined ? { removed: 0 } : { removed: 0, incomplete: true };
+    const startedAt = Date.now();
+    const result = await images.sweep(referenced, {
+      graceMs: imageSweepGraceMs,
+      isProtected: (sha256) => Date.now() - (imageReferencedAt.get(sha256) ?? -Infinity) < imageSweepGraceMs,
+    });
+    for (const [sha256, at] of imageReferencedAt) {
+      if (startedAt - at >= imageSweepGraceMs) imageReferencedAt.delete(sha256);
+    }
+    // Keep the marker while unused files wait out their grace, or when a
+    // delete marked it again during this sweep.
+    if (mark !== undefined && result.deferred === 0) {
+      const current = await fs.readFile(marker, "utf-8").catch(() => undefined);
+      if (current === mark) await fs.rm(marker, { force: true });
+    }
+    return result.nextDueInMs === undefined
+      ? { removed: result.removed }
+      : { removed: result.removed, nextDueInMs: result.nextDueInMs };
+  }
+
+  /**
+   * Sweep unused image files after `imageSweepDelayMs` (restarting the wait on
+   * each call), only when a deleted or cleared chat left a marker behind.
+   * While unused files wait out their grace, sweep again once the first of
+   * them is due.
+   */
+  function scheduleImageSweep(afterMs?: number): void {
+    const delay = durability.imageSweepDelayMs;
+    if (delay === undefined) return;
+    if (imageSweepTimer) clearTimeout(imageSweepTimer);
+    imageSweepTimer = setTimeout(() => {
+      imageSweepTimer = undefined;
+      if (imageSweepRunning) {
+        scheduleImageSweep();
+        return;
+      }
+      imageSweepRunning = sweepUnusedImages({ onlyWhenNeeded: true })
+        .catch((): { removed: number; nextDueInMs?: number; incomplete?: true } => ({ removed: 0, incomplete: true }))
+        .then((result) => {
+          imageSweepRunning = undefined;
+          // A sweep that could not finish keeps its marker; try again later,
+          // waiting twice as long each time (up to an hour).
+          imageSweepRetryMs = result.incomplete
+            ? Math.min(Math.max(delay, (imageSweepRetryMs ?? delay / 2) * 2), IMAGE_SWEEP_MAX_RETRY_MS)
+            : undefined;
+          const nextDueInMs = imageSweepRetryMs ?? result.nextDueInMs;
+          // A later request already restarted the wait; never sweep sooner than the usual delay.
+          if (nextDueInMs !== undefined && !imageSweepTimer) {
+            scheduleImageSweep(Math.max(delay, nextDueInMs));
+          }
+          return result;
+        });
+    }, afterMs ?? delay);
+    imageSweepTimer.unref?.();
+  }
+
+  async function afterChatImagesDropped(): Promise<void> {
+    await markImageSweepNeeded().catch(() => undefined);
+    scheduleImageSweep();
   }
 
   function newId(): string {
@@ -1161,8 +1402,80 @@ export function createChatStore(
     },
 
     async get(id: string): Promise<Chat | null> {
+      return withImageData(await shared([id], false, () => readChat(id, "owner")));
+    },
+
+    /**
+     * The chat as stored: images that live in the image store carry their
+     * `sha256` and no `data`. For the window and phones, which load image
+     * bytes separately.
+     */
+    async getWithImageReferences(id: string): Promise<Chat | null> {
       return shared([id], false, () => readChat(id, "owner"));
     },
+
+    /** One stored image's bytes, or undefined when its file is missing or damaged. */
+    async readImage(sha256: string, size: number): Promise<Buffer | undefined> {
+      return images.read(sha256, size);
+    },
+
+    /**
+     * Copies of the messages with each stored image's bytes read back, in the
+     * shape images had before they became files. The inputs are not changed.
+     */
+    async messagesWithImageData(messages: readonly ChatMessage[]): Promise<ChatMessage[]> {
+      const copies = messages.map((message) =>
+        message.attachments ? { ...message, attachments: message.attachments.map((attachment) => ({ ...attachment })) } : message,
+      );
+      await withImageData({ messages: copies } as Chat);
+      return copies;
+    },
+
+    /**
+     * The type and size of an image file this chat lists, for serving one
+     * image link. Reads the chat without its lock and remembers its image
+     * list until the chat file changes, so a transcript full of images costs
+     * one parse instead of one per image.
+     */
+    async findStoredImage(chatId: string, sha256: string): Promise<{ mimeType: string; size: number } | undefined> {
+      const file = await chatPath(chatId);
+      let stamp: string;
+      try {
+        const stat = await fs.stat(file);
+        stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      }
+      let entry = storedImageLists.get(chatId);
+      if (!entry || entry.stamp !== stamp) {
+        const chat = await readChat(chatId, "pure");
+        const listed = new Map<string, { mimeType: string; size: number }>();
+        for (const message of chat?.messages ?? []) {
+          for (const attachment of message.attachments ?? []) {
+            if (attachment.kind === "image" && attachment.sha256) {
+              listed.set(attachment.sha256, { mimeType: attachment.mimeType, size: attachment.size });
+            }
+          }
+        }
+        entry = { stamp, images: listed };
+        storedImageLists.delete(chatId);
+        storedImageLists.set(chatId, entry);
+        while (storedImageLists.size > STORED_IMAGE_LIST_CACHE) {
+          storedImageLists.delete(storedImageLists.keys().next().value!);
+        }
+      }
+      return entry.images.get(sha256);
+    },
+
+    /**
+     * Remove image files that no file in the chats folder names any more.
+     * Files stored or reused within a day, or written into a chat by this
+     * process within one, are kept.
+     */
+    sweepUnusedImages,
+
+    scheduleImageSweep: () => scheduleImageSweep(),
 
     /** Install the first user message and sidebar metadata as one recoverable transaction. */
     async createWithFirstMessage(input: {
@@ -1176,7 +1489,7 @@ export function createChatStore(
       message: Pick<ChatMessage, "id" | "content" | "attachments" | "skill" | "model">;
       assertCurrent: () => void;
     }): Promise<Chat> {
-      return shared([input.id], true, async () => {
+      return withImageData(await shared([input.id], true, async () => {
         input.assertCurrent();
         // "pure": a corrupt payload at a colliding draft ID must stay in place
         // so the guard below rejects the collision instead of quarantining it.
@@ -1227,7 +1540,7 @@ export function createChatStore(
           firstMessageCommit: { turnId: input.turnId, fingerprint: input.fingerprint },
         };
         return installNewChat(chat, input.assertCurrent);
-      });
+      }));
     },
 
     async create(input: {
@@ -1241,7 +1554,7 @@ export function createChatStore(
       assertCurrent?: () => void;
     }): Promise<Chat> {
       const id = input.id ?? newId();
-      return shared([id], true, async () => {
+      return withImageData(await shared([id], true, async () => {
         input.assertCurrent?.();
         const owner = input.owner === undefined ? undefined : parseChatOwnerV1(input.owner);
         if (input.owner !== undefined && (owner === undefined || input.botId !== undefined)) {
@@ -1261,7 +1574,7 @@ export function createChatStore(
           messages: [],
         };
         return installNewChat(chat, input.assertCurrent);
-      });
+      }));
     },
 
     /** Copy only visible linear history; private runtime fields never enter the new payload. */
@@ -1291,7 +1604,7 @@ export function createChatStore(
       ) => void | Promise<void>;
     }): Promise<Chat> {
       const newChatId = input.targetChatId ?? randomUUID();
-      return shared([input.sourceChatId, newChatId], true, async () => {
+      return withImageData(await shared([input.sourceChatId, newChatId], true, async () => {
         input.assertCurrent?.();
         const source = await readChat(input.sourceChatId, "owner");
         if (!source) throw new ChatForkError("not_found", `Chat ${input.sourceChatId} not found`);
@@ -1425,8 +1738,9 @@ export function createChatStore(
             charge(attachment.id);
             charge(attachment.name);
             charge(attachment.mimeType);
+            // A stored image is shared by hash, so only its reference is copied.
             charge(
-              attachment.kind === "image" ? attachment.data : attachment.text,
+              attachment.kind === "image" ? attachment.data ?? attachment.sha256 : attachment.text,
             );
           }
           for (const artifact of message.htmlArtifacts ?? []) {
@@ -1524,7 +1838,7 @@ export function createChatStore(
         };
         await input.beforeInstall?.(copied, sourceMessageIds);
         return installNewChat(copied, input.assertCurrent);
-      });
+      }));
     },
 
     async rename(
@@ -1532,7 +1846,7 @@ export function createChatStore(
       title: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return shared([id], true, async () => {
+      return withImageData(await shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         await assertCurrent(chat);
@@ -1540,7 +1854,7 @@ export function createChatStore(
         chat.updatedAt = Date.now();
         await writeChatAndMeta(chat);
         return chat;
-      });
+      }));
     },
 
     /**
@@ -1553,7 +1867,7 @@ export function createChatStore(
       id: string,
       next: (summary: ChatForkSummaryV1 | undefined, chat: Chat) => ChatForkSummaryV1 | undefined | null,
     ): Promise<Chat | null> {
-      return shared([id], true, async () => {
+      return withImageData(await shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat?.forkedFrom) return null;
         const summary = next(chat.forkedFrom.summary, chat);
@@ -1562,7 +1876,7 @@ export function createChatStore(
         chat.forkedFrom = summary ? { ...lineage, summary } : lineage;
         await writeChatAndMeta(chat);
         return chat;
-      });
+      }));
     },
 
     /** Apply an asynchronous rename only when no newer rename won the race. */
@@ -1571,7 +1885,7 @@ export function createChatStore(
       expectedTitle: string,
       title: string,
     ): Promise<Chat | null> {
-      return shared([id], true, async () => {
+      return withImageData(await shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat || chat.title !== expectedTitle) return null;
         const nextTitle = title.trim();
@@ -1580,7 +1894,7 @@ export function createChatStore(
         chat.updatedAt = Date.now();
         await writeChatAndMeta(chat);
         return chat;
-      });
+      }));
     },
 
     /** Move only an untouched new chat so its workspace can be chosen from the composer. */
@@ -1589,7 +1903,7 @@ export function createChatStore(
       workspaceId: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return shared([id], true, async () => {
+      return withImageData(await shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         await assertCurrent(chat);
@@ -1600,7 +1914,7 @@ export function createChatStore(
         chat.updatedAt = Date.now();
         await writeChatAndMeta(chat);
         return chat;
-      });
+      }));
     },
 
     /**
@@ -1613,7 +1927,7 @@ export function createChatStore(
       model: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return shared([id], true, async () => {
+      return withImageData(await shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         await assertCurrent(chat);
@@ -1627,7 +1941,7 @@ export function createChatStore(
         chat.model = model;
         await writeChatAndMeta(chat);
         return chat;
-      });
+      }));
     },
 
     /**
@@ -1641,7 +1955,7 @@ export function createChatStore(
       model: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return shared([id], true, async () => {
+      return withImageData(await shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         await assertCurrent(chat);
@@ -1657,15 +1971,15 @@ export function createChatStore(
         chat.model = model;
         await writeChatAndMeta(chat);
         return chat;
-      });
+      }));
     },
 
     /** Persist the user's per-chat Computer Use grant without reordering history. */
     async setComputerUseAllowed(id: string, allowed: boolean): Promise<Chat> {
-      return updateComputerUseAccess(id, (chat) => {
+      return withImageData(await updateComputerUseAccess(id, (chat) => {
         if (allowed) chat.computerUseAllowed = true;
         else delete chat.computerUseAllowed;
-      });
+      }));
     },
 
     /**
@@ -1694,10 +2008,10 @@ export function createChatStore(
      * setup, so the chat can offer Continue after a restart.
      */
     async setComputerUsePendingContinue(id: string, pending: boolean): Promise<Chat> {
-      return updateComputerUseAccess(id, (chat) => {
+      return withImageData(await updateComputerUseAccess(id, (chat) => {
         if (pending) chat.computerUsePendingContinue = true;
         else delete chat.computerUsePendingContinue;
-      });
+      }));
     },
 
     /**
@@ -1722,6 +2036,7 @@ export function createChatStore(
         let attachments = [...(message.attachments ?? [])];
         let refs = [...(message.visualSnapshots ?? [])];
         let stored = false;
+        let replaced = false;
         for (const snapshot of snapshots) {
           if (!visualIds.has(snapshot.visualId) || !isVisualSnapshotAttachmentId(snapshot.attachment.id)) continue;
           const [attachment] = safeStoredAttachments([snapshot.attachment]) ?? [];
@@ -1730,6 +2045,7 @@ export function createChatStore(
           const remaining = attachments.filter((existing) => existing.id !== previous && existing.id !== attachment.id);
           const bytes = remaining.reduce((total, existing) => total + existing.size, 0) + attachment.size;
           if (remaining.length >= MAX_ATTACHMENTS_PER_MESSAGE || bytes > MAX_ATTACHMENT_INLINE_BYTES) continue;
+          if (previous !== undefined) replaced = true;
           attachments = [...remaining, attachment];
           refs = [...refs.filter((ref) => ref.visualId !== snapshot.visualId), { visualId: snapshot.visualId, attachmentId: attachment.id }];
           stored = true;
@@ -1738,6 +2054,7 @@ export function createChatStore(
         message.attachments = attachments;
         message.visualSnapshots = refs;
         await writeChatAndMeta(chat);
+        if (replaced) await afterChatImagesDropped();
         return true;
       });
     },
@@ -1781,7 +2098,13 @@ export function createChatStore(
         if (chat.messages.length === 0 && chat.forkedFrom === undefined) return false;
         chat.messages = [];
         delete chat.forkedFrom;
+        // Mark before the write, so a failure or crash after it still leaves
+        // the dropped images to a later sweep, and again after it, since a
+        // sweep that overlapped the write may have taken the first mark while
+        // the images were still in use.
+        await markImageSweepNeeded().catch(() => undefined);
         await writeChatAndMeta(chat);
+        await afterChatImagesDropped();
         return true;
       });
     },
@@ -1791,6 +2114,12 @@ export function createChatStore(
       assertCurrent?: (chat: Chat | null) => void | Promise<void>,
     ): Promise<void> {
       return shared([id], true, async () => {
+        // Mark before removing, so a failure or crash after the payload is
+        // gone (when a retried delete no longer finds the chat) still leaves
+        // its images to a later sweep, and again after it, since a sweep that
+        // overlapped the delete may have taken the first mark while the chat
+        // still named its images.
+        await markImageSweepNeeded().catch(() => undefined);
         const chat = await readChat(id, "owner");
         if (assertCurrent) await assertCurrent(chat);
         const payload = await chatPath(id);
@@ -1803,6 +2132,7 @@ export function createChatStore(
         }
         if (removedPayload) await syncDirectoryDurably(path.dirname(payload));
         await removeFromIndexDurably(id);
+        await afterChatImagesDropped();
       });
     },
 
@@ -1822,7 +2152,7 @@ export function createChatStore(
         rejectFeatureOwned?: boolean;
       },
     ): Promise<Chat> {
-      return shared([id], true, async () => {
+      return withImageData(await shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         if (meta?.rejectFeatureOwned && chat.owner !== undefined) {
@@ -1920,7 +2250,7 @@ export function createChatStore(
           }
         });
         return chat;
-      });
+      }));
     },
 
     /** Replace only the untouched first-message seed, preserving any manual rename. */
@@ -1929,7 +2259,7 @@ export function createChatStore(
       expectedSeed: string,
       title: string,
     ): Promise<Chat | null> {
-      return shared([id], true, async () => {
+      return withImageData(await shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat || !canReplaceGeneratedChatTitle(chat.title, expectedSeed))
           return null;
@@ -1939,7 +2269,7 @@ export function createChatStore(
         chat.updatedAt = Date.now();
         await writeChatAndMeta(chat);
         return chat;
-      });
+      }));
     },
   };
 }

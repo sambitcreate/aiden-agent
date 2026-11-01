@@ -52,6 +52,7 @@ import {
   seedComposerAttachments,
   stageComposerText,
 } from "../lib/composer-draft-store";
+import { attachmentsWithBytes } from "../lib/stored-attachments";
 import { reduceVisualDrafts, type VisualDrafts } from "../lib/html-artifact-transcript";
 import { reduceUiDrafts, reduceUiVisuals, type UiDrafts } from "../lib/ui-visual-transcript";
 import type { ChatUiVisualV1 } from "../shared/aiden-ui/types";
@@ -1287,7 +1288,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (!message || message.role !== "user") {
         throw new Error("That message is no longer in this chat.");
       }
-      const prefill = { text: message.content, attachments: message.attachments ?? [] };
+      const prefill = {
+        text: message.content,
+        attachments: await attachmentsWithBytes(chatId, message.attachments ?? [], chatsApi.imageData),
+      };
       if (messages.slice(0, index).some((earlier) => earlier.role === "user")) {
         await copyChat({ messageId, position }, prefill, summary);
         return;

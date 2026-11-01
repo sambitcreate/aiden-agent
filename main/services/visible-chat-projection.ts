@@ -2,6 +2,9 @@ import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
 import type { Attachment, Chat } from "./types.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
+import { storedImageHashOf } from "./chat-image-store.js";
+import { imagePixelSize } from "../../renderer/shared/image-dimensions.js";
+import { chatImageUrl } from "./chat-attachment-request-handler.js";
 import { parseChatHtmlArtifacts, parseChatImagePlacements, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
 import { parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
 import { parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
@@ -45,7 +48,26 @@ export interface VisibleChatMessage {
   providerFailure?: ProviderFailureV1;
 }
 
-/** Strip private provider protocol before a Chat crosses into the renderer. */
+/**
+ * A stored image crosses into the renderer as a private `aiden-attachment:`
+ * link instead of its base64 bytes; an image only held inline (an older chat
+ * not saved since) keeps its bytes.
+ */
+function attachmentsForRenderer(chatId: string, attachments: Attachment[] | undefined): Attachment[] | undefined {
+  if (!attachments?.some((attachment) => attachment.kind === "image" && storedImageHashOf(attachment))) {
+    return attachments;
+  }
+  return attachments.map((attachment) => {
+    const sha256 = attachment.kind === "image" ? storedImageHashOf(attachment) : undefined;
+    if (!sha256) return attachment;
+    const { data, ...reference } = attachment;
+    const pixels =
+      reference.width === undefined && data !== undefined ? imagePixelSize(attachment.mimeType, data) : undefined;
+    return { ...reference, sha256, ...(pixels ?? {}), url: chatImageUrl(chatId, sha256) };
+  });
+}
+
+/** Strip private provider protocol and image bytes before a Chat crosses into the renderer. */
 export function chatForRenderer(chat: Chat | null): Chat | null {
   if (!chat) return null;
   const { firstMessageCommit: _privateFirstMessageCommit, ...visibleChat } = chat;
@@ -55,6 +77,7 @@ export function chatForRenderer(chat: Chat | null): Chat | null {
       const { pi: _privatePiProtocol, ...visible } = message;
       return {
         ...visible,
+        attachments: attachmentsForRenderer(chat.id, message.attachments),
         providerFailure:
           message.role === "assistant"
             ? parseProviderFailureV1(message.providerFailure)
