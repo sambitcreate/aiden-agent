@@ -1,4 +1,5 @@
 export const CREATE_IMAGES_FEATURE_FLAG = "AIDEN_EXPERIMENTAL_CREATE_IMAGES";
+export const DESIGN_MODE_FEATURE_FLAG = "AIDEN_EXPERIMENTAL_DESIGN_MODE";
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -12,6 +13,11 @@ export function createImagesEnabled(environment: Environment = process.env): boo
   return flagOn(environment, CREATE_IMAGES_FEATURE_FLAG);
 }
 
+/** Design mode (chat beside a design canvas) stays dark until explicitly enabled. */
+export function designModeEnabled(environment: Environment = process.env): boolean {
+  return flagOn(environment, DESIGN_MODE_FEATURE_FLAG);
+}
+
 /** The shared studio asset store and `aiden-asset:` protocol exist only while Create Images is on. */
 export function studioAssetsEnabled(environment: Environment = process.env): boolean {
   return createImagesEnabled(environment);
@@ -19,8 +25,10 @@ export function studioAssetsEnabled(environment: Environment = process.env): boo
 
 export function studioCapabilities(environment: Environment = process.env): {
   createImages: boolean;
+  designMode: boolean;
 } {
   return {
     createImages: createImagesEnabled(environment),
+    designMode: designModeEnabled(environment),
   };
 }
