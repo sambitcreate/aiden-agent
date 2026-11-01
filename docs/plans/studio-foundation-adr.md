@@ -1,6 +1,6 @@
 # ADR-F: Studio Foundation
 
-Status: Proposed (Phase 0 deliverable; needs owner approval)
+Status: Accepted. Track F merged in [#375](https://github.com/sambitcreate/aiden-agent/pull/375) and [#376](https://github.com/sambitcreate/aiden-agent/pull/376).
 Date: 2026-10-07
 Baseline: `main` @ `bd232b85` (line numbers below are from this commit)
 Parent plan: [Design Studio + Create Images rebuild](design-studio-create-images-rebuild-plan.md) §6 ADR-F and §7 Track F
@@ -147,13 +147,14 @@ A holder is `{ kind: "design" | "images-workflow" | "images-run"; id }`. Its key
 
 Over-limit puts fail with `quota` or `too_large`.
 
-**GC model: holders, not counters.** `collectGarbage()` deletes rows with no holds whose `touched_at` is older than a **1 h grace**, inside one synchronous transaction, then unlinks the blob and thumbnails. `touched_at` is refreshed by `put` (dedup hit) and by any release, so an asset that was just imported, just released or is still on screen survives. GC runs from `initialize()` (startup) and whenever a feature calls it, for example after pruning runs. Crash windows:
-- **Blob written, row not inserted:** the orphan blob is swept by `initialize()`, together with `.*.tmp` staging files.
+**GC model: holders, not counters.** `collectGarbage()` deletes rows with no holds whose `touched_at` is older than a **1 h grace**, inside one synchronous transaction, then unlinks the blob and thumbnails. `touched_at` is refreshed by `put` (dedup hit) and by any release, so an asset that was just imported, just released or is still on screen survives. GC runs from `initialize()` (startup), on a 20-minute timer while the store is open, before a put is refused for `quota`, and whenever a feature calls it. Crash windows:
+- **Blob written, row not inserted:** on `initialize()` a blob with no row is re-indexed when it sits in its shard, its sha256 matches its name and it passes validation (touched now, unheld, so the grace protects it until its feature re-retains it); anything else is swept, together with `.*.tmp` staging files.
+- **Database lost or corrupt:** a missing database is recreated and rebuilt from the blobs the same way. A database SQLite reports as corrupt or not a database, or one with an unsupported `user_version`, is renamed to `assets-v1.sqlite.corrupt-<timestamp>` (with its `-wal`/`-shm`) and rebuilt. Permission and other I/O errors still fail `initialize()`. The database files are kept at 0600.
 - **Row deleted, files remain:** swept the same way.
 
 Because `node:sqlite` is synchronous, a GC transaction can never interleave with a `retain`.
 
-**Thumbnails.** These go through the `StudioAssetThumbnailer` port. Production uses `nativeImage` (`studio-assets/thumbnailer-main.ts`, following `bot-avatar-image-main.ts:24-53`): decode, `isEmpty()` check, resize the longest edge, `toPNG()`. When the source's longest edge is ≤ the requested edge, or decoding fails, the original is served. `nativeImage` only promises PNG/JPEG, so WebP falls back to the original. Successful thumbnails are cached.
+**Thumbnails.** These go through the `StudioAssetThumbnailer` port. Production uses `nativeImage` (`studio-assets/thumbnailer-main.ts`, following `bot-avatar-image-main.ts:24-53`): decode, `isEmpty()` check, resize the longest edge, `toPNG()`. When the source's longest edge is ≤ the requested edge, or decoding fails, the original is served. `nativeImage` only promises PNG/JPEG, so WebP falls back to the original. Successful thumbnails are cached. Concurrent requests for the same rendition share one render, and decode failures are remembered in memory (up to 512) so a failing asset is not decoded again.
 
 **Grants** (`StudioAssetGrants`).
 - `issue(owner: RendererDocumentOwner, assetId, rendition: "original" | "thumb-256" | "thumb-512") → "aiden-asset://grant/<43-char base64url token>"`.

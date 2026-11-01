@@ -1,9 +1,10 @@
 import { initializeSqliteReclamation, reclaimSqlitePages } from "../sqlite-reclamation.js";
 import { createHash } from "node:crypto";
+import { closeSync, openSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { writeFileAtomic } from "../durable-fs.js";
+import { syncDirectory, writeFileAtomic } from "../durable-fs.js";
 import {
   STUDIO_ASSET_LIMITS,
   StudioAssetError,
@@ -11,6 +12,7 @@ import {
   isStudioAssetId,
   parseHolderKey,
   type StudioAssetHolder,
+  type StudioAssetHolderKind,
   type StudioAssetLimits,
   type StudioAssetMediaType,
   type StudioAssetRecord,
@@ -26,6 +28,12 @@ export interface StudioAssetThumbnailer {
   }): Promise<{ bytes: Uint8Array; width: number; height: number }>;
 }
 
+/** Timer seam for the periodic collection. Production uses unref'd Node intervals. */
+export interface StudioAssetStoreTimers {
+  setInterval(callback: () => unknown, ms: number): unknown;
+  clearInterval(handle: unknown): void;
+}
+
 export interface StudioAssetStoreOptions {
   /** Resolved lazily so a disabled feature never touches userData. */
   root: () => string;
@@ -34,6 +42,70 @@ export interface StudioAssetStoreOptions {
   limits?: Partial<StudioAssetLimits>;
   /** Receives non-fatal housekeeping failures (startup sweep or collection); the store stays usable. */
   onError?: (error: unknown) => void;
+  /**
+   * Receives recoveries worth a log line: a quarantined database, or asset rows
+   * rebuilt from stored images. The store is usable when this is called.
+   */
+  onWarning?: (message: string, error?: unknown) => void;
+  /** How often an open store collects unheld assets past their grace period. */
+  gcIntervalMs?: number;
+  timers?: StudioAssetStoreTimers;
+}
+
+/** Periodic collection while the store is open; startup and quota pressure also collect. */
+export const STUDIO_ASSET_GC_INTERVAL_MS = 20 * 60 * 1000;
+/** Decode failures remembered per process so a failing image is not re-decoded per request. */
+const MAX_REMEMBERED_THUMBNAIL_FAILURES = 512;
+const DATABASE_FILE = "assets-v1.sqlite";
+const DATABASE_SIDECARS = ["", "-wal", "-shm"] as const;
+// Primary SQLite result codes that mean the file itself is unusable.
+const SQLITE_CORRUPT = 11;
+const SQLITE_NOTADB = 26;
+
+const NODE_TIMERS: StudioAssetStoreTimers = {
+  setInterval(callback, ms) {
+    const handle = setInterval(callback, ms);
+    handle.unref?.();
+    return handle;
+  },
+  clearInterval(handle) {
+    clearInterval(handle as ReturnType<typeof setInterval>);
+  },
+};
+
+/** The database opened but carries a schema this build cannot read. */
+class UnsupportedSchemaError extends StudioAssetError {
+  constructor() {
+    super("unavailable", "The studio asset database uses an unsupported schema.");
+  }
+}
+
+/**
+ * True for a database file that is damaged or unreadable as this schema, which
+ * quarantine can fix. Permission, missing-directory and other I/O failures are
+ * not: moving the file aside would not help and could hide the real problem.
+ */
+function isUnusableDatabase(error: unknown): boolean {
+  if (error instanceof UnsupportedSchemaError) return true;
+  const errcode = (error as { errcode?: unknown } | null)?.errcode;
+  if (typeof errcode !== "number") return false;
+  const primary = errcode & 0xff;
+  return primary === SQLITE_CORRUPT || primary === SQLITE_NOTADB;
+}
+
+function describeDuration(ms: number): string {
+  const hours = ms / (60 * 60 * 1000);
+  if (hours >= 1 && Number.isInteger(hours)) return hours === 1 ? "an hour" : `${hours} hours`;
+  const minutes = Math.max(1, Math.ceil(ms / (60 * 1000)));
+  return minutes === 1 ? "a minute" : `${minutes} minutes`;
+}
+
+async function syncDirectories(directories: Iterable<string>): Promise<void> {
+  for (const directory of directories) {
+    // Best effort: the unlinks already happened; a lost directory flush only
+    // risks a deleted file reappearing after power loss, which the next sweep handles.
+    await syncDirectory(directory).catch(() => undefined);
+  }
 }
 
 /**
@@ -99,10 +171,20 @@ export class StudioAssetStore {
   /** In-flight open, shared so concurrent initialize() calls never leak a second handle. */
   private opening: Promise<void> | null = null;
   private failed = false;
+  private readonly timers: StudioAssetStoreTimers;
+  private gcTimer: unknown = null;
+  /** One in-flight cache read or render per `${id}:${edge}`, shared by concurrent callers. */
+  private readonly thumbnailLoads = new Map<
+    string,
+    Promise<{ bytes: Uint8Array; mediaType: StudioAssetMediaType }>
+  >();
+  /** `${id}:${edge}` keys whose decode failed; insertion-ordered so the oldest is evicted first. */
+  private readonly thumbnailFailures = new Set<string>();
 
   constructor(private readonly options: StudioAssetStoreOptions) {
     this.now = options.now ?? Date.now;
     this.limits = { ...STUDIO_ASSET_LIMITS, ...options.limits };
+    this.timers = options.timers ?? NODE_TIMERS;
   }
 
   status(): StudioAssetStoreStatus {
@@ -130,24 +212,23 @@ export class StudioAssetStore {
     const root = this.options.root();
     await fs.mkdir(path.join(root, "blobs"), { recursive: true, mode: 0o700 });
     await fs.mkdir(path.join(root, "thumbs"), { recursive: true, mode: 0o700 });
-    const db = new DatabaseSync(path.join(root, "assets-v1.sqlite"));
+    const file = path.join(root, DATABASE_FILE);
+    let db: DatabaseSync;
     try {
-      db.exec("PRAGMA busy_timeout=100;");
-      initializeSqliteReclamation(db);
-      db.exec(
-        "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;",
+      db = openDatabase(file);
+    } catch (error) {
+      if (!isUnusableDatabase(error)) throw error;
+      // The database only indexes content-addressed blobs, so a fresh one can
+      // be rebuilt from them by the sweep below. Keep the old file for diagnosis.
+      const quarantined = await quarantineDatabase(file, this.now());
+      db = openDatabase(file);
+      this.options.onWarning?.(
+        `The studio asset database could not be read and was moved aside as ${path.basename(quarantined)}; rebuilding it from stored images.`,
+        error,
       );
-      const { user_version: version } = db.prepare("PRAGMA user_version").get() as {
-        user_version: number;
-      };
-      if (Number(version) === 0) {
-        db.exec(`BEGIN IMMEDIATE; ${SCHEMA} COMMIT;`);
-      } else if (Number(version) !== 1) {
-        throw new StudioAssetError(
-          "unavailable",
-          "The studio asset database uses an unsupported schema.",
-        );
-      }
+    }
+    try {
+      await restrictDatabaseFiles(file);
     } catch (error) {
       db.close();
       throw error;
@@ -163,6 +244,23 @@ export class StudioAssetStore {
     } catch (error) {
       this.options.onError?.(error);
     }
+    this.gcTimer = this.timers.setInterval(
+      () => this.collectPeriodically(),
+      this.options.gcIntervalMs ?? STUDIO_ASSET_GC_INTERVAL_MS,
+    );
+  }
+
+  /** Timer callback; resolves (never rejects) once the pass is done, for tests. */
+  private collectPeriodically(): Promise<void> {
+    if (!this.db) return Promise.resolve();
+    return this.collectGarbage().then(
+      () => undefined,
+      (error: unknown) => {
+        // A close between the tick and the queued pass is expected, not a failure.
+        if (error instanceof StudioAssetError && error.code === "unavailable" && !this.db) return;
+        this.options.onError?.(error);
+      },
+    );
   }
 
   /**
@@ -184,6 +282,11 @@ export class StudioAssetStore {
     this.failed = false;
     if (!db) return Promise.resolve();
     this.db = null;
+    if (this.gcTimer !== null) {
+      this.timers.clearInterval(this.gcTimer);
+      this.gcTimer = null;
+    }
+    this.thumbnailFailures.clear();
     return this.blobWrites.then(() => {
       reclaimSqlitePages(db);
       db.close();
@@ -225,15 +328,21 @@ export class StudioAssetStore {
       db.prepare("UPDATE assets SET touched_at = ? WHERE id = ?").run(this.now(), id);
       return toRecord(existing);
     }
-    const usage = this.usage();
-    if (
-      usage.assets + 1 > this.limits.maxAssets ||
-      usage.bytes + input.bytes.byteLength > this.limits.maxTotalBytes
-    ) {
-      throw new StudioAssetError(
-        "quota",
-        "Studio asset storage is full. Delete unused projects or workflows to free space.",
-      );
+    if (this.exceedsQuota(input.bytes.byteLength)) {
+      // Unheld assets past their grace count toward usage until collected, so
+      // collect now (already on the exclusive queue) before refusing. This put's
+      // digest has no row, so the pass cannot touch it.
+      try {
+        await this.collectGarbageNow();
+      } catch (error) {
+        this.options.onError?.(error);
+      }
+      if (this.exceedsQuota(input.bytes.byteLength)) {
+        throw new StudioAssetError(
+          "quota",
+          `Studio asset storage is full. Space from deleted projects and workflows is freed up to ${describeDuration(this.limits.gcGraceMs)} after you delete them, so try again later or delete more unused items.`,
+        );
+      }
     }
     const target = this.blobPath(id);
     try {
@@ -256,6 +365,14 @@ export class StudioAssetStore {
     return toRecord(this.requireRow(id));
   }
 
+  private exceedsQuota(incomingBytes: number): boolean {
+    const usage = this.usage();
+    return (
+      usage.assets + 1 > this.limits.maxAssets ||
+      usage.bytes + incomingBytes > this.limits.maxTotalBytes
+    );
+  }
+
   async read(assetId: string): Promise<{ record: StudioAssetRecord; bytes: Uint8Array }> {
     const row = this.requireRow(assetId);
     return { record: toRecord(row), bytes: await this.readBlob(row.id) };
@@ -269,6 +386,25 @@ export class StudioAssetStore {
     if (Math.max(Number(row.width), Number(row.height)) <= edge) {
       return { bytes: await this.readBlob(row.id), mediaType: row.media_type };
     }
+    const key = `${row.id}:${edge}`;
+    if (this.thumbnailFailures.has(key)) {
+      return { bytes: await this.readBlob(row.id), mediaType: row.media_type };
+    }
+    // Rendering is a synchronous main-thread decode of up to 20 MP, so concurrent
+    // requests for the same rendition share one cache read or render.
+    let load = this.thumbnailLoads.get(key);
+    if (!load) {
+      load = this.loadThumbnail(row, edge, key).finally(() => this.thumbnailLoads.delete(key));
+      this.thumbnailLoads.set(key, load);
+    }
+    return load;
+  }
+
+  private async loadThumbnail(
+    row: AssetRow,
+    edge: StudioAssetThumbnailEdge,
+    key: string,
+  ): Promise<{ bytes: Uint8Array; mediaType: StudioAssetMediaType }> {
     const cached = this.thumbPath(row.id, edge);
     try {
       return { bytes: await fs.readFile(cached), mediaType: "image/png" };
@@ -285,7 +421,9 @@ export class StudioAssetStore {
       });
     } catch {
       // nativeImage cannot decode every accepted format (for example WebP on
-      // Linux). The original is within the validated pixel limit.
+      // Linux). The original is within the validated pixel limit. Remember the
+      // failure so later requests skip straight to the original.
+      this.rememberThumbnailFailure(key);
       return { bytes: original, mediaType: row.media_type };
     }
     // The cache is regenerable; a failed write only costs a re-render. If GC removed
@@ -295,6 +433,14 @@ export class StudioAssetStore {
       () => undefined,
     );
     return { bytes: rendered.bytes, mediaType: "image/png" };
+  }
+
+  private rememberThumbnailFailure(key: string): void {
+    this.thumbnailFailures.add(key);
+    if (this.thumbnailFailures.size > MAX_REMEMBERED_THUMBNAIL_FAILURES) {
+      const oldest = this.thumbnailFailures.values().next().value;
+      if (oldest !== undefined) this.thumbnailFailures.delete(oldest);
+    }
   }
 
   retain(holder: StudioAssetHolder, assetIds: readonly string[]): void {
@@ -361,6 +507,16 @@ export class StudioAssetStore {
     ).map(({ holder }) => parseHolderKey(holder));
   }
 
+  /** Ids of every holder of one kind that holds at least one asset, so features can find holders whose owner is gone. */
+  holderIds(kind: StudioAssetHolderKind): string[] {
+    const prefix = `${kind}:`;
+    return (
+      this.requireDb()
+        .prepare("SELECT DISTINCT holder FROM holds WHERE substr(holder, 1, ?) = ? ORDER BY holder")
+        .all(prefix.length, prefix) as { holder: string }[]
+    ).map(({ holder }) => holder.slice(prefix.length));
+  }
+
   collectGarbage(): Promise<{ deletedAssets: number; freedBytes: number }> {
     return this.exclusive(() => this.collectGarbageNow());
   }
@@ -379,7 +535,15 @@ export class StudioAssetStore {
       for (const row of rows) remove.run(row.id);
       return rows;
     });
-    for (const row of doomed) await this.removeFiles(row.id);
+    const touched = new Set<string>();
+    for (const row of doomed) {
+      await this.removeFiles(row.id);
+      touched.add(path.dirname(this.blobPath(row.id)));
+    }
+    if (doomed.length > 0) {
+      touched.add(path.join(this.root, "thumbs"));
+      await syncDirectories(touched);
+    }
     return {
       deletedAssets: doomed.length,
       freedBytes: doomed.reduce((total, row) => total + Number(row.bytes), 0),
@@ -456,24 +620,165 @@ export class StudioAssetStore {
     for (const edge of THUMBNAIL_EDGES) await fs.rm(this.thumbPath(id, edge), { force: true });
   }
 
-  /** Remove crash leftovers: staging files, blobs whose row never committed, orphan thumbnails. */
+  /**
+   * Reconcile files with rows after a crash or a lost database. A blob without
+   * a row is re-indexed when its bytes still hash to its name and pass image
+   * validation (a rebuilt database, or a put that crashed before its insert);
+   * anything else, staging files and thumbnails without a row are removed.
+   * Re-indexed rows are unheld and touched now, so the grace period protects
+   * them until their features retain them again.
+   */
   private async sweepOrphanFiles(): Promise<void> {
     const blobs = path.join(this.root, "blobs");
+    const touched = new Set<string>();
+    const recovered: Array<{
+      id: string;
+      mediaType: StudioAssetMediaType;
+      bytes: number;
+      width: number;
+      height: number;
+      createdAt: number;
+    }> = [];
     for (const shard of await fs.readdir(blobs, { withFileTypes: true })) {
       if (!shard.isDirectory()) continue;
       const directory = path.join(blobs, shard.name);
       for (const entry of await fs.readdir(directory)) {
         const staged = entry.startsWith(".") && entry.endsWith(".tmp");
-        if (staged || (isStudioAssetId(entry) && !this.row(entry))) {
-          await fs.rm(path.join(directory, entry), { force: true });
+        if (!staged && (!isStudioAssetId(entry) || this.row(entry))) continue;
+        const file = path.join(directory, entry);
+        if (!staged && shard.name === entry.slice(0, 2)) {
+          const record = await this.revalidateBlob(file, entry);
+          if (record) {
+            recovered.push(record);
+            continue;
+          }
         }
+        await fs.rm(file, { force: true });
+        touched.add(directory);
       }
+    }
+    if (recovered.length > 0) {
+      const now = this.now();
+      this.transaction((db) => {
+        const insert = db.prepare(
+          "INSERT OR IGNORE INTO assets (id, media_type, bytes, width, height, created_at, touched_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        );
+        for (const asset of recovered) {
+          insert.run(asset.id, asset.mediaType, asset.bytes, asset.width, asset.height, asset.createdAt, now);
+        }
+      });
+      this.options.onWarning?.(
+        `Re-indexed ${recovered.length} stored studio ${recovered.length === 1 ? "image" : "images"} that had no database entry.`,
+      );
     }
     const thumbs = path.join(this.root, "thumbs");
     for (const entry of await fs.readdir(thumbs)) {
       const id = entry.slice(0, 64);
-      if (!isStudioAssetId(id) || !this.row(id))
+      if (!isStudioAssetId(id) || !this.row(id)) {
         await fs.rm(path.join(thumbs, entry), { force: true });
+        touched.add(thumbs);
+      }
     }
+    await syncDirectories(touched);
+  }
+
+  /** Metadata for an unindexed blob, or undefined when it is damaged or not an accepted image. */
+  private async revalidateBlob(
+    file: string,
+    id: string,
+  ): Promise<
+    | {
+        id: string;
+        mediaType: StudioAssetMediaType;
+        bytes: number;
+        width: number;
+        height: number;
+        createdAt: number;
+      }
+    | undefined
+  > {
+    const stat = await fs.stat(file);
+    if (!stat.isFile() || stat.size > this.limits.maxAssetBytes) return undefined;
+    const bytes = await fs.readFile(file);
+    if (createHash("sha256").update(bytes).digest("hex") !== id) return undefined;
+    let image: ReturnType<typeof validateStudioImage>;
+    try {
+      image = validateStudioImage(bytes, undefined, this.limits);
+    } catch {
+      return undefined;
+    }
+    return {
+      id,
+      mediaType: image.mediaType,
+      bytes: bytes.byteLength,
+      width: image.width,
+      height: image.height,
+      // Blobs are written once, so the file time is the best surviving creation time.
+      createdAt: Math.floor(stat.mtimeMs),
+    };
+  }
+}
+
+/** Open (creating as 0600 if missing) and check the schema; closes the handle on failure. */
+function openDatabase(file: string): DatabaseSync {
+  // Create the file private before SQLite does, so it never exists with the
+  // default 0644 mode. SQLite gives -wal and -shm the main file's mode.
+  closeSync(openSync(file, "a", 0o600));
+  const db = new DatabaseSync(file);
+  try {
+    db.exec("PRAGMA busy_timeout=100;");
+    initializeSqliteReclamation(db);
+    db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
+    const { user_version: version } = db.prepare("PRAGMA user_version").get() as {
+      user_version: number;
+    };
+    if (Number(version) === 0) {
+      db.exec(`BEGIN IMMEDIATE; ${SCHEMA} COMMIT;`);
+    } else if (Number(version) !== 1) {
+      throw new UnsupportedSchemaError();
+    }
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+  return db;
+}
+
+/** Pin 0600 on the database and its sidecars, whatever mode an older build created them with. */
+async function restrictDatabaseFiles(file: string): Promise<void> {
+  for (const suffix of DATABASE_SIDECARS) {
+    try {
+      await fs.chmod(`${file}${suffix}`, 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
+/** Rename the database and its sidecars to `<file>.corrupt-<timestamp>[-wal|-shm]`; returns the new main path. */
+async function quarantineDatabase(file: string, now: number): Promise<string> {
+  const stamp = new Date(now).toISOString().replace(/[:.]/gu, "-");
+  let target = `${file}.corrupt-${stamp}`;
+  for (let attempt = 1; await pathExists(target); attempt += 1) {
+    target = `${file}.corrupt-${stamp}-${attempt}`;
+  }
+  for (const suffix of DATABASE_SIDECARS) {
+    try {
+      await fs.rename(`${file}${suffix}`, `${target}${suffix}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  await syncDirectory(path.dirname(file)).catch(() => undefined);
+  return target;
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await fs.lstat(target);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
 }

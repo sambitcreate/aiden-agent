@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import fsModule from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
@@ -7,23 +8,58 @@ import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { type TestContext } from "node:test";
 import { StudioAssetError, type StudioAssetLimits } from "./contract.js";
-import { StudioAssetStore } from "./store.js";
+import {
+  STUDIO_ASSET_GC_INTERVAL_MS,
+  StudioAssetStore,
+  type StudioAssetStoreOptions,
+  type StudioAssetStoreTimers,
+} from "./store.js";
 import { fakeThumbnailer, pngBytes } from "./test-fixture.js";
 
 const HOUR = 60 * 60 * 1000;
 const code = (expected: StudioAssetError["code"]) => (error: unknown) =>
   error instanceof StudioAssetError && error.code === expected;
 
-async function fixture(t: TestContext, limits: Partial<StudioAssetLimits> = {}) {
+/** Records intervals instead of scheduling them; `tick()` runs each live callback. */
+function fakeTimers() {
+  const live = new Map<number, { callback: () => unknown; ms: number }>();
+  let next = 0;
+  const timers: StudioAssetStoreTimers = {
+    setInterval(callback, ms) {
+      next += 1;
+      live.set(next, { callback, ms });
+      return next;
+    },
+    clearInterval(handle) {
+      live.delete(handle as number);
+    },
+  };
+  return {
+    timers,
+    live,
+    async tick() {
+      await Promise.all([...live.values()].map(({ callback }) => callback()));
+    },
+  };
+}
+
+async function fixture(
+  t: TestContext,
+  limits: Partial<StudioAssetLimits> = {},
+  extra: Partial<StudioAssetStoreOptions> = {},
+) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-studio-assets-"));
   let now = 1_000_000;
   const thumbs = fakeThumbnailer();
+  const clock = fakeTimers();
   const open = async () => {
     const store = new StudioAssetStore({
       root: () => root,
       thumbnailer: thumbs.thumbnailer,
       now: () => now,
       limits,
+      timers: clock.timers,
+      ...extra,
     });
     await store.initialize();
     t.after(() => store.close());
@@ -33,6 +69,7 @@ async function fixture(t: TestContext, limits: Partial<StudioAssetLimits> = {}) 
   return {
     root,
     thumbs,
+    clock,
     open,
     store: await open(),
     advance(ms: number) {
@@ -118,6 +155,11 @@ test("holders are independent; releaseAll and replace change only their own hold
   f.store.retain(workflow, [a!.assetId, b!.assetId]);
   f.store.retain(run, [b!.assetId]);
 
+  f.store.retain({ kind: "images-run", id: "run-2" }, [a!.assetId]);
+  assert.deepEqual(f.store.holderIds("images-run"), ["run-1", "run-2"]);
+  assert.deepEqual(f.store.holderIds("design"), []);
+  f.store.releaseAllForHolder({ kind: "images-run", id: "run-2" });
+
   assert.equal(f.store.releaseAllForHolder(workflow), 2);
   assert.deepEqual(f.store.holders(a!.assetId), []);
   assert.deepEqual(f.store.holders(b!.assetId), [run]);
@@ -142,7 +184,7 @@ test("retain is atomic and refuses unknown assets and unsafe holders", async (t)
   );
 });
 
-test("a blob written without its row is swept on restart", async (t) => {
+test("a blob whose bytes do not match its name is swept on restart", async (t) => {
   const f = await fixture(t);
   const orphanId = "a".repeat(64);
   await fs.mkdir(path.join(f.root, "blobs", "aa"), { recursive: true });
@@ -183,8 +225,27 @@ test("thumbnails render once, are cached, and fall back to the original", async 
     Buffer.from(fallback.bytes),
     Buffer.from((await f.store.read(large.assetId)).bytes),
   );
-  await f.store.thumbnail(large.assetId, 512);
-  assert.deepEqual(f.thumbs.calls, [256, 512, 512], "a failed render is not cached");
+  const again512 = await f.store.thumbnail(large.assetId, 512);
+  assert.deepEqual(Buffer.from(again512.bytes), Buffer.from(fallback.bytes));
+  assert.deepEqual(f.thumbs.calls, [256, 512], "a failed decode is remembered, not retried");
+  assert.deepEqual(
+    await fs.readdir(path.join(f.root, "thumbs")),
+    [`${large.assetId}-256.png`],
+    "a failed render writes no cache file",
+  );
+});
+
+test("concurrent requests for one uncached thumbnail share a single render", async (t) => {
+  const f = await fixture(t);
+  const large = await f.store.put({ bytes: pngBytes(2_000, 1_000, 1) });
+  const results = await Promise.all(
+    Array.from({ length: 20 }, () => f.store.thumbnail(large.assetId, 256)),
+  );
+  assert.deepEqual(f.thumbs.calls, [256]);
+  for (const result of results) {
+    assert.equal(result.mediaType, "image/png");
+    assert.deepEqual(Buffer.from(result.bytes), Buffer.from(results[0]!.bytes));
+  }
 });
 
 /**
@@ -394,6 +455,11 @@ test("a database that cannot open leaves the store failed, and a later initializ
   await fs.mkdir(database, { recursive: true });
   await assert.rejects(store.initialize());
   assert.equal(store.status(), "failed");
+  assert.deepEqual(
+    (await fs.readdir(root)).filter((name) => name.includes(".corrupt-")),
+    [],
+    "an I/O failure is not mistaken for corruption",
+  );
   assert.throws(() => store.usage(), code("unavailable"));
   await assert.rejects(store.put({ bytes: pngBytes(10, 10, 6) }), code("unavailable"));
 
@@ -402,4 +468,154 @@ test("a database that cannot open leaves the store failed, and a later initializ
   assert.equal(store.status(), "open");
   const record = await store.put({ bytes: pngBytes(10, 10, 6) });
   assert.equal(store.get(record.assetId)?.assetId, record.assetId);
+});
+
+const DATABASE = "assets-v1.sqlite";
+
+async function removeDatabase(root: string) {
+  for (const suffix of ["", "-wal", "-shm"]) {
+    await fs.rm(path.join(root, `${DATABASE}${suffix}`), { force: true });
+  }
+}
+
+test("a lost database is rebuilt from stored blobs, which stay readable and in grace", async (t) => {
+  const warnings: string[] = [];
+  const f = await fixture(t, {}, { onWarning: (message) => warnings.push(message) });
+  const large = await f.store.put({ bytes: pngBytes(2_000, 1_000, 1) });
+  const small = await f.store.put({ bytes: pngBytes(10, 10, 2) });
+  await f.store.thumbnail(large.assetId, 256);
+  f.store.retain({ kind: "design", id: "project-1" }, [large.assetId]);
+  await f.store.close();
+  await removeDatabase(f.root);
+
+  f.advance(30 * 60 * 1000);
+  const reopened = await f.open();
+  assert.deepEqual(reopened.usage(), { assets: 2, bytes: large.bytes + small.bytes });
+  for (const asset of [large, small]) {
+    const { record, bytes } = await reopened.read(asset.assetId);
+    assert.deepEqual(
+      { mediaType: record.mediaType, width: record.width, height: record.height, bytes: bytes.byteLength },
+      { mediaType: asset.mediaType, width: asset.width, height: asset.height, bytes: asset.bytes },
+    );
+    assert.deepEqual(reopened.holders(asset.assetId), [], "holds are not recoverable from blobs");
+  }
+  await reopened.thumbnail(large.assetId, 256);
+  assert.deepEqual(f.thumbs.calls, [256], "the cached thumbnail of a rebuilt row is kept");
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /Re-indexed 2 stored studio images/u);
+
+  // Rebuilt rows count as freshly touched: they outlive a GC inside the grace
+  // window so their features can retain them again, then are collectable.
+  f.advance(59 * 60 * 1000);
+  assert.deepEqual(await reopened.collectGarbage(), { deletedAssets: 0, freedBytes: 0 });
+  reopened.retain({ kind: "design", id: "project-1" }, [large.assetId]);
+  f.advance(2 * HOUR);
+  assert.deepEqual(await reopened.collectGarbage(), { deletedAssets: 1, freedBytes: small.bytes });
+  assert.deepEqual(await f.blobFiles(), [large.assetId]);
+});
+
+test("an unindexed blob that is not an accepted image is removed even when its name matches", async (t) => {
+  const f = await fixture(t);
+  const kept = await f.store.put({ bytes: pngBytes(10, 10, 3) });
+  const junk = new TextEncoder().encode("not an image");
+  const junkId = createHash("sha256").update(junk).digest("hex");
+  await fs.mkdir(path.join(f.root, "blobs", junkId.slice(0, 2)), { recursive: true });
+  await fs.writeFile(path.join(f.root, "blobs", junkId.slice(0, 2), junkId), junk);
+  await f.store.close();
+  await removeDatabase(f.root);
+  const reopened = await f.open();
+  assert.deepEqual(await f.blobFiles(), [kept.assetId]);
+  assert.equal(reopened.get(junkId), undefined);
+  assert.equal(reopened.get(kept.assetId)?.width, 10);
+});
+
+test("a corrupt database is quarantined and rebuilt, keeping every image", async (t) => {
+  const warnings: string[] = [];
+  const f = await fixture(t, {}, { onWarning: (message) => warnings.push(message) });
+  const asset = await f.store.put({ bytes: pngBytes(40, 30, 4) });
+  await f.store.close();
+  const garbage = Buffer.alloc(8_192, 0x5a);
+  await removeDatabase(f.root);
+  await fs.writeFile(path.join(f.root, DATABASE), garbage);
+
+  const reopened = await f.open();
+  assert.equal(reopened.status(), "open");
+  assert.equal((await reopened.read(asset.assetId)).bytes.byteLength, asset.bytes);
+  const quarantined = (await fs.readdir(f.root)).filter((name) =>
+    name.startsWith(`${DATABASE}.corrupt-`),
+  );
+  assert.equal(quarantined.length, 1);
+  assert.deepEqual(await fs.readFile(path.join(f.root, quarantined[0]!)), garbage);
+  assert.ok(warnings.some((message) => message.includes(quarantined[0]!)));
+  // The rebuilt store accepts new work.
+  const next = await reopened.put({ bytes: pngBytes(10, 10, 5) });
+  assert.equal(reopened.get(next.assetId)?.assetId, next.assetId);
+});
+
+test("a database with an unsupported schema version is quarantined and rebuilt", async (t) => {
+  const f = await fixture(t);
+  const asset = await f.store.put({ bytes: pngBytes(40, 30, 6) });
+  await f.store.close();
+  const raw = new DatabaseSync(path.join(f.root, DATABASE));
+  raw.exec("PRAGMA user_version=99;");
+  raw.close();
+
+  const reopened = await f.open();
+  assert.equal(reopened.get(asset.assetId)?.width, 40);
+  const names = await fs.readdir(f.root);
+  assert.equal(names.filter((name) => /\.corrupt-[^-]/u.test(name) && !/-(wal|shm)$/u.test(name)).length, 1);
+});
+
+test("database files are private (0600)", { skip: process.platform === "win32" }, async (t) => {
+  const f = await fixture(t);
+  await f.store.put({ bytes: pngBytes(10, 10, 7) });
+  for (const suffix of ["", "-wal", "-shm"]) {
+    const mode = (await fs.stat(path.join(f.root, `${DATABASE}${suffix}`))).mode & 0o777;
+    assert.equal(mode.toString(8), "600", `${DATABASE}${suffix}`);
+  }
+  // A database an older build left world-readable is tightened on open.
+  await f.store.close();
+  await fs.chmod(path.join(f.root, DATABASE), 0o644);
+  await f.open();
+  assert.equal(((await fs.stat(path.join(f.root, DATABASE))).mode & 0o777).toString(8), "600");
+});
+
+test("hitting the quota collects eligible unheld assets first, then accepts the put", async (t) => {
+  const f = await fixture(t, { maxAssets: 2 });
+  const held = await f.store.put({ bytes: pngBytes(10, 10, 1) });
+  const loose = await f.store.put({ bytes: pngBytes(10, 10, 2) });
+  f.store.retain({ kind: "images-workflow", id: "wf-1" }, [held.assetId]);
+  // Inside the grace period nothing is eligible, so the quota still refuses,
+  // and the message says when deleted items free their space.
+  await assert.rejects(f.store.put({ bytes: pngBytes(10, 10, 3) }), (error: unknown) => {
+    assert.ok(error instanceof StudioAssetError && error.code === "quota");
+    assert.match(error.message, /up to an hour after you delete them/u);
+    return true;
+  });
+
+  f.advance(2 * HOUR);
+  const next = await f.store.put({ bytes: pngBytes(10, 10, 3) });
+  assert.equal(f.store.get(loose.assetId), undefined);
+  assert.equal(f.store.get(held.assetId)?.assetId, held.assetId, "held assets are never collected");
+  assert.equal(f.store.get(next.assetId)?.assetId, next.assetId);
+  assert.deepEqual((await f.blobFiles()).sort(), [held.assetId, next.assetId].sort());
+});
+
+test("an open store collects periodically, and closing stops the timer", async (t) => {
+  const f = await fixture(t);
+  assert.deepEqual(
+    [...f.clock.live.values()].map(({ ms }) => ms),
+    [STUDIO_ASSET_GC_INTERVAL_MS],
+  );
+  const loose = await f.store.put({ bytes: pngBytes(10, 10, 8) });
+  await f.clock.tick();
+  assert.ok(f.store.get(loose.assetId), "a tick inside the grace period keeps the asset");
+
+  f.advance(2 * HOUR);
+  await f.clock.tick();
+  assert.equal(f.store.get(loose.assetId), undefined);
+  assert.deepEqual(await f.blobFiles(), []);
+
+  await f.store.close();
+  assert.equal(f.clock.live.size, 0);
 });
