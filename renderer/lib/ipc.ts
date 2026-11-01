@@ -5,6 +5,7 @@ import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { WorkspaceFolderPresenceResult } from "../shared/workspace-folder-presence";
 import type { ModelPaceSummary } from "../shared/model-pace";
+import { parseWindowControlsState, type WindowControlsState } from "../shared/window-chrome";
 import {
   parseUsageLimitWaits,
   USAGE_LIMITS_CHANGED_CHANNEL,
@@ -410,6 +411,23 @@ export const appApi = {
     invoke<boolean>("app:setCloseGuard", guard),
   setDockIcon: (preference: "aiden" | "monochrome") =>
     invoke<boolean>("app:setDockIcon", preference),
+};
+
+/** The window controls Aiden draws in its own top bar on Linux. */
+export const windowControlsApi = {
+  state: async (): Promise<WindowControlsState | null> =>
+    parseWindowControlsState(await invoke<unknown>("app:window:getState")),
+  minimize: () => invoke<boolean>("app:window:minimize"),
+  toggleMaximize: async (): Promise<WindowControlsState | null> =>
+    parseWindowControlsState(await invoke<unknown>("app:window:toggleMaximize")),
+  close: () => invoke<boolean>("app:window:close"),
+  /** Opens the app menu (File, Edit, View…) at a point in the window, in CSS pixels. */
+  showMenu: (point: { x: number; y: number }) => invoke<boolean>("app:window:showMenu", point),
+  onStateChanged: (handler: (state: WindowControlsState) => void) =>
+    onNotification<unknown>("app:window-state", (payload) => {
+      const state = parseWindowControlsState(payload);
+      if (state) handler(state);
+    }),
 };
 
 export const appUpdatesApi = {

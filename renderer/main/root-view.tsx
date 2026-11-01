@@ -59,6 +59,7 @@ import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { useBotNotificationsSync } from "../lib/bot-notifications-sync";
 import { subscribeLateReturnedGuidance } from "../lib/composer-draft-store";
 import { onAssistantAutomationComposerRequested } from "../lib/assistant-dock";
+import { WindowControls } from "../components/window-controls";
 
 export function RootView() {
   useTheme();
@@ -633,6 +634,7 @@ function RootContent() {
         />
         <AssistantDock rightInset={environmentPanel.dockRightInset} />
         <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
+        <WindowControls />
         <KeyboardRegions />
         <KeyboardShortcutsDialog />
         <WorkspaceSettingsDialog />
