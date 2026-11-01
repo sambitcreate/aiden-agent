@@ -121,8 +121,9 @@ export type PlaceFrameInput = Omit<DesignFrame, "id" | "x" | "y"> & Partial<Pick
 
 /**
  * Adds a frame. Without a position it goes 64 px right of the last frame in
- * its group (top-aligned), inside an empty group's corner, or centred in the
- * visible part of the canvas (`view`, in canvas coordinates).
+ * its group (top-aligned), inside an empty group's corner, 64 px right of the
+ * last ungrouped frame in the visible part of the canvas (`view`, in canvas
+ * coordinates), or centred in that view when none is visible.
  */
 export function placeFrame(
   doc: DesignCanvasV1,
@@ -146,7 +147,20 @@ export function placeFrame(
       ? { x: last.x + last.w + DESIGN_FRAME_GAP, y: last.y }
       : { x: group.x + GROUP_INSET.x, y: group.y + GROUP_INSET.y };
   } else {
-    position = { x: view.x + (view.w - w) / 2, y: view.y + (view.h - h) / 2 };
+    const ungrouped = doc.frames.filter((entry) => entry.groupId === undefined);
+    const overlaps = (entry: DesignFrame, box: { x: number; y: number; w: number; h: number }) =>
+      entry.x < box.x + box.w && box.x < entry.x + entry.w && entry.y < box.y + box.h && box.y < entry.y + entry.h;
+    const inView = ungrouped.filter((entry) => overlaps(entry, view));
+    const last = inView[inView.length - 1];
+    position = last
+      ? { x: last.x + last.w + DESIGN_FRAME_GAP, y: last.y }
+      : { x: view.x + (view.w - w) / 2, y: view.y + (view.h - h) / 2 };
+    // A frame already there (an earlier one that ran past the view) pushes the
+    // new one further right, so frames added in a row never stack.
+    for (let blocker = ungrouped.find((entry) => overlaps(entry, { ...position, w, h })); blocker; ) {
+      position = { x: blocker.x + blocker.w + DESIGN_FRAME_GAP, y: position.y };
+      blocker = ungrouped.find((entry) => overlaps(entry, { ...position, w, h }));
+    }
   }
   const id = newId();
   const { groupId: _groupId, ...rest } = frame;

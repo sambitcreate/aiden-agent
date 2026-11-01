@@ -119,6 +119,62 @@ test("a new frame on an empty canvas is centred in the view", () => {
   assert.deepEqual(box(byId(placed.doc, "n1")), { x: -100, y: 450, w: 200, h: 100 });
 });
 
+test("a new frame beside others in view goes 64 px right of the last one, on the same top, not on top of it", () => {
+  const view = { x: 0, y: 0, w: 1000, h: 800 };
+  const note = { kind: "note", title: "Note", w: 200, h: 100, text: "", createdBy: "person" } as const;
+  const first = placeFrame(emptyDesignCanvas(), note, view, () => "n1");
+  if ("error" in first) return assert.fail(first.error);
+  const second = placeFrame(first.doc, note, view, () => "n2");
+  if ("error" in second) return assert.fail(second.error);
+  assert.deepEqual(box(byId(second.doc, "n2")), { x: 400 + 200 + 64, y: 350, w: 200, h: 100 });
+
+  // Only frames the person can see count: "loose" is off to the right, and a
+  // group member follows its group, so the group is the last frame in view.
+  const placed = placeFrame(grouped, note, view, () => "n3");
+  if ("error" in placed) return assert.fail(placed.error);
+  assert.deepEqual(box(byId(placed.doc, "n3")), { x: 900 + 64, y: 100, w: 200, h: 100 });
+});
+
+test("frames added one after another never land on each other, even once the row runs past the view", () => {
+  const view = { x: 0, y: 0, w: 800, h: 800 };
+  let doc = emptyDesignCanvas();
+  const sizes = [
+    { w: 200, h: 100 },
+    { w: 640, h: 400 },
+    { w: 1280, h: 800 },
+    { w: 1280, h: 800 },
+    { w: 320, h: 240 },
+  ];
+  sizes.forEach((size, index) => {
+    const placed = placeFrame(
+      doc,
+      { kind: "note", title: `F${index}`, ...size, text: "", createdBy: "person" },
+      view,
+      () => `f${index}`,
+    );
+    if ("error" in placed) return assert.fail(placed.error);
+    doc = placed.doc;
+  });
+  for (const a of doc.frames) {
+    for (const b of doc.frames) {
+      if (a === b) continue;
+      const overlap = a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+      assert.equal(overlap, false, `${a.id} overlaps ${b.id}`);
+    }
+  }
+});
+
+test("a new frame is centred when every other frame is out of view", () => {
+  const placed = placeFrame(
+    grouped,
+    { kind: "note", title: "Note", w: 200, h: 100, text: "", createdBy: "person" },
+    { x: 5000, y: 5000, w: 1000, h: 800 },
+    () => "n4",
+  );
+  if ("error" in placed) return assert.fail(placed.error);
+  assert.deepEqual(box(byId(placed.doc, "n4")), { x: 5400, y: 5350, w: 200, h: 100 });
+});
+
 test("a new frame in a group goes 64 px right of the group's last frame, on the same top", () => {
   const placed = placeFrame(
     grouped,
