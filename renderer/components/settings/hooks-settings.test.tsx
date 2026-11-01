@@ -136,6 +136,78 @@ test("approving a repo hook confirms the command, then sends the digest that was
   await waitFor(() => assert.deepEqual(callsTo("hooks:approveDigest"), [["workspace:shop:PreToolUse:0", digest("b")]]));
 });
 
+/** The value next to a label in a detail list, or null when the row isn't shown. */
+function detail(container: HTMLElement, label: string): string | null {
+  const term = within(container).queryByText(label, { selector: "dt" });
+  return term ? (term.nextElementSibling?.textContent ?? "") : null;
+}
+
+test("the approval confirmation shows how the hook runs and what its approval can't cover", async () => {
+  const background = listing({
+    id: "workspace:shop:PostToolUse:1",
+    name: "Notify",
+    event: "PostToolUse",
+    handler: { type: "command", command: "./scripts/notify.sh && npx tsx send.ts", async: true, timeout: 300, envAllow: ["SLACK_TOKEN", "CHANNEL"] },
+    scope: { kind: "workspace", workspaceRoot: WORKSPACE },
+    source: "workspace-file",
+    digest: digest("e"),
+    status: "waiting-for-approval",
+    scriptFiles: ["scripts/notify.sh"],
+    scriptCoverage: "partial",
+  });
+  const guard = listing({
+    id: "workspace:shop:PreToolUse:2",
+    name: "Strict guard",
+    handler: { type: "command", command: "./guard.sh", failClosed: true },
+    scope: { kind: "workspace", workspaceRoot: WORKSPACE },
+    source: "workspace-file",
+    digest: digest("f"),
+    status: "changed",
+  });
+  mount(overview({ hooks: [background, guard] }));
+
+  fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+  let confirm = await screen.findByRole("alertdialog");
+  assert.equal(detail(confirm, "Timeout"), "300 seconds");
+  assert.match(detail(confirm, "In the background") ?? "", /^Yes/u);
+  assert.equal(detail(confirm, "Extra environment"), "SLACK_TOKEN, CHANNEL");
+  assert.equal(detail(confirm, "If it fails"), null, "an async hook can't block, so the confirmation doesn't offer it");
+  assert.deepEqual(
+    within(within(confirm).getByRole("list", { name: "Script files" })).getAllByRole("listitem").map((item) => item.textContent),
+    ["scripts/notify.sh"],
+  );
+  assert.match(within(confirm).getByRole("note").textContent ?? "", /can’t check every file this command runs/u);
+  fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => assert.equal(screen.queryByRole("alertdialog"), null));
+
+  fireEvent.click(screen.getByRole("button", { name: "Re-approve" }));
+  confirm = await screen.findByRole("alertdialog");
+  assert.equal(detail(confirm, "Timeout"), "30 seconds");
+  assert.equal(detail(confirm, "In the background"), "No");
+  assert.equal(detail(confirm, "If it fails"), "Block the tool");
+  assert.equal(detail(confirm, "Extra environment"), "None");
+  assert.equal(within(confirm).queryByRole("note"), null, "a fully followed command has no coverage warning");
+});
+
+test("an edit that only moves a hook into the background shows as a change", async () => {
+  const before = HOOKS[0]!;
+  const proposal: HookProposal = {
+    ...PROPOSAL_BASE,
+    id: "hp_cccccccccccc",
+    action: "update",
+    hookId: before.id,
+    summary: "Don't hold up the shell.",
+    definition: { ...before, event: "PreToolUse", handler: { ...before.handler, async: true } },
+  };
+  mount(overview({ hooks: [before], proposals: [proposal] }));
+  const edited = await screen.findByLabelText("What Guard shell will run");
+  assert.deepEqual(
+    within(edited).getAllByText(/^(Yes|No)$/u).map((line) => line.textContent),
+    ["− Before: No", "+ After: Yes"],
+  );
+  within(edited).getByText("In the background");
+});
+
 test("Pause all hooks saves at once and comes back off when main refuses", async () => {
   const { callsTo } = mount(overview({ hooks: HOOKS }));
   const pause = await screen.findByRole("switch", { name: "Pause all hooks" });

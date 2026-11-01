@@ -186,6 +186,25 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
+/**
+ * How an approved hook runs, beyond its command: shared by the detail sheet
+ * and the approval confirmation so approving shows everything the digest covers.
+ */
+function HookRunDetailRows({ listing }: { listing: Pick<HookListing, "event" | "handler"> }) {
+  return (
+    <>
+      <DetailRow label="Timeout">{listing.handler.timeout ?? HOOK_DEFAULT_TIMEOUT_SECONDS} seconds</DetailRow>
+      <DetailRow label="In the background">{listing.handler.async ? "Yes, Aiden doesn’t wait for it" : "No"}</DetailRow>
+      {listing.event === "PreToolUse" && !listing.handler.async ? (
+        <DetailRow label="If it fails">{listing.handler.failClosed ? "Block the tool" : "Let the tool run"}</DetailRow>
+      ) : null}
+      <DetailRow label="Extra environment">
+        {listing.handler.envAllow?.length ? <span className="font-mono">{listing.handler.envAllow.join(", ")}</span> : "None"}
+      </DetailRow>
+    </>
+  );
+}
+
 function TestResultView({ result }: { result: HookTestResult }) {
   const decision = result.outcome.decision;
   const outcome = result.timedOut
@@ -282,7 +301,6 @@ function HookDetailSheet({
     }
   };
 
-  const timeout = listing.handler.timeout ?? HOOK_DEFAULT_TIMEOUT_SECONDS;
   const runs = runLog.data ?? [];
 
   return (
@@ -314,17 +332,7 @@ function HookDetailSheet({
             <DetailRow label="Event">{eventAndMatcher(listing)}</DetailRow>
             <DetailRow label="Where">{hookScopeLabel(listing.scope, workspaces)}</DetailRow>
             <DetailRow label="Source">{sourceLabel(listing)}</DetailRow>
-            <DetailRow label="Timeout">{timeout} seconds</DetailRow>
-            {listing.event === "PreToolUse" ? (
-              <DetailRow label="If it fails">{listing.handler.failClosed ? "Block the tool" : "Let the tool run"}</DetailRow>
-            ) : null}
-            <DetailRow label="Extra environment">
-              {listing.handler.envAllow?.length ? (
-                <span className="font-mono">{listing.handler.envAllow.join(", ")}</span>
-              ) : (
-                "None"
-              )}
-            </DetailRow>
+            <HookRunDetailRows listing={listing} />
             <DetailRow label="Digest">
               <span className="font-mono" title={listing.digest}>
                 {hookShortDigest(listing.digest)}
@@ -443,6 +451,7 @@ function definitionFields(definition: Pick<HookListing, "event" | "matcher" | "h
     Matcher: definition.matcher.trim() === "" || definition.matcher === "*" ? "Every tool" : definition.matcher,
     Command: definition.handler.command,
     Timeout: `${definition.handler.timeout ?? HOOK_DEFAULT_TIMEOUT_SECONDS} seconds`,
+    "In the background": definition.handler.async ? "Yes" : "No",
     "If it fails": definition.handler.failClosed ? "Block the tool" : "Let the tool run",
     "Extra environment": definition.handler.envAllow?.length ? definition.handler.envAllow.join(", ") : "None",
     Where: hookScopeLabel(definition.scope, workspaces),
@@ -980,6 +989,10 @@ export function HooksSettings() {
                 {hookScopeLabel(confirmApprove.scope, data?.workspaces ?? [])}, on this computer.
               </span>
               <CommandBlock command={confirmApprove.handler.command} />
+              <dl className="flex flex-col">
+                <HookRunDetailRows listing={confirmApprove} />
+              </dl>
+              <HookScriptCoverage files={confirmApprove.scriptFiles} coverage={confirmApprove.scriptCoverage} />
             </span>
           ) : null
         }
