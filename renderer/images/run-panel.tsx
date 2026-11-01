@@ -8,10 +8,13 @@ const RETRYABLE = new Set(["failed", "cancelled", "interrupted"]);
 export function RunPanel({
   snapshot,
   nodeTitles,
+  busy = false,
   onStop,
   onRetry,
 }: {
   snapshot: RunSnapshot | null;
+  /** A run is being prepared or started; retrying again now would open a second consent. */
+  busy?: boolean;
   nodeTitles: ReadonlyMap<string, string>;
   onStop(): void;
   onRetry(nodeId: string, kind: RetryScopeKind): void;
@@ -42,7 +45,7 @@ export function RunPanel({
               {!running && RETRYABLE.has(attempt.state) ? (
                 <div className="flex flex-wrap gap-1">
                   {RETRY_OPTIONS.map((option) => (
-                    <Button key={option.kind} size="small" variant="transparent" title={option.hint} onClick={() => onRetry(attempt.nodeId, option.kind)}>
+                    <Button key={option.kind} size="small" variant="transparent" title={option.hint} disabled={busy} onClick={() => onRetry(attempt.nodeId, option.kind)}>
                       {option.label}
                     </Button>
                   ))}

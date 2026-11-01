@@ -1,6 +1,8 @@
 /* Create Images: semantic tokens only. Imported only by the lazy images route. */
-.image-node {
-  width: 280px;
+/* Width comes from ImageNodeFrame (IMAGE_NODE_WIDTH); a sized node fills exactly its stored box. */
+.image-node[data-sized="true"] > [role="group"],
+.image-node[data-sized="true"] .image-node-body {
+  height: 100%;
 }
 
 .image-node-media {
@@ -9,6 +11,12 @@
   height: auto;
   border-radius: var(--radius-control);
   background: var(--color-control);
+}
+
+.image-node[data-sized="true"] .image-node-media {
+  flex: 1 1 0;
+  min-height: 0;
+  object-fit: contain;
 }
 
 .image-gallery {
@@ -33,6 +41,11 @@
   height: 10px;
   border: none;
   background: var(--color-tertiary);
+}
+
+/* A port started from the keyboard or a click stays filled until the connection completes or is abandoned. */
+.studio-canvas .image-port.clickconnecting {
+  background: var(--color-accent);
 }
 
 .studio-canvas .image-port:focus-visible {

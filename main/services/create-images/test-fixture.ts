@@ -23,9 +23,11 @@ export interface FakeImageCall {
 }
 
 export type FakeImageReply =
-  | { kind: "images"; count?: number; cost?: number; data?: string }
+  /** `mimeTypes` labels each returned image in order; `text` adds a caption after them. */
+  | { kind: "images"; count?: number; cost?: number; data?: string; mimeTypes?: string[]; text?: string }
   | { kind: "error"; message: string }
-  | { kind: "hold" };
+  /** Waits for release() or the abort. On abort it takes `cancelMs` (a provider-side cancel) before settling. */
+  | { kind: "hold"; cancelMs?: number; onCancelled?: () => void };
 
 const usage = (total: number): Usage => ({
   input: 12,
@@ -39,7 +41,7 @@ const usage = (total: number): Usage => ({
 export function fakeImageModels(
   options: {
     provider?: string;
-    models?: readonly { id: string; name?: string; input?: ("text" | "image")[] }[];
+    models?: readonly { id: string; name?: string; input?: ("text" | "image")[]; maxReferences?: number }[];
     reply?: (call: FakeImageCall, index: number) => FakeImageReply;
   } = {},
 ): { models: MutableModels; calls: FakeImageCall[]; release(): void } {
@@ -58,17 +60,27 @@ export function fakeImageModels(
     input: entry.input ?? ["text", "image"],
     output: ["image", "text"],
     cost: { input: 0.5, output: 3, cacheRead: 0, cacheWrite: 0 },
+    ...(entry.maxReferences ? { inputLimits: { images: { maxPerRequest: entry.maxReferences } } } : {}),
   }));
-  const images = (model: ImageModel<ImageApi>, count: number, cost: number, data?: string): AssistantImages => ({
+  const images = (
+    model: ImageModel<ImageApi>,
+    count: number,
+    cost: number,
+    data?: string,
+    extra: { mimeTypes?: string[]; text?: string } = {},
+  ): AssistantImages => ({
     api: model.api,
     provider: model.provider,
     model: model.id,
     responseId: `fake-${calls.length}`,
-    output: Array.from({ length: count }, (_, index) => ({
-      type: "image" as const,
-      mimeType: "image/png",
-      data: data ?? Buffer.from(pngBytes(16, 16, calls.length * 10 + index)).toString("base64"),
-    })),
+    output: [
+      ...Array.from({ length: count }, (_, index) => ({
+        type: "image" as const,
+        mimeType: extra.mimeTypes?.[index] ?? "image/png",
+        data: data ?? Buffer.from(pngBytes(16, 16, calls.length * 10 + index)).toString("base64"),
+      })),
+      ...(extra.text !== undefined ? [{ type: "text" as const, text: extra.text }] : []),
+    ],
     usage: usage(cost),
     stopReason: "stop",
     timestamp: Date.now(),
@@ -91,7 +103,12 @@ export function fakeImageModels(
             };
             calls.push(call);
             const reply = options.reply?.(call, calls.length - 1) ?? { kind: "images" };
-            if (reply.kind === "images") return images(model, reply.count ?? 1, reply.cost ?? 0.039, reply.data);
+            if (reply.kind === "images") {
+              return images(model, reply.count ?? 1, reply.cost ?? 0.039, reply.data, {
+                ...(reply.mimeTypes ? { mimeTypes: reply.mimeTypes } : {}),
+                ...(reply.text !== undefined ? { text: reply.text } : {}),
+              });
+            }
             if (reply.kind === "error") {
               return { ...images(model, 0, 0), output: [], stopReason: "error", errorMessage: reply.message };
             }
@@ -115,7 +132,14 @@ export function fakeImageModels(
               };
               const onAbort = () => {
                 held.delete(release);
-                resolve(aborted());
+                if (reply.cancelMs === undefined) {
+                  resolve(aborted());
+                  return;
+                }
+                setTimeout(() => {
+                  reply.onCancelled?.();
+                  resolve(aborted());
+                }, reply.cancelMs);
               };
               held.add(release);
               signal?.addEventListener("abort", onAbort, { once: true });

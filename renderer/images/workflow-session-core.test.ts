@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { WorkflowDocV1 } from "../shared/images/schema";
+import { IMAGE_WORKFLOW_LIMITS, type WorkflowDocV1 } from "../shared/images/schema";
 import {
   applyEditorOp,
   createAutosave,
@@ -98,11 +98,11 @@ test("autosave collapses quick edits into one save of the newest document", asyn
   autosave.schedule(titled("One"));
   autosave.schedule(titled("Two"));
   assert.equal(timers.size(), 1);
-  assert.deepEqual(states[states.length - 1], { dirty: true, saving: false, conflict: false, error: null });
+  assert.deepEqual(states[states.length - 1], { dirty: true, saving: false, conflict: false, deleted: false, error: null });
   timers.fire();
   await autosave.flush();
   assert.deepEqual(saves, [["Two", 1]]);
-  assert.deepEqual(states[states.length - 1], { dirty: false, saving: false, conflict: false, error: null });
+  assert.deepEqual(states[states.length - 1], { dirty: false, saving: false, conflict: false, deleted: false, error: null });
 });
 
 test("flush waits for the save in flight, then saves the newest edit on the returned revision", async () => {
@@ -148,5 +148,88 @@ test("a conflict stops autosave, keeps the edit unsaved and is reported", async 
   autosave.schedule(titled("Again"));
   assert.equal(timers.size(), 0);
   assert.equal(saves, 1);
-  assert.deepEqual(states[states.length - 1], { dirty: true, saving: false, conflict: true, error: null });
+  assert.deepEqual(states[states.length - 1], { dirty: true, saving: false, conflict: true, deleted: false, error: null });
+});
+
+test("a save that throws before returning a promise still settles flush, and a later save succeeds", async () => {
+  const timers = fakeTimers();
+  const saves: string[] = [];
+  const states: AutosaveState[] = [];
+  const autosave = createAutosave({
+    delayMs: 800,
+    baseRevision: 1,
+    ...timers,
+    save: (document, baseRevision) => {
+      saves.push(document.title);
+      if (saves.length === 1) throw new Error("The save channel is closed.");
+      return Promise.resolve({ ok: true, revision: baseRevision + 1 });
+    },
+    onState: (state) => states.push(state),
+  });
+  autosave.schedule(titled("First"));
+  assert.deepEqual(await autosave.flush(), { ok: false, revision: 1 });
+  assert.deepEqual(states[states.length - 1], {
+    dirty: true, saving: false, conflict: false, deleted: false, error: "The save channel is closed.",
+  });
+  autosave.schedule(titled("Second"));
+  timers.fire();
+  assert.deepEqual(await autosave.flush(), { ok: true, revision: 2 });
+  assert.deepEqual(saves, ["First", "Second"]);
+  assert.deepEqual(states[states.length - 1], { dirty: false, saving: false, conflict: false, deleted: false, error: null });
+});
+
+test("a failed save reports the server's reason, and retrying with flush saves the same edit", async () => {
+  const timers = fakeTimers();
+  const outcomes: SaveOutcome[] = [
+    { ok: false, reason: "invalid", issues: ["An image in this workflow is no longer available."] },
+    { ok: true, revision: 3 },
+  ];
+  const saved: string[] = [];
+  const states: AutosaveState[] = [];
+  const autosave = createAutosave({
+    delayMs: 800,
+    baseRevision: 2,
+    ...timers,
+    save: async (document) => {
+      saved.push(document.title);
+      return outcomes.shift()!;
+    },
+    onState: (state) => states.push(state),
+  });
+  autosave.schedule(titled("Mine"));
+  assert.equal((await autosave.flush()).ok, false);
+  assert.equal(states[states.length - 1]?.error, "An image in this workflow is no longer available.");
+  assert.deepEqual(await autosave.flush(), { ok: true, revision: 3 });
+  assert.deepEqual(saved, ["Mine", "Mine"]);
+  assert.equal(states[states.length - 1]?.error, null);
+});
+
+test("saving a workflow that was deleted is reported as deleted, not as a conflict, and stops autosave", async () => {
+  const timers = fakeTimers();
+  let saves = 0;
+  const states: AutosaveState[] = [];
+  const autosave = createAutosave({
+    delayMs: 800,
+    baseRevision: 1,
+    ...timers,
+    save: async () => {
+      saves += 1;
+      return { ok: false, reason: "not-found" };
+    },
+    onState: (state) => states.push(state),
+  });
+  autosave.schedule(titled("Mine"));
+  assert.deepEqual(await autosave.flush(), { ok: false, revision: 1 });
+  autosave.schedule(titled("Again"));
+  assert.equal(timers.size(), 0);
+  assert.equal(saves, 1);
+  assert.deepEqual(states[states.length - 1], { dirty: true, saving: false, conflict: false, deleted: true, error: null });
+});
+
+test("a far pan or zoom is saved inside the bounds the workflow schema accepts", () => {
+  const limit = IMAGE_WORKFLOW_LIMITS.positionLimit;
+  let session = sessionReducer(createSession(base), { type: "viewport", viewport: { x: -5 * limit, y: 3 * limit, zoom: 40 } });
+  assert.deepEqual(documentToSave(session).viewport, { x: -limit, y: limit, zoom: IMAGE_WORKFLOW_LIMITS.maxZoom });
+  session = sessionReducer(session, { type: "viewport", viewport: { x: Number.NaN, y: 12, zoom: 0.001 } });
+  assert.deepEqual(documentToSave(session).viewport, { x: 0, y: 12, zoom: IMAGE_WORKFLOW_LIMITS.minZoom });
 });

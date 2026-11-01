@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -20,7 +20,7 @@ import { fakeImageModels, until, type FakeImageReply } from "../../services/crea
 import { StudioAssetGrants, type StudioAssetGrantOwner } from "../../services/studio-assets/delivery-core.js";
 import { StudioAssetStore } from "../../services/studio-assets/store.js";
 import { fakeThumbnailer, pngBytes } from "../../services/studio-assets/test-fixture.js";
-import { registerCreateImagesHandlers, type CreateImagesOwner } from "./register.js";
+import { readPickedImage, registerCreateImagesHandlers, type CreateImagesOwner } from "./register.js";
 
 /** `owner: null` is a document that is not an Aiden window: the production owner check throws for it. */
 interface FakeEvent { owner: CreateImagesOwner | null }
@@ -356,4 +356,18 @@ test("handlers reach the image port only to list models; generation starts only 
   // A consent is single-use: replaying it starts no second paid request.
   assert.deepEqual(await env.invoke("imageWorkflows:start-run", { consentId: prepared.plan.consentId }), { error: "expired" });
   assert.equal(env.fake.calls.length, 1);
+});
+
+test("a picked image is read through one handle and never beyond the import limit", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-image-pick-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const exact = path.join(root, "exact.png");
+  await writeFile(exact, Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]));
+  assert.deepEqual([...(await readPickedImage(exact, 8))], [1, 2, 3, 4, 5, 6, 7, 8]);
+  const over = path.join(root, "over.png");
+  await writeFile(over, new Uint8Array(9));
+  await assert.rejects(readPickedImage(over, 8), /8 MiB or less/u);
+  const folder = path.join(root, "folder.png");
+  await mkdir(folder);
+  await assert.rejects(readPickedImage(folder, 8), /8 MiB or less/u);
 });

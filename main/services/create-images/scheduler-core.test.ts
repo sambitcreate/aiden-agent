@@ -41,7 +41,8 @@ test("a run-all plan lists one request per Generate node with its references", (
   assert.deepEqual(result.plan.steps.map((step) => step.nodeId), ["p1", "i", "g1", "o1", "p2", "g2", "o2"]);
   assert.deepEqual(
     result.plan.requests.map((request) => [request.nodeId, request.provider, request.model, request.referenceCount, request.pendingReferenceCount]),
-    [["g1", "openrouter", MODEL.id, 1, 0], ["g2", "openrouter", MODEL.id, 1, 1]],
+    // g2's reference comes from g1 in this same run, which can return up to four images.
+    [["g1", "openrouter", MODEL.id, 1, 0], ["g2", "openrouter", MODEL.id, 4, 4]],
   );
   assert.deepEqual(result.plan.requests[0]?.knownReferences, [ref("a")]);
 });
@@ -97,6 +98,60 @@ test("node-only plans run one Generate node, and the cap counts each scope's own
   const tail = planRun(chain, { kind: "from-node", nodeId: "c" }, context({ priorOutputs: { b: [ref("b")] } }));
   assert.ok(tail.ok);
   assert.equal(tail.plan.requests.length, 3);
+});
+
+test("references a model cannot take are plan issues on that node, before any consent", () => {
+  const textOnly = context({ model: () => ({ acceptsReferences: false }) });
+  const refused = planRun(graph, { kind: "node-only", nodeId: "g1" }, textOnly);
+  assert.deepEqual(refused.ok ? [] : refused.issues.map((issue) => [issue.code, issue.nodeId]), [["references_unsupported", "g1"]]);
+  // Without references a text-only model is fine.
+  const plain = doc([prompt("p"), generate("g")], [edge("p", "text", "g", "prompt")]);
+  assert.ok(planRun(plain, { kind: "all" }, textOnly).ok);
+
+  // A single-image editor takes one reference, not two.
+  const single = context({ model: () => ({ acceptsReferences: true, maxReferences: 1 }) });
+  const one = doc([prompt("p"), input("i", "a"), generate("g")], [edge("p", "text", "g", "prompt"), edge("i", "image", "g", "references")]);
+  assert.ok(planRun(one, { kind: "all" }, single).ok);
+  const two = doc(
+    [prompt("p"), input("i", "a"), input("j", "b"), generate("g")],
+    [edge("p", "text", "g", "prompt"), edge("i", "image", "g", "references"), edge("j", "image", "g", "references")],
+  );
+  const tooMany = planRun(two, { kind: "all" }, single);
+  assert.deepEqual(
+    tooMany.ok ? [] : tooMany.issues.map((issue) => [issue.code, issue.nodeId, issue.message]),
+    [["too_many_references", "g", "This step could receive up to 2 reference images. This model accepts at most 1 reference image."]],
+  );
+});
+
+test("an upstream Generate in the same run counts as its worst case of four references", () => {
+  // first can return four images; with the Image Input, second could receive five.
+  const nodes = [prompt("p"), { ...generate("first"), title: "Sketch" }, input("i", "a"), generate("second")];
+  const edges = [
+    edge("p", "text", "first", "prompt"),
+    edge("p", "text", "second", "prompt"),
+    edge("first", "images", "second", "references"),
+    edge("i", "image", "second", "references"),
+  ];
+  const result = planRun(doc(nodes, edges), { kind: "all" }, context());
+  assert.deepEqual(
+    result.ok ? [] : result.issues.map((issue) => [issue.code, issue.nodeId, issue.message]),
+    [["too_many_references", "second", "This step could receive up to 5 reference images. “Sketch” can return up to 4 images. Aiden sends at most 4 reference images per request."]],
+  );
+  // Once first has run, its real output is known and seeded instead.
+  const seeded = planRun(doc(nodes, edges), { kind: "node-only", nodeId: "second" }, context({ priorOutputs: { first: [ref("b")] } }));
+  assert.deepEqual(seeded.ok ? seeded.plan.requests.map((request) => request.referenceCount) : [], [2]);
+});
+
+test("known references past 8 MiB or 40 megapixels in all are plan issues", () => {
+  const two = doc(
+    [prompt("p"), input("i", "a"), input("j", "b"), generate("g")],
+    [edge("p", "text", "g", "prompt"), edge("i", "image", "g", "references"), edge("j", "image", "g", "references")],
+  );
+  const heavy = planRun(two, { kind: "all" }, context({ assetBytes: () => 5 * 1024 * 1024 }));
+  assert.deepEqual(heavy.ok ? [] : heavy.issues.map((issue) => [issue.code, issue.nodeId]), [["reference_bytes", "g"]]);
+  const huge = planRun(two, { kind: "all" }, context({ asset: (assetId) => ({ assetId, width: 5_000, height: 5_000, mediaType: "image/png" }) }));
+  assert.deepEqual(huge.ok ? [] : huge.issues.map((issue) => [issue.code, issue.nodeId]), [["reference_pixels", "g"]]);
+  assert.ok(planRun(two, { kind: "all" }, context({ assetBytes: () => 4 * 1024 * 1024 })).ok, "exactly 8 MiB is allowed");
 });
 
 test("staleNodeIds marks outputs older than a newer upstream Generate result and ignores local nodes", () => {

@@ -4,9 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import type { Usage } from "@earendil-works/pi-ai";
-import type { ImageGenerationRequest, ImageGenerationResult } from "../../../renderer/shared/images/port.js";
+import type { ImageGenerationPreflight, ImageGenerationRequest, ImageGenerationResult } from "../../../renderer/shared/images/port.js";
 import type { OutputRef, RunScope } from "../../../renderer/shared/images/run-types.js";
 import type { WorkflowDocV1, WorkflowEdge, WorkflowNode } from "../../../renderer/shared/images/schema.js";
+import { StudioAssetError } from "../studio-assets/contract.js";
 import { StudioAssetStore } from "../studio-assets/store.js";
 import { fakeThumbnailer, pngBytes } from "../studio-assets/test-fixture.js";
 import { executeRun, type RunExecutorDependencies } from "./run-executor.js";
@@ -59,6 +60,8 @@ async function start(
     priorOutputs?: Readonly<Record<string, readonly OutputRef[]>>;
     ledger?: RunExecutorDependencies["ledger"];
     deps?: Partial<RunExecutorDependencies>;
+    /** A local port refusal (preflight), returned instead of a ready request. */
+    refuse?: (request: ImageGenerationRequest) => ImageGenerationPreflight | undefined;
   } = {},
 ) {
   const scope = options.scope ?? { kind: "all" };
@@ -87,7 +90,10 @@ async function start(
       ledger: options.ledger ?? env.ledger,
       assets: env.assets,
       onChange: () => undefined,
-      port: { generate: async (request) => { calls.push(request); return reply(request, calls.length - 1); } },
+      port: {
+        preflight: async (request) =>
+          options.refuse?.(request) ?? { kind: "ready", send: async () => { calls.push(request); return reply(request, calls.length - 1); } },
+      },
       ...options.deps,
     },
     { runId, plan: planned.plan, concurrency: options.concurrency ?? 1, signal: controller.signal },
@@ -195,24 +201,158 @@ test("a result that settles before the abort is observed is kept and marked canc
   assert.deepEqual([kept.state, kept.cancelRequested, kept.output.length], ["succeeded", true, 1]);
 });
 
-test("more than four references fail locally without a provider request", async (t) => {
+test("a local port refusal is recorded unsent: no claim, no submitted time, never may-have-been-billed", async (t) => {
   const env = await fixture(t);
-  const extra = await env.assets.put({ bytes: pngBytes(10, 10, 9) });
-  const doc = workflow(
-    [prompt("p"), gen("first"), { id: "i", type: "image-input", position: at, data: { assetId: extra.assetId } }, gen("second")],
-    [
-      link("p", "text", "first", "prompt"),
-      link("p", "text", "second", "prompt"),
-      link("first", "images", "second", "references"),
-      link("i", "image", "second", "references"),
-    ],
+  const doc = workflow([prompt("p"), gen("a"), gen("b")], [link("p", "text", "a", "prompt"), link("p", "text", "b", "prompt")]);
+  const run = await start(env, doc, () => generated(5), {
+    requestLimit: 2,
+    refuse: () => ({ kind: "failed", code: "references-unsupported", message: "This image model does not accept reference images." }),
+  });
+  assert.equal(await run.done, "failed");
+  assert.equal(run.calls.length, 0);
+  for (const attempt of [attempts(env).get("a")!, attempts(env).get("b")!]) {
+    assert.deepEqual(
+      [attempt.state, attempt.errorCode, attempt.submittedAt, attempt.mayHaveBeenBilled],
+      ["failed", "references-unsupported", undefined, false],
+    );
+  }
+  assert.equal(env.ledger.snapshot("run-1")!.run.requestsSent, 0);
+});
+
+test("a run with no room left in image storage refuses before claiming, so nothing is paid for", async (t) => {
+  const env = await fixture(t);
+  const run = await start(env, workflow([prompt("p"), gen("g")], [link("p", "text", "g", "prompt")]), () => generated(17), {
+    deps: {
+      assets: {
+        read: (assetId) => env.assets.read(assetId),
+        put: (input) => env.assets.put(input),
+        retain: (holder, ids) => env.assets.retain(holder, ids),
+        usage: () => ({ assets: 10, bytes: 95 * 1024 * 1024 }),
+      },
+      storageLimits: { maxAssets: 1_000, maxTotalBytes: 100 * 1024 * 1024 },
+    },
+  });
+  assert.equal(await run.done, "failed");
+  assert.equal(run.calls.length, 0);
+  const attempt = attempts(env).get("g")!;
+  assert.deepEqual([attempt.errorCode, attempt.mayHaveBeenBilled], ["storage-full", false]);
+  assert.match(attempt.errorMessage!, /storage is full, so this request was not sent/u);
+  assert.equal(env.ledger.snapshot("run-1")!.run.requestsSent, 0);
+});
+
+test("a full or failing image store after a paid result is reported as a storage error, not bad output", async (t) => {
+  const env = await fixture(t);
+  const cases = [
+    { runId: "full", error: new StudioAssetError("quota", "Studio asset storage is full."), code: "storage-full", copy: /may have been billed, but Aiden's image storage is full/u },
+    { runId: "io", error: Object.assign(new Error("EIO: i/o error, write"), { code: "EIO" }), code: "storage-failed", copy: /may have been billed, but Aiden could not save it/u },
+  ];
+  for (const { runId, error, code, copy } of cases) {
+    const issues: unknown[] = [];
+    const run = await start(env, workflow([prompt("p"), gen("g")], [link("p", "text", "g", "prompt")]), () => generated(18), {
+      runId,
+      deps: {
+        assets: {
+          read: (assetId) => env.assets.read(assetId),
+          put: async () => {
+            throw error;
+          },
+          retain: (holder, ids) => env.assets.retain(holder, ids),
+        },
+        reportIssue: (issue) => issues.push(issue),
+      },
+    });
+    assert.equal(await run.done, "failed");
+    const attempt = attempts(env, runId).get("g")!;
+    assert.deepEqual([attempt.errorCode, attempt.mayHaveBeenBilled, attempt.costUsd], [code, true, 0.039]);
+    assert.match(attempt.errorMessage!, copy);
+    assert.deepEqual(issues, [error], "the storage failure is reported, not swallowed");
+  }
+});
+
+test("a result that arrives after an executor fault gave up is not held by the ended run", async (t) => {
+  const env = await fixture(t);
+  const doc = workflow([prompt("p"), gen("a"), gen("b")], [link("p", "text", "a", "prompt"), link("p", "text", "b", "prompt")]);
+  const broken: RunExecutorDependencies["ledger"] = {
+    claimProviderRequest: (...args) => env.ledger.claimProviderRequest(...args),
+    snapshot: (runId) => env.ledger.snapshot(runId),
+    finishAttempts: (updates) => {
+      if (updates.some((update) => update.nodeId === "a")) throw new Error("disk full");
+      env.ledger.finishAttempts(updates);
+    },
+    finishRun: (...args) => env.ledger.finishRun(...args),
+    terminateRun: (...args) => env.ledger.terminateRun(...args),
+  };
+  let late!: (result: ImageGenerationResult) => void;
+  const retained: string[] = [];
+  const issues: unknown[] = [];
+  let reported!: () => void;
+  const lateReported = new Promise<void>((resolve) => (reported = resolve));
+  const run = await start(
+    env,
+    doc,
+    (_request, index) => (index === 0 ? generated(32) : new Promise<ImageGenerationResult>((resolve) => (late = resolve))),
+    {
+      ledger: broken,
+      concurrency: 2,
+      requestLimit: 2,
+      deps: {
+        faultWaitMs: 25,
+        reportIssue: (issue) => {
+          issues.push(issue);
+          reported();
+        },
+        assets: {
+          read: (assetId) => env.assets.read(assetId),
+          put: (input) => env.assets.put(input),
+          retain: (holder, ids) => {
+            retained.push(...ids);
+            env.assets.retain(holder, ids);
+          },
+        },
+      },
+    },
   );
-  // The first node returns four images; with the Image Input that is five references.
-  const run = await start(env, doc, () => generated(5, 4));
-  assert.equal(await run.done, "partial");
-  assert.equal(run.calls.length, 1);
-  const refused = attempts(env).get("second")!;
-  assert.deepEqual([refused.state, refused.errorCode, refused.mayHaveBeenBilled], ["failed", "too-many-references", false]);
+  await assert.rejects(run.done, /disk full/u);
+  const before = retained.length;
+  late(generated(33));
+  await lateReported;
+  assert.equal(retained.length, before, "nothing new is held for the terminated run");
+  assert.match(String(issues[0]), /arrived after the run ended/u);
+  assert.equal(attempts(env).get("b")!.output.length, 0);
+});
+
+test("when recording a success fails, the images that attempt held are released", async (t) => {
+  const env = await fixture(t);
+  const failing: RunExecutorDependencies["ledger"] = {
+    claimProviderRequest: (...args) => env.ledger.claimProviderRequest(...args),
+    snapshot: (runId) => env.ledger.snapshot(runId),
+    finishAttempts: (updates) => {
+      if (updates.some((update) => update.state === "succeeded" && update.nodeId === "g")) throw new Error("disk full");
+      env.ledger.finishAttempts(updates);
+    },
+    finishRun: (...args) => env.ledger.finishRun(...args),
+    terminateRun: (...args) => env.ledger.terminateRun(...args),
+  };
+  const retained: string[] = [];
+  const run = await start(env, workflow([prompt("p"), gen("g")], [link("p", "text", "g", "prompt")]), () => generated(34), {
+    ledger: failing,
+    deps: {
+      assets: {
+        read: (assetId) => env.assets.read(assetId),
+        put: (input) => env.assets.put(input),
+        retain: (holder, ids) => {
+          retained.push(...ids);
+          env.assets.retain(holder, ids);
+        },
+        release: (holder, ids) => env.assets.release(holder, ids),
+      },
+    },
+  });
+  assert.equal(await run.done, "failed");
+  assert.equal(retained.length, 1);
+  assert.deepEqual(env.assets.holders(retained[0]!), [], "the unrecorded image is no longer held");
+  const attempt = attempts(env).get("g")!;
+  assert.deepEqual([attempt.state, attempt.errorCode, attempt.output.length], ["failed", "executor-fault", 0]);
 });
 
 test("output the asset store rejects fails as output-invalid and is still marked billed", async (t) => {

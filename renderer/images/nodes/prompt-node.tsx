@@ -3,6 +3,7 @@ import { Textarea } from "../../components/ui";
 import { CanvasNodeChrome } from "../../canvas";
 import { useWorkflowEditor } from "../editor-context";
 import type { WorkflowFlowNode } from "../flow-adapter-core";
+import { ImageNodeFrame } from "./node-frame";
 import { NodePorts } from "./node-ports";
 
 export function PromptNodeBody({ text, onChange }: { text: string; onChange(text: string): void }) {
@@ -24,11 +25,11 @@ export function PromptNode({ id, data, selected }: NodeProps<WorkflowFlowNode>) 
   const node = data.node;
   if (node.type !== "prompt") return null;
   return (
-    <div className="image-node">
+    <ImageNodeFrame>
       <CanvasNodeChrome title={node.title ?? "Prompt"} selected={selected}>
         <PromptNodeBody text={node.data.text} onChange={(text) => editor.apply({ type: "set-prompt", nodeId: id, text })} />
       </CanvasNodeChrome>
       <NodePorts type="prompt" />
-    </div>
+    </ImageNodeFrame>
   );
 }

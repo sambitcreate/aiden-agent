@@ -2,7 +2,7 @@ import { initializeSqliteReclamation, reclaimSqlitePages } from "../sqlite-recla
 // Append-friendly run history for Create Images. One row per node attempt; every
 // write is a single keyed statement. The ledger is history, not a work queue: a
 // restart marks unfinished work interrupted and nothing is ever resubmitted.
-import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, renameSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
@@ -22,7 +22,12 @@ const MAX_ERROR_MESSAGE = 1_024;
 
 export class ImageRunLedgerError extends Error {
   constructor(
-    readonly code: "unsafe" | "unsupported" | "closed",
+    /**
+     * `unsafe`: a file-safety refusal (a link, extra hard links, another owner); never repaired.
+     * `corrupt` / `unsupported`: a damaged file or a schema this build does not know, which
+     * `open({ quarantineDamaged })` moves aside. `closed`: used after `close()`.
+     */
+    readonly code: "unsafe" | "corrupt" | "unsupported" | "closed",
     message: string,
   ) {
     super(message);
@@ -72,23 +77,22 @@ const SCHEMA = `
   PRAGMA user_version=1;
 `;
 
-const PRUNABLE = `
-  WITH latest AS (
-    SELECT r.workflow_id AS workflow_id, a.node_id AS node_id, MAX(a.finished_at) AS finished_at
-    FROM attempts a JOIN runs r ON r.id = a.run_id
-    WHERE a.state = 'succeeded' AND a.output IS NOT NULL
-    GROUP BY r.workflow_id, a.node_id
-  ),
-  holding AS (
-    SELECT DISTINCT a.run_id AS id
-    FROM attempts a
-    JOIN runs r ON r.id = a.run_id
-    JOIN latest l ON l.workflow_id = r.workflow_id AND l.node_id = a.node_id AND l.finished_at = a.finished_at
-    WHERE a.state = 'succeeded' AND a.output IS NOT NULL
-  ),
-  recent AS (SELECT id FROM runs ORDER BY created_at DESC, rowid DESC LIMIT ?)
-  SELECT id FROM runs
-  WHERE state <> 'running' AND id NOT IN (SELECT id FROM recent) AND id NOT IN (SELECT id FROM holding)
+// "Newest" is the attempt id: rows are inserted in order, so it never depends on the wall clock
+// (an NTP step backwards would otherwise reorder `finished_at`). Every query that picks a node's
+// latest output uses this same ordering, so display, staleness and retention always agree.
+const LATEST_PER_NODE = `
+  SELECT r.workflow_id AS workflow_id, a.node_id AS node_id, a.run_id AS run_id
+  FROM attempts a JOIN runs r ON r.id = a.run_id
+  WHERE a.id IN (
+    SELECT MAX(b.id) FROM attempts b JOIN runs s ON s.id = b.run_id
+    WHERE b.state = 'succeeded' AND b.output IS NOT NULL
+    GROUP BY s.workflow_id, b.node_id
+  )
+`;
+
+const OLDER_THAN_RECENT = `
+  WITH recent AS (SELECT id FROM runs ORDER BY created_at DESC, rowid DESC LIMIT ?)
+  SELECT id FROM runs WHERE state <> 'running' AND id NOT IN (SELECT id FROM recent)
 `;
 
 interface RunRow {
@@ -228,13 +232,15 @@ function statements(db: DatabaseSync) {
     latestRun: db.prepare("SELECT id FROM runs WHERE workflow_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1"),
     listRuns: db.prepare("SELECT * FROM runs WHERE workflow_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?"),
     latestOutputs: db.prepare(
-      "SELECT a.node_id AS node_id, a.output AS output FROM attempts a JOIN runs r ON r.id = a.run_id WHERE r.workflow_id = ? AND a.state = 'succeeded' AND a.output IS NOT NULL ORDER BY a.finished_at DESC, a.id DESC",
+      "SELECT a.node_id AS node_id, a.output AS output FROM attempts a JOIN runs r ON r.id = a.run_id WHERE r.workflow_id = ? AND a.state = 'succeeded' AND a.output IS NOT NULL ORDER BY a.id DESC",
     ),
     outputSequence: db.prepare(
-      "SELECT a.node_id AS node_id, a.id AS sequence FROM attempts a JOIN runs r ON r.id = a.run_id WHERE r.workflow_id = ? AND a.state = 'succeeded' AND a.output IS NOT NULL ORDER BY a.finished_at DESC, a.id DESC",
+      "SELECT a.node_id AS node_id, a.id AS sequence FROM attempts a JOIN runs r ON r.id = a.run_id WHERE r.workflow_id = ? AND a.state = 'succeeded' AND a.output IS NOT NULL ORDER BY a.id DESC",
     ),
-    imageOutputs: db.prepare(
-      "SELECT r.workflow_id AS workflow_id, a.output AS output FROM attempts a JOIN runs r ON r.id = a.run_id WHERE a.state = 'succeeded' AND a.output IS NOT NULL",
+    // Only provider (Generate) attempts: their outputs are what an `images-run` holder retains.
+    // Image Input and Output attempts only forward images other holders already keep.
+    generatedOutputs: db.prepare(
+      "SELECT r.id AS run_id, r.workflow_id AS workflow_id, a.output AS output FROM runs r LEFT JOIN attempts a ON a.run_id = r.id AND a.state = 'succeeded' AND a.output IS NOT NULL AND a.provider IS NOT NULL",
     ),
     liveRuns: db.prepare("SELECT id FROM runs WHERE state = 'running' ORDER BY created_at"),
     interruptAttempts: db.prepare(
@@ -243,10 +249,51 @@ function statements(db: DatabaseSync) {
     interruptRuns: db.prepare(
       "UPDATE runs SET state = 'interrupted', finished_at = ?, end_reason = 'app-restart' WHERE state = 'running'",
     ),
-    prunable: db.prepare(PRUNABLE),
+    latestPerNode: db.prepare(LATEST_PER_NODE),
+    olderThanRecent: db.prepare(OLDER_THAN_RECENT),
     deleteRun: db.prepare("DELETE FROM runs WHERE id = ?"),
     workflowRuns: db.prepare("SELECT id FROM runs WHERE workflow_id = ? ORDER BY created_at"),
   };
+}
+
+export interface ImageRunLedgerOptions {
+  directory: string;
+  now?: () => number;
+  /**
+   * The node ids a workflow's document has now, or undefined when the document is gone. Retention
+   * keeps a node's latest output only while that node still exists. Without this option the
+   * ledger cannot see documents and treats every node it has history for as live.
+   */
+  liveNodeIds?: (workflowId: string) => ReadonlySet<string> | undefined;
+  /**
+   * When given, a corrupt ledger or one with an unsupported schema is renamed aside (with its
+   * -wal and -shm files) and an empty ledger is created; this is told where the old file went.
+   * The ledger is history only, so damage must not lock anyone out of their workflows.
+   * File-safety refusals are never quarantined.
+   */
+  quarantineDamaged?: (quarantinedPath: string, error: unknown) => void;
+}
+
+/** SQLITE_CORRUPT and SQLITE_NOTADB, the primary result codes for a damaged database file. */
+const DAMAGED_SQLITE_CODES = new Set([11, 26]);
+
+function isDamaged(error: unknown): boolean {
+  if (error instanceof ImageRunLedgerError) return error.code === "corrupt" || error.code === "unsupported";
+  const sqlite = error as { code?: unknown; errcode?: unknown };
+  return sqlite?.code === "ERR_SQLITE_ERROR" && typeof sqlite.errcode === "number" && DAMAGED_SQLITE_CODES.has(sqlite.errcode & 0xff);
+}
+
+/** Renames the ledger and its sidecars to `runs-v1.sqlite.corrupt-<time>[-n]`, keeping SQLite's suffixes. */
+function quarantine(file: string, at: number): string {
+  let target = `${file}.corrupt-${at}`;
+  for (let n = 1; [target, `${target}-wal`, `${target}-shm`].some((candidate) => existsSync(candidate)); n += 1) {
+    target = `${file}.corrupt-${at}-${n}`;
+  }
+  renameSync(file, target);
+  for (const suffix of ["-wal", "-shm"]) {
+    if (existsSync(file + suffix)) renameSync(file + suffix, target + suffix);
+  }
+  return target;
 }
 
 export class ImageRunLedger {
@@ -256,11 +303,23 @@ export class ImageRunLedger {
   private constructor(
     private readonly db: DatabaseSync,
     private readonly now: () => number,
+    private readonly liveNodeIds: ImageRunLedgerOptions["liveNodeIds"],
   ) {
     this.sql = statements(db);
   }
 
-  static open(options: { directory: string; now?: () => number }): ImageRunLedger {
+  static open(options: ImageRunLedgerOptions): ImageRunLedger {
+    try {
+      return ImageRunLedger.openFile(options);
+    } catch (error) {
+      if (!options.quarantineDamaged || !isDamaged(error)) throw error;
+      const moved = quarantine(path.join(options.directory, FILE), (options.now ?? Date.now)());
+      options.quarantineDamaged(moved, error);
+      return ImageRunLedger.openFile(options);
+    }
+  }
+
+  private static openFile(options: ImageRunLedgerOptions): ImageRunLedger {
     mkdirSync(options.directory, { recursive: true, mode: 0o700 });
     assertPrivate(options.directory, true);
     const file = path.join(options.directory, FILE);
@@ -290,21 +349,23 @@ export class ImageRunLedger {
       const version = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
       if (version === 0) {
         if (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").get()) {
-          throw new ImageRunLedgerError("unsafe", "The image run ledger has no schema version.");
+          throw new ImageRunLedgerError("corrupt", "The image run ledger has no schema version.");
         }
         db.exec(`BEGIN IMMEDIATE; ${SCHEMA} COMMIT;`);
       } else if (version !== 1) {
         throw new ImageRunLedgerError("unsupported", "The image run ledger uses an unsupported schema.");
       }
+      const tables = db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name IN ('runs', 'attempts')").get() as { count: number };
+      if (Number(tables.count) !== 2) throw new ImageRunLedgerError("corrupt", "The image run ledger is missing its tables.");
       for (const suffix of ["-wal", "-shm"]) {
         if (existsSync(file + suffix)) assertPrivate(file + suffix, false);
       }
+      reclaimSqlitePages(db);
+      return new ImageRunLedger(db, options.now ?? Date.now, options.liveNodeIds);
     } catch (error) {
       db.close();
       throw error;
     }
-    reclaimSqlitePages(db);
-    return new ImageRunLedger(db, options.now ?? Date.now);
   }
 
   createRun(input: CreateRunInput): void {
@@ -418,16 +479,35 @@ export class ImageRunLedger {
     return latest;
   }
 
-  /** Distinct generated image assets per workflow, however many attempts hold them. */
+  /**
+   * Distinct generated image assets per workflow, however many attempts hold them: exactly what
+   * releasing the workflow's `images-run` holders lets go of. Image Input and Output attempts are
+   * not counted; they forward images other holders keep.
+   */
   imageAssetIds(): Record<string, string[]> {
-    this.requireOpen();
     const seen = new Map<string, Set<string>>();
-    for (const row of this.sql.imageOutputs.all() as unknown as { workflow_id: string; output: string }[]) {
+    for (const row of this.generatedRows()) {
       const ids = seen.get(row.workflow_id) ?? new Set<string>();
       for (const ref of parseOutput(row.output)) ids.add(ref.assetId);
       seen.set(row.workflow_id, ids);
     }
     return Object.fromEntries([...seen].filter(([, ids]) => ids.size > 0).map(([workflowId, ids]) => [workflowId, [...ids].sort()]));
+  }
+
+  /** Every run in the ledger with the generated assets its `images-run` holder should keep (possibly none). */
+  runAssetIds(): Map<string, string[]> {
+    const runs = new Map<string, Set<string>>();
+    for (const row of this.generatedRows()) {
+      const ids = runs.get(row.run_id) ?? new Set<string>();
+      for (const ref of parseOutput(row.output)) ids.add(ref.assetId);
+      runs.set(row.run_id, ids);
+    }
+    return new Map([...runs].map(([runId, ids]) => [runId, [...ids].sort()]));
+  }
+
+  private generatedRows(): { run_id: string; workflow_id: string; output: string | null }[] {
+    this.requireOpen();
+    return this.sql.generatedOutputs.all() as unknown as { run_id: string; workflow_id: string; output: string | null }[];
   }
 
   /** The single restart sweep: unfinished work becomes history, never a queue. */
@@ -441,12 +521,26 @@ export class ImageRunLedger {
     });
   }
 
+  /**
+   * Keeps the newest `keep` runs, every running run, and each run holding the latest output of a
+   * node that still exists in its workflow's document. A deleted node or workflow keeps nothing,
+   * so retention stays bounded however often node ids change.
+   */
   pruneRuns(keep = RUN_RETENTION): string[] {
     return this.transaction(() => {
-      const ids = (this.sql.prunable.all(keep) as unknown as { id: string }[]).map((row) => row.id);
+      const holding = new Set<string>();
+      for (const row of this.sql.latestPerNode.all() as unknown as { workflow_id: string; node_id: string; run_id: string }[]) {
+        if (this.isLiveNode(row.workflow_id, row.node_id)) holding.add(row.run_id);
+      }
+      const ids = (this.sql.olderThanRecent.all(keep) as unknown as { id: string }[]).map((row) => row.id).filter((id) => !holding.has(id));
       for (const id of ids) this.sql.deleteRun.run(id);
       return ids;
     });
+  }
+
+  private isLiveNode(workflowId: string, nodeId: string): boolean {
+    if (!this.liveNodeIds) return true;
+    return this.liveNodeIds(workflowId)?.has(nodeId) ?? false;
   }
 
   deleteWorkflowRuns(workflowId: string): string[] {

@@ -18,9 +18,10 @@ import {
   type SessionAction,
 } from "./workflow-session-core";
 
-export type SaveState = "saved" | "saving" | "unsaved" | "conflict" | "error";
+export type SaveState = "saved" | "saving" | "unsaved" | "conflict" | "deleted" | "error";
 
 function saveStateOf(state: AutosaveState): SaveState {
+  if (state.deleted) return "deleted";
   if (state.conflict) return "conflict";
   if (state.error !== null) return "error";
   if (state.saving) return "saving";
@@ -38,11 +39,23 @@ export function useWorkflowController(workflowId: string) {
   const [latestOutputs, setLatestOutputs] = React.useState<Record<string, OutputRef[]>>({});
   const [staleNodeIds, setStaleNodeIds] = React.useState<ReadonlySet<string>>(new Set());
   const [saveState, setSaveState] = React.useState<SaveState>("saved");
+  /** Why the last save failed, until the person dismisses it or a later save starts. */
+  const [saveError, setSaveError] = React.useState<string | null>(null);
+  const [resolving, setResolving] = React.useState(false);
   const [loadKey, setLoadKey] = React.useState(0);
   const autosave = React.useRef<Autosave | null>(null);
   const loadedSession = React.useRef<EditorSession | null>(null);
   const latestSession = React.useRef<EditorSession | null>(null);
   latestSession.current = session;
+  // Quit names the workflow by its current title.
+  const title = React.useRef<string | undefined>(undefined);
+  title.current = session?.history.present.title;
+  const lastSaveError = React.useRef<string | null>(null);
+  const refreshSequence = React.useRef(0);
+
+  const releaseGuard = React.useCallback(() => {
+    setRendererLifecycleGuard({ dirty: false, saving: false }, { source: "images" });
+  }, []);
 
   const startAutosave = React.useCallback(
     (baseRevision: number) =>
@@ -52,7 +65,12 @@ export function useWorkflowController(workflowId: string) {
         save: (document, base) => createImagesIpc.save({ workflowId, baseRevision: base, document }),
         onState: (state) => {
           setSaveState(saveStateOf(state));
-          setRendererLifecycleGuard({ dirty: state.dirty, saving: state.saving });
+          // Each failure (re)shows its reason; repeats of the same state keep a dismissal.
+          if (state.error !== lastSaveError.current) {
+            lastSaveError.current = state.error;
+            setSaveError(state.error);
+          }
+          setRendererLifecycleGuard({ dirty: state.dirty, saving: state.saving }, { source: "images", label: title.current });
         },
       }),
     [workflowId],
@@ -69,10 +87,13 @@ export function useWorkflowController(workflowId: string) {
         autosave.current = startAutosave(loaded.workflow.revision);
         setSession(initial);
         setModels(listed.models);
-        setAssetUrls(loaded.assetUrls);
+        // Grants the run hook merged while this load was in flight stay.
+        setAssetUrls((current) => ({ ...current, ...loaded.assetUrls }));
         setLatestOutputs(loaded.latestOutputs);
         setStaleNodeIds(new Set(loaded.staleNodeIds));
         setSaveState("saved");
+        lastSaveError.current = null;
+        setSaveError(null);
         setStatus("ready");
       },
       (failure: unknown) => {
@@ -90,14 +111,14 @@ export function useWorkflowController(workflowId: string) {
       // that could not be saved keeps quit asking. The route blocker offers the choice before this.
       const settle = (saved: boolean) => {
         pending.dispose();
-        if (saved) setRendererLifecycleGuard({ dirty: false, saving: false });
+        if (saved) releaseGuard();
       };
       pending.flush().then(
         (result) => settle(result.ok),
         () => settle(false),
       );
     };
-  }, [workflowId, loadKey, startAutosave]);
+  }, [workflowId, loadKey, startAutosave, releaseGuard]);
 
   // Quit and window close read the close guard; an edit still inside the autosave debounce is
   // saved first, so a quick quit after typing neither loses it nor stops on the unsaved prompt.
@@ -134,20 +155,22 @@ export function useWorkflowController(workflowId: string) {
     [apply, doc, models],
   );
 
+  // Stable identity: node components read it from context, and a new function would re-render all of them.
   const importImage = React.useCallback(
-    async (nodeId: string) => {
-      try {
-        const result = await createImagesIpc.importImage({ source: "dialog" });
-        if ("cancelled" in result) return;
-        setAssetUrls((urls) => ({ ...urls, [result.assetId]: result.url }));
-        const node = doc?.nodes.find((candidate) => candidate.id === nodeId);
-        const dimensions = fitNodeToMediaAspect(node?.dimensions, result.width, result.height);
-        apply({ type: "set-image", nodeId, assetId: result.assetId, ...(dimensions ? { dimensions } : {}) });
-      } catch (failure) {
-        setSession((current) => (current ? { ...current, message: message(failure) } : current));
-      }
-    },
-    [apply, doc],
+    (nodeId: string) =>
+      void (async () => {
+        try {
+          const result = await createImagesIpc.importImage({ source: "dialog" });
+          if ("cancelled" in result) return;
+          setAssetUrls((urls) => ({ ...urls, [result.assetId]: result.url }));
+          const node = latestSession.current?.history.present.nodes.find((candidate) => candidate.id === nodeId);
+          const dimensions = fitNodeToMediaAspect(node?.dimensions, result.width, result.height);
+          apply({ type: "set-image", nodeId, assetId: result.assetId, ...(dimensions ? { dimensions } : {}) });
+        } catch (failure) {
+          setSession((current) => (current ? { ...current, message: message(failure) } : current));
+        }
+      })(),
+    [apply],
   );
 
   const addAssetUrls = React.useCallback((urls: Record<string, string>) => {
@@ -156,8 +179,11 @@ export function useWorkflowController(workflowId: string) {
 
   /** Re-reads what each node last produced and what is out of date; called when a run settles. */
   const refreshOutputs = React.useCallback(async () => {
+    // Back-to-back settles can resolve out of order; only the newest read is applied.
+    const sequence = ++refreshSequence.current;
     try {
       const loaded = await createImagesIpc.get(workflowId);
+      if (sequence !== refreshSequence.current) return;
       setLatestOutputs(loaded.latestOutputs);
       setStaleNodeIds(new Set(loaded.staleNodeIds));
       setAssetUrls((current) => ({ ...current, ...loaded.assetUrls }));
@@ -187,15 +213,19 @@ export function useWorkflowController(workflowId: string) {
   const discard = React.useCallback(() => {
     autosave.current?.dispose();
     autosave.current = null;
-    setRendererLifecycleGuard({ dirty: false, saving: false });
-  }, []);
+    releaseGuard();
+  }, [releaseGuard]);
 
   /** After a conflict, the user chose their version: save it over the newer revision. */
   const keepMine = React.useCallback(async () => {
-    const current = latestSession.current;
-    if (!current) return;
+    if (!latestSession.current) return;
+    setResolving(true);
     try {
       const loaded = await createImagesIpc.get(workflowId);
+      // Read the session only now: edits made during the round trip went to the stopped
+      // autosave, and saving this newest document keeps them.
+      const current = latestSession.current;
+      if (!current) return;
       autosave.current?.dispose();
       const next = startAutosave(loaded.workflow.revision);
       autosave.current = next;
@@ -203,8 +233,20 @@ export function useWorkflowController(workflowId: string) {
       await next.flush();
     } catch (failure) {
       setSession((state) => (state ? { ...state, message: message(failure) } : state));
+    } finally {
+      setResolving(false);
     }
   }, [startAutosave, workflowId]);
+
+  /** Tries the failed save again with the newest edit. */
+  const retrySave = React.useCallback(() => {
+    void autosave.current?.flush().catch(() => undefined);
+  }, []);
+  const dismissSaveError = React.useCallback(() => setSaveError(null), []);
+  const undo = React.useCallback(() => dispatch({ type: "undo" }), [dispatch]);
+  const redo = React.useCallback(() => dispatch({ type: "redo" }), [dispatch]);
+  const dismissMessage = React.useCallback(() => dispatch({ type: "dismiss" }), [dispatch]);
+  const setViewport = React.useCallback((viewport: WorkflowViewport) => dispatch({ type: "viewport", viewport }), [dispatch]);
 
   return {
     status,
@@ -214,22 +256,27 @@ export function useWorkflowController(workflowId: string) {
     canUndo: (session?.history.past.length ?? 0) > 0,
     canRedo: (session?.history.future.length ?? 0) > 0,
     saveState,
+    saveError,
+    /** Keep My Version is saving; its button stays disabled until it ends. */
+    resolving,
     models,
     assetUrls,
     latestOutputs,
     staleNodeIds,
     apply,
-    undo: () => dispatch({ type: "undo" }),
-    redo: () => dispatch({ type: "redo" }),
-    dismissMessage: () => dispatch({ type: "dismiss" }),
-    setViewport: (viewport: WorkflowViewport) => dispatch({ type: "viewport", viewport }),
+    undo,
+    redo,
+    dismissMessage,
+    setViewport,
     addNode,
-    importImage: (nodeId: string) => void importImage(nodeId),
+    importImage,
     addAssetUrls,
     refreshOutputs,
     flush,
     settle,
     keepMine: () => void keepMine(),
+    retrySave,
+    dismissSaveError,
     /** Drops the unsaved edits and opens the saved version. */
     discardAndReload: () => {
       discard();

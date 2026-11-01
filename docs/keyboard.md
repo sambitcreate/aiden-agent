@@ -114,7 +114,9 @@ Besides the keyed commands above, the palette lists commands with no default
 key. You can give any of them one in Settings.
 
 - **Places:** Go to Bots, Open a Bot… (searches Bots by name), Go to Scheduled,
-  Go to Profile, Open Design Studio, Open Create Images.
+  Go to Profile. Open Design Studio and Open Create Images appear in the
+  palette only while their experimental feature is turned on, and can't be
+  given a key.
 - **Workspace tools:** Open Changes, Files, Browser, Device, Context,
   Subagents and Artifacts.
 - **Chat actions:** Rename chat…, Duplicate chat, Delete chat…, Export chat,

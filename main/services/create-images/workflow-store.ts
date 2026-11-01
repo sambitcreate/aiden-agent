@@ -57,6 +57,33 @@ function imageInputAssets(doc: WorkflowDocV1): string[] {
   return doc.nodes.flatMap((node) => (node.type === "image-input" && node.data.assetId ? [node.data.assetId] : []));
 }
 
+/** What the store remembers of each indexed document, so hot reads never re-parse files. */
+interface DocumentFacts {
+  nodeIds: ReadonlySet<string>;
+  imageInputs: readonly string[];
+}
+
+function factsOf(doc: WorkflowDocV1): DocumentFacts {
+  return { nodeIds: new Set(doc.nodes.map((node) => node.id)), imageInputs: [...new Set(imageInputAssets(doc))].sort() };
+}
+
+/** At most `max` UTF-16 units, never splitting a surrogate pair. */
+function truncateCodePoints(text: string, max: number): string {
+  let result = "";
+  for (const character of text) {
+    if (result.length + character.length > max) break;
+    result += character;
+  }
+  return result;
+}
+
+/** `writeJsonAtomic` staging names: `.<target>.<uuid>.tmp`. */
+const STAGED_UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const STAGED_DOCUMENT = new RegExp(`^\\..+\\.json\\.${STAGED_UUID}\\.tmp$`, "u");
+const STAGED_INDEX = new RegExp(`^\\.index\\.json\\.${STAGED_UUID}\\.tmp$`, "u");
+
+type LoadedDocument = { kind: "ok"; doc: WorkflowDocV1 } | { kind: "missing" } | { kind: "unreadable" };
+
 /** Distinct graph problems in reading order; a document with many bad edges repeats the same sentence. */
 function graphProblems(doc: WorkflowDocV1): string[] {
   return [...new Set(validateWorkflowGraph(doc).map((issue) => issue.message))];
@@ -78,6 +105,9 @@ function isSummary(value: unknown): value is WorkflowSummary {
 export class ImageWorkflowStore {
   private root = "";
   private index = new Map<string, WorkflowSummary>();
+  private facts = new Map<string, DocumentFacts>();
+  /** Files that exist but cannot be parsed: left in place, never listed, their holds left alone. */
+  private unreadable = new Set<string>();
   private readonly chains = new Map<string, Promise<unknown>>();
   private indexWrites: Promise<unknown> = Promise.resolve();
   private readonly now: () => number;
@@ -95,7 +125,11 @@ export class ImageWorkflowStore {
   async initialize(): Promise<void> {
     this.root = this.options.root();
     await fs.mkdir(this.workflowsDirectory(), { recursive: true, mode: 0o700 });
-    const ids = (await fs.readdir(this.workflowsDirectory()))
+    const names = await fs.readdir(this.workflowsDirectory());
+    // Nothing writes before initialize finishes, so any staging file left here is from a crash.
+    await this.sweepStaged(this.workflowsDirectory(), names, STAGED_DOCUMENT);
+    await this.sweepStaged(this.root, await fs.readdir(this.root), STAGED_INDEX);
+    const ids = names
       .filter((name) => name.endsWith(".json"))
       .map((name) => name.slice(0, -".json".length))
       .filter((id) => IMAGE_WORKFLOW_ID_PATTERN.test(id));
@@ -105,9 +139,19 @@ export class ImageWorkflowStore {
     // ones included, so a broken workflow stays visible and deletable; opening
     // it is what is refused.
     this.index = new Map();
+    this.facts = new Map();
+    this.unreadable = new Set();
     for (const id of ids) {
-      const doc = await this.readDocument(id);
-      if (doc) this.index.set(id, summary(doc));
+      const loaded = await this.loadDocument(id);
+      if (loaded.kind === "ok") this.remember(loaded.doc);
+      else if (loaded.kind === "unreadable") this.unreadable.add(id);
+    }
+    if (this.unreadable.size > 0) {
+      // Ids only: a parse error message can quote the file's contents, which include prompts.
+      this.reportIssue(
+        `${this.unreadable.size} image workflow ${this.unreadable.size === 1 ? "file" : "files"} could not be read and ${this.unreadable.size === 1 ? "was" : "were"} left in place.`,
+        { workflowIds: [...this.unreadable].sort() },
+      );
     }
     const cached = await this.readIndex();
     const current = this.list();
@@ -126,17 +170,24 @@ export class ImageWorkflowStore {
   }
 
   /**
-   * Distinct Image Input assets per workflow, read from the stored documents. A workflow whose
-   * graph is invalid still counts, because its images are still held; an unreadable file does not.
+   * Distinct Image Input assets per workflow, from memory kept in step with every write. A
+   * workflow whose graph is invalid still counts, because its images are still held; an
+   * unreadable file does not.
    */
   async imageInputAssets(): Promise<Record<string, string[]>> {
     const found: Record<string, string[]> = {};
-    for (const id of this.index.keys()) {
-      const doc = await this.readDocument(id);
-      const assets = doc ? [...new Set(imageInputAssets(doc))].sort() : [];
-      if (assets.length > 0) found[id] = assets;
-    }
+    for (const [id, facts] of this.facts) if (facts.imageInputs.length > 0) found[id] = [...facts.imageInputs];
     return found;
+  }
+
+  /** The node ids the stored document has now; undefined once the workflow is gone. Synchronous, for retention. */
+  nodeIds(workflowId: string): ReadonlySet<string> | undefined {
+    return this.facts.get(workflowId)?.nodeIds;
+  }
+
+  /** Ids whose file exists but cannot be parsed. Their holds are kept, in case the file is repaired. */
+  unreadableIds(): ReadonlySet<string> {
+    return this.unreadable;
   }
 
   async create(
@@ -227,7 +278,7 @@ export class ImageWorkflowStore {
     const copy: WorkflowDocV1 = {
       ...structuredClone(source),
       id: this.newId(),
-      title: `${source.title.slice(0, IMAGE_WORKFLOW_LIMITS.maxTitleLength - suffix.length)}${suffix}`,
+      title: `${truncateCodePoints(source.title, IMAGE_WORKFLOW_LIMITS.maxTitleLength - suffix.length)}${suffix}`,
       revision: 1,
       createdAt: now,
       updatedAt: now,
@@ -247,10 +298,12 @@ export class ImageWorkflowStore {
 
   delete(workflowId: string): Promise<boolean> {
     return this.serialize(workflowId, async () => {
-      // A file that is not indexed (unparseable) can still be deleted by id.
-      if (!this.index.has(workflowId) && !(await this.fileExists(workflowId))) return false;
+      // Only indexed ids: callers' busy checks are keyed by the exact id, and on a
+      // case-insensitive volume a near-miss id could otherwise name another workflow's file.
+      if (!this.index.has(workflowId)) return false;
       await fs.rm(this.file(workflowId), { force: true });
       this.index.delete(workflowId);
+      this.facts.delete(workflowId);
       await this.writeIndex();
       this.options.assets.releaseAllForHolder({ kind: "images-workflow", id: workflowId });
       return true;
@@ -293,33 +346,45 @@ export class ImageWorkflowStore {
       if (stored === null || stored.revision !== doc.revision || stored.updatedAt !== doc.updatedAt) throw error;
       this.reportIssue(`Workflow ${doc.id} was written but could not be flushed to disk.`, error);
     }
-    this.index.set(doc.id, summary(doc));
+    this.remember(doc);
     await this.writeIndex();
   }
 
-  private async fileExists(workflowId: string): Promise<boolean> {
-    if (!IMAGE_WORKFLOW_ID_PATTERN.test(workflowId)) return false;
-    return fs.stat(this.file(workflowId)).then(
-      (stat) => stat.isFile(),
-      () => false,
-    );
+  private remember(doc: WorkflowDocV1): void {
+    this.index.set(doc.id, summary(doc));
+    this.facts.set(doc.id, factsOf(doc));
+    this.unreadable.delete(doc.id);
+  }
+
+  private async sweepStaged(directory: string, names: readonly string[], pattern: RegExp): Promise<void> {
+    for (const name of names) {
+      if (!pattern.test(name)) continue;
+      await fs.rm(path.join(directory, name), { force: true }).catch((error: unknown) =>
+        this.reportIssue("Could not remove a leftover image workflow staging file.", error),
+      );
+    }
   }
 
   /** Shape-parses the stored file. A file that cannot be parsed is left in place and reads as absent. */
   private async readDocument(workflowId: string): Promise<WorkflowDocV1 | null> {
-    if (!IMAGE_WORKFLOW_ID_PATTERN.test(workflowId)) return null;
+    const loaded = await this.loadDocument(workflowId);
+    return loaded.kind === "ok" ? loaded.doc : null;
+  }
+
+  private async loadDocument(workflowId: string): Promise<LoadedDocument> {
+    if (!IMAGE_WORKFLOW_ID_PATTERN.test(workflowId)) return { kind: "missing" };
     let text: string;
     try {
       text = await fs.readFile(this.file(workflowId), "utf8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
       throw error;
     }
     try {
       const parsed = parseWorkflowDocV1(JSON.parse(text));
-      return parsed.ok && parsed.value.id === workflowId ? parsed.value : null;
+      return parsed.ok && parsed.value.id === workflowId ? { kind: "ok", doc: parsed.value } : { kind: "unreadable" };
     } catch {
-      return null;
+      return { kind: "unreadable" };
     }
   }
 

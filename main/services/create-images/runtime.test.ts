@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -7,7 +7,7 @@ import { StudioAssetStore } from "../studio-assets/store.js";
 import { fakeThumbnailer, pngBytes } from "../studio-assets/test-fixture.js";
 import { createPiImageGenerationPort } from "./image-port.js";
 import { ImageRunLedger } from "./run-ledger.js";
-import { CreateImagesRuntime } from "./runtime.js";
+import { CreateImagesRuntime, type CreateImagesAssets } from "./runtime.js";
 import { fakeImageModels, generateChains, saveWorkflow, until } from "./test-fixture.js";
 
 async function environment(t: TestContext, options: Parameters<typeof fakeImageModels>[0] = {}) {
@@ -18,7 +18,14 @@ async function environment(t: TestContext, options: Parameters<typeof fakeImageM
   t.after(() => assets.close());
   const fake = fakeImageModels(options);
   t.after(() => fake.release());
-  const runtime = (overrides: { retainRuns?: number; reportIssue?: (message: string, error: unknown) => void } = {}) => {
+  const runtime = (
+    overrides: {
+      retainRuns?: number;
+      reportIssue?: (message: string, error: unknown) => void;
+      retryCooldownMs?: number;
+      assets?: CreateImagesAssets;
+    } = {},
+  ) => {
     const instance = new CreateImagesRuntime({
       root: () => path.join(root, "create-images"),
       assets,
@@ -111,7 +118,7 @@ test("startup prunes runs beyond retention and releases their asset holds", asyn
   // Distinct timestamps make r2 unambiguously the newest output for node g.
   const ledger = ImageRunLedger.open({ directory: path.join(env.root, "create-images"), now: () => (clock += 1) });
   for (const [runId, asset] of [["r1", older], ["r2", newer]] as const) {
-    ledger.createRun({ runId, workflowId: "wf", workflowRevision: 1, scope: { kind: "all" }, requestLimit: 1, attempts: [{ nodeId: "g", variant: 0 }] });
+    ledger.createRun({ runId, workflowId: "wf", workflowRevision: 1, scope: { kind: "all" }, requestLimit: 1, attempts: [{ nodeId: "g", variant: 0, provider: "openrouter", model: "m" }] });
     ledger.finishAttempts([{ runId, nodeId: "g", variant: 0, state: "succeeded",
       output: [{ assetId: asset.assetId, width: 8, height: 8, mediaType: "image/png" }] }]);
     ledger.finishRun(runId, "succeeded");
@@ -156,6 +163,140 @@ test("a failed open reports the error and leaves no services", async (t) => {
   assert.equal(await runtime.initialize({ enabled: true, onError: (error) => errors.push(error) }), false);
   assert.equal(errors.length, 1);
   assert.throws(() => runtime.services(), /Create Images storage is unavailable/u);
+  assert.throws(() => runtime.services(), (error: unknown) => error instanceof Error && !/Restart Aiden/u.test(error.message));
+});
+
+test("a failed open is retried by a later call once the cause is gone", async (t) => {
+  const env = await environment(t);
+  await env.assets.close();
+  const runtime = env.runtime({ retryCooldownMs: 60_000 });
+  const errors: unknown[] = [];
+  assert.equal(await runtime.initialize({ enabled: true, onError: (error) => errors.push(error) }), false);
+  await env.assets.initialize();
+  // Within the cooldown the last failure is repeated without another attempt.
+  await assert.rejects(runtime.ready(), /studio image store isn't open/u);
+  assert.equal(errors.length, 1);
+
+  const retrying = env.runtime({ retryCooldownMs: 0 });
+  await env.assets.close();
+  assert.equal(await retrying.initialize({ enabled: true, onError: () => undefined }), false);
+  await env.assets.initialize();
+  const services = await retrying.ready();
+  assert.ok(services.workflows.list());
+  assert.equal(retrying.services(), services);
+});
+
+test("a ledger that fails the file-safety checks is refused with an accurate message and never moved", async (t) => {
+  const env = await environment(t);
+  const directory = path.join(env.root, "create-images");
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(env.root, "elsewhere.sqlite"), "");
+  await symlink(path.join(env.root, "elsewhere.sqlite"), path.join(directory, "runs-v1.sqlite"));
+  const runtime = env.runtime();
+  assert.equal(await runtime.initialize({ enabled: true, onError: () => undefined }), false);
+  assert.throws(() => runtime.services(), /run history file \(create-images\/runs-v1\.sqlite\) is a link, has extra hard links, or belongs to another user/u);
+  assert.equal((await readdir(directory)).filter((name) => name.includes("corrupt")).length, 0);
+});
+
+test("a corrupt run ledger is quarantined and the workflows still list and open", async (t) => {
+  const env = await environment(t);
+  const first = env.runtime();
+  assert.equal(await first.initialize({ enabled: true, onError: failOnError }), true);
+  const doc = await saveWorkflow(first.services().workflows, generateChains(1));
+  await first.shutdown("test");
+
+  const directory = path.join(env.root, "create-images");
+  for (const suffix of ["-wal", "-shm"]) await rm(path.join(directory, `runs-v1.sqlite${suffix}`), { force: true });
+  await writeFile(path.join(directory, "runs-v1.sqlite"), "not a database ".repeat(400));
+  const issues: string[] = [];
+  const second = env.runtime({ reportIssue: (message) => void issues.push(message) });
+  assert.equal(await second.initialize({ enabled: true, onError: failOnError }), true);
+  assert.deepEqual(second.services().workflows.list().map((entry) => entry.id), [doc.id]);
+  assert.equal((await second.services().workflows.get(doc.id))?.id, doc.id);
+  assert.deepEqual(second.services().coordinator.listRuns(doc.id, 10), []);
+  assert.equal(issues.filter((message) => /run history could not be read and was moved to .*runs-v1\.sqlite\.corrupt-\d+/u.test(message)).length, 1);
+  assert.equal((await readdir(directory)).filter((name) => /^runs-v1\.sqlite\.corrupt-\d+$/u.test(name)).length, 1);
+});
+
+/** The real store, plus the holder listing reconciliation can use (computed over the assets this test made). */
+function withHolderListing(assets: StudioAssetStore, known: () => string[]): CreateImagesAssets {
+  return Object.assign(Object.create(assets) as StudioAssetStore, {
+    holderIds: (kind: string) => [
+      ...new Set(known().flatMap((assetId) => assets.holders(assetId).filter((holder) => holder.kind === kind).map((holder) => holder.id))),
+    ],
+  });
+}
+
+test("reopening reconciles image holds with the ledger and the documents, leaving Design holds alone", async (t) => {
+  const env = await environment(t);
+  const output = await env.assets.put({ bytes: pngBytes(8, 8, 21) });
+  const input = await env.assets.put({ bytes: pngBytes(8, 8, 22) });
+  const strayRun = await env.assets.put({ bytes: pngBytes(8, 8, 23) });
+  const strayWorkflow = await env.assets.put({ bytes: pngBytes(8, 8, 24) });
+  const known = () => [output, input, strayRun, strayWorkflow].map((record) => record.assetId);
+  const first = env.runtime();
+  assert.equal(await first.initialize({ enabled: true, onError: failOnError }), true);
+  const doc = await saveWorkflow(first.services().workflows, (draft) => ({
+    ...draft,
+    nodes: [{ id: "in", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: input.assetId } }],
+    edges: [],
+  }));
+  await first.shutdown("test");
+
+  const ledger = ImageRunLedger.open({ directory: path.join(env.root, "create-images") });
+  ledger.createRun({ runId: "kept", workflowId: doc.id, workflowRevision: 1, scope: { kind: "all" }, requestLimit: 1, attempts: [{ nodeId: "g", variant: 0, provider: "openrouter", model: "m" }] });
+  ledger.finishAttempts([{ runId: "kept", nodeId: "g", variant: 0, state: "succeeded", output: [{ assetId: output.assetId, width: 8, height: 8, mediaType: "image/png" }] }]);
+  ledger.finishRun("kept", "succeeded");
+  ledger.close();
+  // A crash lost the run's hold and the workflow's hold (or the asset index was rebuilt),
+  // and left holders for a pruned run and a deleted workflow behind.
+  env.assets.releaseAllForHolder({ kind: "images-workflow", id: doc.id });
+  env.assets.retain({ kind: "images-run", id: "pruned-run" }, [strayRun.assetId]);
+  env.assets.retain({ kind: "images-workflow", id: "deleted-workflow" }, [strayWorkflow.assetId]);
+  env.assets.retain({ kind: "design", id: "project-1" }, [strayRun.assetId]);
+
+  const second = env.runtime({ assets: withHolderListing(env.assets, known) });
+  assert.equal(await second.initialize({ enabled: true, onError: failOnError }), true);
+  assert.deepEqual(env.assets.holders(output.assetId), [{ kind: "images-run", id: "kept" }]);
+  assert.deepEqual(env.assets.holders(input.assetId), [{ kind: "images-workflow", id: doc.id }]);
+  assert.deepEqual(env.assets.holders(strayRun.assetId), [{ kind: "design", id: "project-1" }]);
+  assert.deepEqual(env.assets.holders(strayWorkflow.assetId), []);
+});
+
+test("without a holder listing, stray image holders on assets still in use are released", async (t) => {
+  const env = await environment(t);
+  const shared = await env.assets.put({ bytes: pngBytes(8, 8, 31) });
+  const ledger = ImageRunLedger.open({ directory: path.join(env.root, "create-images") });
+  ledger.createRun({ runId: "kept", workflowId: "wf", workflowRevision: 1, scope: { kind: "all" }, requestLimit: 1, attempts: [{ nodeId: "g", variant: 0, provider: "openrouter", model: "m" }] });
+  ledger.finishAttempts([{ runId: "kept", nodeId: "g", variant: 0, state: "succeeded", output: [{ assetId: shared.assetId, width: 8, height: 8, mediaType: "image/png" }] }]);
+  ledger.finishRun("kept", "succeeded");
+  ledger.close();
+  env.assets.retain({ kind: "images-run", id: "pruned-run" }, [shared.assetId]);
+
+  const runtime = env.runtime();
+  assert.equal(await runtime.initialize({ enabled: true, onError: failOnError }), true);
+  assert.deepEqual(env.assets.holders(shared.assetId), [{ kind: "images-run", id: "kept" }]);
+});
+
+test("startup retention keeps latest outputs only for nodes the document still has", async (t) => {
+  const env = await environment(t);
+  const first = env.runtime();
+  assert.equal(await first.initialize({ enabled: true, onError: failOnError }), true);
+  const doc = await saveWorkflow(first.services().workflows, generateChains(1));
+  await first.shutdown("test");
+  const asset = await env.assets.put({ bytes: pngBytes(8, 8, 41) });
+  const ledger = ImageRunLedger.open({ directory: path.join(env.root, "create-images") });
+  for (const [runId, nodeId] of [["live-node", "g1"], ["deleted-node", "g-removed"], ["newest", "g-other"]] as const) {
+    ledger.createRun({ runId, workflowId: doc.id, workflowRevision: 1, scope: { kind: "all" }, requestLimit: 1, attempts: [{ nodeId, variant: 0, provider: "openrouter", model: "m" }] });
+    ledger.finishAttempts([{ runId, nodeId, variant: 0, state: "succeeded", output: [{ assetId: asset.assetId, width: 8, height: 8, mediaType: "image/png" }] }]);
+    ledger.finishRun(runId, "succeeded");
+  }
+  ledger.close();
+
+  const runtime = env.runtime({ retainRuns: 1 });
+  assert.equal(await runtime.initialize({ enabled: true, onError: failOnError }), true);
+  const remaining = runtime.services().coordinator.listRuns(doc.id, 10).map((summary) => summary.runId).sort();
+  assert.deepEqual(remaining, ["live-node", "newest"]);
 });
 
 test("workflow store problems reach the issue reporter instead of vanishing", async (t) => {
