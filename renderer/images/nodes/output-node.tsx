@@ -7,6 +7,7 @@ import type { WorkflowFlowNode } from "../flow-adapter-core";
 import { STALE_LABEL, ownValue } from "../run-view-core";
 import { ImageNodeFrame } from "./node-frame";
 import { NodePorts } from "./node-ports";
+import { openContextMenuFromKeyboard } from "../../lib/keyboard-context-menu";
 
 const GALLERY_LIMIT = 4;
 
@@ -28,7 +29,7 @@ function Thumbnail({ image, index, url, name, more, actions }: { image: OutputRe
   if (!actions) return media;
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>
+      <ContextMenuTrigger asChild onKeyDown={openContextMenuFromKeyboard}>
         <button
           type="button"
           className="image-thumb nodrag"

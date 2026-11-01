@@ -215,6 +215,20 @@ test("Output thumbnails are buttons that open the viewer, with a +N tile past fo
   assert.deepEqual(opened, [1, 3]);
 });
 
+test("Shift+F10 on a focused Output thumbnail opens its menu from the keyboard", async () => {
+  const saved: string[] = [];
+  const actions: OutputImageActions = {
+    open: () => undefined, saveAs: (assetId) => saved.push(assetId[0]!), copy: () => undefined, reveal: () => undefined, revealLabel: "Show in Finder",
+  };
+  const refs = ["a", "b"].map((seed) => ({ assetId: seed.repeat(64), width: 8, height: 8, mediaType: "image/png" as const }));
+  render(<OutputNodeBody images={refs} urls={{}} actions={actions} />);
+  const second = within(screen.getByRole("list", { name: "Generated images" })).getAllByRole("button")[1]!;
+  second.focus();
+  fireEvent.keyDown(second, { key: "F10", shiftKey: true });
+  fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Save…" }));
+  assert.deepEqual(saved, ["b"]);
+});
+
 test("the gallery hook re-reads when a run of its workflow ends, and not while it is running", async () => {
   let reads = 0;
   installBotTestIpc({

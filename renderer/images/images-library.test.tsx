@@ -180,6 +180,19 @@ test("a thumbnail's menu saves, copies and reveals that image, and offers its wo
   assert.deepEqual(opened, ["wf-b"]);
 });
 
+test("Shift+F10 and the Menu key open the focused thumbnail's menu from the keyboard", async () => {
+  const log: string[] = [];
+  render(<Library log={log} />);
+  tiles()[1]!.focus();
+  fireEvent.keyDown(tiles()[1]!, { key: "F10", shiftKey: true });
+  fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Copy Image" }));
+  await waitFor(() => assert.equal(screen.queryByRole("menu"), null));
+  tiles()[2]!.focus();
+  fireEvent.keyDown(tiles()[2]!, { key: "ContextMenu" });
+  fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Save…" }));
+  assert.deepEqual(log, ["copy:b", "save-as:c"]);
+});
+
 test("Save All saves what the filters show, and says when only the first part of a large set is saved", () => {
   const log: string[] = [];
   const { unmount } = render(<Library log={log} />);

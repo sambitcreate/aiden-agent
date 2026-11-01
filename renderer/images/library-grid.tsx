@@ -1,6 +1,7 @@
 import * as React from "react";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, Text } from "../components/ui";
 import type { GalleryItem } from "../shared/images/ipc-types";
+import { openContextMenuFromKeyboard } from "../lib/keyboard-context-menu";
 import { imageCountLabel } from "./gallery-core";
 import { gridMove, tileLabel, type GridKey, type LibraryDaySection } from "./library-core";
 
@@ -46,6 +47,9 @@ export function LibraryGrid({
   const active = Math.min(Math.max(focusIndex, 0), Math.max(count - 1, 0));
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    // Shift+F10 and the Menu key open the focused thumbnail's menu (macOS sends no contextmenu for them).
+    openContextMenuFromKeyboard(event);
+    if (event.defaultPrevented) return;
     if (!GRID_KEYS.has(event.key) || event.metaKey || event.ctrlKey || event.altKey) return;
     const from = (event.target as HTMLElement).closest<HTMLElement>("[data-library-index]");
     if (!from) return;
