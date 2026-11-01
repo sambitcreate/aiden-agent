@@ -64,6 +64,52 @@ export function useDesignChatBodyHidden(): boolean {
   return stacked && pane === "canvas";
 }
 
+/** The stacked layout's "needs a wider window" banner, which the chat's top bar shows. */
+interface DesignBannerState {
+  visible: boolean;
+  widen(): void;
+  dismiss(): void;
+  /** The banner's height, so the stacked canvas starts below it instead of covering it. */
+  reportHeight(height: number): void;
+}
+
+const DesignBannerContext = React.createContext<DesignBannerState>({
+  visible: false,
+  widen: () => {},
+  dismiss: () => {},
+  reportHeight: () => {},
+});
+
+/**
+ * Sits in the chat's top bar, below the title row, while the stacked layout
+ * offers to widen the window. It is part of the top bar, so it pushes the
+ * conversation down instead of floating over it, and the stacked canvas starts
+ * below it.
+ */
+export function DesignModeBannerSlot() {
+  const { visible, widen, dismiss, reportHeight } = React.useContext(DesignBannerContext);
+  const ref = React.useRef<HTMLDivElement>(null);
+  React.useLayoutEffect(() => {
+    const element = ref.current;
+    if (!visible || !element) return;
+    const measure = () => reportHeight(element.getBoundingClientRect().height);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      reportHeight(0);
+    };
+  }, [reportHeight, visible]);
+  if (!visible) return null;
+  return (
+    // Positioned and filled so the header's fade and the scrolling conversation stay behind it.
+    <div ref={ref} data-design-banner className="relative bg-background px-3 pb-2">
+      <DesignModeBanner onWiden={widen} onDismiss={dismiss} />
+    </div>
+  );
+}
+
 /**
  * Hides chat-column content (the terminal drawer) from sight, focus and
  * assistive tech while the stacked layout shows the canvas, without
@@ -175,6 +221,17 @@ export function DesignLayout({
     [chatId],
   );
   const paneState = React.useMemo<DesignPaneState>(() => ({ stacked, pane, setPane }), [pane, setPane, stacked]);
+  const [bannerHeight, setBannerHeight] = React.useState(0);
+  const bannerVisible = Boolean(chatId) && windowPolicy.bannerVisible;
+  const bannerState = React.useMemo<DesignBannerState>(
+    () => ({
+      visible: bannerVisible,
+      widen: windowPolicy.widen,
+      dismiss: windowPolicy.dismiss,
+      reportHeight: setBannerHeight,
+    }),
+    [bannerVisible, windowPolicy.dismiss, windowPolicy.widen],
+  );
   const canvasHidden = stacked && pane === "chat";
   const dockInset = !on
     ? null
@@ -199,46 +256,42 @@ export function DesignLayout({
 
   return (
     <DesignPaneContext.Provider value={paneState}>
-      <div
-        ref={containerRef}
-        data-design-layout={on ? layout.mode : "off"}
-        className="relative flex h-full min-h-0 w-full"
-      >
+      <DesignBannerContext.Provider value={bannerState}>
         <div
-          data-design-mode={on ? "true" : undefined}
-          className="h-full min-h-0 min-w-0 flex-1"
-          style={on && !stacked ? { width: layout.chatWidth, flex: "none" } : undefined}
+          ref={containerRef}
+          data-design-layout={on ? layout.mode : "off"}
+          className="relative flex h-full min-h-0 w-full"
         >
-          {children}
-        </div>
-        {on && chatId ? (
-          <>
-            {stacked ? null : (
-              <DesignChatDivider
-                width={layout.chatWidth}
-                min={DESIGN_CHAT_WIDTH_BOUNDS.min}
-                max={designChatMaxWidth(containerWidth)}
-                onWidthChange={chatWidth.setPreferredWidth}
-                onWidthCommit={chatWidth.commitPreferredWidth}
-                onResizingChange={chatWidth.setResizing}
+          <div
+            data-design-mode={on ? "true" : undefined}
+            className="h-full min-h-0 min-w-0 flex-1"
+            style={on && !stacked ? { width: layout.chatWidth, flex: "none" } : undefined}
+          >
+            {children}
+          </div>
+          {on && chatId ? (
+            <>
+              {stacked ? null : (
+                <DesignChatDivider
+                  width={layout.chatWidth}
+                  min={DESIGN_CHAT_WIDTH_BOUNDS.min}
+                  max={designChatMaxWidth(containerWidth)}
+                  onWidthChange={chatWidth.setPreferredWidth}
+                  onWidthCommit={chatWidth.commitPreferredWidth}
+                  onResizingChange={chatWidth.setResizing}
+                />
+              )}
+              <DesignCanvasRegion
+                chatId={chatId}
+                width={layout.canvasWidth}
+                placement={stacked ? "stacked" : "split"}
+                hidden={canvasHidden}
+                stackedTopInset={bannerVisible ? bannerHeight : 0}
               />
-            )}
-            <DesignCanvasRegion
-              chatId={chatId}
-              width={layout.canvasWidth}
-              placement={stacked ? "stacked" : "split"}
-              hidden={canvasHidden}
-            />
-            {stacked && windowPolicy.bannerVisible ? (
-              <div className="pointer-events-none absolute inset-x-0 top-14 z-40 flex justify-center px-3">
-                <div className="pointer-events-auto">
-                  <DesignModeBanner onWiden={windowPolicy.widen} onDismiss={windowPolicy.dismiss} />
-                </div>
-              </div>
-            ) : null}
-          </>
-        ) : null}
-      </div>
+            </>
+          ) : null}
+        </div>
+      </DesignBannerContext.Provider>
     </DesignPaneContext.Provider>
   );
 }

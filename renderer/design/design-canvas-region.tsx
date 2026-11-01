@@ -17,11 +17,14 @@ export function DesignCanvasRegion({
   width,
   placement,
   hidden,
+  stackedTopInset = 0,
 }: {
   chatId: string;
   width: number;
   placement: "split" | "stacked";
   hidden: boolean;
+  /** Extra room below the top bar when stacked, such as the top bar's design mode banner. */
+  stackedTopInset?: number;
 }) {
   return (
     <section
@@ -34,7 +37,13 @@ export function DesignCanvasRegion({
         placement === "stacked" ? "absolute inset-x-0 bottom-0 top-13 z-20" : "relative h-full shrink-0",
         hidden && "invisible",
       )}
-      style={placement === "split" ? { width } : undefined}
+      style={
+        placement === "split"
+          ? { width }
+          : stackedTopInset > 0
+            ? { top: `calc(3.25rem + ${stackedTopInset}px)` }
+            : undefined
+      }
     >
       <React.Suspense
         fallback={

@@ -977,6 +977,7 @@ export function ScrollArea({
   leading,
   actions,
   toolbar,
+  toolbarAccessory,
   footer,
   alignFooterToScrollContent = false,
   autoScrollToBottom,
@@ -1018,6 +1019,11 @@ export function ScrollArea({
   leading?: React.ReactNode;
   actions?: React.ReactNode;
   toolbar?: React.ReactNode;
+  /**
+   * Sits under the toolbar as part of it, such as a notice, so the scroll
+   * content starts below it instead of underneath it.
+   */
+  toolbarAccessory?: React.ReactNode;
   footer?: React.ReactNode;
   /** Keep the fixed footer aligned with the scrollport when classic scrollbars reserve width. */
   alignFooterToScrollContent?: boolean;
@@ -1365,6 +1371,7 @@ export function ScrollArea({
       {resolvedToolbar ? (
         <div ref={toolbarRef} className="absolute inset-x-0 top-0 z-30">
           {resolvedToolbar}
+          {toolbarAccessory}
         </div>
       ) : null}
       {/* Always rendered so hiding the body never remounts (or rescrolls) the transcript. */}

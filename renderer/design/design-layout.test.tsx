@@ -21,7 +21,7 @@ import { effectiveBindings } from "../shared/keybindings";
 import type { Chat, ChatMeta, Workspace } from "../lib/types";
 import { WorkspaceProvider } from "../lib/workspace-context";
 import { DesignPaneSwitch } from "../components/chat-top-bar";
-import { DesignChatBody, DesignWorkbench, useDesignChatState } from "./design-layout";
+import { DesignChatBody, DesignModeBannerSlot, DesignWorkbench, useDesignChatState } from "./design-layout";
 
 // The lazy canvas imports React Flow's CSS, which Node cannot load; tests get an empty module.
 registerHooks({
@@ -135,6 +135,7 @@ function DesignChat({ chatId }: { chatId: string }) {
       <main aria-label={`Chat ${chatId}`}>
         <ToggleProbe chatId={chatId} />
         <DesignPaneSwitch />
+        <DesignModeBannerSlot />
       </main>
       <DesignChatBody>
         <button type="button">Terminal drawer</button>

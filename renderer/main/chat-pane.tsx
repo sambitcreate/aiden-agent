@@ -127,7 +127,7 @@ import {
   WorkspaceToolButtons,
 } from "../components/chat-top-bar";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
-import { useDesignChatBodyHidden } from "../design/design-layout";
+import { DesignModeBannerSlot, useDesignChatBodyHidden } from "../design/design-layout";
 import { useCommandHandler, useCommandSystem, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import {
@@ -3472,6 +3472,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         focusRegion="chat"
         bodyHidden={designChatBodyHidden}
         overlay={findBar}
+        toolbarAccessory={<DesignModeBannerSlot />}
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={
