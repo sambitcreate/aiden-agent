@@ -10,6 +10,8 @@ export interface ViewerAction {
   id: string;
   label: string;
   icon?: React.ReactNode;
+  /** Whether the action is unavailable for this image, such as Open Workflow once its workflow is gone. */
+  disabled?(item: GalleryItem): boolean;
   onSelect(item: GalleryItem): void;
 }
 
@@ -77,7 +79,7 @@ export function ViewerPanel({
       {item.prompt ? <ViewerPrompt key={item.assetId} prompt={item.prompt} /> : null}
       <div className="flex flex-wrap gap-2">
         {actions.map((action) => (
-          <Button key={action.id} size="small" variant="filled" onClick={() => action.onSelect(item)}>
+          <Button key={action.id} size="small" variant="filled" disabled={action.disabled?.(item) ?? false} onClick={() => action.onSelect(item)}>
             {action.icon}
             {action.label}
           </Button>

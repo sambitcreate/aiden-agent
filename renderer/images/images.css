@@ -112,6 +112,99 @@
   box-shadow: inset 0 1px 0 var(--color-separator);
 }
 
+/* Images home: a card per workflow, and the All Images grid (one product with the History tab). */
+.image-workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.image-workflow-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-card);
+  background: var(--color-well);
+  transition: background-color var(--motion-duration) var(--motion-easing);
+}
+
+.image-workflow-card:hover {
+  background: var(--color-list-hover);
+}
+
+.image-workflow-card-media {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border-radius: var(--radius-card) var(--radius-card) 0 0;
+  background: var(--color-control);
+}
+
+.image-workflow-card-media img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The title is the card's one opening control; its hit area stretches over the whole card. */
+.image-workflow-card-open {
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  cursor: default;
+}
+
+.image-workflow-card-open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-card);
+}
+
+.image-workflow-card-open:focus-visible::after {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.image-workflow-card-menu {
+  position: relative;
+  z-index: 1;
+}
+
+.image-library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.image-library-grid .image-thumb {
+  aspect-ratio: 1;
+}
+
+.image-library-grid img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-control);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .image-workflow-card {
+    transition: none;
+  }
+}
+
 /* Viewer: the stage and filmstrip on the left, the details panel on the right. */
 .image-viewer {
   display: flex;

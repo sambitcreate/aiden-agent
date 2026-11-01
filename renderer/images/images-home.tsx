@@ -1,24 +1,20 @@
 import { useNavigate } from "@tanstack/react-router";
-import { MoreHorizontal } from "lucide-react";
 import * as React from "react";
-import {
-  AlertDialog,
-  Button,
-  Dialog,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  EmptyState,
-  Input,
-  Text,
-} from "../components/ui";
+import { AlertDialog, Button, Dialog, EmptyState, Input, Text } from "../components/ui";
+import { Tabs } from "../components/ui-primitives";
 import { StudioSurface } from "../canvas";
 import { createImagesIpc } from "../lib/create-images-ipc";
+import type { ImagesHomeView } from "../main/images-home-search";
 import type { MutateWorkflowRequest, MutateWorkflowResponse } from "../shared/images/ipc-types";
+import type { ImageModelOption } from "../shared/images/port";
 import type { WorkflowSummary } from "../shared/images/schema";
 import type { ImageWorkflowTemplate } from "../shared/images/templates";
+import { ImageLibrary } from "./image-library";
+import { summarizeWorkflowImages } from "./library-core";
 import { deleteWorkflowDescription, ownValue } from "./run-view-core";
+import { useGallery } from "./use-gallery";
+import { useImageActions } from "./viewer/use-image-actions";
+import { WorkflowGrid, type WorkflowCardActions } from "./workflow-grid";
 
 const message = (error: unknown) => (error instanceof Error ? error.message : "Something went wrong.");
 
@@ -27,13 +23,21 @@ const REFUSED: Record<NonNullable<MutateWorkflowResponse["reason"]>, string> = {
   "not-found": "This workflow no longer exists.",
 };
 
-export function ImagesHome() {
+const VIEWS = [
+  { value: "workflows", label: "Workflows" },
+  { value: "images", label: "All Images" },
+] as const;
+
+export function ImagesHome({ view = "workflows" }: { view?: ImagesHomeView }) {
   const navigate = useNavigate();
   const [workflows, setWorkflows] = React.useState<WorkflowSummary[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [renaming, setRenaming] = React.useState<{ workflow: WorkflowSummary; title: string } | null>(null);
   const [deleting, setDeleting] = React.useState<WorkflowSummary | null>(null);
   const [imageCounts, setImageCounts] = React.useState<Record<string, number>>({});
+  const [models, setModels] = React.useState<readonly ImageModelOption[]>([]);
+  const gallery = useGallery();
+  const imageActions = useImageActions({ onSaved: gallery.refresh });
 
   const refresh = React.useCallback(async () => {
     try {
@@ -47,9 +51,29 @@ export function ImagesHome() {
   }, []);
   React.useEffect(() => {
     void refresh();
+    let cancelled = false;
+    // Display names only: without them, models show by id.
+    createImagesIpc.listModels().then(
+      (listed) => {
+        if (!cancelled) setModels(listed.models);
+      },
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
   }, [refresh]);
 
-  const open = (workflowId: string) => void navigate({ to: "/images/$workflowId", params: { workflowId } });
+  const summaries = React.useMemo(() => summarizeWorkflowImages(gallery.items), [gallery.items]);
+  const liveWorkflowIds = React.useMemo(() => (workflows ? new Set(workflows.map((workflow) => workflow.id)) : null), [workflows]);
+
+  const open = React.useCallback(
+    (workflowId: string) => void navigate({ to: "/images/$workflowId", params: { workflowId } }),
+    [navigate],
+  );
+  // Replace, so Back leaves Images instead of stepping through views; Back from a workflow returns to this view.
+  const changeView = (next: ImagesHomeView) =>
+    void navigate({ to: "/images", search: next === "images" ? { view: "images" } : {}, replace: true });
   const create = async (template: ImageWorkflowTemplate) => {
     try {
       open((await createImagesIpc.create({ template })).workflow.id);
@@ -64,6 +88,12 @@ export function ImagesHome() {
     if (!result.ok) setError(result.reason ? REFUSED[result.reason] : failure);
     return result;
   };
+  const cardActions: WorkflowCardActions = {
+    open: (workflow) => open(workflow.id),
+    rename: (workflow) => setRenaming({ workflow, title: workflow.title }),
+    duplicate: (workflow) => void mutate({ op: "duplicate", workflowId: workflow.id }, "That workflow could not be duplicated."),
+    remove: setDeleting,
+  };
 
   return (
     <StudioSurface
@@ -75,40 +105,24 @@ export function ImagesHome() {
         </>
       }
     >
-      <div className="h-full overflow-y-auto px-6 py-4">
-        {error ? <Text as="p" role="alert" color="status-red" className="mb-3">{error}</Text> : null}
-        {workflows && workflows.length === 0 ? (
-          <EmptyState
-            title="No image workflows yet"
-            description="Start from the Starter template to turn a prompt into an image."
-            action={<Button variant="accent" onClick={() => void create("starter")}>New from Starter</Button>}
-          />
-        ) : (
-          <ul aria-label="Image workflows" className="mx-auto flex max-w-3xl flex-col gap-1">
-            {(workflows ?? []).map((workflow) => (
-              <li key={workflow.id} className="flex items-center gap-2">
-                <Button variant="transparent" className="min-w-0 flex-1 justify-start" onClick={() => open(workflow.id)}>
-                  <span className="truncate">{workflow.title}</span>
-                </Button>
-                <Text variant="small" color="secondary">{new Date(workflow.updatedAt).toLocaleString()}</Text>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="transparent" iconOnly aria-label={`More actions for ${workflow.title}`}>
-                      <MoreHorizontal />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onSelect={() => setRenaming({ workflow, title: workflow.title })}>Rename…</DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => void mutate({ op: "duplicate", workflowId: workflow.id }, "That workflow could not be duplicated.")}>
-                      Duplicate
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => setDeleting(workflow)}>Delete…</DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </li>
-            ))}
-          </ul>
-        )}
+      <div className="flex h-full min-h-0 flex-col">
+        <Tabs<ImagesHomeView> value={view} onValueChange={changeView} items={VIEWS} aria-label="Images views" className="shrink-0 px-6 pb-3 pt-1" />
+        {error ? <Text as="p" role="alert" color="status-red" className="shrink-0 px-6 pb-3">{error}</Text> : null}
+        <div role="tabpanel" aria-label={view === "images" ? "All Images" : "Workflows"} className="flex min-h-0 flex-1 flex-col">
+          {view === "images" ? (
+            <ImageLibrary gallery={gallery} models={models} actions={imageActions} liveWorkflowIds={liveWorkflowIds} onOpenWorkflow={open} />
+          ) : workflows && workflows.length === 0 ? (
+            <EmptyState
+              title="No image workflows yet"
+              description="Start from the Starter template to turn a prompt into an image."
+              action={<Button variant="accent" onClick={() => void create("starter")}>New from Starter</Button>}
+            />
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">
+              <WorkflowGrid workflows={workflows ?? []} summaries={summaries} galleryReady={gallery.status === "ready"} actions={cardActions} />
+            </div>
+          )}
+        </div>
       </div>
       <Dialog
         open={renaming !== null}
@@ -121,7 +135,9 @@ export function ImagesHome() {
         submitOnEnter
         onConfirm={async () => {
           if (!renaming) return;
-          await mutate({ op: "rename", workflowId: renaming.workflow.id, title: renaming.title.trim() }, "That workflow could not be renamed.");
+          const result = await mutate({ op: "rename", workflowId: renaming.workflow.id, title: renaming.title.trim() }, "That workflow could not be renamed.");
+          // Library items carry workflow titles.
+          if (result.ok) gallery.refresh();
           setRenaming(null);
         }}
       >
@@ -143,7 +159,8 @@ export function ImagesHome() {
         confirmVariant="destructive"
         onConfirm={async () => {
           if (!deleting) return;
-          await mutate({ op: "delete", workflowId: deleting.id }, "That workflow could not be deleted.");
+          const result = await mutate({ op: "delete", workflowId: deleting.id }, "That workflow could not be deleted.");
+          if (result.ok) gallery.refresh();
           setDeleting(null);
         }}
       />

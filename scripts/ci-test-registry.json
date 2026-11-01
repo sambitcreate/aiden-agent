@@ -919,6 +919,8 @@
         "renderer/images/gallery-core.test.ts",
         "renderer/images/viewer/viewer-core.test.ts",
         "renderer/images/images-gallery.test.tsx",
+        "renderer/images/library-core.test.ts",
+        "renderer/images/images-library.test.tsx",
         "renderer/lib/accessibility-permission-core.test.ts",
         "renderer/lib/accessibility-refresh.test.ts",
         "renderer/lib/agent-activity.test.ts",

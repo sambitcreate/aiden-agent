@@ -20,6 +20,7 @@ import { parseRemoteNewChatSearch } from "../lib/hosts/remote-new-chat-search";
 import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { parseBotPageSearch } from "./bots/bot-page-search";
+import { parseImagesHomeSearch } from "./images-home-search";
 import { StudioCapabilityRoute } from "./studio-capability-route";
 import { guardHistoryTraversal } from "../lib/guarded-history";
 import { reopenClosedChatDraft } from "../lib/chat-draft";
@@ -225,10 +226,12 @@ const designProjectRoute = createRoute({
 const imagesRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
   path: "/images",
+  validateSearch: parseImagesHomeSearch,
   component: preloadsWith(function CreateImagesRoute() {
+    const { view } = imagesRoute.useSearch();
     return (
       <StudioCapabilityRoute feature="createImages">
-        <ImagesView />
+        <ImagesView view={view ?? "workflows"} />
       </StudioCapabilityRoute>
     );
   }, ImagesView),

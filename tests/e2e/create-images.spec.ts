@@ -222,6 +222,29 @@ test.describe("Create Images", () => {
     expect(aiden.openRouter!.imageRequests).toHaveLength(2);
   });
 
+  test("the home shows each workflow's newest image, and All Images opens an image's workflow and comes back to it", async ({ aiden }) => {
+    const canvas = await newStarter(aiden.page, "A copper kettle");
+    await (await reviewRun(aiden.page)).getByRole("button", { name: "Generate" }).click();
+    await expect(canvas.getByRole("img", IMAGE_ONE)).toBeVisible();
+
+    await openImages(aiden.page);
+    const card = aiden.page.getByRole("list", { name: "Image workflows" }).getByRole("listitem").filter({ hasText: "Prompt to image" });
+    await expect(card).toContainText("1 image");
+    await expect(card.locator("img")).toHaveCount(1);
+
+    await aiden.page.getByRole("tab", { name: "All Images" }).click();
+    await expect(aiden.page.getByRole("heading", { name: "Today" })).toBeVisible();
+    await aiden.page.getByRole("button", { name: "Image 1 of 1, Prompt to image: A copper kettle" }).click();
+    const viewer = aiden.page.getByRole("dialog");
+    await expect(viewer).toContainText("A copper kettle");
+    await viewer.getByRole("button", { name: "Open Workflow" }).click();
+    await expect(aiden.page.getByRole("region", { name: "Images canvas" })).toBeVisible();
+
+    await aiden.page.getByRole("button", { name: "Go back" }).click();
+    await expect(aiden.page.getByRole("tab", { name: "All Images" })).toHaveAttribute("aria-selected", "true");
+    expect(aiden.openRouter!.imageRequests).toHaveLength(1);
+  });
+
   test("deleting a workflow names its image count and removes it after confirmation", async ({ aiden }) => {
     const canvas = await newStarter(aiden.page, "A paper crane");
     await (await reviewRun(aiden.page)).getByRole("button", { name: "Generate" }).click();
