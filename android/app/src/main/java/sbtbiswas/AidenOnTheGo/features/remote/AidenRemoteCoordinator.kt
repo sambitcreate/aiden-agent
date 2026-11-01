@@ -768,7 +768,8 @@ class AidenRemoteCoordinator(
         val workspaceRecords = if (activeInstanceId == null) {
             emptyList()
         } else {
-            _workspaces.value.map { workspace ->
+            // Shortcuts see chats without a workspace as one Chats entry, as the sidebar does.
+            AidenNoWorkspace.grouped(_workspaces.value).map { workspace ->
                 AidenIntentWorkspaceRecord(
                     id = workspace.id,
                     instanceId = activeInstanceId,

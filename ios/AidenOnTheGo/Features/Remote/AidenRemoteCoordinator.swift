@@ -1165,7 +1165,10 @@ final class AidenRemoteCoordinator {
         let cachedWorkspaces: [AidenIntentWorkspaceRecord]
         if let instanceId, instanceId == activeInstanceId {
             let archivedWorkspaceIDs = workspaceArchiveStore.archivedWorkspaceIDs(for: instanceId)
-            cachedWorkspaces = workspaces.filter { !archivedWorkspaceIDs.contains($0.id) }.map {
+            // Shortcuts see chats without a workspace as one Chats entry, as the sidebar does.
+            cachedWorkspaces = AidenNoWorkspace.grouped(
+                AidenNoWorkspace.unarchived(workspaces, archivedIDs: archivedWorkspaceIDs)
+            ).map {
                 AidenIntentWorkspaceRecord(id: $0.id, instanceId: instanceId, name: $0.name)
             }
         } else {

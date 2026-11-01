@@ -1893,16 +1893,18 @@ export class AidenRemoteChatService {
         { deviceId, route: "POST /chats/{id}/move", resourceId: safeId(chatId, "chat"), key },
         { revision, ...parsed },
         async () => {
-          const { moved, workspaceId, left } = await this.assigningNoWorkspace(async () => {
+          // The release runs inside the same turn, so no other assignment can claim the folder
+          // between the emptiness check and its removal.
+          const moved = await this.assigningNoWorkspace(async () => {
             const previous = (await this.options.application.list()).find((entry) => entry.id === chatId);
             const workspaceId = (await this.options.noWorkspace?.target(parsed.workspaceId, chatId)) ?? parsed.workspaceId;
             const moved = await this.options.application.moveEmptyToWorkspace(chatId, workspaceId, {
               assertCurrent: (chat) => requireRevision(revision, chat),
             });
             const left = previous ? persistedChatWorkspaceId(previous.workspaceId) : undefined;
-            return { moved, workspaceId, left };
+            if (left && left !== workspaceId) await this.options.noWorkspace?.release(left);
+            return moved;
           });
-          if (left && left !== workspaceId) await this.options.noWorkspace?.release(left);
           this.options.notifyChanged?.(chatId);
           return projectAidenRemoteChat(moved!);
         },
