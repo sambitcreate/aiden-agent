@@ -1613,7 +1613,6 @@ function isDesktopDevice(device: Pick<AidenRemoteRouterAuthenticatedDevice, "typ
 
 /** What this host has wired, one flag per `/server.features` token it can announce. */
 export interface AidenRemoteServerFeatureSupport {
-  appControls: boolean;
   appControlsEnabled: boolean;
   peerRoutes: boolean;
   providers: boolean;
@@ -1621,7 +1620,7 @@ export interface AidenRemoteServerFeatureSupport {
   speech: boolean;
   chatSummaries: boolean;
   readState: boolean;
-  /** `POST /chats/{chatId}/triage` (desktop-only token while phones' list is full). */
+  /** `POST /chats/{chatId}/triage`, announced to desktops and phones. */
   triage: boolean;
   /**
    * Revision 48 Inbox signals on summaries, `run.state` and Bot rows
@@ -1671,7 +1670,8 @@ export function aidenRemoteServerFeatures(
   const desktop = isDesktopDevice(device);
   const phone = !desktop;
   return [
-    ...(phone && support.appControls ? ["chat-ui-panels-v1"] : []),
+    // `chat-ui-panels-v1` (revision 32) is retired: no shipped client read it,
+    // and its slot in the phones' 32-token list went to `chat-triage-v1`.
     ...(phone && support.appControlsEnabled ? ["chat-ui-panels-enabled-v1"] : []),
     ...(desktop && support.peerRoutes ? ["peer-routes-v1"] : []),
     ...(phone && support.providers ? [AIDEN_REMOTE_PROVIDER_CREATE_FEATURE] : []),
@@ -1679,8 +1679,8 @@ export function aidenRemoteServerFeatures(
     ...(phone && support.speech ? [AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE] : []),
     ...(support.chatSummaries ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE] : []),
     ...(support.readState ? [AIDEN_REMOTE_CHAT_READ_STATE_FEATURE] : []),
-    // Inbox triage: phones already hear AIDEN_REMOTE_MAX_SERVER_FEATURES tokens.
-    ...(desktop && support.triage ? [AIDEN_REMOTE_CHAT_TRIAGE_FEATURE] : []),
+    // Inbox triage (revision 48): every device type; the route still needs `chat:write`.
+    ...(support.triage ? [AIDEN_REMOTE_CHAT_TRIAGE_FEATURE] : []),
     ...(desktop && support.inboxSignals ? [AIDEN_REMOTE_INBOX_SIGNALS_FEATURE] : []),
     ...(support.tasks ? [AIDEN_REMOTE_CHAT_TASKS_FEATURE] : []),
     ...(support.agents ? [AIDEN_REMOTE_CHAT_AGENTS_FEATURE] : []),
@@ -2321,7 +2321,6 @@ export function createAidenRemoteRequestHandler(
             : {}),
           connectionMode: dependencies.connectionMode(),
           features: aidenRemoteServerFeatures(device, {
-            appControls: Boolean(dependencies.appControls),
             appControlsEnabled: (await dependencies.appControls?.enabled()) === true,
             peerRoutes: peerRoutes !== undefined,
             providers: Boolean(dependencies.providers),

@@ -230,11 +230,11 @@ test("a desktop paired before host grants existed picks them up without pairing 
   t.after(() => feed.close());
   await feed.next((frame) => frame.type === "snapshot", "snapshot");
 
-  // A phone hears the phone run subset and read markers, never the host feed or steering.
+  // A phone hears the phone run subset, read markers and triage, never the host feed or steering.
   const phoneIssued = await remote.state.issueDevice({ name: "Test phone", type: "iphone", clientVersion: "test", acceptsProgressCapabilities: true });
   const phone = client(dir, status.lanPort, phoneIssued.credential);
   const phoneServer = (await phone.request("/server")).data;
-  for (const token of ["phone-run-control-v1", "chat-read-state-v1"]) assert.ok(phoneServer.features.includes(token), `${token} in ${phoneServer.features}`);
+  for (const token of ["phone-run-control-v1", "chat-read-state-v1", "chat-triage-v1"]) assert.ok(phoneServer.features.includes(token), `${token} in ${phoneServer.features}`);
   for (const token of ["host-events-v1", "run-control-v1", "chat-run-input-v1", "chat-question-prompts-v1"]) assert.equal(phoneServer.features.includes(token), false, token);
   assert.deepEqual(["runs:observe", "runs:control"].filter((grant) => phoneServer.serverCapabilities.includes(grant)), ["runs:observe", "runs:control"]);
   const phoneUpgrade = await phone.request("/device/capabilities", "POST", { accepts: ["runs:observe", "runs:control"] });
@@ -275,4 +275,15 @@ test("a desktop paired before host grants existed picks them up without pairing 
   await daemon.llmClient.waitForChatIdle(chatId);
   const row = (await phone.request("/chat-summaries")).data.summaries.find((summary) => summary.id === chatId);
   assert.equal(row?.unread, true, JSON.stringify(row));
+
+  // The phone triages under the chat:write it was paired with; a read-only phone is refused.
+  const phoneDone = await phone.request(`/chats/${chatId}/triage`, "POST", { done: true, ifRevision: 0 }, "phone-triage-test-0001");
+  assert.equal(phoneDone.status, 200, JSON.stringify(phoneDone));
+  assert.equal(phoneDone.data.revision, 1); assert.ok(phoneDone.data.doneAt);
+  assert.equal((await phone.request("/chat-summaries")).data.summaries.find((summary) => summary.id === chatId)?.doneAt, phoneDone.data.doneAt);
+  const reader = client(dir, status.lanPort, (await remote.state.issueDevice({ name: "Reader", type: "android", clientVersion: "test",
+    capabilities: ["server:read", "chat:read"] })).credential);
+  const refused = await reader.request(`/chats/${chatId}/triage`, "POST", { pinned: true, ifRevision: 1 }, "phone-triage-test-0002");
+  assert.equal(refused.status, 403, JSON.stringify(refused));
+  assert.equal(refused.data.error.code, "capability_denied");
 });

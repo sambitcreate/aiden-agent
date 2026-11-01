@@ -108,7 +108,7 @@
       "bot-memory-v1",
       "bot-proactive-v1",
       "speech-request-gzip-v1",
-      "chat-ui-panels-v1"
+      "chat-triage-v1"
     ],
     "connectionMode": "both",
     "minimumClientVersion": "1.0.0",

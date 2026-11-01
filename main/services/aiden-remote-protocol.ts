@@ -71,7 +71,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * device type.
  *
  * Contract revision 32: conversation app controls. Assistant messages may carry
- * inert `appPanels` (`chat-ui-panels-v1`); owner-enabled hosts also advertise
+ * inert `appPanels` (`chat-ui-panels-v1`, retired in revision 48); owner-enabled hosts also advertise
  * `chat-ui-panels-enabled-v1`, `GET`/`POST /chats/{chatId}/controls/{panelId}`
  * behind the `app-controls:read`/`app-controls:respond` progress capabilities,
  * the `app_controls_changed` progress event and the `builtin` skill source.
@@ -227,8 +227,8 @@ export const AIDEN_REMOTE_CHAT_READ_STATE_FEATURE = "chat-read-state-v1" as cons
 /**
  * Server feature token for Inbox triage (`POST /chats/{chatId}/triage`):
  * Pin, Done and Snooze kept by the host for every paired surface. Announced
- * to desktops only while phones' feature list is full; phones gain it once a
- * later revision frees a slot.
+ * to desktops and (since revision 48) phones, which took the slot of the
+ * retired `chat-ui-panels-v1`.
  */
 export const AIDEN_REMOTE_CHAT_TRIAGE_FEATURE = "chat-triage-v1" as const;
 /**

@@ -580,10 +580,11 @@ final class AidenRemoteClientTests: XCTestCase {
             AidenBotHostFeature.memory,
             AidenBotHostFeature.proactive,
             AidenServer.speechRequestGzipFeature,
-            "chat-ui-panels-v1",
+            AidenServer.chatTriageFeature,
         ])
         XCTAssertTrue(server.supportsChatAgentInterrupt)
         XCTAssertTrue(server.supportsChatReadState)
+        XCTAssertTrue(server.supportsChatTriage)
 
         let page = fixture.chatSummaries
         XCTAssertEqual(page.summaries.map(\.id), [

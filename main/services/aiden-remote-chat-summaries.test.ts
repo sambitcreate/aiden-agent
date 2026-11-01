@@ -878,7 +878,10 @@ test("triage writes need chat:write and an Idempotency-Key, replay, and refuse a
     headers: { "aiden-protocol-version": "1", authorization: `Bearer ${credential}` },
   })).json()) as { features?: string[] }).features ?? [];
   assert.ok((await features(writer)).includes("chat-triage-v1"));
-  assert.equal((await features(phone)).includes("chat-triage-v1"), false, "phones' feature list is full");
+  assert.ok((await features(phone)).includes("chat-triage-v1"), "phones triage under chat:write (revision 48)");
+  const fromPhone = await post("chat-a", { done: true }, "triage-key-0000009", phone);
+  assert.equal(fromPhone.status, 200);
+  assert.ok((await triage.get("chat-a"))?.doneAt);
   assert.ok((await features(writer)).includes("inbox-signals-v1"));
   assert.equal((await features(phone)).includes("inbox-signals-v1"), false, "phones decode the fields without the token");
 });
