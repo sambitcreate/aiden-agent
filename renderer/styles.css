@@ -1730,10 +1730,12 @@ textarea {
 }
 
 /*
- * The composer footer stays one row and collapses by priority instead of
- * wrapping: the model label truncates first (it is the row's only shrinking
+ * The composer footer collapses by priority as the composer (not the window)
+ * narrows: the model label truncates first (it is the row's only shrinking
  * item), then "Full access" drops to its icon, then the context meter drops
- * its percentage. Only a phone-width composer wraps.
+ * its percentage, then the model and Reasoning labels drop to their icons.
+ * Past that the actions wrap onto their own line, and wrap again inside it,
+ * so no control is ever drawn over another.
  */
 @container composer (max-width: 560px) {
   .composer-permission-control {
@@ -1770,9 +1772,31 @@ textarea {
   }
 }
 
-@container composer (max-width: 380px) {
+@container composer (max-width: 420px) {
+  .composer-model-label,
+  .composer-reasoning-label {
+    display: none;
+  }
+
+  .composer-model-trigger {
+    width: 1.75rem;
+    padding-inline: 0;
+  }
+
+  /*
+   * With the model label gone nothing in the action row shrinks, so wrapping
+   * on its natural width is safe: it moves below "+" only when it cannot fit
+   * beside it, and its own items wrap if even a full line is too narrow.
+   * (A zero flex basis would never wrap and would overflow leftward instead.)
+   */
   .composer-footer-row {
     flex-wrap: wrap;
+  }
+
+  .composer-action-row {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.125rem;
   }
 }
 
