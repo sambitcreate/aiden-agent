@@ -1,3 +1,4 @@
+import * as React from "react";
 import { CHAT_ROW_INBOX_ACTIONS, type ChatRowInboxAction, type ChatRowMenu } from "./chat-row";
 import type { RemoteChatRowAction } from "../../lib/sidebar-remote-groups";
 
@@ -11,6 +12,11 @@ export interface RemoteChatRowMenuHandlers {
    * name the same action.
    */
   inboxAction?: ChatRowInboxAction | null;
+  /**
+   * Inbox rows on a host that takes triage: Pin, Mark done and Snooze, right
+   * after the row's one action and before Rename, as on this Mac's rows.
+   */
+  triage?: (...parts: Parameters<ChatRowMenu>) => React.ReactNode;
 }
 
 /** A remote chat row's menu: one item per action its host grants, in the actions' order. */
@@ -19,7 +25,8 @@ export function remoteChatRowMenu(
   handlers: RemoteChatRowMenuHandlers,
 ): ChatRowMenu {
   const inbox = handlers.inboxAction;
-  return (Item) =>
+  const { triage } = handlers;
+  return (Item, Separator, SubMenu) =>
     actions.flatMap((action) => {
       switch (action.id) {
         case "open":
@@ -32,6 +39,12 @@ export function remoteChatRowMenu(
                   <Item key="inboxAction" icon={CHAT_ROW_INBOX_ACTIONS[inbox.kind].menuIcon} onSelect={inbox.onSelect}>
                     {CHAT_ROW_INBOX_ACTIONS[inbox.kind].label}
                   </Item>,
+                ]
+              : []),
+            ...(triage
+              ? [
+                  <React.Fragment key="triage">{triage(Item, Separator, SubMenu)}</React.Fragment>,
+                  ...(actions.some((other) => other.id === "rename") ? [<Separator key="triageSeparator" />] : []),
                 ]
               : []),
           ];

@@ -255,7 +255,7 @@ export function pendingAttentionForChat(
 const NO_DETACHED_PROMPTS = new DetachedPromptLog();
 
 export interface LiveRunAttention {
-  /** When the live run's oldest waiting approval or question was raised. */
+  /** When the live run's oldest pending approval was raised, or else its oldest question. */
   attentionSince?: number;
   /** When the live run started. */
   runStartedAt?: number;
@@ -265,7 +265,8 @@ export interface LiveRunAttention {
 
 /**
  * A chat's live run, for paired devices' Inbox signals (Remote revision 48):
- * its start, and the oldest live approval or question with its summary.
+ * its start, and its oldest pending approval (or else its oldest question) with
+ * its summary.
  * Detached and interrupted waits are this Mac's own rows and are left out.
  * Undefined when no run is live.
  */

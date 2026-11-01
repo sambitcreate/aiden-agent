@@ -20,6 +20,7 @@ import {
   type ChatTriageWrite,
 } from "../../renderer/shared/chat-triage.js";
 import { DataStore } from "./data-store.js";
+import type { HostRunSummary } from "./host-run-registry.js";
 
 interface ChatTriageFile {
   version: 1;
@@ -27,8 +28,12 @@ interface ChatTriageFile {
 }
 
 const SAFE_CHAT_ID = /^[A-Za-z0-9._:-]{1,160}$/u;
-/** setTimeout clamps anything longer, so a far snooze re-arms in steps. */
-const MAX_TIMER_MS = 2_147_483_647;
+/**
+ * The wake timer never waits longer than this, so a snooze that passed while
+ * the clock jumped (a manual change, a time-zone sync) clears within a minute
+ * even if no resume or unlock reported it.
+ */
+export const SNOOZE_WAKE_CHECK_MS = 60_000;
 
 function isTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -174,7 +179,8 @@ export class ChatTriageStore {
 
   /**
    * Bring a snoozed chat back now, because it needs the person (an approval,
-   * a question or a failure). A chat that is not snoozed is left alone.
+   * a question or a failure) or the person just wrote in it. Only the snooze
+   * is cleared; Pin and Done stay. A chat that is not snoozed is left alone.
    */
   async wake(chatId: string): Promise<boolean> {
     if ((await this.store.load()).chats[chatId]?.snoozedUntil === undefined) return false;
@@ -208,18 +214,33 @@ export class ChatTriageStore {
     await this.expire();
   }
 
+  /**
+   * Clear every snooze that has passed and re-arm the timer now, for example
+   * after the Mac wakes from sleep or unlocks, when a timer may have slept
+   * through its time. Does nothing before `start()`.
+   */
+  async checkSnoozes(): Promise<void> {
+    if (!this.started) return;
+    await this.expire();
+  }
+
   dispose(): void {
     this.started = false;
     this.clear();
   }
 
-  /** Clear every snooze that has passed, then arm the timer for the next one. */
+  /**
+   * Clear every snooze that has passed, then arm the timer for the next one.
+   * The timer is re-armed even when the clear fails, so one failed write never
+   * stops later snoozes from waking.
+   */
   private async expire(): Promise<void> {
-    const now = this.now();
-    const due = Object.entries((await this.store.load()).chats).some(
-      ([, entry]) => entry.snoozedUntil !== undefined && entry.snoozedUntil <= now,
-    );
-    if (due) {
+    try {
+      const now = this.now();
+      const due = Object.entries((await this.store.load()).chats).some(
+        ([, entry]) => entry.snoozedUntil !== undefined && entry.snoozedUntil <= now,
+      );
+      if (!due) return;
       const changed = await this.store.update((draft) => {
         let any = false;
         for (const [chatId, entry] of Object.entries(draft.chats)) {
@@ -231,8 +252,9 @@ export class ChatTriageStore {
         return any;
       });
       if (changed) await this.publish();
+    } finally {
+      this.arm();
     }
-    this.arm();
   }
 
   private clear(): void {
@@ -245,26 +267,31 @@ export class ChatTriageStore {
     this.clear();
     if (!this.started) return;
     void this.store.load().then((file) => {
-      if (!this.started) return;
       let next: number | undefined;
       for (const entry of Object.values(file.chats)) {
         if (entry.snoozedUntil !== undefined && (next === undefined || entry.snoozedUntil < next)) {
           next = entry.snoozedUntil;
         }
       }
-      if (next === undefined) return;
-      this.clear();
-      const delay = Math.min(Math.max(next - this.now(), 0), MAX_TIMER_MS);
-      const set = this.options.setTimer ?? ((callback: () => void, ms: number) => {
-        const handle = setTimeout(callback, ms);
-        (handle as { unref?: () => void }).unref?.();
-        return handle;
-      });
-      this.timer = set(() => {
-        this.timer = null;
-        void this.expire().catch(() => undefined);
-      }, delay);
-    }, () => undefined);
+      if (next !== undefined) this.schedule(Math.max(next - this.now(), 0));
+    }, () => {
+      // An unreadable store retries on the next check rather than never.
+      this.schedule(SNOOZE_WAKE_CHECK_MS);
+    });
+  }
+
+  private schedule(delay: number): void {
+    if (!this.started) return;
+    this.clear();
+    const set = this.options.setTimer ?? ((callback: () => void, ms: number) => {
+      const handle = setTimeout(callback, ms);
+      (handle as { unref?: () => void }).unref?.();
+      return handle;
+    });
+    this.timer = set(() => {
+      this.timer = null;
+      void this.expire().catch(() => undefined);
+    }, Math.min(delay, SNOOZE_WAKE_CHECK_MS));
   }
 
   private async publish(): Promise<void> {
@@ -277,16 +304,37 @@ export class ChatTriageStore {
 /** Run states that need the person, so they bring a snoozed chat back early. */
 const WAKING_RUN_STATES: ReadonlySet<string> = new Set(["needs_approval", "needs_input", "failed"]);
 
+type AttentionRun = Pick<HostRunSummary, "runId" | "chatId" | "state" | "pendingApprovalIds" | "pendingQuestionIds">;
+
 /**
- * Wake a snoozed chat as soon as one of its runs asks for an approval or an
- * answer, or fails. Returns the unsubscribe function.
+ * Wake a snoozed chat as soon as one of its runs starts asking for an
+ * approval or an answer, asks a new one, or fails. Any other notification
+ * about a run that is already waiting (one of two approvals answered, a delta)
+ * leaves a snooze the person set after the wait began. Returns the
+ * unsubscribe function.
  */
 export function wakeTriageOnAttention(
-  runs: { onChange(listener: (summary: { chatId: string; state: string }, removed: boolean) => void): () => void },
+  runs: { onChange(listener: (summary: AttentionRun, removed: boolean) => void): () => void },
   triage: Pick<ChatTriageStore, "wake">,
 ): () => void {
-  return runs.onChange((summary, removed) => {
-    if (removed || !WAKING_RUN_STATES.has(summary.state)) return;
+  /** Each run's last state and the prompt ids it was already waiting on. */
+  const seen = new Map<string, { state: string; prompts: ReadonlySet<string> }>();
+  const stop = runs.onChange((summary, removed) => {
+    if (removed) {
+      seen.delete(summary.runId);
+      return;
+    }
+    const before = seen.get(summary.runId);
+    const prompts = new Set([...summary.pendingApprovalIds, ...summary.pendingQuestionIds]);
+    seen.set(summary.runId, { state: summary.state, prompts });
+    if (!WAKING_RUN_STATES.has(summary.state)) return;
+    const entered = before?.state !== summary.state;
+    const asked = [...prompts].some((id) => !before?.prompts.has(id));
+    if (!entered && !asked) return;
     void triage.wake(summary.chatId).catch(() => undefined);
   });
+  return () => {
+    stop();
+    seen.clear();
+  };
 }

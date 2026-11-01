@@ -3,12 +3,13 @@ import { DEFAULT_CHAT_WORKSPACE_ID } from "../shared/chat-workspace";
 import type { ChatPendingAttention } from "../shared/chat-pending-attention";
 import type { ChatRowState } from "../shared/chat-row-state";
 import type { ChatTriageEntry } from "../shared/chat-triage";
-import { triageSignals } from "./inbox-triage";
+import { formatSnoozeStatus, triageSignals } from "./inbox-triage";
 import { isNoWorkspace, NO_WORKSPACE_GROUP_LABEL } from "./no-workspace";
 import {
   INBOX_SECTIONS,
   INBOX_TIERS,
   inboxState,
+  inboxTriageHold,
   type HeldInboxOrder,
   type InboxDisplayOrder,
   type InboxRow,
@@ -426,6 +427,12 @@ export function inboxRowStatus(entry: InboxEntry, section: InboxSection, now: nu
       tone: "working",
     };
   }
+  // Search lists Done and snoozed chats; so does a row held in place after the person triaged it.
+  const hold = inboxTriageHold(signals, now);
+  if (hold.done) return { label: "Done", tone: "quiet" };
+  if (hold.snoozed && signals.snoozedUntil !== undefined) {
+    return { label: `Snoozed until ${formatSnoozeStatus(signals.snoozedUntil, now)}`, tone: "quiet" };
+  }
   return {
     label: formatInboxDuration(now, section === "updates" ? signals.lastAssistantAt ?? signals.updatedAt : signals.updatedAt),
     tone: "quiet",
@@ -645,17 +652,28 @@ export function resolveInboxEntry<Entry>(
  * on-screen order (the same order that numbers the rows' hints): ⌘N opens the
  * Nth row, a held row that no longer qualifies included, so the binding always
  * matches the hint. `resolve` finds a key's live entry, listed or held.
+ *
+ * `lastOrder` is the last order that still listed the open chat. When the open
+ * chat has left the list (Mark done or Snooze on it), previous and next step
+ * from where it was: the nearest of its old neighbours still listed.
  */
 export function inboxShortcutTargets<Entry>(
   keys: readonly string[],
   resolve: (key: string) => Entry | undefined,
   activeKey: string | null,
+  lastOrder?: readonly string[],
 ): { jump: (Entry | undefined)[]; previous: Entry | undefined; next: Entry | undefined } {
   const jump = keys.slice(0, INBOX_SHORTCUT_LIMIT).map(resolve);
   const navigable = keys.filter((key) => resolve(key) !== undefined);
   const current = activeKey ? navigable.indexOf(activeKey) : -1;
-  const previousKey = current > 0 ? navigable[current - 1] : undefined;
-  const nextKey = current >= 0 ? navigable[current + 1] : navigable[0];
+  let previousKey: string | undefined = current > 0 ? navigable[current - 1] : undefined;
+  let nextKey: string | undefined = current >= 0 ? navigable[current + 1] : navigable[0];
+  const was = current < 0 && activeKey && lastOrder ? lastOrder.indexOf(activeKey) : -1;
+  if (was >= 0) {
+    const listed = new Set(navigable);
+    previousKey = lastOrder!.slice(0, was).reverse().find((key) => listed.has(key));
+    nextKey = lastOrder!.slice(was + 1).find((key) => listed.has(key));
+  }
   return {
     jump,
     previous: previousKey === undefined ? undefined : resolve(previousKey),

@@ -35,6 +35,7 @@ import { createChatStore } from "./chat-store-core.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 import type { VisualViewerAppearance, VisualViewerSource } from "./visual-viewer-document.js";
 import { HostRunRegistry } from "./host-run-registry.js";
+import { ChatTriageStore } from "./chat-triage.js";
 import { workspaceFolderMissing } from "./workspace-folder-presence.js";
 
 const ONE_PIXEL_PNG =
@@ -89,6 +90,7 @@ function fixture(
     visualViewer?: ConstructorParameters<typeof AidenRemoteChatService>[0]["visualViewer"];
     browserRecordings?: ConstructorParameters<typeof AidenRemoteChatService>[0]["browserRecordings"];
     contextPressure?: ConstructorParameters<typeof AidenRemoteChatService>[0]["contextPressure"];
+    triage?: ConstructorParameters<typeof AidenRemoteChatService>[0]["triage"];
     /** The host's configured models; anything else is refused as `resolve` refuses it. */
     configuredModels?: readonly string[];
   } = {},
@@ -310,6 +312,7 @@ function fixture(
     ...(fixtureOptions.visualViewer ? { visualViewer: fixtureOptions.visualViewer } : {}),
     ...(fixtureOptions.browserRecordings ? { browserRecordings: fixtureOptions.browserRecordings } : {}),
     ...(fixtureOptions.contextPressure ? { contextPressure: fixtureOptions.contextPressure } : {}),
+    ...(fixtureOptions.triage ? { triage: fixtureOptions.triage } : {}),
   });
   return {
     service,
@@ -1502,6 +1505,36 @@ test("remote turn atomically appends once, owns its stream, and replays the acce
     () => app.streams.status("device-2", first.streamId),
     (error: unknown) => (error as { code?: string }).code === "not_found",
   );
+});
+
+test("a remote turn brings a snoozed chat back once, keeps Done, and writes nothing for an unsnoozed chat", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "aiden-remote-turn-triage-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let published = 0;
+  const store = new ChatTriageStore(() => directory, { onChange: () => { published += 1; } });
+  // The wake is fire-and-forget; track it so the test can await it.
+  const wakes: Promise<unknown>[] = [];
+  const triage = {
+    snapshot: () => store.snapshot(),
+    set: store.set.bind(store),
+    wake: (chatId: string) => { const write = store.wake(chatId); wakes.push(write); return write; },
+  };
+  await store.set("chat-1", { done: true, snoozeUntil: Date.now() + 3_600_000 });
+  const before = published;
+  const app = fixture(chat(), { triage });
+
+  await app.service.startTurn("device-1", "chat-1", "triage-turn-key-0001", { text: "Back to this" });
+  await Promise.all(wakes);
+  const woken = await store.get("chat-1");
+  assert.equal(woken?.snoozedUntil, undefined);
+  assert.equal(typeof woken?.doneAt, "number");
+  assert.equal(woken?.revision, 2);
+  assert.equal(published, before + 1);
+
+  await app.service.startTurn("device-1", "chat-1", "triage-turn-key-0002", { text: "And again" });
+  await Promise.all(wakes);
+  assert.equal(published, before + 1, "no snooze, no write");
+  assert.equal((await store.get("chat-1"))?.revision, 2);
 });
 
 test("once Bots run in their durable session, a workspace-chat turn to a Bot is refused with an update hint", async () => {

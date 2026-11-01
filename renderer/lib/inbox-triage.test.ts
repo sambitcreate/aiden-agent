@@ -4,10 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { ChatTriageStore } from "../../main/services/chat-triage";
-import type { ChatTriageEntry, ChatTriagePatch } from "../shared/chat-triage";
+import { snoozeOptions, type ChatTriageEntry, type ChatTriagePatch } from "../shared/chat-triage";
 import {
+  formatSnoozeMenuTime,
   formatSnoozeUntil,
   groupByHost,
+  inboxTriageOffer,
   inboxTriagePatch,
   inboxTriageToastTitle,
   inboxTriageUndoConflictText,
@@ -81,8 +83,62 @@ test("each action moves its row the moment it is predicted", () => {
   assert.equal(placed(inboxTriagePatch("pin")), "pinned");
   assert.equal(placed(inboxTriagePatch("done"), { unread: true, lastAssistantAt: NOW - HOUR }), "hidden");
   assert.equal(placed(inboxTriagePatch("snooze", NOW + HOUR), { unread: true }), "hidden");
-  // A Needs you row stays where it is: triage never hides an approval.
-  assert.equal(placed(inboxTriagePatch("snooze", NOW + HOUR), { rowState: "needs_approval" }), "needs_you");
+  // Mark not done and Unsnooze put a Done or snoozed row back.
+  const done = predictTriage(null, { done: true }, NOW - HOUR);
+  const back = (patch: ChatTriagePatch) =>
+    inboxState(signals({ unread: true, ...triageSignals(predictTriage(done, patch, NOW)) }), NOW, 24 * HOUR).shelf;
+  assert.equal(back(inboxTriagePatch("undone")), "updates");
+  const snoozed = predictTriage(null, { snoozeUntil: NOW + HOUR }, NOW - HOUR);
+  assert.equal(
+    inboxState(signals({ unread: true, ...triageSignals(predictTriage(snoozed, inboxTriagePatch("unsnooze"), NOW)) }), NOW, 24 * HOUR).shelf,
+    "updates",
+  );
+});
+
+test("a row offers Mark done and Snooze only where they move it", () => {
+  const rows: Record<string, Partial<InboxSignals>> = {
+    update: { unread: true, lastAssistantAt: NOW - HOUR },
+    earlier: {},
+    pinned: { pinnedAt: NOW - 2 * HOUR },
+    "unread failure": { failed: true, unread: true, lastAssistantAt: NOW - HOUR },
+    "open failure": { failed: true, unread: true, isOpen: true, lastAssistantAt: NOW - HOUR },
+    approval: { rowState: "needs_approval", unread: true },
+    question: { rowState: "needs_input" },
+    running: { rowState: "working" },
+    detached: { attention: "detached" },
+  };
+  for (const [name, base] of Object.entries(rows)) {
+    const offer = inboxTriageOffer(signals(base), NOW);
+    for (const patch of [inboxTriagePatch("done"), inboxTriagePatch("snooze", NOW + HOUR)]) {
+      const after = signals({
+        ...base,
+        ...(offer.alsoMarkRead ? { unread: false } : {}),
+        ...triageSignals(predictTriage(null, patch, NOW)),
+      });
+      const shelf = inboxState(after, NOW, 24 * HOUR).shelf;
+      if (offer.doneAndSnooze) assert.equal(shelf, "hidden", `${name}: ${JSON.stringify(patch)} hides the row`);
+      else assert.notEqual(shelf, "hidden", `${name}: the action would leave the row in place, so it isn't offered`);
+    }
+  }
+  // Only an unseen failure needs the read too; without it the row stays in Needs you.
+  const failure = signals(rows["unread failure"]);
+  assert.equal(inboxTriageOffer(failure, NOW).alsoMarkRead, true);
+  assert.equal(inboxState({ ...failure, ...triageSignals(predictTriage(null, { done: true }, NOW)) }, NOW).shelf, "needs_you");
+  assert.equal(inboxTriageOffer(signals(rows.update), NOW).alsoMarkRead, false);
+  assert.equal(inboxTriageOffer(signals(rows["open failure"]), NOW).alsoMarkRead, false);
+});
+
+test("a Done or snoozed row's menu reads Mark not done or Unsnooze", () => {
+  const offer = (entry: ChatTriageEntry, base: Partial<InboxSignals> = {}) =>
+    inboxTriageOffer(signals({ ...base, ...triageSignals(entry) }), NOW);
+  const done = predictTriage(null, { done: true }, NOW - HOUR);
+  assert.deepEqual([offer(done).done, offer(done).snoozed], [true, false]);
+  // Newer output undoes Done by itself, so the item reads Mark done again.
+  assert.equal(offer(done, { lastAssistantAt: NOW }).done, false);
+  const snoozed = predictTriage(null, { snoozeUntil: NOW + HOUR }, NOW - HOUR);
+  assert.deepEqual([offer(snoozed).done, offer(snoozed).snoozed], [false, true]);
+  const woke = predictTriage(null, { snoozeUntil: NOW - 1 + HOUR }, NOW - 2 * HOUR);
+  assert.equal(inboxTriageOffer(signals(triageSignals(woke)), NOW + HOUR).snoozed, false, "a passed snooze no longer holds");
 });
 
 test("actions of one kind inside the Undo window merge into one batch", () => {
@@ -172,6 +228,27 @@ test("the toast names a snooze's end by day", () => {
   assert.match(formatSnoozeUntil(at(1, 9), NOW, "en-US"), /^tomorrow, 9:00\sAM$/u);
   assert.match(formatSnoozeUntil(at(2, 9), NOW, "en-US"), /^Monday, 9:00\sAM$/u);
   assert.match(formatSnoozeUntil(at(9, 9), NOW, "en-US"), /^Mon, Nov 9, 9:00\sAM$/u);
+});
+
+test("the Snooze menu's trailing time never repeats the preset's day", () => {
+  const at = (days: number, hour: number) => new Date(2026, 9, 31 + days, hour, 0).getTime();
+  // Today: the time alone. Within the week: the short weekday, never "tomorrow". Further: the date.
+  assert.match(formatSnoozeMenuTime(at(0, 18), NOW, "en-US"), /^6:00\sPM$/u);
+  assert.match(formatSnoozeMenuTime(at(1, 9), NOW, "en-US"), /^Sun 9:00\sAM$/u);
+  assert.match(formatSnoozeMenuTime(at(2, 9), NOW, "en-US"), /^Mon 9:00\sAM$/u);
+  assert.match(formatSnoozeMenuTime(at(9, 9), NOW, "en-US"), /^Nov 9, 9:00\sAM$/u);
+});
+
+test("no two Snooze presets read the same time, whatever the day", () => {
+  // A whole week of mornings and evenings, Sunday included, where Tomorrow and
+  // Next week both land on a Monday.
+  for (let day = 0; day < 7; day += 1) {
+    for (const hour of [8, 16]) {
+      const now = new Date(2026, 10, 1 + day, hour, 0);
+      const times = snoozeOptions(now).map((option) => formatSnoozeMenuTime(option.until, now.getTime(), "en-US"));
+      assert.equal(new Set(times).size, times.length, `${now.toDateString()} ${hour}:00 reads ${times.join(" | ")}`);
+    }
+  }
 });
 
 test("the toast's titles and conflict notes read naturally", () => {

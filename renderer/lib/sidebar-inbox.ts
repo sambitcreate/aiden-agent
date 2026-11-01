@@ -53,11 +53,30 @@ export interface InboxPlacement {
   sortAt: number;
 }
 
-/** Where one chat belongs. The placement rules apply in the plan's order. */
+/**
+ * The triage that hides a row right now: Mark done until newer output lands,
+ * and Snooze until it ends. Both can hold at once.
+ */
+export function inboxTriageHold(
+  signals: Pick<InboxSignals, "doneAt" | "snoozedUntil" | "lastAssistantAt">,
+  now: number,
+): { done: boolean; snoozed: boolean } {
+  return {
+    done: signals.doneAt !== undefined && (signals.lastAssistantAt ?? Number.NEGATIVE_INFINITY) <= signals.doneAt,
+    snoozed: signals.snoozedUntil !== undefined && signals.snoozedUntil > now,
+  };
+}
+
+/**
+ * Where one chat belongs. The placement rules apply in the plan's order.
+ * `includeTriaged` (search) skips rule 5, so a Done or snoozed chat is listed
+ * where it would be without its triage.
+ */
 export function inboxState(
   signals: Readonly<InboxSignals>,
   now: number,
   recentWindowMs: number = INBOX_RECENT_WINDOW_MS,
+  includeTriaged = false,
 ): InboxPlacement {
   const unread = signals.unread && !signals.isOpen;
   const needsYou = (tier: number): InboxPlacement => ({
@@ -78,10 +97,10 @@ export function inboxState(
   }
   // 5. Done with no newer output, or snoozed.
   const hidden: InboxPlacement = { shelf: "hidden", tier: 0, sortAt: signals.updatedAt };
-  if (signals.doneAt !== undefined && (signals.lastAssistantAt ?? Number.NEGATIVE_INFINITY) <= signals.doneAt) {
-    return hidden;
+  if (!includeTriaged) {
+    const hold = inboxTriageHold(signals, now);
+    if (hold.done || hold.snoozed) return hidden;
   }
-  if (signals.snoozedUntil !== undefined && signals.snoozedUntil > now) return hidden;
   // 6–8.
   if (signals.pinnedAt !== undefined) return { shelf: "pinned", tier: 0, sortAt: signals.pinnedAt };
   if (unread) return { shelf: "updates", tier: 0, sortAt: signals.lastAssistantAt ?? signals.updatedAt };
@@ -103,6 +122,8 @@ export interface InboxOptions {
   earlierLimit?: number;
   /** Show more: list every Earlier row. */
   showAllEarlier?: boolean;
+  /** Search: list Done and snoozed chats too (see `inboxState`). */
+  includeTriaged?: boolean;
 }
 
 export interface InboxOrganization<Row extends InboxRow> {
@@ -153,7 +174,7 @@ export function organizeInbox<Row extends InboxRow>(
   let hiddenCount = 0;
   let needsYouCount = 0;
   for (const row of rows) {
-    const placement = inboxState(row.signals, now, recentWindowMs);
+    const placement = inboxState(row.signals, now, recentWindowMs, options.includeTriaged);
     if (placement.shelf === "hidden") {
       hiddenCount += 1;
       continue;

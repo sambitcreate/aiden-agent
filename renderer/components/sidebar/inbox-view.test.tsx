@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { createPortal } from "react-dom";
 import { TooltipProvider } from "../ui";
 import { ChatRow } from "./chat-row";
-import { InboxView, type InboxRowContext } from "./inbox-view";
+import { InboxView, type InboxRowContext, type InboxViewHandle } from "./inbox-view";
 import { botInboxRows, inboxRowAction, inboxShortcutTargets, resolveInboxEntry, type InboxEntry } from "../../lib/sidebar-inbox-view";
 import { botFixture } from "../../main/bots/test-fixtures";
 import type { InboxSignals } from "../../lib/sidebar-inbox";
@@ -81,6 +81,8 @@ function view(
     shelfHost?: HTMLElement | null;
     renderRow?: (entry: InboxEntry, context: InboxRowContext) => React.ReactNode;
     onShortcutOrderChange?: (keys: readonly string[]) => void;
+    activeKey?: string | null;
+    handleRef?: React.Ref<InboxViewHandle>;
   } = {},
 ) {
   return (
@@ -93,6 +95,8 @@ function view(
         shelfHost={extra.shelfHost ?? null}
         renderRow={extra.renderRow ?? renderRow(extra.onMarkRead)}
         {...(extra.onShortcutOrderChange ? { onShortcutOrderChange: extra.onShortcutOrderChange } : {})}
+        {...(extra.activeKey !== undefined ? { activeKey: extra.activeKey } : {})}
+        {...(extra.handleRef ? { handleRef: extra.handleRef } : {})}
       />
     </TooltipProvider>
   );
@@ -149,6 +153,68 @@ test("pinned rows get their own group between Needs you and Updates; done and sn
   assert.deepEqual(rowTitles(section("Updates")), ["Chat news"]);
   assert.equal(screen.queryByText("Chat done"), null);
   assert.equal(screen.queryByText("Chat snoozed"), null);
+});
+
+test("a search lists Done and snoozed matches, each saying so", () => {
+  render(view([
+    entry("done", { unread: true, lastAssistantAt: NOW - 10 * MINUTE, doneAt: NOW - 5 * MINUTE }),
+    entry("snoozed", { snoozedUntil: NOW + HOUR }),
+    entry("quiet"),
+  ], { searching: true }));
+  const row = (title: string) =>
+    screen.getAllByRole("button").find((button) =>
+      button.hasAttribute("data-roving-item") && button.querySelector("[data-inbox-title]")?.textContent === title)!;
+  assert.equal(row("Chat done").querySelector("[data-inbox-status]")?.textContent, "Done");
+  assert.match(row("Chat snoozed").querySelector("[data-inbox-status]")?.textContent ?? "", /^Snoozed until \S/u);
+  assert.doesNotMatch(row("Chat quiet").querySelector("[data-inbox-status]")?.textContent ?? "", /Done|Snoozed/u);
+});
+
+test("Undo's restored row goes back to its own slot in a list that is in use", () => {
+  const rows = (doneB: boolean) => [
+    entry("a", { updatedAt: NOW - MINUTE }),
+    entry("b", { updatedAt: NOW - 2 * MINUTE, ...(doneB ? { doneAt: NOW - MINUTE } : {}) }),
+    entry("c", { updatedAt: NOW - 3 * MINUTE }),
+  ];
+  const restore = (touch: boolean) => {
+    const handle: { current: InboxViewHandle | null } = { current: null };
+    const { rerender } = render(view(rows(false), { handleRef: handle }));
+    rerender(view(rows(true), { handleRef: handle }));
+    assert.deepEqual(rowTitles(section("Earlier")), ["Chat a", "Chat c"]);
+    // The pointer is back over the list when Undo lands.
+    fireEvent.pointerOver(inboxRoot());
+    if (touch) act(() => handle.current!.touch([projectOrderKey("local", "b")]));
+    rerender(view(rows(false), { handleRef: handle }));
+    const titles = rowTitles(section("Earlier"));
+    cleanup();
+    return titles;
+  };
+  assert.deepEqual(restore(false), ["Chat a", "Chat c", "Chat b"], "a frozen list adds an untouched arrival at the end");
+  assert.deepEqual(restore(true), ["Chat a", "Chat b", "Chat c"]);
+});
+
+test("after Done on the open chat, ⇧⌘[ and ⇧⌘] step from the rows around where it was", () => {
+  let reported: readonly string[] = [];
+  const onShortcutOrderChange = (keys: readonly string[]) => {
+    reported = keys;
+  };
+  const rows = (doneB: boolean) => [
+    entry("a", { updatedAt: NOW - MINUTE }),
+    entry("b", { updatedAt: NOW - 2 * MINUTE, isOpen: true, ...(doneB ? { doneAt: NOW - MINUTE, lastAssistantAt: NOW - 2 * MINUTE } : {}) }),
+    entry("c", { updatedAt: NOW - 3 * MINUTE }),
+    entry("d", { updatedAt: NOW - 4 * MINUTE }),
+  ];
+  const active = projectOrderKey("local", "b");
+  const { rerender } = render(view(rows(false), { onShortcutOrderChange, activeKey: active }));
+  const before = reported;
+  rerender(view(rows(true), { onShortcutOrderChange, activeKey: active }));
+  assert.deepEqual(rowTitles(section("Earlier")), ["Chat a", "Chat c", "Chat d"]);
+  const listed = new Map(rows(true).filter((item) => item.key !== active).map((item) => [item.key, item] as const));
+  const resolve = resolveInboxEntry(listed, new Map());
+  const targets = inboxShortcutTargets(reported, resolve, active, before);
+  assert.equal(targets.previous?.title, "Chat a");
+  assert.equal(targets.next?.title, "Chat c");
+  // Without the order it left, the next row would be the list's first.
+  assert.equal(inboxShortcutTargets(reported, resolve, active).next?.title, "Chat a");
 });
 
 test("a done chat comes back with new output, and a snoozed one when it wakes or needs you", () => {

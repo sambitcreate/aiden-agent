@@ -15,7 +15,7 @@ import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
 import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
-import { startChatTriage } from "./services/chat-triage-main.js";
+import { startChatTriage, stopChatTriage } from "./services/chat-triage-main.js";
 import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
 import { externalUrl } from "./services/browser/core.js";
@@ -358,6 +358,7 @@ function cleanupApplication(): void {
   formFillRuntime.dispose();
   computerUseStatus.invalidate();
   scheduleService.stop();
+  stopChatTriage();
   llmClient.abortAll();
   void geminiLiveService.shutdown();
   telegramService.stop();

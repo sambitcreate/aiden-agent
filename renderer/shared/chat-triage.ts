@@ -42,7 +42,14 @@ export interface ChatTriageWrite {
 
 export type ChatTriageResult =
   | { ok: true; entry: ChatTriageEntry }
-  | { ok: false; code: "revision_conflict"; entry: ChatTriageEntry | null }
+  | {
+      ok: false;
+      code: "revision_conflict";
+      /** The entry the store holds; a paired host's refusal names only its revision, so it is `null` there. */
+      entry: ChatTriageEntry | null;
+      /** The revision the host holds, when its refusal says. */
+      currentRevision?: number;
+    }
   | { ok: false; code: "invalid" };
 
 /** A chat with no triage reads as revision 0. */
@@ -103,18 +110,24 @@ function atLocal(base: Date, dayOffset: number, hour: number): number {
   return at.getTime();
 }
 
+const SNOOZE_HOUR_MS = 60 * 60 * 1_000;
+
 /**
- * The snooze presets as absolute times on this device's clock: 1 hour from
- * now, this evening at 18:00 (left out once it is 18:00 or later), tomorrow at
- * 09:00 and next week's Monday at 09:00.
+ * The snooze presets as absolute times on this device's clock, earliest
+ * first: 1 hour from now; this evening at 18:00, left out unless it is more
+ * than an hour away (so it never lands at or before "1 hour"); tomorrow at
+ * 09:00; and next week's Monday at 09:00, at least two days away so it never
+ * repeats Tomorrow (on a Sunday it is the Monday after tomorrow).
  */
 export function snoozeOptions(now: Date): SnoozeOption[] {
-  const options: SnoozeOption[] = [{ preset: "hour", label: SNOOZE_PRESET_LABELS.hour, until: now.getTime() + 60 * 60 * 1_000 }];
+  const hour = now.getTime() + SNOOZE_HOUR_MS;
+  const options: SnoozeOption[] = [{ preset: "hour", label: SNOOZE_PRESET_LABELS.hour, until: hour }];
   const evening = atLocal(now, 0, 18);
-  if (evening > now.getTime()) options.push({ preset: "evening", label: SNOOZE_PRESET_LABELS.evening, until: evening });
+  if (evening > hour) options.push({ preset: "evening", label: SNOOZE_PRESET_LABELS.evening, until: evening });
   options.push({ preset: "tomorrow", label: SNOOZE_PRESET_LABELS.tomorrow, until: atLocal(now, 1, 9) });
-  // Monday is day 1. From any day, the next Monday strictly after today.
-  const daysToMonday = ((8 - now.getDay()) % 7) || 7;
+  // Monday is day 1. The next Monday strictly after tomorrow.
+  const nextMonday = ((8 - now.getDay()) % 7) || 7;
+  const daysToMonday = nextMonday < 2 ? nextMonday + 7 : nextMonday;
   options.push({ preset: "next_week", label: SNOOZE_PRESET_LABELS.next_week, until: atLocal(now, daysToMonday, 9) });
   return options;
 }

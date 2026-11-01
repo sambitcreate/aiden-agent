@@ -208,15 +208,22 @@ Triage (**Pin** or **Unpin**, **Mark done**, and a **Snooze** submenu) lives
 only in an Inbox row's overflow and context menus, never as an inline row
 button, and never on a Bot row. The Snooze submenu lists its presets (1 hour,
 This evening, Tomorrow, Next week) with each one's time as trailing tertiary
-`text-small` ("6:00 PM", "tomorrow, 9:00 AM"), worked out when the submenu
-opens. A host that can't take writes shows the items disabled rather than
-hiding them. Pinned chats get their own **Pinned** group between Needs you and
-Updates, and a pinned chat that needs the person still sits in Needs you. An
-action moves its row at once and then shows one Undo toast for five seconds;
+`text-small`, worked out when the submenu opens: the time alone for today
+("6:00 PM"), a short weekday and the time within the week ("Mon 9:00 AM"), else
+the date ("Nov 9, 9:00 AM"), since the label already names the day. This
+evening drops out once it is less than an hour away. A row that waits on the
+person or runs offers Pin alone, since Done or Snooze wouldn't move it. In
+search, a Done or snoozed match shows a quiet "Done" or "Snoozed until …"
+status, and its menu offers **Mark not done** or **Unsnooze** in place of Mark
+done and Snooze. A host that can't take writes shows the items disabled rather
+than hiding them. Pinned chats get their own **Pinned** group between Needs you
+and Updates, and a pinned chat that needs the person still sits in Needs you.
+An action moves its row at once and then shows one Undo toast for five seconds;
 actions of the same kind inside that window merge into it ("3 chats marked
-done") instead of stacking toasts. A failed write puts the row back with one
-error toast, and an Undo that finds the chat changed elsewhere leaves it alone
-and says so in the toast.
+done") instead of stacking toasts. The toast's action (Undo, Open, Retry) is
+the shared small filled squircle button, not Sonner's inverted pill. A failed
+write puts the row back with one error toast, and an Undo that finds the chat
+changed elsewhere leaves it alone and says so in the toast.
 
 ## Verification
 

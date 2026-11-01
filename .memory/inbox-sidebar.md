@@ -141,4 +141,13 @@ Plan: `docs/plans/inbox-sidebar-plan.md`. Before/after page: https://claude.ai/a
 - Env: Android Gradle needs `ANDROID_HOME=$HOME/Library/Android/sdk` and `JAVA_HOME` = Android Studio JBR. `test:aiden-remote` has 4 pre-existing openssl failures (`-days 0` on OpenSSL 4.1).
 - Docs: API doc section "Inbox signals, revision 48", plan "2b as built", plans README row.
 
+### 2a/2b review fixes (2026-11-01)
+- Renderer: `inboxTriageOffer(signals, now)` in `renderer/lib/inbox-triage.ts` -> `{doneAndSnooze, alsoMarkRead, done, snoozed}`; Mark done/Snooze hidden on needs_approval/needs_input/working/attention rows (Pin only); on unread failed rows they also mark read. Kinds `undone` (`{done:false}`) and `unsnooze` (`{snoozeUntil:null}`) = Mark not done / Unsnooze. `organizeInbox(..., {includeTriaged})` lists Done/snoozed rows in search with status "Done" / `formatSnoozeStatus` ("6:00 PM", "Mon 9:00 AM", "Nov 16"). Menu trailing time `formatSnoozeMenuTime`: time today, "Mon 9:00 AM" < 7 days, else "Nov 9, 9:00 AM" (Sunday: Tomorrow and Next week are both Mondays; test "no two Snooze presets read the same time"). `inboxTriageHold` in `sidebar-inbox.ts`.
+- Presets (`snoozeOptions`): Next week on Sunday = Monday after next; This evening drops < 1h before 18:00.
+- `InboxViewHandle.touch(keys)` + `useInboxTriage({onRestore})`: Undo places restored rows live so a frozen list doesn't append them. `inboxShortcutTargets(..., lastOrder)` keeps ⇧⌘[ / ⇧⌘] neighbours after the open row hides.
+- Remote row menu: triage right after the row's one action (`remote-chat-row-menu.tsx`). `RemoteHostAdapter.setTriage` conflict -> `entry: null` (host sends only `currentRevision`).
+- Toast action: `[data-sonner-toast][data-styled="true"] [data-button]` in `styles.css` = shared small filled squircle (28px, `--radius-button`, `--surface-control*`, `--elevation-control*`).
+- Main (S1-S6, R1b): observer gets `run.state`+`attentionSummary` per already-waiting run after its snapshot (device-tagged sequences others skip); snooze timer capped at 60 s, re-arms in `finally`, `checkSnoozes` on powerMonitor resume/unlock, `stopChatTriage` in `cleanupApplication`; `wakeTriageOnAttention` wakes only on entering approval/input/failed or a new prompt id; `createChatApplicationService.remove` `inboxState` drops triage + read marker on every delete path; a sent user message (IPC append, Remote `startTurn`) calls `ChatTriageStore.wake`.
+- Hook tests `renderer/lib/use-inbox-triage.test.tsx`: sonner 2.0.7 `getToasts()` hides ids dismissed in earlier tests (`dismissedToasts` only clears on create), so the tests read `toast.getHistory()` sliced per test.
+
 Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control]].

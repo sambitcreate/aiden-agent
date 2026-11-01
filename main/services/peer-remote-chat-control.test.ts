@@ -468,7 +468,8 @@ test("triage from this Mac lands once on the host across a lost answer, and a st
     // Another device marks it done; an Undo of the snooze built on revision 1 is refused.
     await store.set("chat-1", { done: true });
     const undo = await harness.adapter.setTriage("chat-1", { snoozeUntil: null }, 1);
-    assert.deepEqual(undo, { ok: false, code: "revision_conflict", entry: { revision: 2, updatedAt: 0 } });
+    // The host names only the revision it holds, so the refusal carries no entry of its own making.
+    assert.deepEqual(undo, { ok: false, code: "revision_conflict", entry: null, currentRevision: 2 });
     assert.equal((await store.get("chat-1"))?.snoozedUntil, snoozeUntil, "the stale Undo changed nothing");
   } finally {
     harness.close();

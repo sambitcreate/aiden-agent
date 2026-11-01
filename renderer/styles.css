@@ -2404,6 +2404,41 @@ textarea {
   box-shadow: var(--elevation-toast) !important;
 }
 
+/* A toast's action (Undo, Open, Retry) is the shared small filled squircle
+   button, not Sonner's inverted pill. The neutral keyboard focus ring above
+   still applies. */
+:root [data-sonner-toast][data-styled="true"] [data-button] {
+  height: 28px;
+  padding-inline: 12px;
+  border-radius: var(--radius-button);
+  corner-shape: squircle;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  box-shadow: var(--elevation-control);
+  font-size: var(--ui-font-size);
+  font-weight: 500;
+  cursor: default;
+  transition:
+    background-color var(--motion-duration) var(--motion-easing),
+    box-shadow var(--motion-duration) var(--motion-easing),
+    opacity var(--motion-duration) var(--motion-easing);
+}
+
+:root [data-sonner-toast][data-styled="true"] [data-button]:hover {
+  background: var(--surface-control-hover);
+  box-shadow: var(--elevation-control-hover);
+}
+
+:root [data-sonner-toast][data-styled="true"] [data-button]:active {
+  background: var(--surface-control-active);
+  box-shadow: var(--elevation-control-pressed);
+}
+
+:root [data-sonner-toast][data-styled="true"] [data-button]:focus-visible {
+  background: var(--surface-control-active);
+  box-shadow: var(--elevation-control);
+}
+
 /* Tell Tailwind to scan all local renderer window files for class names */
 @source "./**/*.{ts,tsx}";
 @source not "./preload.ts";

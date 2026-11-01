@@ -391,11 +391,13 @@ export class RemoteHostAdapter implements HostChatAdapter {
     }
     const answer = record(value);
     if ("conflict" in answer) {
+      // The refusal names the host's revision, not its entry: report just that rather than invent one.
       const revision = answer.conflict;
       return {
         ok: false,
         code: "revision_conflict",
-        entry: typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0 ? { revision, updatedAt: 0 } : null,
+        entry: null,
+        ...(typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0 ? { currentRevision: revision } : {}),
       };
     }
     const entry = remoteTriageEntry(answer);

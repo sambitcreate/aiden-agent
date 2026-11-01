@@ -268,7 +268,8 @@ export interface AidenRemoteChatSummaryProjection {
   forkedFrom?: Omit<AidenRemoteChatForkLineageProjection, "summary">;
   /**
    * Additive (protocol revision 48, `inbox-signals-v1`): when the live run's
-   * oldest waiting approval or question was raised. Absent without one.
+   * oldest pending approval was raised, or else its oldest question. Absent
+   * without one.
    */
   attentionSince?: string;
   /** Additive (protocol revision 48): when the chat's live run started. Absent without a live run. */
@@ -312,6 +313,8 @@ export interface AidenRemoteChatReadMarkers {
 export interface AidenRemoteChatTriage {
   snapshot(): Promise<ChatTriageSnapshot>;
   set(chatId: string, patch: ChatTriagePatch, write?: ChatTriageWrite): Promise<ChatTriageResult>;
+  /** Clear a snooze, and only a snooze, because the person wrote in the chat. */
+  wake?(chatId: string): Promise<unknown>;
 }
 
 /** The answer to a triage write: the chat's triage after it, times in RFC 3339. */
@@ -326,7 +329,7 @@ export interface AidenRemoteChatTriageProjection {
 
 /** A chat's live-run times (revision 48), epoch milliseconds. */
 export interface AidenRemoteChatRunTimes {
-  /** When the run's oldest waiting approval or question was raised. */
+  /** When the run's oldest pending approval was raised, or else its oldest question. */
   attentionSince?: number;
   /** When the run started. */
   runStartedAt?: number;
@@ -2666,6 +2669,9 @@ export class AidenRemoteChatService {
             });
             appended = true;
             appendedChat = chat;
+            // The person wrote in it, so a snoozed chat is back. Never blocks
+            // or fails the send; Pin and Done are left alone.
+            void this.options.triage?.wake?.(chatId).catch(() => undefined);
             taken?.commit();
             turn.settleAsyncWork();
             const started = await startSurfaceGeneration(

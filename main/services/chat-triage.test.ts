@@ -3,7 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { ChatTriageStore, wakeTriageOnAttention } from "./chat-triage.js";
+import { ChatTriageStore, SNOOZE_WAKE_CHECK_MS, wakeTriageOnAttention } from "./chat-triage.js";
+import type { HostRunSummary } from "./host-run-registry.js";
 import { parseChatTriageRequest } from "../handlers/chat-triage-params.js";
 import {
   MAX_CHAT_TRIAGE_ENTRIES,
@@ -248,38 +249,139 @@ test("snooze presets land on the acting device's local clock", () => {
   const late = snoozeOptions(new Date(2026, 10, 4, 18, 0, 0, 0));
   assert.equal(late.some((option) => option.preset === "evening"), false);
 
+  // At 17:30 "This evening" would land before "1 hour", so it drops out and
+  // the presets stay earliest first.
+  const halfPastFive = snoozeOptions(new Date(2026, 10, 4, 17, 30, 0, 0));
+  assert.deepEqual(halfPastFive.map((option) => option.preset), ["hour", "tomorrow", "next_week"]);
+  const times = (options: { until: number }[]) => options.map((option) => option.until);
+  for (const list of [options, halfPastFive, late]) {
+    assert.deepEqual(times(list), [...times(list)].sort((left, right) => left - right));
+  }
+
   // On a Monday, next week means the following Monday, not today.
   const monday = snoozeOptions(new Date(2026, 10, 2, 8, 0, 0, 0));
   const nextMonday = new Date(monday.find((option) => option.preset === "next_week")!.until);
   assert.deepEqual([nextMonday.getDay(), nextMonday.getDate()], [1, 9]);
-  // On a Sunday, it is tomorrow.
-  const sunday = snoozeOptions(new Date(2026, 10, 8, 20, 0, 0, 0));
-  assert.equal(new Date(sunday.find((option) => option.preset === "next_week")!.until).getDate(), 9);
+  // On a Sunday, tomorrow is already Monday, so next week is the Monday after (8 days on).
+  const sundayAt = new Date(2026, 10, 8, 20, 0, 0, 0);
+  const sunday = snoozeOptions(sundayAt);
+  const sundayNext = new Date(sunday.find((option) => option.preset === "next_week")!.until);
+  const sundayTomorrow = new Date(sunday.find((option) => option.preset === "tomorrow")!.until);
+  assert.deepEqual([sundayNext.getDay(), sundayNext.getDate(), sundayNext.getMonth()], [1, 16, 10]);
+  assert.deepEqual([sundayTomorrow.getDay(), sundayTomorrow.getDate()], [1, 9]);
+  // On a Saturday, Monday is two days away and counts as next week.
+  const saturday = snoozeOptions(new Date(2026, 10, 7, 10, 0, 0, 0));
+  assert.equal(new Date(saturday.find((option) => option.preset === "next_week")!.until).getDate(), 9);
 });
 
-test("a run that needs approval, input or has failed wakes its snoozed chat", async () => {
-  const listeners: Array<(summary: { chatId: string; state: string }, removed: boolean) => void> = [];
-  const woken: string[] = [];
-  const stop = wakeTriageOnAttention(
-    {
-      onChange(listener) {
+type AttentionListener = Parameters<Parameters<typeof wakeTriageOnAttention>[0]["onChange"]>[0];
+
+function attentionRuns() {
+  const listeners: AttentionListener[] = [];
+  const emit = (
+    chatId: string,
+    state: HostRunSummary["state"],
+    { removed = false, runId = `run-${chatId}`, approvals = [] as string[], questions = [] as string[] } = {},
+  ) => listeners.forEach((listener) =>
+    listener({ runId, chatId, state, pendingApprovalIds: approvals, pendingQuestionIds: questions }, removed));
+  return {
+    emit,
+    runs: {
+      onChange(listener: AttentionListener) {
         listeners.push(listener);
-        return () => listeners.splice(listeners.indexOf(listener), 1);
+        return () => void listeners.splice(listeners.indexOf(listener), 1);
       },
     },
-    { wake: async (chatId) => (woken.push(chatId), true) },
-  );
-  const emit = (chatId: string, state: string, removed = false) => listeners.forEach((listener) => listener({ chatId, state }, removed));
+  };
+}
+
+test("a run that needs approval, input or has failed wakes its snoozed chat", async () => {
+  const woken: string[] = [];
+  const { emit, runs } = attentionRuns();
+  const stop = wakeTriageOnAttention(runs, { wake: async (chatId) => (woken.push(chatId), true) });
   emit("a", "working");
-  emit("b", "needs_approval");
-  emit("c", "needs_input");
+  emit("b", "needs_approval", { approvals: ["approval-b"] });
+  emit("c", "needs_input", { questions: ["question-c"] });
   emit("d", "failed");
   emit("e", "done");
-  emit("f", "failed", true);
+  emit("f", "failed", { removed: true });
   assert.deepEqual(woken, ["b", "c", "d"]);
   stop();
   emit("g", "failed");
   assert.deepEqual(woken, ["b", "c", "d"]);
+});
+
+test("answering one of two approvals keeps a snooze set while the run waits; a new ask wakes it", async (t) => {
+  const root = await tmpDir(t);
+  let now = 1_000;
+  const store = new ChatTriageStore(() => root, { now: () => now, ...manualTimers() });
+  t.after(() => store.dispose());
+  await store.start();
+  const { emit, runs } = attentionRuns();
+  const stop = wakeTriageOnAttention(runs, store);
+  t.after(stop);
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  // The run asks two approvals, then the person snoozes the chat anyway.
+  emit("chat-a", "needs_approval", { approvals: ["approval-1", "approval-2"] });
+  await settled();
+  now = 2_000;
+  await store.set("chat-a", { snoozeUntil: 60_000 });
+
+  // One is answered: still waiting, nothing new asked. The snooze stays.
+  emit("chat-a", "needs_approval", { approvals: ["approval-2"] });
+  await settled();
+  assert.equal((await store.get("chat-a"))?.snoozedUntil, 60_000);
+
+  // A new approval arrives: the chat comes back.
+  emit("chat-a", "needs_approval", { approvals: ["approval-2", "approval-3"] });
+  await waitFor(async () => (await store.get("chat-a"))?.snoozedUntil === undefined);
+
+  // Snoozed again, then the run moves on and comes back to waiting: that wakes it too.
+  await store.set("chat-a", { snoozeUntil: 60_000 });
+  emit("chat-a", "working");
+  await settled();
+  assert.equal((await store.get("chat-a"))?.snoozedUntil, 60_000);
+  emit("chat-a", "needs_input", { questions: ["question-1"] });
+  await waitFor(async () => (await store.get("chat-a"))?.snoozedUntil === undefined);
+});
+
+test("a failed clear still re-arms, and a wake check after a clock jump clears a passed snooze", async (t) => {
+  const root = await tmpDir(t);
+  let now = 1_000;
+  let failPublish = false;
+  const timers = manualTimers();
+  const store = new ChatTriageStore(() => root, {
+    now: () => now,
+    onChange: () => {
+      if (failPublish) throw new Error("broadcast failed");
+    },
+    ...timers,
+  });
+  t.after(() => store.dispose());
+  await store.start();
+  await store.set("soon", { snoozeUntil: 5_000 });
+  await store.set("later", { snoozeUntil: 500_000 });
+  await waitFor(() => timers.live().length === 1 && timers.live()[0]!.ms === 4_000);
+
+  // The clear that the timer runs fails part-way: the next snooze is still armed.
+  now = 5_000;
+  failPublish = true;
+  const fired = timers.live()[0]!;
+  fired.cleared = true;
+  fired.callback();
+  await waitFor(() => timers.live().length === 1);
+  failPublish = false;
+  assert.equal((await store.get("soon"))?.snoozedUntil, undefined);
+  // A far snooze is checked at least once a minute, so a clock change is caught.
+  assert.equal(timers.live()[0]!.ms, SNOOZE_WAKE_CHECK_MS);
+
+  // The clock jumps past the later snooze (sleep, a manual change) before the
+  // timer fires; the resume or unlock check clears it at once.
+  now = 600_000;
+  await store.checkSnoozes();
+  assert.equal((await store.get("later"))?.snoozedUntil, undefined);
+  await waitFor(() => timers.live().length === 0);
 });
 
 test("the desktop IPC parser copies only known fields and refuses bad input", () => {

@@ -46,6 +46,12 @@ export interface InboxRowContext {
   touch: () => void;
 }
 
+/** What the sidebar can ask of a mounted Inbox. */
+export interface InboxViewHandle {
+  /** Place these rows live at once, as a row's own `touch` does: Undo's restored rows. */
+  touch: (keys: readonly string[]) => void;
+}
+
 export interface InboxViewProps {
   /** Rows already narrowed by search and the machine filter. */
   entries: readonly InboxEntry[];
@@ -59,7 +65,7 @@ export interface InboxViewProps {
    * holds in place after it stopped qualifying shows its live state from here.
    */
   unlisted?: ReadonlyMap<string, InboxEntry>;
-  /** Search reaches past the recent window and the Earlier cap, and never freezes. */
+  /** Search reaches past the recent window and the Earlier cap, lists Done and snoozed chats, and never freezes. */
   searching?: boolean;
   /** A change (search, machine filter) re-lays the list at once, without animation. */
   resetKey?: string;
@@ -77,6 +83,8 @@ export interface InboxViewProps {
   shelfHost?: HTMLElement | null;
   /** ⌘1–9 and previous/next: the visible rows' keys in on-screen order. */
   onShortcutOrderChange?: (keys: readonly string[]) => void;
+  /** Receives the view's handle. */
+  handleRef?: React.Ref<InboxViewHandle>;
   /** The clock, for tests. */
   now?: () => number;
 }
@@ -261,6 +269,7 @@ export function InboxView({
   renderRow,
   onShortcutOrderChange,
   shelfHost = null,
+  handleRef,
   now: clock = Date.now,
 }: InboxViewProps) {
   const rootRef = React.useRef<HTMLDivElement>(null);
@@ -273,6 +282,17 @@ export function InboxView({
   const inUse = useListInUse(regions);
   const sidebarHeight = useSidebarHeight(rootRef);
   const frozen = inUse && !searching;
+  React.useImperativeHandle(handleRef, () => ({
+    touch: (keys) => {
+      if (keys.length === 0) return;
+      setTouched((current) => {
+        if (keys.every((key) => current.has(key))) return current;
+        const next = new Set(current);
+        for (const key of keys) next.add(key);
+        return next;
+      });
+    },
+  }), []);
 
   React.useEffect(() => {
     const interval = window.setInterval(tick, CLOCK_TICK_MS);
@@ -300,7 +320,9 @@ export function InboxView({
   const organization = organizeInbox(
     entries,
     now,
-    searching ? { recentWindowMs: Number.POSITIVE_INFINITY, showAllEarlier: true } : { showAllEarlier },
+    searching
+      ? { recentWindowMs: Number.POSITIVE_INFINITY, showAllEarlier: true, includeTriaged: true }
+      : { showAllEarlier },
   );
   const live = inboxDisplayOrder(organization);
   const earlierOverflow = organization.earlierOverflow.map((row) => row.key);

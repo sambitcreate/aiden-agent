@@ -90,7 +90,6 @@ export function registerChatHistoryHandlers(): void {
     },
     hostPlatformCapabilities,
     closeDeviceSessionsForChat,
-    chatReadMarkers,
     chatTriage,
     rendererDocumentOwner,
     llmClient,

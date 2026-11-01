@@ -1072,6 +1072,7 @@
         "renderer/lib/tts-client.test.ts",
         "renderer/lib/tts-player.test.ts",
         "renderer/lib/usage-profile-data.test.ts",
+        "renderer/lib/use-inbox-triage.test.tsx",
         "renderer/lib/use-mark-chat-read.test.ts",
         "renderer/lib/use-sidebar-view.test.tsx",
         "renderer/lib/voice-recorder-core.test.ts",

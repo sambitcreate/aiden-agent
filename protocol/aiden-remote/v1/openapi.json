@@ -11267,7 +11267,7 @@
             ]
           },
           "attentionSince": {
-            "description": "Additive in contract revision 48 (inbox-signals-v1). While a live run waits on an approval or question, when the oldest one was raised. Absent otherwise.",
+            "description": "Additive in contract revision 48 (inbox-signals-v1). While a live run waits on an approval or question, when the oldest pending approval was raised, or else the oldest question. Absent otherwise.",
             "type": "string",
             "format": "date-time"
           },

@@ -4,7 +4,7 @@ import {
   type ChatTriageEntry,
   type ChatTriagePatch,
 } from "../shared/chat-triage";
-import type { InboxSignals } from "./sidebar-inbox";
+import { inboxTriageHold, type InboxSignals } from "./sidebar-inbox";
 import { LOCAL_SIDEBAR_HOST_ID, parseProjectOrderKey } from "./sidebar-organization";
 
 /**
@@ -13,7 +13,8 @@ import { LOCAL_SIDEBAR_HOST_ID, parseProjectOrderKey } from "./sidebar-organizat
  * toast share. The hook that sends them is `use-inbox-triage.ts`.
  */
 
-export type InboxTriageKind = "pin" | "unpin" | "done" | "snooze";
+/** `undone` and `unsnooze` are Mark not done and Unsnooze, on the Done and snoozed rows search lists. */
+export type InboxTriageKind = "pin" | "unpin" | "done" | "undone" | "snooze" | "unsnooze";
 
 /** One row a triage action names. */
 export interface InboxTriageTarget {
@@ -36,9 +37,50 @@ export function inboxTriagePatch(kind: InboxTriageKind, until?: number): ChatTri
       return { pinned: false };
     case "done":
       return { done: true };
+    case "undone":
+      return { done: false };
     case "snooze":
       return { snoozeUntil: until ?? null };
+    case "unsnooze":
+      return { snoozeUntil: null };
   }
+}
+
+/** Which triage items a row's menu offers. */
+export interface InboxTriageOffer {
+  /**
+   * Mark done (or Mark not done) and Snooze (or Unsnooze). Left out while the
+   * row waits on the person or runs: neither would move it.
+   */
+  doneAndSnooze: boolean;
+  /**
+   * Mark done and Snooze also mark the row read: unseen output from a failed
+   * run keeps a row in Needs you until it is read.
+   */
+  alsoMarkRead: boolean;
+  /** Mark done holds now, so the item reads Mark not done. */
+  done: boolean;
+  /** A snooze holds now, so the item reads Unsnooze. */
+  snoozed: boolean;
+}
+
+/** What a row's menu offers, by the rules that place it (`inboxState`). */
+export function inboxTriageOffer(
+  signals: Pick<InboxSignals, "rowState" | "attention" | "failed" | "unread" | "isOpen" | "doneAt" | "snoozedUntil" | "lastAssistantAt">,
+  now: number,
+): InboxTriageOffer {
+  const holdsRow =
+    signals.rowState === "needs_approval" ||
+    signals.rowState === "needs_input" ||
+    signals.rowState === "working" ||
+    signals.attention !== undefined;
+  const hold = inboxTriageHold(signals, now);
+  return {
+    doneAndSnooze: !holdsRow,
+    alsoMarkRead: !holdsRow && signals.failed && signals.unread && !signals.isOpen,
+    done: hold.done,
+    snoozed: hold.snoozed,
+  };
 }
 
 /**
@@ -172,20 +214,54 @@ export function groupByHost<T extends { target: InboxTriageTarget }>(writes: rea
   return groups;
 }
 
+function snoozeTime(at: Date, locale?: string): string {
+  return at.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
+}
+
+/** Whole calendar days from `now` to `until` on this device's clock. */
+function calendarDaysAhead(until: Date, now: number): number {
+  const today = new Date(now);
+  const dayStart = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  return Math.round((dayStart(until) - dayStart(today)) / 86_400_000);
+}
+
 /**
- * When a snooze ends, as the toast and menu say it: a time today, "tomorrow"
- * and a time, or a weekday and a time.
+ * When a snooze ends, as the toast and a snoozed row say it: a time today,
+ * "tomorrow" and a time, or a weekday and a time.
  */
 export function formatSnoozeUntil(until: number, now: number, locale?: string): string {
   const at = new Date(until);
-  const today = new Date(now);
-  const time = at.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
-  const dayStart = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  const days = Math.round((dayStart(at) - dayStart(today)) / 86_400_000);
+  const time = snoozeTime(at, locale);
+  const days = calendarDaysAhead(at, now);
   if (days <= 0) return time;
   if (days === 1) return `tomorrow, ${time}`;
   if (days < 7) return `${at.toLocaleDateString(locale, { weekday: "long" })}, ${time}`;
   return `${at.toLocaleDateString(locale, { weekday: "short", month: "short", day: "numeric" })}, ${time}`;
+}
+
+/**
+ * A snoozed row's status, which search lists: the time for today, the short
+ * weekday and time within the week, else the date ("Nov 16").
+ */
+export function formatSnoozeStatus(until: number, now: number, locale?: string): string {
+  const at = new Date(until);
+  if (calendarDaysAhead(at, now) >= 7) return at.toLocaleDateString(locale, { month: "short", day: "numeric" });
+  return formatSnoozeMenuTime(until, now, locale);
+}
+
+/**
+ * A Snooze preset's trailing time in the menu, beside a label that already
+ * names the day ("Tomorrow", "Next week"): the time alone for today, the short
+ * weekday and the time within the week ("Mon 9:00 AM"), else the date and the
+ * time ("Nov 9, 9:00 AM"), so Next week on a Sunday doesn't read like Tomorrow.
+ */
+export function formatSnoozeMenuTime(until: number, now: number, locale?: string): string {
+  const at = new Date(until);
+  const time = snoozeTime(at, locale);
+  const days = calendarDaysAhead(at, now);
+  if (days <= 0) return time;
+  if (days < 7) return `${at.toLocaleDateString(locale, { weekday: "short" })} ${time}`;
+  return `${at.toLocaleDateString(locale, { month: "short", day: "numeric" })}, ${time}`;
 }
 
 /** The Undo toast's title: "Marked done", or "3 chats marked done" once actions merge. */
@@ -202,11 +278,22 @@ export function inboxTriageToastTitle(
         return "Unpinned";
       case "done":
         return "Marked done";
+      case "undone":
+        return "Marked not done";
       case "snooze":
         return batch.until === undefined ? "Snoozed" : `Snoozed until ${formatUntil(batch.until)}`;
+      case "unsnooze":
+        return "Unsnoozed";
     }
   }
-  const verb = { pin: "pinned", unpin: "unpinned", done: "marked done", snooze: "snoozed" }[batch.kind];
+  const verb = {
+    pin: "pinned",
+    unpin: "unpinned",
+    done: "marked done",
+    undone: "marked not done",
+    snooze: "snoozed",
+    unsnooze: "unsnoozed",
+  }[batch.kind];
   return `${count} chats ${verb}`;
 }
 

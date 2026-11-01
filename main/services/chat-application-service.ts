@@ -97,6 +97,16 @@ export interface ChatApplicationDependencies {
   releaseChatContext?: (chatId: string) => void;
   /** Remove per-chat scratch state once the chat is gone. Best effort; never throws. */
   forgetDeletedChat?: (chatId: string) => Promise<void>;
+  /**
+   * The Inbox stores whose entry for a deleted chat (its read marker and its
+   * triage) is dropped once the chat is gone. Every delete runs through here
+   * (desktop, Remote and Bot chat deletes), so no surface leaves that state
+   * behind. Best effort: it never delays or fails the delete.
+   */
+  inboxState?: {
+    readMarkers?: { remove(chatId: string): Promise<unknown> };
+    triage?: { remove(chatId: string): Promise<unknown> };
+  };
   /** After a deletion commits: lets a No workspace chat's hidden folder go with it. */
   afterChatRemoved?: (workspaceId: string) => Promise<void>;
   logError(area: string, message: string, error: unknown): void;
@@ -380,6 +390,11 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           await options.assertCurrent?.(chat);
         });
         chatRemoved = true;
+        for (const store of [deps.inboxState?.readMarkers, deps.inboxState?.triage]) {
+          void store?.remove(chatId).catch((error: unknown) =>
+            deps.logError("chats", "Could not clear the deleted chat's Inbox state.", error),
+          );
+        }
         await deps.subagentRunStore.completeChatDeletion(chatId);
         releaseAdmission = true;
         // Scratch cleanup is best effort and must not delay the delete reply.

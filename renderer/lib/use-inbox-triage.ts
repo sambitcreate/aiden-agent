@@ -39,14 +39,14 @@ interface TriageWrite {
 
 type WriteOutcome =
   | { ok: true; entry: ChatTriageEntry }
-  | { ok: false; conflict: true; entry: ChatTriageEntry | null }
+  | { ok: false; conflict: true }
   | { ok: false; conflict: false; message: string };
 
 const FAILED_MESSAGE = "Aiden could not update that chat.";
 
 function outcomeOf(result: ChatTriageResult): WriteOutcome {
   if (result.ok) return { ok: true, entry: result.entry };
-  if (result.code === "revision_conflict") return { ok: false, conflict: true, entry: result.entry };
+  if (result.code === "revision_conflict") return { ok: false, conflict: true };
   return { ok: false, conflict: false, message: FAILED_MESSAGE };
 }
 
@@ -127,6 +127,7 @@ export interface InboxTriage {
 export function useInboxTriage({
   views,
   reported,
+  onRestore,
 }: {
   views: ReadonlyMap<string, PeerHostView>;
   /**
@@ -134,6 +135,11 @@ export function useInboxTriage({
    * An overlay entry its host has since reported, or passed, is dropped.
    */
   reported?: ReadonlyMap<string, ChatTriageEntry>;
+  /**
+   * Undo is about to move these rows back: the Inbox places them live, as the
+   * row's own `touch` does for an action, so a frozen list doesn't hold them out.
+   */
+  onRestore?: (keys: readonly string[]) => void;
 }): InboxTriage {
   const local = useChatTriage();
   const [overlay, setOverlay] = React.useState<ReadonlyMap<string, ChatTriageEntry>>(() => new Map());
@@ -142,6 +148,8 @@ export function useInboxTriage({
   localRef.current = local;
   const viewsRef = React.useRef(views);
   viewsRef.current = views;
+  const onRestoreRef = React.useRef(onRestore);
+  onRestoreRef.current = onRestore;
   const undoRef = React.useRef<InboxTriageUndoBatch | null>(null);
 
   const write = React.useCallback((changes: readonly (readonly [string, ChatTriageEntry | null])[]) => {
@@ -176,6 +184,7 @@ export function useInboxTriage({
     const rows: InboxTriageRow[] = batch.items.map((item) => item.target);
     const shown = rows.map((row) => currentFor(row));
     const now = Date.now();
+    onRestoreRef.current?.(rows.map((row) => row.key));
     write(rows.map((row, index) => [row.key, predictTriage(shown[index], writes[index]!.patch, now)] as const));
     const outcomes = await sendWrites(
       writes.map((undoWrite, index) => ({ target: rows[index]!, patch: undoWrite.patch, ifRevision: undoWrite.ifRevision })),

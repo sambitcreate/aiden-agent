@@ -365,3 +365,46 @@ test("an Inbox row's triage lives in its menus only, and Snooze sends an absolut
   fireEvent.click(items[0]!);
   assert.equal(acts.length, 1, "a disabled item never acts");
 });
+
+test("a Done or snoozed row's menu takes it back, and a row that waits on the person offers Pin alone", async () => {
+  const acts: [string, number | undefined][] = [];
+  const menuFor = (offer: { doneAndSnooze: boolean; done: boolean; snoozed: boolean }): ChatRowMenu => (...parts) =>
+    inboxTriageMenuItems(parts, { pinned: false, offer, disabled: false, onAct: (kind, until) => void acts.push([kind, until]) });
+  const items = async (offer: { doneAndSnooze: boolean; done: boolean; snoozed: boolean }) => {
+    inboxRow({}, { menu: menuFor(offer) });
+    fireEvent.contextMenu(inboxRowButton());
+    return within(await screen.findByRole("menu")).getAllByRole("menuitem");
+  };
+
+  const done = await items({ doneAndSnooze: true, done: true, snoozed: false });
+  assert.deepEqual(done.map((item) => item.textContent), ["Pin", "Mark not done", "Snooze"]);
+  fireEvent.click(done[1]!);
+  cleanup();
+
+  const snoozed = await items({ doneAndSnooze: true, done: false, snoozed: true });
+  assert.deepEqual(snoozed.map((item) => item.textContent), ["Pin", "Mark done", "Unsnooze"]);
+  fireEvent.click(snoozed[2]!);
+  cleanup();
+  assert.deepEqual(acts, [["undone", undefined], ["unsnooze", undefined]]);
+
+  const waiting = await items({ doneAndSnooze: false, done: false, snoozed: false });
+  assert.deepEqual(waiting.map((item) => item.textContent), ["Pin"]);
+});
+
+test("an Inbox remote row's triage follows its one action, as on a local row", async () => {
+  const actions = remoteChatRowActions(remoteChat(), new Set(["markRead", "rename"]));
+  const action = { kind: "mark_read" as const, onSelect: () => {} };
+  inboxRow({ unread: true, action }, {
+    menu: remoteChatRowMenu(actions, {
+      onOpen: () => {},
+      onMarkRead: () => {},
+      onRename: () => {},
+      inboxAction: action,
+      triage: (...parts) => inboxTriageMenuItems(parts, { pinned: false, disabled: false, onAct: () => {} }),
+    }),
+  });
+  const hoverLabel = screen.getByRole("button", { name: /^Mark read: Fix the build$/u }).getAttribute("title");
+  fireEvent.contextMenu(inboxRowButton());
+  const items = within(await screen.findByRole("menu")).getAllByRole("menuitem");
+  assert.deepEqual(items.map((item) => item.textContent), ["Open", hoverLabel, "Pin", "Mark done", "Snooze", "Rename"]);
+});

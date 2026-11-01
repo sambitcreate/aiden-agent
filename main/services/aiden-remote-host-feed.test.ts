@@ -10,6 +10,8 @@ import {
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import { PeerEventFrames } from "./peer-transport.js";
+import { PeerHostFeedCache } from "./peer-host-feed-cache.js";
+import type { PeerRunEvent } from "../../renderer/shared/peer-host.js";
 import type { AidenRemoteChatSummaryProjection } from "./aiden-remote-chats.js";
 import type { HostRunSummary } from "./host-run-registry.js";
 import type { BotSessionState } from "../../renderer/shared/bot-live.js";
@@ -122,6 +124,7 @@ function harness(options: {
   debounceMs?: number;
   snapshotChunkBytes?: number;
   attentionSummary?: (runId: string) => string | undefined;
+  liveRuns?: () => readonly HostRunSummary[];
 } = {}) {
   const state: { current: AidenRemoteHostFeedState; reads: number } = {
     current: {
@@ -643,6 +646,52 @@ test("a waiting run's ask reaches only runs:observe desktops, clipped, and only 
     const replayObserver = await open(feed, desktop("device-observer", ["runs:observe"]), cursor);
     assert.equal("attentionSummary" in runStates(replayPlain)[0]!, false);
     assert.equal(runStates(replayObserver)[0]!.attentionSummary, summaryText);
+  } finally {
+    feed.close();
+  }
+});
+
+test("a run already waiting when an observer connects reaches it after the snapshot, and no other device", async () => {
+  const live: HostRunSummary[] = [
+    run("run-ask", "chat-1", "needs_approval"),
+    run("run-busy", "chat-1", "working"),
+    run("run-bot-ask", "bot-chat-1", "needs_input"),
+    run("run-hidden", "chat-unknown", "needs_approval"),
+  ];
+  const asks = new Map([["run-ask", "Allow writing notes.md"], ["run-bot-ask", "Which branch?"]]);
+  const { feed } = harness({ attentionSummary: (runId) => asks.get(runId), liveRuns: () => live });
+  const runStates = (response: RecordingResponse) =>
+    response.frames().filter((frame) => frame.event === "run.state").map((frame) => frame.data.payload as Record<string, unknown>);
+  try {
+    // The runs went waiting before anyone subscribed: no journal entry holds them.
+    const plain = await open(feed, desktop("device-plain"));
+    const observer = await open(feed, desktop("device-observer", ["runs:observe"]));
+    const botObserver = await open(feed, desktop("device-bot-observer", ["runs:observe", "bot:read"]));
+
+    assert.deepEqual(runStates(plain), []);
+    assert.equal(observer.frames()[0]!.event, "snapshot");
+    assert.deepEqual(runStates(observer), [
+      { chatId: "chat-1", runId: "run-ask", state: "needs_approval", unread: false, attentionSummary: "Allow writing notes.md" },
+    ]);
+    assert.deepEqual(runStates(botObserver).map((payload) => [payload.runId, payload.attentionSummary]), [
+      ["run-ask", "Allow writing notes.md"],
+      ["run-bot-ask", "Which branch?"],
+    ]);
+
+    // A paired desktop's feed cache applies them on top of the snapshot.
+    const cache = new PeerHostFeedCache("host-1");
+    for (const frame of observer.frames()) cache.apply(frame.data as unknown as PeerRunEvent);
+    assert.equal(cache.runForChat("chat-1")?.attentionSummary, "Allow writing notes.md");
+
+    // Another device resuming past those sequences never reads them, and its
+    // own later events still arrive.
+    const cursor = plain.frames()[0]!.id;
+    feed.noteRun(run("run-busy", "chat-1", "done"), false);
+    await feed.refresh();
+    const resumed = await open(feed, desktop("device-plain"), cursor);
+    assert.deepEqual(runStates(resumed).map((payload) => [payload.runId, payload.state, "attentionSummary" in payload]), [
+      ["run-busy", "done", false],
+    ]);
   } finally {
     feed.close();
   }

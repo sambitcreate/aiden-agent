@@ -79,7 +79,7 @@ import { useChatActivityState, useChatReadMarkers } from "../lib/use-chat-activi
 import { chatRowStateFor } from "../lib/chat-activity";
 import { isChatUnread } from "../shared/chat-row-state";
 import { CHAT_ROW_INBOX_ACTIONS, ChatRow, type ChatRowInbox, type ChatRowMenu } from "./sidebar/chat-row";
-import { InboxView, type InboxRowContext } from "./sidebar/inbox-view";
+import { InboxView, type InboxRowContext, type InboxViewHandle } from "./sidebar/inbox-view";
 import {
   botInboxRows,
   botInboxKey,
@@ -101,6 +101,7 @@ import { SidebarOverflowMenu } from "./sidebar/sidebar-overflow-menu";
 import { remoteChatRowMenu } from "./sidebar/remote-chat-row-menu";
 import { inboxTriageMenuItems } from "./sidebar/inbox-triage-menu";
 import { useInboxTriage, type InboxTriageRow } from "../lib/use-inbox-triage";
+import { inboxTriageOffer } from "../lib/inbox-triage";
 import { RemoteHostAdapter, remoteHostCapabilities } from "../lib/hosts/remote-host-adapter";
 import { isRevisionConflict, type HostChatCapability } from "../lib/hosts/host-chat-adapter";
 import { ChatRowContextGlyphs } from "./chat-row-context";
@@ -425,6 +426,11 @@ function GeneratedTitleReveal({ previousTitle, title }: { previousTitle: string;
   );
 }
 
+/** A paired host's row for triage, with the entry its summary reports (revision 48). */
+function remoteTriageRow(chat: RemoteSidebarChat): InboxTriageRow {
+  return { key: chat.key, hostId: chat.hostId, chatId: chat.chatId, reported: chat.triage ?? null };
+}
+
 /**
  * On any Bots page the sidebar lists only Bots (spec §9); everywhere else it is
  * the workspace outline. With the Inbox as the view, a Bot opened from the
@@ -433,12 +439,6 @@ function GeneratedTitleReveal({ previousTitle, title }: { previousTitle: string;
  * `bots.open`, All Bots) until they leave Bots. Only one of the two sidebars
  * mounts, so only one registers the jump shortcuts.
  */
-/** A paired host's chat as a triage target. */
-/** A paired host's row for triage, with the entry its summary reports (revision 48). */
-function remoteTriageRow(chat: RemoteSidebarChat): InboxTriageRow {
-  return { key: chat.key, hostId: chat.hostId, chatId: chat.chatId, reported: chat.triage ?? null };
-}
-
 export function ChatSidebar(props: ChatSidebarProps) {
   const capabilities = useAppCapabilities();
   const { view } = useSidebarView();
@@ -572,7 +572,9 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     }
     return reported;
   }, [remoteRows]);
-  const triage = useInboxTriage({ views: peerHosts.views, reported: remoteTriageReported });
+  const inboxViewRef = React.useRef<InboxViewHandle>(null);
+  const restoreInboxRows = React.useCallback((keys: readonly string[]) => inboxViewRef.current?.touch(keys), []);
+  const triage = useInboxTriage({ views: peerHosts.views, reported: remoteTriageReported, onRestore: restoreInboxRows });
   // Read by an in-flight remote rename, which outlives the render that started it.
   const remoteRowsRef = React.useRef(remoteRows);
   remoteRowsRef.current = remoteRows;
@@ -1064,10 +1066,18 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
 
   // In the Inbox, ⌘1–9 and previous/next follow its visible rows, remote ones
   // and held Bots included, in the order that numbers their hints.
+  // The last order that listed the open chat: previous/next step from its old
+  // place after Mark done or Snooze takes it out of the list.
+  const activeInboxOrderRef = React.useRef<{ key: string; keys: readonly string[] } | null>(null);
   React.useEffect(() => {
     if (!inboxActive) return;
+    if (activeInboxKey && inboxShortcutKeys.includes(activeInboxKey)) {
+      activeInboxOrderRef.current = { key: activeInboxKey, keys: inboxShortcutKeys };
+    }
+    const remembered = activeInboxOrderRef.current;
+    const lastOrder = remembered && remembered.key === activeInboxKey ? remembered.keys : undefined;
     const resolve = resolveInboxEntry(inboxEntriesByKey, inboxUnlisted);
-    const { jump, previous, next } = inboxShortcutTargets(inboxShortcutKeys, resolve, activeInboxKey);
+    const { jump, previous, next } = inboxShortcutTargets(inboxShortcutKeys, resolve, activeInboxKey, lastOrder);
     const unregister = jump.flatMap((entry, index) =>
       entry ? [registerCommand(`chat.jump.${index + 1}` as CommandId, () => openInboxEntry(entry))] : [],
     );
@@ -1444,21 +1454,28 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   };
 
   // Pin, Mark done and Snooze: in an Inbox row's ••• and context menus only.
+  // On unseen failed output, Mark done and Snooze also mark the chat read, or
+  // the row would stay in Needs you.
   const inboxTriageItems = (
     parts: Parameters<ChatRowMenu>,
     entry: InboxEntry,
     context: InboxRowContext,
     row: InboxTriageRow,
     disabled: boolean,
-  ) =>
-    inboxTriageMenuItems(parts, {
+    markRead: (() => void) | null,
+  ) => {
+    const offer = inboxTriageOffer(entry.signals, Date.now());
+    return inboxTriageMenuItems(parts, {
       pinned: entry.signals.pinnedAt !== undefined,
+      offer,
       disabled,
       onAct: (kind, until) => {
         context.touch();
+        if (offer.alsoMarkRead && markRead && (kind === "done" || kind === "snooze")) markRead();
         void triage.act(kind, [row], until);
       },
     });
+  };
 
   const renderChatRow = (
     chat: ChatMeta,
@@ -1514,6 +1531,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
             inbox.context,
             { key: inbox.entry.key, hostId: LOCAL_SIDEBAR_HOST_ID, chatId: chat.id },
             inbox.context.dimmed,
+            () => void markLocalChatRead(chat),
           )}
           <Separator />
         </>
@@ -1687,8 +1705,25 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     const shortcutBinding = shortcutNumber
       ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId)
       : null;
-    const baseMenu = remoteChatRowMenu(actions, {
+    // Triage needs the host's `chat-triage-v1` grant; a host that isn't online
+    // (`hostControlRefusal`) shows the items disabled rather than queueing them.
+    const capabilitiesForHost = remoteCapabilities.get(chat.hostId);
+    const triageable = inbox !== undefined && (capabilitiesForHost?.has("triage") ?? false);
+    const menuItems = remoteChatRowMenu(actions, {
       ...(inboxParts ? { inboxAction: inboxParts.action ?? null } : {}),
+      ...(triageable
+        ? {
+            triage: (...parts: Parameters<ChatRowMenu>) =>
+              inboxTriageItems(
+                parts,
+                inbox.entry,
+                inbox.context,
+                remoteTriageRow(chat),
+                chat.stale || inbox.context.dimmed,
+                capabilitiesForHost?.has("markRead") ? () => void markRemoteChatRead(chat) : null,
+              ),
+          }
+        : {}),
       onOpen: () => void openRemoteChat(chat),
       onMarkRead: () => void markRemoteChatRead(chat),
       onRename: () => {
@@ -1696,24 +1731,6 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         setRemoteRenaming({ hostId: chat.hostId, chatId: chat.chatId, hostLabel: chat.hostLabel });
       },
     });
-    // Triage needs the host's `chat-triage-v1` grant; a host that isn't online
-    // (`hostControlRefusal`) shows the items disabled rather than queueing them.
-    const triageable = inbox !== undefined && (remoteCapabilities.get(chat.hostId)?.has("triage") ?? false);
-    const menuItems: ChatRowMenu = triageable
-      ? (Item, Separator, SubMenu) => (
-          <>
-            {baseMenu(Item, Separator, SubMenu)}
-            <Separator />
-            {inboxTriageItems(
-              [Item, Separator, SubMenu],
-              inbox.entry,
-              inbox.context,
-              remoteTriageRow(chat),
-              chat.stale || inbox.context.dimmed,
-            )}
-          </>
-        )
-      : baseMenu;
     return (
       <ChatRow
         key={chat.key}
@@ -2301,6 +2318,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
               headerActions={sidebarOrganizationMenu}
               shelfHost={inboxShelfHost}
               onShortcutOrderChange={updateInboxShortcutKeys}
+              handleRef={inboxViewRef}
               renderRow={(entry, context) =>
                 entry.source.kind === "remote"
                   ? renderRemoteChatRow(entry.source.chat, false, { entry, context })

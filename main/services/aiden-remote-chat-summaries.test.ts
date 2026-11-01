@@ -12,6 +12,13 @@ import {
   type AidenRemoteChatTriage,
 } from "./aiden-remote-chats.js";
 import { ChatTriageStore } from "./chat-triage.js";
+import { ChatReadMarkerStore } from "./chat-read-markers.js";
+import {
+  createChatApplicationService,
+  type ChatApplicationDependencies,
+} from "./chat-application-service.js";
+import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
+import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
 import type { ChatActivitySnapshot } from "../../renderer/shared/chat-activity.js";
 import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
 import {
@@ -47,6 +54,8 @@ function summaryService(
     readMarkers?: AidenRemoteChatReadMarkers;
     triage?: AidenRemoteChatTriage;
     runTimes?: (chatId: string) => AidenRemoteChatRunTimes | undefined;
+    /** The application's delete; a no-op unless a test wires a real one. */
+    remove?: ConstructorParameters<typeof AidenRemoteChatService>[0]["application"]["remove"];
   } = {},
 ) {
   let rows = structuredClone(initial);
@@ -73,7 +82,7 @@ function summaryService(
       create: async () => { throw new Error("unused"); },
       rename: async () => { throw new Error("unused"); },
       moveEmptyToWorkspace: async () => { throw new Error("unused"); },
-      remove: async () => undefined,
+      remove: options.remove ?? (async () => undefined),
     },
     chatStore: {
       get: async () => null,
@@ -754,6 +763,75 @@ test("triage writes need chat:write and an Idempotency-Key, replay, and refuse a
   assert.equal((await features(phone)).includes("chat-triage-v1"), false, "phones' feature list is full");
   assert.ok((await features(writer)).includes("inbox-signals-v1"));
   assert.equal((await features(phone)).includes("inbox-signals-v1"), false, "phones decode the fields without the token");
+});
+
+test("a Remote delete drops the chat's read marker and triage through the shared deletion", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-delete-inbox-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const chatStore = createChatStore(async () => directory);
+  await chatStore.create({ id: "chat-gone", title: "Gone" });
+  await chatStore.create({ id: "chat-kept", title: "Kept" });
+  const triage = new ChatTriageStore(() => directory);
+  const readMarkers = new ChatReadMarkerStore(() => directory);
+  for (const chatId of ["chat-gone", "chat-kept"]) {
+    await triage.set(chatId, { pinned: true });
+    assert.equal(await readMarkers.markRead(chatId, 5_000, 0), true);
+  }
+  // The cleanup is fire-and-forget; track it so the test can await it.
+  const writes: Promise<unknown>[] = [];
+  const track = (write: Promise<unknown>) => { writes.push(write); return write; };
+  // The real chat application service, so the Remote route runs the same
+  // deletion as the desktop and Bot deletes.
+  const application = createChatApplicationService({
+    chatStore,
+    configStore: { getWorkspace: async () => null },
+    llmClient: {
+      isChatOwnedByInactiveRenderer: () => false,
+      isChatBusy: () => false,
+      waitForChatIdle: async () => true,
+      requiresAppendReconciliation: () => false,
+      markAppendReconciliationRequired: () => undefined,
+      clearAppendReconciliationRequired: () => undefined,
+      beginChatWorkspaceChange: () => () => undefined,
+      beginChatDeletion: () => () => undefined,
+      cancelChat: async () => undefined,
+    },
+    displayImageArtifactStore: { availability: () => ({ available: true }), hasPending: async () => false, deleteChat: async () => undefined },
+    generativeUiArtifactStore: { availability: () => ({ available: true }), hasPending: async () => false, deleteChat: async () => undefined },
+    workspaceMutationGate: new WorkspaceMutationGate(),
+    workspaceOperationRegistry: new WorkspaceOperationRegistry(),
+    subagentRunStore: { deleteChat: async () => undefined, completeChatDeletion: async () => undefined, pendingChatDeletions: async () => [] },
+    piRuntimeEffectStore: { deleteChat: async () => undefined },
+    piCompactionSessionStore: { deleteChat: async () => undefined },
+    inboxState: {
+      readMarkers: { remove: (chatId: string) => track(readMarkers.remove(chatId)) },
+      triage: { remove: (chatId: string) => track(triage.remove(chatId)) },
+    },
+    logError: () => undefined,
+  } as unknown as ChatApplicationDependencies);
+  const fixture = summaryService(
+    [metadata("chat-gone", 2_000), metadata("chat-kept", 2_100)],
+    { triage, remove: (chatId, options) => application.remove(chatId, options) },
+  );
+
+  // A delete refused for a stale revision keeps everything.
+  await assert.rejects(
+    fixture.service.remove("chat-gone", `rev_${"a".repeat(43)}`),
+    (error: unknown) => (error as { code?: string }).code === "revision_conflict",
+  );
+  await Promise.all(writes);
+  assert.equal(typeof (await triage.get("chat-gone"))?.pinnedAt, "number");
+
+  const current = await chatStore.get("chat-gone");
+  assert.ok(current);
+  await fixture.service.remove("chat-gone", chatSummaryRevision(current));
+  await Promise.all(writes);
+  assert.equal(await chatStore.get("chat-gone"), null);
+  assert.equal(await triage.get("chat-gone"), null);
+  const markers = await readMarkers.snapshot();
+  assert.equal("chat-gone" in markers.readThrough, false);
+  assert.equal(markers.readThrough["chat-kept"], 5_000);
+  assert.equal(typeof (await triage.get("chat-kept"))?.pinnedAt, "number");
 });
 
 test("feature-owned chats never reach summaries or the host feed", async () => {

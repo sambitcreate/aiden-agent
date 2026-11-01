@@ -1034,6 +1034,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               const run = hostRunRegistry.summary(runId);
               return run ? liveRunAttention(run.chatId, hostRunRegistry)?.summary : undefined;
             },
+            liveRuns: () => hostRunRegistry.list(),
             source: {
               read: async () => {
                 const [{ summaries, botChatIds }, workspaceRows, botList] = await Promise.all([
