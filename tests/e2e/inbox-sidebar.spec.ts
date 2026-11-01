@@ -32,8 +32,9 @@ function inboxRow(page: Page, chatId: string) {
 
 /** Moves the pointer off the sidebar, so the Inbox isn't frozen in place. */
 async function pointerToPane(page: Page) {
-  const box = await page.locator("textarea").boundingBox();
-  if (box) await page.mouse.move(box.x + box.width / 2, box.y - 120);
+  const box = await page.getByRole("main").first().boundingBox();
+  expect(box, "the chat pane is laid out").not.toBeNull();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
 }
 
 test("an approval waits in Needs you, and leaving the chat mid-approval leaves an Unavailable row", async ({ aiden }) => {

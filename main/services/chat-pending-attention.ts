@@ -89,6 +89,12 @@ export function createPendingAttentionRecorder(input: {
   runs: PendingAttentionRuns;
   log: DetachedPromptLog;
   now?: () => number;
+  /**
+   * A wait changed with no activity change to report it: a short-circuited
+   * prompt never reaches the activity registry, so nothing else tells the
+   * renderer to reread `chats:pendingAttention`.
+   */
+  onChange?: () => void;
 }): PendingAttentionRecorder {
   const now = input.now ?? Date.now;
   const promptDetached = (promptId: string): void => {
@@ -123,6 +129,7 @@ export function createPendingAttentionRecorder(input: {
         since: now(),
         runStartedAt: epoch(run.startedAt) ?? now(),
       });
+      input.onChange?.();
     },
     runBegan(chatId) {
       input.log.clearChat(chatId);

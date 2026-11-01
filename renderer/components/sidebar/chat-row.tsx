@@ -141,6 +141,7 @@ export function ChatRow({
         title={title}
         titleContent={titleContent}
         inbox={inbox}
+        icon={icon}
         selected={selected}
         busy={busy || status.state === "working"}
         shortcutHint={shortcutHint}
@@ -244,11 +245,16 @@ export function ChatRow({
   );
 }
 
-const INBOX_ACTION_LABELS: Readonly<Record<ChatRowInboxAction["kind"], string>> = {
-  mark_read: "Mark read",
-  acknowledge: "Acknowledge",
+/**
+ * The Inbox row action's label and menu icon, for the hover icon and the
+ * row's menus alike, so the two always name the same action.
+ */
+export const CHAT_ROW_INBOX_ACTIONS: Readonly<
+  Record<ChatRowInboxAction["kind"], { label: string; menuIcon: string }>
+> = {
+  mark_read: { label: "Mark read", menuIcon: "check-check" },
+  acknowledge: { label: "Acknowledge", menuIcon: "check" },
 };
-
 
 function InboxStatusIcon({ status }: { status: ChatRowInbox["status"] }) {
   const className = "size-3 shrink-0";
@@ -278,7 +284,7 @@ function InboxRowStatus({ status }: { status: ChatRowInbox["status"] }) {
       <span className="flex shrink-0 items-center gap-1" data-inbox-status={status.needsYou}>
         <span
           className={cn(
-            "inline-flex h-4 items-center gap-0.5 rounded-pill px-1.5 font-medium",
+            "inline-flex min-h-(--text-small--line-height) items-center gap-0.5 rounded-pill px-1.5 font-medium",
             status.tone === "danger"
               ? "bg-status-red-surface text-status-red"
               : "bg-status-warning-surface text-status-warning",
@@ -303,6 +309,7 @@ function InboxChatRow({
   title,
   titleContent,
   inbox,
+  icon,
   selected,
   busy,
   shortcutHint,
@@ -316,6 +323,7 @@ function InboxChatRow({
   title: string;
   titleContent: React.ReactNode;
   inbox: ChatRowInbox;
+  icon?: React.ReactNode;
   selected: boolean;
   busy: boolean;
   shortcutHint?: string;
@@ -327,7 +335,8 @@ function InboxChatRow({
   onFocus?: () => void;
 }) {
   const overflowShown = Boolean(menu) && !shortcutsRevealed;
-  const action = shortcutsRevealed ? undefined : inbox.action;
+  // A row held in place after it left, or whose host is offline, offers no action.
+  const action = shortcutsRevealed || inbox.dimmed ? undefined : inbox.action;
   // Room on the right for whichever hover controls the row has.
   const hoverControls = (overflowShown ? 1 : 0) + (action ? 1 : 0);
   const item = (
@@ -337,12 +346,12 @@ function InboxChatRow({
       data-inbox-dimmed={inbox.dimmed ? "true" : undefined}
       className={cn(
         "min-h-0 items-stretch py-1.5",
-        inbox.dimmed && "opacity-55",
         hoverControls === 1 &&
           "group-hover/chat-row:pr-10 group-focus-within/chat-row:pr-10 group-has-[[aria-haspopup=menu][data-state=open]]/chat-row:pr-10",
         hoverControls === 2 &&
           "group-hover/chat-row:pr-17 group-focus-within/chat-row:pr-17 group-has-[[aria-haspopup=menu][data-state=open]]/chat-row:pr-17",
       )}
+      icon={icon}
       aria-busy={busy}
       aria-description={inbox.description}
       aria-keyshortcuts={ariaKeyShortcuts}
@@ -352,13 +361,13 @@ function InboxChatRow({
       onClick={onOpen}
       title={
         <span className="flex min-w-0 flex-col gap-0.5">
-          <span className="flex h-4 min-w-0 items-center gap-1.5 text-small text-quaternary">
+          <span className="flex min-h-(--text-small--line-height) min-w-0 items-center gap-1.5 text-small text-quaternary">
             <span className="min-w-0 flex-1 truncate">{inbox.meta}</span>
             {shortcutsRevealed && shortcutHint ? (
               <kbd
                 aria-hidden="true"
                 data-chat-shortcut-hint="true"
-                className="inline-flex h-4 min-w-7 items-center justify-center rounded-pill bg-control px-1 font-sans text-mini font-medium tabular-nums text-tertiary"
+                className="inline-flex min-h-(--text-small--line-height) min-w-7 items-center justify-center rounded-pill bg-control px-1 font-sans text-mini font-medium tabular-nums text-tertiary"
               >
                 {shortcutHint}
               </kbd>
@@ -368,13 +377,17 @@ function InboxChatRow({
           </span>
           <span
             className={cn(
-              "block truncate text-[calc(var(--ui-font-size)-1px)] leading-4 text-primary",
+              "block truncate text-[calc(var(--ui-font-size)-1px)] leading-(--text-small--line-height)",
+              // Dimmed rows step down the text tokens rather than fading the row.
+              inbox.dimmed ? "text-tertiary" : "text-primary",
               inbox.unread && "font-medium",
             )}
+            data-inbox-title=""
             data-chat-unread={inbox.unread ? "true" : undefined}
           >
             {titleContent}
           </span>
+          {inbox.unread ? <span className="sr-only">{", Unread"}</span> : null}
         </span>
       }
     />
@@ -402,8 +415,8 @@ function InboxChatRow({
           variant="transparent"
           size="small"
           iconOnly
-          aria-label={`${INBOX_ACTION_LABELS[action.kind]}: ${title}`}
-          title={INBOX_ACTION_LABELS[action.kind]}
+          aria-label={`${CHAT_ROW_INBOX_ACTIONS[action.kind].label}: ${title}`}
+          title={CHAT_ROW_INBOX_ACTIONS[action.kind].label}
           data-inbox-action={action.kind}
           className={cn(OVERFLOW_TRIGGER_CLASS, overflowShown && "right-9")}
           onClick={(event) => {

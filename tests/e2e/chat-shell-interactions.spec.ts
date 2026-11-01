@@ -468,8 +468,12 @@ test.describe("with a workspace", () => {
     const sidebar = page.locator("[data-sidebar]");
     const earlier = sidebar.getByRole("group", { name: "Earlier" });
     await expect(earlier.getByText("Approval chat")).toBeVisible();
-    // The pointer over the list freezes it.
-    await sidebar.locator("[data-inbox-view]").hover();
+    // The pointer over the list freezes it. Hover needs the window focused.
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.focus());
+    await expect.poll(() => page.evaluate(() => document.hasFocus())).toBe(true);
+    const inboxView = sidebar.locator("[data-inbox-view]");
+    await inboxView.hover();
+    await expect(inboxView).toHaveAttribute("data-inbox-frozen", "true");
 
     await app.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.webContents.send("chats:activity-changed", {
@@ -486,8 +490,8 @@ test.describe("with a workspace", () => {
 
     // Released, they move: approvals before questions in Needs you, then
     // Earlier, then the Working shelf.
-    const pane = await page.locator("textarea").boundingBox();
-    await page.mouse.move(pane!.x + pane!.width / 2, pane!.y - 120);
+    const pane = await page.getByRole("main").first().boundingBox();
+    await page.mouse.move(pane!.x + pane!.width / 2, pane!.y + pane!.height / 2);
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     const needsYou = sidebar.getByRole("group", { name: "Needs you" });
     await expect(needsYou.locator("[data-inbox-status]")).toHaveText(["Approval", "Question"].map((label) => new RegExp(`^${label}`, "u")));

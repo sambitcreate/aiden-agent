@@ -1,4 +1,6 @@
 import * as React from "react";
+import { createPortal } from "react-dom";
+import { cn } from "../../lib/ui-utils";
 import { EmptyState, SidebarListItem } from "../ui";
 import { SectionHeader } from "./section-header";
 import { prefersReducedMotion } from "../../lib/appearance-runtime";
@@ -63,6 +65,11 @@ export interface InboxViewProps {
   /** The header's trailing controls: the Organize menu. */
   headerActions?: React.ReactNode;
   renderRow: (entry: InboxEntry, context: InboxRowContext) => React.ReactNode;
+  /**
+   * Where the Working shelf goes: a region pinned under the scrolling list
+   * (the sidebar's `belowList`). Without one it follows Earlier in the list.
+   */
+  shelfHost?: HTMLElement | null;
   /** ⌘1–9 and previous/next: the visible rows' keys in on-screen order. */
   onShortcutOrderChange?: (keys: readonly string[]) => void;
   /** The clock, for tests. */
@@ -100,49 +107,116 @@ function windowIsActive(): boolean {
   return typeof document === "undefined" || document.visibilityState !== "hidden";
 }
 
+type Regions = () => readonly (HTMLElement | null)[];
+
+function insideRegions(regions: Regions, node: unknown): boolean {
+  return node instanceof Node && regions().some((region) => region?.contains(node) ?? false);
+}
+
+/** Every Inbox row in screen order: the list's, then the shelf's when it sits apart. */
+function inboxRows(regions: Regions): HTMLElement[] {
+  const rows = new Set<HTMLElement>();
+  for (const region of regions()) {
+    for (const row of region?.querySelectorAll<HTMLElement>("[data-inbox-row]") ?? []) rows.add(row);
+  }
+  return [...rows];
+}
+
 /**
  * The list is in use while the pointer is over it, keyboard focus is inside
  * it, or a menu or dialog is open. Window blur or a hidden window releases it.
+ *
+ * Both are read from the DOM, not React's synthetic events: React bubbles
+ * those through portals, so a row's menu would count as the list. The list
+ * can span two regions (the rows and the Working shelf under them).
  */
-function useListInUse(ref: React.RefObject<HTMLElement | null>) {
+function useListInUse(regions: Regions) {
   const [pointerInside, setPointerInside] = React.useState(false);
   const [focusInside, setFocusInside] = React.useState(false);
   const [overlay, setOverlay] = React.useState(overlayOpen);
   const [windowActive, setWindowActive] = React.useState(windowIsActive);
+  const regionsRef = React.useRef(regions);
+  regionsRef.current = regions;
+  const lastPointerRef = React.useRef<{ x: number; y: number } | null>(null);
+
+  const checkFocus = React.useCallback(() => {
+    const active = document.activeElement;
+    setFocusInside(insideRegions(regionsRef.current, active) && matchesFocusVisible(active));
+  }, []);
 
   React.useEffect(() => {
+    const inside = (node: unknown) => insideRegions(regionsRef.current, node);
+    // A menu that closes leaves no pointer event behind: look at what is
+    // under the pointer now, and again once the closing menu's styles go.
+    let frame = 0;
+    const checkPointer = () => {
+      const at = lastPointerRef.current;
+      if (!at || typeof document.elementFromPoint !== "function") return;
+      setPointerInside(inside(document.elementFromPoint(at.x, at.y)));
+    };
+    const onPointerOver = (event: PointerEvent) => {
+      lastPointerRef.current = { x: event.clientX, y: event.clientY };
+      setPointerInside(inside(event.target));
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      lastPointerRef.current = { x: event.clientX, y: event.clientY };
+    };
+    const onPointerOut = (event: PointerEvent) => {
+      // No related target: the pointer left the window.
+      if (event.relatedTarget === null) setPointerInside(false);
+    };
+    const onFocusIn = () => checkFocus();
+    const onFocusOut = (event: FocusEvent) => {
+      if (!inside(event.relatedTarget)) setFocusInside(false);
+    };
     const onBlur = () => setWindowActive(false);
     const onFocus = () => setWindowActive(windowIsActive());
     const onVisibility = () => setWindowActive(windowIsActive() && (document.hasFocus?.() ?? true));
+    document.addEventListener("pointerover", onPointerOver);
+    document.addEventListener("pointermove", onPointerMove, { passive: true });
+    document.addEventListener("pointerout", onPointerOut);
+    document.addEventListener("focusin", onFocusIn);
+    document.addEventListener("focusout", onFocusOut);
     window.addEventListener("blur", onBlur);
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisibility);
     // Menus and dialogs mount in portals directly under <body>.
+    let wasOpen = overlayOpen();
     const observer = typeof MutationObserver === "function"
-      ? new MutationObserver(() => setOverlay(overlayOpen()))
+      ? new MutationObserver(() => {
+          const open = overlayOpen();
+          setOverlay(open);
+          if (wasOpen && !open) {
+            checkPointer();
+            cancelAnimationFrame(frame);
+            frame = requestAnimationFrame(checkPointer);
+          }
+          wasOpen = open;
+        })
       : null;
     observer?.observe(document.body, { childList: true });
     // The menu that switched the sidebar to the Inbox can close between the
     // first render and this effect, with no mutation left to report it.
-    setOverlay(overlayOpen());
+    setOverlay(wasOpen);
     return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("pointerover", onPointerOver);
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerout", onPointerOut);
+      document.removeEventListener("focusin", onFocusIn);
+      document.removeEventListener("focusout", onFocusOut);
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibility);
       observer?.disconnect();
     };
-  }, []);
+  }, [checkFocus]);
 
-  const handlers = {
-    onPointerEnter: () => setPointerInside(true),
-    onPointerLeave: () => setPointerInside(false),
-    onFocus: (event: React.FocusEvent) => setFocusInside(matchesFocusVisible(event.target)),
-    onBlur: (event: React.FocusEvent) => {
-      const next = event.relatedTarget;
-      if (!(next instanceof Node) || !ref.current?.contains(next)) setFocusInside(false);
-    },
-  };
-  return { inUse: windowActive && (pointerInside || focusInside || overlay), handlers };
+  // A focused row that goes (deleted, or moved out by a filter) fires no
+  // focusout, so read focus again after every render.
+  React.useLayoutEffect(checkFocus);
+
+  return windowActive && (pointerInside || focusInside || overlay);
 }
 
 /** The `[data-sidebar]` height, for the Working shelf's 40% cap. */
@@ -175,15 +249,17 @@ export function InboxView({
   headerActions,
   renderRow,
   onShortcutOrderChange,
+  shelfHost = null,
   now: clock = Date.now,
 }: InboxViewProps) {
   const rootRef = React.useRef<HTMLDivElement>(null);
-  const shelfRef = React.useRef<HTMLDivElement>(null);
+  const shelfRef = React.useRef<HTMLElement>(null);
+  const regions = React.useCallback(() => [rootRef.current, shelfRef.current], []);
   const [, tick] = React.useReducer((count: number) => count + 1, 0);
   const [showAllEarlier, setShowAllEarlier] = React.useState(false);
   const [touched, setTouched] = React.useState<ReadonlySet<string>>(() => new Set());
   const { collapsed: workingCollapsed, setCollapsed: setWorkingCollapsed } = useWorkingShelfCollapsed();
-  const { inUse, handlers } = useListInUse(rootRef);
+  const inUse = useListInUse(regions);
   const sidebarHeight = useSidebarHeight(rootRef);
   const frozen = inUse && !searching;
 
@@ -292,8 +368,8 @@ export function InboxView({
     onShortcutOrderChangeRef.current?.(shortcutSignature ? shortcutSignature.split("\u0000") : []);
   }, [shortcutSignature]);
 
-  useFlip(rootRef, { skip: reset || releasing });
-  useFocusFollowsRemoval(rootRef);
+  useFlip(rootRef, regions, { skip: reset || releasing });
+  useFocusFollowsRemoval(regions);
 
   const focusAfterShowMoreRef = React.useRef<number | null>(null);
   React.useLayoutEffect(() => {
@@ -323,7 +399,43 @@ export function InboxView({
 
   const mainEmpty = MAIN_SECTIONS.every(({ id }) => sectionRows[id].length === 0);
   const workingRows = sectionRows.working;
+  // A search that only matches working chats shows them on the shelf, not "No matches".
+  const showEmpty = mainEmpty && (!searching || workingRows.length === 0);
   const shelfMaxHeight = sidebarHeight ? `${Math.round(sidebarHeight * 0.4)}px` : "40vh";
+  const apart = shelfHost !== null;
+
+  const shelf = workingRows.length > 0 ? (
+    <section
+      ref={shelfRef}
+      role="group"
+      aria-label="Working"
+      data-inbox-section="working"
+      className={cn("flex min-h-0 flex-col pt-1", !apart && "mt-2")}
+      style={{ maxHeight: shelfMaxHeight }}
+    >
+      {/* Apart from the list, the shelf pads itself like the list and keeps
+          the same scrollbar gutter, so its rows' edges line up with the list's. */}
+      <div className={cn("shrink-0", apart && "overflow-hidden px-2.5 [scrollbar-gutter:stable]")}>
+        <div className="flex h-6 items-center px-2.5 text-small-strong font-medium text-tertiary">
+          <div className="min-w-0 flex-1">
+            <SectionHeader
+              label="Working"
+              count={workingRows.length}
+              collapse={{ expanded: !workingCollapsed, onToggle: () => setWorkingCollapsed(!workingCollapsed) }}
+            />
+          </div>
+        </div>
+      </div>
+      {workingCollapsed ? null : (
+        <div
+          data-inbox-flip-root=""
+          className={cn("flex min-h-0 flex-col gap-0.5 overflow-y-auto", apart && "px-2.5 pb-1")}
+        >
+          {workingRows.map((shown) => renderEntry("working", shown))}
+        </div>
+      )}
+    </section>
+  ) : null;
 
   return (
     <div
@@ -332,14 +444,13 @@ export function InboxView({
       data-inbox-frozen={frozen ? "true" : undefined}
       data-inbox-flip-root=""
       className="flex flex-col"
-      {...handlers}
     >
       <div className="flex h-6 items-center px-2.5 text-small-strong font-medium text-tertiary">
         <div className="min-w-0 flex-1">
           <SectionHeader label="Inbox" accessory={headerAccessory} actions={headerActions} />
         </div>
       </div>
-      {mainEmpty ? (
+      {showEmpty ? (
         <EmptyState
           placement="inline"
           role="status"
@@ -379,31 +490,7 @@ export function InboxView({
           ),
         )
       )}
-      {workingRows.length > 0 ? (
-        <section
-          ref={shelfRef}
-          role="group"
-          aria-label="Working"
-          data-inbox-section="working"
-          className="sticky bottom-0 z-1 mt-2 flex min-h-0 flex-col bg-sidebar pt-1"
-          style={{ maxHeight: shelfMaxHeight }}
-        >
-          <div className="flex h-6 shrink-0 items-center px-2.5 text-small-strong font-medium text-tertiary">
-            <div className="min-w-0 flex-1">
-              <SectionHeader
-                label="Working"
-                count={workingRows.length}
-                collapse={{ expanded: !workingCollapsed, onToggle: () => setWorkingCollapsed(!workingCollapsed) }}
-              />
-            </div>
-          </div>
-          {workingCollapsed ? null : (
-            <div data-inbox-flip-root="" className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
-              {workingRows.map((shown) => renderEntry("working", shown))}
-            </div>
-          )}
-        </section>
-      ) : null}
+      {shelf && shelfHost ? createPortal(shelf, shelfHost) : shelf}
     </div>
   );
 }
@@ -413,13 +500,19 @@ export function InboxView({
  * Skipped under Reduce Motion, when more than 40 rows move at once, and right
  * after a reset or a freeze releases.
  */
-function useFlip(rootRef: React.RefObject<HTMLElement | null>, { skip }: { skip: boolean }) {
+function useFlip(
+  rootRef: React.RefObject<HTMLElement | null>,
+  regions: Regions,
+  { skip }: { skip: boolean },
+) {
   const positionsRef = React.useRef(new Map<string, { frame: Element; top: number }>());
   React.useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
     const next = new Map<string, { frame: Element; top: number }>();
-    const rows = [...root.querySelectorAll<HTMLElement>("[data-inbox-row]")];
+    const rows = inboxRows(regions);
+    // A slide still running would be measured mid-flight; settle it first.
+    for (const row of rows) for (const animation of row.getAnimations?.() ?? []) animation.cancel();
     for (const row of rows) {
       const frame = row.parentElement?.closest("[data-inbox-flip-root]") ?? root;
       next.set(row.dataset.inboxRow!, {
@@ -451,12 +544,10 @@ function useFlip(rootRef: React.RefObject<HTMLElement | null>, { skip }: { skip:
 }
 
 /** When the focused row goes (a delete), focus moves to the row now in its place. */
-function useFocusFollowsRemoval(rootRef: React.RefObject<HTMLElement | null>) {
+function useFocusFollowsRemoval(regions: Regions) {
   const focusedRef = React.useRef<{ key: string; index: number } | null>(null);
   React.useLayoutEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-    const rows = [...root.querySelectorAll<HTMLElement>("[data-inbox-row]")];
+    const rows = inboxRows(regions);
     const remembered = focusedRef.current;
     const active = document.activeElement;
     if (remembered && (active === document.body || active === null)) {

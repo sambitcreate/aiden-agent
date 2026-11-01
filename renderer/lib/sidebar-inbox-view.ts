@@ -291,6 +291,52 @@ export function inboxRowAction(
   return entry.signals.unread && !entry.signals.isOpen ? "mark_read" : null;
 }
 
+/** `chats:pendingAttention` refuses more ids than this. */
+export const MAX_PENDING_ATTENTION_IDS = 2_000;
+
+export interface PendingAttentionRequest {
+  ids: readonly string[];
+  /** Short and stable for the same ids: their count and a hash, never the ids themselves. */
+  key: string;
+}
+
+/**
+ * The local chats the Inbox asks `chats:pendingAttention` about. Bot chats are
+ * left out (the Inbox doesn't list them). Chats that are running or waiting
+ * right now come first, so the cap never drops a live wait; the newest of the
+ * rest fill what's left.
+ */
+export function pendingAttentionRequest(
+  chats: readonly ChatMeta[],
+  live: Iterable<ReadonlySet<string>>,
+  max = MAX_PENDING_ATTENTION_IDS,
+): PendingAttentionRequest {
+  const listed = chats.filter((chat) => !chat.botId);
+  const known = new Set(listed.map((chat) => chat.id));
+  const ids: string[] = [];
+  const taken = new Set<string>();
+  const take = (id: string) => {
+    if (ids.length >= max || taken.has(id) || !known.has(id)) return;
+    taken.add(id);
+    ids.push(id);
+  };
+  for (const set of live) for (const id of [...set].sort()) take(id);
+  const newest = [...listed].sort(
+    (left, right) => (right.updatedAt ?? right.createdAt) - (left.updatedAt ?? left.createdAt) || left.id.localeCompare(right.id),
+  );
+  for (const chat of newest) take(chat.id);
+  return { ids, key: `${ids.length}:${fnv1a32(ids.join("\n"))}` };
+}
+
+function fnv1a32(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 /**
  * Mark read names the newest message the row rendered, so a reply that lands
  * mid-click stays unread: the newest user or assistant message no newer than

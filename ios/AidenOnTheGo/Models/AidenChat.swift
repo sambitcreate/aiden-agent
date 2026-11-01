@@ -2363,8 +2363,10 @@ enum AidenChatRowState: String, Codable, Equatable, Sendable {
     }
 
     /// Triage rank used to order chat lists, most urgent first. Mirrors the
-    /// desktop Needs attention tiers: a chat blocked on the user outranks one
-    /// that is merely working, and everything else keeps its existing order.
+    /// desktop Inbox's Needs you tiers (`INBOX_TIERS`, with row status from
+    /// `inboxRowStatus`), which sit above its Updates and Earlier sections: a
+    /// chat blocked on the user outranks one that is merely working, and
+    /// everything else keeps its existing order.
     var attentionRank: Int {
         switch self {
         case .needsApproval: 0
@@ -2379,7 +2381,7 @@ enum AidenChatRowState: String, Codable, Equatable, Sendable {
 /// Ties keep the incoming (recency) order, so rows do not jitter between
 /// refreshes.
 /// Unseen failures sit between chats blocked on the user and working chats,
-/// like the desktop Needs attention tiers.
+/// like the desktop Inbox's Needs you tiers (`INBOX_TIERS`).
 func aidenNeedsAttentionFirst(_ chats: [AidenChatSummary]) -> [AidenChatSummary] {
     chats.enumerated()
         .sorted { left, right in

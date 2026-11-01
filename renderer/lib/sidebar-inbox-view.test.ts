@@ -11,6 +11,7 @@ import {
   inboxShortcutOrder,
   localInboxEntries,
   markReadThroughMessageId,
+  pendingAttentionRequest,
   remoteInboxEntries,
   type InboxEntry,
 } from "./sidebar-inbox-view";
@@ -232,4 +233,27 @@ test("shortcut order follows the visible sections, skips held-over rows, and lea
   const withLeaving = { ...held, earlier: [held.earlier[0]!, { ...held.earlier[1]!, leaving: true }] };
   assert.deepEqual(inboxShortcutOrder(withLeaving, { workingExpanded: true }), [key("n"), key("u"), key("e1"), key("w")]);
   assert.deepEqual(inboxShortcutOrder(withLeaving, { workingExpanded: false }), [key("n"), key("u"), key("e1")]);
+});
+
+test("the pending attention request asks about live chats first, then the newest, and never Bot chats", () => {
+  const chats = [
+    chat("old", { updatedAt: NOW - 9 * HOUR }),
+    chat("new", { updatedAt: NOW - MINUTE }),
+    chat("mid", { updatedAt: NOW - 3 * HOUR }),
+    chat("bot", { updatedAt: NOW, botId: "bot-1" }),
+  ];
+  // "old" is waiting on an approval, so it is asked about even past the cap.
+  const request = pendingAttentionRequest(chats, [new Set(["old", "bot", "gone"])], 2);
+  assert.deepEqual(request.ids, ["old", "new"]);
+  assert.deepEqual(pendingAttentionRequest(chats, [], 10).ids, ["new", "mid", "old"]);
+});
+
+test("the pending attention key is short, follows the ids, and ignores the order they arrive in", () => {
+  const many = Array.from({ length: 500 }, (_, index) => chat(`chat-${index}`, { updatedAt: NOW - index * MINUTE }));
+  const request = pendingAttentionRequest(many, []);
+  assert.equal(request.ids.length, 500);
+  assert.ok(request.key.length < 20, request.key);
+  assert.equal(pendingAttentionRequest([...many].reverse(), []).key, request.key);
+  assert.notEqual(pendingAttentionRequest(many.slice(1), []).key, request.key);
+  assert.notEqual(pendingAttentionRequest(many, [new Set(["chat-499"])]).key, request.key);
 });

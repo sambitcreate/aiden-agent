@@ -18,7 +18,7 @@ Ten research passes looked at two reference apps and Aiden's current sidebar. Th
 | --- | --- | --- |
 | OpenCode Inbox | Status precedence: approval > input > working > read > done. Subagent states roll up into their parent chat. "Needs attention" sits on top. Working sits at the bottom, at most 40% of the height, ordered by when the run began. Unread means the chat went idle after the person last viewed it, and each state records when it began (`since`). | No focus ring, number shortcuts lost, no phone surface, no approving from the list. |
 | T3 Code | Sections: Pinned, Active, Working, Snoozed, Settled. A stable order. On hover the status slot turns into actions. Snooze presets that wake early. A 5-second undo that merges repeated actions. Reordering animates for 150 ms with moves capped at 40 px, and stops animating under Reduce Motion or when more than 40 rows change. One shared inbox module. | Auto-settling after 3 days or a merged PR (revisit after Phase 2). Fractional order keys (Aiden has no manual chat order). |
-| Aiden today | Needs-attention tiers (`SIDEBAR_ATTENTION_TIERS`, `sidebarAttention` in `renderer/lib/sidebar-organization.ts`). Honest unread and failed markers (Remote revisions 18 and 36). Remote rows (`remoteSidebarRows` in `renderer/lib/sidebar-remote-groups.ts`). Bot `needsYou` (`main/services/bot-runtime/live-projection.ts:1475-1505`, shown by `renderer/main/bots/bot-sidebar.tsx`). First-responder-wins run approvals over Remote. | Hand-written phone sorts (`aidenNeedsAttentionFirst` on iOS and Android) once the host can send the bucket. |
+| Aiden today (before the Inbox) | Needs-attention tiers (then `SIDEBAR_ATTENTION_TIERS` and `sidebarAttention` in `renderer/lib/sidebar-organization.ts`; the Inbox's `INBOX_TIERS` and `inboxRowStatus` replace them). Honest unread and failed markers (Remote revisions 18 and 36). Remote rows (`remoteSidebarRows` in `renderer/lib/sidebar-remote-groups.ts`). Bot `needsYou` (`main/services/bot-runtime/live-projection.ts:1475-1505`, shown by `renderer/main/bots/bot-sidebar.tsx`). First-responder-wins run approvals over Remote. | Hand-written phone sorts (`aidenNeedsAttentionFirst` on iOS and Android) once the host can send the bucket. |
 
 ## Decisions
 
@@ -161,7 +161,7 @@ The existing sidebar Playwright specs must pass unchanged.
 - `renderer/lib/sidebar-inbox.ts` with `inboxState` and `organizeInbox`.
 - `"inbox"` added to `SIDEBAR_VIEWS`. The `"attention"` migration waits for 1b.
 - The `useSidebarView()` store, plus `useWorkingShelfCollapsed()` for the shelf's stored state (`SidebarPreferences.workingShelfCollapsed`).
-- Until 1b renders it, a stored `inbox` lays out like Needs attention, and the sidebar title and Organize menu show it as Needs attention; it is serialized with the legacy `organization: "workspace"`, so an older build falls back to By workspace.
+- Between 1a and 1b, a stored `inbox` laid out like Needs attention, and the sidebar title and Organize menu showed it as Needs attention. It is serialized with the legacy `organization: "workspace"`, so an older build falls back to By workspace. Since 1b it renders as the Inbox.
 - `chats:pendingAttention` (see 1c) lands with 1a as data only.
 - Fixture-based tests in `renderer/lib/sidebar-inbox.test.ts`. Each placement and ordering rule gets its own hand-written expected order (an independent oracle). The tests also cover snooze wake-ups, Done coming back on new output, detached and interrupted rows, offline hosts, and tie stability.
 
@@ -196,11 +196,16 @@ New desktop-only IPC, `chats:pendingAttention`, returns for each chat `{ kind, s
 - "Nothing needs you" shows only when Needs you, Updates and Earlier are all empty; a running Working shelf doesn't hide it.
 - Section counts appear on Needs you and Working only.
 - A Question row relies on the existing `AskUserQuestionComposer` autofocus for its answer field.
-- `chats:pendingAttention` is asked about the newest 2,000 chats, its own limit.
+- `chats:pendingAttention` is asked about at most 2,000 chats, its own limit: every chat that is running or waiting first, then the newest. Bot chats are left out. Its query key carries the id count and a hash, not the ids, and lives outside the `chats` key, so chat-list updaters never touch it.
+- A prompt the host refuses after its window left publishes a new activity revision (`ChatActivityRegistry.touch`), so the Unavailable row appears without another change event.
 - When a prompt resolves, focus returns to where it was before the card took it only if that was outside the sidebar; a chat opened from a row or ⌘1–9 leaves focus with the composer.
 - A row held in Needs you by the 400 ms linger or a freeze shows its live status, not the one it entered with.
 - The freeze re-checks for open menus once it starts watching, because the Organize menu that switches to the Inbox can close before the view's observer is attached.
 - Opening a chat calls `chats:dismissDetachedAttention`, so its Unavailable row clears.
+- The Working shelf is its own region under the scrolling list (the sidebar's `belowList` slot), not a sticky part of it: rows never show through it, a short list leaves it pinned to the bottom, it scrolls inside its 40% cap, and its rows line up with the list's. The roving-rows container spans both.
+- The freeze reads the pointer and keyboard focus from the DOM, not React's synthetic events, so a portalled menu or tooltip never holds it; an open menu or dialog holds it on its own. A focused row that goes releases it unless focus moves to the row in its place.
+- Row actions match their menu items: both come from `inboxRowAction`, so a Failed row reads Acknowledge in both, and held-over or offline rows offer neither.
+- **Known gap, for 1d:** while the Inbox is the stored view it stays on Bot routes in place of `BotSidebar`, so the Bot list can't be reached there and Bots don't show in the Inbox yet. 1d brings Bots into the Inbox.
 
 **1d. Bots, Settings and docs.**
 

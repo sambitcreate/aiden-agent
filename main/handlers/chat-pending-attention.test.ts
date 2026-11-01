@@ -45,7 +45,15 @@ function harness(options: {
   const clock = { now: T0 };
   const registry = new HostRunRegistry({ now: () => clock.now });
   const log = new DetachedPromptLog();
-  const recorder = createPendingAttentionRecorder({ runs: registry, log, now: () => clock.now });
+  const changes = { count: 0 };
+  const recorder = createPendingAttentionRecorder({
+    runs: registry,
+    log,
+    now: () => clock.now,
+    onChange: () => {
+      changes.count += 1;
+    },
+  });
   const handlers = new Map<string, Handler>();
   registerChatPendingAttentionHandlers<unknown>({
     handle: (channel, handler) => {
@@ -63,7 +71,7 @@ function harness(options: {
     return handler({}, ...args);
   };
   const pending = async (ids: unknown) => (await invoke("chats:pendingAttention", ids)) as ChatPendingAttention[];
-  return { clock, registry, recorder, invoke, pending };
+  return { clock, registry, recorder, invoke, pending, changes };
 }
 
 test("a live approval reports its summary, when it was raised, and when its run started", async () => {
@@ -177,7 +185,7 @@ test("prompts a window left behind stay as Unavailable until the chat runs again
 });
 
 test("a prompt the run raises after its window left shows as Unavailable from when it was refused", async () => {
-  const { clock, registry, recorder, pending } = harness({ chats: ["chat-a"] });
+  const { clock, registry, recorder, pending, changes } = harness({ chats: ["chat-a"] });
   registry.begin({ runId: "run-a", chatId: "chat-a", origin: "renderer" });
   // The person switches chats while the run works; nothing was waiting yet.
   clock.now = T0 + 2_000;
@@ -207,14 +215,17 @@ test("a prompt the run raises after its window left shows as Unavailable from wh
       count: 2,
     },
   ]);
+  // Each refusal tells the renderer to reread, since no activity change will.
+  assert.equal(changes.count, 2);
 
   // A run the registry never heard of leaves nothing behind.
   recorder.promptShortCircuited("run-unknown", { id: "x", type: "approval_required", payload: { summary: "x" } });
   assert.equal((await pending(["chat-a"]))[0]?.count, 2);
+  assert.equal(changes.count, 2);
 });
 
 test("summaries drop control and bidirectional formatting characters", async () => {
-  const { registry, pending } = harness({ chats: ["chat-a", "chat-b"] });
+  const { registry, pending } = harness({ chats: ["chat-a", "chat-b", "chat-c"] });
   registry.begin({ runId: "run-a", chatId: "chat-a", origin: "renderer" });
   registry.publish("run-a", "chat:approval", approval("approval-1", "rm \u202Etxt.exe\u202C\u0007 -f\u200B now"));
   assert.equal((await pending(["chat-a"]))[0]?.summary, "rm txt.exe -f now");
@@ -226,6 +237,12 @@ test("summaries drop control and bidirectional formatting characters", async () 
   registry.begin({ runId: "run-b", chatId: "chat-b", origin: "renderer" });
   registry.publish("run-b", "chat:approval", approval("approval-2", `Send ${family} ${scotland} ${persian}`));
   assert.equal((await pending(["chat-b"]))[0]?.summary, `Send ${family} ${scotland} ${persian}`);
+
+  // Tag characters outside a flag hide text, so they go.
+  const hidden = "\u{E0069}\u{E0067}\u{E006E}\u{E006F}\u{E0072}\u{E0065}";
+  registry.begin({ runId: "run-c", chatId: "chat-c", origin: "renderer" });
+  registry.publish("run-c", "chat:approval", approval("approval-3", `Run${hidden} tests \u{1F3F4}\u{E0067} ${scotland}`));
+  assert.equal((await pending(["chat-c"]))[0]?.summary, `Run tests \u{1F3F4} ${scotland}`);
 });
 
 test("unknown chats are left out and malformed requests are refused", async () => {

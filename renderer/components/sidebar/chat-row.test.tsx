@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { ChatRow, type ChatRowMenu, type ChatRowProps } from "./chat-row.js";
+import { ChatRow, type ChatRowInbox, type ChatRowMenu, type ChatRowProps } from "./chat-row.js";
+import { TooltipProvider } from "../ui.js";
 import { RowGroup } from "./row-group.js";
 import { SectionHeader } from "./section-header.js";
 import { remoteChatRowMenu } from "./remote-chat-row-menu.js";
@@ -236,4 +237,90 @@ test("a section header shows its count and only becomes a button when collapsibl
     <SectionHeader label="Done" collapse={{ expanded: false, onToggle: () => {} }} />,
   );
   assert.match(collapsible, /<button[^>]*aria-expanded="false"[^>]*>.*Done.*<\/button>/u);
+});
+
+function inboxRow(inbox: Partial<ChatRowInbox> = {}, props: Partial<ChatRowProps> = {}) {
+  return render(
+    <TooltipProvider>
+      <ChatRow
+        title="Fix the build"
+        layout="inbox"
+        status={{ state: "idle", unread: Boolean(inbox.unread) }}
+        inbox={{ meta: "aiden", status: { label: "2h", tone: "quiet" }, ...inbox }}
+        onOpen={() => {}}
+        {...props}
+      />
+    </TooltipProvider>,
+  );
+}
+
+/** The row's own button (the ••• and action buttons also name the chat). */
+function inboxRowButton(): HTMLElement {
+  const [button] = screen
+    .getAllByRole("button", { name: /Fix the build/u })
+    .filter((candidate) => candidate.hasAttribute("data-roving-item"));
+  assert.ok(button);
+  return button;
+}
+
+test("an unread Inbox row says so to screen readers and sets its title in medium weight", () => {
+  inboxRow({ unread: true });
+  assert.match(inboxRowButton().textContent ?? "", /Fix the build, Unread$/u);
+  const title = inboxRowButton().querySelector<HTMLElement>("[data-inbox-title]")!;
+  assert.ok(title.classList.contains("font-medium"));
+  cleanup();
+
+  inboxRow({ unread: false });
+  assert.doesNotMatch(inboxRowButton().textContent ?? "", /Unread/u);
+  assert.equal(inboxRowButton().querySelector("[data-inbox-title]")!.classList.contains("font-medium"), false);
+});
+
+test("an Inbox row's action runs without opening the chat, and a dimmed row offers none", () => {
+  let opened = 0;
+  let marked = 0;
+  inboxRow(
+    { unread: true, action: { kind: "mark_read", onSelect: () => (marked += 1) } },
+    { onOpen: () => (opened += 1) },
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Mark read: Fix the build" }));
+  assert.equal(marked, 1);
+  assert.equal(opened, 0);
+  cleanup();
+
+  inboxRow({ unread: true, dimmed: true, action: { kind: "mark_read", onSelect: () => (marked += 1) } });
+  assert.equal(screen.queryByRole("button", { name: /^Mark read/u }), null);
+});
+
+test("an Inbox row describes its request and keeps its leading icon", () => {
+  inboxRow(
+    { description: "Approve: rm -rf build", status: { label: "Approval", tone: "warning", needsYou: "approval" } },
+    { icon: <span data-testid="lead-icon" /> },
+  );
+  assert.equal(inboxRowButton().getAttribute("aria-description"), "Approve: rm -rf build");
+  assert.ok(within(inboxRowButton()).getByTestId("lead-icon"));
+});
+
+test("an Inbox remote row's menu offers the same one action as its hover icon", async () => {
+  const actions = remoteChatRowActions(remoteChat(), new Set(["markRead", "rename"]));
+  for (const [inboxAction, expected] of [
+    [{ kind: "acknowledge", onSelect: () => {} }, ["Open", "Acknowledge", "Rename"]],
+    [null, ["Open", "Rename"]],
+  ] as const) {
+    let acknowledged = 0;
+    const handlers = {
+      onOpen: () => {},
+      onMarkRead: () => {},
+      onRename: () => {},
+      inboxAction: inboxAction && { ...inboxAction, onSelect: () => (acknowledged += 1) },
+    };
+    inboxRow({}, { menu: remoteChatRowMenu(actions, handlers) });
+    fireEvent.contextMenu(inboxRowButton());
+    const items = within(await screen.findByRole("menu")).getAllByRole("menuitem");
+    assert.deepEqual(items.map((item) => item.textContent), expected);
+    if (inboxAction) {
+      fireEvent.click(items[1]!);
+      assert.equal(acknowledged, 1);
+    }
+    cleanup();
+  }
 });

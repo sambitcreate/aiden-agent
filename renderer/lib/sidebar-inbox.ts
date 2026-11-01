@@ -68,7 +68,7 @@ export function inboxState(
   // 1. A live prompt overrides Done and Snooze.
   if (signals.rowState === "needs_approval") return needsYou(INBOX_TIERS.approval);
   if (signals.rowState === "needs_input") return needsYou(INBOX_TIERS.input);
-  // 2. Unseen output from a failed run (an idle chat, as in `sidebarAttention`).
+  // 2. Unseen output from a failed run (an idle chat; `inboxRowStatus` reads it as Failed).
   if (signals.rowState === "idle" && signals.failed && unread) return needsYou(INBOX_TIERS.failed);
   // 3. A local prompt that can no longer be answered where it was raised.
   if (signals.attention) return needsYou(INBOX_TIERS.unavailable);

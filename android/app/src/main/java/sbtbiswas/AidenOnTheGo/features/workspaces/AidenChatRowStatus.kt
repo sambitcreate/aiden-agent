@@ -37,8 +37,10 @@ import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 
 /**
  * Triage rank used to order chat lists, most urgent first. Mirrors the
- * desktop Needs attention tiers: a chat blocked on the user outranks one that
- * is merely working, and everything else keeps its existing order.
+ * desktop Inbox's Needs you tiers (`INBOX_TIERS`, with row status from
+ * `inboxRowStatus`), which sit above its Updates and Earlier sections: a chat
+ * blocked on the user outranks one that is merely working, and everything
+ * else keeps its existing order.
  */
 fun AidenChatRowState.attentionRank(): Int = when (this) {
     AidenChatRowState.NEEDS_APPROVAL -> 0
@@ -48,7 +50,7 @@ fun AidenChatRowState.attentionRank(): Int = when (this) {
 }
 
 /**
- * Triage rank for a whole row. Mirrors the desktop Needs attention tiers:
+ * Triage rank for a whole row. Mirrors the desktop Inbox's Needs you tiers:
  * approval, input, then an idle chat whose unseen output is a failed turn
  * (it needs a look; a working chat needs nothing), then working, then the rest.
  */

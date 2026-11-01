@@ -725,6 +725,8 @@ export function Sidebar({
   onSearchChange,
   actions,
   footer,
+  belowList,
+  listRegionRef,
   children,
 }: React.PropsWithChildren<{
   searchable?: boolean;
@@ -733,6 +735,10 @@ export function Sidebar({
   onSearchChange?: (value: string) => void;
   actions?: React.ReactNode;
   footer?: React.ReactNode;
+  /** Pinned under the scrolling list, above the footer; it doesn't scroll with the list. */
+  belowList?: React.ReactNode;
+  /** The scrolling list and `belowList` together, for keyboard movement that spans both. */
+  listRegionRef?: React.Ref<HTMLDivElement>;
 }>) {
   const viewport = React.useRef<HTMLDivElement>(null);
   const [atTop, setAtTop] = React.useState(true);
@@ -798,14 +804,17 @@ export function Sidebar({
           </label>
         </div>
       ) : null}
-      <div
-        ref={viewport}
-        data-scroll-top={atTop}
-        data-scroll-bottom={atBottom}
-        className="scroll-edge-mask dimmable min-h-0 flex-1 overflow-y-auto"
-        onScroll={(event) => updateScrollEdges(event.currentTarget)}
-      >
-        {children}
+      <div ref={listRegionRef} className="flex min-h-0 flex-1 flex-col">
+        <div
+          ref={viewport}
+          data-scroll-top={atTop}
+          data-scroll-bottom={atBottom}
+          className="scroll-edge-mask dimmable min-h-0 flex-1 overflow-y-auto"
+          onScroll={(event) => updateScrollEdges(event.currentTarget)}
+        >
+          {children}
+        </div>
+        {belowList}
       </div>
       {footer}
     </div>

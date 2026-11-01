@@ -58,8 +58,12 @@ import type {
 export const queryKeys = {
   providers: ["providers"] as const,
   chats: ["chats"] as const,
-  /** Under `chats`, so anything that invalidates the chat list refetches it too. */
-  pendingAttention: ["chats", "pendingAttention"] as const,
+  /**
+   * Not under `chats`: chat-list updaters (`setQueriesData({ queryKey: chats })`)
+   * would otherwise rewrite it as a chat list. Its key carries the chat list's
+   * `dataUpdatedAt`, so a chat-list refetch still rereads it.
+   */
+  pendingAttention: ["chatPendingAttention"] as const,
   bots: ["bots"] as const,
   bot: (id: string | undefined) => ["bot", id ?? "none"] as const,
   botChats: (id: string | undefined) => ["bot-chats", id ?? "none"] as const,

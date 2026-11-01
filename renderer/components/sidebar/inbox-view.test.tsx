@@ -2,7 +2,8 @@
 import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { createPortal } from "react-dom";
 import { TooltipProvider } from "../ui";
 import { ChatRow } from "./chat-row";
 import { InboxView, type InboxRowContext } from "./inbox-view";
@@ -70,12 +71,34 @@ function renderRow(onMarkRead: (key: string) => void = () => {}) {
   };
 }
 
-function view(entries: readonly InboxEntry[], extra: { onMarkRead?: (key: string) => void } = {}) {
+function view(
+  entries: readonly InboxEntry[],
+  extra: {
+    onMarkRead?: (key: string) => void;
+    searching?: boolean;
+    shelfHost?: HTMLElement | null;
+    renderRow?: (entry: InboxEntry, context: InboxRowContext) => React.ReactNode;
+  } = {},
+) {
   return (
     <TooltipProvider>
-      <InboxView entries={entries} now={clock} renderRow={renderRow(extra.onMarkRead)} />
+      <InboxView
+        entries={entries}
+        now={clock}
+        searching={extra.searching ?? false}
+        shelfHost={extra.shelfHost ?? null}
+        renderRow={extra.renderRow ?? renderRow(extra.onMarkRead)}
+      />
     </TooltipProvider>
   );
+}
+
+function inboxRoot(): HTMLElement {
+  return document.querySelector<HTMLElement>("[data-inbox-view]")!;
+}
+
+function rowButton(name: string): HTMLElement {
+  return screen.getByRole("button", { name: new RegExp(`\\b${name}(?!\\w)`, "u") });
 }
 
 function section(name: string): HTMLElement {
@@ -86,7 +109,7 @@ function rowTitles(container: HTMLElement): string[] {
   return within(container)
     .queryAllByRole("button")
     .filter((button) => button.hasAttribute("data-roving-item") && button.dataset.inboxShowMore === undefined)
-    .map((button) => button.querySelector("[data-chat-unread], span.block")?.textContent ?? "");
+    .map((button) => button.querySelector("[data-inbox-title]")?.textContent ?? "");
 }
 
 test("rows sort into Needs you, Updates, Earlier and the Working shelf, each a labelled group", () => {
@@ -168,7 +191,7 @@ test("Earlier lists 20 rows, then Show more; the count holds the frozen list whi
   assert.ok(screen.getByRole("button", { name: "Show 5 more" }));
 
   const root = container.querySelector<HTMLElement>("[data-inbox-view]")!;
-  fireEvent.pointerEnter(root);
+  fireEvent.pointerOver(root);
   assert.equal(root.dataset.inboxFrozen, "true");
   const before = rowTitles(section("Earlier"));
 
@@ -177,7 +200,7 @@ test("Earlier lists 20 rows, then Show more; the count holds the frozen list whi
   assert.deepEqual(rowTitles(section("Earlier")), before);
   assert.ok(screen.getByRole("button", { name: "Show 6 more" }));
 
-  fireEvent.pointerLeave(root);
+  fireEvent.pointerOver(document.body);
   assert.equal(rowTitles(section("Earlier"))[0], "Chat fresh");
   assert.ok(screen.getByRole("button", { name: "Show 6 more" }));
 
@@ -192,13 +215,13 @@ test("a resolved approval holds its slot while the list is in use, then moves on
     entry("b"),
   ]));
   const root = container.querySelector<HTMLElement>("[data-inbox-view]")!;
-  fireEvent.pointerEnter(root);
+  fireEvent.pointerOver(root);
   rerender(view([entry("a"), entry("b")]));
   // Well past the 400ms debounce, the frozen list still holds it in place.
   nowMs = NOW + 5_000;
   rerender(view([entry("a"), entry("b")]));
   assert.deepEqual(rowTitles(section("Needs you")), ["Chat a"]);
-  fireEvent.pointerLeave(root);
+  fireEvent.pointerOver(document.body);
   assert.equal(screen.queryByRole("group", { name: "Needs you" }), null);
   assert.deepEqual(rowTitles(section("Earlier")).sort(), ["Chat a", "Chat b"]);
 });
@@ -221,4 +244,80 @@ test("the Working shelf collapses to its header and drops its rows from the list
   fireEvent.click(toggle);
   assert.deepEqual(rowTitles(section("Working")), []);
   assert.ok(within(section("Working")).getByRole("button", { expanded: false }));
+});
+
+test("keyboard focus inside the list freezes it, and focus leaving releases it", () => {
+  render(view([entry("a"), entry("b")]));
+  act(() => rowButton("Chat a").focus());
+  assert.equal(inboxRoot().dataset.inboxFrozen, "true");
+  act(() => rowButton("Chat a").blur());
+  assert.equal(inboxRoot().dataset.inboxFrozen, undefined);
+});
+
+test("an open menu or dialog holds the freeze after the pointer leaves", async () => {
+  render(view([entry("a")]));
+  const menu = document.createElement("div");
+  menu.setAttribute("role", "menu");
+  await act(async () => {
+    document.body.append(menu);
+  });
+  assert.equal(inboxRoot().dataset.inboxFrozen, "true");
+  fireEvent.pointerOver(document.body);
+  assert.equal(inboxRoot().dataset.inboxFrozen, "true");
+  await act(async () => {
+    menu.remove();
+  });
+  assert.equal(inboxRoot().dataset.inboxFrozen, undefined);
+});
+
+test("a focused row that goes hands focus to the row in its place, and the last one releases the freeze", () => {
+  const { rerender } = render(view([entry("a", { updatedAt: NOW - MINUTE }), entry("b")]));
+  act(() => rowButton("Chat a").focus());
+  assert.equal(inboxRoot().dataset.inboxFrozen, "true");
+
+  // Deleted while focused: focus moves to the row now in its place.
+  rerender(view([entry("b")]));
+  assert.equal(document.activeElement, rowButton("Chat b"));
+  assert.equal(inboxRoot().dataset.inboxFrozen, "true");
+
+  // Nothing left to take focus: it falls to the page and the list lets go.
+  rerender(view([]));
+  assert.equal(document.activeElement, document.body);
+  assert.equal(inboxRoot().dataset.inboxFrozen, undefined);
+});
+
+test("the pointer over a row's portalled popup is not the pointer over the list", () => {
+  const withPopup = (item: InboxEntry, context: InboxRowContext) => (
+    <>
+      {renderRow()(item, context)}
+      {createPortal(<div data-testid={`popup-${item.title}`}>Popup</div>, document.body)}
+    </>
+  );
+  render(view([entry("a")], { renderRow: withPopup }));
+  fireEvent.pointerOver(screen.getByTestId("popup-Chat a"));
+  assert.equal(inboxRoot().dataset.inboxFrozen, undefined);
+  fireEvent.pointerOver(rowButton("Chat a"));
+  assert.equal(inboxRoot().dataset.inboxFrozen, "true");
+});
+
+test("a search that only matches working chats lists them on the shelf, not No matches", () => {
+  render(view([entry("busy", { rowState: "working" })], { searching: true }));
+  assert.equal(screen.queryByText("No matches"), null);
+  assert.deepEqual(rowTitles(section("Working")), ["Chat busy"]);
+});
+
+test("given a shelf host, the Working shelf renders there and the pointer over it freezes the list", () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  try {
+    render(view([entry("busy", { rowState: "working" }), entry("quiet")], { shelfHost: host }));
+    const shelf = section("Working");
+    assert.ok(host.contains(shelf));
+    assert.equal(inboxRoot().contains(shelf), false);
+    fireEvent.pointerOver(within(shelf).getByRole("button", { name: /\bChat busy\b/u }));
+    assert.equal(inboxRoot().dataset.inboxFrozen, "true");
+  } finally {
+    cleanup();
+    host.remove();
+  }
 });
