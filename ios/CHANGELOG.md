@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Contract revision 49 (`chat:jobs`): when the paired Mac offers it, the iPhone asks for it in a call of its own, and a workspace chat shows "2 in background" beside the composer while the agent has something running for it on the Mac (a dev server, a watcher, a long test run, or a server a command left running). The list says how long each has run or how it ended, the addresses a server listens on ("localhost:5173 on your Mac"), and offers **Stop**, which ends the job and everything it started. The list refreshes after each reply and every few seconds while something runs. Older Macs show nothing new.
 - The disconnected recovery panel now offers **Switch connection**, so an unavailable computer no longer leaves you with only Retry. Open the saved-computer list or pair another Aiden Agent directly, including when a secure-identity failure prevents retrying.
 
 - The Thinking row in a chat no longer opens for a second and folds shut, which made the transcript jump when a fast model thought in many short bursts. It now stays one row tall: while the model thinks, the row shows its latest finished sentence or line next to "Thinking", fading in as each one finishes (no movement under Reduce Motion) and fading out when thinking ends. Tap the row to read the full reasoning, as before.

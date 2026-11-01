@@ -68,11 +68,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
@@ -247,6 +249,22 @@ fun AidenChatDetailScreen(
     val spendingOwner = chat?.botId?.let { AidenSpendingOwner.Bot(it) } ?: AidenSpendingOwner.Chat(chatId)
     LaunchedEffect(spendingOwner, spendingTransport, isStreaming, chat?.messages?.size, sendRecoveryError) {
         spending.refresh(spendingOwner, spendingTransport)
+    }
+    // Revision 49: a Workspace chat's background jobs on the Mac. Not pushed: read after each
+    // reply settles, and every few seconds while something runs or the list is open.
+    val backgroundJobs = remember(chatId) { AidenBackgroundJobsState() }
+    var showsBackgroundJobs by rememberSaveable(chatId) { mutableStateOf(false) }
+    val backgroundJobsTransport = readAloudClient.takeIf { chat?.botId == null && serverInfo?.supportsBackgroundJobs == true }
+    // Only while the chat is on screen: a backgrounded app never polls the Mac.
+    val backgroundJobsLifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    val backgroundJobsVisible = backgroundJobsLifecycle.isAtLeast(Lifecycle.State.STARTED)
+    LaunchedEffect(chatId, backgroundJobsTransport, isStreaming, chat?.messages?.size, showsBackgroundJobs, backgroundJobsVisible) {
+        if (!backgroundJobsVisible) return@LaunchedEffect
+        backgroundJobs.refresh(chatId, backgroundJobsTransport)
+        while (backgroundJobsTransport != null && (backgroundJobs.runningCount > 0 || showsBackgroundJobs)) {
+            delay(if (showsBackgroundJobs) 3_000 else 10_000)
+            backgroundJobs.refresh(chatId, backgroundJobsTransport)
+        }
     }
     val readAloud = remember(readAloudClient, chatId) {
         AidenReadAloudPlayback(context.applicationContext, scope, readAloudClient, chatId) {
@@ -722,6 +740,13 @@ fun AidenChatDetailScreen(
                     )
                 }
 
+                if (backgroundJobs.runningCount > 0) {
+                    AidenBackgroundJobsChip(
+                        running = backgroundJobs.runningCount,
+                        onClick = { showsBackgroundJobs = true },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
                 if (canReadTaskProgress || canReadAgentRoster) {
                     AidenChatProgressControls(
                         taskProgress = taskProgress.takeIf { canReadTaskProgress },
@@ -1139,6 +1164,15 @@ fun AidenChatDetailScreen(
         }
     }
 
+    if (showsBackgroundJobs) {
+        AidenBackgroundJobsSheet(
+            state = backgroundJobs,
+            canStop = connectionState == AidenConnectionState.CONNECTED &&
+                coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.CHAT_WRITE) == true,
+            onStop = { jobId -> scope.launch { backgroundJobs.stop(jobId, backgroundJobsTransport) } },
+            onDismiss = { showsBackgroundJobs = false }
+        )
+    }
     when (progressSheet) {
         "tasks" -> taskProgress
             ?.takeIf { canReadTaskProgress && it.availability == AidenChatProgressAvailability.READY }

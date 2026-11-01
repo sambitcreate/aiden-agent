@@ -597,6 +597,15 @@ data class AidenRemoteCapability(val rawValue: String) {
          */
         val BOT_ISSUES = AidenRemoteCapability("bot:issues")
 
+        /**
+         * Contract revision 49: this phone may list a chat's background jobs on the Mac
+         * (`GET /chats/{chatId}/jobs`, with `chat:read`) and stop one
+         * (`POST /chats/{chatId}/jobs/{jobId}/stop`, with `chat:write`). It widens nothing a chat
+         * grant does not already allow. The Mac offers it only in `serverCapabilities`, and it is
+         * asked for in a call of its own.
+         */
+        val CHAT_JOBS = AidenRemoteCapability("chat:jobs")
+
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
             WORKSPACE_READ, WORKSPACE_BROWSE, WORKSPACE_MANAGE,
@@ -632,13 +641,16 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 42: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_BOT_ISSUES = listOf(BOT_ISSUES)
 
+        /** Revision 49: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        val PHONE_CHAT_JOBS = listOf(CHAT_JOBS)
+
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
-            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES
+            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
         val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
-            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES
+            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS
     }
 }
 
