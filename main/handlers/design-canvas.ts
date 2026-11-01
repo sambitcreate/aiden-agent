@@ -2,8 +2,16 @@
 // AIDEN_EXPERIMENTAL_DESIGN_MODE is on, and every handler re-checks the flag
 // the way `chats:setDesignMode` does.
 
-import type { DesignCanvasV1 } from "../../renderer/shared/design-canvas/schema.js";
+import path from "node:path";
+import * as fs from "node:fs/promises";
+import {
+  isDesignRelativePath,
+  type DesignCanvasV1,
+} from "../../renderer/shared/design-canvas/schema.js";
 import type { DesignGrantRegistry } from "../services/design-canvas/grants.js";
+import { resolveDesignFile } from "../services/design-canvas/resolve-core.js";
+import type { DesignFileWatcher } from "../services/design-canvas/watch.js";
+import { isPathInside } from "../shared/path-containment.js";
 import {
   assertDesignCanvasChatId,
   type DesignCanvasStore,
@@ -41,6 +49,31 @@ export interface DesignCanvasCaptureWindow {
 /** `designCanvas:capture` reply. */
 export type DesignCanvasCaptureResult = { dataUrl: string } | { error: "unavailable" };
 
+/** What `designCanvas:pickFile` may add: a page or an image. */
+export type DesignCanvasPickKind = "file" | "image";
+
+/** How the open dialog is shown: in the workspace folder, for one kind of file. */
+export type DesignCanvasPickOptions = {
+  defaultPath: string;
+  kind: DesignCanvasPickKind;
+  filters: Array<{ name: string; extensions: string[] }>;
+};
+
+/** `designCanvas:pickFile` reply: a workspace-relative path, or why there is none. */
+export type DesignCanvasPickResult =
+  | { path: string }
+  | { cancelled: true }
+  | { error: "outside-workspace" | "unsupported" | "unavailable" };
+
+const PICK_EXTENSIONS: Readonly<Record<DesignCanvasPickKind, readonly string[]>> = {
+  file: ["html", "htm"],
+  image: ["png", "jpg", "jpeg", "gif", "webp", "svg"],
+};
+const PICK_FILTER_NAMES: Readonly<Record<DesignCanvasPickKind, string>> = {
+  file: "Web pages",
+  image: "Images",
+};
+
 /** A frame snapshot's longest side, in pixels. */
 export const DESIGN_CAPTURE_MAX_SIDE = 1024;
 
@@ -58,6 +91,9 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   workspaceRoot(chat: DesignCanvasChat): Promise<string | null>;
   /** The window that sent `event`, or null when it has none (or it is gone). */
   windowFor(event: Event): DesignCanvasCaptureWindow | null;
+  watcher: Pick<DesignFileWatcher, "set" | "clear">;
+  /** Shows the open dialog over the asking window; the chosen absolute path, or null. */
+  pickFile(event: Event, options: DesignCanvasPickOptions): Promise<string | null>;
 }): void {
   if (!deps.enabled()) return;
 
@@ -123,6 +159,40 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     return { grant };
   });
 
+  // Replaces the set of workspace files whose changes reload this chat's frames.
+  deps.handle("designCanvas:watch", async (_event, chatId, paths): Promise<void> => {
+    if (!deps.enabled()) throw new Error(UNAVAILABLE);
+    assertDesignCanvasChatId(chatId);
+    if (!Array.isArray(paths) || !paths.every((entry) => typeof entry === "string")) {
+      throw new Error("Invalid design file list.");
+    }
+    const chat = await deps.getChat(chatId);
+    const root = canFrame(chat) ? await deps.workspaceRoot(chat) : null;
+    if (!root) {
+      deps.watcher.clear(chatId);
+      return;
+    }
+    await deps.watcher.set(chatId, root, paths as string[]);
+  });
+
+  // Lets the person add a page or image from the chat's workspace. Only the
+  // workspace-relative path comes back; the frame loads it through its grant.
+  deps.handle("designCanvas:pickFile", async (event, chatId, kind): Promise<DesignCanvasPickResult> => {
+    if (!deps.enabled()) throw new Error(UNAVAILABLE);
+    assertDesignCanvasChatId(chatId);
+    if (kind !== "file" && kind !== "image") throw new Error("Invalid design file kind.");
+    const chat = await deps.getChat(chatId);
+    const root = canFrame(chat) ? await deps.workspaceRoot(chat) : null;
+    if (!root) return { error: "unavailable" };
+    const chosen = await deps.pickFile(event, {
+      defaultPath: root,
+      kind,
+      filters: [{ name: PICK_FILTER_NAMES[kind], extensions: [...PICK_EXTENSIONS[kind]] }],
+    });
+    if (chosen === null) return { cancelled: true };
+    return validatePickedFile(root, chosen, kind);
+  });
+
   // Snapshots a frame's rectangle of the asking window's own page, so a frame
   // that leaves the live set keeps a picture instead of going blank. A window
   // can only ever capture itself.
@@ -168,4 +238,35 @@ function clampCaptureRect(
   const y1 = Math.min(contentHeight, Math.ceil(top! + h!));
   if (x1 <= x0 || y1 <= y0) return null;
   return { window, rect: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 } };
+}
+
+async function validatePickedFile(
+  root: string,
+  chosen: string,
+  kind: DesignCanvasPickKind,
+): Promise<DesignCanvasPickResult> {
+  const extension = path.extname(chosen).slice(1).toLowerCase();
+  if (!PICK_EXTENSIONS[kind].includes(extension)) return { error: "unsupported" };
+  let realRoot: string;
+  let realChosen: string;
+  try {
+    realRoot = await fs.realpath(root);
+    realChosen = await fs.realpath(chosen);
+  } catch {
+    return { error: "outside-workspace" };
+  }
+  if (!isPathInside(realRoot, realChosen, { allowRoot: false })) return { error: "outside-workspace" };
+  // A link inside the folder may name a file of another type.
+  if (!PICK_EXTENSIONS[kind].includes(path.extname(realChosen).slice(1).toLowerCase())) {
+    return { error: "unsupported" };
+  }
+  const relative = path.relative(realRoot, realChosen).split(path.sep).join("/");
+  // Hidden folders are never served, so a frame there could never load.
+  if (!isDesignRelativePath(relative)) return { error: "outside-workspace" };
+  const resolved = await resolveDesignFile(
+    realRoot,
+    relative.split("/").map(encodeURIComponent).join("/"),
+  );
+  if (resolved.ok) return { path: relative };
+  return resolved.status === 413 ? { error: "unsupported" } : { error: "outside-workspace" };
 }

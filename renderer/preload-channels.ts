@@ -113,6 +113,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chats:design-mode-changed",
   /** A chat's design canvas was saved or edited by Aiden: `{chatId, revision}`. */
   "designCanvas:updated",
+  /** Workspace files a chat's design canvas shows changed: `{chatId, paths}`. */
+  "designCanvas:filesChanged",
   "chats:fork-summary-changed",
   "chats:btw-event",
   "chats:pull-requests-changed",

@@ -2220,4 +2220,16 @@ export const designCanvasApi = {
   /** A PNG of this window's own page inside `rect` (CSS pixels), at most 1024 px on a side. */
   captureDesignFrame: (rect: { x: number; y: number; width: number; height: number }) =>
     invoke<{ dataUrl: string } | { error: "unavailable" }>("designCanvas:capture", rect),
+  /** Replaces the workspace files whose changes reload this chat's frames (at most 50). */
+  watchDesignFiles: (chatId: string, paths: string[]) =>
+    invoke<void>("designCanvas:watch", chatId, paths),
+  onDesignFilesChanged: (handler: (update: { chatId: string; paths: string[] }) => void) =>
+    onNotification<{ chatId: string; paths: string[] }>("designCanvas:filesChanged", handler),
+  /** Opens the file dialog in the chat's workspace folder. */
+  pickDesignFile: (chatId: string, kind: "file" | "image") =>
+    invoke<
+      | { path: string }
+      | { cancelled: true }
+      | { error: "outside-workspace" | "unsupported" | "unavailable" }
+    >("designCanvas:pickFile", chatId, kind),
 };

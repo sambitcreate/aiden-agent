@@ -17,6 +17,7 @@ import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../lib/app-c
 import { CommandSystemProvider } from "../lib/command-system";
 import { applyDesignModeToCache, useDesignModeControls } from "../lib/design-mode";
 import { queryKeys } from "../lib/queries";
+import { emptyDesignCanvas } from "../shared/design-canvas/schema";
 import { effectiveBindings } from "../shared/keybindings";
 import type { Chat, ChatMeta, Workspace } from "../lib/types";
 import { WorkspaceProvider } from "../lib/workspace-context";
@@ -99,6 +100,9 @@ beforeEach(() => {
       return widenResult;
     },
     "app:designWindowCanWiden": () => canWidenResult,
+    "designCanvas:get": () => emptyDesignCanvas(),
+    "designCanvas:grant": () => ({ grant: "b".repeat(52) }),
+    "designCanvas:watch": () => undefined,
   });
   queryClient = createBotTestQueryClient();
   for (const entry of chats) queryClient.setQueryData(queryKeys.chat(entry.id), entry);
@@ -205,7 +209,7 @@ test("a design chat on a wide window splits into a 420 px chat column and the ca
   assert.equal(toolsSurface()?.dataset.state ?? "closed", "closed");
   await waitFor(() => screen.getByRole("region", { name: "Design canvas" }));
   assert.equal(screen.getAllByRole("region", { name: "Design canvas" }).length, 1, "one landmark, named once");
-  screen.getByText("Designs will appear here.");
+  await waitFor(() => screen.getByText("Ask Aiden to design something, or add a note."));
   assert.equal(panel.dockRightInset, 980, "the Live pill stays inside the chat column, off the canvas controls");
   assert.equal(screen.queryByRole("radiogroup", { name: "Design mode view" }), null, "no pane switch while split");
   assert.equal(widenCalls, 0, "a wide window is left alone");

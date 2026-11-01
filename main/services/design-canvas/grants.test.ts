@@ -37,6 +37,21 @@ test("revoking a chat, a root or everything makes its grants resolve to null", (
   assert.notEqual(grants.issue("chat-1", "/work/a"), one);
 });
 
+test("a chat holds a grant only for the root it was issued and until it is revoked", () => {
+  const grants = new DesignGrantRegistry();
+  grants.issue("chat-1", "/work/a");
+  grants.issue("chat-2", "/work/b");
+  assert.equal(grants.holds("chat-1", "/work/a"), true);
+  assert.equal(grants.holds("chat-1", "/work/b"), false, "another root is not covered");
+  assert.equal(grants.holds("chat-3", "/work/a"), false);
+  grants.issue("chat-1", "/work/c");
+  assert.equal(grants.holds("chat-1", "/work/a"), false, "a new root replaces the old grant");
+  grants.revokeChat("chat-1");
+  assert.equal(grants.holds("chat-1", "/work/c"), false);
+  grants.revokeRoot("/work/b");
+  assert.equal(grants.holds("chat-2", "/work/b"), false);
+});
+
 test("a guessed or malformed grant resolves to null", () => {
   const grants = new DesignGrantRegistry();
   const real = grants.issue("chat-1", "/work/a");

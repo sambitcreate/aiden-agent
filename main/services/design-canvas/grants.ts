@@ -55,6 +55,12 @@ export class DesignGrantRegistry {
     return entry ? { ...entry } : null;
   }
 
+  /** Whether the chat's live grant covers exactly `workspaceRoot`. */
+  holds(chatId: string, workspaceRoot: string): boolean {
+    const grant = this.byChat.get(chatId);
+    return grant !== undefined && this.byGrant.get(grant)?.workspaceRoot === workspaceRoot;
+  }
+
   revokeChat(chatId: string): void {
     const grant = this.byChat.get(chatId);
     if (grant === undefined) return;

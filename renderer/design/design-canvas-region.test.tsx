@@ -28,6 +28,7 @@ test("while the canvas chunk loads, the region shows a neutral loading state, no
   assert.equal(screen.queryByText(DESIGN_CANVAS_EMPTY_COPY) === null, true, "no empty-state copy while loading");
   assert.equal(loading.textContent?.trim() ?? "", "", "the skeleton draws no words");
 
-  await waitFor(() => screen.getByRole("region", { name: "Design canvas" }));
+  await waitFor(() => screen.getByText(DESIGN_CANVAS_EMPTY_COPY));
   assert.equal(screen.queryByRole("status", { name: "Loading canvas" }) === null, true);
+  assert.ok(screen.getByRole("region", { name: "Design canvas" }));
 });

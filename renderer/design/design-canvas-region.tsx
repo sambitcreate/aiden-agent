@@ -46,7 +46,7 @@ export function DesignCanvasRegion({
     >
       <React.Suspense fallback={<DesignCanvasLoading />}>
         {/* Each chat has its own canvas, so its tool and viewport never carry over. */}
-        <DesignCanvas key={chatId} />
+        <DesignCanvas key={chatId} chatId={chatId} />
       </React.Suspense>
     </section>
   );

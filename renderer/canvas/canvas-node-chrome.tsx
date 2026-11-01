@@ -7,12 +7,15 @@ export function CanvasNodeChrome({
   selected,
   status,
   toolbar,
+  flush = false,
   children,
 }: React.PropsWithChildren<{
   title: string;
   selected: boolean;
   status?: string;
   toolbar?: React.ReactNode;
+  /** Fill the node's box and give the body no padding, for content drawn edge to edge. */
+  flush?: boolean;
 }>) {
   return (
     <div
@@ -21,6 +24,7 @@ export function CanvasNodeChrome({
       data-selected={selected ? "true" : "false"}
       className={cn(
         "flex min-w-40 flex-col overflow-visible rounded-button bg-popover shadow-control",
+        flush && "h-full w-full min-w-0 overflow-hidden",
         selected && "bg-list-selection",
       )}
     >
@@ -29,7 +33,7 @@ export function CanvasNodeChrome({
         {status ? <span className="shrink-0 text-secondary">{status}</span> : null}
         {toolbar ? <div className="nodrag flex shrink-0 items-center gap-1">{toolbar}</div> : null}
       </div>
-      <div className="min-h-0 flex-1 px-3 pb-3">{children}</div>
+      <div className={cn("min-h-0 flex-1", !flush && "px-3 pb-3")}>{children}</div>
     </div>
   );
 }

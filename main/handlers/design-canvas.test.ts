@@ -15,6 +15,7 @@ import {
   type DesignCanvasCaptureImage,
   type DesignCanvasCaptureWindow,
   type DesignCanvasChat,
+  type DesignCanvasPickOptions,
   type DesignCanvasUpdated,
 } from "./design-canvas.js";
 
@@ -45,6 +46,7 @@ async function fixture(
     roots?: Record<string, string | null>;
     workspaceRoot?: (chat: DesignCanvasChat) => Promise<string | null>;
     windowFor?: (event: unknown) => DesignCanvasCaptureWindow | null;
+    pickFile?: (event: unknown, options: DesignCanvasPickOptions) => Promise<string | null>;
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-canvas-handlers-"));
@@ -67,6 +69,8 @@ async function fixture(
     return grant;
   };
   const roots = options.roots ?? { "workspace-1": "/work/site" };
+  const watched: Array<[string, string, string[]] | ["clear", string]> = [];
+  const dialogs: DesignCanvasPickOptions[] = [];
   registerDesignCanvasHandlers({
     enabled: () => enabled,
     handle: (channel, handler) => {
@@ -80,6 +84,18 @@ async function fixture(
     workspaceRoot:
       options.workspaceRoot ?? (async (chat) => roots[chat.workspaceId ?? ""] ?? null),
     windowFor: options.windowFor ?? (() => null),
+    watcher: {
+      set: async (chatId, workspaceRoot, paths) => {
+        watched.push([chatId, workspaceRoot, [...paths]]);
+      },
+      clear: (chatId) => {
+        watched.push(["clear", chatId]);
+      },
+    },
+    pickFile: async (event, pickOptions) => {
+      dialogs.push(pickOptions);
+      return options.pickFile ? options.pickFile(event, pickOptions) : null;
+    },
   });
   const invokeFrom = async (event: unknown, channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
@@ -98,6 +114,8 @@ async function fixture(
     broadcasts,
     invoke,
     invokeFrom,
+    watched,
+    dialogs,
     disable: () => (enabled = false),
   };
 }
@@ -341,4 +359,102 @@ test("a capture with no window behind the sender, or with the flag off, is refus
     /Design mode is not available/u,
   );
   assert.deepEqual(page.captured, []);
+});
+
+test("watching replaces the chat's watched set under its own workspace folder", async (t) => {
+  const { invoke, watched } = await fixture(t);
+  await invoke("designCanvas:watch", "chat-1", ["design/hero.html", "design/about.html"]);
+  await invoke("designCanvas:watch", "chat-1", []);
+  assert.deepEqual(watched, [
+    ["chat-1", "/work/site", ["design/hero.html", "design/about.html"]],
+    ["chat-1", "/work/site", []],
+  ]);
+});
+
+test("a chat that cannot frame workspace files stops being watched", async (t) => {
+  const { invoke, watched } = await fixture(t, {
+    chats: {
+      off: { id: "off", workspaceId: "workspace-1" },
+      bot: { id: "bot", workspaceId: "workspace-1", designMode: true, botId: "bot-1" },
+      loose: { id: "loose", workspaceId: "nowhere", designMode: true },
+    },
+  });
+  for (const chatId of ["off", "bot", "loose"]) {
+    await invoke("designCanvas:watch", chatId, ["design/hero.html"]);
+  }
+  assert.deepEqual(watched, [
+    ["clear", "off"],
+    ["clear", "bot"],
+    ["clear", "loose"],
+  ]);
+});
+
+test("watching rejects malformed arguments and refuses with the flag off", async (t) => {
+  const { invoke, watched, disable } = await fixture(t);
+  await assert.rejects(invoke("designCanvas:watch", "chat-1", "design/hero.html"));
+  await assert.rejects(invoke("designCanvas:watch", "chat-1", [42]));
+  await assert.rejects(invoke("designCanvas:watch", "../chat", []));
+  disable();
+  await assert.rejects(invoke("designCanvas:watch", "chat-1", []), /Design mode is not available/u);
+  assert.deepEqual(watched, []);
+});
+
+async function pickWorkspace(t: TestContext) {
+  const site = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-pick-"));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-outside-"));
+  t.after(() => fs.rm(site, { recursive: true, force: true }));
+  t.after(() => fs.rm(outside, { recursive: true, force: true }));
+  await fs.mkdir(path.join(site, "design", "img"), { recursive: true });
+  await fs.writeFile(path.join(site, "design", "hero page.html"), "<p>hi</p>");
+  await fs.writeFile(path.join(site, "design", "img", "logo.png"), "png");
+  await fs.writeFile(path.join(site, "notes.md"), "# notes");
+  await fs.writeFile(path.join(outside, "secret.html"), "<p>secret</p>");
+  await fs.symlink(path.join(outside, "secret.html"), path.join(site, "design", "link.html"));
+  return { site, outside };
+}
+
+test("picking a file opens the dialog in the workspace and returns its relative path", async (t) => {
+  const { site } = await pickWorkspace(t);
+  let choice: string | null = path.join(site, "design", "hero page.html");
+  const { invoke, dialogs } = await fixture(t, {
+    roots: { "workspace-1": site },
+    pickFile: async () => choice,
+  });
+  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "file"), { path: "design/hero page.html" });
+  assert.equal(dialogs[0]?.defaultPath, site);
+  assert.equal(dialogs[0]?.kind, "file");
+  choice = path.join(site, "design", "img", "logo.png");
+  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "image"), { path: "design/img/logo.png" });
+  choice = null;
+  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "file"), { cancelled: true });
+});
+
+test("a picked file of the wrong type is unsupported", async (t) => {
+  const { site } = await pickWorkspace(t);
+  let choice = path.join(site, "design", "img", "logo.png");
+  const { invoke } = await fixture(t, { roots: { "workspace-1": site }, pickFile: async () => choice });
+  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "file"), { error: "unsupported" });
+  choice = path.join(site, "notes.md");
+  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "image"), { error: "unsupported" });
+  choice = path.join(site, "design", "hero page.html");
+  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "image"), { error: "unsupported" });
+});
+
+test("a picked file outside the workspace, or linked from outside it, is refused", async (t) => {
+  const { site, outside } = await pickWorkspace(t);
+  let choice = path.join(outside, "secret.html");
+  const { invoke } = await fixture(t, { roots: { "workspace-1": site }, pickFile: async () => choice });
+  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "file"), { error: "outside-workspace" });
+  choice = path.join(site, "design", "link.html");
+  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "file"), { error: "outside-workspace" });
+});
+
+test("a chat that cannot frame workspace files never opens the dialog", async (t) => {
+  const { invoke, dialogs } = await fixture(t, {
+    chats: { off: { id: "off", workspaceId: "workspace-1" } },
+    pickFile: async () => "/work/site/a.html",
+  });
+  assert.deepEqual(await invoke("designCanvas:pickFile", "off", "file"), { error: "unavailable" });
+  await assert.rejects(invoke("designCanvas:pickFile", "off", "video"));
+  assert.deepEqual(dialogs, []);
 });

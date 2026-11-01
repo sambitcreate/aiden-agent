@@ -387,7 +387,9 @@ test("design mode puts the chat beside a canvas, stays with its chat and gives t
     "split",
   );
   await expect(
-    designCanvas(page).getByText("Designs will appear here."),
+    designCanvas(page).getByText(
+      "Ask Aiden to design something, or add a note.",
+    ),
   ).toBeVisible();
   await expect(panel).toBeHidden();
   await expect(paneSwitch(page)).toHaveCount(0);
@@ -618,7 +620,9 @@ test("design mode fits narrow windows: split beside the sidebar, stacked below 6
   await paneSwitch(page).getByRole("radio", { name: "Canvas" }).click();
   await expect(designCanvas(page)).toBeVisible();
   await expect(
-    designCanvas(page).getByText("Designs will appear here."),
+    designCanvas(page).getByText(
+      "Ask Aiden to design something, or add a note.",
+    ),
   ).toBeVisible();
   await expect(page.locator("textarea").first()).toBeHidden();
   await expectCanvasChrome(page);
