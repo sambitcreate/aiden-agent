@@ -1,3 +1,4 @@
+import { workspaceCapabilityFields } from "./workspace-capabilities.js";
 import { MAX_PROVISIONED_BYTES } from "./managed-worktree-provisioner.js";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -152,6 +153,8 @@ export interface WorkspaceWorktreeApplicationDependencies {
   workspaceIsChanging(workspaceId: string): boolean;
   cancelWorkspaceOperations(workspaceId: string, exceptSignal: AbortSignal): Promise<void>;
   closeWorkspaceTerminals(workspaceId: string): Promise<void>;
+  /** Closes the worktree's Git metadata watcher; a later display read re-observes. */
+  closeWorkspaceGitWatcher?(workspaceId: string): void;
   cancelWorkspaceGeneration(workspaceId: string): Promise<void>;
   cancelWorkspaceSchedules(workspaceId: string): Promise<void>;
   resumeWorkspaceSchedules(workspaceId: string): Promise<void>;
@@ -304,6 +307,8 @@ export function createWorkspaceWorktreeApplicationService(
       name: displayName(resolved.workspace, branch, requestedName),
       folderPath: worktree.workspacePath,
       permission: resolved.workspace.permission,
+      // A worktree starts with its project's skill and connector choices.
+      ...workspaceCapabilityFields(resolved.workspace),
       managedWorktree: {
         repositoryPath: worktree.repositoryPath,
         worktreePath: worktree.path,
@@ -688,6 +693,8 @@ export function createWorkspaceWorktreeApplicationService(
         return result;
       } finally {
         finishMutation();
+        // Local and Remote deletions both land here.
+        dependencies.closeWorkspaceGitWatcher?.(workspaceId);
       }
     },
   );
@@ -772,6 +779,7 @@ export function createWorkspaceWorktreeApplicationService(
           name: displayName(resolved.workspace, snapshot.branch, requestedName),
           folderPath: result.worktree.workspacePath,
           permission: resolved.workspace.permission,
+          ...workspaceCapabilityFields(resolved.workspace),
           managedWorktree: {
             repositoryPath: result.worktree.repositoryPath,
             worktreePath: result.worktree.path,

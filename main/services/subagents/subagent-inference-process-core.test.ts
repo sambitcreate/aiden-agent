@@ -623,6 +623,43 @@ test("an asynchronously indeterminate exit proof still fails closed", async () =
   assert.equal(cleanupFailures, 1);
 });
 
+test("a stop that could not be proven settles the run once the identity read recovers", { timeout: 5_000 }, async (t) => {
+  const child = new AsyncProofProcess();
+  child.killHard = async () => {
+    await new Promise((resolve) => setImmediate(resolve));
+    child.hardKills += 1;
+    if (child.proofFailure) throw child.proofFailure;
+    child.alive = false;
+  };
+  let cleanupFailures = 0;
+  const owner = new SubagentInferenceProcessOwner(
+    async () => child,
+    { termGraceMs: 2, killGraceMs: 2 },
+    () => {
+      cleanupFailures += 1;
+      // The transient `ps` overload clears after the first failed proof.
+      child.proofFailure = undefined;
+    },
+  );
+  const cancellation = new AbortController();
+  const stream = owner.stream(request, { model }, cancellation.signal);
+  for (let turn = 0; turn < 5 && child.sent.length === 0; turn += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  child.proofFailure = new Error("process identity unavailable");
+  cancellation.abort();
+
+  // Recovery timers are unref'd so they never hold a quitting app open; keep
+  // the test's event loop alive while the run settles.
+  const keepAlive = setInterval(() => {}, 50);
+  t.after(() => clearInterval(keepAlive));
+  const result = await stream.result();
+  assert.equal(result.stopReason, "aborted", "the parent agent is no longer left waiting");
+  assert.equal(cleanupFailures, 1);
+  assert.ok(child.hardKills >= 2, "the hard kill is retried once identity can be verified");
+  assert.equal(await owner.shutdown(), false, "the earlier unproven stop still fails closed");
+});
+
 test("a worker that exited before its exit listener attached is found by the asynchronous proof", async () => {
   const child = new AsyncProofProcess();
   child.exitedSilently = true;

@@ -938,6 +938,9 @@ struct AidenRemoteErrorEnvelope: Codable, Equatable, Sendable {
         let requestId: String
         let retryable: Bool
         let details: Details?
+        /// The HTTP `Retry-After` delta-seconds that came with this envelope.
+        /// Set by the client from the response header, never decoded from JSON.
+        var retryAfterHeaderSeconds: Int? = nil
 
         init(from decoder: Decoder) throws {
             let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
@@ -967,6 +970,21 @@ struct AidenRemoteErrorEnvelope: Codable, Equatable, Sendable {
         }
     }
 
+    /// The shortest and longest wait the clients honor for a server-provided
+    /// retry delay. A zero or missing value still waits at least a second, and
+    /// a long value never parks a draft or a stream for more than a minute.
+    static let retryAfterBoundsSeconds: ClosedRange<Int> = 1...60
+
+    /// Parses an HTTP `Retry-After` header. Only the delta-seconds form is
+    /// accepted; an HTTP-date or a malformed value is ignored.
+    static func retryAfterHeaderSeconds(_ value: String?) -> Int? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespaces),
+              !trimmed.isEmpty, trimmed.count <= 6,
+              trimmed.allSatisfy({ $0.isASCII && $0.isNumber }),
+              let seconds = Int(trimmed), (0...86_400).contains(seconds) else { return nil }
+        return seconds
+    }
+
     let error: Body
 
     init(from decoder: Decoder) throws {
@@ -978,6 +996,17 @@ struct AidenRemoteErrorEnvelope: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case error
+    }
+}
+
+extension AidenRemoteErrorEnvelope.Body {
+    /// The server's requested wait before retrying, in seconds: the envelope's
+    /// `details.retryAfterSeconds` first, then the `Retry-After` header, clamped
+    /// to `retryAfterBoundsSeconds`. `nil` when the server named no delay.
+    var retryAfterDelaySeconds: Int? {
+        guard let raw = details?.retryAfterSeconds ?? retryAfterHeaderSeconds else { return nil }
+        let bounds = AidenRemoteErrorEnvelope.retryAfterBoundsSeconds
+        return min(max(raw, bounds.lowerBound), bounds.upperBound)
     }
 }
 

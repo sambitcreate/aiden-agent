@@ -580,6 +580,102 @@ test("retains queued mutations across a transient persistence failure", async ()
   );
 });
 
+test("a burst inside the save window is written once and survives a reload after flush", async () => {
+  let value = createEmptyUsageDatabase();
+  let saves = 0;
+  const persistence: UsagePersistence = {
+    async load() {
+      return structuredClone(value);
+    },
+    async save(data) {
+      saves += 1;
+      value = structuredClone(data);
+    },
+  };
+  const store = createUsageStore(persistence, () => NOW, { saveDelayMs: 60_000 });
+  await Promise.all(
+    Array.from({ length: 30 }, (_, index) =>
+      store.record(record({ providerId: "openai", modelId: `model-${index % 3}` })),
+    ),
+  );
+
+  assert.equal(saves, 0);
+  assert.equal((await store.summary("7d")).totals.requests, 30);
+
+  await store.flush();
+  assert.equal(saves, 1);
+  await store.flush();
+  assert.equal(saves, 1, "a clean store does not rewrite the ledger");
+
+  const reloaded = createUsageStore(persistence, () => NOW);
+  const summary = await reloaded.summary("7d");
+  assert.equal(summary.totals.requests, 30);
+  assert.equal(value.buckets.length, 3);
+});
+
+test("a failed coalesced save is reported and retried without waiting for another request", async () => {
+  let value = createEmptyUsageDatabase();
+  let saveAttempts = 0;
+  let markSaved: () => void = () => undefined;
+  const saved = new Promise<void>((resolve) => {
+    markSaved = resolve;
+  });
+  const persistence: UsagePersistence = {
+    async load() {
+      return structuredClone(value);
+    },
+    async save(data) {
+      saveAttempts += 1;
+      if (saveAttempts === 1) throw new Error("disk full");
+      value = structuredClone(data);
+      markSaved();
+    },
+  };
+  const failures: unknown[] = [];
+  const store = createUsageStore(persistence, () => NOW, {
+    saveDelayMs: 5,
+    onSaveError: (error) => failures.push(error),
+  });
+
+  await store.record(record({ providerId: "openai", modelId: "gpt-test" }));
+  // The store's save timer is unref'd so it never holds the app open; hold
+  // the test's event loop open until the retried save lands.
+  const keepAlive = setInterval(() => undefined, 1_000);
+  try {
+    await saved;
+  } finally {
+    clearInterval(keepAlive);
+  }
+
+  assert.match(String(failures[0]), /disk full/u);
+  assert.equal(
+    value.buckets.reduce((total, bucket) => total + bucket.requests, 0),
+    1,
+  );
+});
+
+test("usage recorded after the shutdown flush is still persisted", async () => {
+  let value = createEmptyUsageDatabase();
+  const persistence: UsagePersistence = {
+    async load() {
+      return structuredClone(value);
+    },
+    async save(data) {
+      value = structuredClone(data);
+    },
+  };
+  const store = createUsageStore(persistence, () => NOW, { saveDelayMs: 60_000 });
+  await store.record(record({ providerId: "openai", modelId: "chat-model" }));
+  await store.flush();
+
+  // Work that settles after the flush (an image job, a routine) still records.
+  await store.record(record({ providerId: "fal", modelId: "image-model" }));
+  await store.record(record({ providerId: "fal", modelId: "image-model" }));
+
+  const reloaded = createUsageStore(persistence, () => NOW);
+  assert.equal((await reloaded.summary("7d")).totals.requests, 3);
+});
+
 
 test("TTS accounting survives reload and keeps unknown cost and usage separate from zero", async () => {
   const { ttsUsageRecord } = await import("./tts/service.js");

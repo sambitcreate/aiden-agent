@@ -37,6 +37,12 @@ const MAX_READ_BYTES = 200_000;
 const MAX_OUTPUT_CHARS = 20_000;
 const MAX_COMMAND_OUTPUT_BYTES = 10 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 120_000;
+// run_command stops the command's process group if anything still holds its
+// output a second after the shell exits; say so, so the model does not assume
+// a server is running. A job that left the group (setsid, a daemon) is not
+// reached, so the note does not promise it stopped.
+const BACKGROUND_STOPPED_NOTE =
+  "Note: background processes from this command that still held the output were stopped 1 s after the command exited. A job started with setsid or as a daemon leaves the command's process group and may still be running. Use background_job to keep something running, or redirect its output (`> file 2>&1 &`).";
 const MAX_LIST_ENTRIES = 500;
 const MAX_LIST_SCAN_ENTRIES = 10_000;
 const MAX_GLOB_MATCHES = 500;
@@ -47,6 +53,11 @@ const MAX_GREP_BYTES = 10 * 1024 * 1024;
 const MAX_GREP_DURATION_MS = 5_000;
 const MAX_SEARCH_PATTERN_CHARS = 1_000;
 const MAX_PARENT_EDIT_BYTES = 256 * 1024 * 1024;
+/** write_file keeps an existing file's text for line counts only up to this size. */
+const MAX_WRITE_PREIMAGE_TEXT_BYTES = 16 * 1024 * 1024;
+/** edit_file holds the file as bytes and text at once, so it refuses larger files. */
+const MAX_EDIT_SOURCE_BYTES = 64 * 1024 * 1024;
+const FILE_READ_CHUNK_BYTES = 1024 * 1024;
 const SKIP_DIRS = new Set([".git", "node_modules", "dist", "build", ".next", ".cache"]);
 let re2Constructor: typeof import("re2-wasm").RE2 | undefined;
 
@@ -159,6 +170,70 @@ function fileMutationDetails(
 ): FileMutationDetailsV1 {
   const changes = lineChangeCounts(before, after);
   return { kind: "file_line_changes", version: 1, ...changes };
+}
+
+/**
+ * Reads an existing file in chunks for write_file: always its SHA-256 and line
+ * count, and its text only when it is small enough to diff. A replaced log or
+ * dataset is never held whole in memory or decoded into one string.
+ */
+async function readWritePreimage(
+  handle: fs.FileHandle,
+  signal: AbortSignal | undefined,
+): Promise<{ sha256: string; lines: number; text?: string }> {
+  const hash = createHash("sha256");
+  const chunk = Buffer.allocUnsafe(FILE_READ_CHUNK_BYTES);
+  const kept: Buffer[] = [];
+  let keptBytes = 0;
+  let keepText = true;
+  let newlines = 0;
+  let lastByte: number | undefined;
+  for (;;) {
+    throwIfAborted(signal, "File write cancelled.");
+    const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+    if (bytesRead === 0) break;
+    const view = chunk.subarray(0, bytesRead);
+    hash.update(view);
+    for (let at = view.indexOf(0x0a); at !== -1; at = view.indexOf(0x0a, at + 1)) newlines += 1;
+    lastByte = view[bytesRead - 1];
+    if (keepText && keptBytes + bytesRead <= MAX_WRITE_PREIMAGE_TEXT_BYTES) {
+      kept.push(Buffer.from(view));
+      keptBytes += bytesRead;
+    } else {
+      keepText = false;
+      kept.length = 0;
+    }
+  }
+  // Same line count as textLines(): a final line without a newline still counts.
+  const lines = newlines + (lastByte !== undefined && lastByte !== 0x0a ? 1 : 0);
+  return {
+    sha256: hash.digest("hex"),
+    lines,
+    ...(keepText ? { text: Buffer.concat(kept).toString("utf8") } : {}),
+  };
+}
+
+/**
+ * Reads at most `limit` bytes; undefined when the file is larger. The buffer
+ * starts at the size the file had when it was checked and grows only if the
+ * file grew since, so a small edit never allocates the whole limit.
+ */
+async function readAtMost(handle: fs.FileHandle, limit: number, expectedSize: number): Promise<Buffer | undefined> {
+  // One spare byte shows whether the file ends where stat said it would.
+  let buffer = Buffer.allocUnsafe(Math.min(limit, expectedSize) + 1);
+  let length = 0;
+  for (;;) {
+    if (length === buffer.length) {
+      // The file grew while being read; length <= limit here.
+      const grown = Buffer.allocUnsafe(Math.min(limit + 1, length + Math.max(length, FILE_READ_CHUNK_BYTES)));
+      buffer.copy(grown, 0, 0, length);
+      buffer = grown;
+    }
+    const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
+    if (bytesRead === 0) return buffer.subarray(0, length);
+    length += bytesRead;
+    if (length > limit) return undefined;
+  }
 }
 
 function fileMutationResult(
@@ -1111,7 +1186,7 @@ function makeWriteFile(workspace: WorkspaceRootGuard, binary?: string): AgentToo
         : workspace;
       const { path: p, content } = params as { path: string; content: string };
       const full = await resolveWritableInRoot(activeWorkspace, p, signal);
-      let before = "";
+      let before: { text?: string; lines: number } = { text: "", lines: 0 };
       let preimage: { identity: PinnedWorkspaceRootIdentity; sha256: string } | undefined;
       try {
         const handle = await fs.open(full, fsConstants.O_RDONLY |
@@ -1121,11 +1196,17 @@ function makeWriteFile(workspace: WorkspaceRootGuard, binary?: string): AgentToo
           if (!stat.isFile() || stat.nlink !== 1n) {
             throw new Error(`Path "${p}" is not an exclusively linked regular file.`);
           }
-          const source = await handle.readFile();
-          before = source.toString("utf8");
+          // The native writer refuses to replace anything larger; say why up front.
+          if (stat.size > BigInt(MAX_PARENT_EDIT_BYTES)) {
+            throw new Error(
+              `${p} is larger than write_file's ${MAX_PARENT_EDIT_BYTES / 1024 / 1024} MiB limit for replacing a file; remove or truncate it with run_command first.`,
+            );
+          }
+          const source = await readWritePreimage(handle, signal);
+          before = source;
           preimage = {
             identity: { device: stat.dev.toString(), inode: stat.ino.toString() },
-            sha256: createHash("sha256").update(source).digest("hex"),
+            sha256: source.sha256,
           };
         } finally {
           await handle.close();
@@ -1134,7 +1215,10 @@ function makeWriteFile(workspace: WorkspaceRootGuard, binary?: string): AgentToo
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
       throwIfAborted(signal, "File write cancelled.");
-      const details = fileMutationDetails(before, content);
+      const details: FileMutationDetailsV1 = before.text === undefined
+        // Too large to diff: count the replacement as whole-file.
+        ? { kind: "file_line_changes", version: 1, additions: textLines(content).length, deletions: before.lines }
+        : fileMutationDetails(before.text, content);
       throwIfAborted(signal, "File write cancelled.");
       const root = await verifyWorkspaceRoot(activeWorkspace, signal);
       const relativePath = path.relative(root, full).split(path.sep).join("/");
@@ -1233,7 +1317,16 @@ function makeEditFile(workspace: WorkspaceRootGuard, binary?: string): AgentTool
         if (!stat.isFile() || stat.nlink !== 1n) {
           throw new Error(`Path "${p}" is not an exclusively linked regular file.`);
         }
-        source = await handle.readFile();
+        await workspace.testObserver?.afterFileStat?.(full);
+        const bounded = stat.size > BigInt(MAX_EDIT_SOURCE_BYTES)
+          ? undefined
+          : await readAtMost(handle, MAX_EDIT_SOURCE_BYTES, Number(stat.size));
+        if (!bounded) {
+          throw new Error(
+            `${p} is larger than edit_file's ${MAX_EDIT_SOURCE_BYTES / 1024 / 1024} MiB limit; use write_file or run_command for files this large.`,
+          );
+        }
+        source = bounded;
         fileIdentity = { device: stat.dev.toString(), inode: stat.ino.toString() };
       } finally {
         await handle.close();
@@ -2006,7 +2099,8 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
       if (result.aborted) {
         throw signal?.reason instanceof Error ? signal.reason : new Error("Command cancelled.");
       }
-      const combined = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+      const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+      const combined = result.backgroundStopped ? [output, BACKGROUND_STOPPED_NOTE].filter(Boolean).join("\n\n") : output;
       if (result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded) {
         return markHostCommandObservation(textResult(await boundedToolOutput(combined || "[no output]", MAX_OUTPUT_CHARS)), result);
       }

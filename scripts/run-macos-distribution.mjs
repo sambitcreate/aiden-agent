@@ -271,6 +271,8 @@ export async function buildMacDistribution(
 
 export async function runMacDistribution() {
   const enableAutoUpdates = process.env.AIDEN_ENABLE_AUTO_UPDATES === "1";
+  // Lets the build embed the analytics project key (AIDEN_POSTHOG_PROJECT_KEY).
+  process.env.AIDEN_DISTRIBUTION_BUILD = "1";
   return runDistributionTransaction({
     prepare: () => beginMacDistribution(repositoryRoot),
     build: ({ staging }) => buildMacDistribution(staging, { enableAutoUpdates }),

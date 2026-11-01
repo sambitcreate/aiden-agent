@@ -23,6 +23,7 @@ const operationIds: Record<PeerOperation["operation"], string> = {
   respondApproval: "respondApproval",
   selectFolder: "createWorkspaceSelection",
   createWorkspace: "createWorkspace",
+  cloneWorkspace: "createWorkspace",
   messagesWindow: "chatMessagesWindow",
   attachmentContent: "getChatAttachmentContent",
   skills: "getChatSkills",

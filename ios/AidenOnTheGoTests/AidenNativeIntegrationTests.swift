@@ -1,10 +1,49 @@
 import ActivityKit
 import AVFoundation
 import Foundation
+import SwiftUI
+import UIKit
+import Vision
 import XCTest
 @testable import AidenOnTheGo
 
 final class AidenNativeIntegrationTests: XCTestCase {
+    @MainActor
+    func testOfflineRecoveryKeepsSwitchingAvailableWhenRetryIsUnsafe() throws {
+        for error in [URLError(.cannotConnectToHost) as Error, AidenServerTrustError.publicKeyPinMismatch] {
+            let coordinator = AidenRemoteCoordinator(installationStore: AidenInstallationStore(keychain: AidenRecoveryMemoryKeychain()))
+            let issue = AidenConnectionIssue.classify(error)
+            let host = UIHostingController(rootView:
+                AidenConnectionRecoveryView(coordinator: coordinator, issue: issue, switchConnection: {})
+                    .environment(AidenHapticCenter())
+                    .environment(\.colorScheme, .light)
+            )
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 320, height: 700)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            window.layoutIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+
+            // Inspect the rendered text, since a hosted SwiftUI view does not
+            // publish its virtual accessibility buttons to unit-test callers.
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = issue.title
+            add(attachment)
+            let recognition = VNRecognizeTextRequest()
+            recognition.recognitionLevel = .accurate
+            try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([recognition])
+            let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ").lowercased()
+            XCTAssertTrue(text.contains("switch connection"), "\(issue.title): \(text)")
+            XCTAssertEqual(text.contains("retry connection"), issue.canRetry, text)
+        }
+    }
+
     @MainActor
     func testExternalVoiceLinkHasNoRecordingAuthorityAndForgedProvenanceIsRejected() throws {
         let external = try XCTUnwrap(AidenDeepLink.request(from: URL(string: "aiden-otg://new-chat-voice?instance=mac&workspace=workspace")!))
@@ -1088,6 +1127,15 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(decoded.status, .waitingForApproval)
         XCTAssertEqual(AgentRunActivityStateReducer.refreshedWaiting(state: decoded).status, .waitingForApproval)
     }
+}
+
+private final class AidenRecoveryMemoryKeychain: KeychainStoring {
+    func save(_ value: String, forKey key: KeychainStore.Key) throws {}
+    func load(_ key: KeychainStore.Key) throws -> String? { nil }
+    func delete(_ key: KeychainStore.Key) throws {}
+    func save(_ value: String, forKey key: KeychainStore.Key, scope: String) throws {}
+    func load(_ key: KeychainStore.Key, scope: String) throws -> String? { nil }
+    func delete(_ key: KeychainStore.Key, scope: String) throws {}
 }
 
 /// ActivityKit echoes an app's own `update(_:)` back to its `Activity`

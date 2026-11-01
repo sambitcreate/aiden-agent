@@ -158,6 +158,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(fun
 });
 
 type TextProps = React.HTMLAttributes<HTMLElement> & {
+  ref?: React.Ref<HTMLElement>;
   as?: keyof React.JSX.IntrinsicElements;
   variant?: "heading1" | "strong" | "regular" | "small" | "small-strong";
   color?: "primary" | "secondary" | "tertiary" | "quaternary" | "red" | "status-red";
@@ -1007,6 +1008,10 @@ export function ScrollArea({
   // The follow latch lives in a ref so scroll, wheel, and resize handlers read
   // the latest decision synchronously; React state only mirrors it for paint.
   const followRef = React.useRef<FollowState>(INITIAL_FOLLOW_STATE);
+  const scrollSampleRef = React.useRef<{ top: number; height: number; viewport: number } | null>(null);
+  // Upward movement too small to count yet. Kept apart from the sample, which
+  // content snaps overwrite, so fractional scrolls add up across a stream.
+  const upwardDriftRef = React.useRef(0);
   const followFrameRef = React.useRef(0);
   const offerJumpTimerRef = React.useRef(0);
   const jumpSettleTimerRef = React.useRef(0);
@@ -1066,6 +1071,7 @@ export function ScrollArea({
     if (autoScrollRef.current && state.following && !state.jumpPending && !state.scrollbarHeld) {
       element.scrollTop = element.scrollHeight;
     }
+    scrollSampleRef.current = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
     dispatchFollow({ type: "contentResize", distance: measureDistance(element), scrollTop: element.scrollTop });
   }, [dispatchFollow, measureDistance]);
 
@@ -1081,6 +1087,9 @@ export function ScrollArea({
       !streamingRef.current &&
       distance > 1 &&
       document.documentElement.dataset.reduceMotion !== "true";
+    // A jump starts any small upward movement over; an instant one lands
+    // without a scroll event that would otherwise reset it.
+    upwardDriftRef.current = 0;
     dispatchFollow({ type: "jump", smooth });
     window.clearTimeout(jumpSettleTimerRef.current);
     if (smooth) {
@@ -1152,6 +1161,8 @@ export function ScrollArea({
       // Only the viewport's own box (its scrollbar) starts a scrollbar hold.
       // The press itself keeps follow: only where the thumb settles counts.
       if (event.target !== element) return;
+      scrollSampleRef.current = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
+      upwardDriftRef.current = 0;
       dispatchFollow({ type: "scrollbarHold" });
     };
     const onPointerUp = () => {
@@ -1255,6 +1266,7 @@ export function ScrollArea({
 
   React.useLayoutEffect(() => {
     if (autoScrollResetKey === undefined) return;
+    upwardDriftRef.current = 0;
     dispatchFollow({ type: "reset" });
     if (autoScrollToBottom) scheduleFollowBottom();
   }, [autoScrollResetKey, autoScrollToBottom, dispatchFollow, scheduleFollowBottom]);
@@ -1341,10 +1353,30 @@ export function ScrollArea({
           overflowAnchor: autoScrollToBottom && following ? "none" : undefined,
         }}
         onScroll={(event) => {
+          const element = event.currentTarget;
+          const sample = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
+          const previous = scrollSampleRef.current;
+          const clamped = previous !== null &&
+            (sample.height < previous.height || sample.viewport !== previous.viewport);
+          // Sandboxed frame input cannot reach our wheel/touch listeners. Its
+          // chained host scroll can still reveal the reader moving upward.
+          // Fractional upward movement adds up across events, including across
+          // a streaming snap; a downward move or a jump starts over.
+          if (!previous || clamped || followRef.current.jumpPending || sample.top > previous.top) {
+            upwardDriftRef.current = 0;
+          } else {
+            upwardDriftRef.current += previous.top - sample.top;
+          }
+          const movedUp = upwardDriftRef.current > 1;
+          if (movedUp) upwardDriftRef.current = 0;
+          scrollSampleRef.current = sample;
+          if (autoScrollRef.current && movedUp && !followRef.current.jumpPending && !followRef.current.scrollbarHeld) {
+            dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: true });
+          }
           dispatchFollow({
-            type: "settle",
-            distance: measureDistance(event.currentTarget),
-            scrollTop: event.currentTarget.scrollTop,
+            type: clamped ? "contentResize" : "settle",
+            distance: measureDistance(element),
+            scrollTop: element.scrollTop,
           });
         }}
       >
@@ -1442,14 +1474,16 @@ type DialogProps = React.PropsWithChildren<{
   busy?: boolean;
   onConfirm?: () => void | Promise<void>;
   returnFocus?: () => HTMLElement | null;
-  /** "full" fills the window (an image's full view). */
-  size?: "large" | "full";
+  /** "wide" fits a two-pane dialog with its own tab list; "full" fills the window (an image's full view). */
+  size?: "large" | "wide" | "full";
   layer?: DialogLayer;
   /**
    * Run the confirm action on Enter in a single-line field, or Mod+Enter anywhere in the
    * dialog, while confirm is visible, enabled, and not busy.
    */
   submitOnEnter?: boolean;
+  /** Runs before Escape dismisses the dialog; call `preventDefault()` to keep it open. */
+  onEscapeKeyDown?: (event: KeyboardEvent) => void;
 }>;
 
 export function Dialog({
@@ -1474,6 +1508,7 @@ export function Dialog({
   size,
   layer = "default",
   submitOnEnter = false,
+  onEscapeKeyDown,
   children,
 }: DialogProps) {
   const dismissBlocked = Boolean(
@@ -1502,7 +1537,10 @@ export function Dialog({
               target.focus();
             }
           }}
-          onEscapeKeyDown={(event) => dismissBlocked && event.preventDefault()}
+          onEscapeKeyDown={(event) => {
+            onEscapeKeyDown?.(event);
+            if (dismissBlocked) event.preventDefault();
+          }}
           onPointerDownOutside={(event) => dismissBlocked && event.preventDefault()}
           onKeyDown={
             submitOnEnter
@@ -1530,6 +1568,7 @@ export function Dialog({
             "fixed left-1/2 top-1/2 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 outline-none",
             layer === "onboarding" ? "z-[70] shadow-onboarding" : "z-50 shadow-modal",
             size === "large" && "w-[min(92vw,680px)]",
+            size === "wide" && "w-[min(92vw,860px)]",
             size === "full" && "h-[94vh] max-h-[94vh] w-[96vw]",
           )}
         >

@@ -4,7 +4,8 @@ import {
   type BotAvatar as BotAvatarValue,
   type BotAvatarShape,
 } from "../shared/bots";
-import { AidenActivityMark, observeOffscreen } from "./aiden-activity-mark";
+import { AidenActivityMark } from "./aiden-activity-mark";
+import { observeOffscreen } from "../lib/offscreen-pause";
 import { useBotCanonicalPhoto } from "../lib/bot-canonical-photo-cache";
 
 interface AvatarBody {

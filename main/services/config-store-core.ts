@@ -84,6 +84,7 @@ import {
 } from "../../renderer/shared/model-pad-preferences.js";
 import { hiddenModelsForGeminiScope } from "../../renderer/shared/gemini-usage-scope.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { workspaceCapabilityFields } from "./workspace-capabilities.js";
 import {
   freshWebSearchSettings,
   migrateWebSearchSettingsWithReport,
@@ -96,6 +97,7 @@ import {
   parseWebFetchSettings,
   type WebFetchSettingsV1,
 } from "../../renderer/shared/web-fetch-settings.js";
+import { parseAnalyticsState, type AnalyticsState } from "./analytics/analytics-consent.js";
 import type {
   AppSettings,
   McpServer,
@@ -214,7 +216,7 @@ function normalizePortableConfig(value: unknown): {
 
 function normalizeWorkspace(workspace: Workspace): Workspace {
   // Only a literal `true` marks a scratch or No workspace record; anything else is dropped.
-  const { scratch, noWorkspace, ...w } = workspace;
+  const { scratch, noWorkspace, disabledSkills, disabledMcpServerIds, ...w } = workspace;
   return {
     ...w,
     ...(scratch === true ? { scratch } : {}),
@@ -222,6 +224,8 @@ function normalizeWorkspace(workspace: Workspace): Workspace {
     name: w.name.trim() || "Workspace",
     permission: PERMISSIONS.has(w.permission) ? w.permission : "ask",
     ...(typeof w.memoryEnabled === "boolean" ? { memoryEnabled: w.memoryEnabled } : {}),
+    // No workspace chats always use the global skills and connectors.
+    ...(noWorkspace === true ? {} : workspaceCapabilityFields({ disabledSkills, disabledMcpServerIds })),
     managedWorktree:
       w.managedWorktree &&
       typeof w.managedWorktree.repositoryPath === "string" &&
@@ -909,6 +913,20 @@ export function createConfigStore(
       return resolveProviderAlias(config.providerIdAliases, id) ?? migrateLegacyPiProviderId(id);
     },
 
+    /** Machine-local product-analytics consent, never exposed through settings:get. */
+    async getAnalyticsState(): Promise<AnalyticsState> {
+      await ensureSeeded();
+      return parseAnalyticsState((await settingsStore.load()).analytics);
+    },
+
+    async updateAnalyticsState(mutate: (state: AnalyticsState) => AnalyticsState): Promise<AnalyticsState> {
+      return mutateSettings((config) => {
+        const next = mutate(parseAnalyticsState(config.analytics));
+        config.analytics = { ...next };
+        return next;
+      });
+    },
+
     async getSettings(): Promise<AppSettings> {
       await ensureSeeded();
       return runtimeSettingsFrom((await settingsStore.load()).settings);
@@ -1094,6 +1112,7 @@ export function createConfigStore(
       }
       if (patch.cacheWarmingEnabled !== undefined && typeof patch.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
       if (patch.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(patch.usageLimitWaitHours)) throw new Error("Invalid usage limit wait setting.");
+      if (patch.botRoutinesGoAhead !== undefined && typeof patch.botRoutinesGoAhead !== "boolean") throw new Error("Invalid Bot routines setting.");
       if (patch.spendingLimits !== undefined) {
         const spendingLimits = parseSpendingLimitsSettings(patch.spendingLimits);
         if (spendingLimits === undefined) throw new Error("Invalid spending limits.");
@@ -1401,8 +1420,13 @@ export function createConfigStore(
       const saved = await localStore.update(async (config) => {
         await assertCurrent?.(config.workspaces.find((w) => w.id === next.id));
         const idx = config.workspaces.findIndex((w) => w.id === next.id);
-        if (idx >= 0) config.workspaces[idx] = { ...config.workspaces[idx], ...next };
-        else config.workspaces.push(next);
+        if (idx >= 0) {
+          const merged = { ...config.workspaces[idx], ...next };
+          // An emptied off-list is omitted from `next`; don't let the merge keep the old one.
+          if (!next.disabledSkills) delete merged.disabledSkills;
+          if (!next.disabledMcpServerIds) delete merged.disabledMcpServerIds;
+          config.workspaces[idx] = merged;
+        } else config.workspaces.push(next);
         return structuredClone(config.workspaces.find((w) => w.id === next.id)!);
       });
       notifyListeners(workspaceListeners);

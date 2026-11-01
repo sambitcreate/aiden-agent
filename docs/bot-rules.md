@@ -5,6 +5,8 @@ hands back to the person to do themselves. They live in the Bot's Profile →
 Rules, and main checks them at every tool call they cover. Rules only make a
 Bot stricter: the strictest of the Bot's own approval and every matching rule
 wins, so no rule can let through a step the Bot would otherwise ask about.
+The one setting that loosens anything is Settings → Bots, for routines only
+(see [Routines that go ahead](#routines-that-go-ahead-settings--bots)).
 
 The design is in `docs/plans/bot-handoffs-rules-computers-plan.md` §6;
 implementation notes are in `.memory/bot-rules.md`.
@@ -26,7 +28,36 @@ implementation notes are in `.memory/bot-rules.md`.
   Skip; the Bot waits for the answer and never does the step itself.
 - On a routine or Telegram turn nobody is there to answer, so a step a rule
   would hand off doesn't run, nor does a step a rule would ask about that has
-  no approval of its own. The Bot is told why.
+  no approval of its own. The Bot is told why. A step with an approval of its
+  own (a connection tool that changes something) waits under Needs you until
+  the person answers. Settings → Bots can let routines go ahead instead.
+
+## Routines that go ahead (Settings → Bots)
+
+Settings → Bots has one switch for every Bot on the desktop, **Go ahead without
+asking** under Routines (`AppSettings.botRoutinesGoAhead`, off by default).
+While it is on, a run made only of routine inputs (a scheduled, manual, event
+or missed-fire run, and a Bot's own wake-up) takes a step that would otherwise
+wait for the person's OK without a card:
+
+- a step an Ask first rule covers, built-in or the person's own, with or
+  without an approval of its own;
+- an approval the step has without any rule: a connection tool that changes
+  something, or sharing an image.
+
+It never lowers anything else:
+
+- Hand off to me rules, and the locked password and money rules, still stop
+  the step and the Bot says in its reply what the person needs to do.
+- Computer Use on the person's Mac still asks before each action.
+- A chat turn, a Telegram turn, and a routine run a person's message joined
+  still ask as before.
+
+Main reads the setting fresh at every tool call (`checkPolicy` in
+`bot-tool-assembly.ts`), so turning it off applies to the next step. Under each
+Bot's rules, the profile says what routines do with Ask first steps and links
+to the page. The CLI's durable Bot host has no rules and keeps asking for every
+MCP call.
 
 ## What rules check
 

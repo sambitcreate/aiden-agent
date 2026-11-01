@@ -97,7 +97,8 @@ sudo tailscale set --operator=$USER
 Aiden changes only its scoped `/api/aiden/v1` HTTPS Serve path and preserves
 unrelated Serve configuration. Without the operator grant, status remains
 readable but Aiden reports the permission requirement instead of claiming an
-uncertain connection.
+uncertain connection. On a headless server, `aiden remote check` lists each
+Tailscale step (including this operator grant) with its fix.
 
 ## Platform behavior
 
@@ -181,6 +182,8 @@ package or use the extraction command above. When reporting a Linux issue,
 include the distribution, architecture, desktop environment, X11/Wayland
 session type, package format, and the exact error shown by Aiden.
 
-### Headless CLI durable Bots
+### Headless server
 
-The standalone CLI supports an explicit `aiden bots enable-durable` migration followed by a daemon restart. It preserves legacy chats and journals, requires the existing profile/credential authority, and exposes only the supported Remote capabilities. See [migration, recovery and capability limits](cli-durable-bots.md).
+On a Linux box with no display, build and run the headless server (`aiden serve`) from a clone and pair your phone or Mac with it; see [the server guide](../packages/cli/README.md). It has no interactive terminal UI. `aiden service install` runs it as a systemd user service that starts at boot, reachable on the local network, over Tailscale, or both.
+
+The server supports an explicit `aiden bots enable-durable` migration followed by a daemon restart. It preserves legacy chats and journals, requires the existing profile/credential authority, and exposes only the supported Remote capabilities. See [migration, recovery and capability limits](cli-durable-bots.md).

@@ -65,6 +65,7 @@ export const COMMAND_IDS = [
   "chat.find",
   "composer.attach",
   "workspace.access",
+  "workspace.settings",
   "shortcuts.show",
 ] as const;
 
@@ -593,6 +594,20 @@ export const COMMANDS = [
     keywords: ["search", "find", "text", "match"],
     defaultBinding: "Command+F",
     scope: "chat",
+    global: false,
+    allowInEditable: true,
+    paletteWhenAvailable: true,
+    showInPalette: true,
+    showInSettings: true,
+  }),
+  command({
+    id: "workspace.settings",
+    title: "Workspace settings",
+    description: "Rename this workspace and choose which skills and connectors its chats can use.",
+    category: "Settings",
+    keywords: ["project", "skills", "connectors", "mcp", "tools", "rename", "turn off"],
+    defaultBinding: "Command+Shift+,",
+    scope: "app",
     global: false,
     allowInEditable: true,
     paletteWhenAvailable: true,
@@ -1186,6 +1201,7 @@ const INTRODUCED_DEFAULT_COMMANDS: readonly CommandId[] = [
   "composer.attach",
   "subagents.toggleTray",
   "shortcuts.show",
+  "workspace.settings",
 ];
 
 function yieldIntroducedDefaults(next: KeybindingOverridesV1): void {

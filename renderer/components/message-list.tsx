@@ -81,6 +81,7 @@ import {
   type VisualDrafts,
   htmlArtifactTranscriptPlan,
 } from "../lib/html-artifact-transcript";
+import { pauseWhenUnseen } from "../lib/offscreen-pause";
 
 const EMPTY_CHAT_ARTIFACTS: readonly ChatArtifactV1[] = [];
 interface MessageListProps {
@@ -191,6 +192,21 @@ const EMPTY_UI_DRAFTS: UiDrafts = new Map();
 const EMPTY_VISUALS: readonly ChatHtmlArtifactV1[] = [];
 const EMPTY_PLACEMENTS: ReadonlyMap<string, string> = new Map();
 const EMPTY_WIDE_VISUALS: ReadonlySet<string> = new Set();
+
+/**
+ * Whether a reply is running, for visuals' follow-up confirmations. A context
+ * rather than a prop, so a turn starting or ending updates the visuals alone
+ * instead of re-rendering every memoized transcript row.
+ */
+const VisualFollowUpBusyContext = React.createContext(false);
+
+function FollowUpAwareHtmlArtifactFrame(props: Omit<React.ComponentProps<typeof HtmlArtifactFrame>, "followUpBusy">) {
+  return <HtmlArtifactFrame {...props} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
+}
+
+function FollowUpAwareAidenUiBlock(props: Omit<React.ComponentProps<typeof AidenUiBlock>, "followUpBusy">) {
+  return <AidenUiBlock {...props} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
+}
 
 type RenderVisual = (
   artifact: ChatHtmlArtifactV1,
@@ -886,47 +902,44 @@ export function MessageList({
   );
   const renderVisual = React.useCallback(
     (artifact: ChatHtmlArtifactV1, placementCallId?: string, layout?: HtmlArtifactLayout) => (
-      <HtmlArtifactFrame
+      <FollowUpAwareHtmlArtifactFrame
         key={`html:${artifact.mediaId}`}
         chatId={chatId}
         artifact={artifact}
         onGuestPrompt={stableVisualPrompt}
-        followUpBusy={visualFollowUpBusy}
         placementCallId={placementCallId}
         layout={layout}
       />
     ),
-    [chatId, stableVisualPrompt, visualFollowUpBusy],
+    [chatId, stableVisualPrompt],
   );
 
   const renderLiveUiVisual = React.useCallback<RenderUiVisual>(
     (visual, draft) => (
-      <AidenUiBlock
+      <FollowUpAwareAidenUiBlock
         key={`ui:${visual.id}`}
         visual={visual}
         draft={draft}
-        followUpBusy={visualFollowUpBusy}
         onAction={(action) => {
           if (action.kind === "send") stableVisualPrompt(action.text, visual.id);
         }}
       />
     ),
-    [stableVisualPrompt, visualFollowUpBusy],
+    [stableVisualPrompt],
   );
   const renderSettledUiVisual = React.useCallback(
     (visual: ChatUiVisualV1, message: ChatMessage) => (
-      <AidenUiBlock
+      <FollowUpAwareAidenUiBlock
         key={`ui:${visual.id}`}
         visual={visual}
         attachments={message.attachments}
-        followUpBusy={visualFollowUpBusy}
         onAction={(action) => {
           if (action.kind === "send") stableVisualPrompt(action.text, visual.id);
         }}
         onStateChange={(state) => scheduleUiVisualStateSave(chatId, message.id, visual.id, state)}
       />
     ),
-    [chatId, stableVisualPrompt, visualFollowUpBusy],
+    [chatId, stableVisualPrompt],
   );
 
   React.useEffect(() => {
@@ -989,9 +1002,15 @@ export function MessageList({
 
 
   const transcriptRows: React.ReactNode[] = [];
-  const summaryRows = forkWithSummaryEnabled ? forkSummaryRows(messages) : null;
-  const unforkablePromptId =
-    forkEnabled && !forkBeforeFirstPrompt ? messages.find((message) => message.role === "user")?.id : undefined;
+  // Streaming frames re-render the list without changing saved messages.
+  const summaryRows = React.useMemo(
+    () => (forkWithSummaryEnabled ? forkSummaryRows(messages) : null),
+    [forkWithSummaryEnabled, messages],
+  );
+  const unforkablePromptId = React.useMemo(
+    () => (forkEnabled && !forkBeforeFirstPrompt ? messages.find((message) => message.role === "user")?.id : undefined),
+    [forkBeforeFirstPrompt, forkEnabled, messages],
+  );
   // The persisted copy of the reply still on screen waits until the live row
   // hands over, then takes the live row's key: one reply, settled in place.
   const settlingMessageId = streamingRowVisible ? persistedHandoffMessageId : null;
@@ -1123,28 +1142,30 @@ export function MessageList({
 
   return (
     <MessageAttachmentPreviewProvider>
-      <div
-        ref={transcriptRef}
-        className="aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
-        data-subagent-chip-focus-scope="true"
-      >
-        {transcriptRows}
+      <VisualFollowUpBusyContext.Provider value={visualFollowUpBusy}>
+        <div
+          ref={transcriptRef}
+          className="aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
+          data-subagent-chip-focus-scope="true"
+        >
+          {transcriptRows}
 
-        <AgentActivityTransition activity={agentActivity} onRetryUsageLimit={onRetryUsageLimit} />
+          <AgentActivityTransition activity={agentActivity} onRetryUsageLimit={onRetryUsageLimit} />
 
-        <EventPresence present={Boolean(error)}>
-          {error ? (
-            <Callout color="red" role="alert" aria-atomic="true">
-              <Text variant="small-strong" color="red">
-                Generation failed
-              </Text>
-              <Text variant="small" color="secondary" className="mt-0.5 block">
-                {error}
-              </Text>
-            </Callout>
-          ) : null}
-        </EventPresence>
-      </div>
+          <EventPresence present={Boolean(error)}>
+            {error ? (
+              <Callout color="red" role="alert" aria-atomic="true">
+                <Text variant="small-strong" color="red">
+                  Generation failed
+                </Text>
+                <Text variant="small" color="secondary" className="mt-0.5 block">
+                  {error}
+                </Text>
+              </Callout>
+            ) : null}
+          </EventPresence>
+        </div>
+      </VisualFollowUpBusyContext.Provider>
     </MessageAttachmentPreviewProvider>
   );
 }
@@ -1195,6 +1216,13 @@ function AgentActivityTransition({
         variant="small"
         color="secondary"
         title={current.label}
+        ref={
+          current.phase === "thinking" ||
+          current.phase === "loading" ||
+          current.phase === "visualizing"
+            ? pauseWhenUnseen
+            : undefined
+        }
         className={
           current.phase === "thinking" ||
           current.phase === "loading" ||

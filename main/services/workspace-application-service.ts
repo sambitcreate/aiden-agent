@@ -9,6 +9,7 @@ import type { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import type { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 import { assertWorkspaceRecordRemovalAllowed } from "./workspace-record-removal.js";
 import { withWorkspaceScheduleRestoration } from "./workspace-schedule-restoration.js";
+import { normalizeDisabledMcpServerIds, normalizeDisabledSkills } from "./workspace-capabilities.js";
 
 const PERMISSIONS: readonly WorkspacePermission[] = ["full", "ask", "none"];
 
@@ -40,6 +41,8 @@ export interface WorkspaceApplicationDependencies {
   >;
   terminalService: Pick<typeof terminalService, "closeForWorkspace">;
   browserService?: { closeForWorkspace(workspaceId: string): void };
+  /** Closes the workspace's Git metadata watcher; a later display read re-observes. */
+  gitWatcher?: { close(workspaceId: string): void };
   /** Stops background jobs and done-when checks that run in the workspace folder. */
   followThrough?: { closeForWorkspace(workspaceId: string): Promise<void> };
   /** Drops the workspace's artifacts once its record is gone. */
@@ -123,7 +126,16 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         permission,
         createdAt: now,
         updatedAt: now,
-      });
+      }, options.assertCurrent ? async () => {
+        // Revalidate after list/save admission awaits, inside the storage mutation.
+        const currentPath = await deps.realpath(folderPath);
+        const current = await deps.stat(currentPath);
+        if (!current.isDirectory() || currentPath !== canonicalPath) throw new Error("The workspace folder changed before registration.");
+        await options.assertCurrent!({ canonicalPath: currentPath,
+          ...(current.dev === undefined ? {} : { filesystemDevice: String(current.dev) }),
+          ...(current.ino === undefined ? {} : { filesystemInode: String(current.ino) }),
+        });
+      } : undefined);
     });
   };
 
@@ -319,7 +331,18 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
             typeof fields.memoryEnabled === "boolean"
               ? fields.memoryEnabled
               : existing.memoryEnabled,
+          // Off-lists apply from the next message, so they never stop a reply.
+          disabledSkills:
+            "disabledSkills" in fields
+              ? normalizeDisabledSkills(fields.disabledSkills)
+              : existing.disabledSkills,
+          disabledMcpServerIds:
+            "disabledMcpServerIds" in fields
+              ? normalizeDisabledMcpServerIds(fields.disabledMcpServerIds)
+              : existing.disabledMcpServerIds,
         };
+        if (!next.disabledSkills) delete next.disabledSkills;
+        if (!next.disabledMcpServerIds) delete next.disabledMcpServerIds;
         const authorityChanged =
           next.permission !== existing.permission ||
           next.memoryEnabled !== existing.memoryEnabled;
@@ -401,6 +424,9 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         );
       } finally {
         finishMutation();
+        // Every client's removal (this Mac's IPC, a paired device's Remote
+        // request) lands here. Closing after a failed remove is harmless.
+        deps.gitWatcher?.close(id);
       }
     },
   };
