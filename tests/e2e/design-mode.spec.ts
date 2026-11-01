@@ -1,8 +1,17 @@
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
 import type { ElectronApplication, Page } from "@playwright/test";
 import {
-  E2E_ASSISTANT_RESPONSE,
+  canvasRegion,
+  capture,
+  chooseWorkspace,
+  designCanvas,
+  designLayout,
+  sendFirstMessage,
+  setDisplayWidth,
+  setWindowWidth,
+  typeSlashCommand,
+  WORKSPACE_NAME,
+} from "./design-mode-helpers";
+import {
   expect,
   finishLmStudioOnboarding,
   test,
@@ -11,116 +20,13 @@ import {
 
 const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 const DESIGN_SHORTCUT = `${PRIMARY_MODIFIER}+Shift+L`;
-const WORKSPACE_NAME = "Aiden E2E workspace";
 const DESIGN_CHAT = "Design chat for the landing page";
 const NOTES_CHAT = "Notes chat about something else";
-/** Set to a folder to save light and dark screenshots of each design mode state there. */
-const SCREENSHOT_DIR = process.env.AIDEN_DESIGN_SCREENSHOTS?.trim();
 
 test.use({
   workspaceSeed: true,
   appEnvironment: { AIDEN_EXPERIMENTAL_DESIGN_MODE: "1" },
 });
-
-async function setWindowWidth(
-  app: ElectronApplication,
-  page: Page,
-  width: number,
-): Promise<void> {
-  await app.evaluate(({ BrowserWindow }, nextWidth) => {
-    const window = BrowserWindow.getAllWindows()[0];
-    window.setBounds({
-      ...window.getBounds(),
-      x: 0,
-      y: 0,
-      width: nextWidth,
-      height: 900,
-    });
-  }, width);
-  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width);
-}
-
-/** Pretends the window's display has a work area this wide, as a laptop or a large monitor would. */
-async function setDisplayWidth(
-  app: ElectronApplication,
-  width: number,
-): Promise<void> {
-  await app.evaluate(({ screen }, workAreaWidth) => {
-    const workArea = { x: 0, y: 0, width: workAreaWidth, height: 900 };
-    screen.getDisplayMatching = () => ({
-      ...screen.getPrimaryDisplay(),
-      workArea,
-      bounds: workArea,
-    });
-  }, width);
-}
-
-type AppearanceIpc = {
-  aidenAPI: {
-    ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> };
-  };
-};
-
-/** Previews an appearance the way Settings does, without saving it. */
-async function previewAppearance(
-  page: Page,
-  mode: "light" | "dark" | null,
-): Promise<void> {
-  await page.evaluate(async (nextMode) => {
-    const { ipc } = (window as unknown as AppearanceIpc).aidenAPI;
-    const saved = await ipc.invoke<{ mode: string }>("settings:getAppearance");
-    await ipc.invoke(
-      "settings:previewAppearance",
-      nextMode ? { ...saved, mode: nextMode } : saved,
-    );
-  }, mode);
-}
-
-async function capture(page: Page, name: string): Promise<void> {
-  if (!SCREENSHOT_DIR) return;
-  await mkdir(SCREENSHOT_DIR, { recursive: true });
-  await page.mouse.move(1, 1);
-  for (const scheme of ["light", "dark"] as const) {
-    await previewAppearance(page, scheme);
-    await expect(page.locator("html")).toHaveAttribute(
-      "data-appearance-scheme",
-      scheme,
-    );
-    await page.screenshot({
-      path: path.join(SCREENSHOT_DIR, `${name}-${scheme}.png`),
-      animations: "disabled",
-    });
-  }
-  await previewAppearance(page, null);
-}
-
-async function chooseWorkspace(page: Page, name: RegExp): Promise<void> {
-  const picker = page.getByRole("button", { name: "Choose a workspace" });
-  await picker.click();
-  const option = page.getByRole("option", { name });
-  await option.click();
-  await expect(option).toHaveCount(0);
-}
-
-async function sendFirstMessage(page: Page, text: string): Promise<void> {
-  const composer = page.locator("textarea").first();
-  await composer.fill(text);
-  await composer.press("Enter");
-  await expect(page.getByText(E2E_ASSISTANT_RESPONSE).last()).toBeVisible({
-    timeout: 20_000,
-  });
-  await expect(page.locator("[data-chat-title-menu]")).toBeVisible({
-    timeout: 20_000,
-  });
-  // Every chat is titled from the fake model's reply, so name it after its message instead.
-  await page.locator("[data-chat-title-menu]").click();
-  await page.getByRole("menuitem", { name: "Rename…" }).click();
-  const dialog = page.getByRole("dialog", { name: "Rename chat" });
-  await dialog.getByRole("textbox", { name: "Chat name" }).fill(text);
-  await dialog.getByRole("button", { name: "Save" }).click();
-  await expect(dialog).toBeHidden();
-  await expect(page.locator("[data-chat-title-menu]")).toContainText(text);
-}
 
 /** A No workspace chat and then a workspace chat, which is left open. */
 async function openTwoChats(page: Page): Promise<void> {
@@ -133,15 +39,6 @@ async function openTwoChats(page: Page): Promise<void> {
   await sendFirstMessage(page, DESIGN_CHAT);
 }
 
-async function typeSlashCommand(page: Page, command: string): Promise<void> {
-  const composer = page.locator("textarea").first();
-  await composer.click();
-  await composer.pressSequentially(command);
-  await composer.press("Enter");
-  await expect(composer).toHaveValue("");
-}
-
-const designLayout = (page: Page) => page.locator("[data-design-layout]");
 const sidebar = (page: Page) => page.locator("[data-sidebar]");
 const scopeList = (page: Page) =>
   sidebar(page).locator("[data-sidebar-scope-list]");
@@ -151,10 +48,6 @@ const sidebarChat = (page: Page, title: string) =>
     .first();
 const designToggle = (page: Page) =>
   page.getByRole("button", { name: "Design mode", exact: true });
-const designCanvas = (page: Page) =>
-  page.getByRole("region", { name: "Design canvas", exact: true });
-const canvasRegion = (page: Page) =>
-  page.locator("[data-design-canvas-region]");
 const banner = (page: Page) =>
   page.getByText("Design mode needs a wider window");
 const paneSwitch = (page: Page) =>
@@ -324,6 +217,28 @@ function apart(
   );
 }
 
+/** The locator's box once it has stopped moving, so a sidebar or column transition has finished. */
+async function settledBox(
+  locator: ReturnType<Page["locator"]>,
+): Promise<{ x: number; y: number; width: number; height: number }> {
+  let last: Awaited<ReturnType<typeof locator.boundingBox>> = null;
+  await expect
+    .poll(async () => {
+      const box = await locator.boundingBox();
+      const still =
+        box !== null &&
+        last !== null &&
+        box.x === last.x &&
+        box.y === last.y &&
+        box.width === last.width &&
+        box.height === last.height;
+      last = box;
+      return still;
+    })
+    .toBe(true);
+  return last!;
+}
+
 /** The canvas's tool rail and zoom controls are on screen, inside the canvas and clear of each other. */
 async function expectCanvasChrome(page: Page): Promise<void> {
   const tools = designCanvas(page).getByRole("toolbar", {
@@ -334,7 +249,7 @@ async function expectCanvasChrome(page: Page): Promise<void> {
   await expect(zoom).toBeVisible();
   await expect(tools.getByRole("button").first()).toBeVisible();
   await expect(zoom.getByRole("button", { name: "Zoom in" })).toBeVisible();
-  const region = (await canvasRegion(page).boundingBox())!;
+  const region = await settledBox(canvasRegion(page));
   for (const toolbar of [tools, zoom]) {
     const box = (await toolbar.boundingBox())!;
     expect(box.x).toBeGreaterThanOrEqual(region.x - 0.5);

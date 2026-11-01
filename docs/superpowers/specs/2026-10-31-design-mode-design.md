@@ -76,7 +76,7 @@ Design mode is a per-chat layout on an ordinary workspace chat. In it, the right
   - The terminal drawer stays in the chat column.
   - The top bar keeps its actions whole: the title may shrink to nothing, the actions never shrink, and when the header is narrower than 480 px of content, Quick View and Terminal move into the ••• tools menu.
 - **Canvas region:**
-  - It takes everything left over, with a minimum of 320 px. It is one region named "Design canvas"; while empty it reads "Designs will appear here."
+  - It takes everything left over, with a minimum of 320 px. It is one region named "Design canvas"; while empty it reads "Ask Aiden to design something, or add a note."
   - It replaces the side panel while design mode is on. On entry the panel and Quick View always close, and their state is saved only if the saved copy is missing or stale. Both are restored on exit.
   - The browser panel stays reachable through **Open in browser** on a frame, which leaves design mode's canvas visible and opens the panel overlaid.
 - **Live pill:** it stays inside the chat column's bottom-right corner, clear of the canvas zoom, fit and minimap controls. In the stacked layout showing the canvas it sits at the canvas's bottom-left.
