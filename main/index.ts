@@ -27,11 +27,18 @@ import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
 import { externalUrl } from "./services/browser/core.js";
 import { shutdownDevices, terminateDeviceHelperCommands } from "./handlers/devices.js";
+import { disposeWorkspaceGitWatchers } from "./handlers/workspaces.js";
 import { forwardTrackpadScrollEnd } from "./services/devices/trackpad-scroll-end.js";
 import { registerBrowserHandlers } from "./handlers/browser.js";
 import { TerminalHistoryStore } from "./services/terminal-history.js";
 import { getPreloadPath, getWindowUrl } from "./windows/window-paths.js";
 import { mainWindowOptions } from "./windows/main-window-options.js";
+import {
+  registerWindowControlHandlers,
+  trackWindowControlsState,
+  WINDOW_STATE_NOTIFICATION_CHANNEL,
+} from "./handlers/window-controls.js";
+import { resolveWindowChrome } from "../renderer/shared/window-chrome.js";
 import {
   initShortcut,
   initDictationShortcut,
@@ -372,6 +379,7 @@ function cleanupApplication(): void {
   telegramService.stop();
   subagentRuntimeRegistry.abortAll();
   botSkillContentWatcher.dispose();
+  disposeWorkspaceGitWatchers();
   geminiLiveTranscription.dispose();
   void mcpManager.closeAll({ final: true });
 }
@@ -1520,11 +1528,22 @@ async function createMainWindow(
     return;
   }
 
+  const windowChrome = resolveWindowChrome({
+    platform: process.platform,
+    preference: normalizeAppearanceConfig((await configStore.getSettings()).appearance).linuxTitleBar,
+    env: process.env,
+  });
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    await revealExistingMainWindow(mainWindow);
+    return;
+  }
+
   mainWindow = new BrowserWindow({
     ...mainWindowOptions(
       getPreloadPath(),
       process.platform,
       nativeTheme.shouldUseDarkColors,
+      windowChrome,
     ),
     ...restoredWindowState.bounds,
     title: app.getName(),
@@ -1538,6 +1557,13 @@ async function createMainWindow(
   registerBroadcastReceiver(createdWindow);
   imageQuitCoverage.clear();
   mainWindowState.track(createdWindow);
+  if (windowChrome === "aiden") {
+    // Aiden draws the window controls; keep their maximize/full-screen look current.
+    const stopTracking = trackWindowControlsState(createdWindow, (state) => {
+      if (!createdWindow.isDestroyed()) createdWindow.webContents.send(WINDOW_STATE_NOTIFICATION_CHANNEL, state);
+    });
+    createdWindow.once("closed", stopTracking);
+  }
   writeDiagnosticEvent({
     level: "info",
     area: "renderer",
@@ -2014,6 +2040,19 @@ registerAppPathOpener(async (path) => {
 // reports it can run now, so the menu can be rebuilt when either changes.
 let applicationMenuInputs: { settings: AppSettings; acceleratorsEnabled: boolean } | null = null;
 let applicationMenuAvailable: ReadonlySet<string> | null = null;
+
+registerWindowControlHandlers<BrowserWindow>({
+  handle: (channel, handler) => ipcMain.handle(channel, handler),
+  mainWindow: () => mainWindow,
+  popupMenu: (window, point) => {
+    const menu = Menu.getApplicationMenu();
+    if (!menu) return false;
+    // The renderer measures in CSS pixels; the menu wants window points.
+    const zoom = window.webContents.getZoomFactor();
+    menu.popup({ window, x: Math.round(point.x * zoom), y: Math.round(point.y * zoom) });
+    return true;
+  },
+});
 
 ipcMain.handle("app:setMenuCommands", (event, commandIds: unknown) => {
   if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) return false;

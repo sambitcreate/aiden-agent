@@ -243,13 +243,13 @@ test("summaries project attention row states and honest unread from shared marke
     page.summaries.filter((summary) => "lastRunFailed" in summary).map(({ id }) => id),
     ["chat-failed"],
   );
-  // The newest output's time goes out as RFC 3339 (revision 48), and only when there is one.
+  // The newest output's time goes out as RFC 3339 (revision 50), and only when there is one.
   assert.equal(byId["chat-new"]!.lastAssistantAt, new Date(2_800).toISOString());
   assert.equal("lastAssistantAt" in byId["chat-ask"]!, false);
   assert.ok(page.summaries.every((summary) => !("lastAssistantFailed" in summary)));
 });
 
-test("revision 48 summaries carry a live run's times and the chat's triage", async (t) => {
+test("revision 50 summaries carry a live run's times and the chat's triage", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-signals-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const pinnedAt = Date.parse("2026-11-01T09:00:00.000Z");
@@ -418,7 +418,7 @@ test("summary parser accepts additive row state and rejects unknown values", () 
     () => parseAidenRemoteChatSummaryProjection({ ...summary, lastRunFailed: false }),
     /lastRunFailed/u,
   );
-  // Revision 48: RFC 3339 times, and triage times only beside the revision that wrote them.
+  // Revision 50: RFC 3339 times, and triage times only beside the revision that wrote them.
   const signals = parseAidenRemoteChatSummaryProjection({
     ...summary,
     attentionSince: "2026-08-30T21:05:00Z",
@@ -878,7 +878,7 @@ test("triage writes need chat:write and an Idempotency-Key, replay, and refuse a
     headers: { "aiden-protocol-version": "1", authorization: `Bearer ${credential}` },
   })).json()) as { features?: string[] }).features ?? [];
   assert.ok((await features(writer)).includes("chat-triage-v1"));
-  assert.ok((await features(phone)).includes("chat-triage-v1"), "phones triage under chat:write (revision 48)");
+  assert.ok((await features(phone)).includes("chat-triage-v1"), "phones triage under chat:write (revision 50)");
   const fromPhone = await post("chat-a", { done: true }, "triage-key-0000009", phone);
   assert.equal(fromPhone.status, 200);
   assert.ok((await triage.get("chat-a"))?.doneAt);

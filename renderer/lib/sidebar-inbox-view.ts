@@ -234,7 +234,7 @@ function feedTime(value: unknown): number | undefined {
 }
 
 /**
- * Paired hosts' Bots (Remote revision 48), listed while their host says they
+ * Paired hosts' Bots (Remote revision 50), listed while their host says they
  * need the person (`needsYou`), their last run failed (`failed`), or their
  * chat is open here. A host has no read state for a Bot's replies, so a
  * remote Bot's replies never read as unread; a failed one reads as an unseen
@@ -320,7 +320,7 @@ export function remoteInboxEntries(
             isOpen: isOpen(chat.hostId, chat.chatId),
             hostOnline: !chat.stale,
             updatedAt: chat.lastActivityAt ?? chat.createdAt ?? 0,
-            // Revision 48 hosts report these; older hosts leave the row on updatedAt.
+            // Revision 50 hosts report these; older hosts leave the row on updatedAt.
             ...(chat.attentionSince !== undefined ? { attentionSince: chat.attentionSince } : {}),
             ...(chat.runStartedAt !== undefined ? { runStartedAt: chat.runStartedAt } : {}),
             ...(chat.lastAssistantAt !== undefined ? { lastAssistantAt: chat.lastAssistantAt } : {}),
@@ -446,7 +446,7 @@ export function inboxRowStatus(entry: InboxEntry, section: InboxSection, now: nu
 /**
  * The row's tooltip and `aria-description`: the pending command, question or
  * failure for local chats; for remote chats, what a waiting run asks (Remote
- * revision 48, for `runs:observe` devices) or else status, host and wait.
+ * revision 50, for `runs:observe` devices) or else status, host and wait.
  */
 export function inboxRowDescription(entry: InboxEntry, status: InboxRowStatus): string | undefined {
   const offline = entry.signals.hostOnline ? "" : `. ${entry.hostLabel} is offline`;
@@ -454,7 +454,7 @@ export function inboxRowDescription(entry: InboxEntry, status: InboxRowStatus): 
     return entry.signals.hostOnline ? undefined : `${entry.hostLabel} is offline`;
   }
   if (entry.source.kind === "remote") {
-    // Revision 48 hosts send what a waiting run asks, to devices that may observe runs.
+    // Revision 50 hosts send what a waiting run asks, to devices that may observe runs.
     const asked = entry.source.chat.attentionSummary?.trim();
     const prefix = status.needsYou === "approval" ? "Approve" : status.needsYou === "question" ? "Question" : null;
     if (asked && prefix) return `${prefix}: ${asked}. On ${entry.hostLabel}, waiting ${status.wait}${offline}`;

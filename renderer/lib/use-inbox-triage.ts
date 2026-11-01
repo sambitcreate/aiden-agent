@@ -165,7 +165,7 @@ export function useInboxTriage({
 }: {
   views: ReadonlyMap<string, PeerHostView>;
   /**
-   * What each paired host last reported, by row key (Remote revision 48 summaries).
+   * What each paired host last reported, by row key (Remote revision 50 summaries).
    * An overlay entry its host has since reported, or passed, is dropped.
    */
   reported?: ReadonlyMap<string, ChatTriageEntry>;

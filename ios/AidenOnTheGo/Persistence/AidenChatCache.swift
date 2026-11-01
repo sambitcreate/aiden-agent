@@ -112,7 +112,7 @@ actor AidenChatCache {
         let lastRunFailed: Bool?
         // Optional so caches written before contract revision 21 still load.
         let forkedFrom: AidenChatForkLineage?
-        // Optional so caches written before the Inbox (revision 48) still load.
+        // Optional so caches written before the Inbox (revision 50) still load.
         let inbox: AidenChatInboxSignals?
 
         init(_ summary: AidenChatSummary) {

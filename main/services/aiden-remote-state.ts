@@ -260,8 +260,9 @@ function isMobileSimulatorCapability(
 }
 
 /**
- * Display opt-ins (`bot:cards`, `bot:activity`, `bot:handoffs`,
- * `schedule:cards`): no authority, any device type.
+ * Opt-ins negotiated after pairing (`bot:cards`, `bot:activity`,
+ * `bot:handoffs`, `schedule:cards`, `chat:jobs`): any device type, and never
+ * more authority than the device's chat or Bot grants already carry.
  */
 function isOptInCapability(
   value: unknown,

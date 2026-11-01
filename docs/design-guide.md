@@ -11,6 +11,7 @@ for emphasis; do not add a separate pill or circular button variant.
 | --- | --- | --- |
 | Buttons, toolbar actions, navigation actions, and button links | `Button`, or the shared action rule in `renderer/styles.css` for existing native buttons | `--radius-button: 16px` and `corner-shape: squircle` |
 | Window top-bar actions (sidebar toggle, history, chat tools, header menus) | `Button` with `variant="bar"` and `size="small"` | The same squircle at 28px: no fill at rest, list-hover fill on hover, list-selection fill while `aria-pressed`/`aria-expanded` |
+| Linux window controls (minimize, maximize/restore, close) and the Linux main menu button | `WindowControls` / `Button` with `variant="bar"` and `size="small"` | The same 28px bar squircle with 14px custom glyphs, separated from the header tools by a 16px separator. Close stays neutral on hover (closing is guarded, not destructive). Top bars that reach the window's top-right corner add the cluster's width to their right padding (`useTrailingWindowControlsClearance`) |
 | A custom visual that must follow a button's silhouette, such as its artwork mask | `.squircle-control` | The same button radius and corner shape |
 | Joined actions, such as an action with a separate menu trigger | `.squircle-control.squircle-action-group` around direct `Button` children | 16px outer corners, square internal seams |
 | Chat composer | `.composer-shell` | `--radius-composer: 40px` and `corner-shape: squircle` |

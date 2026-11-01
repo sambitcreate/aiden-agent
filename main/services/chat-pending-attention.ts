@@ -264,7 +264,7 @@ export interface LiveRunAttention {
 }
 
 /**
- * A chat's live run, for paired devices' Inbox signals (Remote revision 48):
+ * A chat's live run, for paired devices' Inbox signals (Remote revision 50):
  * its start, and its oldest pending approval (or else its oldest question) with
  * its summary.
  * Detached and interrupted waits are this Mac's own rows and are left out.

@@ -121,8 +121,8 @@ export function newerTriage(
 /**
  * The overlay keys whose host has since reported the same revision or a newer
  * one: this Mac's store for local rows, the host's chat summaries (Remote
- * revision 48) for a paired host's. A host that reports nothing for a row,
- * such as one older than revision 48, keeps its overlay entry.
+ * revision 50) for a paired host's. A host that reports nothing for a row,
+ * such as one older than revision 50, keeps its overlay entry.
  */
 export function settledTriageOverlayKeys(
   overlay: ReadonlyMap<string, ChatTriageEntry>,

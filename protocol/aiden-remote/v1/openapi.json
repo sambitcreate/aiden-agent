@@ -1737,6 +1737,96 @@
         }
       }
     },
+      "/chats/{chatId}/jobs": {
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "$ref": "#/components/parameters/ProtocolVersion"
+          }
+        ],
+        "get": {
+          "operationId": "listChatBackgroundJobs",
+          "x-aiden-archived-access": "readable",
+          "x-aiden-capability": "chat:read",
+          "x-aiden-capabilities": [
+            "chat:read",
+            "chat:jobs"
+          ],
+          "description": "Contract revision 49. What the agent left running for this chat on the Mac (a dev server, a watcher, a long test run), running jobs first, then the ones that ended recently in this session of the Mac app. fromCommand marks processes a run_command call left running, which have no exit code. ports are the TCP ports a running job listens on, on the Mac (localhost there, not on the phone). The list is not pushed: read it again after a reply settles or while it is on screen.",
+          "responses": {
+            "200": {
+              "description": "The chat's background jobs",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/BackgroundJobs"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/Error"
+            }
+          }
+        }
+      },
+      "/chats/{chatId}/jobs/{jobId}/stop": {
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^job_[0-9a-f]{8}$"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ProtocolVersion"
+          }
+        ],
+        "post": {
+          "operationId": "stopChatBackgroundJob",
+          "x-aiden-capability": "chat:write",
+          "x-aiden-capabilities": [
+            "chat:write",
+            "chat:jobs"
+          ],
+          "description": "Contract revision 49. Stops a job and everything it started: politely first, forced after a few seconds, and only processes that carry the job's own marker. Returns once it has ended, with the chat's list. A job that already ended is returned as it is. The body is an empty object. 404 not_found for a job this chat does not have.",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "maxProperties": 0
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "The chat's background jobs after the stop",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/BackgroundJobs"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/Error"
+            }
+          }
+        }
+      },
     "/chats/{chatId}/visuals/{visualId}/document": {
       "parameters": [
         {
@@ -6207,7 +6297,7 @@
       ],
       "get": {
         "operationId": "hostEvents",
-        "description": "Contract revision 19 host feed (host-events-v1), granted to paired mac and linux devices only. The first event is a snapshot of every chat summary, workspace (with an optional credential-free repository identity) and, for bot:read devices, Bot. Later events upsert or remove one chat, workspace or Bot, or report a run.state change. Event ids are <epoch>:<sequence>; a missing, foreign-epoch or expired cursor (more than 1,000 events or 8 MiB behind) receives a fresh snapshot instead of a replay. A snapshot larger than 256 KiB arrives as consecutive snapshot frames: every frame but the last carries partial: true and no SSE id, and only the final frame carries the id, so an interrupted snapshot is retried whole on resume. A heartbeat comment is sent every 15 seconds. The feed never reads transcripts. Since revision 48, right after a runs:observe device's snapshot the host also sends that device a run.state (with attentionSummary) for each run still waiting; those entries take sequences every other device skips, and each pass uses at most half the journal's event and byte retention.",
+        "description": "Contract revision 19 host feed (host-events-v1), granted to paired mac and linux devices only. The first event is a snapshot of every chat summary, workspace (with an optional credential-free repository identity) and, for bot:read devices, Bot. Later events upsert or remove one chat, workspace or Bot, or report a run.state change. Event ids are <epoch>:<sequence>; a missing, foreign-epoch or expired cursor (more than 1,000 events or 8 MiB behind) receives a fresh snapshot instead of a replay. A snapshot larger than 256 KiB arrives as consecutive snapshot frames: every frame but the last carries partial: true and no SSE id, and only the final frame carries the id, so an interrupted snapshot is retried whole on resume. A heartbeat comment is sent every 15 seconds. The feed never reads transcripts. Since revision 50, right after a runs:observe device's snapshot the host also sends that device a run.state (with attentionSummary) for each run still waiting; those entries take sequences every other device skips, and each pass uses at most half the journal's event and byte retention.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "host:events",
         "parameters": [
@@ -7765,7 +7855,8 @@
                 "bot:handoff-on-mac",
                 "bot:images",
                 "bot:issues",
-                "schedule:cards"
+                "schedule:cards",
+                "chat:jobs"
               ]
             },
             "uniqueItems": true
@@ -7808,7 +7899,8 @@
                 "bot:handoff-on-mac",
                 "bot:images",
                 "bot:issues",
-                "schedule:cards"
+                "schedule:cards",
+                "chat:jobs"
               ]
             },
             "uniqueItems": true
@@ -7954,7 +8046,8 @@
                 "bot:handoff-on-mac",
                 "bot:images",
                 "bot:issues",
-                "schedule:cards"
+                "schedule:cards",
+                "chat:jobs"
               ]
             },
             "uniqueItems": true
@@ -8006,7 +8099,8 @@
                 "bot:handoff-on-mac",
                 "bot:images",
                 "bot:issues",
-                "schedule:cards"
+                "schedule:cards",
+                "chat:jobs"
               ]
             },
             "uniqueItems": true
@@ -8758,6 +8852,54 @@
               }
             },
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "mode",
+              "selection",
+              "url",
+              "files"
+            ],
+            "properties": {
+              "mode": {
+                "const": "clone"
+              },
+              "selection": {
+                "type": "string",
+                "pattern": "^sel_[A-Za-z0-9_-]{43}$"
+              },
+              "url": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "files": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "content"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "maxLength": 80,
+                      "pattern": "^\\.(?:env|dev\\.vars)(?:\\.[A-Za-z0-9_-][A-Za-z0-9_.-]*)?$"
+                    },
+                    "content": {
+                      "type": "string",
+                      "maxLength": 131072
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false,
+            "description": "Desktop-only, requires workspace:manage and workspace:browse. Clones into a new repository-name child of the selected approved folder. Optional ignored root-level environment text files are at most 128 KiB each and 512 KiB total. Request cancellation stops the clone before publication when possible; a lost reply must be reconciled before a fresh request."
           }
         ]
       },
@@ -11267,42 +11409,42 @@
             ]
           },
           "attentionSince": {
-            "description": "Additive in contract revision 48 (inbox-signals-v1). While a live run waits on an approval or question, when the oldest pending approval was raised, or else the oldest question. Absent otherwise.",
+            "description": "Additive in contract revision 50 (inbox-signals-v1). While a live run waits on an approval or question, when the oldest pending approval was raised, or else the oldest question. Absent otherwise.",
             "type": "string",
             "format": "date-time"
           },
           "runStartedAt": {
-            "description": "Additive in contract revision 48. While a run is live, when it started. Absent otherwise.",
+            "description": "Additive in contract revision 50. While a run is live, when it started. Absent otherwise.",
             "type": "string",
             "format": "date-time"
           },
           "lastAssistantAt": {
-            "description": "Additive in contract revision 48. When the chat's newest assistant output (or failed turn) was persisted. Absent before the first reply.",
+            "description": "Additive in contract revision 50. When the chat's newest assistant output (or failed turn) was persisted. Absent before the first reply.",
             "type": "string",
             "format": "date-time"
           },
           "pinnedAt": {
-            "description": "Additive in contract revision 48. When the chat was pinned in the Inbox. Present only with triageRevision.",
+            "description": "Additive in contract revision 50. When the chat was pinned in the Inbox. Present only with triageRevision.",
             "type": "string",
             "format": "date-time"
           },
           "doneAt": {
-            "description": "Additive in contract revision 48. When the chat was marked done. Newer output brings it back. Present only with triageRevision.",
+            "description": "Additive in contract revision 50. When the chat was marked done. Newer output brings it back. Present only with triageRevision.",
             "type": "string",
             "format": "date-time"
           },
           "snoozedUntil": {
-            "description": "Additive in contract revision 48. When the chat's snooze ends. Present only with triageRevision.",
+            "description": "Additive in contract revision 50. When the chat's snooze ends. Present only with triageRevision.",
             "type": "string",
             "format": "date-time"
           },
           "triageRevision": {
-            "description": "Additive in contract revision 48. The revision of the chat's triage entry (chat-triage-v1); absent when the chat has never been triaged. Clients send it as ifRevision and drop their own pending write once the host reports it.",
+            "description": "Additive in contract revision 50. The revision of the chat's triage entry (chat-triage-v1); absent when the chat has never been triaged. Clients send it as ifRevision and drop their own pending write once the host reports it.",
             "type": "integer",
             "minimum": 1
           },
           "inboxBucket": {
-            "description": "Additive in contract revision 48 (inbox-signals-v1). The Inbox bucket the host's own placement rules give the row, computed from the state the host holds: needs_you (a pending approval or question, or unread output from a failed run), working, done (marked done with no newer output), snoozed, pinned, updates (unread), or earlier (read and idle, however old). The host can't know which chat a device has open, so the row counts as not open, and it applies no recent window. Clients recheck the time-based parts against their own clock: a snoozed row past its snoozedUntil is awake, and an earlier row older than the client's recent window ages out. Needs you rows order by tier from rowState (approval, question, then failed). Later hosts may send values outside this list; a client places those rows itself, as it does a bucket without an inboxSortAt. Present only with inboxSortAt.",
+            "description": "Additive in contract revision 50 (inbox-signals-v1). The Inbox bucket the host's own placement rules give the row, computed from the state the host holds: needs_you (a pending approval or question, or unread output from a failed run), working, done (marked done with no newer output), snoozed, pinned, updates (unread), or earlier (read and idle, however old). The host can't know which chat a device has open, so the row counts as not open, and it applies no recent window. Clients recheck the time-based parts against their own clock: a snoozed row past its snoozedUntil is awake, and an earlier row older than the client's recent window ages out. Needs you rows order by tier from rowState (approval, question, then failed). Later hosts may send values outside this list; a client places those rows itself, as it does a bucket without an inboxSortAt. Present only with inboxSortAt.",
             "enum": [
               "needs_you",
               "pinned",
@@ -11314,7 +11456,7 @@
             ]
           },
           "inboxSortAt": {
-            "description": "Additive in contract revision 48. The time the row orders by within its inboxBucket: needs_you by attentionSince (else updatedAt), oldest first; pinned by pinnedAt and updates by lastAssistantAt (else updatedAt), newest first; earlier by updatedAt, newest first; working by runStartedAt (else updatedAt), oldest first. A done or snoozed row carries the time it orders by in the bucket it returns to. Present only with inboxBucket.",
+            "description": "Additive in contract revision 50. The time the row orders by within its inboxBucket: needs_you by attentionSince (else updatedAt), oldest first; pinned by pinnedAt and updates by lastAssistantAt (else updatedAt), newest first; earlier by updatedAt, newest first; working by runStartedAt (else updatedAt), oldest first. A done or snoozed row carries the time it orders by in the bucket it returns to. Present only with inboxBucket.",
             "type": "string",
             "format": "date-time"
           }
@@ -14476,6 +14618,95 @@
           }
         }
       },
+        "BackgroundJobs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "jobs"
+          ],
+          "description": "Contract revision 49 (chat:jobs).",
+          "properties": {
+            "jobs": {
+              "type": "array",
+              "maxItems": 40,
+              "items": {
+                "$ref": "#/components/schemas/BackgroundJob"
+              }
+            }
+          }
+        },
+        "BackgroundJob": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "label",
+            "state",
+            "startedAt",
+            "ports"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^job_[0-9a-f]{8}$"
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "The agent's short label, else the command."
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "running",
+                "exited",
+                "failed",
+                "stopped"
+              ]
+            },
+            "startedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "endedAt": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Present exactly when the job is not running."
+            },
+            "exitCode": {
+              "type": "integer",
+              "description": "Only for exited or failed jobs whose exit code is known."
+            },
+            "endReason": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person",
+                "output-limit",
+                "chat-deleted",
+                "access-changed",
+                "app-quit"
+              ],
+              "description": "Present exactly when the job is stopped."
+            },
+            "fromCommand": {
+              "type": "boolean",
+              "const": true,
+              "description": "A run_command call left these processes running; they have no exit code."
+            },
+            "ports": {
+              "type": "array",
+              "maxItems": 5,
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "description": "TCP ports it listens on, on the Mac; empty unless it runs."
+            }
+          }
+        },
       "MemorySettings": {
         "type": "object",
         "required": [

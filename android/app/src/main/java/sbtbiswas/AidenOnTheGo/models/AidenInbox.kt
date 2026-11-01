@@ -9,7 +9,7 @@ import java.time.temporal.ChronoUnit
 
 /**
  * The Inbox bucket a host reports on a summary row (`inboxBucket`, Remote
- * revision 48). Unknown values never map to a case, so a newer host's bucket
+ * revision 50). Unknown values never map to a case, so a newer host's bucket
  * falls back to local placement instead of failing the page.
  */
 enum class AidenInboxBucket(val wire: String) {

@@ -47,7 +47,7 @@ function runState(value: unknown): PeerRunState {
     typeof unread !== "boolean"
   )
     malformed();
-  // Revision 48: a summary that is not bounded text is left out rather than refusing the frame.
+  // Revision 50: a summary that is not bounded text is left out rather than refusing the frame.
   const summary = typeof attentionSummary === "string" ? clipPendingAttentionSummary(attentionSummary) : "";
   return { chatId, runId, state, unread, ...(summary ? { attentionSummary: summary } : {}) };
 }

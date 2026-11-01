@@ -1,7 +1,7 @@
 import Foundation
 
 /// The Inbox bucket a host reports on a summary row (`inboxBucket`, Remote
-/// revision 48). Unknown values never decode into a case, so a newer host's
+/// revision 50). Unknown values never decode into a case, so a newer host's
 /// bucket falls back to local placement instead of failing the page.
 enum AidenInboxBucket: String, Codable, Equatable, Sendable, CaseIterable {
     case needsYou = "needs_you"
@@ -33,7 +33,7 @@ enum AidenInboxSection: String, CaseIterable, Equatable, Sendable {
     }
 }
 
-/// The Inbox fields of a summary row (Remote revisions 47 and 48). Every
+/// The Inbox fields of a summary row (Remote revision 50). Every
 /// field is optional: older hosts send none of them, and a malformed one is
 /// dropped on its own. `bucket` and `sortAt` are kept only together.
 struct AidenChatInboxSignals: Codable, Equatable, Sendable {

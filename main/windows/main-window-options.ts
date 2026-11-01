@@ -1,9 +1,11 @@
 import type { BrowserWindowConstructorOptions } from "electron";
+import { WINDOW_CHROME_ARGUMENT, type WindowChrome } from "../../renderer/shared/window-chrome.js";
 
 export function mainWindowOptions(
   preload: string,
   platform: NodeJS.Platform = process.platform,
   dark = false,
+  chrome: WindowChrome = platform === "darwin" ? "mac" : "system",
 ): BrowserWindowConstructorOptions {
   const shared: BrowserWindowConstructorOptions = {
     width: 1000,
@@ -16,15 +18,20 @@ export function mainWindowOptions(
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // The preload reads this synchronously so the first paint already lays
+      // the top bar out for the right window controls.
+      additionalArguments: [`${WINDOW_CHROME_ARGUMENT}${chrome}`],
     },
   };
   if (platform !== "darwin") {
     return {
       ...shared,
-      // Linux compositors own the native title bar and window shadow. An
-      // opaque semantic surface avoids transparency artifacts under Wayland.
+      // An opaque semantic surface avoids transparency artifacts under Wayland.
       backgroundColor: dark ? "#181b21" : "#f6f7f9",
-      titleBarStyle: "default",
+      // "aiden": no desktop title bar or menu bar; the renderer draws the
+      // window controls inside its own 52px top bar. "system": the
+      // compositor owns the title bar and window shadow.
+      titleBarStyle: chrome === "aiden" ? "hidden" : "default",
       transparent: false,
     };
   }

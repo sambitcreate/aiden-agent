@@ -71,7 +71,7 @@ export interface PeerRunState {
   state: string;
   unread: boolean;
   /**
-   * Revision 48, for a waiting run on a host that serves `runs:observe`: the
+   * Revision 50, for a waiting run on a host that serves `runs:observe`: the
    * approval summary or question text, one line, at most 200 characters.
    */
   attentionSummary?: string;

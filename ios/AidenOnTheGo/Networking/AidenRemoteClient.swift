@@ -778,6 +778,117 @@ struct AidenSpendingStatus: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case spending }
 }
 
+/// Contract revision 49 (`chat:jobs`): one of a chat's background jobs. It
+/// runs on the Mac, so its ports are addresses there, not on the phone.
+struct AidenBackgroundJob: Codable, Equatable, Identifiable, Sendable {
+    enum State: String, Codable, Sendable { case running, exited, failed, stopped }
+
+    static let maxLabelLength = 200
+    static let maxPorts = 5
+
+    let id: String
+    let label: String
+    let state: State
+    let startedAt: Date
+    let endedAt: Date?
+    let exitCode: Int?
+    /// Why a stopped job stopped: `person`, `agent`, `output-limit` and others the Mac may add.
+    let endReason: String?
+    /// A command the agent ran left these processes running; they have no exit code.
+    let fromCommand: Bool
+    /// TCP ports it listens on, on the Mac, while it runs.
+    let ports: [Int]
+
+    init(
+        id: String,
+        label: String,
+        state: State,
+        startedAt: Date,
+        endedAt: Date? = nil,
+        exitCode: Int? = nil,
+        endReason: String? = nil,
+        fromCommand: Bool = false,
+        ports: [Int] = []
+    ) {
+        self.id = id
+        self.label = label
+        self.state = state
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.exitCode = exitCode
+        self.endReason = endReason
+        self.fromCommand = fromCommand
+        self.ports = ports
+    }
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        label = try values.decode(String.self, forKey: .label)
+        state = try values.decode(State.self, forKey: .state)
+        startedAt = try values.decode(Date.self, forKey: .startedAt)
+        endedAt = try values.decodeIfPresent(Date.self, forKey: .endedAt)
+        exitCode = try values.decodeIfPresent(Int.self, forKey: .exitCode)
+        endReason = try values.decodeIfPresent(String.self, forKey: .endReason)
+        let fromCommandValue = try values.decodeIfPresent(Bool.self, forKey: .fromCommand)
+        fromCommand = fromCommandValue == true
+        ports = try values.decode([Int].self, forKey: .ports)
+        let running = state == .running
+        guard id.range(of: "^job_[0-9a-f]{8}$", options: .regularExpression) != nil,
+              !label.isEmpty, label.count <= Self.maxLabelLength,
+              running == (endedAt == nil),
+              exitCode == nil || state == .exited || state == .failed,
+              (endReason != nil) == (state == .stopped),
+              fromCommandValue != false,
+              !(fromCommand && state == .failed),
+              ports.count <= Self.maxPorts,
+              ports.allSatisfy({ (1...65_535).contains($0) }),
+              running || ports.isEmpty else {
+            throw DecodingError.dataCorruptedError(forKey: .id, in: values, debugDescription: "Invalid background job.")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(label, forKey: .label)
+        try values.encode(state, forKey: .state)
+        try values.encode(startedAt, forKey: .startedAt)
+        try values.encodeIfPresent(endedAt, forKey: .endedAt)
+        try values.encodeIfPresent(exitCode, forKey: .exitCode)
+        try values.encodeIfPresent(endReason, forKey: .endReason)
+        if fromCommand { try values.encode(true, forKey: .fromCommand) }
+        try values.encode(ports, forKey: .ports)
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, label, state, startedAt, endedAt, exitCode, endReason, fromCommand, ports
+    }
+}
+
+/// `GET /chats/{chatId}/jobs` and the stop response: running jobs first, newest first.
+struct AidenBackgroundJobs: Codable, Equatable, Sendable {
+    static let maxJobs = 40
+
+    let jobs: [AidenBackgroundJob]
+
+    init(jobs: [AidenBackgroundJob]) {
+        self.jobs = jobs
+    }
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["jobs"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        jobs = try values.decode([AidenBackgroundJob].self, forKey: .jobs)
+        guard jobs.count <= Self.maxJobs, Set(jobs.map(\.id)).count == jobs.count else {
+            throw DecodingError.dataCorruptedError(forKey: .jobs, in: values, debugDescription: "Invalid background job list.")
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case jobs }
+}
+
 struct AidenMemorySettings: Codable, Equatable, Sendable {
     let enabled: Bool
     let revision: String
@@ -1318,7 +1429,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
             .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues,
-            .appControlsRead, .appControlsRespond, .scheduleCards,
+            .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
@@ -1482,6 +1593,26 @@ final class AidenRemoteClient: @unchecked Sendable {
             try validateBotIdentifier(botId)
             return ["bots", botId, "spending"]
         }
+    }
+
+    /// Revision 49 (`chat:jobs`): what the agent left running for the chat on the Mac.
+    func backgroundJobs(chatId: String) async throws -> AidenBackgroundJobs {
+        try validateRemoteIdentifier(chatId)
+        return try await send(method: "GET", path: ["chats", chatId, "jobs"])
+    }
+
+    /// Stops a job and everything it started, and returns the chat's list once
+    /// it has ended. A job that already ended comes back as it is.
+    func stopBackgroundJob(chatId: String, jobId: String) async throws -> AidenBackgroundJobs {
+        try validateRemoteIdentifier(chatId)
+        guard jobId.range(of: "^job_[0-9a-f]{8}$", options: .regularExpression) != nil else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return try await send(
+            method: "POST",
+            path: ["chats", chatId, "jobs", jobId, "stop"],
+            body: AidenBotSessionActionRequest()
+        )
     }
 
     func memorySettings() async throws -> AidenMemorySettings {

@@ -41,6 +41,8 @@ export interface WorkspaceApplicationDependencies {
   >;
   terminalService: Pick<typeof terminalService, "closeForWorkspace">;
   browserService?: { closeForWorkspace(workspaceId: string): void };
+  /** Closes the workspace's Git metadata watcher; a later display read re-observes. */
+  gitWatcher?: { close(workspaceId: string): void };
   /** Stops background jobs and done-when checks that run in the workspace folder. */
   followThrough?: { closeForWorkspace(workspaceId: string): Promise<void> };
   /** Drops the workspace's artifacts once its record is gone. */
@@ -124,7 +126,16 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         permission,
         createdAt: now,
         updatedAt: now,
-      });
+      }, options.assertCurrent ? async () => {
+        // Revalidate after list/save admission awaits, inside the storage mutation.
+        const currentPath = await deps.realpath(folderPath);
+        const current = await deps.stat(currentPath);
+        if (!current.isDirectory() || currentPath !== canonicalPath) throw new Error("The workspace folder changed before registration.");
+        await options.assertCurrent!({ canonicalPath: currentPath,
+          ...(current.dev === undefined ? {} : { filesystemDevice: String(current.dev) }),
+          ...(current.ino === undefined ? {} : { filesystemInode: String(current.ino) }),
+        });
+      } : undefined);
     });
   };
 
@@ -413,6 +424,9 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         );
       } finally {
         finishMutation();
+        // Every client's removal (this Mac's IPC, a paired device's Remote
+        // request) lands here. Closing after a failed remove is harmless.
+        deps.gitWatcher?.close(id);
       }
     },
   };

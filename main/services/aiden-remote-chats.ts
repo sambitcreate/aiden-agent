@@ -11,7 +11,6 @@ import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { hostInboxPlacement, type HostInboxSignals, type InboxBucket } from "../../renderer/shared/inbox-state.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
-import { WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL } from "../../renderer/shared/workspace-folder-presence.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import {
   isToolStep,
@@ -268,17 +267,17 @@ export interface AidenRemoteChatSummaryProjection {
   /** Additive (protocol revision 21): fork lineage, without its summary. */
   forkedFrom?: Omit<AidenRemoteChatForkLineageProjection, "summary">;
   /**
-   * Additive (protocol revision 48, `inbox-signals-v1`): when the live run's
+   * Additive (protocol revision 50, `inbox-signals-v1`): when the live run's
    * oldest pending approval was raised, or else its oldest question. Absent
    * without one.
    */
   attentionSince?: string;
-  /** Additive (protocol revision 48): when the chat's live run started. Absent without a live run. */
+  /** Additive (protocol revision 50): when the chat's live run started. Absent without a live run. */
   runStartedAt?: string;
-  /** Additive (protocol revision 48): when the newest assistant output arrived. */
+  /** Additive (protocol revision 50): when the newest assistant output arrived. */
   lastAssistantAt?: string;
   /**
-   * Additive (protocol revision 48): the chat's triage revision, which a
+   * Additive (protocol revision 50): the chat's triage revision, which a
    * client compares with its own writes. Present whenever the chat has a
    * triage entry, with `pinnedAt`, `doneAt` and `snoozedUntil` as set.
    */
@@ -287,7 +286,7 @@ export interface AidenRemoteChatSummaryProjection {
   doneAt?: string;
   snoozedUntil?: string;
   /**
-   * Additive (protocol revision 48, `inbox-signals-v1`): the Inbox bucket the
+   * Additive (protocol revision 50, `inbox-signals-v1`): the Inbox bucket the
    * host's own placement rules give the row (`hostInboxPlacement`), with the
    * time it orders by within that bucket. Computed from state as the host
    * knows it: the row counts as not open, no recent window applies (an old
@@ -298,7 +297,7 @@ export interface AidenRemoteChatSummaryProjection {
   inboxSortAt?: string;
 }
 
-/** The revision-48 fields `freezeSummaryPage` adds to a row. */
+/** The revision-50 fields `freezeSummaryPage` adds to a row. */
 type InboxSignalField =
   | "attentionSince"
   | "runStartedAt"
@@ -340,7 +339,7 @@ export interface AidenRemoteChatTriageProjection {
   snoozedUntil?: string;
 }
 
-/** A chat's live-run times (revision 48), epoch milliseconds. */
+/** A chat's live-run times (revision 50), epoch milliseconds. */
 export interface AidenRemoteChatRunTimes {
   /** When the run's oldest pending approval was raised, or else its oldest question. */
   attentionSince?: number;
@@ -355,7 +354,7 @@ function isoTime(at: number | undefined): string | undefined {
 }
 
 /**
- * A summary row's revision-48 fields: each time in RFC 3339, and the triage
+ * A summary row's revision-50 fields: each time in RFC 3339, and the triage
  * entry's revision with whichever of Pin, Done and Snooze it holds. A field
  * whose time is unknown or out of range is left out. With `placement` (the
  * row's state and the host's clock) it adds `inboxBucket` and `inboxSortAt`,
@@ -1407,10 +1406,11 @@ export class AidenRemoteChatService {
        */
       deviceSupportsQuestionPrompts?: (deviceId: string) => Promise<boolean>;
       /**
-       * Whether a workspace's folder was moved or deleted, so a paired device
-       * hears why before its message is stored. Absent: never refused here.
+       * Why a workspace's turns are refused when its folder (or its managed
+       * worktree's checkout) was moved or deleted, so a paired device hears
+       * why before its message is stored. Undefined, or absent: not refused.
        */
-      workspaceFolderMissing?: (workspaceId: string) => Promise<boolean>;
+      workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
@@ -1466,7 +1466,7 @@ export class AidenRemoteChatService {
       /** Enables `POST /chats/{chatId}/triage` (`chat-triage-v1`) and the summaries' triage fields. */
       triage?: AidenRemoteChatTriage;
       /**
-       * Revision 48: a chat's live-run times, epoch milliseconds, for the
+       * Revision 50: a chat's live-run times, epoch milliseconds, for the
        * summaries' `attentionSince` and `runStartedAt`. Undefined without a live run.
        */
       runTimes?: (chatId: string) => AidenRemoteChatRunTimes | undefined;
@@ -2607,18 +2607,14 @@ export class AidenRemoteChatService {
             // this check is enforced on the generation: it checks again once
             // registered, and the pause stops the chat's running work.
             await this.refuseIfBotPaused(authoritative);
-            if (
-              workspaceId &&
-              !authoritative.botId &&
-              (await this.options.workspaceFolderMissing?.(workspaceId)) === true
-            ) {
+            const folderRefusal =
+              workspaceId && !authoritative.botId
+                ? await this.options.workspaceFolderRefusal?.(workspaceId)
+                : undefined;
+            if (folderRefusal) {
               // Nothing ran, so the same send runs once the folder is back.
               throw new AidenOperationNotExecutedError(
-                new AidenRemoteServiceError(
-                  "workspace_unavailable",
-                  WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL,
-                  409,
-                ),
+                new AidenRemoteServiceError("workspace_unavailable", folderRefusal, 409),
               );
             }
             taken = parsed.attachmentIds === undefined

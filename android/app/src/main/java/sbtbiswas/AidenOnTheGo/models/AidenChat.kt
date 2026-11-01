@@ -1028,7 +1028,7 @@ data class AidenChatSummary(
      */
     val lastRunFailed: Boolean = false,
     /**
-     * Revision 48: the host's Inbox bucket, kept as a string so a newer
+     * Revision 50: the host's Inbox bucket, kept as a string so a newer
      * host's bucket falls back to local placement. Read it through
      * [inboxBucket], which keeps it only together with [inboxSortAtWire].
      */
@@ -1038,11 +1038,11 @@ data class AidenChatSummary(
     @SerialName("inboxSortAt")
     @Serializable(with = AidenTolerantInstantSerializer::class)
     val inboxSortAtWire: Instant? = null,
-    /** Revision 48 Inbox times; each is dropped on its own when malformed. */
+    /** Revision 50 Inbox times; each is dropped on its own when malformed. */
     @Serializable(with = AidenTolerantInstantSerializer::class) val lastAssistantAt: Instant? = null,
     @Serializable(with = AidenTolerantInstantSerializer::class) val attentionSince: Instant? = null,
     @Serializable(with = AidenTolerantInstantSerializer::class) val runStartedAt: Instant? = null,
-    /** Revision 48 triage, as `POST /chats/{chatId}/triage` answers it. */
+    /** Revision 50 triage, as `POST /chats/{chatId}/triage` answers it. */
     @Serializable(with = AidenTolerantInstantSerializer::class) val pinnedAt: Instant? = null,
     @Serializable(with = AidenTolerantInstantSerializer::class) val doneAt: Instant? = null,
     @Serializable(with = AidenTolerantInstantSerializer::class) val snoozedUntil: Instant? = null,

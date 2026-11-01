@@ -59,7 +59,7 @@ export interface PeerFeedChatState {
   attentionSince?: number;
   runStartedAt?: number;
   lastAssistantAt?: number;
-  /** Revision 48: the triage entry the host reports. */
+  /** Revision 50: the triage entry the host reports. */
   triage?: ChatTriageEntry;
 }
 
@@ -100,7 +100,7 @@ export function peerFeedChatState(
 }
 
 /**
- * A paired host's Bot row (revision 48). A Bot that needs the person outranks
+ * A paired host's Bot row (revision 50). A Bot that needs the person outranks
  * one whose last run failed; older hosts send neither field.
  */
 export function peerFeedBotAttention(row: PeerFeedRow): { needsYou: boolean; failed: boolean } {

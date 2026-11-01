@@ -428,7 +428,7 @@ function GeneratedTitleReveal({ previousTitle, title }: { previousTitle: string;
   );
 }
 
-/** A paired host's row for triage, with the entry its summary reports (revision 48). */
+/** A paired host's row for triage, with the entry its summary reports (revision 50). */
 function remoteTriageRow(chat: RemoteSidebarChat): InboxTriageRow {
   return { key: chat.key, hostId: chat.hostId, chatId: chat.chatId, reported: chat.triage ?? null };
 }
@@ -653,7 +653,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         : { listed: [], unlisted: [] },
     [botPreferences, botRows.rows, inboxBotsShown, openBotId],
   );
-  // Paired hosts' Bots join while their host says they need the person or failed (revision 48).
+  // Paired hosts' Bots join while their host says they need the person or failed (revision 50).
   const openRemoteBotKey = hostBotChatRouteKey(pathname);
   const { open: openHostBot, opening: openingHostBot } = useRemoteBots();
   const remoteBotInbox = React.useMemo(

@@ -365,7 +365,7 @@ test("the open Bot stays listed while it is open, never as unread, and its key c
   assert.notEqual(botInboxKey("b1"), projectOrderKey("local", "b1"));
 });
 
-test("a revision-48 host's own triage and run times place its rows when nothing here overrides them", () => {
+test("a revision-50 host's own triage and run times place its rows when nothing here overrides them", () => {
   const rows: RemoteSidebarRows[] = [{
     projects: [],
     chats: [

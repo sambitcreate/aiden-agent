@@ -412,7 +412,7 @@ test("a chat row carries the host's revision for a rename, and an older host's r
   assert.equal("revision" in byId.get("old")!, false);
 });
 
-test("a revision-48 row carries its run times, triage and the waiting ask; an older host's row carries none", () => {
+test("a revision-50 row carries its run times, triage and the waiting ask; an older host's row carries none", () => {
   const rows = remoteSidebarRows(
     host("studio", "Studio"),
     snapshot("studio", {

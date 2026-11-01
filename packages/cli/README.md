@@ -53,14 +53,16 @@ When `aiden serve` runs in the foreground in an interactive terminal, it prints 
 
 | Command | What it does |
 | --- | --- |
-| `aiden serve` | Run in the foreground; Ctrl-C stops it after active work settles |
+| `aiden serve` | Run in the foreground; Ctrl-C, SIGTERM or a closed terminal (SIGHUP) stops it after active work settles |
 | `aiden serve --daemon` | Run in the background, logging to `<agentDir>/serve.log` |
 | `aiden serve status` | Report the running server's PID and control socket |
-| `aiden serve stop` | Stop the running server |
+| `aiden serve stop` | Stop the running server; one still running 15 seconds later is force-killed |
 | `aiden remote pair lan\|tailscale` | Open a new ~5-minute pairing window and print its QR and manual code |
 | `aiden remote pair-status`, `remote pair-cancel <session-id>` | Inspect or cancel the pairing window |
 | `aiden remote devices`, `remote revoke <id>` | List or revoke paired devices |
 | `aiden remote roots`, `remote approve-root <path>` | Folders that paired devices may open |
+
+**Stopping.** Once shutdown starts, the server takes no new connections, requests or chat turns, cancels running ones and drains. `aiden serve stop` force-kills a server still running 15 seconds after SIGTERM, after checking the PID is still that server: a `--daemon` server together with its process group (its Remote advertiser), a foreground `aiden serve` on its own so the rest of its shell job (`aiden serve | tee`) survives. Either way, its stdio MCP servers (each in a process group of its own, recorded in the lease directory) are killed too, but only groups that still contain a process the server started. A foreground server logs a stray unhandled rejection instead of exiting. Aiden commands exit 0 quietly when their reader closes early (`aiden schedule list | head -1`).
 
 `remote` and `bots` commands talk to the running server over its control socket and fail if it is not running. `schedule` and `workspace` commands also work without the server, through a one-shot lease. `telegram status` works anytime; `telegram connect|configure|disable|disconnect` take the server's lease, so stop `aiden serve` before changing Telegram configuration.
 
@@ -107,6 +109,7 @@ Phones and Macs paired with the server see its workspaces, chats, Bots, schedule
 - **Forks.** Paired phones fork server chats with the Remote `chat-fork-v1` feature; the fork's journal is seeded from the copied visible messages, so tool results before the cut are not carried. The server does not offer Fork with summary (`chat-fork-summary-v1`).
 - **Paired desktops.** A Mac or Linux desktop paired to the server lists its chats in the sidebar and the Inbox. The server serves the host feed (`GET /host/events`), live-run observation and run control (Stop and approvals), shared read markers (`POST /chats/{id}/read`), and the Inbox's Pin, Done and Snooze (`POST /chats/{id}/triage`), with the same `inbox-signals-v1` row times and Inbox bucket as the desktop. Read markers and triage are kept in `chat-read-markers.json` and `chat-triage.json` in the server's data directory, and snoozes end on a timer that runs with `aiden serve`. A desktop paired before this server version doesn't need to pair again: it picks up the host grants on its next connection after Aiden starts (relaunch Aiden if it was already connected). Approvals from a paired device apply once; the server keeps no "always allow" approvals and refuses one. The server's runs don't take questions or mid-run input, so a paired desktop shows Stop and approvals on them but no Steer. The server's Bot rows carry no Needs you, Failed or last-reply signals, so its Bots appear in a desktop's Inbox only while they are open.
 - **Phones and other runs.** A paired phone can watch, stop and answer approvals on a run another device started (`phone-run-control-v1`), shares read markers and unread state with paired desktops, and marks chats Done or snoozes them from its Inbox (`chat-triage-v1`, under the `chat:write` it was paired with). It doesn't read the host feed, and it offers no Steer on a run it didn't start.
+- **Project transfer.** The server does not advertise the desktop's `workspace-clone-v1` project transfer (Add this project to another machine); its Remote API keeps the existing workspace creation modes.
 - **Scheduled-run notifications.** Run completions show up through `aiden schedule runs <id>`, `aiden schedule notifications` and, for tasks with `notify`, local notifications on paired phones via the Remote `scheduled-tasks/notifications` feed.
 
 ## Bots

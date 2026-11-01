@@ -36,6 +36,7 @@ export type PeerWriteOperation =
   | "respondApproval"
   | "selectFolder"
   | "createWorkspace"
+  | "cloneWorkspace"
   | "markRead"
   /** Inbox triage (`chat-triage-v1`): Pin, Done and Snooze. */
   | "setTriage"

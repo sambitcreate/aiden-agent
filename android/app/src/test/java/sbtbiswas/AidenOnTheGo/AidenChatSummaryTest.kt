@@ -215,7 +215,7 @@ class AidenChatSummaryTest {
 
     @Test
     fun inboxSignalsDecodeAndAMalformedOneLeavesTheRestOfTheRow() = runBlocking {
-        // Revision 48 summaries carry the host's Inbox placement, run times and triage.
+        // Revision 50 summaries carry the host's Inbox placement, run times and triage.
         val waiting = "\"rowState\":\"needs_approval\","
         val signals = waiting +
             "\"attentionSince\":\"2026-09-01T12:00:40Z\",\"runStartedAt\":\"2026-09-01T12:00:30Z\"," +

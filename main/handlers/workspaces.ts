@@ -1,5 +1,6 @@
 // Workspace CRUD + folder helpers (git status, reveal in Finder).
 
+import * as fs from "node:fs/promises";
 import type { IpcMainInvokeEvent, OpenDialogOptions } from "electron";
 import { BrowserWindow, dialog, ipcMain, shell } from "../platform.js";
 import { listExternalEditors, openFolderInExternalEditor } from "../services/external-editors.js";
@@ -13,6 +14,8 @@ import {
   gitCreateBranch,
   gitDiff,
   gitInfo,
+  gitManagedWorktreeBranchHead,
+  gitManagedWorktreeDeletionPending,
   gitPush,
   gitPushCapability,
   gitReview,
@@ -23,9 +26,14 @@ import {
   type GitPushInput,
 } from "../services/git.js";
 import { githubCurrentPullRequest } from "../services/github/github-runtime-main.js";
-import { GitRepoWatcher } from "../services/git-repo-watcher.js";
+import { workspaceGitWatcher as gitRepoWatcher } from "../services/workspace-git-watcher-main.js";
 import { workspaceApplicationService } from "../services/workspace-application-service-main.js";
-import { displayWorkspaceFolder, workspaceFolderPresence } from "../services/workspace-folder-presence.js";
+import {
+  checkedWorkspaceFolder,
+  displayWorkspaceFolder,
+  missingWorktreeOptions,
+  workspaceFolderPresence,
+} from "../services/workspace-folder-presence.js";
 import {
   workspaceFolderCheckApplies,
   type WorkspaceFolderPresenceResult,
@@ -147,11 +155,10 @@ async function withOptionalWorkspaceOperation<T>(
   );
 }
 
-// Repository changes (commit, checkout, stage, fetch, push) are pushed to the
-// renderer so its Git queries can poll slowly as a safety net only.
-const gitRepoWatcher = new GitRepoWatcher({
-  notify: (workspaceId, generation) => ipcMain.broadcast("git:changed", { workspaceId, generation }),
-});
+/** Closes every Git metadata watcher; called once at quit. */
+export function disposeWorkspaceGitWatchers(): void {
+  gitRepoWatcher.dispose();
+}
 
 function observeGitRepository(resolved: WorkspaceEnvironmentDirectory | undefined): void {
   if (!resolved) return;
@@ -434,10 +441,41 @@ export function registerWorkspaceHandlers(): void {
     if (!workspace || !workspaceFolderCheckApplies(workspace)) {
       return { presence: "none" } satisfies WorkspaceFolderPresenceResult;
     }
+    const folder = checkedWorkspaceFolder(workspace)!;
+    const presence = await workspaceFolderPresence(folder);
+    const worktree =
+      presence === "missing"
+        ? await missingWorktreeOptions(workspace, await workspaceApplicationService.list(), {
+            branchHead: gitManagedWorktreeBranchHead,
+            worktrees: (repositoryPath) => gitWorktrees(repositoryPath),
+            deletionPending: (managed) =>
+              managed.worktreeGitDir && managed.ownershipToken
+                ? gitManagedWorktreeDeletionPending(managed.worktreePath, managed.worktreeGitDir, managed.ownershipToken)
+                : Promise.resolve(false),
+            folderExists: async (folder) => {
+              try {
+                return (await fs.lstat(folder)).isDirectory();
+              } catch {
+                return false;
+              }
+            },
+          })
+        : undefined;
     return {
-      presence: await workspaceFolderPresence(workspace.folderPath!),
-      folder: displayWorkspaceFolder(workspace.folderPath!),
+      presence,
+      folder: displayWorkspaceFolder(folder),
+      ...(worktree ? { worktree } : {}),
     } satisfies WorkspaceFolderPresenceResult;
+  });
+
+  // Put back a managed worktree whose folder was deleted outside Aiden.
+  ipcMain.handle("workspaces:restoreDeletedWorktree", async (event, workspaceId: unknown) => {
+    const id = asString(workspaceId, "workspaceId");
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Workspace access requires the active renderer document."),
+    );
+    return workspaceWorktreeApplicationService.restoreDeleted(owner, id);
   });
 
   // Reveal the workspace folder in Finder. shell.openPath opens a directory itself.

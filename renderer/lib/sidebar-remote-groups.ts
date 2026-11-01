@@ -67,18 +67,18 @@ export interface RemoteSidebarChat extends SidebarChatSummary {
   stale: boolean;
   /** The host's chat revision, which a rename must name. Absent from older hosts. */
   revision?: string;
-  /** Revision 48: when the live run's oldest waiting prompt was raised. */
+  /** Revision 50: when the live run's oldest waiting prompt was raised. */
   attentionSince?: number;
-  /** Revision 48: when the live run started. */
+  /** Revision 50: when the live run started. */
   runStartedAt?: number;
-  /** Revision 48: when the chat's newest assistant output arrived. */
+  /** Revision 50: when the chat's newest assistant output arrived. */
   lastAssistantAt?: number;
   /**
-   * Revision 48: the triage entry the host reports. Absent when the chat is
+   * Revision 50: the triage entry the host reports. Absent when the chat is
    * untriaged or the host is older (`inbox-signals-v1` tells the two apart).
    */
   triage?: ChatTriageEntry;
-  /** Revision 48: what a waiting run asks, one line, from the host feed's `run.state`. */
+  /** Revision 50: what a waiting run asks, one line, from the host feed's `run.state`. */
   attentionSummary?: string;
 }
 
