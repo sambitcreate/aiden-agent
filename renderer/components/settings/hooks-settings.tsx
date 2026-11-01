@@ -868,7 +868,13 @@ export function HooksSettings() {
 
   React.useEffect(
     () =>
-      hooksApi.onChanged(() => {
+      hooksApi.onChanged((change) => {
+        // A run adds only to that hook's run log; re-reading the overview would
+        // re-read every workspace's hooks file and re-hash its scripts.
+        if (change.reason === "run" && change.hookId) {
+          void queryClient.invalidateQueries({ queryKey: runLogKey(change.hookId) });
+          return;
+        }
         void queryClient.invalidateQueries({ queryKey: ["hooks"] });
       }),
     [queryClient],

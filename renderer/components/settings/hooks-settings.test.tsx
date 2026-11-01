@@ -308,6 +308,18 @@ test("the page re-reads when main says hooks changed", async () => {
   await screen.findByText("~/.aiden/hooks/guard.sh");
 });
 
+test("a hook run re-reads only that hook's run log, not the whole page", async () => {
+  const { callsTo } = mount(overview({ hooks: [HOOKS[0]!] }));
+  await screen.findByText("~/.aiden/hooks/guard.sh");
+  const lists = callsTo("hooks:list").length;
+  emitBotTestNotification("hooks:changed", { reason: "run", hookId: HOOKS[0]!.id });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(callsTo("hooks:list").length, lists, "a run leaves the overview alone");
+  // A hook Aiden turned off does change the page.
+  emitBotTestNotification("hooks:changed", { reason: "auto-disabled", hookId: HOOKS[0]!.id });
+  await waitFor(() => assert.equal(callsTo("hooks:list").length, lists + 1));
+});
+
 const PROPOSAL_BASE: Omit<HookProposal, "id" | "action" | "hookId" | "definition" | "summary"> = {
   origin: "agent",
   digest: digest("e"),
