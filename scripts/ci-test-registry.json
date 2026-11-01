@@ -319,6 +319,7 @@
         "main/native-ipc-core.test.ts",
         "renderer/shared/images/ports.test.ts",
         "scripts/check-ci-policy.test.mjs",
+        "scripts/pullfrog-locked-runtime.test.mjs",
         "scripts/ci-changes.test.mjs",
         "scripts/ci-e2e-shards.test.mjs",
         "scripts/ci-required.test.mjs",
