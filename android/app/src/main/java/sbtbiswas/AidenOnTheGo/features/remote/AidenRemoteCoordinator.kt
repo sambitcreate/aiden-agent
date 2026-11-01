@@ -602,8 +602,8 @@ class AidenRemoteCoordinator(
                     server = imagesServer,
                     request = ::aidenRequestBotIssues
                 )
-                // Revision 49: `chat:jobs` goes alone too, last.
-                val negotiatedServer = negotiateSoloCapability(
+                // Revision 49: `chat:jobs` goes alone too.
+                val jobsServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
@@ -615,7 +615,7 @@ class AidenRemoteCoordinator(
                     generation = generation,
                     installation = installation,
                     client = newClient,
-                    server = issuesServer,
+                    server = jobsServer,
                     request = ::aidenRequestChatNewWorktree
                 )
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
