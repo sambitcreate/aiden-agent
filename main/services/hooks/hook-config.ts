@@ -159,6 +159,19 @@ export function hookDigest(input: { event: string; matcher: string; handler: Hoo
 const RUNNERS = new Set(["npx", "bunx", "node", "bun", "deno", "bash", "sh", "zsh", "python", "python3", "uv", "uvx", "ruby", "perl", "pnpm", "npm", "yarn", "exec", "env"]);
 
 /** A short display name from the command: `~/.aiden/hooks/guard-shell.sh` → `guard-shell`. */
+/**
+ * Control and text-direction characters (tabs and newlines aside), which can
+ * make a command or name read differently from what runs: the same set the
+ * approval cards refuse.
+ */
+// eslint-disable-next-line no-control-regex -- matching these characters is the point
+const UNSAFE_DISPLAY_CHARACTER = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069]/u;
+
+function displayableName(name: string | undefined): string | undefined {
+  const cleaned = name?.replace(new RegExp(UNSAFE_DISPLAY_CHARACTER.source, "gu"), "").trim().slice(0, 60);
+  return cleaned ? cleaned : undefined;
+}
+
 export function defaultHookName(command: string): string {
   const tokens = command.trim().split(/\s+/u).map((token) => token.replace(/^["']|["']$/gu, ""));
   let token = tokens[0] ?? "";
@@ -203,6 +216,9 @@ export function validateHookHandler(raw: unknown, options: { maxTimeoutSeconds?:
   if (!commandText.trim()) return fail("The hook has no command.");
   if (commandText.length > MAX_HOOK_COMMAND_LENGTH) return fail(`The command is longer than ${MAX_HOOK_COMMAND_LENGTH} characters.`);
   if (commandText.includes("\0")) return fail("The command contains a NUL character.");
+  if (UNSAFE_DISPLAY_CHARACTER.test(commandText)) {
+    return fail("The command contains a control or text-direction character, which could hide what it runs.");
+  }
   const warnings: string[] = [];
   let timeout: number | undefined;
   if (record.timeout !== undefined) {
@@ -363,7 +379,7 @@ export function hookDefinitionFor(input: {
   const matcher = input.matcher ?? "";
   return {
     id: input.id,
-    name: input.name?.trim() ? input.name.trim().slice(0, 60) : defaultHookName(input.handler.command),
+    name: displayableName(input.name) ?? defaultHookName(input.handler.command),
     event: input.event,
     matcher,
     handler: input.handler,

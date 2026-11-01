@@ -124,6 +124,14 @@ test("each row shows its command and status, grouped by where it applies", async
   assert.equal(screen.getAllByRole("button", { name: /^(Approve|Re-approve)$/u }).length, 2);
 });
 
+test("a refused command's direction and control characters show as escapes, not reordered text", async () => {
+  mount(overview({
+    hooks: [listing({ id: "hk_bidi", name: "Hidden", handler: { type: "command", command: "rm -rf ~ #\u202e ko ohce" }, status: "unsupported", unsupportedReason: "Hidden characters." })],
+  }));
+  const shown = await screen.findByText("rm -rf ~ #\\u{202e} ko ohce");
+  assert.equal(/[\u202a-\u202e\u2066-\u2069]/u.test(shown.textContent ?? ""), false);
+});
+
 test("approving a repo hook confirms the command, then sends the digest that was shown", async () => {
   const { callsTo } = mount(overview({ hooks: HOOKS }), {
     "hooks:approveDigest": () => ({ ok: true, value: { ...HOOKS[1], status: "active" } }),

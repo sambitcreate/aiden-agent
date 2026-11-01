@@ -658,6 +658,8 @@ export interface ChatMessage {
   visualSnapshots?: import("../shared/visual-snapshots").VisualSnapshotRefV1[];
   skill?: SkillProvenanceV1;
   notice?: import("../shared/agent-notices").AgentNoticeV1;
+  /** Set when a UserPromptSubmit hook refused this message; it never reached a model. */
+  hookBlocked?: { reason: string };
   timeline?: GenerationTimeline;
   turnStats?: AssistantTurnStatsV1;
   subagents?: SubagentMessageReferenceV1;

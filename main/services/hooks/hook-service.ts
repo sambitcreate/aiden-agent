@@ -319,6 +319,22 @@ function fixtureMatches(definition: HookDefinition, payload: HookPayload): boole
   return true;
 }
 
+/** How many repo hooks' scripts are read at once. */
+const REPO_SCAN_CONCURRENCY = 4;
+
+async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 function uncheckableScriptsReason(overLimit: string): string {
   return `Aiden can't check everything this command runs (${overLimit}), so it won't run it; move the commands into one script.`;
 }
@@ -472,7 +488,17 @@ export function createHookService(deps: HookServiceDeps): HookService {
     return listing.status === "unsupported" ? Promise.resolve(listing) : withScripts(listing, cwd);
   };
 
-  const readRepo = async (workspaceRoot: string, cwd?: string): Promise<WorkspaceHooksFile> => {
+  /**
+   * The repo file with its hooks' scripts folded in. `scan` limits which hooks
+   * are read (the rest come back unscanned), and at most
+   * REPO_SCAN_CONCURRENCY are read at once, so a large cloned hooks file
+   * can't start hundreds of scans together.
+   */
+  const readRepo = async (
+    workspaceRoot: string,
+    cwd?: string,
+    scan: (hook: HookListing) => boolean = () => true,
+  ): Promise<WorkspaceHooksFile> => {
     let file: WorkspaceHooksFile;
     try {
       file = await readWorkspaceFile(workspaceRoot);
@@ -480,7 +506,9 @@ export function createHookService(deps: HookServiceDeps): HookService {
       file = { present: true, unreadable: true, hooks: [], problems: [`The hooks file could not be read: ${(error as Error).message}`], warnings: [] };
     }
     for (const hook of file.hooks) repoHookRoots.set(hook.id, workspaceRoot);
-    const hooks = await Promise.all(file.hooks.map((hook) => (hook.status === "unsupported" || hook.event === "unknown" ? hook : withScripts(hook, cwd))));
+    const hooks = await mapWithConcurrency(file.hooks, REPO_SCAN_CONCURRENCY, (hook) =>
+      hook.status === "unsupported" || hook.event === "unknown" || !scan(hook) ? Promise.resolve(hook) : withScripts(hook, cwd),
+    );
     return { ...file, hooks };
   };
 
@@ -513,7 +541,9 @@ export function createHookService(deps: HookServiceDeps): HookService {
           // that can no longer be read may still hold an approved guard, so it
           // fails like an unreadable store rather than reading as no hooks.
           if (repoHasApprovals(scope)) {
-            const file = await readRepo(workspaceRootOf(scope) as string, cwd);
+            // Only this event's approved hooks can run, so only their scripts are read.
+            const approved = new Set(trust.approvalsFor(scope).filter((record) => record.event === event).map((record) => record.hookId));
+            const file = await readRepo(workspaceRootOf(scope) as string, cwd, (hook) => hook.event === event && approved.has(hook.id));
             if (file.unreadable) throw new Error(`.aiden/hooks.json could not be loaded: ${file.problems.join(" ")}`);
             listings.push(...file.hooks.map(statusOf));
           }
@@ -587,7 +617,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
     if (entry) return { listing: statusOf(await storedListing(entry)), entry };
     const root = repoRootFor(hookId);
     if (!root) return undefined;
-    const listing = (await readRepo(root)).hooks.find((hook) => hook.id === hookId);
+    const listing = (await readRepo(root, undefined, (hook) => hook.id === hookId)).hooks.find((hook) => hook.id === hookId);
     return listing ? { listing: statusOf(listing) } : undefined;
   };
 
