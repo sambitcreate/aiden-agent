@@ -135,6 +135,7 @@ import { DESKTOP_ARTIFACT_SKILLS } from "./workspace-artifacts/skill.js";
 import { DESKTOP_HOOK_SKILLS } from "./hooks-skill.js";
 import { HOOKS_TOOL_NAME, createHooksTool, offersHooksTool, runsWorkspaceChatHooks } from "./hooks-tool.js";
 import { getHookService } from "./hooks/hook-service-main.js";
+import { markPromptHookBlocked } from "./hook-blocked-prompt.js";
 import {
   assistantTurnTextSeparator,
   buildAgentRuntimeOptions,
@@ -196,6 +197,7 @@ import {
   markWorkspaceChatCompacted,
   preCompactSummaryInstructions,
   runPromptIntakeHooks,
+  screenRunInputWithHooks,
 } from "./workspace-chat-hooks.js";
 import { chatSurfaceHooks } from "./agent-surface-hooks.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
@@ -389,6 +391,7 @@ import { ChatTurnAdmission } from "./chat-turn-admission.js";
 import type { ChatTurnLease } from "./chat-turn-admission.js";
 import {
   createChatRunInputAdmission,
+  type ChatRunInputHooks,
   type ChatRunInputAdmissionRequest,
   type ChatRunInputAdmissionResult,
 } from "./chat-run-input-admission.js";
@@ -631,6 +634,8 @@ interface ActiveGeneration {
   inputClosed: boolean;
   /** A steered send stops this run's still-running subagents. */
   stopSubagentsForGuidance?: () => void;
+  /** UserPromptSubmit for mid-flight input, in a chat that runs hooks. */
+  inputHooks?: ChatRunInputHooks;
 }
 
 const active = new Map<string, ActiveGeneration>();
@@ -2789,6 +2794,8 @@ export const llmClient = {
     const skillSnapshot =
       hooksTool || !setupSkillSnapshot ? setupSkillSnapshot : withoutSkills(setupSkillSnapshot, DESKTOP_HOOK_SKILLS);
     let hookTurnContext: string | undefined;
+    // Mid-flight input's UserPromptSubmit context, by the queued message's timestamp.
+    const hookInputContexts = new Map<number, string>();
     // Each response's price counts toward the chat's limit (a Bot chat's, its
     // month). A sign-in or a model on this Mac counts as $0.
     const spendingOwner: SpendingOwner = authoritativeBot
@@ -3269,6 +3276,7 @@ export const llmClient = {
                         ? currentPromptMessage.timestamp
                         : undefined,
                     turnContext: () => hookTurnContext,
+                    inputContext: (timestamp) => hookInputContexts.get(timestamp),
                   }),
                 ]
               : []),
@@ -4966,6 +4974,42 @@ export const llmClient = {
       computerUse,
       formFill,
       inputClosed: designWiring?.inputClosed ?? false,
+      ...(chatHooks
+        ? {
+            inputHooks: {
+              screen: async ({ text, messageId }) => {
+                try {
+                  const screening = await screenRunInputWithHooks({
+                    dispatch: chatHooks.dispatch,
+                    text,
+                    idempotencyKey: `UserPromptSubmit:${params.chatId}:${streamId}:${messageId}`,
+                    signal: initialization.controller.signal,
+                  });
+                  if ("blocked" in screening) {
+                    sendGeneration(streamId, "chat:status", {
+                      streamId,
+                      phase: "hook_messages",
+                      messages: [screening.blocked],
+                    });
+                  }
+                  return screening;
+                } catch (error) {
+                  // The same as a failed dispatch at the start of a turn: no outcome.
+                  logger.error("hooks", "UserPromptSubmit for run input failed.", error);
+                  return {};
+                }
+              },
+              markBlocked: (messageId, reason) =>
+                markPromptHookBlocked(chatStore, params.chatId, messageId, reason, (error) =>
+                  logger.error("hooks", "Could not mark a hook-blocked run input.", error),
+                ),
+              attachContext: (timestamp, context) => {
+                const earlier = hookInputContexts.get(timestamp);
+                hookInputContexts.set(timestamp, earlier ? `${earlier}\n\n${context}` : context);
+              },
+            },
+          }
+        : {}),
       ...(subagentSupervisor
         ? {
             stopSubagentsForGuidance: () => {

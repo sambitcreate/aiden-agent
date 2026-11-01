@@ -133,6 +133,8 @@ export interface WorkspaceChatHooks {
     /** The current prompt's timestamp; without one the last user message carries the context. */
     promptTimestamp(): number | undefined;
     turnContext(): string | undefined;
+    /** UserPromptSubmit context for the mid-flight input with this timestamp, on that message only. */
+    inputContext?(timestamp: number): string | undefined;
   }): PiAgentRuntimeExtension;
 }
 
@@ -336,10 +338,18 @@ export function createWorkspaceChatHooks(
         continueWith: `[Aiden hook] ${capitalized(hooksLabel(outcome, "Stop hook"))} asked you to keep going before you finish:\n${instruction}`,
       };
     },
-    extension({ promptTimestamp, turnContext }) {
+    extension({ promptTimestamp, turnContext, inputContext }) {
       return {
         id: "aiden.hooks",
-        transformContext: async (messages) => {
+        transformContext: async (input) => {
+          let messages = input;
+          if (inputContext) {
+            messages = messages.map((message) => {
+              if (message.role !== "user") return message;
+              const own = inputContext(message.timestamp);
+              return own ? appendText(message, own) : message;
+            });
+          }
           const context = turnContext();
           if (!context) return messages;
           let index = -1;
@@ -500,6 +510,28 @@ export async function runPromptIntakeHooks(input: PromptIntakeInput): Promise<st
     );
   }
   return context;
+}
+
+/**
+ * UserPromptSubmit for input the person sends while a run is going (a steer
+ * or a queued follow-up). A refusal (or `continue: false`) says why, so the
+ * input is saved marked and never queued; otherwise any hook context is
+ * returned for that input alone.
+ */
+export async function screenRunInputWithHooks(input: {
+  dispatch: WorkspaceChatHooks["dispatch"];
+  text: string;
+  idempotencyKey: string;
+  signal?: AbortSignal;
+}): Promise<{ blocked: string } | { context?: string }> {
+  const outcome = await input.dispatch(
+    "UserPromptSubmit",
+    { prompt: input.text },
+    { idempotencyKey: input.idempotencyKey, ...(input.signal ? { signal: input.signal } : {}) },
+  );
+  if (outcome?.blockPrompt || outcome?.stopTurn) return { blocked: promptBlockedMessage(outcome) };
+  const context = outcome?.additionalContext?.trim();
+  return context ? { context: `[Aiden hook] Context from the person's hooks for this message:\n\n${context}` } : {};
 }
 
 /**

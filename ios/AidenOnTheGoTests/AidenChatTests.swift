@@ -12472,6 +12472,12 @@ final class AidenAppearanceTests: XCTestCase {
             ),
             "Saved to the chat — the run ended before it could use it"
         )
+        XCTAssertEqual(
+            AidenRunInputPresentation.receipt(
+                for: runInputResult(status: .rejected, reason: .invalid, committed: true)
+            ),
+            "Saved to the chat — it wasn't sent to the run"
+        )
         XCTAssertNil(AidenRunInputPresentation.receipt(
             for: runInputResult(status: .rejected, reason: .capacity, committed: false)
         ))

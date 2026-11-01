@@ -20,7 +20,7 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { convertToLlm } from "./pi-legacy-harness.js";
 import { createChatStore } from "./chat-store-core.js";
-import { isHookBlockedPrompt } from "./hook-blocked-prompt.js";
+import { isHookBlockedPrompt, markPromptHookBlocked } from "./hook-blocked-prompt.js";
 import { PiCompactionSessionStore, syncChatMessagesToPiSession } from "./pi-compaction-session-store.js";
 import { PiAgentRuntimeHarness } from "./pi-agent-runtime-harness.js";
 import {
@@ -35,8 +35,10 @@ import {
   promptBlockedMessage,
   resetWorkspaceChatSessionsForTests,
   runPromptIntakeHooks,
+  screenRunInputWithHooks,
   workspaceChatSessionStartSource,
 } from "./workspace-chat-hooks.js";
+import { createChatRunInputAdmission, type ChatRunInputGenerationRef } from "./chat-run-input-admission.js";
 
 interface Dispatched {
   event: HookEvent;
@@ -600,6 +602,97 @@ test("a prompt stays out of the model's context when writing its blocked mark fa
   const session = await sessions.openChat("fail-closed");
   await syncChatMessagesToPiSession(session, [stored], fauxModel(), false);
   assert.doesNotMatch(JSON.stringify(await session.buildContext()), /sk-live-FAILCLOSED/u);
+});
+
+test("a steer or follow-up sent mid-run is screened by UserPromptSubmit: refused input never reaches the model, and context rides that input only", async (t) => {
+  resetWorkspaceChatSessionsForTests();
+  const chatsRoot = await tempDir(t, "aiden-hook-run-input-chats-");
+  const store = createChatStore(async () => chatsRoot);
+  const chat = await store.create({ workspaceId: "workspace" });
+  await store.appendMessage(chat.id, { role: "user", content: "Start the migration" });
+  const { dispatcher, calls } = fakeDispatcher({
+    UserPromptSubmit: (payload) =>
+      String(payload.prompt).includes("sk-live")
+        ? { blockPrompt: true, reason: "secret in prompt", ranHooks: ["scan"] }
+        : { additionalContext: fenced("ticket: OPS-12"), ranHooks: ["scan"] },
+  });
+  const hooks = createWorkspaceChatHooks({ chatId: chat.id }, dispatcher);
+  const contexts = new Map<number, string>();
+  const queued: AgentMessage[] = [];
+  let clock = 1_000;
+  let ids = 0;
+  const generation: ChatRunInputGenerationRef = {
+    chatId: chat.id,
+    owner: { documentId: "doc" },
+    cancelRequested: false,
+    inputHooks: {
+      screen: ({ text, messageId }) =>
+        screenRunInputWithHooks({ dispatch: hooks.dispatch, text, idempotencyKey: `UserPromptSubmit:${messageId}` }),
+      attachContext: (timestamp, context) => contexts.set(timestamp, context),
+      markBlocked: (messageId, reason) => markPromptHookBlocked(store, chat.id, messageId, reason, assert.ifError),
+    },
+    agent: {
+      queueAdmissionBlocked: () => undefined,
+      queueSteer: (message: AgentMessage) => (queued.push(message), { accepted: true, queue: "steer" }),
+      queueFollowUp: (message: AgentMessage) => (queued.push(message), { accepted: true, queue: "follow-up" }),
+    } as unknown as ChatRunInputGenerationRef["agent"],
+  };
+  const admission = createChatRunInputAdmission({
+    active: new Map([["stream", generation]]),
+    isChatDeleting: () => false,
+    appendMessage: (chatId, message, meta) => store.appendMessage(chatId, message, meta),
+    readChat: (chatId) => store.get(chatId),
+    now: () => (clock += 1),
+    newMessageId: () => `message_run_input_${(ids += 1)}`,
+  });
+
+  const refused = await admission.admit({ streamId: "stream", mode: "steer", text: "use key sk-live-STEERED" });
+  assert.deepEqual(refused, { admitted: false, reason: "invalid", committed: true, messageId: "message_run_input_1" });
+  const passed = await admission.admit({ streamId: "stream", mode: "queue", text: "then run the tests" });
+  assert.equal(passed.admitted, true);
+  assert.deepEqual(
+    calls.map((call) => call.payload.prompt),
+    ["use key sk-live-STEERED", "then run the tests"],
+    "each input is screened as the person's prompt",
+  );
+  // A notice is Aiden's own words, so it is never screened.
+  await admission.admit({
+    streamId: "stream",
+    mode: "queue",
+    text: "A background task finished.",
+    notice: { kind: "background_task" } as never,
+  });
+  assert.equal(calls.length, 2);
+
+  // The refused steer is kept, marked, and never queued.
+  const stored = (await store.get(chat.id))!.messages;
+  const blocked = stored.find((message) => message.content === "use key sk-live-STEERED")!;
+  assert.equal(blocked.hookBlocked?.reason, "Blocked by hook scan: secret in prompt");
+  assert.deepEqual(queued.map((message) => (message.role === "user" ? message.content : undefined)), [
+    "then run the tests",
+    "A background task finished.",
+  ]);
+  const model = fauxModel();
+  const piRoot = await tempDir(t, "aiden-hook-run-input-pi-");
+  const session = await new PiCompactionSessionStore({ root: async () => piRoot }).openChat(chat.id);
+  await syncChatMessagesToPiSession(session, stored, model, false);
+  assert.doesNotMatch(JSON.stringify(await session.buildContext()), /sk-live-STEERED/u);
+
+  // The follow-up's hook context reaches the model on that message, not on the run's prompt.
+  const extension = hooks.extension({
+    promptTimestamp: () => 1,
+    turnContext: () => undefined,
+    inputContext: (timestamp) => contexts.get(timestamp),
+  });
+  const prompt: AgentMessage = { role: "user", content: "Start the migration", timestamp: 1 };
+  const transformed = await extension.transformContext!([prompt, ...queued], undefined);
+  assert.deepEqual(transformed[0], prompt);
+  assert.deepEqual((transformed[1] as Extract<AgentMessage, { role: "user" }>).content, [
+    { type: "text", text: "then run the tests" },
+    { type: "text", text: `[Aiden hook] Context from the person's hooks for this message:\n\n${fenced("ticket: OPS-12")}` },
+  ]);
+  assert.deepEqual(transformed[2], queued[1]);
+  assert.equal(queued[0]!.role === "user" ? queued[0]!.content : undefined, "then run the tests", "the queued copy is untouched");
 });
 
 test("SessionStart continue: false ends the turn before the prompt is checked, and the next message starts the session again", async () => {

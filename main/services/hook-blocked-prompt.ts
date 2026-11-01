@@ -60,6 +60,14 @@ export interface PromptHookBlockStore {
  * message is retried once and then reported, and the prompt stays excluded
  * for as long as this process runs.
  */
+/**
+ * Keep a prompt out of every projection in this process, before it is even
+ * saved. Run input a hook refused is held this way, then saved and marked.
+ */
+export function holdHookBlockedPrompt(messageId: string): void {
+  blockedInThisProcess.add(messageId);
+}
+
 export async function markPromptHookBlocked(
   store: PromptHookBlockStore,
   chatId: string,
@@ -67,7 +75,7 @@ export async function markPromptHookBlocked(
   reason: string,
   onError: (error: unknown) => void,
 ): Promise<void> {
-  blockedInThisProcess.add(messageId);
+  holdHookBlockedPrompt(messageId);
   const write = async () => {
     if (!(await store.setPromptHookBlock(chatId, messageId, reason))) {
       throw new Error("The prompt was not found in its chat.");

@@ -114,7 +114,7 @@ echo '{"decision":"block","reason":"Run the test suite and report the result bef
 | --- | --- | --- | --- |
 | PreToolUse | Before a tool runs, after Computer Use and Form Fill access checks and before the approval decision. | Tool name | Deny, ask you first, or allow; change the tool's input; add context to the tool's result. |
 | PostToolUse | After a tool returns. | Tool name | Flag the result and add context to it. |
-| UserPromptSubmit | When you send a message, before any model call. | Ignored | Refuse the message; add context for this turn. |
+| UserPromptSubmit | When you send a message, before any model call, including guidance you steer into a running reply or queue behind it. | Ignored | Refuse the message; add context for this turn (for steered or queued guidance, for that message). |
 | SessionStart | On a chat's first turn in this run of Aiden. | `startup` (new chat), `resume` (first turn after a restart), `compact` (first turn after compaction) | Add context for this turn. |
 | SessionEnd | When a chat whose hooks ran in this run of Aiden is deleted. Not awaited. | Ignored | Nothing; observe only. |
 | Stop | When a reply finishes normally. Never after Stop, an error, a cut-off or a spending block. | Ignored | Keep the agent working, up to 8 times per message you send. |
@@ -186,6 +186,7 @@ When several hooks match, they run four at a time and the strictest answer wins:
 - An ask always shows an approval card, even under Full access or a remembered scope. The card adds the hook's reason and offers no "remember" option. An allow skips the card only where a remembered scope could already have skipped it.
 - SessionStart and UserPromptSubmit context follows your message for that turn only, introduced as "[Aiden hook] Context from the person's hooks for this turn". It is never saved as your words.
 - A Stop continuation reads "[Aiden hook] Stop hook name asked you to keep going before you finish: …". `stop_hook_active` is true on continued turns, so a hook can let the reply end.
+- Guidance you steer into a running reply, or queue as a follow-up, is checked by UserPromptSubmit before it's saved, from the desktop or a paired phone. Its context rides that message only, introduced as "for this message". A refused steer or follow-up is saved marked as blocked and never queued; you see the hook's reason. Aiden's own follow-up notices aren't checked.
 - A message a UserPromptSubmit hook refused stays in the chat so you can see what you typed, marked as blocked. It never reaches the model: not on that turn, later turns, compaction, forks, side questions or title generation. Sending it again after the hook lets it through clears the mark.
 - `systemMessage` text and Aiden's notices about a hook (a failure, a timeout) never reach the model. A desktop chat shows the messages that arrive together as one notice while the reply runs (the first message, up to three more, then a count of the rest), and `aiden serve` sends them as `chat:status` events with `phase: "hook_messages"`. A chat subagent's SubagentStop messages show in its chat while that reply runs. Anything with no reply to show it in (a deleted chat's SessionEnd, a SubagentStop after the reply ended, a Bot's hooks including its routines, subagents and PreCompact) goes to Aiden's log, or stderr on `aiden serve`. Phones and paired Macs don't show them yet.
 

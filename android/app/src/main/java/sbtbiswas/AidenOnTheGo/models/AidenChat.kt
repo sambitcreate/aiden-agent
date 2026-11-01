@@ -1624,8 +1624,10 @@ object AidenRunInputPresentation {
                     "Saved to the chat — the run was cancelled before it could use it"
                 AidenStreamInputRejectionReason.CAPACITY ->
                     "Saved to the chat — the run queue was full"
-                AidenStreamInputRejectionReason.RUN_NOT_ACTIVE,
-                AidenStreamInputRejectionReason.INVALID, null ->
+                // A hook refused it, so it's kept in the chat but never queued.
+                AidenStreamInputRejectionReason.INVALID ->
+                    "Saved to the chat — it wasn't sent to the run"
+                AidenStreamInputRejectionReason.RUN_NOT_ACTIVE, null ->
                     "Saved to the chat — the run ended before it could use it"
             }
         }
