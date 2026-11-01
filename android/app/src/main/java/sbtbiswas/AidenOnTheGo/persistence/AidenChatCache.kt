@@ -197,12 +197,26 @@ class AidenChatCache(
         return summaries
     }
 
+    /**
+     * Saves [summaries] as the instance's rows. [merge], when given, runs
+     * under the cache lock just before the write, so rows another writer
+     * changed while this page was in flight (an Inbox swipe) can be kept
+     * over it in the same write.
+     */
     @Synchronized
     fun saveSummaries(
         summaries: List<AidenChatSummary>,
         instanceId: String,
         unchangedPrefixCount: Int = 0,
-        writeToken: Long = reserveChatWrite()
+        writeToken: Long = reserveChatWrite(),
+        merge: ((List<AidenChatSummary>) -> List<AidenChatSummary>)? = null
+    ): Boolean = writeSummaries(merge?.invoke(summaries) ?: summaries, instanceId, unchangedPrefixCount, writeToken)
+
+    private fun writeSummaries(
+        summaries: List<AidenChatSummary>,
+        instanceId: String,
+        unchangedPrefixCount: Int,
+        writeToken: Long
     ): Boolean {
         if (writeToken <= (purgeWriteTokens[instanceId] ?: 0L) ||
             writeToken < (summaryWriteTokens[instanceId] ?: 0L)) return false

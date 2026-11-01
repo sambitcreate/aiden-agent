@@ -104,10 +104,12 @@ struct AidenChatInboxSignals: Codable, Equatable, Sendable {
 extension AidenChatInboxSignals {
     /// The row's signals once `chat` is admitted: a chat detail carries no
     /// triage, but its newest reply is newer output than the row may know of,
-    /// which ends a Done hold and outdates the host's placement.
+    /// which ends a Done hold and outdates the host's placement. Only
+    /// replies the host counts for `lastAssistantAt` do (an empty or
+    /// cancelled turn does not).
     func admitting(_ chat: AidenChat) -> Self {
         var signals = self
-        guard let newest = chat.messages.filter({ $0.role == .assistant }).map(\.createdAt).max(),
+        guard let newest = chat.messages.filter(\.isInboxReply).map(\.createdAt).max(),
               newest > (lastAssistantAt ?? .distantPast) else { return signals }
         signals.lastAssistantAt = newest
         signals.invalidateHostPlacement()
@@ -350,10 +352,13 @@ enum AidenInbox {
     /// `before`, but only while it still shows the optimistic value, so newer
     /// output, a reload or a later write that landed meanwhile is kept. The
     /// host's placement comes back only when the whole row is as it was.
+    /// `restoresUnread` is false for a chat viewed while the write was out:
+    /// it has been read since, so its dot stays off.
     static func rollingBack(
         _ current: AidenChatSummary,
         optimistic: AidenChatSummary,
-        before: AidenChatSummary
+        before: AidenChatSummary,
+        restoresUnread: Bool = true
     ) -> AidenChatSummary {
         var row = current
         func restore<Value: Equatable>(_ field: WritableKeyPath<AidenChatSummary, Value>) {
@@ -364,7 +369,7 @@ enum AidenInbox {
         restore(\.inbox.pinnedAt)
         restore(\.inbox.doneAt)
         restore(\.inbox.snoozedUntil)
-        restore(\.unread)
+        if restoresUnread { restore(\.unread) }
         if row.inbox.bucket == nil, row.inbox.sortAt == nil {
             var placed = row
             placed.inbox.bucket = before.inbox.bucket

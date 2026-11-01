@@ -7,6 +7,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenChatTriageChange
 import sbtbiswas.AidenOnTheGo.models.AidenChatTriageResult
 import sbtbiswas.AidenOnTheGo.models.AidenInbox
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 
@@ -14,13 +15,20 @@ import java.util.UUID
 sealed interface AidenInboxNotice {
     val id: UUID
 
-    /** The change landed; [undo] puts it back. */
+    /**
+     * The change landed; [undo] puts it back. Undo is meant for right after
+     * the swipe, as on the desktop: a notice still unshown (or shown again
+     * on returning to the screen) once [UNDO_WINDOW] passed is dropped.
+     */
     data class Changed(
         val change: AidenChatTriageChange,
         val chatId: String,
         val undo: AidenChatTriageChange?,
+        val postedAt: Instant = Instant.now(),
         override val id: UUID = UUID.randomUUID()
-    ) : AidenInboxNotice
+    ) : AidenInboxNotice {
+        fun isStale(now: Instant): Boolean = Duration.between(postedAt, now) > UNDO_WINDOW
+    }
 
     /** The host refused the change; the row is back where it was. */
     data class TriageFailed(override val id: UUID = UUID.randomUUID()) : AidenInboxNotice
@@ -30,6 +38,11 @@ sealed interface AidenInboxNotice {
 
     /** Mark read failed; the unread dot is back. */
     data class MarkReadFailed(override val id: UUID = UUID.randomUUID()) : AidenInboxNotice
+
+    companion object {
+        /** The desktop's Undo window (`INBOX_TRIAGE_UNDO_MS`). */
+        val UNDO_WINDOW: Duration = Duration.ofSeconds(5)
+    }
 }
 
 /**
@@ -38,7 +51,9 @@ sealed interface AidenInboxNotice {
  * changed. [row] and [publish] address the host the write was sent to, so a
  * refusal that arrives after a switch to another host still puts that
  * host's saved row back. [isCurrent] is false once the phone switched hosts:
- * a late answer then shows no snackbar and starts no reload.
+ * a late answer then shows no snackbar and starts no reload. [viewStamp]
+ * changes each time the chat is viewed: a chat viewed while its write was out
+ * is read, so a refusal never brings its unread dot back.
  */
 class AidenInboxTriage(
     private val row: (String) -> AidenChatSummary?,
@@ -49,11 +64,13 @@ class AidenInboxTriage(
     ) -> AidenChatTriageResult,
     private val writeRead: suspend (chatId: String) -> Unit,
     private val reload: suspend () -> Unit,
+    private val viewStamp: (String) -> Long = { 0L },
     private val now: () -> Instant = Instant::now
 ) {
     /** Mark read from a swipe. The dot clears at once and comes back if the host refuses. */
     suspend fun markRead(chatId: String): AidenInboxNotice? {
         val before = row(chatId)?.takeIf { it.unread } ?: return null
+        val viewed = viewStamp(chatId)
         val optimistic = before.copy(unread = false).withoutHostPlacement()
         publish(optimistic)
         return try {
@@ -62,7 +79,7 @@ class AidenInboxTriage(
         } catch (error: CancellationException) {
             throw error
         } catch (_: Throwable) {
-            rollBack(chatId, optimistic, before)
+            rollBack(chatId, optimistic, before, viewed)
             if (isCurrent()) AidenInboxNotice.MarkReadFailed() else null
         }
     }
@@ -72,7 +89,9 @@ class AidenInboxTriage(
      * (not the open chat) also reads it, as on the desktop, so when the host
      * takes no read markers ([readsFailures] false) nothing is written.
      * A stale revision is sent once more from the host's revision with a new
-     * idempotency key before it counts as a refusal. Returns the snackbar.
+     * idempotency key before it counts as a refusal; a write that landed that
+     * way offers no Undo, since [before] may no longer be what the host held
+     * (the desktop never retries). Returns the snackbar.
      */
     suspend fun setTriage(
         chatId: String,
@@ -82,17 +101,18 @@ class AidenInboxTriage(
         offersUndo: Boolean = true
     ): AidenInboxNotice? {
         val before = row(chatId) ?: return null
+        val viewed = viewStamp(chatId)
         val at = now()
         val alsoMarkRead = change.hidesRow && AidenInbox.alsoMarksRead(before, isOpen)
         if (alsoMarkRead && !readsFailures) return null
         val optimistic = AidenInbox.applyingOptimisticTriage(change, before, at, alsoMarkRead)
         publish(optimistic)
-        val result = try {
+        val (result, retried) = try {
             sendTriage(chatId, change, before.triageRevision ?: 0)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
-            rollBack(chatId, optimistic, before)
+            rollBack(chatId, optimistic, before, viewed)
             if (!isCurrent()) return null
             if (AidenChatForkErrors.isRevisionConflict(error)) {
                 reload()
@@ -107,25 +127,30 @@ class AidenInboxTriage(
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Throwable) {
-                row(chatId)?.takeIf { !it.unread }?.let { publish(it.copy(unread = before.unread)) }
+                if (viewStamp(chatId) == viewed) {
+                    row(chatId)?.takeIf { !it.unread }?.let { publish(it.copy(unread = before.unread)) }
+                }
             }
         }
-        if (!isCurrent() || !offersUndo) return null
-        return AidenInbox.undo(change, before, at)?.let { AidenInboxNotice.Changed(change, chatId, it) }
+        if (!isCurrent() || !offersUndo || retried) return null
+        return AidenInbox.undo(change, before, at)?.let { AidenInboxNotice.Changed(change, chatId, it, postedAt = now()) }
     }
 
-    private suspend fun sendTriage(chatId: String, change: AidenChatTriageChange, ifRevision: Int): AidenChatTriageResult =
+    /** The host's answer, and whether it came from the one retry. */
+    private suspend fun sendTriage(
+        chatId: String, change: AidenChatTriageChange, ifRevision: Int
+    ): Pair<AidenChatTriageResult, Boolean> =
         try {
-            writeTriage(chatId, change, ifRevision, UUID.randomUUID())
+            writeTriage(chatId, change, ifRevision, UUID.randomUUID()) to false
         } catch (error: AidenRemoteClientException.Server) {
             val current = error.body.details?.currentRevision?.toIntOrNull()?.takeIf { it >= 0 }
             if (!AidenChatForkErrors.isRevisionConflict(error) || current == null || !isCurrent()) throw error
-            writeTriage(chatId, change, current, UUID.randomUUID())
+            writeTriage(chatId, change, current, UUID.randomUUID()) to true
         }
 
-    private suspend fun rollBack(chatId: String, optimistic: AidenChatSummary, before: AidenChatSummary) {
+    private suspend fun rollBack(chatId: String, optimistic: AidenChatSummary, before: AidenChatSummary, viewed: Long) {
         val current = row(chatId) ?: return
-        val restored = AidenInbox.rollingBack(current, optimistic, before)
+        val restored = AidenInbox.rollingBack(current, optimistic, before, restoresUnread = viewStamp(chatId) == viewed)
         if (restored != current) publish(restored)
     }
 }

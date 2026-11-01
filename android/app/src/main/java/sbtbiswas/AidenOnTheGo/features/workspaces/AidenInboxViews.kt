@@ -45,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -102,6 +103,7 @@ import java.time.format.TextStyle
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.roundToInt
+import kotlin.math.sign
 
 /**
  * What an Inbox row's trailing status says, as on iOS and the desktop. The
@@ -253,6 +255,7 @@ object AidenInboxNoticeText {
 /**
  * Shows an Inbox notice as a snackbar, with Undo when the change can be put
  * back. Long enough to reach Undo; with TalkBack it stays until dismissed.
+ * A confirmation first shown past its Undo window is dropped instead.
  * [onUndo] runs the inverse write; [onDismissed] gets the notice's id.
  */
 @Composable
@@ -270,6 +273,11 @@ fun AidenInboxNoticeEffect(
     val currentOnDismissed by rememberUpdatedState(onDismissed)
     LaunchedEffect(notice?.id) {
         val shown = notice ?: return@LaunchedEffect
+        // Back on the screen after the Undo window: the confirmation is stale.
+        if (shown is AidenInboxNotice.Changed && shown.isStale(Instant.now())) {
+            currentOnDismissed(shown.id)
+            return@LaunchedEffect
+        }
         val undo = (shown as? AidenInboxNotice.Changed)?.undo
         val duration = if (accessibilityManager?.isTouchExplorationEnabled == true) SnackbarDuration.Indefinite
         else SnackbarDuration.Long
@@ -499,13 +507,18 @@ private fun AidenInboxSwipeRow(
     }
     // A row that loses its actions (it moved section) closes.
     LaunchedEffect(leadingPx, trailingPx) {
-        if (offset.value > leadingPx || offset.value < -trailingPx) offset.snapTo(0f)
+        if (offset.value > leadingPx || offset.value < -trailingPx) {
+            offset.snapTo(0f)
+            if (swipe.openKey == key) swipe.openKey = null
+        }
     }
     val dragState = rememberDraggableState { delta ->
         scope.launch { offset.snapTo((offset.value + delta * direction).coerceIn(-trailingPx, leadingPx)) }
     }
+    // Only the side that shows is read in composition; the offset itself is
+    // read in the layout phase, so dragging doesn't recompose the row.
+    val shown by remember { derivedStateOf { sign(offset.value) } }
     Box(modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-        val shown = offset.value
         if (shown > 0f) {
             Row(Modifier.fillMaxHeight().fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
                 leading.forEach { action -> AidenInboxSwipeButton(action) { settle(0f); action.onClick() } }

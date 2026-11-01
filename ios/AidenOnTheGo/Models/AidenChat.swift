@@ -17,6 +17,17 @@ enum AidenChatRole: String, Codable, Sendable {
 }
 
 struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
+    /// Whether the host counts this as a reply for the Inbox
+    /// (`lastAssistantAt`): an assistant message with visible text,
+    /// attachments, artifacts, visuals or app panels, or a failed turn.
+    var isInboxReply: Bool {
+        guard role == .assistant else { return false }
+        return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !(attachments ?? []).isEmpty || !(htmlArtifacts ?? []).isEmpty
+            || !(visuals ?? []).isEmpty || !(appPanels ?? []).isEmpty
+            || outcome?.status == .failed || timeline?.status == .failed
+    }
+
     var isReadAloudEligible: Bool {
         role == .assistant && outcome == nil && (timeline == nil || timeline?.status == .completed)
             && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

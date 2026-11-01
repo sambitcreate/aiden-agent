@@ -245,12 +245,15 @@ object AidenInbox {
      * Puts back what a refused write changed. Only the fields the write
      * changed that still hold its optimistic value go back, so newer output,
      * run times and later writes on [current] stay. The host's old bucket
-     * returns only when the row is then exactly as it was.
+     * returns only when the row is then exactly as it was. Without
+     * [restoresUnread] (the chat was viewed while the write was out) the row
+     * stays read.
      */
     fun rollingBack(
         current: AidenChatSummary,
         optimistic: AidenChatSummary,
-        before: AidenChatSummary
+        before: AidenChatSummary,
+        restoresUnread: Boolean = true
     ): AidenChatSummary {
         var row = current
         if (optimistic.pinnedAt != before.pinnedAt && current.pinnedAt == optimistic.pinnedAt) {
@@ -262,7 +265,7 @@ object AidenInbox {
         if (optimistic.snoozedUntil != before.snoozedUntil && current.snoozedUntil == optimistic.snoozedUntil) {
             row = row.copy(snoozedUntil = before.snoozedUntil)
         }
-        if (optimistic.unread != before.unread && current.unread == optimistic.unread) {
+        if (restoresUnread && optimistic.unread != before.unread && current.unread == optimistic.unread) {
             row = row.copy(unread = before.unread)
         }
         if (row.inboxBucketWire == null && row.inboxSortAtWire == null) {

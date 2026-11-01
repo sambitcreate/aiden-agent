@@ -194,6 +194,10 @@ final class AidenHomeModel {
     private var persistedLocalGeneration: UInt64 = 0
     private var localSummaryEdits: [String: (generation: UInt64, token: UInt64, summary: AidenChatSummary?, activityOnly: Bool)] = [:]
     private var prefetchTask: Task<Void, Never>?
+    /// Changes each time a chat is viewed: a chat viewed while a swipe's
+    /// write was out has been read, so a refusal never brings its dot back.
+    private var viewStamps: [String: UInt64] = [:]
+    private var viewClock: UInt64 = 0
 
     init(chatCache: AidenChatCache = .shared) {
         self.chatCache = chatCache
@@ -207,6 +211,7 @@ final class AidenHomeModel {
     /// Accepts a chat the user is viewing, so its row is read by definition.
     func accept(_ chat: AidenChat) {
         guard !chat.isBotChat else { return }
+        stampViewed(chat.id)
         let existing = chats.first(where: { $0.id == chat.id })
         chats.removeAll { $0.id == chat.id }
         var summary = AidenChatSummary(chat: chat, preservingActivity: existing?.activity ?? .idle)
@@ -228,11 +233,19 @@ final class AidenHomeModel {
 
     /// Clear a row's unread marker as soon as the user opens it.
     func markViewed(chatID: String) {
+        stampViewed(chatID)
         guard let index = chats.firstIndex(where: { $0.id == chatID }),
               chats[index].unread else { return }
         chats[index].unread = false
         persistCurrentSummaries(changedID: chatID)
     }
+
+    private func stampViewed(_ chatID: String) {
+        viewClock &+= 1
+        viewStamps[chatID] = viewClock
+    }
+
+    private func viewStamp(_ chatID: String) -> UInt64 { viewStamps[chatID] ?? 0 }
 
     /// The Inbox banner after a swipe action: a rollback explanation, or
     /// a confirmation that can undo the change.
@@ -245,6 +258,7 @@ final class AidenHomeModel {
               let index = chats.firstIndex(where: { $0.id == chatID }), chats[index].unread,
               let context = try? coordinator.requestContext() else { return }
         let before = chats[index]
+        let viewed = viewStamp(chatID)
         chats[index].unread = false
         chats[index].inbox.invalidateHostPlacement()
         let optimistic = chats[index]
@@ -252,7 +266,7 @@ final class AidenHomeModel {
         do {
             try await coordinator.remoteClient(for: context).markChatRead(id: chatID)
         } catch {
-            await rollBack(chatID: chatID, optimistic: optimistic, before: before, context: context, coordinator: coordinator)
+            await rollBack(chatID: chatID, optimistic: optimistic, before: before, viewed: viewed, context: context, coordinator: coordinator)
             guard coordinator.isCurrent(context) else { return }
             inboxNotice = AidenInboxNotice(message: String(localized: "Couldn’t mark that chat read. Try again once your Mac is reachable."))
         }
@@ -260,9 +274,12 @@ final class AidenHomeModel {
 
     /// Done, Snooze or their undo. The row moves at once; a refusal puts back
     /// what the write changed with a banner, and a stale revision is sent
-    /// once more from the host's revision before it counts as a refusal.
-    /// Done or Snooze on unseen failed output also reads it, as on the
-    /// desktop, so a Mac without read markers is sent neither.
+    /// once more from the host's revision before it counts as a refusal. A
+    /// write that landed on that retry offers no Undo, since `before` may no
+    /// longer be what the host held (the desktop never retries). Done or
+    /// Snooze on unseen failed output also reads it, as on the desktop, so a
+    /// Mac without read markers is sent neither; the read marker is sent even
+    /// when the answer arrives after a switch to another Mac.
     @discardableResult
     func setTriage(
         _ change: AidenChatTriageChange,
@@ -275,15 +292,19 @@ final class AidenHomeModel {
         guard let index = chats.firstIndex(where: { $0.id == chatID }),
               let context = try? coordinator.requestContext() else { return false }
         let before = chats[index]
+        let viewed = viewStamp(chatID)
         let alsoMarkRead = change.hidesRow && AidenInbox.alsoMarksRead(before, isOpen: isOpen)
         if alsoMarkRead, coordinator.server?.supportsChatReadState != true { return false }
         let optimistic = AidenInbox.applyingOptimisticTriage(change, to: before, now: now, alsoMarkRead: alsoMarkRead)
         chats[index] = optimistic
         persistCurrentSummaries(changedID: chatID)
         inboxNotice = nil
+        let client: AidenRemoteClient
+        let result: AidenChatTriageResult
+        let retried: Bool
         do {
-            let client = try coordinator.remoteClient(for: context)
-            let result = try await sendTriage(
+            client = try coordinator.remoteClient(for: context)
+            (result, retried) = try await sendTriage(
                 change,
                 chatID: chatID,
                 ifRevision: before.inbox.triageRevision ?? 0,
@@ -291,32 +312,8 @@ final class AidenHomeModel {
                 context: context,
                 coordinator: coordinator
             )
-            guard coordinator.isCurrent(context), contentContext == context,
-                  let index = chats.firstIndex(where: { $0.id == chatID }) else { return true }
-            chats[index].inbox.pinnedAt = result.pinnedAt
-            chats[index].inbox.doneAt = result.doneAt
-            chats[index].inbox.snoozedUntil = result.snoozedUntil
-            chats[index].inbox.triageRevision = result.revision > 0 ? result.revision : nil
-            // A bucket the host reported before this write no longer describes the row.
-            chats[index].inbox.invalidateHostPlacement()
-            persistCurrentSummaries(changedID: chatID)
-            if offersUndo, let undo = AidenInbox.undo(of: change, before: before, now: now) {
-                inboxNotice = AidenInboxNotice(message: change.confirmation, undo: undo, chatID: chatID)
-            }
-            if alsoMarkRead {
-                do {
-                    try await client.markChatRead(id: chatID)
-                } catch {
-                    if coordinator.isCurrent(context), contentContext == context,
-                       let index = chats.firstIndex(where: { $0.id == chatID }), !chats[index].unread {
-                        chats[index].unread = before.unread
-                        persistCurrentSummaries(changedID: chatID)
-                    }
-                }
-            }
-            return true
         } catch {
-            await rollBack(chatID: chatID, optimistic: optimistic, before: before, context: context, coordinator: coordinator)
+            await rollBack(chatID: chatID, optimistic: optimistic, before: before, viewed: viewed, context: context, coordinator: coordinator)
             guard coordinator.isCurrent(context) else { return false }
             let conflict = (error as? AidenRemoteClientError)?.isRevisionConflict == true
             inboxNotice = AidenInboxNotice(message: conflict
@@ -325,6 +322,33 @@ final class AidenHomeModel {
             if conflict { await load(coordinator: coordinator) }
             return false
         }
+        func isShown() -> Bool { coordinator.isCurrent(context) && contentContext == context }
+        if isShown(), let index = chats.firstIndex(where: { $0.id == chatID }) {
+            chats[index].inbox.pinnedAt = result.pinnedAt
+            chats[index].inbox.doneAt = result.doneAt
+            chats[index].inbox.snoozedUntil = result.snoozedUntil
+            chats[index].inbox.triageRevision = result.revision > 0 ? result.revision : nil
+            // A bucket the host reported before this write no longer describes the row.
+            chats[index].inbox.invalidateHostPlacement()
+            persistCurrentSummaries(changedID: chatID)
+            if offersUndo, !retried, let undo = AidenInbox.undo(of: change, before: before, now: now) {
+                inboxNotice = AidenInboxNotice(message: change.confirmation, undo: undo, chatID: chatID)
+            }
+        }
+        if alsoMarkRead {
+            // Sent with the write's own client: the Mac took Done, so it
+            // should also take the read, whichever Mac is shown now.
+            do {
+                try await client.markChatRead(id: chatID)
+            } catch {
+                if isShown(), viewStamp(chatID) == viewed,
+                   let index = chats.firstIndex(where: { $0.id == chatID }), !chats[index].unread {
+                    chats[index].unread = before.unread
+                    persistCurrentSummaries(changedID: chatID)
+                }
+            }
+        }
+        return true
     }
 
     /// One triage write, sent once more from the host's revision when another
@@ -336,28 +360,31 @@ final class AidenHomeModel {
         client: AidenRemoteClient,
         context: AidenRemoteRequestContext,
         coordinator: AidenRemoteCoordinator
-    ) async throws -> AidenChatTriageResult {
+    ) async throws -> (AidenChatTriageResult, retried: Bool) {
         do {
-            return try await client.setChatTriage(chatId: chatID, change: change, ifRevision: ifRevision)
+            return (try await client.setChatTriage(chatId: chatID, change: change, ifRevision: ifRevision), false)
         } catch let error as AidenRemoteClientError {
             guard let current = error.conflictingRevision, coordinator.isCurrent(context) else { throw error }
-            return try await client.setChatTriage(chatId: chatID, change: change, ifRevision: current, idempotencyKey: UUID())
+            return (try await client.setChatTriage(chatId: chatID, change: change, ifRevision: current, idempotencyKey: UUID()), true)
         }
     }
 
     /// Puts back what a refused write changed. After a switch to another Mac
     /// the old Mac's saved row is put back instead, so it isn't left showing
-    /// a write that never landed.
+    /// a write that never landed. A chat viewed since the write began keeps
+    /// its dot off.
     private func rollBack(
         chatID: String,
         optimistic: AidenChatSummary,
         before: AidenChatSummary,
+        viewed: UInt64,
         context: AidenRemoteRequestContext,
         coordinator: AidenRemoteCoordinator
     ) async {
+        let restoresUnread = viewStamp(chatID) == viewed
         if coordinator.isCurrent(context), contentContext == context {
             guard let index = chats.firstIndex(where: { $0.id == chatID }) else { return }
-            let restored = AidenInbox.rollingBack(chats[index], optimistic: optimistic, before: before)
+            let restored = AidenInbox.rollingBack(chats[index], optimistic: optimistic, before: before, restoresUnread: restoresUnread)
             guard restored != chats[index] else { return }
             chats[index] = restored
             persistCurrentSummaries(changedID: chatID)
@@ -365,7 +392,7 @@ final class AidenHomeModel {
         }
         let writeToken = chatCache.reserveSummaryWrite(instanceId: context.instanceId)
         try? await chatCache.updateChatSummary(id: chatID, instanceId: context.instanceId, writeToken: writeToken) {
-            AidenInbox.rollingBack($0, optimistic: optimistic, before: before)
+            AidenInbox.rollingBack($0, optimistic: optimistic, before: before, restoresUnread: restoresUnread)
         }
     }
 

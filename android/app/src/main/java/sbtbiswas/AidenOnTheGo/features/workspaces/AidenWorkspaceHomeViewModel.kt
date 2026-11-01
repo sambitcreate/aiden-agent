@@ -55,14 +55,32 @@ class AidenWorkspaceHomeViewModel(
     /** The Inbox snackbar after a swipe: a confirmation with Undo, or a rollback. */
     val inboxNotice: StateFlow<AidenInboxNotice?> = _inboxNotice.asStateFlow()
 
+    /** The row fields an Inbox swipe writes. */
+    private enum class TriageField { PINNED, DONE, SNOOZE, REVISION, UNREAD }
+
     /**
-     * An Inbox swipe's row, kept over list pages requested before it: a load
+     * An Inbox swipe's row, kept over list pages that may predate it: a load
      * already in flight when the row moved carries the host's older triage.
-     * [token] orders it against those loads; [settled] once the host answered.
+     * Only the [fields] the swipe's writes changed are kept, so a Mark read
+     * never hides a pin made on another device. [token] orders it against
+     * loads; while unsettled it holds over every page, and once the host
+     * answered ([settled]) only over pages requested before its last write.
      */
-    private data class TriageOverlay(val token: Long, val row: AidenChatSummary, val settled: Boolean = false)
+    private data class TriageOverlay(
+        val token: Long,
+        val row: AidenChatSummary,
+        val fields: Set<TriageField>,
+        val settled: Boolean = false
+    )
+    // Read under the cache lock by a page save (see acceptSummaryPage), so
+    // every access holds this map's monitor.
     private val triageOverlay = mutableMapOf<String, TriageOverlay>()
     private val triageWritesInFlight = mutableMapOf<String, Int>()
+    /** Bumped on each host switch, so a write from before it settles nothing here. */
+    private var triageGeneration = 0L
+    /** Changes each time a chat is viewed ([accept]); see [AidenInboxTriage]. */
+    private val viewStamps = mutableMapOf<String, Long>()
+    private var viewClock = 0L
 
     private val _scheduledTasks = MutableStateFlow<List<AidenScheduledTask>>(emptyList())
     val scheduledTasks: StateFlow<List<AidenScheduledTask>> = _scheduledTasks.asStateFlow()
@@ -166,8 +184,9 @@ class AidenWorkspaceHomeViewModel(
             paginationBoundary = null
             // A notice or a pending swipe belongs to the host it was made on.
             _inboxNotice.value = null
-            triageOverlay.clear()
+            synchronized(triageOverlay) { triageOverlay.clear() }
             triageWritesInFlight.clear()
+            triageGeneration += 1
         }
 
         val cached = withContext(Dispatchers.IO) { chatCache.loadSummaries(instanceId) }
@@ -335,6 +354,7 @@ class AidenWorkspaceHomeViewModel(
         val existing = _chats.value.firstOrNull { it.id == chat.id }
         val admitted = AidenChatSummary.fromChat(chat).copy(rowStateWire = existing?.rowStateWire)
         val summary = existing?.let(admitted::withInboxSignals)?.admittingReplies(chat) ?: admitted
+        viewStamps[chat.id] = ++viewClock
         _chats.value = regularNewestFirst(_chats.value.filterNot { it.id == summary.id } + summary)
         coordinator.activeInstanceId?.let { instanceId ->
             val writeToken = chatCache.reserveSummaryMutation(instanceId)
@@ -350,6 +370,7 @@ class AidenWorkspaceHomeViewModel(
         val client = coordinator.client.value ?: return null
         val instanceId = coordinator.activeInstanceId ?: return null
         val isCurrent = { coordinator.activeInstanceId == instanceId && coordinator.client.value === client }
+        val generation = triageGeneration
         return AidenInboxTriage(
             // After a switch the write still settles on the host it was sent to.
             row = { id ->
@@ -357,8 +378,12 @@ class AidenWorkspaceHomeViewModel(
                     ?: chatCache.summaries.value[instanceId]?.get(id)
             },
             publish = { row ->
-                if (coordinator.activeInstanceId == instanceId) {
-                    triageOverlay[row.id] = TriageOverlay(chatCache.reserveChatWrite(), row)
+                if (coordinator.activeInstanceId == instanceId && triageGeneration == generation) {
+                    val previous = _chats.value.firstOrNull { it.id == row.id }
+                    synchronized(triageOverlay) {
+                        val fields = triageFieldsChanged(previous, row) + triageOverlay[row.id]?.fields.orEmpty()
+                        triageOverlay[row.id] = TriageOverlay(chatCache.reserveChatWrite(), row, fields)
+                    }
                     _chats.value = regularNewestFirst(_chats.value.map { if (it.id == row.id) row else it })
                 }
                 withContext(cacheWriteDispatcher) {
@@ -368,20 +393,27 @@ class AidenWorkspaceHomeViewModel(
             isCurrent = isCurrent,
             writeTriage = { id, change, ifRevision, key -> client.setChatTriage(id, change, ifRevision, key) },
             writeRead = { id -> client.markChatRead(id) },
-            reload = { load(force = true) }
+            reload = { load(force = true) },
+            viewStamp = { id -> viewStamps[id] ?: 0L }
         )
     }
 
     private suspend fun <T> trackingTriageWrite(chatId: String, write: suspend () -> T): T {
+        val generation = triageGeneration
         triageWritesInFlight[chatId] = (triageWritesInFlight[chatId] ?: 0) + 1
         try {
             return write()
         } finally {
-            val left = (triageWritesInFlight[chatId] ?: 1) - 1
-            if (left > 0) triageWritesInFlight[chatId] = left
-            else {
-                triageWritesInFlight.remove(chatId)
-                triageOverlay[chatId]?.let { triageOverlay[chatId] = it.copy(settled = true) }
+            // After a host switch the counts belong to the new host's writes.
+            if (generation == triageGeneration) {
+                val left = (triageWritesInFlight[chatId] ?: 1) - 1
+                if (left > 0) triageWritesInFlight[chatId] = left
+                else {
+                    triageWritesInFlight.remove(chatId)
+                    synchronized(triageOverlay) {
+                        triageOverlay[chatId]?.let { triageOverlay[chatId] = it.copy(settled = true) }
+                    }
+                }
             }
         }
     }
@@ -411,19 +443,35 @@ class AidenWorkspaceHomeViewModel(
     }
 
     /**
-     * A page row with any newer Inbox swipe kept over it. Only the fields a
-     * swipe writes come from the swipe; unread stays read once either says so.
+     * A page row with an Inbox swipe that may be newer kept over it: an
+     * unsettled swipe always, a settled one only over a page requested
+     * before its last write. Only the fields the swipe changed come from it;
+     * unread stays read once either says so. Holds the overlay's monitor.
      */
     private fun overlayingTriage(page: AidenChatSummary, writeToken: Long): AidenChatSummary {
-        val swipe = triageOverlay[page.id]?.takeIf { it.token > writeToken }?.row ?: return page
-        val merged = page.copy(
-            pinnedAt = swipe.pinnedAt,
-            doneAt = swipe.doneAt,
-            snoozedUntil = swipe.snoozedUntil,
-            triageRevision = swipe.triageRevision,
-            unread = page.unread && swipe.unread
-        )
+        val overlay = synchronized(triageOverlay) { triageOverlay[page.id] }
+            ?.takeIf { !it.settled || it.token > writeToken } ?: return page
+        val swipe = overlay.row
+        var merged = page
+        for (field in overlay.fields) merged = when (field) {
+            TriageField.PINNED -> merged.copy(pinnedAt = swipe.pinnedAt)
+            TriageField.DONE -> merged.copy(doneAt = swipe.doneAt)
+            TriageField.SNOOZE -> merged.copy(snoozedUntil = swipe.snoozedUntil)
+            TriageField.REVISION -> merged.copy(triageRevision = swipe.triageRevision)
+            TriageField.UNREAD -> merged.copy(unread = page.unread && swipe.unread)
+        }
         return if (merged == page) page else merged.withoutHostPlacement()
+    }
+
+    private fun triageFieldsChanged(previous: AidenChatSummary?, row: AidenChatSummary): Set<TriageField> {
+        if (previous == null) return TriageField.entries.toSet()
+        return buildSet {
+            if (previous.pinnedAt != row.pinnedAt) add(TriageField.PINNED)
+            if (previous.doneAt != row.doneAt) add(TriageField.DONE)
+            if (previous.snoozedUntil != row.snoozedUntil) add(TriageField.SNOOZE)
+            if (previous.triageRevision != row.triageRevision) add(TriageField.REVISION)
+            if (previous.unread != row.unread) add(TriageField.UNREAD)
+        }
     }
 
     fun loadMoreChats() {
@@ -484,16 +532,21 @@ class AidenWorkspaceHomeViewModel(
             throw AidenRemoteContractException.InvalidJson("Chat Summary pages are out of order")
         }
         // A page requested after a swipe settled already carries it.
-        triageOverlay.entries.removeAll { (_, swipe) -> swipe.settled && swipe.token < writeToken }
+        synchronized(triageOverlay) {
+            triageOverlay.entries.removeAll { (_, swipe) -> swipe.settled && swipe.token < writeToken }
+        }
         val accepted = regularNewestFirst(existing + summaries.map { overlayingTriage(it, writeToken) })
         // Persist first so a bounded-cache failure leaves the visible list,
         // page boundary, and cursor unchanged and Retry can request the same page.
+        // The overlay is applied again under the cache lock: a swipe that
+        // lands while this save waits must not be written over.
         val retained = withContext(cacheWriteDispatcher) {
             chatCache.saveSummaries(
                 accepted,
                 instanceId,
                 unchangedPrefixCount = if (replace) 0 else existing.size,
-                writeToken = writeToken
+                writeToken = writeToken,
+                merge = { rows -> rows.map { overlayingTriage(it, writeToken) } }
             )
         }
         if (!isCurrent()) throw CancellationException("Chat list owner changed")

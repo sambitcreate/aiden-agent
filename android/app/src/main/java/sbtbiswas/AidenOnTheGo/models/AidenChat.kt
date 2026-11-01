@@ -872,6 +872,18 @@ data class AidenChatMessage(
     val timeline: AidenGenerationTimeline? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant
 ) {
+    /**
+     * Assistant output the host counts toward `lastAssistantAt`
+     * (`chat-store-core.ts` `metaOf`): visible text, attachments, artifacts,
+     * visuals or app panels, or a failed turn even with nothing visible.
+     */
+    val isInboxReply: Boolean
+        get() = role == AidenChatRole.ASSISTANT && (
+            text.isNotBlank() || !attachments.isNullOrEmpty() || !htmlArtifacts.isNullOrEmpty() ||
+                !visuals.isNullOrEmpty() || !appPanels.isNullOrEmpty() ||
+                outcome?.status == AidenMessageOutcomeStatus.FAILED ||
+                timeline?.status == AidenGenerationTimelineStatus.FAILED
+            )
     val isReadAloudEligible: Boolean get() = role == AidenChatRole.ASSISTANT && outcome == null &&
         (timeline == null || timeline.status == AidenGenerationTimelineStatus.COMPLETED) && text.isNotBlank()
     val isWireSafe: Boolean
@@ -1069,12 +1081,13 @@ data class AidenChatSummary(
     )
 
     /**
-     * The row after opening [chat]: a reply newer than [lastAssistantAt]
+     * The row after opening [chat]: a reply the host counts
+     * ([AidenChatMessage.isInboxReply]) newer than [lastAssistantAt]
      * moves it (so a Done hold ends, as on the desktop) and drops the host
      * placement that described the row before.
      */
     fun admittingReplies(chat: AidenChat): AidenChatSummary {
-        val newest = chat.messages.filter { it.role == AidenChatRole.ASSISTANT }.maxOfOrNull { it.createdAt }
+        val newest = chat.messages.filter { it.isInboxReply }.maxOfOrNull { it.createdAt }
             ?: return this
         if (lastAssistantAt?.let { !newest.isAfter(it) } == true) return this
         return copy(lastAssistantAt = newest).withoutHostPlacement()

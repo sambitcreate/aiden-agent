@@ -353,6 +353,31 @@ final class AidenInboxTests: XCTestCase {
         XCTAssertEqual(opened.inbox.admitting(chat), opened.inbox)
     }
 
+    func testOpeningAChatEndsDoneOnlyForRepliesTheHostCounts() throws {
+        let held = summary("held", minutesAgo: 30, inbox: AidenChatInboxSignals(
+            bucket: .done, sortAt: ago(minutes: 30), lastAssistantAt: ago(minutes: 30), doneAt: ago(minutes: 20)
+        ))
+        func chat(_ messages: String) throws -> AidenChat {
+            try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data("""
+            {"id":"held","workspaceId":"alpha","botId":"bot","title":"held","providerId":"p","modelId":"m","createdAt":"2026-08-18T19:00:00Z","updatedAt":"2026-08-18T19:00:00Z",
+            "revision":"rev-2","messages":[{"id":"m1","role":"assistant","text":"old","createdAt":"\(Self.iso(ago(minutes: 30)))"},\(messages)]}
+            """.utf8))
+        }
+        // A blank reply and a cancelled empty turn are not output the host counts.
+        let quiet = try chat("""
+        {"id":"m2","role":"assistant","text":"  ","createdAt":"\(Self.iso(ago(minutes: 5)))"},
+        {"id":"m3","role":"assistant","text":"","outcome":{"status":"cancelled"},"createdAt":"\(Self.iso(ago(minutes: 4)))"}
+        """)
+        XCTAssertEqual(held.inbox.admitting(quiet), held.inbox)
+
+        // A failed turn counts even with no text, as the host's failure does.
+        let failed = try chat("""
+        {"id":"m4","role":"assistant","text":"","outcome":{"status":"failed"},"createdAt":"\(Self.iso(ago(minutes: 3)))"}
+        """)
+        XCTAssertEqual(held.inbox.admitting(failed).lastAssistantAt, ago(minutes: 3))
+        XCTAssertNil(held.inbox.admitting(failed).bucket)
+    }
+
     private static func iso(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

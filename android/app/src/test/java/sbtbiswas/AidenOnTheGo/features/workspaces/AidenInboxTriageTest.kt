@@ -33,6 +33,7 @@ class AidenInboxTriageTest {
         var current = true
         var triageAnswer: suspend (AidenChatTriageChange) -> AidenChatTriageResult = { error("unset") }
         var readAnswer: suspend () -> Unit = {}
+        var viewStamp = 0L
 
         fun triage(now: Instant) = AidenInboxTriage(
             row = { rows[it] },
@@ -45,6 +46,7 @@ class AidenInboxTriageTest {
             },
             writeRead = { readWrites += it; readAnswer() },
             reload = { reloads += 1 },
+            viewStamp = { viewStamp },
             now = { now }
         )
     }
@@ -181,8 +183,10 @@ class AidenInboxTriageTest {
             if (calls == 1) throw conflict(currentRevision = "7")
             AidenChatTriageResult("chat-1", 8, now, doneAt = now)
         }
-        val notice = host.triage(now).setTriage("chat-1", AidenChatTriageChange.done(true), readsFailures = true)
-        assertTrue(notice is AidenInboxNotice.Changed)
+        // The row's `before` predates the other device's write, so an Undo
+        // built from it could erase that write: a retried write offers none.
+        assertNull(host.triage(now).setTriage("chat-1", AidenChatTriageChange.done(true), readsFailures = true))
+        assertEquals(now, host.rows.getValue("chat-1").doneAt)
         assertEquals(listOf(2, 7), host.triageWrites.map { it.third })
         assertEquals(2, host.idempotencyKeys.toSet().size)
         assertEquals(8, host.rows.getValue("chat-1").triageRevision)
@@ -248,5 +252,47 @@ class AidenInboxTriageTest {
         assertEquals(row().inboxBucket, host.rows.getValue("chat-1").inboxBucket)
         // No snackbar and no reload for a host the phone has left.
         assertEquals(0, host.reloads)
+    }
+
+    @Test
+    fun aChatViewedWhileItsWriteWasOutStaysReadWhenTheHostRefuses() = runBlocking {
+        // Mark read refused after the chat was opened: the dot stays off.
+        val read = Host(row(unread = true))
+        read.readAnswer = { read.viewStamp += 1; throw IOException("offline") }
+        assertTrue(read.triage(now).markRead("chat-1") is AidenInboxNotice.MarkReadFailed)
+        assertFalse(read.rows.getValue("chat-1").unread)
+
+        // Done on an unseen failure refused after the chat was opened: Done
+        // goes back, the read stays.
+        val done = Host(row(unread = true, failed = true))
+        done.triageAnswer = { done.viewStamp += 1; throw IOException("offline") }
+        assertTrue(done.triage(now).setTriage("chat-1", AidenChatTriageChange.done(true), readsFailures = true)
+            is AidenInboxNotice.TriageFailed)
+        assertNull(done.rows.getValue("chat-1").doneAt)
+        assertFalse(done.rows.getValue("chat-1").unread)
+
+        // Its read marker refused after the chat was opened: still read.
+        val marker = Host(row(unread = true, failed = true))
+        marker.triageAnswer = { AidenChatTriageResult("chat-1", 3, now, doneAt = now) }
+        marker.readAnswer = { marker.viewStamp += 1; throw IOException("offline") }
+        marker.triage(now).setTriage("chat-1", AidenChatTriageChange.done(true), readsFailures = true)
+        assertFalse(marker.rows.getValue("chat-1").unread)
+    }
+
+    @Test
+    fun aWriteThatLandsAfterSwitchingHostsStillSendsItsReadMarker() = runBlocking {
+        val host = Host(row(unread = true, failed = true))
+        host.triageAnswer = { host.current = false; AidenChatTriageResult("chat-1", 3, now, doneAt = now) }
+        // No snackbar for a host the phone has left, but the old host still
+        // learns the failure was read, so it doesn't stay unseen there.
+        assertNull(host.triage(now).setTriage("chat-1", AidenChatTriageChange.done(true), readsFailures = true))
+        assertEquals(listOf("chat-1"), host.readWrites)
+    }
+
+    @Test
+    fun aConfirmationGoesStaleAfterTheDesktopsUndoWindow() {
+        val notice = AidenInboxNotice.Changed(AidenChatTriageChange.done(true), "chat-1", AidenChatTriageChange.done(false), postedAt = now)
+        assertFalse(notice.isStale(now.plusSeconds(5)))
+        assertTrue(notice.isStale(now.plusSeconds(6)))
     }
 }

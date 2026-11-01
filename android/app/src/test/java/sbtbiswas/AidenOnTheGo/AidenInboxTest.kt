@@ -7,7 +7,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.features.workspaces.AidenInboxNoticeText
 import sbtbiswas.AidenOnTheGo.features.workspaces.AidenInboxRowStatus
+import sbtbiswas.AidenOnTheGo.models.AidenChat
+import sbtbiswas.AidenOnTheGo.models.AidenChatMessage
+import sbtbiswas.AidenOnTheGo.models.AidenChatRole
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
+import sbtbiswas.AidenOnTheGo.models.AidenMessageOutcome
+import sbtbiswas.AidenOnTheGo.models.AidenMessageOutcomeStatus
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummaryActivity
 import sbtbiswas.AidenOnTheGo.models.AidenChatTriageChange
 import sbtbiswas.AidenOnTheGo.models.AidenChatTriageResult
@@ -344,5 +349,34 @@ class AidenInboxTest {
         assertEquals("Monday" to "9:00 AM", monday.day to plain(monday.time))
         assertEquals(AidenInboxNoticeText.Confirmation.Updated,
             AidenInboxNoticeText.confirmation(AidenChatTriageChange(pinned = true), now, zone, locale))
+    }
+
+    @Test
+    fun openingAChatEndsDoneOnlyForRepliesTheHostCounts() {
+        val doneAt = now.minusSeconds(120)
+        val row = chat("c1", doneAt = doneAt, lastAssistantAt = now.minusSeconds(300), bucket = "done", sortAt = doneAt)
+        fun opened(vararg replies: AidenChatMessage) = row.admittingReplies(
+            AidenChat(
+                id = "c1", workspaceId = "ws", title = "Chat c1", messages = replies.toList(),
+                createdAt = now.minus(Duration.ofDays(30)), updatedAt = now, revision = "rev-c1"
+            )
+        )
+        fun reply(text: String = "", outcome: AidenMessageOutcome? = null) = AidenChatMessage(
+            id = "m-${text.length}-${outcome != null}", role = AidenChatRole.ASSISTANT, text = text,
+            outcome = outcome, createdAt = now.minusSeconds(10)
+        )
+        // A blank assistant message (the host skips it for lastAssistantAt) keeps Done.
+        val blank = opened(reply("  "))
+        assertEquals(row, blank)
+        assertNull(section(blank))
+        // Visible text ends the hold, as on the desktop.
+        val text = opened(reply("Here it is"))
+        assertEquals(now.minusSeconds(10), text.lastAssistantAt)
+        assertEquals(AidenInboxSection.EARLIER, section(text))
+        // A failed turn is news even with nothing visible.
+        val failed = opened(reply(outcome = AidenMessageOutcome(AidenMessageOutcomeStatus.FAILED)))
+        assertEquals(now.minusSeconds(10), failed.lastAssistantAt)
+        // A cancelled empty turn is not.
+        assertEquals(row, opened(reply(outcome = AidenMessageOutcome(AidenMessageOutcomeStatus.CANCELLED))))
     }
 }

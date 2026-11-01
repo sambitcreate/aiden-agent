@@ -9,11 +9,13 @@ final class AidenRemoteClientTests: XCTestCase {
     override func setUp() {
         super.setUp()
         AidenRemoteMockURLProtocol.handler = nil
+        AidenRemoteMockURLProtocol.hold = nil
         AidenRemoteMockURLProtocol.epoch = UUID().uuidString
     }
 
     override func tearDown() {
         AidenRemoteMockURLProtocol.handler = nil
+        AidenRemoteMockURLProtocol.hold = nil
         super.tearDown()
     }
 
@@ -6397,6 +6399,10 @@ private actor AidenInstallationDataRaceProbe {
 
 private final class AidenRemoteMockURLProtocol: URLProtocol, @unchecked Sendable {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+    /// A request this returns a semaphore for is answered off the loading
+    /// thread once the semaphore is signalled, so the session's other
+    /// requests keep being answered while it is held.
+    static var hold: ((URLRequest) -> DispatchSemaphore?)?
     /// Sessions carry the epoch of the test that made them. A request an
     /// earlier test left behind (a cancelled `async let` can still reach
     /// `startLoading`) fails instead of answering from a later test's handler.
@@ -6415,6 +6421,18 @@ private final class AidenRemoteMockURLProtocol: URLProtocol, @unchecked Sendable
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
         }
+        if let gate = Self.hold?(request) {
+            let request = request
+            DispatchQueue.global().async {
+                _ = gate.wait(timeout: .now() + 5)
+                self.answer(request, with: handler)
+            }
+            return
+        }
+        answer(request, with: handler)
+    }
+
+    private func answer(_ request: URLRequest, with handler: (URLRequest) throws -> (HTTPURLResponse, Data)) {
         do {
             let (response, data) = try handler(request)
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -6466,18 +6484,23 @@ extension AidenRemoteClientTests {
     private struct InboxHome {
         let home: AidenHomeModel
         let coordinator: AidenRemoteCoordinator
+        let cache: AidenChatCache
         let root: URL
     }
+
+    private static let otherMacID = "instance-inbox-other"
 
     private static let inboxChatID = "chat_inbox_triage_01"
 
     /// One idle row on a connected Mac, loaded through the real Home load.
     /// `triage` answers each `POST …/triage` (its body and Idempotency-Key);
-    /// `markRead` answers each `POST …/read`.
+    /// `markRead` answers each `POST …/read`. With `otherMac` a second,
+    /// empty Mac is paired too, to switch to.
     @MainActor
     private func makeInboxHome(
         features: [String] = [AidenServer.chatTriageFeature, AidenServer.chatReadStateFeature],
         failed: Bool = false,
+        otherMac: Bool = false,
         triage: @escaping (URLRequest, [String: Any]) -> (Int, String),
         markRead: @escaping () -> Int = { 204 },
         summaryReads: @escaping () -> Void = {}
@@ -6486,6 +6509,15 @@ extension AidenRemoteClientTests {
             .appending(path: "aiden-inbox-home-\(UUID().uuidString)", directoryHint: .isDirectory)
         let cache = AidenChatCache(root: root)
         let store = AidenInstallationStore(keychain: AidenRemoteMemoryKeychain())
+        let otherCredential = String(repeating: "O", count: 43)
+        if otherMac {
+            _ = try store.savePairing(makeExchange(
+                instanceId: Self.otherMacID,
+                deviceId: "device-inbox-other",
+                credential: otherCredential,
+                capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite]
+            ), trust: makeSystemTrust(), name: "Other Mac")
+        }
         let exchange = makeExchange(
             instanceId: "instance-inbox",
             deviceId: "device-inbox",
@@ -6504,6 +6536,23 @@ extension AidenRemoteClientTests {
         "inboxBucket":"\(failed ? "needs_you" : "pinned")","inboxSortAt":"2026-08-18T19:01:00.000Z"}]}
         """
         AidenRemoteMockURLProtocol.handler = { request in
+            if request.value(forHTTPHeaderField: "Authorization")?.contains(otherCredential) == true {
+                switch (request.httpMethod, request.url?.path ?? "") {
+                case ("GET", "/api/aiden/v1/server"):
+                    return Self.response(for: request, status: 200, json: """
+                    {"protocolVersion":1,"instanceId":"\(Self.otherMacID)","name":"Other Mac","appVersion":"1.0.0",
+                    "capabilities":["server:read","workspace:read","chat:read","chat:write"],
+                    "serverCapabilities":["server:read","workspace:read","chat:read","chat:write"],
+                    "features":[\(featureList)],"connectionMode":"lan","serverTime":"2026-08-18T19:05:00.000Z"}
+                    """)
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: #"{"workspaces":[]}"#)
+                case ("GET", "/api/aiden/v1/chat-summaries"):
+                    return Self.response(for: request, status: 200, json: #"{"summaries":[]}"#)
+                default:
+                    return Self.response(for: request, status: 404, json: Self.inboxError("not_found"))
+                }
+            }
             switch (request.httpMethod, request.url?.path ?? "") {
             case ("GET", "/api/aiden/v1/server"):
                 return Self.response(for: request, status: 200, json: """
@@ -6538,7 +6587,7 @@ extension AidenRemoteClientTests {
         let home = AidenHomeModel(chatCache: cache)
         await home.load(coordinator: coordinator)
         XCTAssertEqual(home.chats.map(\.id), [Self.inboxChatID])
-        return InboxHome(home: home, coordinator: coordinator, root: root)
+        return InboxHome(home: home, coordinator: coordinator, cache: cache, root: root)
     }
 
     private static func inboxError(_ code: String, retryable: Bool = false, currentRevision: String? = nil) -> String {
@@ -6613,7 +6662,7 @@ extension AidenRemoteClientTests {
         XCTAssertEqual(bodies.map { $0["ifRevision"] as? Int }, [3, 7])
         XCTAssertEqual(Set(keys).count, 2, "The retry is a new request, not a replay of the refused one.")
         XCTAssertEqual(inbox.home.chats[0].inbox.triageRevision, 8)
-        XCTAssertNotNil(inbox.home.inboxNotice?.undo)
+        XCTAssertNil(inbox.home.inboxNotice, "The retry wrote over another device's change; Undo could put back a state the Mac no longer had.")
         XCTAssertEqual(summaryReads, readsAfterLoad, "A retry that lands needs no reload.")
 
         // A second conflict in a row is a refusal: one retry only, the row
@@ -6679,5 +6728,102 @@ extension AidenRemoteClientTests {
         XCTAssertFalse(landed)
         XCTAssertEqual(triageWrites, 0, "Done would hide unseen failed output the Mac can't mark read.")
         XCTAssertEqual(inbox.home.chats[0], before)
+    }
+
+    @MainActor
+    func testInboxChatViewedWhileItsWriteWasOutStaysReadWhenTheMacRefuses() async throws {
+        var home: AidenHomeModel?
+        var viewsDuringWrite = true
+        let viewDuringWrite = {
+            guard viewsDuringWrite else { return }
+            DispatchQueue.main.sync { MainActor.assumeIsolated { home?.markViewed(chatID: Self.inboxChatID) } }
+        }
+        var readStatus = 500
+        let inbox = try await makeInboxHome(
+            failed: true,
+            triage: { _, body in
+                viewDuringWrite()
+                return body["snoozeUntil"] != nil
+                    ? (500, Self.inboxError("internal_error", retryable: true))
+                    : (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z"))
+            },
+            markRead: { viewDuringWrite(); return readStatus }
+        )
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        home = inbox.home
+        func unread() { inbox.home.chats[0].unread = true }
+
+        // A refused Mark read.
+        await inbox.home.markRead(chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertFalse(inbox.home.chats[0].unread, "The chat was opened meanwhile, so it has been read.")
+        XCTAssertNotNil(inbox.home.inboxNotice)
+
+        // A refused Snooze that also read unseen failed output.
+        unread()
+        let snoozed = await inbox.home.setTriage(.snooze(until: Date().addingTimeInterval(3600)), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertFalse(snoozed)
+        XCTAssertNil(inbox.home.chats[0].inbox.snoozedUntil)
+        XCTAssertFalse(inbox.home.chats[0].unread)
+
+        // Done landed but its read marker was refused.
+        unread()
+        let done = await inbox.home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertTrue(done)
+        XCTAssertFalse(inbox.home.chats[0].unread)
+
+        // Unviewed, the same refusal brings the dot back.
+        viewsDuringWrite = false
+        unread()
+        await inbox.home.markRead(chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertTrue(inbox.home.chats[0].unread)
+        readStatus = 204
+    }
+
+    @MainActor
+    func testInboxWriteOutDuringASwitchToAnotherMacSettlesOnTheMacItWasSentTo() async throws {
+        for refused in [true, false] {
+            let arrived = expectation(description: "triage sent")
+            let release = DispatchSemaphore(value: 0)
+            var readMarks = 0
+            let inbox = try await makeInboxHome(
+                failed: true,
+                otherMac: true,
+                triage: { _, _ in
+                    refused
+                        ? (500, Self.inboxError("internal_error", retryable: true))
+                        : (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z"))
+                },
+                markRead: { readMarks += 1; return 204 }
+            )
+            defer { try? FileManager.default.removeItem(at: inbox.root) }
+            XCTAssertEqual(inbox.coordinator.activeInstanceId, "instance-inbox")
+            AidenRemoteMockURLProtocol.hold = { request in
+                guard request.url?.path.hasSuffix("/triage") == true else { return nil }
+                arrived.fulfill()
+                return release
+            }
+            defer { AidenRemoteMockURLProtocol.hold = nil }
+
+            let write = Task { await inbox.home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator) }
+            await fulfillment(of: [arrived], timeout: 5)
+            await inbox.coordinator.switchInstallation(to: Self.otherMacID)
+            XCTAssertEqual(inbox.coordinator.activeInstanceId, Self.otherMacID)
+            let saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+            XCTAssertNotNil(saved?.inbox.doneAt, "The optimistic Done was saved for the first Mac.")
+            release.signal()
+            let landed = await write.value
+
+            XCTAssertEqual(landed, !refused)
+            XCTAssertNil(inbox.home.inboxNotice, "A late answer shows nothing over the other Mac.")
+            let settled = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+            let row = try XCTUnwrap(settled)
+            if refused {
+                XCTAssertNil(row.inbox.doneAt, "The first Mac's saved row is put back.")
+                XCTAssertTrue(row.unread)
+                XCTAssertEqual(readMarks, 0)
+            } else {
+                XCTAssertEqual(readMarks, 1, "The Mac that took Done is still sent the read marker.")
+            }
+        }
     }
 }
