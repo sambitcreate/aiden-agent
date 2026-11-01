@@ -142,6 +142,8 @@ export interface WorkspaceWorktreeApplicationDependencies {
   workspaceIsChanging(workspaceId: string): boolean;
   cancelWorkspaceOperations(workspaceId: string, exceptSignal: AbortSignal): Promise<void>;
   closeWorkspaceTerminals(workspaceId: string): Promise<void>;
+  /** Closes the worktree's Git metadata watcher; a later display read re-observes. */
+  closeWorkspaceGitWatcher?(workspaceId: string): void;
   cancelWorkspaceGeneration(workspaceId: string): Promise<void>;
   cancelWorkspaceSchedules(workspaceId: string): Promise<void>;
   resumeWorkspaceSchedules(workspaceId: string): Promise<void>;
@@ -680,6 +682,8 @@ export function createWorkspaceWorktreeApplicationService(
         return result;
       } finally {
         finishMutation();
+        // Local and Remote deletions both land here.
+        dependencies.closeWorkspaceGitWatcher?.(workspaceId);
       }
     },
   );

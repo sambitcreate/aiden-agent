@@ -134,6 +134,12 @@ Remote Access diagnostics keep only closed route categories, outcome/status clas
 
 ## Connection recovery
 
+On iPhone and iPad, the disconnected recovery panel offers **Switch connection**
+alongside **Retry connection**. It opens the saved-computer list, where you can
+select another paired computer or choose **Pair Another Aiden Agent** without
+reconnecting first. Switching remains available when a secure-identity failure
+prevents retrying.
+
 Settings → Connections separates computers that control this device from computers
 this device controls. A paired computer shows its current route, route count, and last
 successful chat synchronization. “Syncing chats” means the secure connection is open

@@ -9,6 +9,7 @@ import {
   repositoryRelativePath,
   type RepositoryIdentity,
 } from "./repository-identity.js";
+import { createProcessGroupTerminator, decodeCappedUtf8 } from "../shared/process-group.js";
 import { redactUrlCredentials } from "../shared/redaction.js";
 import { spawn, type ChildProcess } from "child_process";
 import { createHash, randomUUID } from "crypto";
@@ -75,6 +76,21 @@ export class GitServiceError extends Error {
     super(message);
     this.name = "GitServiceError";
   }
+}
+
+/** Waits for a queued mutation, but lets a cancelled read leave the queue at once. */
+function waitUnlessAborted(pending: Promise<void>, signal: AbortSignal | undefined): Promise<void> {
+  if (!signal) return pending;
+  const cancelled = () => new GitServiceError("aborted", "Git operation was cancelled.");
+  if (signal.aborted) return Promise.reject(cancelled());
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => reject(cancelled());
+    signal.addEventListener("abort", onAbort, { once: true });
+    pending.then(
+      () => { signal.removeEventListener("abort", onAbort); resolve(); },
+      () => { signal.removeEventListener("abort", onAbort); resolve(); },
+    );
+  });
 }
 
 export class GitManagedWorktreeDeleteError extends GitServiceError {
@@ -982,20 +998,6 @@ export function parseGitWorktrees(raw: string, currentPath: string): GitWorktree
   return worktrees;
 }
 
-function terminateProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (!child.pid) return;
-  try {
-    if (process.platform === "win32") child.kill(signal);
-    else process.kill(-child.pid, signal);
-  } catch {
-    try {
-      child.kill(signal);
-    } catch {
-      // The process may already have exited.
-    }
-  }
-}
-
 function reviewFileSignature(stats: BigIntStats): string {
   return `${stats.dev}:${stats.ino}:${stats.mode}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`;
 }
@@ -1120,14 +1122,12 @@ export class GitService {
       let stderrBytes = 0;
       let termination: TerminationReason | undefined;
       let settled = false;
-      let killTimer: NodeJS.Timeout | undefined;
+      const terminator = createProcessGroupTerminator(child, { killGraceMs: KILL_GRACE_MS });
 
       const terminate = (reason: TerminationReason) => {
         if (termination || settled) return;
         termination = reason;
-        terminateProcessGroup(child, "SIGTERM");
-        killTimer = setTimeout(() => terminateProcessGroup(child, "SIGKILL"), KILL_GRACE_MS);
-        killTimer.unref();
+        terminator.terminate();
       };
       const append = (target: Buffer[], chunk: Buffer, stream: "stdout" | "stderr") => {
         const currentBytes = stream === "stdout" ? stdoutBytes : stderrBytes;
@@ -1154,14 +1154,13 @@ export class GitService {
 
       const cleanup = () => {
         clearTimeout(timeout);
-        if (killTimer) clearTimeout(killTimer);
         options.signal?.removeEventListener("abort", abort);
       };
       const finishError = (error: GitServiceError) => {
         if (settled) return;
         settled = true;
         cleanup();
-        reject(error);
+        void terminator.finished().then(() => reject(error));
       };
 
       child.once("error", (error) => {
@@ -1171,8 +1170,14 @@ export class GitService {
         if (settled) return;
         settled = true;
         cleanup();
-        const stdoutText = Buffer.concat(stdout).toString("utf8");
-        const stderrText = Buffer.concat(stderr).toString("utf8");
+        // Escalation is not cancelled by Git closing: helpers it started can
+        // ignore SIGTERM and outlive it. Settle once the group is gone.
+        void terminator.finished().then(() => settleClosed(code, signal));
+      });
+      const settleClosed = (code: number | null, signal: NodeJS.Signals | null) => {
+        const truncated = termination === "output_limit";
+        const stdoutText = decodeCappedUtf8(Buffer.concat(stdout), truncated);
+        const stderrText = decodeCappedUtf8(Buffer.concat(stderr), truncated);
         if (termination === "aborted") {
           reject(new GitServiceError("aborted", "Git operation was cancelled."));
           return;
@@ -1214,7 +1219,7 @@ export class GitService {
           stdoutText ||
           `Git exited with code ${exitCode}${signal ? ` (${signal})` : ""}.`;
         reject(new GitServiceError("command_failed", publicGitMessage(detail, cwd)));
-      });
+      };
     });
   }
 
@@ -1535,7 +1540,7 @@ export class GitService {
         throw new GitServiceError("aborted", "Git operation was cancelled.");
       }
       const active = this.mutations.get(repo.commonDir);
-      if (active) await active;
+      if (active) await waitUnlessAborted(active, signal);
       const epoch = this.mutationEpochs.get(repo.commonDir) ?? 0;
       const value = await operation();
       if (signal?.aborted) {

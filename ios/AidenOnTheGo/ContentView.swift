@@ -65,6 +65,11 @@ final class AidenExternalNewChatQueue {
 }
 
 struct ContentView: View {
+    private enum ConnectionRecoveryDestination: String, Identifiable {
+        case installations, pairing
+        var id: Self { self }
+    }
+
     @Bindable var coordinator: AidenRemoteCoordinator
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("aiden.mobileOnboarding.v1.complete") private var hasCompletedMobileOnboarding = false
@@ -76,6 +81,7 @@ struct ContentView: View {
     @State private var navigationRequest: AidenNavigationRequest?
     @State private var sceneConnectionRefreshInProgress = false
     @State private var sceneRefreshGate = AidenSceneRefreshGate(refreshOnFirstActivation: true)
+    @State private var connectionRecoveryDestination: ConnectionRecoveryDestination?
 
     var body: some View {
         Group {
@@ -97,24 +103,21 @@ struct ContentView: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             if case .offline = coordinator.connectionState, let issue = coordinator.connectionIssue {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(issue.title).font(.subheadline.weight(.semibold))
-                    if let installation = coordinator.installationStore.activeInstallation {
-                        Text(installation.name).font(.caption.weight(.medium))
-                        if let last = installation.lastConnectedAt {
-                            Text("Last connected \(last.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    Text(issue.message).font(.caption).foregroundStyle(.secondary)
-                    if issue.canRetry {
-                        Button("Retry connection") { Task { await coordinator.connectActiveInstallation() } }
-                            .buttonStyle(.bordered)
-                    }
+                AidenConnectionRecoveryView(coordinator: coordinator, issue: issue) {
+                    connectionRecoveryDestination = .installations
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .background(.regularMaterial)
-                .accessibilityElement(children: .contain)
+            }
+        }
+        // Keep the sheet on the stable root so a foreground reconnect cannot
+        // remove connection management while the person is using it.
+        .sheet(item: $connectionRecoveryDestination) { destination in
+            switch destination {
+            case .installations:
+                AidenInstallationsView(coordinator: coordinator, addInstallation: {
+                    connectionRecoveryDestination = .pairing
+                })
+            case .pairing:
+                AidenPairingView(coordinator: coordinator, onPaired: { connectionRecoveryDestination = nil })
             }
         }
         .task { await coordinator.start() }
@@ -161,7 +164,10 @@ struct ContentView: View {
             _ = foregroundIntents.take()
         }
         .onChange(of: coordinator.connectionState) { _, state in
-            if state == .needsPairing { externalNewChats.invalidate() }
+            if state == .needsPairing {
+                externalNewChats.invalidate()
+                connectionRecoveryDestination = nil
+            }
             if state == .connected {
                 consumeExternalNewChatIfReady()
                 Task { await consumeForegroundIntentIfReady() }
@@ -342,6 +348,50 @@ struct ContentView: View {
             return
         }
         navigationRequest = request
+    }
+}
+
+/// Connection management must remain reachable without a successful connection,
+/// including failures where retry is unsafe, such as a changed certificate.
+struct AidenConnectionRecoveryView: View {
+    @Bindable var coordinator: AidenRemoteCoordinator
+    let issue: AidenConnectionIssue
+    let switchConnection: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(issue.title).font(.subheadline.weight(.semibold))
+            if let installation = coordinator.installationStore.activeInstallation {
+                Text(installation.name).font(.caption.weight(.medium))
+                if let last = installation.lastConnectedAt {
+                    Text("Last connected \(last.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Text(issue.message).font(.caption).foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    recoveryActions
+                }
+                VStack(alignment: .leading) {
+                    recoveryActions
+                }
+            }
+            .buttonStyle(.bordered)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(.regularMaterial)
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var recoveryActions: some View {
+        if issue.canRetry {
+            Button("Retry connection") { Task { await coordinator.connectActiveInstallation() } }
+        }
+        Button("Switch connection", action: switchConnection)
+            .accessibilityHint("Choose a paired computer or pair another Aiden Agent.")
     }
 }
 

@@ -298,6 +298,7 @@
         "main/shared/guards.test.ts",
         "main/shared/path-containment.test.ts",
         "main/shared/redaction.test.ts",
+        "main/shared/process-group.test.ts",
         "main/windows/pill-window-security.test.ts",
         "main/windows/design-window-core.test.ts",
         "main/native-ipc-core.test.ts",
