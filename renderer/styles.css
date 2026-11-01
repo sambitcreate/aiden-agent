@@ -2776,14 +2776,18 @@ textarea {
 .appearance-sidebar-preview-column i:nth-of-type(even) { width: 72%; }
 .appearance-sidebar-preview-column i[data-indent] { margin-left: 12%; width: 76%; }
 
-/* The Inbox leads with the row that waits on the person, in its soft status fill. */
+/* The Inbox leads with the row that waits on the person, tinted amber. */
 .appearance-sidebar-preview-column i[data-waiting] {
   height: 7px;
   margin: 0 -6%;
   width: 112%;
-  /* Drawn like the other bars, in the status tone, so the miniature reads at its size. */
-  background: var(--status-warning);
-  opacity: 0.4;
+  /* Drawn from the warning support tone, at full opacity rather than the other
+     bars' dimmed one. Light schemes darken that tone for text contrast, so the bar
+     lifts it to at least an amber lightness and chroma, keeping its hue, and reads
+     amber at miniature size in both themes. */
+  background: var(--support-warning);
+  background: oklch(from var(--support-warning) max(l, 0.8) max(c, 0.15) h / 0.8);
+  opacity: 1;
 }
 
 .appearance-sidebar-option-label {

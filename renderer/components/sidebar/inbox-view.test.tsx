@@ -7,7 +7,7 @@ import { createPortal } from "react-dom";
 import { TooltipProvider } from "../ui";
 import { ChatRow } from "./chat-row";
 import { InboxView, type InboxRowContext } from "./inbox-view";
-import { botInboxRows, inboxRowAction, type InboxEntry } from "../../lib/sidebar-inbox-view";
+import { botInboxRows, inboxRowAction, inboxShortcutTargets, type InboxEntry } from "../../lib/sidebar-inbox-view";
 import { botFixture } from "../../main/bots/test-fixtures";
 import type { InboxSignals } from "../../lib/sidebar-inbox";
 import { projectOrderKey } from "../../lib/sidebar-organization";
@@ -80,6 +80,7 @@ function view(
     searching?: boolean;
     shelfHost?: HTMLElement | null;
     renderRow?: (entry: InboxEntry, context: InboxRowContext) => React.ReactNode;
+    onShortcutOrderChange?: (keys: readonly string[]) => void;
   } = {},
 ) {
   return (
@@ -91,6 +92,7 @@ function view(
         searching={extra.searching ?? false}
         shelfHost={extra.shelfHost ?? null}
         renderRow={extra.renderRow ?? renderRow(extra.onMarkRead)}
+        {...(extra.onShortcutOrderChange ? { onShortcutOrderChange: extra.onShortcutOrderChange } : {})}
       />
     </TooltipProvider>
   );
@@ -269,6 +271,34 @@ test("a Bot read elsewhere while the pointer is on the list stays put, read, unt
 
   fireEvent.pointerOver(document.body);
   assert.equal(screen.queryByRole("button", { name: /^Trip Planner,/u }), null);
+});
+
+test("⌘N opens the Nth row on screen, a Bot lingering in Needs you after it was answered elsewhere included", () => {
+  let reported: readonly string[] = [];
+  const onShortcutOrderChange = (keys: readonly string[]) => {
+    reported = keys;
+  };
+  const chats = [entry("u", { unread: true, updatedAt: NOW - MINUTE }), entry("a")];
+  const waiting = botRows({ needsYou: true });
+  const { rerender } = render(view([...chats, ...waiting.listed], { unlisted: waiting.unlisted, onShortcutOrderChange }));
+  // Answered from the Bot list or its chat: the Bot no longer qualifies, but lingers 400ms.
+  const answered = botRows({});
+  assert.equal(answered.listed.length, 0);
+  rerender(view([...chats, ...answered.listed], { unlisted: answered.unlisted, onShortcutOrderChange }));
+
+  // The sidebar's lookup: listed rows first, then Bots that no longer qualify.
+  const listed = new Map(chats.map((item) => [item.key, item] as const));
+  const unlisted = new Map(answered.unlisted.map((item) => [item.key, item] as const));
+  const resolve = (key: string) => listed.get(key) ?? unlisted.get(key);
+  const onScreen = rowTitles(inboxRoot());
+  assert.deepEqual(onScreen, ["Trip Planner", "Chat u", "Chat a"]);
+  const targets = inboxShortcutTargets(reported, resolve, null);
+  assert.deepEqual(targets.jump.map((item) => item?.title), onScreen, "⌘1 opens the lingering Bot, ⌘2 the row labelled ⌘2");
+  assert.equal(targets.next?.title, "Trip Planner");
+
+  const fromChat = inboxShortcutTargets(reported, resolve, chats[0]!.key);
+  assert.equal(fromChat.previous?.title, "Trip Planner");
+  assert.equal(fromChat.next?.title, "Chat a");
 });
 
 test("a Bot answered elsewhere lingers 400ms in Needs you; a deleted one goes at once", () => {

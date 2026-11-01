@@ -83,7 +83,9 @@ import {
   botInboxRows,
   botInboxKey,
   filterInboxEntries,
+  INBOX_SHORTCUT_LIMIT,
   inboxRowAction,
+  inboxShortcutTargets,
   localInboxEntries,
   markReadThroughMessageId,
   pendingAttentionRequest,
@@ -692,7 +694,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       current.length === keys.length && current.every((key, index) => key === keys[index]) ? current : keys);
   }, []);
   const inboxShortcutNumbers = React.useMemo(
-    () => new Map(inboxShortcutKeys.slice(0, 9).map((key, index) => [key, index + 1] as const)),
+    () => new Map(inboxShortcutKeys.slice(0, INBOX_SHORTCUT_LIMIT).map((key, index) => [key, index + 1] as const)),
     [inboxShortcutKeys],
   );
   const manualReorderEnabled = view === "projects" && projectSort === "manual" && !searching;
@@ -1018,24 +1020,19 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     [navigate, openChat, openRemoteChat],
   );
 
-  // In the Inbox, ⌘1–9 and previous/next follow its visible rows, remote ones included.
+  // In the Inbox, ⌘1–9 and previous/next follow its visible rows, remote ones
+  // and held Bots included, in the order that numbers their hints.
   React.useEffect(() => {
     if (!inboxActive) return;
-    const keys = inboxShortcutKeys.filter((key) => inboxEntriesByKey.has(key));
-    const unregister = keys.slice(0, 9).map((key, index) =>
-      registerCommand(`chat.jump.${index + 1}` as CommandId, () => openInboxEntry(inboxEntriesByKey.get(key))),
+    const resolve = (key: string) => inboxEntriesByKey.get(key) ?? inboxUnlisted.get(key);
+    const { jump, previous, next } = inboxShortcutTargets(inboxShortcutKeys, resolve, activeInboxKey);
+    const unregister = jump.flatMap((entry, index) =>
+      entry ? [registerCommand(`chat.jump.${index + 1}` as CommandId, () => openInboxEntry(entry))] : [],
     );
-    const current = activeInboxKey ? keys.indexOf(activeInboxKey) : -1;
-    const previousKey = current > 0 ? keys[current - 1] : undefined;
-    const nextKey = current >= 0 ? keys[current + 1] : keys[0];
-    if (previousKey) {
-      unregister.push(registerCommand("chat.previous", () => openInboxEntry(inboxEntriesByKey.get(previousKey))));
-    }
-    if (nextKey) {
-      unregister.push(registerCommand("chat.next", () => openInboxEntry(inboxEntriesByKey.get(nextKey))));
-    }
+    if (previous) unregister.push(registerCommand("chat.previous", () => openInboxEntry(previous)));
+    if (next) unregister.push(registerCommand("chat.next", () => openInboxEntry(next)));
     return () => unregister.forEach((dispose) => dispose());
-  }, [activeInboxKey, inboxActive, inboxEntriesByKey, inboxShortcutKeys, openInboxEntry, registerCommand]);
+  }, [activeInboxKey, inboxActive, inboxEntriesByKey, inboxShortcutKeys, inboxUnlisted, openInboxEntry, registerCommand]);
 
   React.useEffect(() => {
     if (inboxActive) return;

@@ -284,17 +284,19 @@ const routeTree = rootRoute.addChildren([
 
 const queryClient = createAppQueryClient();
 
-const router = createRouter({
-  routeTree,
-  // Back/Forward (sidebar history buttons, Settings' Back to app) run leave guards too,
-  // and an ask for the Bot list rides on its history entries.
-  history: guardHistoryTraversal(carryBotListRequest(createMemoryHistory())),
-  defaultPreloadStaleTime: 0,
-  scrollRestoration: true,
-  context: {
-    queryClient,
-  },
-});
+// An ask for the Bot list rides on the history entries the router commits.
+const router = carryBotListRequest(
+  createRouter({
+    routeTree,
+    // Back/Forward (sidebar history buttons, Settings' Back to app) run leave guards too.
+    history: guardHistoryTraversal(createMemoryHistory()),
+    defaultPreloadStaleTime: 0,
+    scrollRestoration: true,
+    context: {
+      queryClient,
+    },
+  }),
+);
 
 declare module "@tanstack/react-router" {
   interface Register {

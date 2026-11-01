@@ -522,3 +522,29 @@ export function inboxShortcutOrder(held: HeldInboxOrder, options: { workingExpan
       : held[section].filter((row) => !row.leaving).map((row) => row.key),
   );
 }
+
+/** How many Inbox rows get a ⌘1–9 shortcut. */
+export const INBOX_SHORTCUT_LIMIT = 9;
+
+/**
+ * What ⌘1–9 and previous/next open, given the keys the Inbox reports in
+ * on-screen order (the same order that numbers the rows' hints): ⌘N opens the
+ * Nth row, a held row that no longer qualifies included, so the binding always
+ * matches the hint. `resolve` finds a key's live entry, listed or held.
+ */
+export function inboxShortcutTargets<Entry>(
+  keys: readonly string[],
+  resolve: (key: string) => Entry | undefined,
+  activeKey: string | null,
+): { jump: (Entry | undefined)[]; previous: Entry | undefined; next: Entry | undefined } {
+  const jump = keys.slice(0, INBOX_SHORTCUT_LIMIT).map(resolve);
+  const navigable = keys.filter((key) => resolve(key) !== undefined);
+  const current = activeKey ? navigable.indexOf(activeKey) : -1;
+  const previousKey = current > 0 ? navigable[current - 1] : undefined;
+  const nextKey = current >= 0 ? navigable[current + 1] : navigable[0];
+  return {
+    jump,
+    previous: previousKey === undefined ? undefined : resolve(previousKey),
+    next: nextKey === undefined ? undefined : resolve(nextKey),
+  };
+}

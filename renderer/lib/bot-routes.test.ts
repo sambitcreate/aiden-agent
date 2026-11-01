@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createMemoryHistory } from "@tanstack/react-router";
+import { createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import {
   botChatPath,
   botChatRouteBotId,
@@ -13,6 +13,7 @@ import {
   rememberRoute,
   sidebarShowsBotList,
 } from "./bot-routes";
+import { guardHistoryTraversal } from "./guarded-history";
 
 test("Bots pages are /bots and everything under it, and nothing that only starts with the same letters", () => {
   for (const path of ["/bots", "/bots/", "/bots/b1", "/bots/b1/chat", "/host/h1/bots/b1/chat"]) assert.equal(isBotsPath(path), true, path);
@@ -57,45 +58,83 @@ test("with the Inbox as the view, only an entry that asked for the Bot list show
   assert.equal(sidebarShowsBotList({ pathname: "/scheduled", state: {} }, false), false);
 });
 
-test("an ask for the Bot list follows the person through Bots, ends when they leave, and comes back with Back", () => {
-  const history = carryBotListRequest(createMemoryHistory({ initialEntries: ["/chat/c1"] }));
-  const showsList = () => sidebarShowsBotList(history.location, true);
+// The app's router shape: guarded memory history, the ask carried on commit,
+// and a history subscriber that loads each entry (RouterProvider's job in the app).
+async function botsRouter(initialEntry: string) {
+  const root = createRootRoute();
+  const route = (path: string) => createRoute({ getParentRoute: () => root, path });
+  const router = carryBotListRequest(
+    createRouter({
+      routeTree: root.addChildren([route("/bots"), route("/bots/$botId/chat"), route("/chat/$chatId"), route("/scheduled")]),
+      history: guardHistoryTraversal(createMemoryHistory({ initialEntries: [initialEntry] })),
+    }),
+  );
+  router.history.subscribe(() => void router.load());
+  await router.load();
+  const go = (options: { to: string; params?: Record<string, string>; search?: Record<string, string>; state?: object; replace?: boolean }) =>
+    router.navigate(options as never);
+  const showsList = () => sidebarShowsBotList(router.state.location, true);
+  return { router, history: router.history, go, showsList };
+}
+
+test("an ask for the Bot list follows the person through Bots, ends when they leave, and comes back with Back", async () => {
+  const { history, go, showsList } = await botsRouter("/chat/c1");
 
   // A Bot opened directly (the Inbox, a notification) is no ask.
-  history.push("/bots/9f0c/chat", {});
+  await go(botChatPath("9f0c"));
   assert.equal(showsList(), false);
 
   // The Bots entry asks; /bots then replaces itself with the last Bot, and other Bots open from the list.
-  const { to, state } = botListLocation();
-  history.push(to, state);
+  await go(botListLocation());
   assert.equal(showsList(), true);
-  history.replace("/bots/9f0c/chat", {});
+  await go({ ...botChatPath("9f0c"), replace: true });
   assert.equal(showsList(), true, "the redirect to the last Bot keeps the ask");
-  history.push("/bots/a71e/chat?draft=1", {});
+  await go({ ...botChatPath("a71e"), search: { draft: "1" } });
   assert.equal(showsList(), true);
 
   // Leaving Bots ends it, so the next Bot opened directly keeps the Inbox.
-  history.push("/scheduled", {});
+  await go({ to: "/scheduled" });
   assert.equal(history.location.state.aidenBotList, undefined);
-  history.push("/bots/9f0c/chat", {});
+  await go(botChatPath("9f0c"));
   assert.equal(showsList(), false);
 
   // Back returns to the entries that asked; Forward to the one that didn't.
   history.back();
   history.back();
   assert.equal(history.location.pathname, "/bots/a71e/chat");
-  assert.equal(showsList(), true);
+  assert.equal(sidebarShowsBotList(history.location, true), true);
   history.back();
   history.back();
   assert.equal(history.location.pathname, "/bots/9f0c/chat");
-  assert.equal(showsList(), false, "the Bot opened before the ask still keeps the Inbox");
+  assert.equal(sidebarShowsBotList(history.location, true), false, "the Bot opened before the ask still keeps the Inbox");
   history.forward();
-  assert.equal(showsList(), true);
+  assert.equal(sidebarShowsBotList(history.location, true), true);
 });
 
-test("an entry that says it isn't an ask for the list stays that way inside Bots", () => {
-  const history = carryBotListRequest(createMemoryHistory({ initialEntries: ["/bots"] }));
-  history.replace("/bots", { aidenBotList: true });
-  history.push("/bots/9f0c/chat", { aidenBotList: false });
+test("opening the Bot that's already open adds no history entry, whether or not its entry asked for the list", async () => {
+  const { history, go, showsList } = await botsRouter("/chat/c1");
+  await go(botChatPath("9f0c"));
+  const plainLength = history.length;
+  await go(botChatPath("9f0c"));
+  assert.equal(history.length, plainLength);
+
+  await go(botListLocation());
+  await go({ ...botChatPath("9f0c"), replace: true });
+  const askedLength = history.length;
+  await go(botChatPath("9f0c"));
+  await go(botChatPath("9f0c"));
+  assert.equal(history.length, askedLength, "a row click or ⌘N on the open Bot is a no-op");
+  assert.equal(showsList(), true);
+
+  // One Back still leaves the asked entry for the Bot opened before it.
+  history.back();
+  assert.equal(history.location.pathname, "/bots/9f0c/chat");
   assert.equal(sidebarShowsBotList(history.location, true), false);
+});
+
+test("an entry that says it isn't an ask for the list stays that way inside Bots", async () => {
+  const { go, showsList } = await botsRouter("/chat/c1");
+  await go(botListLocation());
+  await go({ ...botChatPath("9f0c"), state: { aidenBotList: false } });
+  assert.equal(showsList(), false);
 });

@@ -2,7 +2,7 @@
 // on there, where ‹ in the Bots sidebar goes back to (spec §8, §9), and
 // whether the person asked for the Bot list while the Inbox is the sidebar view.
 
-import type { RouterHistory } from "@tanstack/react-router";
+import type { AnyRouter } from "@tanstack/react-router";
 
 const BOT_CHAT_ROUTE = /^\/bots\/([^/]+)\/chat\/?$/u;
 const BOT_ROUTE = /^\/bots\/([^/]+)(?:\/chat)?\/?$/u;
@@ -65,8 +65,8 @@ declare module "@tanstack/history" {
 /**
  * The Bot list, asked for: the Bots nav entry, `bots.open` and the All Bots
  * links navigate here. The ask lives on the history entry, so Back and Forward
- * bring it back with the page, and a plain `/bots` (after deleting a Bot, or
- * from an error) doesn't count as one.
+ * bring it back with the page. A plain `/bots` (after deleting a Bot, or from
+ * an error) doesn't start an ask; it keeps one already in progress inside Bots.
  */
 export function botListLocation(): { to: "/bots"; state: { aidenBotList: true } } {
   return { to: "/bots", state: { aidenBotList: true } };
@@ -84,23 +84,27 @@ function pathnameOf(href: string): string {
  * other Bots) and ends when the person leaves Bots; an entry that says either
  * way itself keeps what it says.
  */
-export function nextBotListState<T extends object>(current: HistoryStateLike, href: string, state: T | undefined): T | undefined {
-  if (!isBotsPath(pathnameOf(href))) {
-    if (!state || !("aidenBotList" in state)) return state;
+function nextBotListState<T extends object>(current: HistoryStateLike, pathname: string, state: T): T {
+  if (!isBotsPath(pathname)) {
+    if (!("aidenBotList" in state)) return state;
     const { aidenBotList: _dropped, ...rest } = state as T & { aidenBotList?: unknown };
     return rest as T;
   }
-  if (state && "aidenBotList" in state) return state;
-  return current?.aidenBotList === true ? ({ ...state, aidenBotList: true } as T) : state;
+  if ("aidenBotList" in state) return state;
+  return current?.aidenBotList === true ? { ...state, aidenBotList: true } : state;
 }
 
-/** Carry an ask for the Bot list from entry to entry within Bots (see `nextBotListState`). */
-export function carryBotListRequest<T extends RouterHistory>(history: T): T {
-  const push = history.push;
-  const replace = history.replace;
-  history.push = (path, state, options) => push(path, nextBotListState(history.location.state, path, state), options);
-  history.replace = (path, state, options) => replace(path, nextBotListState(history.location.state, path, state), options);
-  return history;
+/**
+ * Carry an ask for the Bot list from entry to entry within Bots (see
+ * `nextBotListState`). It goes on each location before the router commits it,
+ * so the router compares the state the entry will really have: opening the
+ * Bot that's already open stays a no-op instead of pushing a duplicate entry.
+ */
+export function carryBotListRequest<T extends Pick<AnyRouter, "history" | "commitLocation">>(router: T): T {
+  const commit = router.commitLocation;
+  router.commitLocation = (next) =>
+    commit({ ...next, state: nextBotListState(router.history.location.state, next.pathname, next.state) });
+  return router;
 }
 
 /**
@@ -108,6 +112,8 @@ export function carryBotListRequest<T extends RouterHistory>(history: T): T {
  * any Bots page it does, except with the Inbox as the view: a Bot opened from
  * the Inbox, a notification or a redirect keeps the Inbox (it owns ⌘1–9
  * there), and the list shows only on an entry where the person asked for it.
+ * A notification or redirect that opens a Bot from inside an ask keeps the
+ * list, since the ask carries through Bots.
  */
 export function sidebarShowsBotList(location: { pathname: string; state?: HistoryStateLike }, inboxView: boolean): boolean {
   if (!isBotsPath(location.pathname)) return false;
