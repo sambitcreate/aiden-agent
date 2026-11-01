@@ -375,15 +375,17 @@ test("answering an approval while the run's question still waits keeps a snooze 
   await waitFor(async () => (await store.get("chat-a"))?.snoozedUntil === undefined);
 });
 
-test("a listener that throws on a write never stops the next snooze from waking", async (t) => {
+test("a listener that throws on a write is logged, and never fails the write or stops the next snooze", async (t) => {
   const root = await tmpDir(t);
   let failPublish = false;
   const timers = manualTimers();
+  const logged: unknown[] = [];
   const store = new ChatTriageStore(() => root, {
     now: () => 1_000,
     onChange: () => {
       if (failPublish) throw new Error("broadcast failed");
     },
+    logError: (_message, error) => logged.push(error),
     ...timers,
   });
   t.after(() => store.dispose());
@@ -393,13 +395,21 @@ test("a listener that throws on a write never stops the next snooze from waking"
   await waitFor(() => timers.live().length === 1 && timers.live()[0]!.ms === 4_000);
 
   // Waking the sooner chat, or forgetting it, leaves the later one armed even when the broadcast fails.
+  // The writes stand and the calls succeed, so a Remote retry of the same write
+  // doesn't read a conflict.
   failPublish = true;
-  await assert.rejects(store.wake("soon"), /broadcast failed/u);
-  assert.deepEqual(timers.live().map((timer) => timer.ms), [8_000]);
-  await assert.rejects(store.set("other", { snoozeUntil: 3_000 }), /broadcast failed/u);
-  assert.deepEqual(timers.live().map((timer) => timer.ms), [2_000]);
-  await assert.rejects(store.remove("other"), /broadcast failed/u);
-  assert.deepEqual(timers.live().map((timer) => timer.ms), [8_000]);
+  const live = () => timers.live().map((timer) => timer.ms).join(",");
+  assert.equal(await store.wake("soon"), true);
+  assert.equal((await store.get("soon"))?.snoozedUntil, undefined);
+  await waitFor(() => live() === "8000");
+  const other = await store.set("other", { snoozeUntil: 3_000 });
+  assert.equal(other.ok, true);
+  assert.equal((await store.get("other"))?.snoozedUntil, 3_000);
+  await waitFor(() => live() === "2000");
+  await store.remove("other");
+  assert.equal(await store.get("other"), null);
+  await waitFor(() => live() === "8000");
+  assert.equal(logged.length, 3, "each failed announcement is logged");
 });
 
 test("a failed clear still re-arms, and a wake check after a clock jump clears a passed snooze", async (t) => {

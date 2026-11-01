@@ -1,9 +1,10 @@
-import { app, ipcMain, powerMonitor } from "../platform.js";
+import { app, ipcMain, logger, powerMonitor } from "../platform.js";
 import { ChatTriageStore, wakeTriageOnAttention } from "./chat-triage.js";
 import { hostRunRegistry } from "./host-runs-main.js";
 
 export const chatTriage = new ChatTriageStore(() => app.getPath("userData"), {
   onChange: (snapshot) => ipcMain.broadcast("chats:triage-changed", snapshot),
+  logError: (message, error) => logger.error("chat-triage", message, error),
 });
 
 let stopWaking: (() => void) | null = null;

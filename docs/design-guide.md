@@ -214,10 +214,12 @@ the date ("Nov 9, 9:00 AM"), since the label already names the day. This
 evening drops out once it is less than an hour away. A row that waits on the
 person or runs offers Pin alone, since Done or Snooze wouldn't move it, plus
 **Unsnooze** while a snooze set earlier is still running. On an unread failed
-run, Mark done and Snooze also mark the chat read; a paired host that can't
-mark it read offers Pin alone there. In search, a Done or snoozed match shows a
-quiet "Done" or a short "Until 6 PM" / "Until Mon 9 AM" / "Until Nov 16"
-status, short enough to keep the workspace beside it on a narrow sidebar (its
+run, Mark done and Snooze also mark the chat read, and the row leaves Needs you
+the moment the person acts (it reads unread again, with an error toast, if the
+read fails); a paired host that can't mark it read offers Pin alone there. In
+search, a Done or snoozed match shows a quiet "Done" or a short "Until 6 PM" /
+"Until Mon 9 AM" / "Until Nov 16" status (a 24-hour clock keeps its minutes,
+"Until 18:00"), short enough to keep the workspace beside it on a narrow sidebar (its
 accessible name still reads "Snoozed until" with the full time), and its menu
 offers **Mark not done** or **Unsnooze** in place of Mark done and Snooze. A host that can't take writes shows the items disabled rather
 than hiding them. Pinned chats get their own **Pinned** group between Needs you

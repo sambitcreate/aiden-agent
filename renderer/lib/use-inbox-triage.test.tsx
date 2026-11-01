@@ -6,7 +6,9 @@ import { toast, type ToastT } from "sonner";
 import type { ChatTriageEntry, ChatTriageResult } from "../shared/chat-triage";
 import type { PeerHostView } from "../shared/peer-host";
 import { LOCAL_SIDEBAR_HOST_ID, projectOrderKey } from "./sidebar-organization";
-import { useInboxTriage, type InboxTriageRow } from "./use-inbox-triage";
+import { settledInboxReads, triageSignals, withInboxReadsPending } from "./inbox-triage";
+import { inboxState, type InboxSignals } from "./sidebar-inbox";
+import { useInboxTriage, type InboxTriage, type InboxTriageRow } from "./use-inbox-triage";
 
 const NO_PEERS: ReadonlyMap<string, PeerHostView> = new Map();
 const ROW: InboxTriageRow = {
@@ -86,13 +88,13 @@ test("a row moves the moment it is marked done, and moves back when the write fa
   const { result } = await mount();
   assert.equal(result.current.entryFor(ROW), undefined);
 
-  const written: (readonly InboxTriageRow[])[] = [];
+  const reads: InboxTriageRow[] = [];
   let acting!: Promise<void>;
   act(() => {
-    acting = result.current.act("done", [ROW], undefined, { onWritten: (rows) => written.push(rows) });
+    acting = result.current.act("done", [ROW], undefined, { markRead: async (row) => void reads.push(row) });
   });
   assert.notEqual(result.current.entryFor(ROW)?.doneAt, undefined, "the row reads Done before the host answers");
-  assert.deepEqual(written, [], "nothing follows the write before the host takes it");
+  assert.deepEqual(reads, [], "no read is sent before the host takes the write");
 
   // Electron wraps a handler's error in its remote-method prefix.
   await settle(store.answers[0], new Error("Error invoking remote method 'chats:setTriage': Error: The disk is full."));
@@ -100,24 +102,95 @@ test("a row moves the moment it is marked done, and moves back when the write fa
   assert.equal(result.current.entryFor(ROW), undefined, "the row shows what it showed before");
   assert.ok(shownToasts().some((item) => item.type === "error" && item.title === "The disk is full."));
   assert.equal(triageToast(), undefined, "nothing to undo");
-  assert.deepEqual(written, [], "a write that failed leaves the chat unread");
+  assert.deepEqual(reads, [], "a write that failed leaves the chat unread");
+  assert.equal(result.current.readsPending.size, 0);
 });
 
-test("what follows a write runs once the host takes it, only for the rows it took", async () => {
+test("the read sent with an action goes once the host takes the write, only for the rows it took", async () => {
   const store = installStore();
   const { result } = await mount();
   const other: InboxTriageRow = { key: projectOrderKey(LOCAL_SIDEBAR_HOST_ID, "c2"), hostId: LOCAL_SIDEBAR_HOST_ID, chatId: "c2" };
-  const written: (readonly InboxTriageRow[])[] = [];
+  const reads: string[] = [];
   let acting!: Promise<void>;
   act(() => {
-    acting = result.current.act("snooze", [ROW, other], Date.now() + 3_600_000, { onWritten: (rows) => written.push(rows) });
+    acting = result.current.act("snooze", [ROW, other], Date.now() + 3_600_000, {
+      markRead: async (row) => void reads.push(row.chatId),
+    });
   });
   await settle(store.answers[0], { ok: true, entry: { revision: 2, updatedAt: 10, snoozedUntil: Date.now() + 3_600_000 } });
   // The local store takes one write at a time; the second one fails.
   await act(async () => {});
   await settle(store.answers[1], new Error("The disk is full."));
   await act(() => acting);
-  assert.deepEqual(written, [[ROW]], "only the chat whose snooze landed");
+  assert.deepEqual(reads, ["c1"], "only the chat whose snooze landed");
+  assert.deepEqual([...result.current.readsPending.keys()], [ROW.key], "the chat whose snooze failed reads unread again");
+});
+
+/** A chat with unseen output from a failed run: it waits in Needs you. */
+const FAILED_UNREAD = {
+  key: ROW.key,
+  signals: {
+    rowState: "idle",
+    unread: true,
+    failed: true,
+    isOpen: false,
+    hostOnline: true,
+    updatedAt: Date.now() - 3_600_000,
+    lastAssistantAt: Date.now() - 3_600_000,
+  } satisfies InboxSignals,
+};
+
+function shelfOf(triage: InboxTriage, signals: InboxSignals = FAILED_UNREAD.signals): string {
+  const [row] = withInboxReadsPending([{ key: ROW.key, signals }], triage.readsPending);
+  return inboxState({ ...row!.signals, ...triageSignals(triage.entryFor(ROW)) }, Date.now()).shelf;
+}
+
+test("Mark done on unseen failed output takes the row out of Needs you before the host answers", async () => {
+  const store = installStore();
+  const { result } = await mount();
+  assert.equal(shelfOf(result.current), "needs_you");
+
+  const read = deferred<void>();
+  let acting!: Promise<void>;
+  act(() => {
+    acting = result.current.act("done", [{ ...ROW, readThrough: FAILED_UNREAD.signals.lastAssistantAt }], undefined, {
+      markRead: () => read.promise,
+    });
+  });
+  assert.equal(shelfOf(result.current), "hidden", "no host has answered yet");
+
+  await settle(store.answers[0], { ok: true, entry: { revision: 2, updatedAt: 10, doneAt: Date.now() } });
+  await act(() => acting);
+  assert.equal(shelfOf(result.current), "hidden", "the read is on its way");
+  // Output newer than the action still reads unread, and brings the row back.
+  const newer = { ...FAILED_UNREAD.signals, lastAssistantAt: Date.now() + 1_000 };
+  assert.equal(shelfOf(result.current, newer), "needs_you");
+  assert.deepEqual(settledInboxReads(result.current.readsPending, [{ key: ROW.key, signals: newer }]), [ROW.key]);
+
+  // The read markers catch up: the row reads as read by itself.
+  const caughtUp = { key: ROW.key, signals: { ...FAILED_UNREAD.signals, unread: false } };
+  assert.deepEqual(settledInboxReads(result.current.readsPending, [FAILED_UNREAD]), [], "still unread on its own");
+  assert.deepEqual(settledInboxReads(result.current.readsPending, [caughtUp]), [ROW.key]);
+  await act(async () => read.resolve());
+});
+
+test("a read the host refuses puts the row back in Needs you, and says so", async () => {
+  const store = installStore();
+  const { result } = await mount();
+  let acting!: Promise<void>;
+  act(() => {
+    acting = result.current.act("snooze", [{ ...ROW, readThrough: FAILED_UNREAD.signals.lastAssistantAt }], Date.now() + 3_600_000, {
+      markRead: async () => {
+        throw new Error("Error invoking remote method 'chats:markRead': Error: That chat is gone.");
+      },
+    });
+  });
+  assert.equal(shelfOf(result.current), "hidden");
+  await settle(store.answers[0], { ok: true, entry: { revision: 2, updatedAt: 10, snoozedUntil: Date.now() + 3_600_000 } });
+  await act(() => acting);
+  await act(async () => {});
+  assert.equal(shelfOf(result.current), "needs_you", "the snooze stands, but the failure is still unseen");
+  assert.ok(shownToasts().some((item) => item.type === "error" && item.title === "That chat is gone."));
 });
 
 test("Undo reverses the action and names the revision the action left", async () => {

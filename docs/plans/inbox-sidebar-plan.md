@@ -325,6 +325,12 @@ Claim the revision after the one on `main` at merge time. It is 47 today (`AIDEN
 - *Host feed cost.* A runs-observing device's waiting-run announcements are capped at half the journal by bytes as well as by count, so one resnapshot never expires another device's fresh cursor. A burst of reconnecting observers can still age a slow cursor out; that device resnapshots as usual.
 - *Known limitation.* `attentionSummary` is per run, and a parent chat's row shows its own run's ask. A child (subagent) run waiting on the person rolls up into its parent's Needs you state, but its ask is not carried to the parent row.
 
+**2a/2b round-3 fixes (2026-11-01).** A third pass settled:
+
+- *Instant read with the action.* The placement rules are unchanged (unseen failed output still outranks Done and Snooze), so Mark done or Snooze on an unread failed run now counts its read at once: `useInboxTriage` keeps a per-row read-pending overlay (`readsPending`, applied by `withInboxReadsPending`) from the moment the person acts, so the row leaves Needs you before the host answers. The read itself is still sent only once the host takes the triage write (`act`'s `markRead`, which replaces `onWritten`). A write that fails or conflicts, or a read the host refuses or that names no message, drops the overlay so the row reads unread again, with an error toast for the read. The overlay goes once the row reads as read by itself (`settledInboxReads`), and output newer than the action still reads unread.
+- *24-hour clocks.* The short snoozed status drops ":00" only on a 12-hour clock ("Until 6 PM"); a 24-hour locale keeps "Until 18:00".
+- *Host.* A triage listener (the IPC broadcast) that throws after a committed write is logged and no longer fails the write, so a Remote retry with the same key doesn't read a false conflict.
+
 **2c. Dock badge.**
 
 - A main-process count of Needs you: local signals from `HostRunRegistry`, Bot `needsYou`, and unseen failures, plus remote Needs you from the `PeerHostManager` feed caches in main.

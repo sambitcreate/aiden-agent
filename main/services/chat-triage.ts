@@ -94,6 +94,8 @@ function copyEntry(entry: ChatTriageEntry): ChatTriageEntry {
 export interface ChatTriageStoreOptions {
   now?: () => number;
   onChange?: (snapshot: ChatTriageSnapshot) => void;
+  /** A listener that threw after a committed write. The write still stands. */
+  logError?: (message: string, error: unknown) => void;
   setTimer?: (callback: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
 }
@@ -293,13 +295,16 @@ export class ChatTriageStore {
   }
 
   /**
-   * Tell listeners about a write, then re-arm the wake timer. The timer is
-   * re-armed even when a listener throws, as in `expire`, so the next snooze
-   * still wakes.
+   * Tell listeners about a committed write, then re-arm the wake timer. A
+   * listener that throws is logged, not passed on: the write already stands,
+   * so failing the call would send a Remote retry into a false conflict. The
+   * timer is re-armed either way, so the next snooze still wakes.
    */
   private async publishThenArm(): Promise<void> {
     try {
       await this.publish();
+    } catch (error) {
+      this.options.logError?.("Could not announce a chat triage change.", error);
     } finally {
       this.arm();
     }

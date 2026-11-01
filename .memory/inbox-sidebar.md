@@ -160,4 +160,9 @@ Plan: `docs/plans/inbox-sidebar-plan.md`. Before/after page: https://claude.ai/a
 - E2E: `inbox-sidebar.spec.ts` "after Mark done on the open chat, next and previous chat step from where it was" (R9 wiring).
 - Known limitation: child-run `attentionSummary` not carried to the parent row.
 
+### 2a/2b round-3 fixes (2026-11-01)
+- Optimistic read with triage: rule order unchanged (failed-unread still beats done/snooze). `useInboxTriage` returns `readsPending` (row key -> `readThrough`, the row's `lastAssistantAt` at act time) + `settleReads(keys)`; `act(..., {markRead: (row) => Promise<void>})` replaces `onWritten`: sets pending at act time, drops it for rows whose write failed/conflicted, sends `markRead` only for written rows, and on rejection drops it + `toast.error(userFacingErrorMessage(...))`. Pure `withInboxReadsPending(rows, pending)` / `settledInboxReads(pending, rawRows)` in `inbox-triage.ts`. `chat-sidebar.tsx`: `rawInboxEntries` -> `allInboxEntries = withInboxReadsPending(...)`, effect settles (row read by itself, newer output, or gone). `sendLocalChatRead` (false when no message matches) / `markLocalChatReadForTriage` (throws then) and `sendRemoteChatRead` (throws) back the triage path; `markLocalChatRead` / `markRemoteChatRead` keep toasting for the row action.
+- `compactSnoozeTime` drops ":00" only when `resolvedOptions().hour12` (lib typings lack `hourCycle`); en-GB gives "18:00", "Mon 9:00".
+- `ChatTriageStore` option `logError`; `publishThenArm` catches listener errors (logged via `logger.error("chat-triage", ...)` in `chat-triage-main.ts`), so `set`/`wake`/`remove` resolve after commit.
+
 Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control]].

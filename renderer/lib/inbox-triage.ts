@@ -137,6 +137,53 @@ export function settledTriageOverlayKeys(
   });
 }
 
+/**
+ * Rows this device marked read along with Mark done or Snooze, by row key: the
+ * newest output each row showed then (`InboxTriageRow.readThrough`).
+ */
+export type InboxReadsPending = ReadonlyMap<string, number | undefined>;
+
+type ReadSignals = Pick<InboxSignals, "unread" | "isOpen" | "lastAssistantAt">;
+
+function readCovers(through: number | undefined, signals: ReadSignals): boolean {
+  return (signals.lastAssistantAt ?? Number.NEGATIVE_INFINITY) <= (through ?? Number.NEGATIVE_INFINITY);
+}
+
+/**
+ * The rows as the person left them: a read sent with an action counts at once,
+ * so unseen failed output doesn't hold a Done or snoozed row in Needs you while
+ * the host and the read markers catch up. Output newer than the action still
+ * reads unread.
+ */
+export function withInboxReadsPending<Row extends { key: string; signals: ReadSignals }>(
+  rows: readonly Row[],
+  pending: InboxReadsPending,
+): Row[] {
+  if (pending.size === 0) return [...rows];
+  return rows.map((row) =>
+    row.signals.unread && pending.has(row.key) && readCovers(pending.get(row.key), row.signals)
+      ? { ...row, signals: { ...row.signals, unread: false } }
+      : row,
+  );
+}
+
+/**
+ * The pending reads the rows no longer need: the row reads as read by itself,
+ * newer output arrived, or the row is gone.
+ */
+export function settledInboxReads(
+  pending: InboxReadsPending,
+  rows: readonly { key: string; signals: ReadSignals }[],
+): string[] {
+  if (pending.size === 0) return [];
+  const byKey = new Map(rows.map((row) => [row.key, row.signals] as const));
+  return [...pending].flatMap(([key, through]) => {
+    const signals = byKey.get(key);
+    if (!signals || !signals.unread || signals.isOpen || !readCovers(through, signals)) return [key];
+    return [];
+  });
+}
+
 /** The placement signals one entry contributes to a row. */
 export function triageSignals(
   entry: ChatTriageEntry | null | undefined,
@@ -241,9 +288,15 @@ export function formatSnoozeUntil(until: number, now: number, locale?: string): 
   return `${at.toLocaleDateString(locale, { weekday: "short", month: "short", day: "numeric" })}, ${time}`;
 }
 
-/** A time without ":00" on the hour ("9 AM", "5:42 PM"). */
+/**
+ * A time without ":00" on the hour ("9 AM", "5:42 PM"), on a 12-hour clock only: a
+ * 24-hour clock's bare hour ("18") doesn't read as a time.
+ */
 function compactSnoozeTime(at: Date, locale?: string): string {
-  return at.getMinutes() === 0 ? at.toLocaleTimeString(locale, { hour: "numeric" }) : snoozeTime(at, locale);
+  if (at.getMinutes() !== 0) return snoozeTime(at, locale);
+  const hourOnly = new Intl.DateTimeFormat(locale, { hour: "numeric" });
+  // `hour12` is true for the h11 and h12 hour cycles.
+  return hourOnly.resolvedOptions().hour12 === true ? hourOnly.format(at) : snoozeTime(at, locale);
 }
 
 /**

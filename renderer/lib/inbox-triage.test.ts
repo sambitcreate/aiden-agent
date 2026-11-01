@@ -260,24 +260,29 @@ test("a snoozed row's status is short beside its workspace", () => {
   assert.match(formatSnoozeStatus(at(0, 18), NOW, "en-US"), /^6\sPM$/u);
   assert.match(formatSnoozeStatus(at(2, 9), NOW, "en-US"), /^Mon 9\sAM$/u);
   assert.match(formatSnoozeStatus(at(16, 9), NOW, "en-US"), /^Nov 16$/u);
+  // A 24-hour clock keeps its minutes: a bare "18" wouldn't read as a time.
+  assert.equal(formatSnoozeStatus(at(0, 18), NOW, "en-GB"), "18:00");
+  assert.match(formatSnoozeStatus(at(2, 9), NOW, "en-GB"), /^Mon 0?9:00$/u);
+  assert.equal(formatSnoozeStatus(at(0, 13, 42), NOW, "en-GB"), "13:42");
 });
 
 test("no two Snooze presets read the same time, whatever the day", () => {
   // A whole week of mornings and evenings, Sunday included, where Tomorrow and
   // Next week both land on a Monday.
   for (let day = 0; day < 7; day += 1) {
-    for (const [hour, minute] of [[8, 0], [16, 0], [16, 59], [17, 0], [17, 30]] as const) {
+    // This evening (18:00) shows only while it is more than an hour away:
+    // still there at 16:59, gone from 17:00.
+    const cases = [[8, 0, true], [16, 0, true], [16, 59, true], [17, 0, false], [17, 30, false]] as const;
+    for (const [hour, minute, eveningShown] of cases) {
       const now = new Date(2026, 10, 1 + day, hour, minute);
       const options = snoozeOptions(now);
       const times = options.map((option) => formatSnoozeMenuTime(option.until, now.getTime(), "en-US"));
       const label = `${now.toDateString()} ${hour}:${String(minute).padStart(2, "0")}`;
       assert.equal(new Set(times).size, times.length, `${label} reads ${times.join(" | ")}`);
-      // This evening (18:00) shows only while it is more than an hour away.
-      const evening = new Date(2026, 10, 1 + day, 18, 0).getTime();
       assert.equal(
         options.some((option) => option.preset === "evening"),
-        evening - now.getTime() > HOUR,
-        `${label}: This evening ${evening - now.getTime() > HOUR ? "shows" : "drops out"}`,
+        eveningShown,
+        `${label}: This evening ${eveningShown ? "shows" : "drops out"}`,
       );
     }
   }

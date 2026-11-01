@@ -101,7 +101,8 @@ import { SidebarOverflowMenu } from "./sidebar/sidebar-overflow-menu";
 import { remoteChatRowMenu } from "./sidebar/remote-chat-row-menu";
 import { inboxTriageMenuItems } from "./sidebar/inbox-triage-menu";
 import { useInboxTriage, type InboxTriageRow } from "../lib/use-inbox-triage";
-import { inboxTriageOffer } from "../lib/inbox-triage";
+import { inboxTriageOffer, settledInboxReads, withInboxReadsPending } from "../lib/inbox-triage";
+import { userFacingErrorMessage } from "../lib/ipc-error";
 import { RemoteHostAdapter, remoteHostCapabilities } from "../lib/hosts/remote-host-adapter";
 import { isRevisionConflict, type HostChatCapability } from "../lib/hosts/host-chat-adapter";
 import { ChatRowContextGlyphs } from "./chat-row-context";
@@ -170,6 +171,7 @@ import {
 const AIDEN_MARK_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
 const COLLAPSED_WORKSPACE_CHAT_LIMIT = 4;
 const NO_REMOTE_CAPABILITIES: ReadonlySet<HostChatCapability> = new Set();
+const MARK_READ_FAILED = "Aiden could not mark that chat read.";
 /** Must match aiden-app-update-banner-out in styles.css. */
 const APP_UPDATE_BANNER_EXIT_MS = 120;
 
@@ -661,7 +663,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         : { listed: [], unlisted: [] },
     [inboxActive, openRemoteBotKey, peerHosts.feeds, peerHosts.hosts],
   );
-  const allInboxEntries = React.useMemo(() => {
+  const rawInboxEntries = React.useMemo(() => {
     if (!inboxActive) return [];
     const pending = new Map((pendingAttention.data ?? []).map((item) => [item.chatId, item] as const));
     return [
@@ -703,6 +705,17 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     triage,
     workspaces,
   ]);
+  // A read sent with Mark done or Snooze counts at once (see `withInboxReadsPending`).
+  const allInboxEntries = React.useMemo(
+    () => withInboxReadsPending(rawInboxEntries, triage.readsPending),
+    [rawInboxEntries, triage.readsPending],
+  );
+  const { readsPending: inboxReadsPending, settleReads: settleInboxReadsPending } = triage;
+  React.useEffect(() => {
+    if (!inboxActive) return;
+    const settled = settledInboxReads(inboxReadsPending, rawInboxEntries);
+    if (settled.length > 0) settleInboxReadsPending(settled);
+  }, [inboxActive, inboxReadsPending, rawInboxEntries, settleInboxReadsPending]);
   const inboxEntries = React.useMemo(
     () => filterInboxEntries(allInboxEntries, { search, machineFilter: shownMachines }),
     [allInboxEntries, search, shownMachines],
@@ -882,21 +895,32 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     },
     [openChat, openRemoteChat],
   );
-  const markRemoteChatRead = React.useCallback(
+  // Rejects with a message for the person when the host doesn't take the read.
+  const sendRemoteChatRead = React.useCallback(
     async (chat: RemoteSidebarChat) => {
       const view = peerHosts.views.get(chat.hostId);
-      if (!view) return;
+      if (!view) throw new Error("That Mac is no longer paired with this one.");
       const adapter = new RemoteHostAdapter(view);
       try {
         await adapter.ready();
         // Summaries name no message, so the host marks through its newest output.
         const result = await adapter.markRead(chat.chatId);
-        if (!result.ok) toast.error(result.error.message || "Aiden could not mark that chat read.");
+        if (!result.ok) throw new Error(result.error.message || MARK_READ_FAILED);
       } finally {
         adapter.dispose();
       }
     },
     [peerHosts.views],
+  );
+  const markRemoteChatRead = React.useCallback(
+    async (chat: RemoteSidebarChat) => {
+      try {
+        await sendRemoteChatRead(chat);
+      } catch (error) {
+        toast.error(userFacingErrorMessage(error, MARK_READ_FAILED));
+      }
+    },
+    [sendRemoteChatRead],
   );
   const commitRemoteRename = React.useCallback(async () => {
     const target = remoteRenaming;
@@ -1406,20 +1430,30 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
 
   // Local Mark read covers only the output the row rendered, so a reply that
   // lands mid-click stays unread.
+  // False when the chat holds no message the row's output names.
+  const sendLocalChatRead = async (chat: ChatMeta): Promise<boolean> => {
+    // Always read the chat afresh: a cached copy can predate the reply the row shows.
+    const session = await qc.fetchQuery({
+      queryKey: queryKeys.chat(chat.id),
+      queryFn: () => chatsApi.get(chat.id),
+      staleTime: 0,
+    });
+    const through = session ? markReadThroughMessageId(session.messages, chat.lastAssistantAt) : null;
+    if (!through) return false;
+    await chatsApi.markRead(chat.id, through);
+    return true;
+  };
   const markLocalChatRead = async (chat: ChatMeta) => {
     try {
-      // Always read the chat afresh: a cached copy can predate the reply the row shows.
-      const session = await qc.fetchQuery({
-        queryKey: queryKeys.chat(chat.id),
-        queryFn: () => chatsApi.get(chat.id),
-        staleTime: 0,
-      });
-      const through = session ? markReadThroughMessageId(session.messages, chat.lastAssistantAt) : null;
-      if (!through) return;
-      await chatsApi.markRead(chat.id, through);
+      await sendLocalChatRead(chat);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Aiden could not mark that chat read.");
+      toast.error(userFacingErrorMessage(error, MARK_READ_FAILED));
     }
+  };
+  // With Mark done or Snooze the row already reads as read, so a read that
+  // can't be sent says so (and the row reads unread again).
+  const markLocalChatReadForTriage = async (chat: ChatMeta) => {
+    if (!(await sendLocalChatRead(chat))) throw new Error(MARK_READ_FAILED);
   };
 
   const inboxRowParts = (
@@ -1454,8 +1488,9 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   };
 
   // Pin, Mark done and Snooze: in an Inbox row's ••• and context menus only.
-  // On unseen failed output, Mark done and Snooze also mark the chat read once
-  // the host takes the write, or the row would stay in Needs you. A host that
+  // On unseen failed output, Mark done and Snooze also mark the chat read, or
+  // the row would stay in Needs you: it reads as read at once and the read is
+  // sent once the host takes the write (`useInboxTriage`). A host that
   // can't mark it read (a paired Mac without markRead) offers Pin alone there,
   // since neither action would move the row.
   const inboxTriageItems = (
@@ -1464,7 +1499,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     context: InboxRowContext,
     row: InboxTriageRow,
     disabled: boolean,
-    markRead: (() => void) | null,
+    markRead: (() => Promise<void>) | null,
   ) => {
     const offered = inboxTriageOffer(entry.signals, Date.now());
     const offer = offered.alsoMarkRead && !markRead ? { ...offered, doneAndSnooze: false } : offered;
@@ -1475,7 +1510,12 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       onAct: (kind, until) => {
         context.touch();
         const readAfter = offer.alsoMarkRead && markRead && (kind === "done" || kind === "snooze") ? markRead : null;
-        void triage.act(kind, [row], until, readAfter ? { onWritten: () => readAfter() } : undefined);
+        if (!readAfter) {
+          void triage.act(kind, [row], until);
+          return;
+        }
+        const target = entry.signals.lastAssistantAt !== undefined ? { ...row, readThrough: entry.signals.lastAssistantAt } : row;
+        void triage.act(kind, [target], until, { markRead: readAfter });
       },
     });
   };
@@ -1534,7 +1574,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
             inbox.context,
             { key: inbox.entry.key, hostId: LOCAL_SIDEBAR_HOST_ID, chatId: chat.id },
             inbox.context.dimmed,
-            () => void markLocalChatRead(chat),
+            () => markLocalChatReadForTriage(chat),
           )}
           <Separator />
         </>
@@ -1723,7 +1763,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                 inbox.context,
                 remoteTriageRow(chat),
                 chat.stale || inbox.context.dimmed,
-                capabilitiesForHost?.has("markRead") ? () => void markRemoteChatRead(chat) : null,
+                capabilitiesForHost?.has("markRead") ? () => sendRemoteChatRead(chat) : null,
               ),
           }
         : {}),

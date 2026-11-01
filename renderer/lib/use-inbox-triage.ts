@@ -18,6 +18,7 @@ import {
   mergeInboxTriageUndo,
   newerTriage,
   predictTriage,
+  type InboxReadsPending,
   settledTriageOverlayKeys,
   type InboxTriageKind,
   type InboxTriageTarget,
@@ -30,6 +31,11 @@ import type { ChatTriageEntry, ChatTriagePatch, ChatTriageResult } from "../shar
 export interface InboxTriageRow extends InboxTriageTarget {
   /** A paired host's last reported entry (Phase 2b summaries); local rows read the store's snapshot. */
   reported?: ChatTriageEntry | null;
+  /**
+   * The newest output the row showed when the person acted. A read sent with
+   * the action (`markRead`) covers output up to here; anything newer stays unread.
+   */
+  readThrough?: number;
 }
 
 interface TriageWrite {
@@ -44,6 +50,7 @@ type WriteOutcome =
   | { ok: false; conflict: false; message: string };
 
 const FAILED_MESSAGE = "Aiden could not update that chat.";
+const READ_FAILED_MESSAGE = "Aiden could not mark that chat read.";
 
 function outcomeOf(result: ChatTriageResult): WriteOutcome {
   if (result.ok) return { ok: true, entry: result.entry };
@@ -116,12 +123,14 @@ async function sendWrites(
 
 export interface InboxTriageActOptions {
   /**
-   * Runs once the host has taken the write, with the rows it took, before the
-   * Undo toast shows. A row whose write failed or conflicted is left out, so a
-   * side effect such as marking the chat read never lands without the triage.
-   * Undo doesn't reverse it.
+   * Also mark each row read (unseen output from a failed run, which would
+   * otherwise keep the row in Needs you). The rows read as read at once
+   * (`readsPending`); the read itself is sent only once the host has taken the
+   * triage write, so it never lands without the triage. A row whose write fails
+   * or conflicts, or whose read rejects, reads unread again, and a rejected
+   * read shows an error toast. Undo doesn't reverse the read.
    */
-  onWritten?: (rows: readonly InboxTriageRow[]) => void;
+  markRead?: (row: InboxTriageRow) => Promise<void>;
 }
 
 export interface InboxTriage {
@@ -134,6 +143,14 @@ export interface InboxTriage {
     until?: number,
     options?: InboxTriageActOptions,
   ) => Promise<void>;
+  /**
+   * Rows this device marked read with an action, by row key, until the row's
+   * own read state catches up (`withInboxReadsPending` applies them;
+   * `settledInboxReads` names the ones to `settleReads`).
+   */
+  readsPending: InboxReadsPending;
+  /** Drops rows from `readsPending`. */
+  settleReads: (keys: readonly string[]) => void;
 }
 
 /**
@@ -168,6 +185,24 @@ export function useInboxTriage({
   const onRestoreRef = React.useRef(onRestore);
   onRestoreRef.current = onRestore;
   const undoRef = React.useRef<InboxTriageUndoBatch | null>(null);
+  const [readsPending, setReadsPending] = React.useState<InboxReadsPending>(() => new Map());
+
+  const markReadsPending = React.useCallback((rows: readonly InboxTriageRow[]) => {
+    setReadsPending((current) => {
+      const next = new Map(current);
+      for (const row of rows) next.set(row.key, row.readThrough);
+      return next;
+    });
+  }, []);
+
+  const settleReads = React.useCallback((keys: readonly string[]) => {
+    setReadsPending((current) => {
+      if (!keys.some((key) => current.has(key))) return current;
+      const next = new Map(current);
+      for (const key of keys) next.delete(key);
+      return next;
+    });
+  }, []);
 
   const write = React.useCallback((changes: readonly (readonly [string, ChatTriageEntry | null])[]) => {
     const next = new Map(overlayRef.current);
@@ -234,6 +269,8 @@ export function useInboxTriage({
     const patch = inboxTriagePatch(kind, until);
     const before = rows.map((row) => currentFor(row) ?? null);
     const now = Date.now();
+    const markRead = options?.markRead;
+    if (markRead) markReadsPending(rows);
     write(rows.map((row, index) => [row.key, predictTriage(before[index], patch, now)] as const));
     const outcomes = await sendWrites(rows.map((row) => ({ target: row, patch })), viewsRef.current);
     const items: InboxTriageUndoItem[] = [];
@@ -250,8 +287,17 @@ export function useInboxTriage({
       return [row.key, row.hostId === LOCAL_SIDEBAR_HOST_ID ? null : before[index] ?? null] as const;
     }));
     if (failure) toast.error(failure);
+    if (markRead) {
+      const refused = rows.filter((row) => !written.includes(row));
+      if (refused.length > 0) settleReads(refused.map((row) => row.key));
+      for (const row of written) {
+        void markRead(row).catch((error: unknown) => {
+          settleReads([row.key]);
+          toast.error(userFacingErrorMessage(error, READ_FAILED_MESSAGE));
+        });
+      }
+    }
     if (items.length === 0) return;
-    options?.onWritten?.(written);
     const batch = mergeInboxTriageUndo(undoRef.current, {
       kind,
       items,
@@ -264,7 +310,7 @@ export function useInboxTriage({
       duration: INBOX_TRIAGE_UNDO_MS,
       action: { label: "Undo", onClick: () => void undo(batch) },
     });
-  }, [currentFor, undo, write]);
+  }, [currentFor, markReadsPending, settleReads, undo, write]);
 
   const entryFor = React.useCallback(
     (row: InboxTriageRow) =>
@@ -273,5 +319,8 @@ export function useInboxTriage({
   );
 
   // One identity while nothing changes, so the Inbox's entries are not rebuilt every render.
-  return React.useMemo(() => ({ entryFor, act }), [entryFor, act]);
+  return React.useMemo(
+    () => ({ entryFor, act, readsPending, settleReads }),
+    [entryFor, act, readsPending, settleReads],
+  );
 }
