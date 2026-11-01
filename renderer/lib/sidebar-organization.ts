@@ -1,5 +1,3 @@
-import type { ChatRowState } from "../shared/chat-row-state";
-
 /**
  * Pure sidebar ordering and grouping. Inputs are plain project/chat summaries
  * so local workspaces today, and remote host rows later, share one projection.
@@ -10,10 +8,10 @@ import type { ChatRowState } from "../shared/chat-row-state";
 export const LOCAL_SIDEBAR_HOST_ID = "local";
 
 /**
- * `inbox` is accepted ahead of its view (Inbox plan, Phase 1a). Until the Inbox
- * UI lands, nothing offers it and a stored `inbox` lays out like `attention`.
+ * `inbox` replaced the earlier Needs attention view; a stored `attention`
+ * migrates to it when read.
  */
-export const SIDEBAR_VIEWS = ["projects", "recent", "attention", "inbox"] as const;
+export const SIDEBAR_VIEWS = ["projects", "recent", "inbox"] as const;
 export type SidebarView = (typeof SIDEBAR_VIEWS)[number];
 
 export const SIDEBAR_CHAT_SORTS = ["last_activity", "created"] as const;
@@ -37,40 +35,6 @@ export function parseSidebarMachineFilter(value: unknown): SidebarMachineFilter 
   return typeof value === "string" && MACHINE_FILTER_HOST.test(value)
     ? (value as SidebarMachineFilter)
     : null;
-}
-
-/** Triage tier used by the Needs attention view, most urgent first. */
-export const SIDEBAR_ATTENTION_TIERS = [
-  "needs_approval",
-  "needs_input",
-  "failed",
-  "working",
-  "unread",
-  "none",
-] as const;
-export type SidebarAttention = (typeof SIDEBAR_ATTENTION_TIERS)[number];
-
-export const SIDEBAR_ATTENTION_LABELS: Readonly<Record<SidebarAttention, string>> = {
-  needs_approval: "Needs approval",
-  needs_input: "Needs input",
-  failed: "Failed",
-  working: "Working",
-  unread: "Unread",
-  none: "Other chats",
-};
-
-/**
- * A live row state outranks unread output: a chat still working is not "done".
- * Unseen output from a failed turn ranks above working chats, which need nothing.
- */
-export function sidebarAttention(
-  rowState: ChatRowState,
-  unread: boolean,
-  failed = false,
-): SidebarAttention {
-  if (rowState !== "idle") return rowState;
-  if (!unread) return "none";
-  return failed ? "failed" : "unread";
 }
 
 /**
@@ -109,7 +73,6 @@ export interface SidebarChatSummary {
   title: string;
   createdAt?: number;
   lastActivityAt?: number;
-  attention: SidebarAttention;
 }
 
 export interface SidebarProjectGroup<P extends SidebarProjectSummary, C extends SidebarChatSummary> {
@@ -143,7 +106,7 @@ export interface SidebarOrganization<P extends SidebarProjectSummary, C extends 
   projectGroups: SidebarProjectGroup<P, C>[];
   /** Every supplied project key in display order, ignoring search. */
   projectOrder: string[];
-  /** Chat sections for the Recent and Needs attention views; empty otherwise. */
+  /** Chat sections for the Recent view; empty otherwise (the Inbox organizes itself). */
   chatSections: SidebarChatSection<C>[];
 }
 
@@ -172,14 +135,6 @@ function chatComparator(sort: SidebarChatSort) {
     compareNewest(chatTime(left, sort), chatTime(right, sort)) ||
     left.title.localeCompare(right.title) ||
     compareKeys(left.key, right.key);
-}
-
-function attentionComparator(left: SidebarChatSummary, right: SidebarChatSummary): number {
-  return (
-    SIDEBAR_ATTENTION_TIERS.indexOf(left.attention) -
-      SIDEBAR_ATTENTION_TIERS.indexOf(right.attention) ||
-    chatComparator("last_activity")(left, right)
-  );
 }
 
 const MONTHS = [
@@ -310,20 +265,14 @@ export function organizeSidebar<P extends SidebarProjectSummary, C extends Sideb
     : ordered;
 
   let chatSections: SidebarChatSection<C>[] = [];
-  if (input.view !== "projects") {
+  if (input.view === "recent") {
     const visible = admitted.filter(
       (chat) => !query || titleMatches(chat) || projectMatches(projectByKey.get(chat.projectKey)!),
     );
-    chatSections =
-      input.view === "recent"
-        ? bySections([...visible].sort(chatComparator(input.chatSort)), (chat) => {
-            const label = recentBucketLabel(chatTime(chat, input.chatSort), input.now);
-            return { id: label, label };
-          })
-        : bySections([...visible].sort(attentionComparator), (chat) => ({
-            id: chat.attention,
-            label: SIDEBAR_ATTENTION_LABELS[chat.attention],
-          }));
+    chatSections = bySections([...visible].sort(chatComparator(input.chatSort)), (chat) => {
+      const label = recentBucketLabel(chatTime(chat, input.chatSort), input.now);
+      return { id: label, label };
+    });
   }
 
   return {
@@ -491,8 +440,10 @@ export function parseSidebarPreferences(
     return { ...DEFAULT_SIDEBAR_PREFERENCES, projectOrder: [], expandedWorkspaceIds: [] };
   }
 
+  // The Inbox replaced the Needs attention view (Inbox plan, Phase 1b).
+  const storedView = record.view === "attention" ? "inbox" : record.view;
   const view =
-    oneOf(knownViews, record.view) ?? (record.organization === "recent" ? "recent" : "projects");
+    oneOf(knownViews, storedView) ?? (record.organization === "recent" ? "recent" : "projects");
   const expandedWorkspaceIds = Array.isArray(record.expandedWorkspaceIds)
     ? Array.from(
         new Set(

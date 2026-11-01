@@ -86,7 +86,7 @@ const localChats = [
 ] as ChatMeta[];
 const local = {
   projects: localSidebarProjects(localWorkspaces),
-  chats: localSidebarChats(localWorkspaces, localChats, () => "none"),
+  chats: localSidebarChats(localWorkspaces, localChats),
 };
 
 function organize<P extends SidebarProjectSummary, C extends SidebarChatSummary>(
@@ -285,7 +285,7 @@ test("remote rows without this Mac merge under the first host's key", () => {
   assert.equal(merged.name, "api on Studio");
 });
 
-test("run state and row hints drive attention, and the open chat is never unread", () => {
+test("run state and row hints drive row state, and the open chat is never unread", () => {
   const runs: PeerRunState[] = [
     { chatId: "approval", runId: "r1", state: "done", unread: false },
     { chatId: "approval", runId: "r2", state: "needs_approval", unread: false },
@@ -314,25 +314,20 @@ test("run state and row hints drive attention, and the open chat is never unread
     }),
     (hostId, chatId) => hostId === "studio" && chatId === "open",
   );
-  const attention = Object.fromEntries(rows.chats.map((chat) => [chat.chatId, chat.attention]));
-  assert.deepEqual(attention, {
-    approval: "needs_approval",
-    question: "needs_input",
-    finished: "unread",
-    open: "none",
-    busy: "working",
-    hinted: "needs_input",
-    broke: "failed",
-    "broke-seen": "none",
-    quiet: "none",
-  });
-  assert.equal(rows.chats.find((chat) => chat.chatId === "broke")?.lastRunFailed, true);
-  assert.equal(rows.chats.find((chat) => chat.chatId === "quiet")?.lastRunFailed, false);
-  const sections = organize(rows.projects, rows.chats, "attention").chatSections;
-  assert.deepEqual(
-    sections.map((section) => section.id),
-    ["needs_approval", "needs_input", "failed", "working", "unread", "none"],
+  const states = Object.fromEntries(
+    rows.chats.map((chat) => [chat.chatId, [chat.rowState, chat.unread, chat.lastRunFailed]]),
   );
+  assert.deepEqual(states, {
+    approval: ["needs_approval", false, false],
+    question: ["needs_input", false, false],
+    finished: ["idle", true, false],
+    open: ["idle", false, false],
+    busy: ["working", false, false],
+    hinted: ["needs_input", true, false],
+    broke: ["idle", true, true],
+    "broke-seen": ["idle", false, true],
+    quiet: ["idle", false, false],
+  });
 });
 
 test("reading a chat on its host clears the unread left by its finished run", () => {
@@ -344,7 +339,7 @@ test("reading a chat on its host clears the unread left by its finished run", ()
     runs: [{ chatId: "done", runId: "r1", state: "done", unread: true }],
   });
   const before = remoteSidebarRows(studio, unreadFeed).chats[0];
-  assert.equal(before?.attention, "unread");
+  assert.equal(before?.unread, true);
 
   const read = applyPeerHostFeedMessage(unreadFeed, {
     hostId: "studio",
@@ -355,10 +350,6 @@ test("reading a chat on its host clears the unread left by its finished run", ()
   if (read === FEED_RESYNC) assert.fail("the read marker should apply in sequence");
   const after = remoteSidebarRows(studio, read);
   assert.equal(after.chats[0]?.unread, false);
-  assert.deepEqual(
-    organize(after.projects, after.chats, "attention").chatSections.map((section) => section.id),
-    ["none"],
-  );
 });
 
 test("an offline host's rows stay listed, stale, and stop claiming work in progress", () => {
@@ -474,13 +465,13 @@ for (const hostCount of [1, 5, 10]) {
       countingReads(remoteSidebarRows(host, crowdedFeed(host.id, chatsPerHost, 40)), counter),
     );
     const total = hostCount * chatsPerHost;
-    // Measured at about 7 reads per n·log2(n) for the attention view (two
-    // sorts); 12 leaves headroom while a quadratic pass overshoots many times.
+    // Measured at about 7 reads per n·log2(n) for the Recent view (a sort
+    // plus bucketing); 12 leaves headroom while a quadratic pass overshoots many times.
     // A merged group copies its other machines' rows, which stop counting, so
     // the separate grouping is the one that counts every row.
     const budget = 12 * total * Math.log2(total);
 
-    for (const sidebarView of ["projects", "recent", "attention"] as const) {
+    for (const sidebarView of ["projects", "recent"] as const) {
       for (const grouping of ["separate", "repository"] as const) {
         counter.reads = 0;
         const combined = combineSidebarRows({

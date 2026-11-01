@@ -1,7 +1,6 @@
 import {
   LOCAL_SIDEBAR_HOST_ID,
   projectOrderKey,
-  type SidebarAttention,
   type SidebarChatSummary,
   type SidebarProjectSummary,
 } from "./sidebar-organization";
@@ -54,7 +53,6 @@ export function localSidebarProjects(workspaces: readonly Workspace[]): LocalSid
 export function localSidebarChats(
   workspaces: readonly Workspace[],
   chats: readonly ChatMeta[],
-  attentionFor: (chat: ChatMeta) => SidebarAttention,
 ): LocalSidebarChat[] {
   const registered = new Map(workspaces.map((workspace) => [workspace.id, workspace]));
   const home = noWorkspaceHome(workspaces);
@@ -69,7 +67,6 @@ export function localSidebarChats(
             title: chat.title,
             createdAt: chat.createdAt,
             lastActivityAt: chat.updatedAt,
-            attention: attentionFor(chat),
             chat,
           },
         ]

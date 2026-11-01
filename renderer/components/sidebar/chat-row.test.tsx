@@ -95,7 +95,6 @@ function remoteChat(overrides: Partial<RemoteSidebarChat> = {}): RemoteSidebarCh
     key: "remote:host-1:chat-1",
     projectKey: "remote:host-1:ws-1",
     title: "Fix the build",
-    attention: "none",
     remote: true,
     hostId: "host-1",
     hostLabel: "Studio Mac",

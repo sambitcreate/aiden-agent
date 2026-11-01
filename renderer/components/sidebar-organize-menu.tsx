@@ -1,5 +1,5 @@
 import * as React from "react";
-import { BellDot, ListTree, Rows3 } from "lucide-react";
+import { Inbox, ListTree, Rows3 } from "lucide-react";
 import {
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
@@ -60,9 +60,6 @@ export function SidebarOrganizeMenuItems({
   machines,
 }: SidebarOrganizeMenuItemsProps) {
   const id = React.useId();
-  // Nothing offers the Inbox yet (Phase 1b), and a stored `inbox` lays out like
-  // Needs attention, so the menu shows it as that.
-  const shownView = view === "inbox" ? "attention" : view;
   const showMachines = machines !== undefined && machines.hosts.length > 0;
   const machineFilters: SidebarMachineFilter[] = showMachines
     ? ["all", "local", ...machines.hosts.map((host) => `host:${host.id}` as const)]
@@ -72,7 +69,7 @@ export function SidebarOrganizeMenuItems({
       <DropdownMenuLabel id={`${id}-view`}>View</DropdownMenuLabel>
       <DropdownMenuRadioGroup
         aria-labelledby={`${id}-view`}
-        value={shownView}
+        value={view}
         onValueChange={pick(SIDEBAR_VIEWS, onViewChange)}
       >
         <DropdownMenuRadioItem value="projects">
@@ -83,12 +80,14 @@ export function SidebarOrganizeMenuItems({
           <Rows3 className={ICON_CLASS} aria-hidden="true" />
           Recent
         </DropdownMenuRadioItem>
-        <DropdownMenuRadioItem value="attention">
-          <BellDot className={ICON_CLASS} aria-hidden="true" />
-          Needs attention
+        <DropdownMenuRadioItem value="inbox" aria-label="Inbox (Beta)">
+          <Inbox className={ICON_CLASS} aria-hidden="true" />
+          <span className="min-w-0 flex-1">Inbox</span>
+          <span className="rounded-pill bg-control px-1.5 text-mini text-tertiary">Beta</span>
         </DropdownMenuRadioItem>
       </DropdownMenuRadioGroup>
-      {shownView !== "attention" ? (
+      {/* The Inbox orders itself by what needs the person, so chat sorts don't apply. */}
+      {view !== "inbox" ? (
         <>
           <DropdownMenuSeparator />
           <DropdownMenuLabel id={`${id}-chat-sort`}>Sort chats</DropdownMenuLabel>

@@ -58,6 +58,8 @@ import type {
 export const queryKeys = {
   providers: ["providers"] as const,
   chats: ["chats"] as const,
+  /** Under `chats`, so anything that invalidates the chat list refetches it too. */
+  pendingAttention: ["chats", "pendingAttention"] as const,
   bots: ["bots"] as const,
   bot: (id: string | undefined) => ["bot", id ?? "none"] as const,
   botChats: (id: string | undefined) => ["bot-chats", id ?? "none"] as const,

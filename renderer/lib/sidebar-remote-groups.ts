@@ -11,7 +11,6 @@ import type {
 import {
   LOCAL_SIDEBAR_HOST_ID,
   projectOrderKey,
-  sidebarAttention,
   type SidebarChatSummary,
   type SidebarMachineFilter,
   type SidebarProjectGrouping,
@@ -236,7 +235,6 @@ export function remoteSidebarRows(
         title: text(row, "title") ?? "New chat",
         createdAt: time(row, "createdAt"),
         lastActivityAt: time(row, "updatedAt"),
-        attention: sidebarAttention(rowState, unread, lastRunFailed),
         remote: true,
         hostId: host.id,
         hostLabel: host.label,

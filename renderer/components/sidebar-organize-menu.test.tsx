@@ -7,7 +7,7 @@ import { SidebarOrganizeMenuItems, type SidebarOrganizeMenuItemsProps } from "./
 
 const noop = () => undefined;
 
-/** Renders the menu open in place (no portal) and returns each radio group. */
+/** Renders the menu open in place (no portal) and returns each radio group by accessible name. */
 function renderMenu(overrides: Partial<SidebarOrganizeMenuItemsProps> = {}) {
   const markup = renderToStaticMarkup(
     <DropdownMenuPrimitive.Root open modal={false}>
@@ -35,19 +35,18 @@ function renderMenu(overrides: Partial<SidebarOrganizeMenuItemsProps> = {}) {
       const items = Array.from(group.getElementsByTagName("*")).filter(
         (element) => element.getAttribute("role") === "menuitemradio",
       );
+      const name = (item: Element) => item.getAttribute("aria-label") || item.textContent;
       return {
         label: label?.textContent ?? null,
-        options: items.map((item) => item.textContent),
-        checked: items
-          .filter((item) => item.getAttribute("aria-checked") === "true")
-          .map((item) => item.textContent),
+        options: items.map(name),
+        checked: items.filter((item) => item.getAttribute("aria-checked") === "true").map(name),
       };
     });
 }
 
 test("workspace view offers every view and both sort choices with the current values checked", () => {
   assert.deepEqual(renderMenu({ chatSort: "created", projectSort: "manual" }), [
-    { label: "View", options: ["Workspaces", "Recent", "Needs attention"], checked: ["Workspaces"] },
+    { label: "View", options: ["Workspaces", "Recent", "Inbox (Beta)"], checked: ["Workspaces"] },
     { label: "Sort chats", options: ["Last activity", "Created"], checked: ["Created"] },
     {
       label: "Sort workspaces",
@@ -65,14 +64,10 @@ test("sort groups appear only for the views they affect", () => {
       ["Sort chats", ["Last activity"]],
     ],
   );
-  assert.deepEqual(
-    renderMenu({ view: "attention" }).map((group) => [group.label, group.checked]),
-    [["View", ["Needs attention"]]],
-  );
-  // A stored Inbox view lays out like Needs attention until the Inbox ships.
+  // The Inbox orders itself, so it offers no chat sort.
   assert.deepEqual(
     renderMenu({ view: "inbox" }).map((group) => [group.label, group.checked]),
-    [["View", ["Needs attention"]]],
+    [["View", ["Inbox (Beta)"]]],
   );
 });
 
@@ -103,7 +98,7 @@ test("with paired hosts the menu offers a machine filter and, for workspaces, cr
   ]);
   // Grouping applies to workspaces only; the machine filter stays for every view.
   assert.deepEqual(
-    renderMenu({ view: "attention", machines }).map((group) => group.label),
+    renderMenu({ view: "inbox", machines }).map((group) => group.label),
     ["View", "Machines"],
   );
 });

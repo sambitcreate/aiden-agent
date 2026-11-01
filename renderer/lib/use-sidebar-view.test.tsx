@@ -109,8 +109,8 @@ test("a storage that refuses writes still switches the view for this session", a
   const { useSidebarView } = await loadStore();
   stub.failWrites = true;
   const { result } = renderHook(() => useSidebarView());
-  act(() => result.current.setView("attention"));
-  assert.equal(result.current.view, "attention");
+  act(() => result.current.setView("inbox"));
+  assert.equal(result.current.view, "inbox");
   assert.equal(stub.data.has(KEY), false);
 });
 
