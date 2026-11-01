@@ -74,3 +74,31 @@ Deviations from the P1 plan:
 - Chat title: the truncating title spans carry `title` with the full text (the button's accessible name already was the full title).
 - E2E helpers in `tests/e2e/design-mode.spec.ts`: `expectComposerFooterClear` (visible footer buttons stay inside the composer, no pairwise overlap, "+", context meter and send present), `expectCanvasChrome`, and banner-below-header / first-message-below-banner checks. Test 2 also checks the footer at a 420 px window with design mode off. Passed 2/2 in the Cua Space.
 - Formatting gotcha: `npx oxfmt` on `styles.css` or `model-picker.tsx` reformats the whole file (HEAD is not oxfmt-clean there); keep diffs to your own lines.
+
+## P2 Tasks 1–3 (2026-11-01)
+
+- Task 1, `renderer/shared/design-canvas/schema.ts`: `DesignCanvasV1`, `parseDesignCanvasV1` (drops and counts bad frames, clamps sizes, coordinates and zoom, bounds comments, refuses a non-integer revision), `emptyDesignCanvas`, `isDesignRelativePath`.
+- Task 2:
+  - `DesignCanvasStore` (`main/services/design-canvas/store.ts`): one atomic `<userData>/design-canvases/<chatId>.json` per chat, a promise chain per chat, and a CAS `save(chatId, doc, baseRevision)`. The singleton lives in `design-canvas/main.ts`, not `main/index.ts`.
+  - IPC: `designCanvas:get`/`save` (broadcast `designCanvas:updated`) in `main/handlers/design-canvas.ts`. Each handler refuses with the flag off and refuses unknown chats.
+  - Renderer client: `designCanvasApi` at the end of `renderer/lib/ipc.ts`.
+  - Deleting a chat (and startup pending-deletion reconcile) deletes its canvas.
+- Task 3, `aiden-design://<grant>/<workspace-relative path>`:
+  - Grants: `DesignGrantRegistry` (`grants.ts`) keeps them in memory only. A grant is lowercase base32 of 32 random bytes, 52 chars. That deviates from the plan's base64url, because Chromium lowercases standard-scheme hosts. `revokeRoot` was added for workspace removal. The singleton is `designGrants` in `design-canvas/main.ts`.
+  - Grant IPC: `designCanvas:grant` → `{grant}` or `{error:"unavailable"}`. It needs design mode on, no `botId`, no `owner` and a workspace `folderPath`. It re-reads the chat after issuing and revokes if the chat changed.
+  - Revocation: grants end on design mode off, a move to another workspace, chat delete and workspace remove.
+  - `resolveDesignFile` (`resolve-core.ts`) parses the raw path, because WHATWG parsing would collapse `%2e%2e`. Then it realpaths and checks `isPathInside`.
+    - 404: traversal and encoded `..`, empty or `.` segments, separators or NUL, symlink escape, missing files, directories, extensionless names.
+    - 403: dot segments and disallowed extensions.
+    - 413: files over 8 MiB.
+  - `designResponse` (`protocol.ts`): every response carries `DESIGN_CONTENT_SECURITY_POLICY`, `no-store` and `nosniff`. Failure bodies are plain, with no paths. Methods other than GET or HEAD get 405.
+  - Bridge: HTML gets `<script src=".../__aiden/bridge.js">` injected after `<head>` (else after `<html>` or the doctype), byte-level through latin1. `__aiden/lib/<name>` serves the generative-UI host libraries.
+  - Wiring: `startDesignProtocol()` (`protocol-main.ts`) is called from `main/index.ts` only when the flag is on. `registerCustomSchemes({studioAssets, designMode})` registers the scheme with `LOCAL_CONTENT_PRIVILEGES`.
+  - Main window CSP: adds `aiden-design:` to `frame-src` and `img-src` only. Framed content must stay sandboxed without `allow-same-origin` (Task 6).
+  - `DESIGN_SCHEME` and `designUrl` live in `renderer/shared/design-canvas/url.ts` so the renderer can import them.
+  - Navigation guards needed no change, because `externalUrl` already refuses `aiden-design:`.
+- Open for review:
+  - Workspace permission "none" does not block framing.
+  - There is a residual parent-directory TOCTOU between realpath and the `O_NOFOLLOW` open.
+  - The bridge has no nonce yet (spec P4).
+  - The `main-window.html` CSP line will conflict with PR #682 (`aiden-attachment:` in `img-src`).

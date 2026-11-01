@@ -67,7 +67,7 @@
   export function isDesignRelativePath(value: unknown): value is string; // lexical check only
   ```
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - `parseDesignCanvasV1(emptyDesignCanvas())` is ok, with `dropped: 0`.
   - A frame with `kind: "page"` is dropped, and `dropped` counts it.
   - `w: 5` becomes 40, `w: 99999` becomes 8000, and `x: 5e9` becomes 1 000 000.
@@ -79,12 +79,12 @@
   - `version: 2` and a non-object both give `ok: false`.
   - `viewport.zoom: 9` becomes 4.
   - A note with 2 500 characters is cut to 2 000.
-- [ ] **Step 2: Run the tests and confirm they fail.**
+- [x] **Step 2: Run the tests and confirm they fail.**
   - Run: `npx tsx --test renderer/shared/design-canvas/schema.test.ts`
   - Expected: FAIL. The module does not exist.
-- [ ] **Step 3: Implement the module.** It is pure, with no Node imports, because the renderer and the CLI bundle may import it. `isDesignRelativePath` rejects an empty path, more than 1 024 characters, a NUL, a backslash, a leading `/` or drive letter, any `..` segment, and any segment that starts with `.`.
-- [ ] **Step 4: Run the tests again.** Expected: PASS.
-- [ ] **Step 5: Commit** with the message `Add design canvas document schema`.
+- [x] **Step 3: Implement the module.** It is pure, with no Node imports, because the renderer and the CLI bundle may import it. `isDesignRelativePath` rejects an empty path, more than 1 024 characters, a NUL, a backslash, a leading `/` or drive letter, any `..` segment, and any segment that starts with `.`.
+- [x] **Step 4: Run the tests again.** Expected: PASS.
+- [x] **Step 5: Commit** with the message `Add design canvas document schema`.
 
 ### Task 2: Canvas store and IPC
 
@@ -115,7 +115,7 @@
   // renderer/lib/ipc.ts: getDesignCanvas, saveDesignCanvas, onDesignCanvasUpdated
   ```
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - **Store:**
     - `get` on an unknown chat gives revision 0.
     - `save(id, doc, 0)` gives `{ok: true, revision: 1}`, and a new store on the same root reads it back.
@@ -131,12 +131,12 @@
     - A successful save broadcasts `designCanvas:updated` with the new revision.
     - Deleting a chat through the chat deletion path removes its canvas file.
     - With the flag off, no `designCanvas:` channel is registered.
-- [ ] **Step 2: Run the tests and confirm they fail.**
+- [x] **Step 2: Run the tests and confirm they fail.**
   - Run: `npx tsx --test main/services/design-canvas/store.test.ts main/handlers/design-canvas.test.ts`
   - Expected: FAIL.
-- [ ] **Step 3: Implement the store** with one promise chain per chat, as `ImageWorkflowStore` uses for `chains`. `save` validates through `parseDesignCanvasV1` and stores `revision = base + 1`. The store is created in `main/index.ts` next to the Create Images store, rooted at `path.join(app.getPath("userData"), "design-canvases")`.
-- [ ] **Step 4: Run the tests again,** plus `npm run type-check`. Expected: PASS.
-- [ ] **Step 5: Commit** with the message `Store design canvases per chat in main`.
+- [x] **Step 3: Implement the store** with one promise chain per chat, as `ImageWorkflowStore` uses for `chains`. `save` validates through `parseDesignCanvasV1` and stores `revision = base + 1`. The store is created in `main/index.ts` next to the Create Images store, rooted at `path.join(app.getPath("userData"), "design-canvases")`.
+- [x] **Step 4: Run the tests again,** plus `npm run type-check`. Expected: PASS.
+- [x] **Step 5: Commit** with the message `Store design canvases per chat in main`.
 
 ### Task 3: The `aiden-design:` scheme
 
@@ -177,7 +177,7 @@
   // IPC "designCanvas:grant" (chatId) => { grant: string } | { error: "unavailable" }
   ```
 
-- [ ] **Step 1: Write the failing tests.** Use real temp directories and real symlinks.
+- [x] **Step 1: Write the failing tests.** Use real temp directories and real symlinks.
   - **`resolveDesignFile`:**
     - It serves `design/a.html` as `text/html; charset=utf-8`.
     - It decodes `design/my%20page.html`.
@@ -199,10 +199,10 @@
     - An unknown grant gives 404.
     - A non-HTML file is served byte for byte, with no injection.
   - **`customSchemePrivileges({studioAssets: false, designMode: true})`** includes `aiden-design` with `bypassCSP: false` and `supportFetchAPI: false`. With `designMode: false` it does not.
-- [ ] **Step 2: Run the tests and confirm they fail.**
+- [x] **Step 2: Run the tests and confirm they fail.**
   - Run: `npx tsx --test main/services/design-canvas/resolve-core.test.ts main/services/design-canvas/grants.test.ts main/services/design-canvas/protocol.test.ts main/services/custom-schemes-core.test.ts`
   - Expected: FAIL.
-- [ ] **Step 3: Implement it.**
+- [x] **Step 3: Implement it.**
   - `resolveDesignFile` checks each segment against the Task 1 rules after decoding.
   - It realpaths the root and the target, and checks containment with `isPathInside` (as `main/services/generative-ui-extension.ts` does). It stats the target and requires `isFile()`.
   - The bridge for P2:
@@ -210,8 +210,8 @@
     2. It posts `aiden-design:resize` from a `ResizeObserver` on `document.documentElement`, throttled to one per animation frame.
   - The library route reuses `readGenerativeUiHostLibrary`.
   - Grants are revoked when design mode turns off for a chat, when a chat's workspace changes and when the chat is deleted. Hook into the `setDesignMode` path from P1 and the chat deletion path from Task 2.
-- [ ] **Step 4: Run the tests again,** plus `npm run type-check`. Expected: PASS.
-- [ ] **Step 5: Commit** with the message `Serve workspace designs through a sandboxed aiden-design scheme`.
+- [x] **Step 4: Run the tests again,** plus `npm run type-check`. Expected: PASS.
+- [x] **Step 5: Commit** with the message `Serve workspace designs through a sandboxed aiden-design scheme`.
 
 ### Task 4: Renderer adapter, controller and undo
 
