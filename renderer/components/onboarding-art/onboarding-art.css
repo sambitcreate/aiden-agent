@@ -223,6 +223,10 @@
   }
   :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-press { animation: oa-press 7s var(--motion-easing) infinite; }
 }
+/* A tile scrolled out of the gallery, or a hidden window, holds its frame
+ * instead of repainting loops nobody can see (renderer/lib/offscreen-pause.ts). */
+.oa-tile[data-offscreen] .oa-art *,
+:root[data-document-hidden] .oa-art * { animation-play-state: paused !important; }
 @keyframes oa-blink { 50% { opacity: 0; } }
 @keyframes oa-type {
   0% { opacity: 1; transform: scaleX(0); }

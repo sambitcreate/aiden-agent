@@ -6,6 +6,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import * as os from "node:os";
+import { createProcessGroupTerminator } from "../shared/process-group.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
 import { resolveGitExecutableMemoized } from "./git-executable.js";
 import type { GitCloneOutcome, GitCloneRequest } from "./workspace-intake.js";
@@ -45,20 +46,6 @@ function cloneEnvironment(): NodeJS.ProcessEnv {
     if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/u.test(key)) delete env[key];
   }
   return { ...env, GIT_TERMINAL_PROMPT: "0", LANG: "C", LC_ALL: "C" };
-}
-
-function terminateProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (!child.pid) return;
-  try {
-    if (process.platform === "win32") child.kill(signal);
-    else process.kill(-child.pid, signal);
-  } catch {
-    try {
-      child.kill(signal);
-    } catch {
-      // Already exited.
-    }
-  }
 }
 
 export interface GitCloneRunnerOptions {
@@ -131,7 +118,7 @@ export function createGitCloneRunner(options: GitCloneRunnerOptions = {}) {
       let pending = "";
       let termination: "cancelled" | "timeout" | undefined;
       let settled = false;
-      let killTimer: NodeJS.Timeout | undefined;
+      const terminator = createProcessGroupTerminator(child, { killGraceMs: KILL_GRACE_MS });
       let lastPhase: string | undefined;
       let lastPercent: number | undefined;
       let lastEmit = 0;
@@ -167,9 +154,7 @@ export function createGitCloneRunner(options: GitCloneRunnerOptions = {}) {
       const terminate = (reason: "cancelled" | "timeout") => {
         if (termination || settled) return;
         termination = reason;
-        terminateProcessGroup(child, "SIGTERM");
-        killTimer = setTimeout(() => terminateProcessGroup(child, "SIGKILL"), KILL_GRACE_MS);
-        killTimer.unref();
+        terminator.terminate();
       };
       const abort = () => terminate("cancelled");
       request.signal.addEventListener("abort", abort, { once: true });
@@ -180,9 +165,10 @@ export function createGitCloneRunner(options: GitCloneRunnerOptions = {}) {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
-        if (killTimer) clearTimeout(killTimer);
         request.signal.removeEventListener("abort", abort);
-        resolve(outcome);
+        // A stopped clone's helpers can outlive git itself; the caller removes the
+        // partial destination only after the whole group is gone.
+        void terminator.finished().then(() => resolve(outcome));
       };
 
       child.once("error", (error) => {

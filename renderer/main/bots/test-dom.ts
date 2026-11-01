@@ -100,6 +100,8 @@ export function installBotTestDom(): Window {
 /** Answers for reads every Bot surface makes, unless a test overrides them. */
 const BOT_TEST_IPC_DEFAULTS: Record<string, (...args: unknown[]) => unknown> = {
   "bots:getCanonicalPhoto": () => null,
+  // The model picker reads custom connection artwork from the providers list.
+  "providers:list": () => [],
   // A Bot whose browser isn't reachable: the panel shows no Browser tab.
   "bots:browser:workspace": () => null,
   // Profile → Rules: a Bot nobody has changed the rules of.

@@ -1,3 +1,6 @@
+import { hostQueryKeys } from "../lib/hosts/host-query-keys";
+import { PeerProjectCloneDialog } from "./peer-project-clone-dialog";
+import { remoteNewChatDraftKey } from "./remote-new-chat-view";
 import {
   beginChatDraftSend,
   createChatDraft,
@@ -14,6 +17,7 @@ import {
   updateChatDraftWorktree,
 } from "../lib/chat-draft";
 import { registerChatPromptTarget } from "../lib/chat-prompt-bridge";
+import { resolveModelDisplay } from "../lib/model-display";
 import { readChatDraftGitMemory, resolveDraftWorktreeDefaults } from "../lib/chat-draft-git-memory";
 import {
   draftWorkInOptions,
@@ -42,6 +46,7 @@ import { adoptWorkspace } from "../lib/use-workspace-path-intake";
 import { workspaceChangeBusyReason } from "../lib/workspace-menu";
 import {
   discardComposerDraft,
+  loadComposerDraft,
   restoreUnsentMessage,
   saveComposerDraftText,
   seedComposerAttachments,
@@ -83,7 +88,12 @@ import { useChatSession } from "../lib/hosts/use-chat-session";
 import { LOCAL_HOST_ID } from "../shared/peer-host";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { WorkspaceFolderMissingNotice } from "../components/workspace-folder-missing-notice";
-import { WORKSPACE_FOLDER_MISSING_SEND_REFUSAL, workspaceFolderCheckApplies } from "../shared/workspace-folder-presence";
+import {
+  MANAGED_WORKTREE_MISSING_SEND_REFUSAL,
+  WORKSPACE_FOLDER_MISSING_SEND_REFUSAL,
+  workspaceFolderCheckApplies,
+} from "../shared/workspace-folder-presence";
+import { useOptionalNewChatActions } from "../lib/new-chat-actions";
 import { Button, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
 import {
   agentsInstructionNoticeMessage,
@@ -344,8 +354,54 @@ export function ChatPane({ chatId }: { chatId: string }) {
   });
   const missingWorkspaceFolder =
     folderWorkspaceId !== undefined && folderPresenceQuery.data?.presence === "missing"
-      ? { name: effectiveWorkspace!.name, folder: folderPresenceQuery.data.folder }
+      ? {
+          id: folderWorkspaceId,
+          name: effectiveWorkspace!.name,
+          folder: folderPresenceQuery.data.folder,
+          worktree: folderPresenceQuery.data.worktree,
+        }
       : undefined;
+  // A deleted Aiden-managed worktree: put it back on its branch, or carry the
+  // unsent message to a new chat in the main checkout.
+  const newChatActions = useOptionalNewChatActions();
+  const [restoringWorktree, setRestoringWorktree] = React.useState(false);
+  const restoreDeletedWorktree = React.useCallback(
+    async (workspaceId: string) => {
+      setRestoringWorktree(true);
+      try {
+        await workspacesApi.restoreDeletedWorktree(workspaceId);
+        await Promise.all([
+          qc.invalidateQueries({ queryKey: queryKeys.workspaces }),
+          qc.invalidateQueries({ queryKey: queryKeys.workspaceFolderPresence(workspaceId) }),
+        ]);
+        toast.success("Worktree restored. You can send again.");
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "The worktree could not be restored.");
+        // A refused or rolled-back restore can still leave a folder in place,
+        // so the notice must follow what is on disk now.
+        void qc.invalidateQueries({ queryKey: queryKeys.workspaceFolderPresence(workspaceId) });
+      } finally {
+        setRestoringWorktree(false);
+      }
+    },
+    [qc],
+  );
+  const newChatInMainCheckout = React.useCallback(
+    (mainWorkspaceId: string) => {
+      if (!newChatActions) return;
+      // A send refused by the folder check may be waiting in the paused queue
+      // with the composer already cleared.
+      const initialText = (
+        loadComposerDraft(chatId).text.trim() || chatMessageQueue(chatId).getSnapshot().messages[0]?.text || ""
+      ).trim();
+      void newChatActions
+        .openNewChatIn(mainWorkspaceId, { gitMode: "checkout", ...(initialText ? { initialText } : {}) })
+        .catch((error: unknown) => {
+          toast.error(error instanceof Error ? error.message : "Couldn't start a new chat.");
+        });
+    },
+    [chatId, newChatActions],
+  );
   const folderWorkspaceRef = React.useRef<{ id: string; name: string } | undefined>(undefined);
   folderWorkspaceRef.current = folderWorkspaceId ? { id: folderWorkspaceId, name: effectiveWorkspace!.name } : undefined;
   // Agent-backed models need someone answering approvals in an ordinary chat.
@@ -576,8 +632,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [contextFeed],
   );
+  const cloneDraftRef = React.useRef<{ text: string; attachments: Attachment[] }>({ text: "", attachments: [] });
   const onDraftContextChange = React.useCallback(
     (value: string, draftAttachments: Attachment[]) => {
+      cloneDraftRef.current = { text: value, attachments: draftAttachments };
       const draftText = value.trim() ? value : undefined;
       const attachments = draftAttachments.length ? draftAttachments : undefined;
       contextFeed.draftChanged(draftText || attachments ? { draftText, attachments } : undefined);
@@ -1359,13 +1417,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useEffect(() => {
     environmentPanel.setContextDetails(!draft && chat.data ? {
       chat: chat.data,
+      providerId,
       providerLabel: selectedProvider?.label ?? providerId ?? "Unavailable",
-      modelLabel: model ?? "Unavailable",
+      providerArtwork: selectedProvider?.artwork,
+      modelId: model,
+      modelLabel: model ? resolveModelDisplay(model, modelInfo.data?.[model]).label : "Unavailable",
       pressure: contextPressure,
       compacting: contextCompactPending || (displayedGenerationTimeline?.steps.some((step) => isToolStep(step) && step.toolName === "compact_context" && (step.status === "pending" || step.status === "running")) ?? false),
     } : null);
     return () => environmentPanel.setContextDetails(null);
-  }, [chat.data, draft, selectedProvider?.label, providerId, model, contextPressure, contextCompactPending, displayedGenerationTimeline, environmentPanel.setContextDetails]);
+  }, [chat.data, draft, selectedProvider?.label, selectedProvider?.artwork, providerId, model, modelInfo.data, contextPressure, contextCompactPending, displayedGenerationTimeline, environmentPanel.setContextDetails]);
 
   // The PR rail/push dialog read the presented chat even without subagents.
   React.useLayoutEffect(() => {
@@ -1600,6 +1661,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             setModelCallRetry(retry);
           },
           onAgentsInstructionNotices: (notices) => {
+            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
             for (const notice of agentsInstructionNotices.update(chatId, notices)) {
               toast.info(agentsInstructionNoticeMessage(notice));
             }
@@ -1944,7 +2006,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
           throw new WorktreeSendCancelledError();
         }
         // The notice above the composer names the folder; the toast stays short.
-        if (presence?.presence === "missing") throw new Error(WORKSPACE_FOLDER_MISSING_SEND_REFUSAL);
+        if (presence?.presence === "missing") {
+          throw new Error(presence.worktree ? MANAGED_WORKTREE_MISSING_SEND_REFUSAL : WORKSPACE_FOLDER_MISSING_SEND_REFUSAL);
+        }
       }
       let worktreeRequest: FirstMessageWorktreeRequest | undefined;
       try {
@@ -2861,6 +2925,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [documentAppendReconciliationRequired, isNewChat, moveNewChatToWorkspace, qc, workspaceChangeBusy]);
 
   // The headline name and app-level entry points open the composer's menu.
+  const [cloningProject, setCloningProject] = React.useState(false);
   const [workspaceMenuRequest, setWorkspaceMenuRequest] = React.useState<WorkspaceMenuRequest>();
   const openWorkspaceMenu = React.useCallback((view: DraftWorkspaceMenuView) => {
     setWorkspaceMenuRequest((current) => ({ nonce: (current?.nonce ?? 0) + 1, view }));
@@ -3658,8 +3723,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
               <WorkspaceFolderMissingNotice
                 workspaceName={missingWorkspaceFolder.name}
                 folder={missingWorkspaceFolder.folder}
+                {...(missingWorkspaceFolder.worktree ? { worktree: missingWorkspaceFolder.worktree } : {})}
                 checking={folderPresenceQuery.isFetching}
+                restoring={restoringWorktree}
                 onCheckAgain={() => void folderPresenceQuery.refetch()}
+                onRestore={() => void restoreDeletedWorktree(missingWorkspaceFolder.id)}
+                onNewChatInMain={newChatActions ? () => {
+                  const mainWorkspaceId = missingWorkspaceFolder.worktree?.mainWorkspaceId;
+                  if (mainWorkspaceId) newChatInMainCheckout(mainWorkspaceId);
+                } : undefined}
               />
             ) : null}
             {questionnaire ? (
@@ -3767,6 +3839,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     <RemoteMachinePicker
                       machines={newChatMachines}
                       selected="local"
+                      // Only a Git project can be cloned. A No workspace chat, a scratch
+                      // folder or any other folder outside a repository has none to offer.
+                      onAddProject={
+                        effectiveWorkspace?.folderPath && !isNoWorkspace(effectiveWorkspace) && git.data?.isRepo === true
+                          ? () => setCloningProject(true)
+                          : undefined
+                      }
                       disabled={isGenerating || isStartingGeneration}
                       onSelect={(machine) => {
                         if (machine !== "local") void navigate({ to: "/host/$hostId/new", params: { hostId: machine } });
@@ -4041,6 +4120,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
           />
         )}
       </ScrollArea>
+      {cloningProject && isNewChat && effectiveWorkspace ? <PeerProjectCloneDialog workspaceId={effectiveWorkspace.id} onClose={() => setCloningProject(false)} onCreated={(hostId, workspace) => {
+        const key = remoteNewChatDraftKey(hostId);
+        if (!loadComposerDraft(key).text) {
+          saveComposerDraftText(key, cloneDraftRef.current.text);
+          seedComposerAttachments(key, cloneDraftRef.current.attachments);
+        } else if (cloneDraftRef.current.text || cloneDraftRef.current.attachments.length) {
+          toast.info("The paired computer already has a draft. Your current prompt remains saved on this computer.");
+        }
+        qc.setQueryData<import("../shared/peer-host").PeerHostFeedSnapshot | null>(hostQueryKeys.feed(hostId), current => current ? { ...current, workspaces: [...current.workspaces.filter(row => row.id !== workspace.id), workspace] } : current);
+        void navigate({ to: "/host/$hostId/new", params: { hostId }, search: { workspaceId: workspace.id } });
+      }} /> : null}
       <ForkSummaryDialog
         open={forkSummaryRequest !== null}
         kind={forkSummaryRequest?.position === "before" ? "edit" : "fork"}

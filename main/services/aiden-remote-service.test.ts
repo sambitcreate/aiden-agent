@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomBytes, X509Certificate } from "node:crypto";
 import { once } from "node:events";
-import { createConnection, createServer, type Socket } from "node:net";
+import { createConnection, createServer, Server as NetServer, type Socket } from "node:net";
 import * as fs from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
@@ -516,6 +516,38 @@ test("a fresh profile skips a LAN candidate occupied only on IPv4 loopback", asy
   } finally {
     await app.cleanup();
     await closeReservedPort(blocker);
+  }
+});
+
+test("a host without IPv6 serves LAN on the IPv4 wildcard", async () => {
+  // A kernel without IPv6 refuses the "::" socket; one with IPv6 turned off by sysctl refuses the bind.
+  for (const code of ["EAFNOSUPPORT", "EADDRNOTAVAIL"]) {
+    const lanPort = await availablePortPair();
+    const original = NetServer.prototype.listen;
+    const lanHosts: unknown[] = [];
+    NetServer.prototype.listen = function (this: NetServer, ...args: unknown[]) {
+      if (args[0] === lanPort) lanHosts.push(args[1]);
+      if (args[1] === "::") {
+        process.nextTick(() => this.emit("error", Object.assign(new Error(`listen ${code}`), { code })));
+        return this;
+      }
+      return (original as (...rest: unknown[]) => NetServer).apply(this, args);
+    } as typeof original;
+    const app = await fixture({ mode: "lan", lanPort, portCandidates: [lanPort] });
+    try {
+      await app.service.setEnabled(true);
+      // The port probe binds IPv4 loopback first; the listener itself tries "::" and then falls back.
+      assert.deepEqual(lanHosts.filter((host) => host !== "127.0.0.1"), ["::", "0.0.0.0"], code);
+      assert.equal(app.persisted().lanPort, lanPort, "the IPv4 fallback keeps the chosen port instead of moving on");
+      assert.equal((await app.service.status()).running, true);
+      assert.deepEqual(await insecureHealth(lanPort), {
+        status: 200,
+        body: { ok: true, protocolVersion: 1 },
+      });
+    } finally {
+      NetServer.prototype.listen = original;
+      await app.cleanup();
+    }
   }
 });
 

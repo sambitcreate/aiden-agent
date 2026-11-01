@@ -9,6 +9,7 @@ import { scheduleService } from "./schedule-service.js";
 import { createScratchWorkspaceDirectory } from "./scratch-workspace.js";
 import { terminalService } from "./terminal.js";
 import { browserService } from "./browser/service.js";
+import { workspaceGitWatcher } from "./workspace-git-watcher-main.js";
 import { workspaceArtifactStore } from "./workspace-artifacts/main.js";
 import { closeWorkspaceFollowThrough } from "./follow-through/follow-through-main.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
@@ -25,13 +26,14 @@ export const workspaceApplicationService = createWorkspaceApplicationService({
   scheduleService,
   terminalService,
   browserService,
+  gitWatcher: workspaceGitWatcher,
   workspaceArtifacts: workspaceArtifactStore,
   followThrough: { closeForWorkspace: closeWorkspaceFollowThrough },
   workspaceMutationGate,
   workspaceOperationRegistry,
   createScratchWorkspaceDirectory,
   realpath: (value) => fs.realpath(value),
-  stat: (value) => fs.stat(value),
+  stat: (value) => fs.stat(value, { bigint: true }),
   removeEmptyDirectory: (value) => fs.rmdir(value),
   noWorkspace: {
     createDirectory: async () =>

@@ -20,6 +20,7 @@ import {
   gitRepositoryPaths,
   gitRestoreManagedWorktreeCheckout,
   gitResumeManagedWorktreeCheckout,
+  gitRestoreDeletedManagedWorktreeCheckout,
   gitRollbackWorktree,
   gitExpandManagedWorktreeIgnored,
   gitFetchWorktreeBase,
@@ -32,6 +33,7 @@ import { provisionWorktreeIncludedFiles } from "./managed-worktree-provisioner.j
 import { llmClient } from "./llm-client.js";
 import { scheduleService } from "./schedule-service.js";
 import { terminalService } from "./terminal.js";
+import { workspaceGitWatcher } from "./workspace-git-watcher-main.js";
 import { defaultWorkspaceId } from "./workspace-application-service.js";
 import { workspaceEnvironmentApplicationService } from "./workspace-environment-application-service-main.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
@@ -107,6 +109,17 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
     gitDeleteManagedWorktreeSnapshotRef(repositoryPath, snapshotId, expectedCommit),
   restoreManagedCheckout: gitRestoreManagedWorktreeCheckout,
   resumeManagedCheckout: gitResumeManagedWorktreeCheckout,
+  restoreDeletedCheckout: (managed, root, workspaceSubpath, commit, signal) => gitRestoreDeletedManagedWorktreeCheckout(
+    managed.repositoryPath,
+    root,
+    managed.worktreePath,
+    managed.branch,
+    managed.worktreeGitDir!,
+    managed.ownershipToken!,
+    workspaceSubpath,
+    commit,
+    signal,
+  ),
   applyWorktreeSnapshot: (worktreePath, snapshotCommit, signal) =>
     gitApplyManagedWorktreeSnapshot(worktreePath, worktreePath, snapshotCommit, signal),
   workspacePathExists: async (worktreePath) => {
@@ -128,6 +141,7 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
   cancelWorkspaceOperations: (workspaceId, exceptSignal) =>
     workspaceOperationRegistry.cancelAndSettle(workspaceId, { exceptSignal }),
   closeWorkspaceTerminals: (workspaceId) => terminalService.closeForWorkspaceAndWait(workspaceId),
+  closeWorkspaceGitWatcher: (workspaceId) => workspaceGitWatcher.close(workspaceId),
   cancelWorkspaceGeneration: (workspaceId) => llmClient.cancelWorkspaceAndSettle(workspaceId),
   cancelWorkspaceSchedules: (workspaceId) => scheduleService.cancelWorkspace(workspaceId),
   resumeWorkspaceSchedules: (workspaceId) => scheduleService.resumeWorkspace(workspaceId),

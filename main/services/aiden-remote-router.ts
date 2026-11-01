@@ -1,3 +1,4 @@
+import { PEER_PROJECT_CLONE_FEATURE } from "../../renderer/shared/peer-project-clone.js";
 import type { remoteAppControls } from "./aiden-remote-app-controls.js";
 import type { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
 import { projectBotDetailForAudience, projectBotSummaryForAudience } from "./aiden-remote-bot-handoffs.js";
@@ -49,6 +50,7 @@ import {
   AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE,
   AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
+  AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   AIDEN_REMOTE_CHAT_TASKS_FEATURE,
@@ -119,6 +121,7 @@ import type { AidenRemoteGitService } from "./aiden-remote-git.js";
 import type { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
 import type { AidenRemoteMemorySettingsService } from "./aiden-remote-memory-settings.js";
 import type { AidenRemoteSpendingService } from "./aiden-remote-spending.js";
+import type { AidenRemoteBackgroundJobService } from "./aiden-remote-background-jobs.js";
 import type { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
 import { MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES } from "./aiden-remote-attachments.js";
@@ -199,7 +202,7 @@ export interface AidenRemoteRouterDependencies {
     AidenRemotePairingRequestService,
     "accepting" | "create" | "reveal" | "poll" | "cancel"
   >;
-  workspaces?: Pick<AidenRemoteWorkspaceService, "list" | "get" | "create" | "update" | "remove">;
+  workspaces?: Pick<AidenRemoteWorkspaceService, "list" | "get" | "create" | "update" | "remove"> & { supportsClone?: boolean };
   workspaceBrowser?: Pick<
     AidenRemoteWorkspaceBrowserService,
     "listRoots" | "listChildren" | "createSelection"
@@ -273,6 +276,11 @@ export interface AidenRemoteRouterDependencies {
    * `not_found` and phones are not told `spending-limits-v1`.
    */
   spending?: Pick<AidenRemoteSpendingService, "chat" | "bot" | "allowMoreChat" | "allowMoreBot">;
+  /**
+   * A chat's background jobs (contract revision 49). Absent: the job routes
+   * are `not_found` and `chat:jobs` is neither offered nor negotiable.
+   */
+  backgroundJobs?: Pick<AidenRemoteBackgroundJobService, "list" | "stop">;
   usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
   readAloud?: Pick<AidenRemoteTtsService, "status" | "start" | "read" | "stop">;
   speech?: Pick<
@@ -465,6 +473,7 @@ export type AidenRemoteRouteLabel =
   | "chatVisualDocument"
   | "chatBrowserRecording"
   | "chatSpending"
+  | "chatBackgroundJobs"
   | "turns"
   | "models"
   | "stream"
@@ -575,6 +584,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   chatVisualDocument: ["/chats/:id/visuals/:visualId/document"],
   chatBrowserRecording: ["/chats/:id/recordings/:recordingId"],
   chatSpending: ["/chats/:id/spending", "/chats/:id/spending/allow-more"],
+  chatBackgroundJobs: ["/chats/:id/jobs", "/chats/:id/jobs/:jobId/stop"],
   turns: ["/chats/:id/turns"],
   models: ["/models"],
   stream: ["/streams/:streamId"],
@@ -1661,6 +1671,7 @@ export interface AidenRemoteServerFeatureSupport {
   botAttachments: boolean;
   spending: boolean;
   mobileSimulators: boolean;
+  workspaceClone?: boolean;
 }
 
 /**
@@ -1679,6 +1690,7 @@ export function aidenRemoteServerFeatures(
   return [
     ...(phone && support.appControls ? ["chat-ui-panels-v1"] : []),
     ...(phone && support.appControlsEnabled ? ["chat-ui-panels-enabled-v1"] : []),
+    ...(desktop && support.workspaceClone ? [PEER_PROJECT_CLONE_FEATURE] : []),
     ...(desktop && support.peerRoutes ? ["peer-routes-v1"] : []),
     ...(phone && support.providers ? [AIDEN_REMOTE_PROVIDER_CREATE_FEATURE] : []),
     ...(phone && support.readAloud ? [REMOTE_TTS_FEATURE] : []),
@@ -2015,6 +2027,8 @@ function advertisedServerCapabilities(
       : []),
     // Revision 39: a display opt-in for any device type while approvals are served.
     ...(scheduleCardsWired(dependencies) ? AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES : []),
+    // Revision 49: offered only while the host runs background jobs.
+    ...(dependencies.backgroundJobs ? AIDEN_REMOTE_CHAT_JOB_CAPABILITIES : []),
     ...(device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
           progressCapabilitySupported(dependencies, capability),
@@ -2324,6 +2338,7 @@ export function createAidenRemoteRequestHandler(
             : {}),
           connectionMode: dependencies.connectionMode(),
           features: aidenRemoteServerFeatures(device, {
+            workspaceClone: dependencies.workspaces?.supportsClone === true,
             appControls: Boolean(dependencies.appControls),
             appControlsEnabled: (await dependencies.appControls?.enabled()) === true,
             peerRoutes: peerRoutes !== undefined,
@@ -2445,6 +2460,11 @@ export function createAidenRemoteRequestHandler(
             // Revision 39: a display opt-in for scheduled-task approvals; it never changes canAllow.
             if (!scheduleCardsWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Schedule cards are unavailable on this Aiden installation.", 404);
+            }
+          } else if ((AIDEN_REMOTE_CHAT_JOB_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 49: offered only while the host runs background jobs.
+            if (!dependencies.backgroundJobs) {
+              throw new AidenRemoteServiceError("not_found", "Background jobs are unavailable on this Aiden installation.", 404);
             }
           } else if (capability === "simulators:control") {
             // Refuse non-desktops first so they never learn whether this Mac has simulators.
@@ -3246,11 +3266,18 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.workspaces) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(
-          response,
-          201,
-          await dependencies.workspaces.create(device.id, key, body),
-        );
+        const cloning = body !== null && typeof body === "object" && (body as { mode?: unknown }).mode === "clone";
+        if (cloning && (!isDesktopDevice(device) || !device.capabilities.has("workspace:browse"))) throw new AidenRemoteServiceError("capability_denied", "Cloning projects requires a paired desktop with folder browsing access.", 403);
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        if (cloning) {
+          response.once("close", abort);
+          if (response.destroyed || request.aborted) abort();
+        }
+        try {
+          const result = await dependencies.workspaces.create(device.id, key, body, controller.signal);
+          if (!controller.signal.aborted) writeJson(response, 201, result);
+        } finally { response.off("close", abort); }
         return;
       }
       const workspaceMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})$/u.exec(path);
@@ -4246,6 +4273,30 @@ export function createAidenRemoteRequestHandler(
                 requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u),
               )
             : await dependencies.spending.chat(chatSpendingMatch[1]!),
+        );
+        return;
+      }
+      const chatJobsListMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/jobs$/u.exec(path);
+      const chatJobStopMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/jobs\/(job_[0-9a-f]{8})\/stop$/u.exec(path);
+      const chatJobsMatch = request.method === "GET" ? chatJobsListMatch : request.method === "POST" ? chatJobStopMatch : null;
+      if (chatJobsMatch) {
+        requireNoQuery(query);
+        route = "chatBackgroundJobs";
+        const stop = chatJobsMatch === chatJobStopMatch;
+        if (stop) requireEmptyJsonObject(await readJsonBody(request, 64));
+        const device = await authenticate(request, dependencies.devices, stop ? "chat:write" : "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.backgroundJobs || !dependencies.chats) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        requireDeviceCapabilities(device, ["chat:jobs"]);
+        await requireChatAccess(dependencies.chats, device, chatJobsMatch[1]!, stop ? "write" : "read");
+        writeJson(
+          response,
+          200,
+          stop
+            ? await dependencies.backgroundJobs.stop(chatJobsMatch[1]!, chatJobsMatch[2]!)
+            : dependencies.backgroundJobs.list(chatJobsMatch[1]!),
         );
         return;
       }

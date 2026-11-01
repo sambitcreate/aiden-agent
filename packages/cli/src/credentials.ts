@@ -36,8 +36,8 @@ const LEASE_WAIT_MS = 10_000;
 
 /**
  * Run `operation` holding the cross-process writer lease. Writers in this
- * process queue; a lease held by another process (a TUI next to `aiden
- * serve`) is retried with bounded backoff before failing.
+ * process queue; a lease held by another process (an `aiden` command
+ * next to `aiden serve`) is retried with bounded backoff before failing.
  */
 export function withCredentialWriterLease<T>(lease: string, operation: () => Promise<T>, waitMs = LEASE_WAIT_MS): Promise<T> {
   const run = async () => {

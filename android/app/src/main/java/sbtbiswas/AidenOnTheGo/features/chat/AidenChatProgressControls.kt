@@ -256,15 +256,18 @@ fun AidenChatProgressControls(
 }
 
 @Composable
-private fun AidenProgressChip(
+internal fun AidenProgressChip(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     supportingLabel: String? = null,
     description: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** Read instead of "description: label" when the label alone says it. */
+    accessibilityLabel: String? = null
 ) {
     val palette = AidenTheme.palette
-    val chipDescription = if (supportingLabel != null) {
+    val chipDescription = accessibilityLabel ?: if (supportingLabel != null) {
         stringResource(R.string.chat_progress_chip_supporting_cd, description, label, supportingLabel)
     } else {
         stringResource(R.string.chat_progress_chip_cd, description, label)
@@ -272,7 +275,7 @@ private fun AidenProgressChip(
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = CircleShape,
-        modifier = Modifier
+        modifier = modifier
             .heightIn(min = AidenUi.MinimumTouchTarget)
             .shadow(
                 elevation = 2.dp,

@@ -1,3 +1,5 @@
+import { isLinuxTitleBarPreference, type LinuxTitleBarPreference } from "./window-chrome.js";
+
 export type AppearanceMode = "system" | "light" | "dark";
 export type AppearanceScheme = "light" | "dark";
 export type ThemePresetId =
@@ -52,6 +54,8 @@ export interface AppearanceConfig {
   chatWidth: ChatWidthPreference;
   /** When the agent may draw inline visuals in desktop chats. */
   inlineVisuals: InlineVisualsMode;
+  /** Linux only: Aiden's own title bar, the desktop's, or Aiden's unless a tiling window manager runs. Applies on the next launch. */
+  linuxTitleBar: LinuxTitleBarPreference;
 }
 
 export interface AppearancePreviewSnapshot {
@@ -429,6 +433,7 @@ const DEFAULT_APPEARANCE: AppearanceConfig = {
   fontSmoothing: true,
   chatWidth: "default",
   inlineVisuals: "automatic",
+  linuxTitleBar: "auto",
 };
 
 export function createDefaultAppearanceConfig(): AppearanceConfig {
@@ -536,6 +541,7 @@ export function normalizeAppearanceConfig(value: unknown): AppearanceConfig {
       : fallback.fontSmoothing,
     chatWidth: isChatWidthPreference(value.chatWidth) ? value.chatWidth : fallback.chatWidth,
     inlineVisuals: isInlineVisualsMode(value.inlineVisuals) ? value.inlineVisuals : fallback.inlineVisuals,
+    linuxTitleBar: isLinuxTitleBarPreference(value.linuxTitleBar) ? value.linuxTitleBar : fallback.linuxTitleBar,
   };
 }
 
@@ -581,6 +587,10 @@ export function parseAppearanceConfig(value: unknown): AppearanceConfig {
   // Older settings and exports predate the inline visuals preference.
   if (value.inlineVisuals !== undefined && !isInlineVisualsMode(value.inlineVisuals)) {
     throw new Error("Inline visuals mode is unsupported.");
+  }
+  // Older settings and exports predate the Linux title bar preference.
+  if (value.linuxTitleBar !== undefined && !isLinuxTitleBarPreference(value.linuxTitleBar)) {
+    throw new Error("Linux title bar preference is unsupported.");
   }
   const verifyVariant = (variant: unknown, label: string) => {
     if (!isRecord(variant)) throw new Error(`${label} theme must be an object.`);

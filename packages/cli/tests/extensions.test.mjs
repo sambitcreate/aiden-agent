@@ -1,80 +1,17 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 const pkgDir = path.dirname(fileURLToPath(import.meta.url)) + "/..";
-const selfcheck = path.join(pkgDir, "dist", "selfcheck.js");
-
-function rmSyncSafe(dir) {
-	try {
-		rmSync(dir, { recursive: true, force: true });
-	} catch {
-		// Temp cleanup is best-effort.
-	}
-}
-
-test("every Aiden extension registers and contributes its tools in a real session", () => {
-	const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-ext-"));
-	const result = spawnSync(process.execPath, [selfcheck], {
-		cwd: path.join(pkgDir, "dist", "app"),
-		env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" },
-		encoding: "utf-8",
-		timeout: 120_000,
-	});
-	rmSyncSafe(agentDir);
-	assert.equal(result.status, 0, result.stderr);
-	const report = JSON.parse(result.stdout.trim().split("\n").pop());
-	const extensions = report.extensions.map((name) => name.replace(/<inline:|>/g, ""));
-	for (const expected of [
-		"aiden-advisor",
-		"aiden-ask-user-question",
-		"aiden-btw",
-		"aiden-slash-arguments",
-		"aiden-startup",
-		"aiden-context-capture",
-		"aiden-display-image",
-		"aiden-memory",
-		"aiden-todo",
-		"aiden-usage",
-		"aiden-voice",
-		"aiden-web-search",
-		"aiden-sessions",
-		"aiden-providers",
-		"aiden-workflows",
-		"aiden-onboarding",
-		"aiden-subagents",
-		"aiden-artifacts",
-		"aiden-mcp",
-		"aiden-schedule",
-	]) {
-		assert.ok(extensions.includes(expected), `extension ${expected} missing; loaded: ${extensions.join(", ")}`);
-	}
-	assert.deepEqual(report.tools, [
-		"advisor",
-		"ask_user_question",
-		"display_image",
-		"recall_memory",
-		"remember_fact",
-		"render_artifact",
-		"render_ui",
-		"schedule_task",
-		"subagent",
-		"todo",
-		"web_search",
-	]);
-	assert.equal(report.errors, 0, "extension loader reported errors");
-});
 
 /**
  * Evaluates a pure module through Node's TypeScript stripping. Only modules
  * whose imports are types or .ts files qualify; feature modules that import
  * Aiden cores with .js specifiers resolve only under esbuild, so their
- * end-to-end coverage lives in the selfcheck test above.
+ * end-to-end coverage lives in the parity suite's daemon tests.
  */
 function evalModule(expression) {
 	const result = spawnSync(
@@ -87,9 +24,7 @@ function evalModule(expression) {
 }
 
 const bridgeUrl = JSON.stringify(pathToFileURL(path.join(pkgDir, "src", "pi-bridge", "adapt-aiden-extension.ts")).href);
-const widgetUrl = JSON.stringify(pathToFileURL(path.join(pkgDir, "src", "extensions", "todo-widget.ts")).href);
 const settingsUrl = JSON.stringify(pathToFileURL(path.join(pkgDir, "src", "extensions", "aiden-settings.ts")).href);
-const askUserCoreUrl = JSON.stringify(pathToFileURL(path.join(pkgDir, "src", "extensions", "ask-user-question-core.ts")).href);
 
 test("bridge registers tools and chains system prompts onto before_agent_start", () => {
 	const out = evalModule(`
@@ -114,25 +49,6 @@ if (result.systemPrompt !== "BASE\\n\\nUse the demo tool politely.") {
 console.log("bridge-ok");
 `);
 	assert.match(out, /bridge-ok/);
-});
-
-test("todo widget renders statuses and hides when empty", () => {
-	const out = evalModule(`
-import { renderTodoWidget } from ${widgetUrl};
-const empty = renderTodoWidget({ tasks: [], nextId: 1 });
-if (empty !== undefined) throw new Error("empty state must hide the widget");
-const lines = renderTodoWidget({ tasks: [
-	{ id: 1, subject: "Ship", status: "completed", blockedBy: [] },
-	{ id: 2, subject: "Build", status: "in_progress", activeForm: "Building", blockedBy: [] },
-	{ id: 3, subject: "Wait", status: "pending", blockedBy: [2] },
-], nextId: 4 });
-if (lines[0] !== "todos 1/3") throw new Error("counter wrong: " + lines[0]);
-if (!lines.some((line) => line.includes("✓ Ship"))) throw new Error("completed glyph missing");
-if (!lines.some((line) => line.includes("◉ Building…"))) throw new Error("in-progress label missing");
-if (!lines.some((line) => line.includes("blocked by 2"))) throw new Error("blocked annotation missing");
-console.log("todo-ok");
-`);
-	assert.match(out, /todo-ok/);
 });
 
 test("aiden.json settings reject wrong-typed values (desktop normalization parity)", () => {
@@ -165,147 +81,6 @@ try {
 }
 `);
 	assert.match(out, /normalize-ok/);
-});
-
-test("CLI ask-user applies one absolute timeout across every terminal selection", () => {
-	const out = evalModule(`
-import { createTerminalAskUserQuestionRequest } from ${askUserCoreUrl};
-const originalNow = Date.now;
-let now = 1_000;
-Date.now = () => now;
-try {
-	const controller = new AbortController();
-	const timeouts = [];
-	let selectionCount = 0;
-	const request = createTerminalAskUserQuestionRequest(() => ({
-		select: async (_title, _options, options) => {
-			selectionCount++;
-			if (options?.signal !== controller.signal) throw new Error("AbortSignal was not forwarded");
-			timeouts.push(options?.timeout);
-			if (selectionCount <= 2) {
-				now += 10_000;
-				const label = selectionCount === 1 ? "Direct" : "Guided";
-				return _options.find((row) => row.endsWith(" " + label));
-			}
-			if (selectionCount === 3) return "Done";
-			now += options.timeout;
-			return undefined;
-		},
-	}));
-	const question = {
-		question: "Which approach?",
-		header: "Approach",
-		multiSelect: true,
-		options: [
-			{ label: "Direct", description: "Take action." },
-			{ label: "Guided", description: "Explain each step." },
-		],
-	};
-	const result = await request("call-one", [question, { ...question, multiSelect: false }], controller.signal, 30);
-	if (JSON.stringify(timeouts) !== JSON.stringify([30_000, 20_000, 10_000, 10_000])) {
-		throw new Error("per-question timeouts reset the deadline: " + JSON.stringify(timeouts));
-	}
-	if (
-		!result.cancelled ||
-		!result.timedOut ||
-		JSON.stringify(result.answers[0]) !== JSON.stringify({
-			questionIndex: 0,
-			kind: "multi",
-			selected: ["Direct", "Guided"],
-		})
-	) {
-		throw new Error("timeout response lost its result or prior answer: " + JSON.stringify(result));
-	}
-	console.log("ask-user-timeout-ok");
-} finally {
-	Date.now = originalNow;
-}
-`);
-	assert.match(out, /ask-user-timeout-ok/);
-});
-
-test("CLI ask-user starts on the recommended option, and a multi-select starts with its recommendations picked", () => {
-	const out = evalModule(`
-import { createTerminalAskUserQuestionRequest } from ${askUserCoreUrl};
-const shown = [];
-// The terminal select returns its first row when the person just presses Enter.
-const request = createTerminalAskUserQuestionRequest(() => ({
-	select: async (title, options) => {
-		shown.push(title);
-		return options[0];
-	},
-}));
-const result = await request("call-one", [
-	{
-		question: "Which database?",
-		header: "Database",
-		multiSelect: false,
-		options: [
-			{ label: "SQLite", description: "Embedded." },
-			{ label: "Postgres (Recommended)", description: "Relational." },
-		],
-	},
-	{
-		question: "Which checks?",
-		header: "Checks",
-		multiSelect: true,
-		options: [
-			{ label: "Lint (Recommended)", description: "Style." },
-			{ label: "Test", description: "Behavior." },
-			{ label: "Types (Recommended)", description: "Types." },
-		],
-	},
-]);
-const expected = [
-	{ questionIndex: 0, kind: "option", answer: "Postgres (Recommended)" },
-	{ questionIndex: 1, kind: "multi", selected: ["Lint (Recommended)", "Types (Recommended)"] },
-];
-if (result.cancelled || JSON.stringify(result.answers) !== JSON.stringify(expected)) {
-	throw new Error("Enter did not accept the recommendations: " + JSON.stringify(result));
-}
-if (!shown[1].includes("picked: Lint (Recommended), Types (Recommended)")) {
-	throw new Error("the multi-select did not show its starting picks: " + shown[1]);
-}
-console.log("ask-user-recommended-ok");
-`);
-	assert.match(out, /ask-user-recommended-ok/);
-});
-
-test("CLI ask-user keeps every recommendation removable and waits for Done", () => {
-	const out = evalModule(`
-import { createTerminalAskUserQuestionRequest } from ${askUserCoreUrl};
-const shown = [];
-// The person unticks one recommendation, then presses Done.
-const steps = [(rows) => rows.find((row) => row.endsWith(" Lint (Recommended)")), () => "Done"];
-const request = createTerminalAskUserQuestionRequest(() => ({
-	select: async (_title, options) => {
-		shown.push(options);
-		const step = steps.shift();
-		if (!step) throw new Error("asked again after Done");
-		return step(options);
-	},
-}));
-const result = await request("call-one", [{
-	question: "Which checks?",
-	header: "Checks",
-	multiSelect: true,
-	options: [
-		{ label: "Lint (Recommended)", description: "Style." },
-		{ label: "Types (Recommended)", description: "Types." },
-	],
-}]);
-// Every option is recommended, yet the question still waits for the person.
-if (shown.length !== 2) throw new Error("the question did not wait for Done: " + shown.length);
-if (!shown[0].some((row) => row.endsWith(" Lint (Recommended)"))) {
-	throw new Error("a recommended pick was not offered for removal: " + JSON.stringify(shown[0]));
-}
-const expected = [{ questionIndex: 0, kind: "multi", selected: ["Types (Recommended)"] }];
-if (result.cancelled || JSON.stringify(result.answers) !== JSON.stringify(expected)) {
-	throw new Error("unticking a recommendation was lost: " + JSON.stringify(result));
-}
-console.log("ask-user-untick-ok");
-`);
-	assert.match(out, /ask-user-untick-ok/);
 });
 
 test("memory scope id matches the desktop SAFE_ID charset and is stable per folder", () => {
@@ -362,67 +137,4 @@ try {
 }
 `);
 	assert.match(out, /settings-ok/);
-});
-
-
-const slashEditorUrl = JSON.stringify(pathToFileURL(path.join(pkgDir, "src", "extensions", "slash-argument-editor.ts")).href);
-
-test("Enter on an argument command fills it in and waits; other commands still run on Enter", () => {
-	const out = evalModule(`
-import { CombinedAutocompleteProvider, getKeybindings } from "@earendil-works/pi-tui";
-import { ArgumentAwareEditor, createArgumentCommandMatcher } from ${slashEditorUrl};
-
-const templates = {
-	"/prompts/review.md": "Review $ARGUMENTS carefully.",
-	"/prompts/target.md": "Review \${ARGUMENTS:-the current diff} carefully.",
-	"/prompts/standup.md": "Summarize today.",
-};
-const commands = [
-	{ name: "review", source: "prompt", sourceInfo: { path: "/prompts/review.md" } },
-	{ name: "target", source: "prompt", sourceInfo: { path: "/prompts/target.md" } },
-	{ name: "standup", source: "prompt", sourceInfo: { path: "/prompts/standup.md" } },
-];
-const waitsForArgument = createArgumentCommandMatcher(() => commands, (file) => templates[file]);
-const tui = { requestRender() {}, terminal: { rows: 40, columns: 100 } };
-const theme = { borderColor: (text) => text, selectList: { selectedPrefix: (t) => t, selectedText: (t) => t, description: (t) => t, scrollInfo: (t) => t, noMatch: (t) => t } };
-
-async function run(typed) {
-	const editor = new ArgumentAwareEditor(tui, theme, getKeybindings());
-	editor.waitsForArgument = waitsForArgument;
-	editor.setAutocompleteProvider(new CombinedAutocompleteProvider(
-		[{ name: "btw" }, { name: "new" }, { name: "review" }, { name: "target" }, { name: "standup" }], process.cwd(),
-	));
-	const submitted = [];
-	editor.onSubmit = (text) => submitted.push(text);
-	for (const character of typed) editor.handleInput(character);
-	for (let i = 0; i < 100 && !editor.isShowingAutocomplete(); i++) await new Promise((r) => setTimeout(r, 10));
-	if (!editor.isShowingAutocomplete()) throw new Error("autocomplete never opened for " + typed);
-	editor.handleInput("\\r");
-	return { editor, submitted };
-}
-
-// Aiden's /btw needs a question: Enter fills it in and waits, then sends with the question.
-const btw = await run("/bt");
-if (btw.editor.getText() !== "/btw " || btw.submitted.length !== 0) {
-	throw new Error("btw should wait: " + JSON.stringify([btw.editor.getText(), btw.submitted]));
-}
-for (const character of "why?") btw.editor.handleInput(character);
-btw.editor.handleInput("\\r");
-if (JSON.stringify(btw.submitted) !== JSON.stringify(["/btw why?"])) throw new Error("btw send: " + JSON.stringify(btw.submitted));
-
-// A template that reads $ARGUMENTS waits; one without placeholders runs right away.
-const review = await run("/rev");
-if (review.editor.getText() !== "/review " || review.submitted.length !== 0) throw new Error("review should wait");
-// pi also reads a braced default, \${ARGUMENTS:-…}.
-const target = await run("/tar");
-if (target.editor.getText() !== "/target " || target.submitted.length !== 0) throw new Error("target should wait");
-const standup = await run("/stand");
-if (JSON.stringify(standup.submitted) !== JSON.stringify(["/standup"])) throw new Error("standup: " + JSON.stringify(standup.submitted));
-
-// A command with no argument keeps pi's Enter-runs-now behavior.
-const fresh = await run("/ne");
-if (JSON.stringify(fresh.submitted) !== JSON.stringify(["/new"])) throw new Error("new: " + JSON.stringify(fresh.submitted));
-console.log("slash-arguments-ok");
-`);
-	assert.match(out, /slash-arguments-ok/);
 });

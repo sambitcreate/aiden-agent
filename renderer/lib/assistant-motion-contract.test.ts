@@ -62,7 +62,7 @@ test("the hotkey waits for the central command listener and uses the dock comman
   const main = source("../../main/index.ts");
   const listener = commands.indexOf('onNotification<{ commandId?: unknown }>("app:command"');
   const readySignal = commands.indexOf("appApi.rendererReady()");
-  const readinessWait = main.indexOf("await rendererReadiness.wait()");
+  const readinessWait = main.indexOf("await waitForRendererReady()");
   const assistantCommand = main.indexOf('commandId: "assistant.open"');
   assert.doesNotMatch(dock, /interactionBlocked/u);
   assert.ok(listener >= 0 && readySignal > listener);
