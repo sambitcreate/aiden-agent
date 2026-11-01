@@ -213,7 +213,7 @@ Nothing a hook runs triggers hooks, and a replayed event never runs a hook twice
 - **Pause all hooks** in Settings → Hooks stops every hook. `AIDEN_HOOKS=0` in Aiden's environment turns hooks off entirely, and Settings says so.
 - Statuses: Active, Waiting for approval, Changed — re-approve, Off, Disabled after failures, Not supported in Aiden.
 
-Each hook's detail sheet shows its last ten runs. **Test** runs it once against a sample payload, asks first if the hook isn't approved, and doesn't count toward its run log or failures. It sends the digest the sheet shows, and is refused if the hook changed since.
+Each hook's detail sheet shows its last ten runs. **Test** runs it once against a sample payload, asks first if the hook isn't approved, and doesn't count toward its run log or failures. It sends the digest the sheet shows, and is refused if the hook changed since. Test is also refused while hooks are paused or `AIDEN_HOOKS=0` is set. A workspace hook is tested in its workspace folder; a global or chat hook has no folder of its own, so it is tested in your home folder, and a command that relies on a chat's workspace folder can fail there.
 
 ## The agent's `hooks` tool
 

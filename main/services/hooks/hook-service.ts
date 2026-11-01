@@ -909,6 +909,8 @@ export function createHookService(deps: HookServiceDeps): HookService {
 
     async testHook(target, fixturePayload) {
       await ensureLoaded();
+      if (disabledByEnvironment()) return { ok: false, reason: "AIDEN_HOOKS=0 turns hooks off, so Test didn't run anything." };
+      if (trust.paused) return { ok: false, reason: "Hooks are paused, so Test didn't run anything. Resume them to test a hook." };
       let definition: HookDefinition | undefined;
       const saved = "hookId" in target ? target : undefined;
       if (saved) {

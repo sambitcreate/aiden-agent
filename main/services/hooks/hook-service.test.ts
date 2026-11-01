@@ -211,12 +211,20 @@ test("pause-all and AIDEN_HOOKS=0 stop every hook", async (t) => {
   await service.dispatcher.dispatch("Stop", { ...bashCall(""), hook_event_name: "Stop" }, f.context);
   assert.equal(runs, 0);
   assert.equal((await service.listHooks()).paused, true);
+  const saved = (await service.listHooks()).hooks[0];
+  assert.ok(saved);
+  assert.equal((await service.testHook({ hookId: saved.id, digest: saved.digest })).ok, false, "Test runs nothing while hooks are paused");
+  assert.equal(runs, 0);
   await service.setPaused(false);
   await service.dispatcher.dispatch("Stop", { ...bashCall(""), hook_event_name: "Stop" }, f.context);
   assert.equal(runs, 1);
 
   const off = await f.create({ run, env: { AIDEN_HOOKS: "0" } });
   await off.dispatcher.dispatch("Stop", { ...bashCall(""), hook_event_name: "Stop" }, f.context);
+  const offHook = (await off.listHooks()).hooks[0];
+  assert.ok(offHook);
+  assert.equal((await off.testHook({ hookId: offHook.id, digest: offHook.digest })).ok, false, "Test runs nothing under AIDEN_HOOKS=0");
+  assert.equal((await off.testHook({ scope: { kind: "global" }, event: "Stop", handler: { type: "command", command: "./draft.sh" } })).ok, false, "nor an unsaved draft");
   assert.equal(runs, 1);
   assert.equal((await off.listHooks()).disabledByEnvironment, true);
 });
