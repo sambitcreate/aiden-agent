@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import test from "node:test";
+import { emptyDesignCanvas } from "../../renderer/shared/design-canvas/schema.js";
+import { DesignCanvasStore } from "./design-canvas/store.js";
 import type { Chat, Workspace } from "./types.js";
 import {
   createChatApplicationService,
@@ -537,4 +542,35 @@ test("a committed deletion offers the chat's workspace for release, and a failed
   });
   await assert.rejects(uncommitted.service.remove("chat-1"), /disk failed/u);
   assert.deepEqual(released, ["workspace-1"], "nothing is released for a deletion that did not commit");
+});
+
+test("deleting a chat deletes its design canvas, and a canvas that cannot be deleted keeps the chat", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-delete-canvas-"));
+  try {
+    const designCanvasStore = new DesignCanvasStore({ root: () => root });
+    await designCanvasStore.save("chat-1", emptyDesignCanvas(), 0);
+    await designCanvasStore.save("chat-2", emptyDesignCanvas(), 0);
+    await fixture({ designCanvasStore }).service.remove("chat-1");
+    assert.deepEqual(await fs.readdir(root), ["chat-2.json"]);
+
+    let removed = false;
+    const failing = fixture({
+      designCanvasStore: { delete: async () => { throw new Error("disk failed"); } },
+      chatStore: {
+        listRegular: async () => [],
+        list: async () => [],
+        get: async (id: string) => chat(id),
+        create: async () => chat(),
+        rename: async () => chat(),
+        setChatModelSelection: async () => chat(),
+        setDesignMode: async () => chat(),
+        moveEmptyChatToWorkspace: async () => chat(),
+        remove: async () => { removed = true; },
+      } as ChatApplicationDependencies["chatStore"],
+    });
+    await assert.rejects(failing.service.remove("chat-2"), /design canvas/u);
+    assert.equal(removed, false);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });

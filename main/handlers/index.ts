@@ -61,6 +61,7 @@ import { registerFollowThroughHandlers } from "./follow-through.js";
 import { registerTtsHandlers } from "./tts.js";
 import { registerDeviceHandlers } from "./devices.js";
 import { registerCreateImagesIpc } from "./create-images/index.js";
+import { registerDesignCanvasIpc } from "./design-canvas-main.js";
 import { initializeAdvisorRuntime } from "../services/advisor-runtime-main.js";
 import { initializeForkSummaries } from "../services/fork-summary-service-main.js";
 import { modelPaceRecorder } from "../services/model-pace-runtime.js";
@@ -151,6 +152,7 @@ export function registerHandlers(): void {
   registerTtsHandlers();
   registerDeviceHandlers();
   registerCreateImagesIpc();
+  registerDesignCanvasIpc();
 
   logger.info("handlers", "✓ IPC handlers registered");
 }

@@ -8,6 +8,7 @@ import type { ChatPullRequestStore } from "./chat-pull-request-store.js";
 import type { configStore } from "./config-store.js";
 import type { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import type { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
+import type { DesignCanvasStore } from "./design-canvas/store.js";
 import type { ToolOutputStore } from "./tool-output-store.js";
 import {
   ChatStoreError,
@@ -88,6 +89,8 @@ export interface ChatApplicationDependencies {
   piRuntimeEffectStore: Pick<typeof piRuntimeEffectStore, "deleteChat">;
   piCompactionSessionStore: Pick<typeof piCompactionSessionStore, "deleteChat">;
   chatPullRequestStore?: Pick<ChatPullRequestStore, "deleteChat">;
+  /** The chat's design canvas document goes with it; forks never copy it. */
+  designCanvasStore?: Pick<DesignCanvasStore, "delete">;
   /** Queued visual snapshots; a deleted chat's are dropped, not captured. */
   visualSnapshots?: { cancelChat(chatId: string): void };
   /** Stops a deleted chat's background jobs and drops its followed pull requests and check. */
@@ -398,6 +401,12 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         } catch (error) {
           deps.logError("git", "Could not delete the chat's pull request links.", error);
           throw new Error("Aiden could not delete this chat's pull request links.");
+        }
+        try {
+          await deps.designCanvasStore?.delete(chatId);
+        } catch (error) {
+          deps.logError("design", "Could not delete the chat's design canvas.", error);
+          throw new Error("Aiden could not delete this chat's design canvas.");
         }
         await deps.chatStore.remove(chatId, async (chat) => {
           if (!chat) throw new Error(`Chat ${chatId} not found`);

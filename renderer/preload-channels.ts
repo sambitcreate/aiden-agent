@@ -17,6 +17,7 @@ export const INVOKE_PREFIXES = [
   "devices:",
   "chats:",
   "computerUse:",
+  "designCanvas:",
   "dictation:",
   "diagnostics:",
   "exa:",
@@ -110,6 +111,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chats:metadata-updated",
   /** A chat's design mode changed: `{chatId, designMode}`. */
   "chats:design-mode-changed",
+  /** A chat's design canvas was saved or edited by Aiden: `{chatId, revision}`. */
+  "designCanvas:updated",
   "chats:fork-summary-changed",
   "chats:btw-event",
   "chats:pull-requests-changed",

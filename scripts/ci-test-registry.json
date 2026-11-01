@@ -301,6 +301,8 @@
         "main/shared/process-group.test.ts",
         "main/windows/pill-window-security.test.ts",
         "main/windows/design-window-core.test.ts",
+        "main/services/design-canvas/store.test.ts",
+        "main/handlers/design-canvas.test.ts",
         "main/native-ipc-core.test.ts",
         "renderer/shared/images/ports.test.ts",
         "scripts/check-ci-policy.test.mjs",

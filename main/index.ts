@@ -139,6 +139,7 @@ import { EmptyChatMigrationSnapshotError } from "./services/empty-chat-migration
 import { migrateLegacyEmptyWorkspaceChats } from "./services/empty-chat-migration-main.js";
 import { ensureUserDataDir } from "./services/data-store.js";
 import { piCompactionSessionStore } from "./services/pi-compaction-session-store.js";
+import { designCanvasStore } from "./services/design-canvas/main.js";
 import {
   reconcileExternalProviderCredentialChanges,
   reconcilePendingProviderCredentialRotation,
@@ -2347,6 +2348,7 @@ if (!ownsSingleInstanceLock) {
         }
         await piRuntimeEffectStore.deleteChat(chatId);
         await piCompactionSessionStore.deleteChat(chatId);
+        await designCanvasStore.delete(chatId);
         await chatStore.remove(chatId);
       });
       // After deletions settle and before any renderer draft exists.

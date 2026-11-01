@@ -16,6 +16,7 @@ import { spending } from "./spending-main.js";
 import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
 import { toolOutputStore } from "./tool-output-store.js";
 import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
+import { designCanvasStore } from "./design-canvas/main.js";
 import { cancelVisualSnapshots } from "./visual-snapshot-service.js";
 import { deleteChatFollowThrough, restoreChatFollowThrough } from "./follow-through/follow-through-main.js";
 import { interruptedWaits } from "./interrupted-waits-main.js";
@@ -33,6 +34,7 @@ export const chatApplicationService = createChatApplicationService({
   piRuntimeEffectStore,
   piCompactionSessionStore,
   chatPullRequestStore,
+  designCanvasStore,
   visualSnapshots: { cancelChat: cancelVisualSnapshots },
   followThrough: { deleteChat: deleteChatFollowThrough, restoreChat: restoreChatFollowThrough },
   memoryStore,
