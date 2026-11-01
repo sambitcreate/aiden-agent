@@ -708,7 +708,7 @@ private fun AidenWorkspaceHome(
             Column(
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = AidenUi.ScreenGutter, vertical = 8.dp)
             ) {
-                Text(stringResource(R.string.workspace_home_new_chat_cd), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.workspace_new_chat), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(10.dp))
                 // Revision 50: the Mac gives the chat a folder of its own if the home already holds one.
                 noWorkspaceHome?.let { home ->
