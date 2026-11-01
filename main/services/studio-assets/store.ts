@@ -245,45 +245,77 @@ export class StudioAssetStore {
     await fs.mkdir(path.join(root, "blobs"), { recursive: true, mode: 0o700 });
     await fs.mkdir(path.join(root, "thumbs"), { recursive: true, mode: 0o700 });
     const file = path.join(root, DATABASE_FILE);
-    let db: DatabaseSync;
-    // True while a rebuild is unfinished: the file was missing or was just
-    // quarantined (now or on an earlier open whose re-index never completed), so
-    // every blob on disk may have lost its row and may be re-indexed.
-    let recovering: boolean;
-    try {
-      ({ db, recovering } = openDatabase(file));
-    } catch (error) {
-      if (!isUnusableDatabase(error)) throw error;
-      // The database only indexes content-addressed blobs, so a fresh one can
-      // be rebuilt from them by the sweep below. Keep the old file for diagnosis.
-      const quarantined = await quarantineDatabase(file, this.now());
-      ({ db, recovering } = openDatabase(file));
-      this.options.onWarning?.(
-        `The studio asset database could not be read and was moved aside as ${path.basename(quarantined)}; rebuilding it from stored images.`,
-        error,
-      );
-    }
-    try {
-      await restrictDatabaseFiles(file);
-    } catch (error) {
-      db.close();
-      throw error;
-    }
-    reclaimSqlitePages(db);
+    let { db, recovering } = await this.connect(file);
     this.db = db;
     this.root = root;
     // Housekeeping is best effort: a failed pass must not disable a store whose
     // database opened, and the next start (or an explicit collection) retries it.
     try {
-      await this.exclusive(() => this.sweepOrphanFiles(recovering));
-      await this.collectGarbage();
+      await this.housekeep(recovering);
     } catch (error) {
-      this.options.onError?.(error);
+      if (!isUnusableDatabase(error)) {
+        this.options.onError?.(error);
+      } else {
+        // Opening reads only the header and schema, so a damaged table page first
+        // shows up in this full scan. Rebuild once, as for a file that cannot be read.
+        this.db = null;
+        db.close();
+        ({ db, recovering } = await this.connect(file, error));
+        this.db = db;
+        try {
+          await this.housekeep(recovering);
+        } catch (retryError) {
+          this.options.onError?.(retryError);
+        }
+      }
     }
     this.gcTimer = this.timers.setInterval(
       () => this.collectPeriodically(),
       this.options.gcIntervalMs ?? STUDIO_ASSET_GC_INTERVAL_MS,
     );
+  }
+
+  /**
+   * Open the database, first moving it aside when `damaged` is the corruption error
+   * that condemned it or when it cannot be read. `recovering` is true while a rebuild
+   * is unfinished: the file was missing or was just quarantined (now or on an earlier
+   * open whose re-index never completed), so every blob on disk may have lost its row
+   * and may be re-indexed.
+   */
+  private async connect(file: string, damaged?: unknown): Promise<{ db: DatabaseSync; recovering: boolean }> {
+    let opened: { db: DatabaseSync; recovering: boolean } | undefined;
+    let cause = damaged;
+    if (cause === undefined) {
+      try {
+        opened = openDatabase(file);
+      } catch (error) {
+        if (!isUnusableDatabase(error)) throw error;
+        cause = error;
+      }
+    }
+    if (!opened) {
+      // The database only indexes content-addressed blobs, so a fresh one can
+      // be rebuilt from them by the sweep. Keep the old file for diagnosis.
+      const quarantined = await quarantineDatabase(file, this.now());
+      opened = openDatabase(file);
+      this.options.onWarning?.(
+        `The studio asset database could not be read and was moved aside as ${path.basename(quarantined)}; rebuilding it from stored images.`,
+        cause,
+      );
+    }
+    try {
+      await restrictDatabaseFiles(file);
+    } catch (error) {
+      opened.db.close();
+      throw error;
+    }
+    reclaimSqlitePages(opened.db);
+    return opened;
+  }
+
+  private async housekeep(recovering: boolean): Promise<void> {
+    await this.exclusive(() => this.sweepOrphanFiles(recovering));
+    await this.collectGarbage();
   }
 
   /** Timer callback; resolves (never rejects) once the pass is done, for tests. */

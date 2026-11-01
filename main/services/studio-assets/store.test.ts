@@ -639,6 +639,67 @@ test("a corrupt database is quarantined and rebuilt, keeping every image", async
   assert.equal(reopened.get(next.assetId)?.assetId, next.assetId);
 });
 
+test("a damaged table page first met by the startup scan is quarantined and rebuilt, keeping every image", async (t) => {
+  const warnings: string[] = [];
+  const errors: unknown[] = [];
+  const f = await fixture(t, {}, {
+    onWarning: (message) => warnings.push(message),
+    onError: (error) => errors.push(error),
+  });
+  const asset = await f.store.put({ bytes: pngBytes(40, 30, 4) });
+  await f.store.close();
+  // Grow the tables well past their root pages, then damage the last pages: the
+  // header and schema still read, so only the first full scan meets the damage.
+  const file = path.join(f.root, DATABASE);
+  const raw = new DatabaseSync(file);
+  const insert = raw.prepare(
+    "INSERT INTO assets (id, media_type, bytes, width, height, created_at, touched_at) VALUES (?, 'image/png', 1, 1, 1, 0, 0)",
+  );
+  for (let index = 0; index < 400; index += 1) insert.run(createHash("sha256").update(String(index)).digest("hex"));
+  const { page_size: pageSize } = raw.prepare("PRAGMA page_size").get() as { page_size: number };
+  raw.close();
+  const { size } = await fs.stat(file);
+  const handle = await fs.open(file, "r+");
+  await handle.write(Buffer.alloc(pageSize * 2, 0xa5), 0, pageSize * 2, size - pageSize * 2);
+  await handle.close();
+
+  const reopened = await f.open();
+  assert.deepEqual(errors, []);
+  assert.equal(reopened.status(), "open");
+  assert.equal((await reopened.read(asset.assetId)).bytes.byteLength, asset.bytes);
+  assert.deepEqual(reopened.usage(), { assets: 1, bytes: asset.bytes });
+  const quarantined = (await fs.readdir(f.root)).filter(
+    (name) => name.startsWith(`${DATABASE}.corrupt-`) && !/-(wal|shm)$/u.test(name),
+  );
+  assert.equal(quarantined.length, 1);
+  assert.ok(warnings.some((message) => message.includes(quarantined[0]!)));
+  const next = await reopened.put({ bytes: pngBytes(10, 10, 5) });
+  assert.equal(reopened.get(next.assetId)?.assetId, next.assetId);
+});
+
+test("a rebuild re-indexes only blobs whose bytes hash to their name in their own shard", async (t) => {
+  const f = await fixture(t);
+  const kept = await f.store.put({ bytes: pngBytes(10, 10, 3) });
+  await f.store.close();
+  await removeDatabase(f.root);
+  // A valid image filed under another image's hash.
+  const misnamedId = createHash("sha256").update(pngBytes(12, 12, 8)).digest("hex");
+  await fs.mkdir(path.join(f.root, "blobs", misnamedId.slice(0, 2)), { recursive: true });
+  await fs.writeFile(path.join(f.root, "blobs", misnamedId.slice(0, 2), misnamedId), pngBytes(13, 13, 9));
+  // A valid image under its own hash, but in a shard its name does not start with.
+  const misplaced = pngBytes(14, 14, 7);
+  const misplacedId = createHash("sha256").update(misplaced).digest("hex");
+  const wrongShard = misplacedId.startsWith("00") ? "ff" : "00";
+  await fs.mkdir(path.join(f.root, "blobs", wrongShard), { recursive: true });
+  await fs.writeFile(path.join(f.root, "blobs", wrongShard, misplacedId), misplaced);
+
+  const reopened = await f.open();
+  assert.equal(reopened.get(misnamedId), undefined);
+  assert.equal(reopened.get(misplacedId), undefined);
+  assert.equal(reopened.get(kept.assetId)?.width, 10);
+  assert.deepEqual(await f.blobFiles(), [kept.assetId]);
+});
+
 test("a database with an invalid schema version is quarantined and rebuilt", async (t) => {
   const f = await fixture(t);
   const asset = await f.store.put({ bytes: pngBytes(40, 30, 6) });
