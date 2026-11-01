@@ -3938,7 +3938,7 @@ enum AidenInstallationPresentation {
     }
 }
 
-private struct AidenInstallationsView: View {
+struct AidenInstallationsView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var coordinator: AidenRemoteCoordinator
     let addInstallation: () -> Void

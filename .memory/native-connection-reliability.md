@@ -46,3 +46,10 @@ installation switches and preservation of a newer pending key. Actual Android QR
 and setup-code exchanges send `android`; unsupported older hosts show update
 guidance without retrying under an Apple identity. Full Android 429 tests and lint
 pass; focused iOS lifecycle and original-stream recovery tests pass.
+
+## iOS disconnected connection picker — 2026-10-31
+
+- The root `ContentView` recovery panel previously exposed Retry only. It now also offers **Switch connection**, opening the existing `AidenInstallationsView` with saved computers, Forget, and **Pair Another Aiden Agent**. This stays available for trust failures where retry is disabled, even with one saved computer.
+- The sheet destination belongs to `ContentView`, outside the conditional offline panel, so foreground reconnects cannot remove connection management mid-flow. Forgetting the last pairing dismisses recovery management for the normal pairing screen. Recovery actions fall back to a vertical layout on narrow screens or with larger text.
+- Focused simulator validation: `AidenNativeIntegrationTests`, `AidenRemoteClientTests`, and `AidenRemotePhase0Tests`, 210 passed and 5 device-only skips on iPhone 17 Pro, iOS 27.0, BD8018AF-7C14-4729-BDE1-775E29EA4FBD, with signing disabled. The new rendered-panel test uses Vision to verify visible action labels; the coordinator test proves offline-to-other-computer switching, credential isolation, no retry of the old computer, and pairing retention. iOS release policy: 20 Ruby and 30 Node tests passed.
+- Initial hosted-view accessibility inspection returned no virtual buttons through either public UIKit container API, so it could not serve as a rendering oracle. The parallel Xcode runner also stalled while diagnosing a different simulator UUID; explicit serial simulator execution succeeded. These are local verification limitations, not physical-device or TestFlight acceptance. No protocol, Android, onboarding, or plan-status change.
