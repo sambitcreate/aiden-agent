@@ -108,6 +108,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chats:read-markers-changed",
   "chats:changed",
   "chats:metadata-updated",
+  /** A chat's design mode changed: `{chatId, designMode}`. */
+  "chats:design-mode-changed",
   "chats:fork-summary-changed",
   "chats:btw-event",
   "chats:pull-requests-changed",

@@ -13,7 +13,8 @@ import { assertRenameAllowedFromChat } from "../services/chat-title-policy.js";
 import type { ChatTurnLease } from "../services/chat-turn-admission.js";
 import { WorkspaceMutationGate } from "../services/workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "../services/workspace-operation-registry.js";
-import { createRendererChatMutationHandlers } from "./chat-renderer-mutations.js";
+import { createRendererChatMutationHandlers, type ChatDesignModeChange } from "./chat-renderer-mutations.js";
+import type { Workspace } from "../services/types.js";
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
 
@@ -45,16 +46,31 @@ function lease(chatId: string, turnId: string, ownerId: string): ChatTurnLease {
 }
 
 /** The renderer channels, registered the way chats.ts registers them, over a real chat store. */
-async function fixture(t: TestContext, options: { busyChats?: ReadonlySet<string> } = {}) {
+async function fixture(
+  t: TestContext,
+  options: {
+    busyChats?: ReadonlySet<string>;
+    workspaces?: Record<string, Partial<Workspace>>;
+    designModeEnabled?: boolean;
+  } = {},
+) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-renderer-chat-mutations-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const chatStore = createChatStore(async () => root);
   await chatStore.create({ id: "design-chat", owner: { kind: "design-project", projectId: "project-1" } });
   await chatStore.create({ id: "regular-chat", title: "Regular" });
   const busyChats = options.busyChats ?? new Set<string>();
+  const broadcasts: ChatDesignModeChange[] = [];
   const chatApplicationService = createChatApplicationService({
     chatStore,
-    configStore: { getWorkspace: async () => null },
+    configStore: {
+      getWorkspace: async (workspaceId: string) => {
+        const workspace = options.workspaces?.[workspaceId];
+        return workspace
+          ? ({ id: workspaceId, name: workspaceId, permission: "ask", createdAt: 1, updatedAt: 1, ...workspace } as Workspace)
+          : null;
+      },
+    },
     llmClient: {
       isChatOwnedByInactiveRenderer: () => false,
       isChatBusy: (chatId: string) => busyChats.has(chatId),
@@ -114,17 +130,20 @@ async function fixture(t: TestContext, options: { busyChats?: ReadonlySet<string
     artifactRecoveryMessage: (message) => message,
     workspaceMutationGate: new WorkspaceMutationGate(),
     skillRegistry: { resolveFresh: async () => assert.fail("no skill is invoked here") },
+    designModeEnabled: () => options.designModeEnabled ?? true,
+    broadcastDesignModeChanged: (change) => broadcasts.push(change),
   });
   const handlers = new Map<string, Handler>([
     ["chats:rename", rendererChats.rename as Handler],
     ["chats:renameWithFoundationModels", rendererChats.renameWithFoundationModels as Handler],
     ["chats:setModel", rendererChats.setModel as Handler],
+    ["chats:setDesignMode", rendererChats.setDesignMode as Handler],
     ["chats:remove", rendererChats.remove as Handler],
     ["chats:appendMessage", rendererChats.appendMessage as Handler],
     ["chats:dismissComputerUseContinue", rendererChats.dismissComputerUseContinue as Handler],
   ]);
   const invoke = async (channel: string, ...args: unknown[]) => handlers.get(channel)!(event, ...args);
-  return { chatStore, invoke };
+  return { chatStore, invoke, broadcasts };
 }
 
 const append = (chatId: string, turnId: string) =>
@@ -226,4 +245,70 @@ test("dismissing the Computer Use continue callout clears only that chat's marke
 
   await assert.rejects(f.invoke("chats:dismissComputerUseContinue", ""), /non-empty string/u);
   await assert.rejects(f.invoke("chats:dismissComputerUseContinue", "missing-chat"), /not found/u);
+});
+
+const projectWorkspaces = {
+  default: { folderPath: "/tmp/aiden-chats/default", noWorkspace: true as const },
+  site: { folderPath: "/Users/person/site" },
+  empty: {},
+};
+
+test("design mode turns on for a project chat, tells every window, and turns off again", async (t) => {
+  const f = await fixture(t, { workspaces: projectWorkspaces });
+  await f.chatStore.create({ id: "site-chat", title: "Landing hero", workspaceId: "site" });
+  const before = await f.chatStore.get("site-chat");
+
+  const on = (await f.invoke("chats:setDesignMode", "site-chat", true)) as { id: string; designMode?: true };
+  assert.deepEqual([on.id, on.designMode], ["site-chat", true]);
+  const stored = await f.chatStore.get("site-chat");
+  assert.equal(stored?.designMode, true);
+  assert.equal(stored?.updatedAt, before?.updatedAt, "design mode does not move the chat in the sidebar");
+  assert.deepEqual(f.broadcasts, [{ chatId: "site-chat", designMode: true }]);
+
+  const off = (await f.invoke("chats:setDesignMode", "site-chat", false)) as { designMode?: true };
+  assert.equal(off.designMode, undefined);
+  assert.equal((await f.chatStore.get("site-chat"))?.designMode, undefined);
+  assert.equal(f.broadcasts[f.broadcasts.length - 1]?.designMode, false);
+
+  // A No workspace chat lives in Aiden's own folder, so it is a project chat too.
+  await f.invoke("chats:setDesignMode", "regular-chat", true);
+  assert.equal((await f.chatStore.get("regular-chat"))?.designMode, true);
+});
+
+test("design mode is refused outside project chats and leaves them unchanged", async (t) => {
+  const f = await fixture(t, { workspaces: projectWorkspaces });
+  await f.chatStore.create({ id: "folderless-chat", workspaceId: "empty" });
+  await f.chatStore.create({ id: "orphan-chat", workspaceId: "deleted-workspace" });
+  await f.chatStore.create({ id: "bot-chat", botId: "bot-1" });
+  await f.chatStore.create({ id: "assistant-chat", workspaceId: "assistant" });
+  for (const chatId of ["folderless-chat", "orphan-chat", "bot-chat", "assistant-chat"]) {
+    await assert.rejects(f.invoke("chats:setDesignMode", chatId, true), /project chats only/u, chatId);
+    assert.equal((await f.chatStore.get(chatId))?.designMode, undefined, chatId);
+  }
+  await assert.rejects(f.invoke("chats:setDesignMode", "design-chat", true), /belongs to another Aiden feature/u);
+  assert.deepEqual(f.broadcasts, [], "a refusal tells no window");
+});
+
+test("the design mode channel checks its arguments and does nothing while the flag is off", async (t) => {
+  const f = await fixture(t, { workspaces: projectWorkspaces });
+  await assert.rejects(f.invoke("chats:setDesignMode", "regular-chat", "true"), /boolean/u);
+  await assert.rejects(f.invoke("chats:setDesignMode", "regular-chat"), /boolean/u);
+  await assert.rejects(f.invoke("chats:setDesignMode", "", true), /non-empty string/u);
+  await assert.rejects(f.invoke("chats:setDesignMode", "missing-chat", true), /not found/u);
+
+  const off = await fixture(t, { workspaces: projectWorkspaces, designModeEnabled: false });
+  await assert.rejects(off.invoke("chats:setDesignMode", "regular-chat", true), /not available/u);
+  assert.equal((await off.chatStore.get("regular-chat"))?.designMode, undefined);
+  assert.deepEqual(off.broadcasts, []);
+});
+
+test("a rename and a design mode change racing on one chat both land", async (t) => {
+  const f = await fixture(t, { workspaces: projectWorkspaces });
+  await Promise.all([
+    f.invoke("chats:rename", "regular-chat", "Pricing page"),
+    f.invoke("chats:setDesignMode", "regular-chat", true),
+  ]);
+  const stored = await f.chatStore.get("regular-chat");
+  assert.deepEqual([stored?.title, stored?.designMode], ["Pricing page", true]);
+  assert.deepEqual(f.broadcasts, [{ chatId: "regular-chat", designMode: true }], "the change carries no title to undo the rename");
 });

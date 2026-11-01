@@ -9,7 +9,11 @@ import type { configStore } from "./config-store.js";
 import type { displayImageArtifactStore } from "./display-image-artifact-store.js";
 import type { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import type { ToolOutputStore } from "./tool-output-store.js";
-import { isChatCreateReconciliationRequiredError } from "./chat-store-core.js";
+import {
+  ChatStoreError,
+  DESIGN_MODE_UNAVAILABLE_MESSAGE,
+  isChatCreateReconciliationRequiredError,
+} from "./chat-store-core.js";
 import type { llmClient } from "./llm-client.js";
 import type { Chat } from "./types.js";
 import { assertRenameAllowedFromChat } from "./chat-title-policy.js";
@@ -50,6 +54,7 @@ export interface ChatApplicationDependencies {
     | "create"
     | "rename"
     | "setChatModelSelection"
+    | "setDesignMode"
     | "moveEmptyChatToWorkspace"
     | "remove"
   > & Partial<Pick<typeof chatStore, "listSummaryMetadata">>;
@@ -243,6 +248,26 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           await options.assertCurrent?.(chat);
           if (deps.llmClient.isChatBusy(chatId)) {
             throw new Error("Finish or stop the current response before changing this chat's model.");
+          }
+        }),
+      );
+    },
+
+    /**
+     * Turn design mode on or off for one chat. It needs a project chat: one
+     * whose workspace has a folder, or a No workspace chat in Aiden's own
+     * folder. Turning it off is always allowed. A running reply is not
+     * affected, because design mode only changes the layout.
+     */
+    async setDesignMode(chatId: string, enabled: boolean, options: ChatApplicationMutationOptions = {}) {
+      return chatForRenderer(
+        await deps.chatStore.setDesignMode(chatId, enabled, async (chat) => {
+          assertRenameAllowedFromChat(chat, options);
+          await options.assertCurrent?.(chat);
+          if (!enabled) return;
+          const workspace = await deps.configStore.getWorkspace(persistedChatWorkspaceId(chat.workspaceId));
+          if (!workspace || (!workspace.folderPath && workspace.noWorkspace !== true)) {
+            throw new ChatStoreError("design-mode-unavailable", DESIGN_MODE_UNAVAILABLE_MESSAGE);
           }
         }),
       );

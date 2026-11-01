@@ -1585,6 +1585,8 @@ export const chatsApi = {
   /** Change the model this chat answers with; other chats and new chats keep theirs. */
   setModel: (id: string, providerId: string, model: string) =>
     invoke<Chat | null>("chats:setModel", id, providerId, model),
+  /** Turn design mode on or off for this chat; every window hears `chats:design-mode-changed`. */
+  setDesignMode: (id: string, enabled: boolean) => invoke<Chat | null>("chats:setDesignMode", id, enabled),
   /**
    * Clone the whole visible chat, or fork it at `forkAt`. A fork with
    * `summary` also summarizes what the source did after the fork point.

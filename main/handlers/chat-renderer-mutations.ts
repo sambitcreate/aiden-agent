@@ -1,5 +1,6 @@
 // The renderer's chat mutations: rename, a model-titled rename, a chat's own
-// model choice, delete, append, and dismissing a Computer Use continue callout.
+// model choice, design mode, delete, append, and dismissing a Computer Use
+// continue callout.
 // Each asks its service to refuse a chat another Aiden feature owns (a Design
 // project's hidden chat). The handlers live here, apart from chats.ts, so they
 // load without Electron and the refusal is pinned by invoking them; chats.ts
@@ -45,6 +46,16 @@ function boundedId(value: unknown, name: string, maxChars: number, maxBytes: num
   return text;
 }
 
+/**
+ * The `chats:design-mode-changed` payload. It has its own channel, apart from
+ * `chats:metadata-updated`, so it never carries a title that could undo a
+ * rename and never plays the sidebar's title reveal.
+ */
+export interface ChatDesignModeChange {
+  chatId: string;
+  designMode: boolean;
+}
+
 /** The app singletons these handlers use; chats.ts passes the real ones. */
 export interface RendererChatMutationDeps {
   chatStore: Pick<
@@ -53,8 +64,12 @@ export interface RendererChatMutationDeps {
   >;
   chatApplicationService: Pick<
     ReturnType<typeof createChatApplicationService>,
-    "rename" | "setModelSelection" | "remove"
+    "rename" | "setModelSelection" | "setDesignMode" | "remove"
   >;
+  /** AIDEN_EXPERIMENTAL_DESIGN_MODE; off means the design mode channel has no effect. */
+  designModeEnabled(): boolean;
+  /** Tells every window a chat's design mode changed (`chats:design-mode-changed`). */
+  broadcastDesignModeChanged(change: ChatDesignModeChange): void;
   chatTitleService: {
     renameWithFoundationModels(chatId: string, options: { rejectFeatureOwned?: boolean }): Promise<unknown>;
   };
@@ -90,6 +105,8 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
     artifactRecoveryMessage,
     workspaceMutationGate,
     skillRegistry,
+    designModeEnabled,
+    broadcastDesignModeChanged,
   } = deps;
   return {
     rename: async (_event: IpcMainInvokeEvent, id: unknown, title: unknown) => {
@@ -109,6 +126,17 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
         boundedId(model, "model", MAX_MODEL_ID_CHARS, MAX_MODEL_ID_BYTES),
         { rejectFeatureOwned: true },
       ),
+
+    /** Turn design mode on or off for one chat, then tell every window. */
+    setDesignMode: async (_event: IpcMainInvokeEvent, id: unknown, enabled: unknown) => {
+      const chatId = asString(id, "id");
+      if (typeof enabled !== "boolean") throw new Error('Expected a boolean for "enabled".');
+      if (!designModeEnabled()) throw new Error("Design mode is not available.");
+      const chat = await chatApplicationService.setDesignMode(chatId, enabled, { rejectFeatureOwned: true });
+      // The store only resolves once the chat holds exactly this value.
+      broadcastDesignModeChanged({ chatId, designMode: enabled });
+      return chat;
+    },
 
     /** Clear the post-restart "continue Computer Use" marker without resuming. */
     dismissComputerUseContinue: async (_event: IpcMainInvokeEvent, id: unknown) =>

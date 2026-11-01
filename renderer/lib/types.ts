@@ -679,6 +679,8 @@ export interface ChatMeta {
   forkedFrom?: ChatForkLineageV1;
   /** Main-owned feature owner; owned chats never appear in chat listings or Remote. */
   owner?: ChatOwnerV1;
+  /** This chat opens in design mode (narrow chat beside the canvas); absent when off. */
+  designMode?: true;
   createdAt: number;
   updatedAt: number;
 }
@@ -788,6 +790,12 @@ export interface ChatMetadataUpdated {
   workspaceId?: string;
   title: string;
   updatedAt: number;
+}
+
+/** `chats:design-mode-changed`: one chat's design mode turned on or off. */
+export interface ChatDesignModeChanged {
+  chatId: string;
+  designMode: boolean;
 }
 
 export interface ChatTitleRenameResult extends ChatMetadataUpdated {

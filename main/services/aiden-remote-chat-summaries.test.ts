@@ -153,7 +153,8 @@ test("summary pages are transcript-free, deterministic, and exclude reserved cha
   const pending = new Set(["chat-b"]);
   const fixture = summaryService([
     metadata("chat-b", 3_000),
-    metadata("chat-a", 3_000),
+    // Design mode is a desktop layout preference; it never reaches a phone.
+    metadata("chat-a", 3_000, { designMode: true }),
     metadata("assistant-chat", 4_000, { workspaceId: "assistant" }),
     metadata("bot-chat", 5_000, { botId: "bot-1" }),
   ], { active, pending });
