@@ -2245,6 +2245,10 @@ if (!ownsSingleInstanceLock) {
       nativeTheme.themeSource = normalizeAppearanceConfig(
         (await configStore.getSettings()).appearance,
       ).mode;
+      // Design mode frames workspace files only through granted aiden-design:// hosts. It is
+      // registered before the window loads: a page only reaches the schemes handled when it
+      // loaded, so the canvas's own <img> frames would otherwise fail with an unknown scheme.
+      if (designModeEnabled()) startDesignProtocol();
       initialMainWindow = createMainWindow({ startupAdmissionHeld: true });
       // Observed below after reconciliation; never an unhandled rejection.
       initialMainWindow.catch(() => undefined);
@@ -2304,8 +2308,6 @@ if (!ownsSingleInstanceLock) {
             error,
           ),
       });
-      // Design mode frames workspace files only through granted aiden-design:// hosts.
-      if (designModeEnabled()) startDesignProtocol();
       const quarantinedImageArtifactPath = displayImageArtifactStore.quarantinedPath();
       if (quarantinedImageArtifactPath) {
         logger.warn(
