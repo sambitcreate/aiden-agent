@@ -274,6 +274,20 @@ test("Find in chat gets Command+F unless a saved shortcut already uses it", () =
   assert.equal(effectiveBinding("chat.find", repaired), null);
 });
 
+test("design mode toggles on Command+Shift+L unless a saved shortcut already uses it", () => {
+  assert.equal(effectiveBinding("design.toggle", repairKeybindingOverrides(undefined)), "Command+Shift+L");
+  const saved = { version: 1, commands: { "chat.search": { binding: "Command+Shift+L" } } };
+  const repaired = repairKeybindingOverrides(saved);
+  assert.equal(effectiveBinding("chat.search", repaired), "Command+Shift+L", "the saved choice wins");
+  assert.equal(effectiveBinding("design.toggle", repaired), null);
+  // Dictation keeps Command+Shift+D, so turning it on never collides with design mode.
+  const dictation = applyKeybindingMutation(undefined, { commandId: "dictation.toggle", disabled: false });
+  assert.deepEqual(
+    [effectiveBinding("dictation.toggle", dictation), effectiveBinding("design.toggle", dictation)],
+    ["Command+Shift+D", "Command+Shift+L"],
+  );
+});
+
 test("a shortcut saved for New chat keeps Command+Shift+O ahead of Open folder", () => {
   // Saved by an earlier build: New chat on Command+Shift+O, before Open folder… owned that default.
   const saved = { version: 1, commands: { "chat.new": { binding: "Command+Shift+O" } } };

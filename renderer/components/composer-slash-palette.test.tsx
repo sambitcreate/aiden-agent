@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Composer } from "./composer";
 import { TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
+import { DesignModeControlsContext, type DesignModeControls } from "../lib/design-mode";
 import type { Chat } from "../lib/types";
 
 // Boolean oracles throughout: a failing assert on a happy-dom node would
@@ -44,8 +45,15 @@ const SESSION_CHAT = {
   updatedAt: 1,
 } as unknown as Chat;
 
-function ComposerHarness({ slashPaletteBlocked = false }: { slashPaletteBlocked?: boolean }) {
+function ComposerHarness({
+  slashPaletteBlocked = false,
+  designControls = null,
+}: {
+  slashPaletteBlocked?: boolean;
+  designControls?: DesignModeControls | null;
+}) {
   return (
+    <DesignModeControlsContext.Provider value={designControls}>
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <CommandSystemProvider>
@@ -65,13 +73,14 @@ function ComposerHarness({ slashPaletteBlocked = false }: { slashPaletteBlocked?
         </CommandSystemProvider>
       </TooltipProvider>
     </QueryClientProvider>
+    </DesignModeControlsContext.Provider>
   );
 }
 
-async function mountComposer() {
+async function mountComposer(designControls: DesignModeControls | null = null) {
   let view!: ReturnType<typeof render>;
   await act(async () => {
-    view = render(<ComposerHarness />);
+    view = render(<ComposerHarness designControls={designControls} />);
   });
   return { view, textbox: screen.getByRole("textbox") as HTMLTextAreaElement };
 }
@@ -203,4 +212,57 @@ test("a blocked slash palette closes while the draft stays", async () => {
 
   assert.ok(palette() === null);
   assert.ok(textbox.value === "/");
+});
+
+/** Design mode controls for chat-1 that record each change instead of saving it. */
+function recordingDesignControls(changes: Array<[boolean, string]>, chatId = "chat-1"): DesignModeControls {
+  return {
+    chatId,
+    on: false,
+    set: (enabled, source) => changes.push([enabled, source]),
+    toggle: (source) => changes.push([true, source]),
+  };
+}
+
+const optionTitles = () => screen.queryAllByRole("option").map((option) => option.textContent ?? "");
+
+test("/design is offered only in a chat that can use design mode", async () => {
+  const changes: Array<[boolean, string]> = [];
+  for (const controls of [null, recordingDesignControls(changes, "another-chat")]) {
+    const { view, textbox } = await mountComposer(controls);
+    await type(textbox, "/des");
+    assert.ok(!optionTitles().some((title) => title.includes("Design mode")), `controls for ${controls?.chatId ?? "no chat"}`);
+    view.unmount();
+  }
+  const { textbox } = await mountComposer(recordingDesignControls(changes));
+  await type(textbox, "/des");
+  assert.ok(optionTitles().some((title) => title.includes("Design mode")));
+  assert.deepEqual(changes, []);
+});
+
+test("picking /design turns design mode on at once and clears the command", async () => {
+  const changes: Array<[boolean, string]> = [];
+  const { textbox } = await mountComposer(recordingDesignControls(changes));
+  await type(textbox, "/design");
+  await press(textbox, "Enter");
+  assert.deepEqual(changes, [[true, "slash"]]);
+  assert.equal(textbox.value, "", "the command is cleared");
+  assert.ok(palette() === null);
+  assert.deepEqual(sends, []);
+});
+
+test("sending /design off turns design mode off, and any other word after /design is refused", async () => {
+  const changes: Array<[boolean, string]> = [];
+  const { textbox } = await mountComposer(recordingDesignControls(changes));
+  await type(textbox, "/design please");
+  await press(textbox, "Enter");
+  assert.deepEqual(changes, [], "not a design mode change");
+  assert.equal(textbox.value, "/design please", "the draft stays to fix");
+  assert.deepEqual(sends, [], "and it is not sent as a message");
+
+  await type(textbox, "/design off");
+  await press(textbox, "Enter");
+  assert.deepEqual(changes, [[false, "slash"]]);
+  assert.equal(textbox.value, "", "the command is cleared");
+  assert.deepEqual(sends, []);
 });

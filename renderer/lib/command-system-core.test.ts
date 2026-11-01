@@ -191,6 +191,14 @@ test("palette omits studio commands while their capability is off", () => {
   );
 });
 
+test("the palette lists Toggle design mode only with the capability and a design-ready chat on screen", () => {
+  const listed = (capabilities: { createImages: boolean; designMode: boolean }, onScreen: boolean) =>
+    paletteCommands(capabilities, (id) => onScreen && id === "design.toggle").some(({ id }) => id === "design.toggle");
+  assert.equal(listed({ createImages: false, designMode: false }, true), false, "flag off");
+  assert.equal(listed({ createImages: false, designMode: true }, false), false, "no eligible chat on screen");
+  assert.equal(listed({ createImages: false, designMode: true }, true), true);
+});
+
 test("no capability set offers a Design Studio command", () => {
   for (const createImages of [false, true]) {
     const commands = paletteCommands({ createImages });

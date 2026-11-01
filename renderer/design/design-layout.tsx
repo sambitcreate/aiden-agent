@@ -3,7 +3,8 @@ import { DesignModeBanner } from "../components/design-mode-banner";
 import { EnvironmentWorkbench, type WorkbenchDesignState } from "../components/environment-panel";
 import { useSplitViewSidebar } from "../components/ui";
 import { useWorkbenchWidth } from "../components/workbench-panel";
-import { useDesignMode } from "../lib/design-mode";
+import { useCommandHandler } from "../lib/command-system";
+import { DesignModeControlsContext, useDesignMode, type DesignModeControls } from "../lib/design-mode";
 import {
   DESIGN_CANVAS_MIN_WIDTH,
   DESIGN_CHAT_WIDTH_BOUNDS,
@@ -25,6 +26,8 @@ export interface DesignChatState {
   state: WorkbenchDesignState;
   /** The open chat's workspace while design mode is active, for the scoped sidebar. */
   workspaceId: string | undefined;
+  /** Null when the open chat cannot use design mode. */
+  controls: DesignModeControls | null;
 }
 
 /**
@@ -41,7 +44,12 @@ export function useDesignChatState(chatId: string | undefined, allowed: boolean)
       : design.on
         ? "active"
         : "inactive";
-  return { state, workspaceId: state === "active" ? design.workspaceId : undefined };
+  const { available, on, set, toggle } = design;
+  const controls = React.useMemo<DesignModeControls | null>(
+    () => (allowed && chatId && available ? { chatId, on, set, toggle } : null),
+    [allowed, available, chatId, on, set, toggle],
+  );
+  return { state, workspaceId: state === "active" ? design.workspaceId : undefined, controls };
 }
 
 /** The chat area with design mode wired in. */
@@ -52,16 +60,21 @@ export function DesignWorkbench({
   children,
 }: React.PropsWithChildren<{
   chatId: string | undefined;
-  /** From `useDesignChatState`; "inactive" on surfaces design mode never applies to. */
-  design: WorkbenchDesignState;
+  /** From `useDesignChatState`. */
+  design: DesignChatState;
   suppressed: boolean;
 }>) {
+  const controls = design.controls;
+  // ⌘⇧L has no handler, so the key is left alone, unless this chat can use design mode.
+  useCommandHandler("design.toggle", () => controls?.toggle("shortcut"), controls !== null);
   return (
-    <EnvironmentWorkbench suppressed={suppressed} design={design}>
-      <DesignLayout chatId={chatId} state={design}>
-        {children}
-      </DesignLayout>
-    </EnvironmentWorkbench>
+    <DesignModeControlsContext.Provider value={controls}>
+      <EnvironmentWorkbench suppressed={suppressed} design={design.state}>
+        <DesignLayout chatId={chatId} state={design.state}>
+          {children}
+        </DesignLayout>
+      </EnvironmentWorkbench>
+    </DesignModeControlsContext.Provider>
   );
 }
 

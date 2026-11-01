@@ -26,6 +26,8 @@ export interface SlashCommandActionContext {
   followThroughBlockedReason?: string;
   payloadAfterToken: boolean;
   hasAttachmentsOrSelectedSkill?: boolean;
+  /** The open chat can use design mode (the flag is on and it is a local project chat). */
+  designModeAvailable?: boolean;
 }
 
 export interface SlashCommandAvailabilityResult {
@@ -59,6 +61,8 @@ export interface SlashCommandActionHandlers {
   ) => boolean | Promise<boolean>;
   /** `/until <check>` and `/follow`; false when the chat cannot take them. */
   followThrough?: (action: "until" | "follow", argument: string) => boolean | Promise<boolean>;
+  /** `/design` and `/design off`; false when the chat cannot use design mode. */
+  setDesignMode?: (on: boolean) => boolean;
 }
 
 const unavailable = (reason: string): SlashCommandAvailabilityResult => ({
@@ -136,6 +140,9 @@ export function slashCommandAvailability(
       if (!context.hasWorkspace) return unavailable("Open a workspace first.");
       if (!context.hasChat) return unavailable("Send a message first, then add this.");
       if (context.followThroughBlockedReason) return unavailable(context.followThroughBlockedReason);
+      break;
+    case "design-chat":
+      if (!context.designModeAvailable) return unavailable("Design mode works in project chats.");
       break;
     case "idle-workspace":
       if (!context.hasWorkspace) return unavailable("Open a workspace first.");
@@ -223,6 +230,13 @@ export function validateSlashCommandArgument(
       };
     }
     return { valid: true, value };
+  }
+  if (command.argument === "optional-off") {
+    if (value.toLocaleLowerCase() === "off") return { valid: true, value: "off" };
+    return {
+      valid: false,
+      reason: "Type /design to turn design mode on, or /design off to leave it.",
+    };
   }
   if (command.argument === "optional-title") {
     if (!/[\p{Cc}\p{Cf}]/u.test(value) && Array.from(value).length <= 120) {
@@ -327,6 +341,9 @@ export function executeSlashCommandAction(
       if (!handlers.followThrough) return false;
       return handlers.followThrough(command.action.action, argument.trim());
     }
+    case "design-mode":
+      if (!handlers.setDesignMode) return false;
+      return handlers.setDesignMode(argument.trim().toLocaleLowerCase() !== "off");
   }
 }
 

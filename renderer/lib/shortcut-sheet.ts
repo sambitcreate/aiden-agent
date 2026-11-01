@@ -4,12 +4,12 @@
 import {
   COMMANDS,
   prettyAcceleratorForPlatform,
+  type CommandCapability,
   type CommandCategory,
   type CommandId,
   type KeyboardPlatform,
 } from "../shared/keybindings";
 import { BUILT_IN_KEYS, type BuiltInKeySection } from "../shared/built-in-keys";
-import type { StudioFeature } from "../shared/studio-routes";
 
 export interface ShortcutSheetRow {
   id: string;
@@ -69,7 +69,7 @@ export function shortcutSheet(
     platform,
     query = "",
   }: {
-    capabilities?: Partial<Record<StudioFeature, boolean>>;
+    capabilities?: Partial<Record<CommandCapability, boolean>>;
     platform: KeyboardPlatform;
     query?: string;
   },

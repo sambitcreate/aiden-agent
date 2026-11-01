@@ -79,7 +79,7 @@ import {
   rankSlashResults,
   slashActionCommitIsCurrent,
   slashActionDraftCommitIsCurrent,
-  slashCommandTakesArgument,
+  slashCommandWaitsForArgument,
   slashTabAcceptsSelection,
   updateSlashSessionTracker,
   type SelectedSkillInvocation,
@@ -97,6 +97,7 @@ import {
   validateSlashCommandArgument,
 } from "../lib/slash-command-actions";
 import { claimCompactionCommand } from "../lib/compaction-command-admission";
+import { useDesignModeControls } from "../lib/design-mode";
 import { useExpiredCacheReturn } from "../lib/use-expired-cache-return";
 import {
   loadComposerDraft,
@@ -815,14 +816,25 @@ export function Composer({
       text,
     ],
   );
+  // /design is offered only where this chat's design mode can be switched.
+  const designControls = useDesignModeControls(chatId);
+  const designCommandOffered = designControls !== null;
+  const slashCommands = React.useMemo(
+    () =>
+      designCommandOffered
+        ? SLASH_COMMANDS
+        : SLASH_COMMANDS.filter((command) => command.action.kind !== "design-mode"),
+    [designCommandOffered],
+  );
   const rankedSlashResults = React.useMemo(
     () =>
       rankSlashResults(
         slashSession?.query ?? "",
         skillCatalog.data ?? [],
         slashSession?.kind ?? "command",
+        slashCommands,
       ),
-    [skillCatalog.data, slashSession?.kind, slashSession?.query],
+    [skillCatalog.data, slashCommands, slashSession?.kind, slashSession?.query],
   );
   const slashActionContext = React.useMemo(
     () => ({
@@ -884,9 +896,11 @@ export function Composer({
           )
         : Boolean(text.trim() || attachments.length > 0 || selectedSkill),
       hasAttachmentsOrSelectedSkill: attachments.length > 0 || Boolean(selectedSkill),
+      designModeAvailable: designCommandOffered,
     }),
     [
       attachments.length,
+      designCommandOffered,
       attaching,
       commandSystem.canExecute,
       authenticatedProviders.length,
@@ -1322,7 +1336,7 @@ export function Composer({
       }
       if (
         !submittedSession &&
-        slashCommandTakesArgument(result.command) &&
+        slashCommandWaitsForArgument(result.command) &&
         !session.argument.trim()
       ) {
         // Picking a command that reads text after it fills in "/name " and waits;
@@ -1365,6 +1379,11 @@ export function Composer({
         openSessionDetails: () => setSessionDialogOpen(true),
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
+        setDesignMode: (on) => {
+          if (!designControls) return false;
+          designControls.set(on, "slash");
+          return true;
+        },
         followThrough: async (action, argument) => {
           try {
             if (action === "follow") {
@@ -1518,6 +1537,7 @@ export function Composer({
       openForkDialog,
       cloneChat,
       createWorktreeFromSlash,
+      designControls,
       exportChat,
       compactChat,
       onOpenReview,
@@ -1912,7 +1932,7 @@ export function Composer({
     }
     if ((!trimmed && attachments.length === 0) || !submissionAllowed) return;
     // Surfaces without Aiden's slash commands (remote hosts) send the text as written.
-    const submittedCommand = surfaces.slashCommands ? parseSubmittedSlashCommand(text) : null;
+    const submittedCommand = surfaces.slashCommands ? parseSubmittedSlashCommand(text, slashCommands) : null;
     if (submittedCommand) {
       const availability = slashCommandAvailability(submittedCommand.command, slashActionContext);
       if (!availability.available) {

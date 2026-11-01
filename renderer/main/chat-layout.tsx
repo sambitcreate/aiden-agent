@@ -139,7 +139,7 @@ export function ChatLayout() {
     >
       <DesignWorkbench
         chatId={localChatId}
-        design={design.state}
+        design={design}
         suppressed={onRemoteHost || studioSurface || botsSurface}
       >
         <div className="flex h-full min-h-0 flex-col">

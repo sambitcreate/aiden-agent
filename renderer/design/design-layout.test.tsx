@@ -17,6 +17,7 @@ import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../lib/app-c
 import { CommandSystemProvider } from "../lib/command-system";
 import { applyDesignModeToCache } from "../lib/design-mode";
 import { queryKeys } from "../lib/queries";
+import { effectiveBindings } from "../shared/keybindings";
 import type { Chat, ChatMeta, Workspace } from "../lib/types";
 import { WorkspaceProvider } from "../lib/workspace-context";
 import { DesignWorkbench, useDesignChatState } from "./design-layout";
@@ -50,18 +51,24 @@ let queryClient: QueryClient;
 let containerWidth = 1400;
 let widenCalls = 0;
 let panel!: EnvironmentPanelContextValue;
+let savedDesignModes: Array<[string, boolean]> = [];
 const realRect = HTMLElement.prototype.getBoundingClientRect;
 
 beforeEach(() => {
   containerWidth = 1400;
   widenCalls = 0;
+  savedDesignModes = [];
   // happy-dom does no layout, so every measured box reports the test's width.
   HTMLElement.prototype.getBoundingClientRect = function () {
     return { x: 0, y: 0, top: 0, left: 0, bottom: 800, right: containerWidth, width: containerWidth, height: 800, toJSON() {} } as DOMRect;
   };
-  const chats = [chat("design-chat", { designMode: true }), chat("plain-chat")];
+  const chats = [
+    chat("design-chat", { designMode: true }),
+    chat("plain-chat"),
+    chat("bot-chat", { botId: "bot-1" }),
+  ];
   installBotTestIpc({
-    "shortcut:get": () => null,
+    "shortcut:get": () => ({ overrides: { version: 1, commands: {} }, effective: effectiveBindings(undefined), global: [] }),
     "workspaces:list": () => [WORKSPACE],
     "browser:link-preference": () => "ask",
     "chats:get": (id) => ({
@@ -70,6 +77,11 @@ beforeEach(() => {
       imageArtifactRecoveryUnavailable: false,
       reconciliation: null,
     }),
+    "chats:setDesignMode": (id, enabled) => {
+      savedDesignModes.push([id as string, enabled as boolean]);
+      const saved = chats.find((entry) => entry.id === id);
+      return saved ? { ...saved, designMode: enabled === true } : null;
+    },
     "app:widenForDesign": () => {
       widenCalls += 1;
       return { widened: true };
@@ -96,16 +108,16 @@ function PanelProbe() {
 function DesignChat({ chatId }: { chatId: string }) {
   const design = useDesignChatState(chatId, true);
   return (
-    <DesignWorkbench chatId={chatId} design={design.state} suppressed={false}>
+    <DesignWorkbench chatId={chatId} design={design} suppressed={false}>
       <main aria-label={`Chat ${chatId}`} />
     </DesignWorkbench>
   );
 }
 
-function Shell({ chatId }: { chatId: string }) {
+function Shell({ chatId, designMode = true }: { chatId: string; designMode?: boolean }) {
   return (
     <QueryClientProvider client={queryClient}>
-      <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, designMode: true }}>
+      <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: "darwin", designMode }}>
         <CommandSystemProvider>
         <WorkspaceProvider>
           <WorkspaceTerminalProvider>
@@ -270,4 +282,61 @@ test("dragging the divider saves the design chat width and leaves the panel widt
     fireEvent.keyDown(divider, { key: "Home" });
   });
   assert.equal(localStorage.getItem(DESIGN_CHAT_WIDTH_KEY), "360");
+});
+
+/** ⌘⇧L as the person presses it in the message box; true when Aiden took the key. */
+function pressDesignShortcut(): boolean {
+  const event = new KeyboardEvent("keydown", {
+    key: "L",
+    code: "KeyL",
+    metaKey: true,
+    shiftKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  document.body.dispatchEvent(event);
+  return event.defaultPrevented;
+}
+
+const layoutState = () => document.querySelector("[data-design-layout]")?.getAttribute("data-design-layout");
+
+test("⌘⇧L turns design mode on and off for the open chat and saves each change", async () => {
+  await act(async () => {
+    render(<Shell chatId="plain-chat" />);
+  });
+  assert.equal(layoutState(), "off");
+  let taken = false;
+  await act(async () => {
+    taken = pressDesignShortcut();
+  });
+  assert.equal(taken, true);
+  await waitFor(() => assert.equal(layoutState(), "on"));
+  await act(async () => {
+    pressDesignShortcut();
+  });
+  await waitFor(() => assert.equal(layoutState(), "off"));
+  await waitFor(() =>
+    assert.deepEqual(savedDesignModes, [
+      ["plain-chat", true],
+      ["plain-chat", false],
+    ]),
+  );
+});
+
+test("⌘⇧L is left alone while the flag is off or the chat is a Bot's", async () => {
+  for (const [chatId, designMode] of [
+    ["plain-chat", false],
+    ["bot-chat", true],
+  ] as const) {
+    const view = render(<Shell chatId={chatId} designMode={designMode} />);
+    await act(async () => undefined);
+    let taken = true;
+    await act(async () => {
+      taken = pressDesignShortcut();
+    });
+    assert.equal(taken, false, `${chatId}, designMode: ${designMode}`);
+    assert.equal(layoutState(), "off");
+    view.unmount();
+  }
+  assert.deepEqual(savedDesignModes, []);
 });

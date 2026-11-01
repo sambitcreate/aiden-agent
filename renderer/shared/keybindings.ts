@@ -4,6 +4,9 @@
 
 import type { StudioFeature } from "./studio-routes.js";
 
+/** An app capability a command can depend on: a Studio, or design mode. */
+export type CommandCapability = StudioFeature | "designMode";
+
 export const COMMAND_IDS = [
   "composer.focus",
   "dictation.toggle",
@@ -34,6 +37,7 @@ export const COMMAND_IDS = [
   "terminal.toggle",
   "environment.toggle",
   "quick-view.toggle",
+  "design.toggle",
   "subagents.toggleTray",
   "file.save",
   "navigate.back",
@@ -86,7 +90,7 @@ export interface CommandDefinition {
   allowRepeat?: boolean;
   nativeMenu?: boolean;
   /** Hidden from the palette, and never handled, unless this capability is on. */
-  requiresCapability?: StudioFeature;
+  requiresCapability?: CommandCapability;
   /**
    * Listed in the palette only while something on screen handles it, such as
    * the open chat's actions; other commands show as disabled instead.
@@ -368,6 +372,21 @@ export const COMMANDS = [
     defaultBinding: null,
     scope: "app",
     global: false,
+    showInPalette: true,
+    showInSettings: true,
+  }),
+  command({
+    id: "design.toggle",
+    title: "Toggle design mode",
+    description: "Put the chat on the left and a design canvas on the right.",
+    category: "Tools",
+    keywords: ["design", "canvas", "layout", "mockup"],
+    defaultBinding: "Command+Shift+L",
+    scope: "app",
+    global: false,
+    allowInEditable: true,
+    requiresCapability: "designMode",
+    paletteWhenAvailable: true,
     showInPalette: true,
     showInSettings: true,
   }),
@@ -1188,6 +1207,7 @@ const INTRODUCED_DEFAULT_COMMANDS: readonly CommandId[] = [
   "subagents.toggleTray",
   "shortcuts.show",
   "workspace.settings",
+  "design.toggle",
 ];
 
 function yieldIntroducedDefaults(next: KeybindingOverridesV1): void {

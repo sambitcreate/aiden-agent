@@ -152,3 +152,24 @@ export function useDesignMode(chatId: string | undefined) {
 
   return { available, on, settled, workspaceId, set, toggle };
 }
+
+/** What the top-bar toggle and `/design` need to change the open chat's design mode. */
+export interface DesignModeControls {
+  /** The local chat these controls change; a control for any other chat stays hidden. */
+  chatId: string;
+  on: boolean;
+  set: (enabled: boolean, source: DesignModeSource) => void;
+  toggle: (source: DesignModeSource) => void;
+}
+
+/**
+ * Set by the chat area for the open chat while design mode is available to
+ * it, and null otherwise (flag off, a Bot, the Assistant, a feature chat).
+ */
+export const DesignModeControlsContext = React.createContext<DesignModeControls | null>(null);
+
+/** The open chat's design mode controls, or null when this chat cannot use design mode. */
+export function useDesignModeControls(chatId: string | undefined): DesignModeControls | null {
+  const controls = React.useContext(DesignModeControlsContext);
+  return chatId && controls?.chatId === chatId ? controls : null;
+}

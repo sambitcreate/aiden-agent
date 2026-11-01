@@ -974,6 +974,7 @@
         "renderer/lib/design-mode.test.tsx",
         "renderer/design/design-layout.test.tsx",
         "renderer/components/chat-sidebar-scope.test.tsx",
+        "renderer/components/chat-top-bar-design.test.tsx",
         "renderer/lib/quick-view-layout.test.ts",
         "renderer/lib/environment-panel-state.test.ts",
         "renderer/components/workbench-panel.test.tsx",

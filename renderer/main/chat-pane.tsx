@@ -119,7 +119,12 @@ import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card
 import { ModelPicker } from "../components/model-picker";
 import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
 import { useNewChatMachines } from "../lib/hosts/use-new-chat-machines";
-import { ChatTitleMenu, WorkspaceChip, WorkspaceToolButtons } from "../components/chat-top-bar";
+import {
+  ChatTitleMenu,
+  DesignModeToggle,
+  WorkspaceChip,
+  WorkspaceToolButtons,
+} from "../components/chat-top-bar";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { useCommandHandler, useCommandSystem, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
@@ -3511,7 +3516,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
             )}
             // A cached repository read must not outlive access being switched off.
             isRepo={git.data?.isRepo === true && effectiveWorkspace?.permission !== "none"}
-            leading={<QuickViewToggle disabled={!effectiveWorkspace} />}
+            leading={
+              <>
+                <DesignModeToggle chatId={chatId} />
+                <QuickViewToggle disabled={!effectiveWorkspace} />
+              </>
+            }
             terminalButton={
               <Button
                 iconOnly

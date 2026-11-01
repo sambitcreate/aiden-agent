@@ -73,6 +73,13 @@ test("a key given to a Studio command shows only while that Studio is on", () =>
   );
 });
 
+test("⌘⇧L lists Toggle design mode only while design mode is available", () => {
+  assert.equal(row(shortcutSheet(defaults(), { platform: "darwin" }), "Toggle design mode"), null);
+  const on = row(shortcutSheet(defaults(), { platform: "darwin", capabilities: { designMode: true } }), "Toggle design mode");
+  assert.deepEqual(on?.keys, ["Command+Shift+L"]);
+  assert.equal(on?.section, "Workspace");
+});
+
 test("⌘⇧D is not bound to anything", () => {
   const sections = shortcutSheet(defaults(), { platform: "darwin", capabilities: { createImages: true } });
   const keys = sections.flatMap((section) =>

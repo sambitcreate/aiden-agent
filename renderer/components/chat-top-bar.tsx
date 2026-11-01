@@ -15,6 +15,7 @@ import {
   GitBranch,
   MessageCircle,
   Pencil,
+  PencilRuler,
   Settings2,
   SquareTerminal,
   Users,
@@ -42,7 +43,9 @@ import {
   toast,
 } from "./ui";
 import { WORKSPACE_TOOLS } from "./workspace-tool-launcher";
-import { useCommandHandler } from "../lib/command-system";
+import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
+import { useDesignModeControls } from "../lib/design-mode";
+import { ariaKeyShortcut } from "../shared/keybindings";
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac/u.test(navigator.userAgent);
 
@@ -445,6 +448,32 @@ function SubagentsRunningBadge({
         <Users aria-hidden="true" className="size-3.5" />
         {count}
       </span>
+    </Button>
+  );
+}
+
+/**
+ * Puts this chat into design mode, or takes it out. Shown only while the chat
+ * can use design mode; the layout follows at once and saves in the background.
+ */
+export function DesignModeToggle({ chatId }: { chatId: string | undefined }) {
+  const controls = useDesignModeControls(chatId);
+  const binding = useShortcutBinding("design.toggle");
+  const shortcut = useShortcutLabel("design.toggle");
+  if (!controls) return null;
+  return (
+    <Button
+      iconOnly
+      variant="bar"
+      size="small"
+      onClick={() => controls.set(!controls.on, "toggle")}
+      aria-label="Design mode"
+      aria-pressed={controls.on}
+      aria-keyshortcuts={ariaKeyShortcut(binding)}
+      title={binding ? `Design mode (${shortcut})` : "Design mode"}
+      data-design-mode-toggle
+    >
+      <PencilRuler />
     </Button>
   );
 }
