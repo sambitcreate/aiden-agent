@@ -142,6 +142,20 @@ test("a thumbnail opens the viewer over the filtered images, and Open Workflow g
   await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
 });
 
+test("closing the viewer returns focus to the image it showed, even after newer images moved it", async () => {
+  const log: string[] = [];
+  const { rerender } = render(<Library log={log} />);
+  fireEvent.click(tiles()[1]!);
+  const dialog = await screen.findByRole("dialog");
+  assert.ok(within(dialog).getByText("2 of 4"));
+  // A run finishes meanwhile: its image is newest and every other thumbnail shifts by one.
+  rerender(<Library log={log} items={[item("e", { createdAt: at(31, 11) + 1, prompt: "A fresh one" }), ...LIBRARY]} />);
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+  await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
+  await waitFor(() => assert.equal(document.activeElement?.getAttribute("aria-label"), "Image 3 of 5, Product shots: white sneaker"));
+  assert.equal(document.activeElement?.getAttribute("tabindex"), "0");
+});
+
 test("a thumbnail's menu saves, copies and reveals that image, and offers its workflow", async () => {
   const log: string[] = [];
   const opened: string[] = [];
@@ -281,6 +295,9 @@ test("the home keeps All Images selected across opening a workflow from it and c
   const view = () => (router.state.location.search as { view?: string }).view;
   await waitFor(() => assert.equal(view(), "images"));
   await waitFor(() => assert.equal(tiles().length, 1));
+  const panel = screen.getByRole("tabpanel", { name: "All Images" });
+  assert.equal(tab("All Images").getAttribute("aria-controls"), panel.id);
+  assert.ok(panel.contains(tiles()[0]!));
   fireEvent.click(tiles()[0]!);
   fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Open Workflow" }));
   await screen.findByText("Editing wf-b");

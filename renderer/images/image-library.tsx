@@ -13,7 +13,7 @@ import {
   workflowAvailable,
   type LibraryFilters,
 } from "./library-core";
-import { LibraryGrid, libraryTileAt } from "./library-grid";
+import { LibraryGrid, libraryTileFor } from "./library-grid";
 import { LibraryToolbar } from "./library-toolbar";
 import type { GalleryState } from "./use-gallery";
 import { ImageViewer, type ViewerAction } from "./viewer/image-viewer";
@@ -53,12 +53,13 @@ export function ImageLibrary({
   const sections = React.useMemo(() => sectionByDay(shown, now, (timestamp) => dateFormat.format(timestamp)), [shown, now]);
   const found = viewing === null ? -1 : shown.findIndex((item) => item.assetId === viewing);
   const viewerIndex = found >= 0 ? found : null;
-  // The viewer hands focus back to the thumbnail of the image it closed on.
-  const lastViewed = React.useRef(0);
+  // The viewer hands focus back to the thumbnail of the image it closed on, found by asset id:
+  // a gallery refresh or a new run's images can move it to another position meanwhile.
+  const lastViewed = React.useRef<string | null>(null);
   const view = (index: number) => {
     const item = shown[index];
     if (!item) return;
-    lastViewed.current = index;
+    lastViewed.current = item.assetId;
     setViewing(item.assetId);
   };
 
@@ -83,7 +84,7 @@ export function ImageLibrary({
 
   const footer = saveFolderLabel ? (
     // Leading-aligned: the app's floating Live control sits in the bottom-right corner.
-    <footer className="image-history-footer flex flex-wrap items-center gap-x-2 px-6">
+    <footer className="image-history-footer image-library-footer flex flex-wrap items-center gap-x-2">
       <Text variant="small" color="secondary" className="min-w-0">
         Saved to {saveFolderLabel}
         {items.length >= GALLERY_MAX_ITEMS ? ` · Showing the newest ${numberFormat.format(GALLERY_MAX_ITEMS)} images` : ""}
@@ -178,14 +179,15 @@ export function ImageLibrary({
         index={viewerIndex}
         onIndexChange={view}
         onClose={() => {
-          setFocusIndex(lastViewed.current);
+          const at = shown.findIndex((entry) => entry.assetId === lastViewed.current);
+          if (at >= 0) setFocusIndex(at);
           setViewing(null);
         }}
         actions={actions}
         models={models}
         saveFolderLabel={saveFolderLabel}
         extraActions={viewerActions}
-        returnFocus={() => libraryTileAt(grid.current, lastViewed.current)}
+        returnFocus={() => (lastViewed.current === null ? null : libraryTileFor(grid.current, lastViewed.current))}
       />
     </div>
   );

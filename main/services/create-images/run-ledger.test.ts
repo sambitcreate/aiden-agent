@@ -467,6 +467,20 @@ test("generated attempts list Generate outputs newest first, per workflow or acr
   assert.equal(ledger.generatedAsset(out("c").assetId)?.ref.assetId, out("c").assetId);
   // Forwarded by a local node only: not something the ledger generated.
   assert.equal(ledger.generatedAsset(out("d").assetId), undefined);
+  // Only a whole asset id matches, never a fragment of one.
+  assert.equal(ledger.generatedAsset(out("c").assetId.slice(0, 8)), undefined);
+  assert.equal(ledger.generatedAsset(""), undefined);
+
+  // Generated again by a later run: the newest attempt answers, one at a time or in a batch.
+  ledger.createRun(run({ runId: "a2", workflowId: "wf-a" }));
+  ledger.finishAttempts([{ runId: "a2", nodeId: "g1", variant: 0, state: "succeeded", output: [out("c")] }]);
+  assert.equal(ledger.generatedAsset(out("c").assetId)?.attempt.runId, "a2");
+  const batch = ledger.generatedAssets([out("c").assetId, out("b").assetId, out("d").assetId, "f".repeat(64)]);
+  assert.deepEqual(
+    [...batch].map(([assetId, found]) => [assetId[0], found.attempt.runId, found.ref.assetId === assetId]).sort(),
+    [["b", "b1", true], ["c", "a2", true]],
+  );
+  assert.equal(ledger.generatedAssets([]).size, 0);
 });
 
 test("export records round-trip and are forgotten once no remaining run names their image", async (t) => {

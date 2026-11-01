@@ -166,6 +166,10 @@ test("the side panel switches between Run and History, and only the run headline
   fireEvent.click(history);
   await waitFor(() => assert.ok(screen.getByText("History body")));
   assert.equal(screen.queryAllByRole("status").length, 0);
+  // The panel is the selected tab's: named by it, and the one it controls.
+  const panel = screen.getByRole("tabpanel", { name: "History" });
+  assert.ok(within(panel).getByText("History body"));
+  assert.equal(history.getAttribute("aria-controls"), panel.id);
 });
 
 test("before any run, the Run tab says how to start one", () => {

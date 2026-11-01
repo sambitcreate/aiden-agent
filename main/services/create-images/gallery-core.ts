@@ -14,6 +14,13 @@ export interface GalleryImage {
  * The images to list, newest first by when their request finished (ties keep the ledger's
  * order). Each asset appears once, at its newest occurrence; images no longer in the asset store
  * are left out, since they cannot be shown.
+ *
+ * Assets are content-addressed, so "each asset once" means byte-identical images collapse: if two
+ * runs returned exactly the same bytes, only the newer run's History group lists the image and the
+ * older group shows one fewer. That is deliberate. The library, the viewer, actions and React keys
+ * all name an image by asset id, and a provider returning byte-identical output for two requests
+ * is vanishingly rare (each response differs at least in seed noise or metadata). Listing every
+ * occurrence would need keys of run, attempt and asset id across the gallery, viewer and library.
  */
 export function selectGalleryImages(
   attempts: readonly GeneratedAttempt[],

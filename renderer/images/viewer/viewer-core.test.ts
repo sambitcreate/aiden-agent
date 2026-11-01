@@ -112,6 +112,13 @@ test("action outcomes: cancelled says nothing, failures read as plain sentences,
   assert.deepEqual(actionOutcome("save-as", { ok: false, reason: "failed" }), { kind: "error", text: "Aiden couldn't save the image." });
   assert.equal(actionOutcome("reveal", { ok: false, reason: "not-found" })?.kind, "error");
   assert.equal(thrownOutcome("copy")?.kind, "error");
+  // A save names what it wrote, so the toast can show it; a Save All that wrote only some files
+  // still says so plainly and can show the folder.
+  assert.deepEqual(actionOutcome("save-all", { ok: true, count: 2, savedId: "s1" }), { kind: "success", text: "Saved 2 images", savedId: "s1" });
+  assert.deepEqual(actionOutcome("save-all", { ok: false, reason: "failed", message: "Aiden saved 2 of 3 images.", savedId: "s2" }), {
+    kind: "error", text: "Aiden saved 2 of 3 images.", savedId: "s2",
+  });
+  assert.equal(actionOutcome("save-all", { ok: false, reason: "failed", message: "Aiden saved 0 of 3 images." })?.savedId, undefined);
 });
 
 test("the file-manager action follows the platform's name for it", () => {

@@ -80,6 +80,21 @@ test("file names lose separators, control characters and leading dots", () => {
   assert.equal(safeImageFileStem("x".repeat(400)).length, 120);
 });
 
+test("long names in 3- and 4-byte characters fit the 255-byte file name limit and are cut between characters", () => {
+  const zwj = String.fromCodePoint(0x200d);
+  const acute = String.fromCodePoint(0x0301);
+  for (const name of ["写真".repeat(100), "🌅".repeat(100), `👩🏽${zwj}🚀`.repeat(40), `e${acute}`.repeat(200)]) {
+    const stem = safeImageFileStem(`${name}.png`);
+    // The longest name saving can produce: stem, the " (999)" suffix and the longest extension.
+    assert.ok(Buffer.byteLength(`${stem} (999).heic`) <= 255, `${Buffer.byteLength(stem)} bytes`);
+    assert.ok(stem.length > 0 && name.startsWith(stem), "a prefix of the original name");
+    // The cut falls between whole graphemes: no lone surrogate, dangling joiner or bare letter.
+    const graphemes = (text: string) => [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].map((part) => part.segment);
+    const kept = graphemes(stem);
+    assert.deepEqual(kept, graphemes(name).slice(0, kept.length));
+  }
+});
+
 test("bidi overrides, isolates and C1 controls cannot disguise a saved file's name", () => {
   // "photo<RLO>gnp.exe" would render in Finder as "photoexe.png".
   assert.equal(safeImageFileStem("photo‮gnp.exe"), "photo gnp");

@@ -155,6 +155,7 @@ export type ImageActionRequest =
   | { op: "reveal-saved"; savedId: string }
   | { op: "reveal-folder" };
 
+/** A failed save-all that still wrote some files carries `savedId`, so the folder can be shown. */
 export type ImageActionResponse =
   | { ok: true; url?: string; count?: number; savedId?: string }
-  | { ok: false; reason: "cancelled" | "not-found" | "unsupported" | "failed"; message?: string };
+  | { ok: false; reason: "cancelled" | "not-found" | "unsupported" | "failed"; message?: string; savedId?: string };

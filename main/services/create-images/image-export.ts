@@ -2,10 +2,11 @@
 // `<Pictures>/Aiden/Create Images/<YYYY-MM-DD>/<HHMMSS> <workflow title> <sha8>.<ext>`.
 // Electron-free: the root folder, file system and clock are injected, so tests
 // never touch the real Pictures folder. File names never contain prompt text.
+import { randomUUID } from "node:crypto";
 import * as nodeFs from "node:fs/promises";
 import path from "node:path";
 import type { ImageMediaType, OutputRef } from "../../../renderer/shared/images/run-types.js";
-import { safeFileNameStem } from "../chat-image-actions.js";
+import { MAX_FILE_STEM_BYTES, safeFileNameStem, truncateFileNameText } from "../chat-image-actions.js";
 import type { StudioAssetStore } from "../studio-assets/store.js";
 import { ImageRunLedgerError, type ImageRunLedger } from "./run-ledger.js";
 
@@ -20,13 +21,16 @@ export const IMAGE_EXTENSIONS: Readonly<Record<ImageMediaType, string>> = Object
   "image/webp": "webp",
 });
 
-const MAX_TITLE_CODE_POINTS = 80;
+/** UTF-16 units of the workflow title kept in a file name (the stem is also capped at 180 UTF-8 bytes). */
+const MAX_TITLE_UNITS = 80;
 const MAX_UNIQUE_ATTEMPTS = 1_000;
 
 /** The slice of `node:fs/promises` the exporter uses; tests inject failures through it. */
 export interface ExportFileSystem {
   mkdir(target: string, options: { recursive: true }): Promise<unknown>;
   open(target: string, flags: "wx" | "w", mode: number): Promise<{ writeFile(data: Uint8Array): Promise<unknown>; close(): Promise<void> }>;
+  /** Fails with EEXIST when `newPath` exists, which makes publishing a finished file exclusive. */
+  link(existingPath: string, newPath: string): Promise<void>;
   rm(target: string, options: { force: true }): Promise<void>;
   stat(target: string): Promise<{ isFile(): boolean }>;
 }
@@ -39,17 +43,26 @@ export function exportDayFolder(at: number): string {
   return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}`;
 }
 
-/** `<HHMMSS> <title> <sha8>.<ext>` in local time; the title is made safe for any folder, "Image" when empty. */
+/**
+ * `<HHMMSS> <title> <sha8>.<ext>` in local time; the title is made safe for any folder, "Image"
+ * when empty, and cut between graphemes so the whole name, with a " (n)" suffix, stays well
+ * under the 255-byte name limit of Linux file systems.
+ */
 export function exportFileName(input: { at: number; workflowTitle?: string; assetId: string; mediaType: ImageMediaType }): string {
   const date = new Date(input.at);
   const time = `${two(date.getHours())}${two(date.getMinutes())}${two(date.getSeconds())}`;
-  const title = safeFileNameStem([...(input.workflowTitle ?? "")].slice(0, MAX_TITLE_CODE_POINTS).join(""));
+  const title = safeFileNameStem(truncateFileNameText(input.workflowTitle ?? "", MAX_TITLE_UNITS, MAX_FILE_STEM_BYTES));
   return `${time} ${title} ${input.assetId.slice(0, 8)}.${IMAGE_EXTENSIONS[input.mediaType]}`;
 }
 
 /**
  * Writes `bytes` to a new file named `fileName` in `directory`, or `name (n).ext` when that is
  * taken; never overwrites. Creates the directory first. Returns the path written.
+ *
+ * The bytes go to a hidden staging file in the same folder first and are then hard-linked to the
+ * visible name (exclusive, like `wx`), so a write cut short by quit or a full disk never leaves a
+ * truncated image under the real name. Where hard links are not supported (some external or
+ * network volumes), the visible name is created and written directly, and removed on failure.
  */
 export async function writeUniqueFile(
   fs: ExportFileSystem,
@@ -60,26 +73,70 @@ export async function writeUniqueFile(
   await fs.mkdir(directory, { recursive: true });
   const extension = path.extname(fileName);
   const stem = fileName.slice(0, fileName.length - extension.length);
-  for (let attempt = 0; attempt < MAX_UNIQUE_ATTEMPTS; attempt += 1) {
-    const target = path.join(directory, attempt === 0 ? fileName : `${stem} (${attempt})${extension}`);
-    let handle: Awaited<ReturnType<ExportFileSystem["open"]>>;
-    try {
-      handle = await fs.open(target, "wx", 0o644);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
-      throw error;
+  const candidate = (attempt: number) => path.join(directory, attempt === 0 ? fileName : `${stem} (${attempt})${extension}`);
+  const staging = path.join(directory, `.aiden-${randomUUID()}.tmp`);
+  await writeNewFile(fs, staging, bytes);
+  try {
+    for (let attempt = 0; attempt < MAX_UNIQUE_ATTEMPTS; attempt += 1) {
+      const target = candidate(attempt);
+      try {
+        await fs.link(staging, target);
+        return target;
+      } catch (error) {
+        if (errorCode(error) === "EEXIST") continue;
+        return await writeUniqueDirectly(fs, candidate, attempt, bytes);
+      }
     }
-    try {
-      await handle.writeFile(bytes);
-      await handle.close();
-    } catch (error) {
-      await handle.close().catch(() => undefined);
-      await fs.rm(target, { force: true }).catch(() => undefined);
-      throw error;
-    }
-    return target;
+  } finally {
+    await fs.rm(staging, { force: true }).catch(() => undefined);
   }
   throw new Error("No free file name was found for the image.");
+}
+
+/** The fallback without hard links: exclusive create of each candidate name, written in place. */
+async function writeUniqueDirectly(
+  fs: ExportFileSystem,
+  candidate: (attempt: number) => string,
+  from: number,
+  bytes: Uint8Array,
+): Promise<string> {
+  for (let attempt = from; attempt < MAX_UNIQUE_ATTEMPTS; attempt += 1) {
+    const target = candidate(attempt);
+    try {
+      await writeNewFile(fs, target, bytes);
+      return target;
+    } catch (error) {
+      if (errorCode(error) === "EEXIST") continue;
+      throw error;
+    }
+  }
+  throw new Error("No free file name was found for the image.");
+}
+
+/** Creates `target` exclusively and writes `bytes`; on a failed write the file is removed. */
+async function writeNewFile(fs: ExportFileSystem, target: string, bytes: Uint8Array): Promise<void> {
+  const handle = await fs.open(target, "wx", 0o644);
+  try {
+    await handle.writeFile(bytes);
+    await handle.close();
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    await fs.rm(target, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+function errorCode(error: unknown): string | undefined {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return typeof code === "string" ? code : undefined;
+}
+
+/**
+ * What a log may say about a failed file operation: its error code (`EACCES`, `ENOSPC`) or error
+ * name, never the message, which names the path and so the workflow title.
+ */
+export function fileErrorSummary(error: unknown): string {
+  return errorCode(error) ?? (error instanceof Error ? error.name : "unknown");
 }
 
 export interface CreateImagesExportsOptions {
@@ -89,7 +146,7 @@ export interface CreateImagesExportsOptions {
   assets: Pick<StudioAssetStore, "read">;
   fs?: ExportFileSystem;
   now?: () => number;
-  /** Non-fatal auto-save failures. Never given prompt text. */
+  /** Non-fatal auto-save failures, with only the error code: never prompt text, paths or titles. */
   reportIssue?(message: string, error: unknown): void;
 }
 
@@ -147,7 +204,7 @@ export class CreateImagesExports {
       const task = this.ensureExported(ref, workflowTitle).catch((error: unknown) => {
         if (isClosedLedger(error)) return;
         try {
-          this.options.reportIssue?.("Could not auto-save a generated image to the Pictures folder.", error);
+          this.options.reportIssue?.("Could not auto-save a generated image to the Pictures folder.", fileErrorSummary(error));
         } catch {
           // Reporting is best effort.
         }

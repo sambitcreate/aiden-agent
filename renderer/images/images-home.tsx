@@ -1,7 +1,7 @@
 import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 import { AlertDialog, Button, Dialog, EmptyState, Input, Text } from "../components/ui";
-import { Tabs } from "../components/ui-primitives";
+import { Tabs, tabIds } from "../components/ui-primitives";
 import { StudioSurface } from "../canvas";
 import { createImagesIpc } from "../lib/create-images-ipc";
 import type { ImagesHomeView } from "../main/images-home-search";
@@ -37,6 +37,8 @@ export function ImagesHome({ view = "workflows" }: { view?: ImagesHomeView }) {
   const [imageCounts, setImageCounts] = React.useState<Record<string, number>>({});
   const [models, setModels] = React.useState<readonly ImageModelOption[]>([]);
   const gallery = useGallery();
+  const tabsId = React.useId();
+  const viewIds = tabIds(tabsId, view);
   const imageActions = useImageActions({ onSaved: gallery.refresh });
 
   const refresh = React.useCallback(async () => {
@@ -106,9 +108,9 @@ export function ImagesHome({ view = "workflows" }: { view?: ImagesHomeView }) {
       }
     >
       <div className="flex h-full min-h-0 flex-col">
-        <Tabs<ImagesHomeView> value={view} onValueChange={changeView} items={VIEWS} aria-label="Images views" className="shrink-0 px-6 pb-3 pt-1" />
+        <Tabs<ImagesHomeView> value={view} onValueChange={changeView} items={VIEWS} idBase={tabsId} aria-label="Images views" className="shrink-0 px-6 pb-3 pt-1" />
         {error ? <Text as="p" role="alert" color="status-red" className="shrink-0 px-6 pb-3">{error}</Text> : null}
-        <div role="tabpanel" aria-label={view === "images" ? "All Images" : "Workflows"} className="flex min-h-0 flex-1 flex-col">
+        <div role="tabpanel" id={viewIds.panel} aria-labelledby={viewIds.tab} className="flex min-h-0 flex-1 flex-col">
           {view === "images" ? (
             <ImageLibrary gallery={gallery} models={models} actions={imageActions} liveWorkflowIds={liveWorkflowIds} onOpenWorkflow={open} />
           ) : workflows && workflows.length === 0 ? (

@@ -318,6 +318,15 @@ function statements(db: DatabaseSync) {
       WHERE a.state = 'succeeded' AND a.output IS NOT NULL AND a.provider IS NOT NULL AND (?1 IS NULL OR r.workflow_id = ?1)
       ORDER BY a.finished_at DESC, a.id DESC LIMIT ?2`,
     ),
+    // The same rows, narrowed to outputs whose JSON text contains an asset id; callers confirm the
+    // match on the parsed output, so this only skips parsing attempts that cannot name the asset.
+    generatedAttemptsNaming: db.prepare(
+      `SELECT r.id AS run_id, r.state AS run_state, r.workflow_id AS workflow_id, a.node_id AS node_id, a.variant AS variant, a.provider AS provider,
+        a.model AS model, a.prompt AS prompt, a.finished_at AS finished_at, r.created_at AS created_at, a.output AS output
+      FROM attempts a JOIN runs r ON r.id = a.run_id
+      WHERE a.state = 'succeeded' AND a.output IS NOT NULL AND a.provider IS NOT NULL AND instr(a.output, ?1) > 0
+      ORDER BY a.finished_at DESC, a.id DESC`,
+    ),
     allOutputs: db.prepare("SELECT output FROM attempts WHERE output IS NOT NULL"),
     exportPath: db.prepare("SELECT path FROM exports WHERE asset_id = ?"),
     allExports: db.prepare("SELECT asset_id, path FROM exports"),
@@ -607,12 +616,30 @@ export class ImageRunLedger {
   /** The newest succeeded Generate attempt that produced this asset, or undefined when the ledger never generated it. */
   generatedAsset(assetId: string): { attempt: GeneratedAttempt; ref: OutputRef } | undefined {
     this.requireOpen();
-    for (const row of this.sql.generatedAttempts.all(null, -1) as unknown as GeneratedAttemptRow[]) {
+    if (assetId.length === 0) return undefined;
+    for (const row of this.sql.generatedAttemptsNaming.all(assetId) as unknown as GeneratedAttemptRow[]) {
       const attempt = generatedAttemptFrom(row);
       const ref = attempt.output.find((candidate) => candidate.assetId === assetId);
       if (ref) return { attempt, ref };
     }
     return undefined;
+  }
+
+  /** `generatedAsset` for many assets in one pass over the ledger; assets it never generated are absent. */
+  generatedAssets(assetIds: Iterable<string>): Map<string, { attempt: GeneratedAttempt; ref: OutputRef }> {
+    this.requireOpen();
+    const wanted = new Set(assetIds);
+    const found = new Map<string, { attempt: GeneratedAttempt; ref: OutputRef }>();
+    if (wanted.size === 0) return found;
+    for (const row of this.sql.generatedAttempts.all(null, -1) as unknown as GeneratedAttemptRow[]) {
+      const attempt = generatedAttemptFrom(row);
+      for (const ref of attempt.output) {
+        // Rows come newest first, so the first attempt naming an asset is its newest.
+        if (wanted.has(ref.assetId) && !found.has(ref.assetId)) found.set(ref.assetId, { attempt, ref });
+      }
+      if (found.size === wanted.size) break;
+    }
+    return found;
   }
 
   /** Where Aiden auto-saved this asset, if it recorded doing so. The file may since have moved. */

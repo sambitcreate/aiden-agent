@@ -16,8 +16,9 @@ export interface LibraryTileActions {
   revealLabel: string;
 }
 
-export const libraryTileAt = (grid: HTMLElement | null, index: number) =>
-  grid?.querySelector<HTMLButtonElement>(`[data-library-index="${index}"]`) ?? null;
+/** The thumbnail of this image, wherever the current filters and sort put it, or null when it is not shown. */
+export const libraryTileFor = (grid: HTMLElement | null, assetId: string) =>
+  Array.from(grid?.querySelectorAll<HTMLButtonElement>("[data-library-asset]") ?? []).find((tile) => tile.dataset.libraryAsset === assetId) ?? null;
 
 /**
  * The library's day sections of thumbnails. The grid is one Tab stop: the arrow keys, Home
@@ -91,6 +92,7 @@ export function LibraryGrid({
                       type="button"
                       className="image-thumb"
                       data-library-index={index}
+                      data-library-asset={item.assetId}
                       tabIndex={index === active ? 0 : -1}
                       aria-label={tileLabel(item, index, count)}
                       onFocus={() => {

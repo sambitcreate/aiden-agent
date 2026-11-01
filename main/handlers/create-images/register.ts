@@ -302,15 +302,38 @@ export function registerCreateImagesHandlers<Event>(deps: CreateImagesHandlerDep
 }
 
 function authorizeImage(services: CreateImagesServices, assetId: string): AuthorizedImage | undefined {
-  const record = services.assets.get(assetId);
-  if (!record) return undefined;
-  const title = (workflowId: string) => services.workflows.list().find((entry) => entry.id === workflowId)?.title;
-  const ref = { assetId, mediaType: record.mediaType };
-  const generated = services.coordinator.generatedAsset(assetId);
-  const workflowId = generated?.attempt.workflowId ?? services.assets.holders(assetId).find((holder) => holder.kind === "images-workflow")?.id;
-  if (workflowId === undefined) return undefined;
-  const workflowTitle = title(workflowId);
-  return { ref, ...(workflowTitle !== undefined ? { workflowTitle } : {}) };
+  return authorizeImages(services, [assetId])[0];
+}
+
+/**
+ * Authorizes every asset in one pass over the ledger, in order; an entry is undefined for an
+ * asset an action may not touch.
+ */
+function authorizeImages(services: CreateImagesServices, assetIds: readonly string[]): (AuthorizedImage | undefined)[] {
+  const records = new Map(assetIds.flatMap((assetId) => {
+    const record = services.assets.get(assetId);
+    return record ? [[assetId, record] as const] : [];
+  }));
+  // One asset (view, copy, reveal) takes the ledger's targeted lookup; Save All takes one pass.
+  const [only] = records.keys();
+  let generated: ReadonlyMap<string, { attempt: { workflowId: string } }>;
+  if (records.size === 1 && only !== undefined) {
+    const found = services.coordinator.generatedAsset(only);
+    generated = new Map(found ? [[only, found]] : []);
+  } else {
+    generated = services.coordinator.generatedAssets(records.keys());
+  }
+  let titles: Map<string, string> | undefined;
+  const title = (workflowId: string) => (titles ??= new Map(services.workflows.list().map((entry) => [entry.id, entry.title]))).get(workflowId);
+  return assetIds.map((assetId) => {
+    const record = records.get(assetId);
+    if (!record) return undefined;
+    const workflowId =
+      generated.get(assetId)?.attempt.workflowId ?? services.assets.holders(assetId).find((holder) => holder.kind === "images-workflow")?.id;
+    if (workflowId === undefined) return undefined;
+    const workflowTitle = title(workflowId);
+    return { ref: { assetId, mediaType: record.mediaType }, ...(workflowTitle !== undefined ? { workflowTitle } : {}) };
+  });
 }
 
 async function imageAction<Event>(
@@ -337,12 +360,10 @@ async function imageAction<Event>(
     return { ok: true };
   }
   if (request.op === "save-all") {
-    const images: AuthorizedImage[] = [];
-    for (const assetId of new Set(request.assetIds)) {
-      const image = authorizeImage(services, assetId);
-      if (!image) return { ok: false, reason: "not-found" };
-      images.push(image);
-    }
+    // Strict: one unknown image refuses the whole request before any dialog opens.
+    const authorized = authorizeImages(services, [...new Set(request.assetIds)]);
+    const images = authorized.filter((image): image is AuthorizedImage => image !== undefined);
+    if (images.length !== authorized.length) return { ok: false, reason: "not-found" };
     const folder = await deps.files.chooseFolder(event, { defaultPath: deps.files.downloadsFolder() });
     if (!folder) return { ok: false, reason: "cancelled" };
     let count = 0;
@@ -355,9 +376,14 @@ async function imageAction<Event>(
         // Counted below; one unreadable image does not stop the rest.
       }
     }
-    return count === images.length
-      ? { ok: true, count, savedId: saved.remember("folder", folder) }
-      : { ok: false, reason: "failed", message: `Aiden saved ${count} of ${images.length} images.` };
+    if (count === images.length) return { ok: true, count, savedId: saved.remember("folder", folder) };
+    // Some files were written: the folder can still be shown.
+    return {
+      ok: false,
+      reason: "failed",
+      message: `Aiden saved ${count} of ${images.length} images.`,
+      ...(count > 0 ? { savedId: saved.remember("folder", folder) } : {}),
+    };
   }
   const image = authorizeImage(services, request.assetId);
   if (!image) return { ok: false, reason: "not-found" };

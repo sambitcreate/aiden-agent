@@ -612,6 +612,7 @@ test("a gallery read right as a run ends waits for its auto-save, so the image i
       await gate;
       return real.open(target, flags, mode);
     },
+    link: (existing, target) => real.link(existing, target),
     rm: (target, options) => real.rm(target, options),
     stat: (target) => real.stat(target),
   };
@@ -639,6 +640,9 @@ test("an auto-save that fails never fails the run", async (t) => {
     open: async () => {
       throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
     },
+    link: async () => {
+      throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    },
     rm: async () => undefined,
     stat: async () => {
       throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
@@ -654,4 +658,45 @@ test("an auto-save that fails never fails the run", async (t) => {
     ok: false, reason: "failed", message: "Aiden couldn't finish that image action.",
   });
   assert.deepEqual(env.files.calls, []);
+});
+
+test("a Save All that writes only some images says how many, and can still show the folder", async (t) => {
+  const real = await import("node:fs/promises");
+  // Writes into the chosen folder fail after the first one, as on a disk that fills up.
+  let failInto: string | null = null;
+  let writesInto = 0;
+  const filling: ExportFileSystem = {
+    mkdir: (target, options) => real.mkdir(target, options),
+    open: async (target, flags, mode) => {
+      if (failInto !== null && target.startsWith(failInto) && ++writesInto > 1) {
+        throw Object.assign(new Error(`ENOSPC: no space left on device, open '${target}'`), { code: "ENOSPC" });
+      }
+      return real.open(target, flags, mode);
+    },
+    link: (existing, target) => real.link(existing, target),
+    rm: (target, options) => real.rm(target, options),
+    stat: (target) => real.stat(target),
+  };
+  const env = await harness(t, undefined, { exportFs: filling });
+  await generate(env, "One", "Partial");
+  await generate(env, "Two", "Partial");
+  const assetIds = (await env.invoke<GalleryResponse>("imageWorkflows:gallery", {})).items.map((item) => item.assetId);
+  assert.equal(assetIds.length, 2);
+  const folder = path.join(env.root, "filling-folder");
+  await mkdir(folder);
+  env.files.answers.folder = folder;
+  failInto = folder;
+
+  const partial = await env.invoke<{ ok: false; reason: string; message: string; savedId?: string }>("imageWorkflows:image-action", { op: "save-all", assetIds });
+  assert.deepEqual({ ok: partial.ok, reason: partial.reason, message: partial.message }, { ok: false, reason: "failed", message: "Aiden saved 1 of 2 images." });
+  // Only the finished file is in the folder: no partial or staging file is left behind.
+  assert.equal((await readdir(folder)).length, 1);
+  assert.ok(partial.savedId, "a partial save names the folder it wrote to");
+  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "reveal-saved", savedId: partial.savedId }), { ok: true });
+  assert.deepEqual(env.files.calls[env.files.calls.length - 1], { op: "open-folder", arg: folder });
+
+  // Nothing written at all: nothing to show.
+  writesInto = 1;
+  const none = await env.invoke<{ ok: false; message: string; savedId?: string }>("imageWorkflows:image-action", { op: "save-all", assetIds });
+  assert.deepEqual([none.ok, none.message, none.savedId], [false, "Aiden saved 0 of 2 images.", undefined]);
 });

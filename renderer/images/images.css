@@ -108,8 +108,14 @@
 
 .image-history-footer {
   flex-shrink: 0;
-  padding: 8px 12px;
+  /* The end padding keeps the label and Show Folder clear of the app's floating Live control. */
+  padding: 8px 112px 8px 12px;
   box-shadow: inset 0 1px 0 var(--color-separator);
+}
+
+/* All Images lines its footer up with the grid's 24px gutter. */
+.image-history-footer.image-library-footer {
+  padding-left: 24px;
 }
 
 /* Images home: a card per workflow, and the All Images grid (one product with the History tab). */

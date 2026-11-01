@@ -17,9 +17,9 @@ async function perform(request: ImageActionRequest): Promise<ImageActionResponse
 
 function announce(outcome: ActionOutcome, action?: { label: string; onClick: () => void }) {
   if (!outcome) return;
-  if (outcome.kind === "error") toast.error(outcome.text);
-  else if (action) toast(outcome.text, { action });
-  else toast(outcome.text);
+  const options = action ? { action } : undefined;
+  if (outcome.kind === "error") toast.error(outcome.text, options);
+  else toast(outcome.text, options);
 }
 
 /**
@@ -34,12 +34,14 @@ export function useImageActions(options: { onSaved?: () => void } = {}) {
   return React.useMemo(() => {
     const run = async (op: ImageActionOp, request: ImageActionRequest): Promise<ImageActionResponse | null> => {
       const response = await perform(request);
-      // A save names what it wrote by an opaque id, so the toast can show it in the file manager.
-      const savedId = response?.ok ? response.savedId : undefined;
+      const outcome = response ? actionOutcome(op, response) : thrownOutcome(op);
+      // A save names what it wrote by an opaque id, so the toast can show it in the file manager,
+      // including the folder of a Save All that wrote only some of its images.
+      const savedId = outcome?.savedId;
       const showSaved = savedId
         ? { label: REVEAL_LABEL, onClick: () => void run("reveal-saved", { op: "reveal-saved", savedId }) }
         : undefined;
-      announce(response ? actionOutcome(op, response) : thrownOutcome(op), showSaved);
+      announce(outcome, showSaved);
       // Reveal saves a missing auto-saved copy first, so the saved state may have changed.
       if (response?.ok && op === "reveal") onSaved.current?.();
       return response;

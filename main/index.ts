@@ -417,7 +417,9 @@ const SHUTDOWN_BUDGET_MS = {
   subagentRunStore: 3_000,
   terminalHistory: 2_000,
   designWork: 2_000,
-  imageRuns: 2_000,
+  // ImageRunCoordinator.shutdown(): 1.5 s for in-flight requests to settle, then up to
+  // 3 s for background auto-saves to finish before the run ledger closes.
+  imageRuns: 5_000,
   studioAssets: 2_000,
   browser: 3_000,
   botComputers: 5_000,

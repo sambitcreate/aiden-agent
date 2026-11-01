@@ -130,7 +130,8 @@ export function revealLabel(isMac: boolean): string {
 
 export type ImageActionOp = "save-as" | "save-all" | "copy" | "reveal" | "reveal-saved" | "reveal-folder" | "drag" | "view";
 
-export type ActionOutcome = { kind: "success"; text: string } | { kind: "error"; text: string } | null;
+/** `savedId` names what a save wrote, so the toast can offer to show it (also after a partial Save All). */
+export type ActionOutcome = { kind: "success" | "error"; text: string; savedId?: string } | null;
 
 const FAILED: Record<ImageActionOp, string> = {
   "save-as": "Aiden couldn't save the image.",
@@ -159,6 +160,11 @@ const UNSUPPORTED: Record<ImageActionOp, string> = {
  * successful reveal or drag speaks for itself.
  */
 export function actionOutcome(op: ImageActionOp, response: ImageActionResponse): ActionOutcome {
+  const outcome = baseOutcome(op, response);
+  return outcome && response.savedId ? { ...outcome, savedId: response.savedId } : outcome;
+}
+
+function baseOutcome(op: ImageActionOp, response: ImageActionResponse): ActionOutcome {
   if (response.ok) {
     if (op === "save-as") return { kind: "success", text: "Image saved" };
     if (op === "copy") return { kind: "success", text: "Image copied" };
