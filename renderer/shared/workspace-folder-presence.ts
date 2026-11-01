@@ -39,7 +39,7 @@ export function managedWorktreeMissingMessage(
     return `The worktree folder for “${name}” is missing${where}. Restore it, or ${elsewhere}.`;
   }
   if (!options.restorable) {
-    return `The worktree folder for “${name}” is missing${where}, and its branch ${options.branch} can't be checked out again (it was deleted, or another worktree has it). ${capitalize(elsewhere)}.`;
+    return `The worktree folder for “${name}” is missing${where}, and Aiden can't restore it from its branch ${options.branch}. ${capitalize(elsewhere)}.`;
   }
   return `The worktree folder for “${name}” is missing${where}. If it's in the Trash, put it back to keep uncommitted changes, then check again. Or restore it from its branch ${options.branch}, or ${elsewhere}.`;
 }

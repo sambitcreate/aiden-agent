@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { rm, stat } from "node:fs/promises";
+import { mkdir, rm, stat } from "node:fs/promises";
 import { E2E_ASSISTANT_RESPONSE, expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 test.use({ workspaceSeed: true });
@@ -60,6 +60,17 @@ test("a chat whose worktree folder was deleted waits, then restores the worktree
   await page.getByRole("button", { name: /^Expand workspace · aiden\/fix-the-login-bug/u }).click();
   await page.getByRole("complementary").getByRole("button", { name: /Worktree on aiden\/fix-the-login-bug$/u }).click();
   await expect(notice).toBeVisible({ timeout: 15_000 });
+
+  // A folder that came back in the meantime refuses the restore, and the
+  // notice follows the disk instead of still offering Restore.
+  await mkdir(checkout);
+  await notice.getByRole("button", { name: "Restore worktree" }).click();
+  await expect(page.getByText(/The worktree folder is already there/u)).toBeVisible({ timeout: 15_000 });
+  await expect(notice).toHaveCount(0, { timeout: 15_000 });
+  await rm(checkout, { recursive: true, force: true });
+  await composer.press("Enter");
+  await expect(notice).toBeVisible({ timeout: 15_000 });
+
   await notice.getByRole("button", { name: "Restore worktree" }).click();
   await expect(notice).toHaveCount(0, { timeout: 30_000 });
   expect((await stat(checkout)).isDirectory()).toBe(true);

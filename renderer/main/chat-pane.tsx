@@ -376,6 +376,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         toast.success("Worktree restored. You can send again.");
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "The worktree could not be restored.");
+        // A refused or rolled-back restore can still leave a folder in place,
+        // so the notice must follow what is on disk now.
+        void qc.invalidateQueries({ queryKey: queryKeys.workspaceFolderPresence(workspaceId) });
       } finally {
         setRestoringWorktree(false);
       }
