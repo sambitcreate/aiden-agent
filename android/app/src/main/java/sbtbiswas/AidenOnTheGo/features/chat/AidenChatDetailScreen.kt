@@ -68,11 +68,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
@@ -202,6 +204,8 @@ fun AidenChatDetailScreen(
     val presentedError by viewModel.presentedError.collectAsStateWithLifecycle()
     val pendingSend by viewModel.pendingSend.collectAsStateWithLifecycle()
     val sendRecoveryError by viewModel.sendRecoveryError.collectAsStateWithLifecycle()
+    val isWaitingToRetryRateLimitedSend by viewModel.isWaitingToRetryRateLimitedSend.collectAsStateWithLifecycle()
+    val isPendingSendRefusedBecauseBusy by viewModel.isPendingSendRefusedBecauseBusy.collectAsStateWithLifecycle()
     val isStartingSend by viewModel.isStarting.collectAsStateWithLifecycle()
     val isRetryingInput by viewModel.isSubmittingRunInput.collectAsStateWithLifecycle()
     val hasOlderMessages by viewModel.hasOlderMessages.collectAsStateWithLifecycle()
@@ -246,6 +250,22 @@ fun AidenChatDetailScreen(
     LaunchedEffect(spendingOwner, spendingTransport, isStreaming, chat?.messages?.size, sendRecoveryError) {
         spending.refresh(spendingOwner, spendingTransport)
     }
+    // Revision 49: a Workspace chat's background jobs on the Mac. Not pushed: read after each
+    // reply settles, and every few seconds while something runs or the list is open.
+    val backgroundJobs = remember(chatId) { AidenBackgroundJobsState() }
+    var showsBackgroundJobs by rememberSaveable(chatId) { mutableStateOf(false) }
+    val backgroundJobsTransport = readAloudClient.takeIf { chat?.botId == null && serverInfo?.supportsBackgroundJobs == true }
+    // Only while the chat is on screen: a backgrounded app never polls the Mac.
+    val backgroundJobsLifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    val backgroundJobsVisible = backgroundJobsLifecycle.isAtLeast(Lifecycle.State.STARTED)
+    LaunchedEffect(chatId, backgroundJobsTransport, isStreaming, chat?.messages?.size, showsBackgroundJobs, backgroundJobsVisible) {
+        if (!backgroundJobsVisible) return@LaunchedEffect
+        backgroundJobs.refresh(chatId, backgroundJobsTransport)
+        while (backgroundJobsTransport != null && (backgroundJobs.runningCount > 0 || showsBackgroundJobs)) {
+            delay(if (showsBackgroundJobs) 3_000 else 10_000)
+            backgroundJobs.refresh(chatId, backgroundJobsTransport)
+        }
+    }
     val readAloud = remember(readAloudClient, chatId) {
         AidenReadAloudPlayback(context.applicationContext, scope, readAloudClient, chatId) {
             readAloudClient != null && coordinator.client.value === readAloudClient
@@ -259,7 +279,6 @@ fun AidenChatDetailScreen(
     var selectTextFor by remember { mutableStateOf<String?>(null) }
     var visualViewerRequest by remember(chatId) { mutableStateOf<AidenVisualViewerRequest?>(null) }
     var visualSnapshotGallery by remember(chatId) { mutableStateOf<AidenMessageAttachment?>(null) }
-    val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
 
     LaunchedEffect(isStreaming, chat?.messages?.lastOrNull()?.id) {
@@ -377,7 +396,9 @@ fun AidenChatDetailScreen(
         readAloud.stop()
         voiceInput.start(
             mode = currentVoiceMode,
-            currentDraft = currentDraft,
+            // Snapshot when voice actually starts, including after permission returns.
+            // Keeping it in screen-level rememberUpdatedState would recompose the screen per edit.
+            currentDraft = viewModel.draft.value,
             client = coordinator.client.value,
             updateDraft = viewModel::updateDraft
         )
@@ -647,8 +668,7 @@ fun AidenChatDetailScreen(
                 }
                 if ((pendingSend != null || sendRecoveryError != null) && !isStartingSend && !isRetryingInput) {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                        Text(sendRecoveryError ?: if (pendingSend?.canRetry() == true) "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
-                            else "Couldn’t confirm delivery. The retry window has ended. Check the conversation on your desktop before sending another message.",
+                        Text(aidenSendRecoveryMessage(sendRecoveryError, pendingSend, isWaitingToRetryRateLimitedSend, isPendingSendRefusedBecauseBusy),
                             style = MaterialTheme.typography.bodySmall, color = palette.secondary)
                         Row {
                             TextButton(onClick = { viewModel.send(retry = true) }, enabled = viewModel.canRetrySend) { Text("Retry message") }
@@ -720,6 +740,13 @@ fun AidenChatDetailScreen(
                     )
                 }
 
+                if (backgroundJobs.runningCount > 0) {
+                    AidenBackgroundJobsChip(
+                        running = backgroundJobs.runningCount,
+                        onClick = { showsBackgroundJobs = true },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
                 if (canReadTaskProgress || canReadAgentRoster) {
                     AidenChatProgressControls(
                         taskProgress = taskProgress.takeIf { canReadTaskProgress },
@@ -1137,6 +1164,15 @@ fun AidenChatDetailScreen(
         }
     }
 
+    if (showsBackgroundJobs) {
+        AidenBackgroundJobsSheet(
+            state = backgroundJobs,
+            canStop = connectionState == AidenConnectionState.CONNECTED &&
+                coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.CHAT_WRITE) == true,
+            onStop = { jobId -> scope.launch { backgroundJobs.stop(jobId, backgroundJobsTransport) } },
+            onDismiss = { showsBackgroundJobs = false }
+        )
+    }
     when (progressSheet) {
         "tasks" -> taskProgress
             ?.takeIf { canReadTaskProgress && it.availability == AidenChatProgressAvailability.READY }

@@ -52,6 +52,7 @@ import sbtbiswas.AidenOnTheGo.features.chat.AidenChatViewModel
 import sbtbiswas.AidenOnTheGo.features.chat.AidenForeignRunAttachPolicy
 import sbtbiswas.AidenOnTheGo.features.chat.AidenVisualSnapshotRefreshPolicy
 import sbtbiswas.AidenOnTheGo.features.chat.aidenEligibleImageAttachments
+import sbtbiswas.AidenOnTheGo.features.chat.aidenSendRecoveryMessage
 import sbtbiswas.AidenOnTheGo.features.chat.aidenUnsupportedHtmlArtifacts
 import sbtbiswas.AidenOnTheGo.features.chat.aidenVisibleMessageAttachments
 import sbtbiswas.AidenOnTheGo.features.chat.aidenVisualDisplay
@@ -4778,6 +4779,149 @@ class AidenChatTest {
             io.close()
         }
     }
+
+    private fun rateLimitedTurn(retryable: Boolean, message: String = "Aiden Agent is busy.", retryAfterSeconds: Int? = null) =
+        MockResponse().setResponseCode(429).setBody(
+            """{"error":{"code":"rate_limited","message":"$message","requestId":"req-busy","retryable":$retryable""" +
+                (retryAfterSeconds?.let { ""","details":{"retryAfterSeconds":$it}""" } ?: "") + "}}"
+        )
+
+    private fun acceptedTurn(n: Int) = MockResponse().setResponseCode(202).setBody(
+        """{"turnId":"turn-$n","streamId":"stream-$n","status":"queued","message":${forkWireJson.encodeToString(
+            AidenChatMessage("accepted-$n", AidenChatRole.USER, "Hello", createdAt = Instant.EPOCH.plusSeconds(10))
+        )}}"""
+    )
+
+    /** Routes the send endpoints, answering each turn POST with [answer] by its 1-based count. */
+    private fun withTurnHarness(
+        answer: (Int) -> MockResponse,
+        block: suspend CoroutineScope.(AidenChatViewModel, java.util.concurrent.LinkedBlockingQueue<RecordedRequest>, CountDownLatch) -> Unit,
+        expectedTurns: Int
+    ) {
+        val turns = java.util.concurrent.LinkedBlockingQueue<RecordedRequest>()
+        val arrived = CountDownLatch(expectedTurns)
+        val count = java.util.concurrent.atomic.AtomicInteger(0)
+        withForkHarness(emptyList(), { request ->
+            val path = request.requestUrl!!.encodedPath
+            when {
+                path == "/api/aiden/v1/chats/${forkSource.id}/turns" -> {
+                    turns.add(request)
+                    answer(count.incrementAndGet()).also { arrived.countDown() }
+                }
+                path == "/api/aiden/v1/chats/${forkSource.id}" -> MockResponse().setBody(forkWireJson.encodeToString(forkSource))
+                path.endsWith("/events") -> MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE)
+                else -> null
+            }
+        }) { harness ->
+            val model = harness.open(forkSource.id, forkSource)
+            block(model, turns, arrived)
+        }
+    }
+
+    @Test
+    fun aBusyMacSendIsResentAfterTheServerDelayUnderAFreshKey() = withTurnHarness(
+        answer = { n -> if (n == 1) rateLimitedTurn(retryable = true, retryAfterSeconds = 4) else acceptedTurn(n) },
+        expectedTurns = 2,
+        block = { model, turns, _ ->
+            val waits = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            model.rateLimitedSendRetryDelay = { waits += it; yield() }
+            model.updateDraft("Hello")
+            model.send()
+            withTimeout(5_000) { model.chat.first { chat -> chat?.messages?.any { it.id == "accepted-2" } == true } }
+
+            assertEquals("the resend waits the server's Retry-After", listOf(4_000L), waits)
+            val refused = turns.poll()!!
+            val resent = turns.poll()!!
+            assertNull(turns.poll())
+            // The Mac settled the refused key as rejected, so only a fresh key can carry the resend.
+            assertNotEquals(refused.getHeader("Idempotency-Key"), resent.getHeader("Idempotency-Key"))
+            assertEquals(refused.body.readUtf8(), resent.body.readUtf8())
+            assertNull("a busy Mac is not reported as a failed send", model.presentedError.value)
+            assertNull(model.pendingSend.value)
+            assertFalse(model.isWaitingToRetryRateLimitedSend.value)
+            assertEquals("", model.draft.value)
+        }
+    )
+
+    private fun sendRecoveryNotice(model: AidenChatViewModel) = aidenSendRecoveryMessage(
+        model.sendRecoveryError.value,
+        model.pendingSend.value,
+        model.isWaitingToRetryRateLimitedSend.value,
+        model.isPendingSendRefusedBecauseBusy.value
+    )
+
+    private val dropTurnAnswers = java.util.concurrent.atomic.AtomicBoolean(true)
+
+    @Test
+    fun busyMacResendsStopAfterTheirLimitAndLeaveRetryToThePerson() = withTurnHarness(
+        answer = { n ->
+            when {
+                n <= 1 + AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES -> rateLimitedTurn(retryable = true)
+                dropTurnAnswers.get() -> MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                else -> acceptedTurn(n)
+            }
+        },
+        expectedTurns = 1 + AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES,
+        block = { model, turns, arrived ->
+            val refusals = 1 + AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES
+            val waits = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            model.rateLimitedSendRetryDelay = { waits += it; yield() }
+            model.updateDraft("Hello")
+            model.send()
+            withContext(Dispatchers.IO) { check(arrived.await(5, TimeUnit.SECONDS)) }
+            withTimeout(5_000) { model.isStarting.first { !it } }
+
+            assertEquals(AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES, waits.size)
+            assertFalse(model.isWaitingToRetryRateLimitedSend.value)
+            assertNull(model.presentedError.value)
+            assertTrue("the send stays saved for the person's Retry", model.pendingSend.value?.canRetry() == true)
+            assertTrue(model.canRetrySend)
+            assertEquals(
+                "the Mac refused every attempt, so the notice says it is busy rather than that delivery is unknown",
+                "Aiden Agent is still busy. Your message wasn’t sent; try again in a moment.",
+                sendRecoveryNotice(model)
+            )
+
+            // The person's Retry clears the busy notice; this time the answer is lost.
+            model.send(retry = true)
+            assertFalse(model.isPendingSendRefusedBecauseBusy.value)
+            withTimeout(5_000) {
+                while (turns.size < refusals + 1) yield()
+                model.isStarting.first { !it }
+            }
+            assertNotNull("an unconfirmed send stays saved", model.pendingSend.value)
+            assertEquals(
+                "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window.",
+                sendRecoveryNotice(model)
+            )
+
+            dropTurnAnswers.set(false)
+            model.send(retry = true)
+            withTimeout(5_000) { model.chat.first { chat -> chat?.messages?.any { it.id.startsWith("accepted-") } == true } }
+            val keys = turns.map { it.getHeader("Idempotency-Key") }
+            assertEquals("every refused attempt was replaced by a fresh key", refusals + 1, keys.toSet().size)
+            assertEquals("a send whose answer was lost replays its key", keys[refusals], keys.last())
+            assertNull(model.pendingSend.value)
+        }
+    )
+
+    @Test
+    fun aRateLimitTheMacMarksFinalStillFailsTheSend() = withTurnHarness(
+        answer = { rateLimitedTurn(retryable = false, message = "Daily limit reached", retryAfterSeconds = 5) },
+        expectedTurns = 1,
+        block = { model, turns, _ ->
+            val waits = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            model.rateLimitedSendRetryDelay = { waits += it; yield() }
+            model.updateDraft("Hello")
+            model.send()
+            assertEquals("Daily limit reached", withTimeout(5_000) { model.presentedError.first { it != null } })
+            withTimeout(5_000) { model.isStarting.first { !it } }
+            assertNull(model.pendingSend.value)
+            assertTrue(waits.isEmpty())
+            assertEquals(1, turns.size)
+            assertEquals("the refused text returns to the composer", "Hello", model.draft.value)
+        }
+    )
 
     @Test
     fun aForkTheMacRejectedRetriesWithAFreshIdempotencyKey() {

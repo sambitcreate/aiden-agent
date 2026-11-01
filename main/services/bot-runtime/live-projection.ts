@@ -849,16 +849,29 @@ export function createQueuedInputClassifier(deps: QueuedInputClassifierDeps): Qu
   let timer: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
 
-  function scheduleRetry(): void {
-    notBefore = Math.max(notBefore, deps.now() + deps.retryMs);
-    if (timer !== undefined || closed) return;
+  /**
+   * Wake the caller once the pause is over by the classifier's own clock. A
+   * timer can fire early against `now()` (a busy event loop schedules from a
+   * stale loop time), so an early firing waits out the rest instead of
+   * opening the pause.
+   */
+  function armTimer(delayMs: number): void {
     timer = setTimeout(() => {
       timer = undefined;
       if (closed) return;
-      notBefore = 0;
+      const remaining = notBefore - deps.now();
+      if (remaining > 0) {
+        armTimer(remaining);
+        return;
+      }
       deps.retry();
-    }, deps.retryMs);
+    }, delayMs);
     timer.unref?.();
+  }
+
+  function scheduleRetry(): void {
+    if (timer !== undefined || closed) return;
+    armTimer(Math.max(0, notBefore - deps.now()));
   }
 
   return {
@@ -878,7 +891,10 @@ export function createQueuedInputClassifier(deps: QueuedInputClassifierDeps): Qu
           if (!failing) deps.report(error);
           failing = true;
         }
-        if (unknown.some((id) => !kinds.has(id))) scheduleRetry();
+        if (unknown.some((id) => !kinds.has(id))) {
+          notBefore = deps.now() + deps.retryMs;
+          scheduleRetry();
+        }
       } else if (unknown.length > 0) {
         scheduleRetry();
       }

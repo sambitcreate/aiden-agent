@@ -2247,6 +2247,9 @@ textarea {
 :root[data-reduce-motion="false"] .scheduled-task-detail[data-state="open"] {
   animation: aiden-app-update-banner-in 150ms cubic-bezier(0.19, 1, 0.22, 1) both;
 }
+:root[data-reduce-motion="false"] .usage-data-notice[data-state="open"] {
+  animation: aiden-app-update-banner-in 150ms cubic-bezier(0.19, 1, 0.22, 1) both;
+}
 :root[data-reduce-motion="false"] .agent-thinking-shimmer {
   color: transparent;
   background-image: linear-gradient(
@@ -2263,6 +2266,12 @@ textarea {
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   animation: aiden-thinking-shimmer 1.8s ease-in-out infinite;
+}
+/* The shimmer repaints its text every frame, so it pauses while scrolled away
+   or while the window is hidden (lib/offscreen-pause.ts). */
+.agent-thinking-shimmer[data-offscreen],
+:root[data-document-hidden] .agent-thinking-shimmer {
+  animation-play-state: paused !important;
 }
 
 /*
@@ -3110,7 +3119,8 @@ textarea {
 .aiden-mark { display: block; flex: none; overflow: visible; }
 .aiden-mark * { transform-box: view-box; }
 .aiden-mark[data-paused] *,
-.aiden-mark[data-offscreen] * { animation-play-state: paused !important; }
+.aiden-mark[data-offscreen] *,
+:root[data-document-hidden] .aiden-mark * { animation-play-state: paused !important; }
 :root[data-reduce-motion="true"] .aiden-mark * { animation-play-state: paused !important; }
 @media (prefers-reduced-motion: reduce) {
   .aiden-mark * { animation-play-state: paused !important; }
@@ -3176,7 +3186,8 @@ textarea {
    face pauses where it is. */
 :root[data-reduce-motion="false"] .bot-avatar[data-working] .bot-avatar-eyes { animation: aiden-mark-look 4s cubic-bezier(.5, 0, .3, 1) infinite; }
 :root[data-reduce-motion="false"] .bot-avatar[data-working] .bot-avatar-eye { transform-box: fill-box; transform-origin: center; animation: aiden-mark-blink 4s ease-in-out infinite; }
-.bot-avatar[data-offscreen] * { animation-play-state: paused !important; }
+.bot-avatar[data-offscreen] *,
+:root[data-document-hidden] .bot-avatar * { animation-play-state: paused !important; }
 /* Under Reduce Motion a working face holds the glance's look-aside pose instead,
    so it still reads as working without moving. */
 :root[data-reduce-motion="true"] .bot-avatar[data-working] .bot-avatar-eyes { transform: translateX(-2.6px); }
@@ -3451,7 +3462,7 @@ textarea {
 /* Offscreen or hidden pauses the whole slot, caption dot included. The reveal
    pauses the scan but never the arriving image's own fade. */
 .image-scan-slot[data-offscreen] *,
-.image-scan-slot[data-document-hidden] *,
+:root[data-document-hidden] .image-scan-slot *,
 .image-scan-slot[data-arrival="reveal"] .image-scan-live,
 .image-scan[data-arrival="reveal"] *:not(.image-scan-result) { animation-play-state: paused !important; }
 /* Arrival: the cover slides away under a bright edge, revealing the image. */

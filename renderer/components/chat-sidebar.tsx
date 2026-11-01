@@ -5,6 +5,8 @@ import {
   requestChatDraftComposerFocus,
   subscribeChatDrafts,
 } from "../lib/chat-draft";
+import { openWorkspaceSettings } from "./workspace-settings-dialog";
+import { workspaceHasOwnSettings } from "../lib/workspace-settings-view";
 import { useNewChatActions } from "../lib/new-chat-actions";
 import { HistoryNavButtons } from "./history-nav";
 import { forkedFromLabel } from "../lib/chat-copy-view";
@@ -14,6 +16,7 @@ import { forkedFromLabel } from "../lib/chat-copy-view";
 import * as React from "react";
 import { workspaceDisplayName, workspaceSecondaryLabel, type WorkspacePathPreferences } from "../lib/workspace-path-display";
 import { WorkspacePathLabel } from "./workspace-path-label";
+import { isNoWorkspace, NO_WORKSPACE_GROUP_LABEL, sidebarGroupWorkspaceId } from "../lib/no-workspace";
 import { useWorkspacePathPreferences } from "../lib/use-workspace-path-preferences";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
@@ -50,6 +53,7 @@ import {
   FolderPlus,
   GitFork,
   Loader2,
+  MessageCircle,
   MoreHorizontal,
   Plus,
   Settings,
@@ -158,6 +162,8 @@ type SidebarEntry = SidebarProjectEntry<LocalSidebarProject>;
 type SidebarRow = LocalSidebarChat | RemoteSidebarChat;
 
 function workspaceAccessibleName(workspace: Workspace, preferences: WorkspacePathPreferences, workspaces: readonly Workspace[]): string {
+  // The Chats group stands for every hidden No workspace folder; its own folder is no name for it.
+  if (isNoWorkspace(workspace)) return NO_WORKSPACE_GROUP_LABEL;
   return [workspaceDisplayName(workspace, workspaces), workspaceSecondaryLabel(workspace, preferences)].filter(Boolean).join(", ");
 }
 
@@ -1126,10 +1132,12 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     const listed = new Set((chats.data ?? []).map((chat) => chat.id));
     for (const { chat } of [...chatDrafts].reverse()) {
       if (!chat.workspaceId || listed.has(chat.id)) continue;
-      grouped.set(chat.workspaceId, [...(grouped.get(chat.workspaceId) ?? []), chat]);
+      // Drafts in any hidden No workspace folder show under the one Chats group.
+      const groupId = sidebarGroupWorkspaceId(chat.workspaceId, workspaces);
+      grouped.set(groupId, [...(grouped.get(groupId) ?? []), chat]);
     }
     return grouped;
-  }, [chatDrafts, chats.data, searching]);
+  }, [chatDrafts, chats.data, searching, workspaces]);
   const renderDraftRow = (draft: ChatMeta) => (
     <SidebarListItem
       key={`draft:${draft.id}`}
@@ -1707,7 +1715,9 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                     });
                   }
                   const workspace = primary.workspace;
-                  const secondaryLabel = workspaceSecondaryLabel(workspace, pathPreferences);
+                  const chatsGroup = isNoWorkspace(workspace);
+                  const groupName = chatsGroup ? NO_WORKSPACE_GROUP_LABEL : workspaceDisplayName(workspace, workspaces);
+                  const secondaryLabel = chatsGroup ? undefined : workspaceSecondaryLabel(workspace, pathPreferences);
                   const explicitlyExpanded = expandedWorkspaceIds.has(workspace.id);
                   const expanded = searching || explicitlyExpanded;
                   return (
@@ -1725,13 +1735,13 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                           icon={
                             <span className="flex items-center gap-1.5">
                               {expanded ? <ChevronDown /> : <ChevronRight />}
-                              <Folder />
+                              {chatsGroup ? <MessageCircle /> : <Folder />}
                             </span>
                           }
                           title={
                             <span className="flex min-w-0 flex-col">
-                              <span className="truncate">{workspaceDisplayName(workspace, workspaces)}</span>
-                              {workspace.folderPath && pathPreferences.showWorkspacePaths ? (
+                              <span className="truncate">{groupName}</span>
+                              {!chatsGroup && workspace.folderPath && pathPreferences.showWorkspacePaths ? (
                                 <span className="flex min-w-0 items-center gap-1 text-small text-tertiary">
                                   {workspace.managedWorktree?.branch ? <span className="max-w-[45%] truncate">{workspace.managedWorktree.branch} ·</span> : null}
                                   <WorkspacePathLabel path={workspace.folderPath} format={pathPreferences.workspacePathFormat} />
@@ -1748,7 +1758,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                           variant="transparent"
                           size="small"
                           iconOnly
-                          aria-label={`New chat in ${workspaceDisplayName(workspace, workspaces)}`}
+                          aria-label={chatsGroup ? "New chat without a workspace" : `New chat in ${groupName}`}
                           disabled={Boolean(settingsBlockedReason) || appendReconciliationRequired}
                           className="size-7 shrink-0 text-tertiary opacity-0 group-hover/workspace:opacity-100 group-focus-within/workspace:opacity-100 focus-visible:opacity-100"
                           onClick={() => void newAgentInWorkspace(workspace.id)}
@@ -1769,6 +1779,11 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                             >
                               New chat
                             </DropdownMenuItem>
+                            {workspaceHasOwnSettings(workspace) ? (
+                              <DropdownMenuItem onSelect={() => openWorkspaceSettings(workspace.id)}>
+                                Workspace settings…
+                              </DropdownMenuItem>
+                            ) : null}
                             <DropdownMenuItem
                               disabled={workspaceSwitchBlocked || group.chats.length === 0}
                               title={
@@ -1780,7 +1795,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                             >
                               Open latest chat
                             </DropdownMenuItem>
-                            {workspace.folderPath ? (
+                            {!chatsGroup && workspace.folderPath ? (
                               <DropdownMenuItem
                                 onSelect={() => void revealWorkspace(workspace)}
                               >
@@ -1788,7 +1803,8 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                               </DropdownMenuItem>
                             ) : null}
                             {moveItems}
-                            {workspaces.length > 1 ? <DropdownMenuSeparator /> : null}
+                            {/* The Chats group is a view over hidden folders: nothing to remove. */}
+                            {!chatsGroup && workspaces.length > 1 ? <DropdownMenuSeparator /> : null}
                             {workspaces.length > 1 && workspace.managedWorktree ? (
                               <DropdownMenuItem
                                 disabled={workspaceActionBlocked}
@@ -1799,7 +1815,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                                 Delete worktree…
                               </DropdownMenuItem>
                             ) : null}
-                            {workspaces.length > 1 && !workspace.managedWorktree ? (
+                            {!chatsGroup && workspaces.length > 1 && !workspace.managedWorktree ? (
                               <DropdownMenuItem
                                 disabled={workspaceActionBlocked}
                                 icon="trash"

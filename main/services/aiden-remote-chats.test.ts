@@ -35,7 +35,7 @@ import { createChatStore } from "./chat-store-core.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 import type { VisualViewerAppearance, VisualViewerSource } from "./visual-viewer-document.js";
 import { HostRunRegistry } from "./host-run-registry.js";
-import { workspaceFolderMissing } from "./workspace-folder-presence.js";
+import { workspaceFolderRemoteRefusal } from "./workspace-folder-presence.js";
 
 const ONE_PIXEL_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
@@ -70,7 +70,7 @@ function fixture(
     botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
     botPaused?: (botId: string) => Promise<boolean>;
     spendingRefusal?: (chat: { id: string; botId?: string }) => Promise<string | undefined>;
-    workspaceFolderMissing?: (workspaceId: string) => Promise<boolean>;
+    workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
@@ -288,8 +288,8 @@ function fixture(
       fixtureOptions.botTurnAuthorityPreflight ?? (async () => undefined),
     ...(fixtureOptions.botPaused ? { botPaused: fixtureOptions.botPaused } : {}),
     ...(fixtureOptions.spendingRefusal ? { spendingRefusal: fixtureOptions.spendingRefusal } : {}),
-    ...(fixtureOptions.workspaceFolderMissing
-      ? { workspaceFolderMissing: fixtureOptions.workspaceFolderMissing }
+    ...(fixtureOptions.workspaceFolderRefusal
+      ? { workspaceFolderRefusal: fixtureOptions.workspaceFolderRefusal }
       : {}),
     ...(fixtureOptions.attachments ? { attachments: fixtureOptions.attachments } : {}),
     ...(fixtureOptions.isTitlePending ? { isTitlePending: fixtureOptions.isTitlePending } : {}),
@@ -1677,9 +1677,10 @@ test("a phone turn in a workspace whose folder moved is refused before it is sto
   try {
     await mkdir(folderPath);
     const app = fixture(chat(), {
-      workspaceFolderMissing: async (workspaceId) =>
-        workspaceId === "workspace-1" &&
-        (await workspaceFolderMissing({ name: "Project", folderPath, permission: "ask" })),
+      workspaceFolderRefusal: async (workspaceId) =>
+        workspaceId === "workspace-1"
+          ? workspaceFolderRemoteRefusal({ name: "Project", folderPath, permission: "ask" })
+          : undefined,
     });
     await rename(folderPath, moved);
 
@@ -2410,10 +2411,16 @@ const skillInvocation = {
   source: "workspace" as const,
 };
 
-test("remote skill turn rejects while its workspace is changing", async () => {
+test("remote skill turn rejects while its workspace is changing, keeping its attachment for the resend", async () => {
   const app = fixture(chat({ workspaceId: "workspace-9" }), {
     deviceSupportsSkillInvocation: async () => true,
     resolveSkillInvocation: async () => resolvedSkill,
+  });
+  const notes = await app.service.uploadAttachment("device-1", "chat-1", {
+    name: "diff-notes.md",
+    mimeType: "text/markdown",
+    kind: "text",
+    text: "# Diff notes",
   });
   const endMutation = workspaceMutationGate.begin("workspace-9");
   try {
@@ -2421,6 +2428,7 @@ test("remote skill turn rejects while its workspace is changing", async () => {
       app.service.startTurn("device-1", "chat-1", "skill-gated-000001", {
         text: "check this diff",
         skill: skillInvocation,
+        attachmentIds: [notes.id],
       }),
       (error: unknown) =>
         (error as { code?: string; status?: number }).code === "rate_limited" &&
@@ -2430,12 +2438,23 @@ test("remote skill turn rejects while its workspace is changing", async () => {
   } finally {
     endMutation();
   }
-  // Once the workspace settles the same turn is admitted again.
+  // Once the workspace settles, the phone's resend under a fresh key is
+  // admitted with the same attachment, which the refused send gave back.
   const retry = await app.service.startTurn("device-1", "chat-1", "skill-gated-retry1", {
     text: "check this diff",
     skill: skillInvocation,
+    attachmentIds: [notes.id],
   });
   assert.equal(retry.status, "accepted");
+  assert.deepEqual(retry.message.attachments?.map((attachment) => attachment.name), ["diff-notes.md"]);
+  // Spent by the accepted send: a third send can no longer use it.
+  await assert.rejects(
+    app.service.startTurn("device-1", "chat-1", "skill-gated-again1", {
+      text: "check this diff",
+      attachmentIds: [notes.id],
+    }),
+    (error: unknown) => (error as { status?: number }).status === 409,
+  );
 });
 
 test("remote skill turn aborts the append when its workspace changes mid-prepare", async () => {

@@ -534,6 +534,61 @@ test("a workspace keeps only a literal scratch mark across saves and reloads", a
   assert.equal((await h.store.getWorkspace("scratch"))?.scratch, true);
 });
 
+test("workspace skill and connector off-lists survive restarts, and a damaged list never loses the workspace", async (t) => {
+  const h = await harness(t);
+  const base = { permission: "ask" as const, createdAt: 1, updatedAt: 1 };
+  await h.store.saveWorkspace({ ...base, id: "client", name: "Client", disabledSkills: ["Deploy"], disabledMcpServerIds: ["gmail"] });
+  await h.store.saveWorkspace({ ...base, id: "damaged", name: "Damaged" });
+  const local = await readJson<{ workspaces: Array<Record<string, unknown>> }>(h.localFile);
+  for (const entry of local.workspaces) {
+    if (entry.id === "damaged") Object.assign(entry, { disabledSkills: "deploy", disabledMcpServerIds: [7, "notion"] });
+  }
+  await fs.writeFile(h.localFile, JSON.stringify(local), "utf-8");
+
+  const next = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  const client = await next.getWorkspace("client");
+  assert.deepEqual(client?.disabledSkills, ["deploy"]);
+  assert.deepEqual(client?.disabledMcpServerIds, ["gmail"]);
+  const damaged = await next.getWorkspace("damaged");
+  assert.equal(damaged?.name, "Damaged");
+  assert.equal("disabledSkills" in (damaged ?? {}), false);
+  assert.deepEqual(damaged?.disabledMcpServerIds, ["notion"]);
+
+  // Turning everything back on removes the stored list.
+  await next.saveWorkspace({ ...client!, disabledSkills: undefined });
+  assert.equal("disabledSkills" in ((await next.getWorkspace("client")) ?? {}), false);
+});
+
+test("a workspace keeps only a literal No workspace mark across saves and reloads", async (t) => {
+  const h = await harness(t);
+  const base = { permission: "ask" as const, createdAt: 1, updatedAt: 1 };
+  // No workspace chats use the global skills and connectors, so an off-list is never kept for them.
+  await h.store.saveWorkspace({
+    ...base,
+    id: "chat",
+    name: "No workspace",
+    folderPath: "/x/chats/kind-fern-hike",
+    noWorkspace: true,
+    disabledSkills: ["deploy"],
+    disabledMcpServerIds: ["gmail"],
+  });
+  await h.store.saveWorkspace({ ...base, id: "odd", name: "Odd", noWorkspace: 1 as unknown as true });
+  const listed = new Map((await h.store.listWorkspaces()).map((workspace) => [workspace.id, workspace]));
+  assert.equal(listed.get("chat")?.noWorkspace, true);
+  assert.equal("noWorkspace" in (listed.get("odd") ?? {}), false);
+  await h.store.saveWorkspace({ ...listed.get("chat")!, permission: "full" });
+  const chat = await h.store.getWorkspace("chat");
+  assert.equal(chat?.noWorkspace, true);
+  assert.equal("disabledSkills" in (chat ?? {}), false);
+  assert.equal("disabledMcpServerIds" in (chat ?? {}), false);
+});
+
 test("resetUserSetup clears setup and preferences while preserving skills and workspaces", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);
@@ -627,6 +682,48 @@ test("reads and writes survive a restart of the whole store", async (t) => {
     assistant: assistantConfig,
     webSearch: expectedWebSearchSettings(true),
   });
+});
+
+test("analytics consent stays in machine-local settings.json, apart from app settings", async (t) => {
+  const h = await harness(t);
+  await h.store.setSettings({ exaEnabled: true });
+  const saved = await h.store.updateAnalyticsState((state) => ({
+    ...state,
+    installId: "0b6f4a6e-3c1d-4f8e-9a2b-7c5d1e0f9a8b",
+    noticeShownAt: "2026-10-30T12:00:00.000Z",
+  }));
+  // An unrelated settings write must not drop the analytics state.
+  await h.store.setSettings({ exaEnabled: false });
+
+  const next = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  assert.deepEqual(await next.getAnalyticsState(), saved);
+  assert.equal(saved.enabled, true);
+  assert.equal("analytics" in (await next.getSettings()), false);
+  const portableText = await fs.readFile(h.portableFile, "utf-8").catch(() => "");
+  assert.equal(portableText.includes("0b6f4a6e"), false);
+  assert.equal((await readJson<{ analytics?: { installId?: string } }>(h.settingsFile)).analytics?.installId, saved.installId);
+});
+
+test("damaged analytics state reads back as the default instead of failing", async (t) => {
+  const h = await harness(t);
+  await h.store.setSettings({ exaEnabled: true });
+  const file = await readJson<Record<string, unknown>>(h.settingsFile);
+  await fs.writeFile(h.settingsFile, JSON.stringify({ ...file, analytics: { enabled: "nope", installId: 7 } }), "utf-8");
+
+  const next = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  assert.deepEqual(await next.getAnalyticsState(), { enabled: true });
 });
 
 test("hand-edited dictation preferences reach consumers only in supported shapes", async (t) => {

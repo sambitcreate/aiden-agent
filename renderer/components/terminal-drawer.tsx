@@ -524,6 +524,11 @@ export function TerminalDrawer() {
   const toggleShortcutBinding = useShortcutBinding("terminal.toggle");
   const [clearEpoch, setClearEpoch] = React.useState(0);
   const [present, setPresent] = React.useState(open);
+  // While the drawer's height animates, the body keeps its settled size and the
+  // drawer clips it. Otherwise every frame would refit the canvas: a new backing
+  // store, a grid reflow and a full render, about 18 times per toggle.
+  const [moving, setMoving] = React.useState(false);
+  const settledOpenRef = React.useRef(open);
   const resizeRef = React.useRef<{ startY: number; startHeight: number } | null>(null);
   const heightRef = React.useRef(height);
   heightRef.current = height;
@@ -555,6 +560,14 @@ export function TerminalDrawer() {
     );
     return () => window.clearTimeout(timeout);
   }, [open, present]);
+
+  React.useLayoutEffect(() => {
+    if (settledOpenRef.current === open) return;
+    settledOpenRef.current = open;
+    setMoving(true);
+    const timeout = window.setTimeout(() => setMoving(false), TERMINAL_DRAWER_MOTION_MS);
+    return () => window.clearTimeout(timeout);
+  }, [open]);
 
   const beginResize = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -597,7 +610,7 @@ export function TerminalDrawer() {
       data-state={open ? "open" : "closed"}
       className="terminal-drawer relative shrink-0 overflow-hidden border-t border-separator bg-popover"
       data-placement={placement}
-      style={{ "--terminal-drawer-height": placement === "side" ? "100%" : `${height}px`, display: (placement === "side" ? !requestedOpen : !present) ? "none" : undefined } as React.CSSProperties}
+      style={{ "--terminal-drawer-height": placement === "side" ? "100%" : `${height}px`, "--terminal-drawer-body-height": placement === "side" ? "100%" : `${height - 1}px`, display: (placement === "side" ? !requestedOpen : !present) ? "none" : undefined } as React.CSSProperties}
     >
       <div
         hidden={placement === "side"}
@@ -615,7 +628,8 @@ export function TerminalDrawer() {
         onKeyDown={resizeWithKeyboard}
         className="absolute inset-x-0 top-0 z-20 h-2 cursor-row-resize outline-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-separator hover:before:bg-accent focus-visible:before:h-0.5 focus-visible:before:bg-accent"
       />
-      <div className="flex h-full min-h-0 flex-col">
+      {/* The settled body height is the drawer's less its 1px top border. */}
+      <div className={cn("flex min-h-0 flex-col", moving ? "h-(--terminal-drawer-body-height)" : "h-full")}>
         <header className="drag-region flex h-11 shrink-0 items-center gap-2 border-b border-separator px-3">
           <div
             className="no-drag flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-1"

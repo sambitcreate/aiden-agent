@@ -53,11 +53,20 @@ Bot computers (Lume and the macOS restore image) are also manual-only.
 - Startup, listing, onboarding and background work never download, create or start a VM.
 - A Bot computer starts only for that Bot's `computer` or `computer_shell` call, a routine that uses it, the person opening its Computer tab, or the person's Open on its computer sign-in card. Set up, Update base and Set up element control in Settings start the base computer only.
 
+## Product analytics
+
+Anonymous usage analytics and crash reports go only to the fixed PostHog US host (`https://us.i.posthog.com`, project "aiden") from the Electron main process through `main/services/analytics/`. See [`docs/analytics.md`](docs/analytics.md).
+
+- Only events and properties listed in `main/services/analytics/analytics-events.ts` may be sent; the core drops anything else. Never send chats, prompts, replies, file names or contents, paths, credentials, custom provider names or URLs, or free text. Every payload sets `$process_person_profile: false` and uses the random install ID, never a device or account identifier.
+- Sending needs all of: a project key, the Settings → About → **Usage data** switch on (on by default), the notice or onboarding row already shown, and neither `DO_NOT_TRACK=1` nor `AIDEN_ANALYTICS=0` in the environment. Turning it off sends one `analytics_disabled`, drops the queue and forgets the install ID.
+- The key exists only in distribution builds (`npm run dist`, the release workflow) from the `AIDEN_POSTHOG_PROJECT_KEY` secret, injected into a generated module and never committed. `npm run dev`, unpacked builds, tests and E2E have no key and never construct the client; `AIDEN_ANALYTICS_DEBUG=1` in an unpackaged build logs would-be events instead. A launch no person started (CI, smoke, acceptance) sets `AIDEN_ANALYTICS=0`.
+- No feature flags, session replay, autocapture, heatmaps, surveys or renderer-side PostHog SDK. The renderer only reads status and changes the setting over IPC.
+- Adding an event means adding it to the registry, its docs row in `docs/analytics.md`, and a test; the Settings "What's sent" sheet renders straight from the registry.
+
 ## Aiden CLI (`packages/cli`)
 
-The headless Aiden Agent lives in `packages/cli` as a self-contained npm package with its own lockfile — it is deliberately not an npm workspace of the Electron root. See `packages/cli/README.md` and `docs/plans/aiden-cli-plan.md` for architecture and phasing.
+The headless Aiden server lives in `packages/cli` as a self-contained npm package with its own lockfile — it is deliberately not an npm workspace of the Electron root. It is serve-only: `aiden serve` runs the daemon that paired phones and Macs connect to, plus short admin subcommands. There is no interactive terminal UI, print mode or RPC mode; do not add one back. See `packages/cli/README.md`, `docs/plans/aiden-serve-only-cli.md` and, for history, `docs/plans/aiden-cli-plan.md`.
 
-- Never hand-edit `packages/cli/themes/*.json`: they are generated from `renderer/shared/appearance.ts` by `npm run themes` (in `packages/cli`), and the fidelity test fails on drift. Change palettes in `appearance.ts`, then regenerate.
 - The rebrand depends on the bundle layout: `dist/app/cli.js` plus the generated `dist/app/package.json` (`piConfig`) must stay the nearest package.json to the bundled code. Restructure `dist/app/` only with that contract and `tests/bundle.test.mjs` in mind.
 - Pin pi packages exactly (matching the desktop pin line) and upgrade them through a replay evaluation rather than casually.
 - The CLI bundles `main/services` and `renderer/shared` sources directly; `aidenRelativeTsRewritePlugin` in `packages/cli/scripts/build.mjs` maps their NodeNext `.js` specifiers to `.ts`. Do not reintroduce vendored copies (the former `src/vendor/advisor/` copies and their drift test were removed); import the original instead.

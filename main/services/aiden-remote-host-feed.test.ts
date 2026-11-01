@@ -520,6 +520,27 @@ test("a revocation that lands while a feed is opening refuses the subscription",
   assert.equal(response.body, "");
 });
 
+test("a client that disconnects during the opening read leaves no subscriber reading the host", async () => {
+  const { feed, state, holdNextRead, releaseRead } = harness({ debounceMs: 1 });
+  try {
+    const response = new RecordingResponse();
+    const reading = holdNextRead();
+    const opening = feed.open(desktop("device-a"), undefined, response.asServerResponse());
+    await reading;
+    response.destroy();
+    releaseRead();
+    await opening;
+    assert.equal(response.status, 0, "nothing is written to the dropped client");
+    const reads = state.reads;
+    state.current = { ...state.current, summaries: [summary("chat-1"), summary("chat-2")] };
+    feed.invalidate();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(state.reads, reads, "with no live subscriber, changes are not re-read");
+  } finally {
+    feed.close();
+  }
+});
+
 test("a change signalled during the opening read reaches the new subscriber", async () => {
   const { feed, state, holdNextRead, releaseRead } = harness({ debounceMs: 1 });
   const response = new RecordingResponse();

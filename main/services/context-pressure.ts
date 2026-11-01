@@ -1,3 +1,4 @@
+import { withoutWorkspaceDisabledMcpServers } from "./workspace-capabilities.js";
 import { configuredCompactionReserveTokens } from "../../renderer/shared/compaction.js";
 // Composer context meter: exposes the runtime's own next-request projection
 // (projectChatContextUsage over the Pi journal + the generation's static
@@ -40,8 +41,16 @@ import { ambientRuntimeToolEstimate } from "./context-pressure-tools.js";
 import { mcpManager } from "./mcp.js";
 import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
 import { draftUserPiMessage } from "./generation-messages.js";
+import { RecentChatCache } from "./recent-chat-cache.js";
 
-const generationProfiles = new Map<string, GenerationContextProfile>();
+/**
+ * Profiles are kept for the chats used most recently. An evicted chat's next
+ * estimate rebuilds the ambient profile, and its next generation re-registers
+ * the exact one, so the cap bounds memory without losing correctness.
+ */
+const RECENT_CHAT_PROFILE_LIMIT = 16;
+
+const generationProfiles = new RecentChatCache<GenerationContextProfile>(RECENT_CHAT_PROFILE_LIMIT);
 
 /**
  * Callers register right after the runtime applied AGENTS.md to `options`
@@ -55,6 +64,11 @@ export function rememberChatContextProfile(
   generationProfiles.set(chatId, createGenerationContextProfile(options, scope));
 }
 
+/**
+ * Not LRU-bounded: evicting a refresh would show a still-warm prompt cache as
+ * expired. Each entry is three short fields for a chat cache warming touched,
+ * and it is released when the chat is deleted.
+ */
 const promptCacheRefreshes = new Map<string, PromptCacheRefresh>();
 
 /** Cache warming refreshed this chat's cache; ambient reads keep the later expiry. */
@@ -73,7 +87,7 @@ interface AmbientProfile {
   key: string;
   options: GenerationContextOptions;
 }
-const ambientProfiles = new Map<string, AmbientProfile>();
+const ambientProfiles = new RecentChatCache<AmbientProfile>(RECENT_CHAT_PROFILE_LIMIT);
 
 interface JournalSnapshot {
   at: number;
@@ -150,14 +164,18 @@ async function ambientContextOptions(
   const { workspaceId, workspace, folderPath, permission, instructionRoots } =
     await currentInstructionScope(chat.workspaceId);
   const instructionFingerprint = await agentsInstructionFingerprint(instructionRoots);
-  const key = `${contextWindow}:${supportsImages}:${workspaceId ?? ""}:${folderPath ?? ""}:${permission}:${instructionFingerprint}`;
+  const key = `${contextWindow}:${supportsImages}:${workspaceId ?? ""}:${folderPath ?? ""}:${permission}:${instructionFingerprint}:${JSON.stringify(workspace?.disabledSkills ?? [])}`;
   // Codemode turns declare codemode/tool_search instead of MCP tools (except
   // "Always visible" servers); other turns declare the MCP tools this process
   // already built (never connecting).
   const codemode = Boolean(workspaceId && folderPath) && permission !== "none";
   const withRuntimeTools = async (options: GenerationContextOptions): Promise<GenerationContextOptions> => {
     const mcpTools = await configStore.listMcpServers()
-      .then((servers) => mcpManager.peekBuiltTools(servers.filter((server) => server.enabled && mcpServerOffersTools(server)).map((server) => server.id)))
+      .then((servers) => mcpManager.peekBuiltTools(
+        withoutWorkspaceDisabledMcpServers(servers, workspace?.disabledMcpServerIds)
+          .filter((server) => server.enabled && mcpServerOffersTools(server))
+          .map((server) => server.id),
+      ))
       .catch(() => []);
     const extra = ambientRuntimeToolEstimate({ codemode, mcpTools });
     if (!extra.length) return options;
@@ -198,6 +216,7 @@ async function ambientContextOptions(
     skillsEnabled,
     skillSnapshot,
     new Set(tools.map((tool) => tool.name)),
+    workspace?.noWorkspace === true,
   );
   const systemPrompt = await withAgentsInstructionsEstimate(hostPrompt, instructionRoots);
   const options: GenerationContextOptions = {
@@ -222,10 +241,17 @@ async function journalMessages(
   if (cached && Date.now() - cached.at < JOURNAL_SNAPSHOT_TTL_MS) {
     return cached.messages;
   }
+  if (cached) journalSnapshots.delete(chatId);
   const opened = await piCompactionSessionStore.openChatIfEligible(chatId, { createdAt });
   if (!opened.session) return undefined;
   const context = await opened.session.buildContext();
-  journalSnapshots.set(chatId, { at: Date.now(), messages: context.messages });
+  const snapshot: JournalSnapshot = { at: Date.now(), messages: context.messages };
+  journalSnapshots.set(chatId, snapshot);
+  // A snapshot is only useful while the composer is typing; release the whole
+  // message list once it expires instead of holding it until chat delete.
+  setTimeout(() => {
+    if (journalSnapshots.get(chatId) === snapshot) journalSnapshots.delete(chatId);
+  }, JOURNAL_SNAPSHOT_TTL_MS).unref();
   return context.messages;
 }
 

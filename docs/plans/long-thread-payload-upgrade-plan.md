@@ -2,6 +2,8 @@
 
 Reconciliation (2026-10-19, main `99df8a92a`): the proposals below are the historical audit, not a current defect list. Remote compression and stream-journal coalescing have landed; see [compression audit](../performance/compression-format-audit-2026-10-18.md). Measured desktop rendering now belongs to H4 in [the harness upgrade plan](aiden-harness-quality-upgrade-plan.md); transport/loading remains coordinated with cache-first loading. No packaged performance acceptance is claimed.
 
+Update (2026-10-29): a run longer than 200 timeline steps used to lose its saved timeline, because the projector had no cap while every reader rejects more than 200 steps. The projector now publishes a bounded timeline (`boundGenerationTimelineSteps` in `renderer/shared/generation-timeline.ts`); see the `timeline` event in [aiden-remote-api-v1.md](../aiden-remote-api-v1.md).
+
 Status: planned; first cut shipped (no-op streaming timeline republish)  
 Date: 2026-08-30  
 Inspiration: T3 Code PRs `#4006`, `#4622`, `#4705`, `#4788`, `#4791`, `#6675` (context only; Aiden’s architecture does not map 1:1)
@@ -36,7 +38,7 @@ This plan ranks upgrades that fit **this** codebase. Do not invent T3 subsystems
 | Don’t persist full `tool.updated` stdout; keep a one-line summary until `tool.completed` | **Already the transcript model.** Residual bug: no-op `toolRunning` republishes. First cut below. | T3 `#6675` |
 | Project activity payloads on the wire | **Mostly done.** Remote chat GET already drops `pi`, reasoning, attachment bytes, raw tool data. Desktop `chats:get` still ships full attachment bodies. | T3 `#4622` |
 | Gzip HTTP snapshots / `permessage-deflate` | **Partial analog.** No WebSocket. HTTP/SSE are uncompressed. gzip for Remote JSON is a product/compat decision (native clients must opt in). | T3 `#4788`, `#4705` |
-| Don’t rewrite a full local thread cache on every streaming tick | **Desktop chat file: already terminal-only.** Remote stream journal **does** rewrite the full event array at stream cadence. iOS/Android chat cache does **not**. | T3 `#4006` |
+| Don’t rewrite a full local thread cache on every streaming tick | **Desktop chat file: already terminal-only.** Remote stream journal **no longer** rewrites finished streams at stream cadence: since 2026-10-29 it keeps finished streams in an archive file rewritten only when that set changes, and streaming writes (coalesced to 1 s) carry only unfinished streams and the turn index. iOS/Android chat cache does **not**. | T3 `#4006` |
 | Keep only the latest context-window / usage row in snapshots | **No T3-style activity history of usage.** Usage is a separate store (`usageStore.record` per assistant `message_end`). Snapshots do not accumulate context-window rows. | T3 `#4791` |
 | Transfer/size budget test | **Missing as a regression gate** for long chats / stream journals. First cut adds a projector budget. | — |
 

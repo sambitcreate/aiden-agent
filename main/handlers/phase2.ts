@@ -51,6 +51,7 @@ import {
   presetServerId,
 } from "../services/mcp-presets.js";
 import { skillRegistry } from "../services/skill-registry-main.js";
+import { workspaceSkillChoices } from "../services/skill-registry.js";
 import { transcribeCloud } from "../services/transcription.js";
 import { geminiLiveTranscription } from "../services/gemini-live-transcription.js";
 import { asString } from "./voice-codec.js";
@@ -358,6 +359,10 @@ export function registerPhase2Handlers(): void {
   });
   ipcMain.handle("skills:catalog", async (_event, workspaceId: unknown) =>
     skillRegistry.catalog(asString(workspaceId, "workspaceId")),
+  );
+  // Every skill a workspace could switch off, including ones already off there.
+  ipcMain.handle("skills:workspaceChoices", async (_event, workspaceId: unknown) =>
+    workspaceSkillChoices(await skillRegistry.snapshot(asString(workspaceId, "workspaceId"))),
   );
   // Compatibility alias with the safe workspace-id contract. Renderer paths
   // are never accepted as discovery authority.

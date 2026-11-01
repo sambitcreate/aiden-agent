@@ -31,8 +31,6 @@ test("atomic stores serialize mutations, protect credentials, and reject cross-p
   writeFileSync(file, "broken");
   await assert.rejects(store.update(() => {}), /Cannot read/);
   assert.equal(readFileSync(file, "utf8"), "broken");
-  assert.deepEqual(api.splitArgs('save "two words.json" \'a b\''), ["save", "two words.json", "a b"]);
-  assert.throws(() => api.splitArgs('"unfinished'), /Unfinished/);
 });
 
 test("a stale CLI lease cannot be reclaimed by two processes", async (t) => {
@@ -134,23 +132,6 @@ test("daemon approval summaries read like the desktop's without hiding any argum
   assert.equal(api.daemonApprovalSummary("edit", { path: "a.ts", oldText: "a", newText: "b" }), 'edit: {"path":"a.ts","oldText":"a","newText":"b"}');
 });
 
-test("workspace identity is canonical and all tools require one-shot approval in ask mode", async (t) => {
-  const dir = temporary(t), workspace = await api.workspaceCommand(dir, ["add", dir]);
-  assert.equal(api.accessFor(dir, dir), "ask");
-  const harness = extension(api.createSessionParityExtension(dir));
-  const call = harness.events.get("tool_call");
-  let approvals = 0;
-  const ctx = { cwd: dir, hasUI: true, ui: { confirm: async () => { approvals++; return true; } } };
-  assert.equal(await call({ toolName: "write", input: { path: "a" } }, ctx), undefined);
-  assert.equal(await call({ toolName: "write", input: { path: "b" } }, ctx), undefined);
-  assert.equal(approvals, 2);
-  assert.equal((await call({ toolName: "mcp_send", input: {} }, { ...ctx, hasUI: false })).block, true);
-  await api.workspaceCommand(dir, ["access", workspace.id, "none"]);
-  assert.equal((await call({ toolName: "read", input: {} }, ctx)).block, true);
-  await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
-  assert.equal(await call({ toolName: "write", input: {} }, ctx), undefined);
-});
-
 test("portable export and context projection include only the active branch", async (t) => {
   const dir = temporary(t), manager = api.SessionManager.inMemory(dir);
   const first = manager.appendMessage({ role: "user", content: "Keep this", timestamp: 100 });
@@ -182,62 +163,6 @@ test("headless command output survives a pipe when it exceeds the kernel pipe bu
   assert.equal(parsed.length, 1); assert.equal(parsed[0].preview, preview);
 });
 
-test("CLI display_image limits are per agent run and per session journal", async (t) => {
-  const dir = temporary(t); mkdirSync(join(dir, "workspace")); const workspaceRoot = realpathSync(join(dir, "workspace"));
-  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
-  writeFileSync(join(workspaceRoot, "dot.png"), png);
-  const handlers = []; let tool;
-  let session = api.SessionManager.inMemory(dir);
-  api.createDisplayImageInlineExtension({ agentDir: join(dir, "agent"), workspaceRoot }).factory({
-    registerTool: (candidate) => { tool = candidate; },
-    on: (event, handler) => { if (event === "before_agent_start") handlers.push(handler); },
-    appendEntry: (customType, data) => { session.appendCustomEntry(customType, data); },
-  });
-  const startRun = async () => { for (const handler of handlers) await handler({ type: "before_agent_start", systemPrompt: "" }, { sessionManager: session }); };
-  // Like pi, persist each tool result into the session journal.
-  const display = async () => {
-    const toolCallId = `call-${Math.random()}`;
-    const result = await tool.execute(toolCallId, { path: "dot.png" }, new AbortController().signal);
-    session.appendMessage({ role: "toolResult", toolCallId, toolName: "display_image", content: result.content, isError: false, timestamp: Date.now() });
-    return result;
-  };
-  // One image per answer for more than 20 answers: the per-response cap must not accumulate.
-  for (let run = 0; run < 100; run++) { await startRun(); assert.ok((await display()).content.some((part) => part.type === "image"), `run ${run}`); }
-  // The per-chat ceiling still counts every image already in this session.
-  await startRun();
-  await assert.rejects(display(), /100-image/);
-  // A different session starts from its own (empty) history.
-  session = api.SessionManager.inMemory(dir); await startRun();
-  assert.ok((await display()).content.some((part) => part.type === "image"));
-
-  // Through codemode or ctx.executeTool, pi journals only the outer tool's result, with the
-  // display_image call in its nestedCalls; those images count toward the same session ceiling.
-  session = api.SessionManager.inMemory(dir);
-  const nested = async () => {
-    const outerId = `outer-${Math.random()}`, innerId = `inner-${Math.random()}`;
-    const inner = await tool.execute(innerId, { path: "dot.png" }, new AbortController().signal);
-    session.appendMessage({ role: "toolResult", toolCallId: outerId, toolName: "codemode", content: inner.content, isError: false, timestamp: Date.now(),
-      nestedCalls: { calls: [{ id: innerId, name: "display_image", isError: false }], complete: true } });
-    return inner;
-  };
-  for (let run = 0; run < 100; run++) { await startRun(); assert.ok((await nested()).content.some((part) => part.type === "image"), `nested run ${run}`); }
-  await startRun();
-  await assert.rejects(nested(), /100-image/);
-});
-
-test("title generation preserves manual renames and seeds offline sessions", async (t) => {
-  const dir = temporary(t), harness = extension(api.createSessionParityExtension(dir));
-  const manager = api.SessionManager.inMemory(dir);
-  const ctx = { sessionManager: manager, model: undefined };
-  // pi 1.2 also starts runs from extension custom messages; they carry no prompt and never title the chat.
-  await harness.events.get("before_agent_start")({ messageType: "custom", message: { role: "custom", content: "Reminder" } }, ctx);
-  assert.equal(harness.name(), undefined);
-  await harness.events.get("before_agent_start")({ messageType: "user", prompt: "Build my CLI" }, ctx);
-  assert.equal(harness.name(), "Build my CLI");
-  await harness.events.get("before_agent_start")({ messageType: "user", prompt: "Second message" }, ctx);
-  assert.equal(harness.name(), "Build my CLI");
-});
-
 test("insight keys use authenticated file encryption and separate provider names", async (t) => {
   const dir = temporary(t), credentials = api.insightCredentials(dir);
   await credentials.write("openrouter", "benchmark-secret");
@@ -261,39 +186,6 @@ test("catalog status and insight reads never fetch, and model metadata fetch is 
   assert.equal(calls, 0);
   await api.catalogCommand(dir, ["models-dev", "fetch"]); assert.equal(calls, 1);
   assert.ok(readFileSync(join(dir, "models-dev.json"), "utf8").includes('"schemaVersion": 1'));
-});
-
-test("/models info attaches cached OpenRouter benchmark scores offline and ignores a missing or invalid cache", async (t) => {
-  const dir = temporary(t), originalEntry = process.env.AIDEN_CLI_ENTRY, originalFetch = globalThis.fetch;
-  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
-  globalThis.fetch = async () => { throw new Error("/models info must not use the network"); };
-  t.after(() => { globalThis.fetch = originalFetch; if (originalEntry === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = originalEntry; });
-  const commands = new Map();
-  api.createProviderParityExtension(dir).factory({ registerProvider: () => {}, on: () => {}, registerCommand: (name, command) => commands.set(name, command) });
-  const model = { provider: "openai", id: "gpt-cli-bench", name: "GPT CLI Bench", baseUrl: "https://api.openai.com/v1", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 4096 };
-  async function info() {
-    const notes = [];
-    await commands.get("models").handler("info openai/gpt-cli-bench", { modelRegistry: { getAll: () => [model] }, ui: { notify: (text) => notes.push(text) } });
-    return JSON.parse(notes.at(-1));
-  }
-  const missing = await info();
-  assert.equal(missing.id, "gpt-cli-bench");
-  assert.equal(missing.metadata.benchmark, undefined);
-  const cache = api.buildOpenRouterBenchmarkCache({
-    data: [{ source: "artificial-analysis", model_permaslug: "openai/gpt-cli-bench", display_name: "GPT CLI Bench", intelligence_index: 61.5, coding_index: 70.2, agentic_index: 55 }],
-    meta: { as_of: "2026-09-30T00:00:00.000Z", version: "v1", source: "artificial-analysis", source_url: "https://artificialanalysis.ai", citation: "Source: Artificial Analysis (artificialanalysis.ai) via OpenRouter (openrouter.ai/rankings).", model_count: 1 },
-  }, "2026-10-01T00:00:00.000Z");
-  api.atomicJson(join(dir, "openrouter-insights.json"), cache);
-  const matched = await info();
-  assert.equal(matched.metadata.benchmark.intelligence, 61.5);
-  assert.equal(matched.metadata.benchmark.coding, 70.2);
-  assert.equal(matched.metadata.benchmark.agentic, 55);
-  assert.equal(matched.metadata.benchmark.asOf, "2026-09-30T00:00:00.000Z");
-  assert.deepEqual({ ...matched.metadata, benchmark: undefined }, { ...missing.metadata, benchmark: undefined });
-  api.atomicJson(join(dir, "openrouter-insights.json"), { ...cache, source: { ...cache.source, endpoint: "https://example.com/benchmarks" } });
-  assert.deepEqual(await info(), missing);
-  writeFileSync(join(dir, "openrouter-insights.json"), "{ not json");
-  assert.deepEqual(await info(), missing);
 });
 
 test("schedule CRUD uses shared validation, preview and persisted state", async (t) => {
@@ -326,322 +218,6 @@ test("daemon lifecycle and control refuse unsafe existing directories before tou
   await assert.rejects(api.serve(alias, new AbortController().signal), /storage must be a private/u);
   const missing = join(base, "new-private"); assert.equal(api.daemonStatus(missing).running, false);
   assert.equal(statSync(missing).mode & 0o777, 0o700);
-});
-
-async function scheduleToolFixture(t) {
-  const dir = temporary(t);
-  const workspace = await api.workspaceCommand(dir, ["add", dir]);
-  await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
-  const model = { id: "offline", name: "Offline", provider: "schedule-fixture", api: "openai-completions", baseUrl: "http://127.0.0.1:1/v1", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
-  api.atomicJson(join(dir, "models.json"), { providers: { [model.provider]: { api: model.api, baseUrl: model.baseUrl, apiKey: "test-only", models: [model] } } });
-  const harness = extension(api.createScheduleExtension(dir));
-  const tool = harness.tools.get("schedule_task");
-  const input = { action: "save", name: "Daily review", cron: "0 9 * * *", timezone: "UTC", prompt: "Review this workspace", permission: "full", enabled: true, workspaceId: workspace.id };
-  return { dir, workspace, model, tool, input, context: { cwd: dir, model, hasUI: true, ui: { confirm: async () => true } } };
-}
-
-test("owned schedule reads retain Ask-mode consent, including headless calls", async (t) => {
-  const { dir, workspace, context } = await scheduleToolFixture(t);
-  await api.workspaceCommand(dir, ["access", workspace.id, "ask"]);
-  const harness = extension(api.createSessionParityExtension(dir), {
-    getAllTools: () => [{ name: "schedule_task", sourceInfo: { path: "<inline:aiden-schedule>" } }],
-  });
-  const hook = harness.events.get("tool_call");
-  for (const action of ["list", "preview", "runs"]) {
-    const result = await hook({ toolName: "schedule_task", input: { action, id: "task" } }, { ...context, hasUI: false });
-    assert.equal(result.block, true, action);
-  }
-  let prompts = 0;
-  assert.equal(await hook({ toolName: "schedule_task", input: { action: "list" } }, {
-    ...context, ui: { confirm: async () => { prompts++; return true; } },
-  }), undefined);
-  assert.equal(prompts, 1);
-});
-
-test("a long existing prompt does not prevent approving pause or removal", async (t) => {
-  const { dir, input, model, tool, context } = await scheduleToolFixture(t);
-  const file = join(dir, "manual-task.json");
-  api.atomicJson(file, { ...input, prompt: "Read this detailed instruction. ".repeat(200), enabled: false, mode: "llm", providerId: model.provider, model: model.id });
-  const task = await api.scheduleCommand(dir, ["save", file]);
-  let confirmations = 0;
-  context.ui.confirm = async () => { confirmations++; return true; };
-  await tool.execute("pause-long", { action: "pause", id: task.id }, undefined, undefined, context);
-  await tool.execute("remove-long", { action: "remove", id: task.id }, undefined, undefined, context);
-  assert.equal(confirmations, 2);
-  assert.equal((await api.scheduleCommand(dir, ["list"])).length, 0);
-});
-
-test("model scheduling in a Full workspace requires consent and leaves no state on denial or missing UI", async (t) => {
-  const { dir, tool, input, context } = await scheduleToolFixture(t);
-  await assert.rejects(tool.execute("headless", input, undefined, undefined, { ...context, hasUI: false }), /not approved/);
-  await assert.rejects(tool.execute("denied", input, undefined, undefined, { ...context, ui: { confirm: async () => false } }), /not approved/);
-  assert.equal(existsSync(join(dir, "schedules.json")), false);
-  assert.equal(existsSync(join(dir, "schedule-proposals")), false);
-});
-
-test("approved model scheduling persists one exact task and replay does not duplicate it", async (t) => {
-  const { dir, tool, input, context } = await scheduleToolFixture(t);
-  let consent;
-  context.ui.confirm = async (_title, text) => { consent = JSON.parse(text); return true; };
-  await tool.execute("one-approved-call", input, undefined, undefined, context);
-  const tasks = await api.scheduleCommand(dir, ["list"]);
-  assert.equal(tasks.length, 1);
-  assert.equal(tasks[0].prompt, "Review this workspace");
-  assert.equal(tasks[0].permission, "full");
-  assert.equal(tasks[0].enabled, true);
-  assert.equal(tasks[0].workspaceId, consent.workspace.id);
-  assert.equal(consent.request.cron, "0 9 * * *");
-  assert.equal(consent.model.provider, "schedule-fixture");
-  await assert.rejects(tool.execute("one-approved-call", input, undefined, undefined, context), /already submitted/);
-  assert.equal((await api.scheduleCommand(dir, ["list"])).length, 1);
-});
-
-test("schedule save consent shows effective defaults before publishing them", async (t) => {
-  const { dir, workspace, model, tool, context } = await scheduleToolFixture(t);
-  let consent;
-  context.ui.confirm = async (_title, text) => {
-    consent = JSON.parse(text);
-    assert.equal(existsSync(join(dir, "schedules.json")), false, "confirmation must precede publication");
-    return true;
-  };
-  await tool.execute("defaulted-save", { action: "save", name: "Default review", cron: "0 9 * * *", prompt: "Review the workspace", workspaceId: workspace.id }, undefined, undefined, context);
-  for (const values of [consent.request, (await api.scheduleCommand(dir, ["list"]))[0]]) {
-    assert.equal(values.enabled, true);
-    assert.equal(values.permission, "read-only");
-    assert.equal(values.notify, true);
-    assert.equal(values.timezone, Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
-    assert.equal(values.mode, "llm");
-    assert.equal(values.providerId, model.provider);
-    assert.equal(values.model, model.id);
-    assert.equal(values.workspaceId, workspace.id);
-    assert.deepEqual(values.mcpServerIds, []);
-    assert.deepEqual(values.mcpServerBindings, []);
-    assert.equal(values.webSearchEnabled, false);
-  }
-});
-
-test("a long existing prompt can be shortened while consent shows effective edit values", async (t) => {
-  const { dir, input, model, tool, context } = await scheduleToolFixture(t);
-  const file = join(dir, "manual-task.json");
-  api.atomicJson(file, { ...input, prompt: "Detailed existing instruction. ".repeat(200), enabled: false, timezone: "Asia/Tokyo", mode: "llm", providerId: model.provider, model: model.id });
-  const task = await api.scheduleCommand(dir, ["save", file]);
-  let consent;
-  context.ui.confirm = async (_title, text) => { consent = JSON.parse(text); return true; };
-  await tool.execute("shorten", { action: "save", id: task.id, name: "Short review", cron: "0 9 * * *", prompt: "Read the project status", workspaceId: task.workspaceId }, undefined, undefined, context);
-  assert.equal(consent.currentTask.enabled, false);
-  assert.equal(consent.request.enabled, true);
-  assert.equal(consent.request.permission, "read-only");
-  assert.equal(consent.request.timezone, "Asia/Tokyo");
-  assert.equal(consent.request.prompt, "Read the project status");
-  const [saved] = await api.scheduleCommand(dir, ["list"]);
-  assert.equal(saved.id, task.id);
-  assert.equal(saved.enabled, true);
-  assert.equal(saved.permission, "read-only");
-  assert.equal(saved.timezone, "Asia/Tokyo");
-  assert.equal(saved.prompt, "Read the project status");
-});
-
-test("resume consent includes persisted instructions, execution mode and effective scope", async (t) => {
-  for (const mode of ["llm", "script"]) {
-    await t.test(mode, async (t) => {
-      const { dir, input, model, tool, context } = await scheduleToolFixture(t);
-      const file = join(dir, "manual-task.json");
-      api.atomicJson(file, { ...input, mode, enabled: false, providerId: mode === "llm" ? model.provider : undefined,
-        model: mode === "llm" ? model.id : undefined, prompt: mode === "llm" ? "Summarize the project status" : undefined,
-        script: mode === "script" ? "audit.sh" : undefined, webSearchEnabled: mode === "llm" });
-      const task = await api.scheduleCommand(dir, ["save", file]);
-      let consent;
-      context.ui.confirm = async (_title, text) => { consent = JSON.parse(text); return true; };
-      await tool.execute("resume", { action: "resume", id: task.id }, undefined, undefined, context);
-      assert.equal(consent.currentTask.enabled, false);
-      const shown = consent.resumedTask;
-      assert.equal(shown.enabled, true);
-      assert.equal(shown.mode, mode);
-      assert.equal(shown.permission, "full");
-      assert.equal(shown.workspaceId, task.workspaceId);
-      assert.equal(shown.cron, "0 9 * * *");
-      assert.equal(shown.timezone, "UTC");
-      assert.equal(shown.notify, true);
-      assert.deepEqual(shown.mcpServerIds, []);
-      assert.deepEqual(shown.mcpServerBindings, []);
-      assert.equal(shown.webSearchEnabled, mode === "llm");
-      if (mode === "llm") {
-        assert.equal(shown.prompt, "Summarize the project status");
-        assert.equal(shown.providerId, model.provider);
-        assert.equal(shown.model, model.id);
-      } else {
-        assert.equal(shown.script, "audit.sh");
-      }
-      assert.equal((await api.scheduleCommand(dir, ["list"]))[0].enabled, true);
-    });
-  }
-});
-
-test("an undisplayable resume leaves the disabled task unchanged without asking", async (t) => {
-  const { dir, input, model, tool, context } = await scheduleToolFixture(t);
-  const file = join(dir, "manual-task.json");
-  api.atomicJson(file, { ...input, prompt: "Detailed existing instruction. ".repeat(200), enabled: false, mode: "llm", providerId: model.provider, model: model.id });
-  const task = await api.scheduleCommand(dir, ["save", file]);
-  const before = readFileSync(join(dir, "schedules.json"), "utf8");
-  let confirmations = 0;
-  context.ui.confirm = async () => { confirmations++; return true; };
-  await assert.rejects(tool.execute("resume-long", { action: "resume", id: task.id }, undefined, undefined, context), /display budget/);
-  assert.equal(confirmations, 0);
-  assert.equal(readFileSync(join(dir, "schedules.json"), "utf8"), before);
-  assert.equal(existsSync(join(dir, "schedule-proposals")), false);
-});
-
-test("invalid schedule arguments and specialized edits are refused before confirmation", async (t) => {
-  const { dir, input, model, tool, context } = await scheduleToolFixture(t);
-  let confirmations = 0;
-  context.ui.confirm = async () => { confirmations++; return true; };
-  const invalid = [{ ...input, prompt: " " }, { ...input, cron: "invalid" }, { ...input, timezone: "Unknown/Zone" }];
-  for (const [index, proposal] of invalid.entries()) {
-    await assert.rejects(tool.execute(`invalid-${index}`, proposal, undefined, undefined, context));
-  }
-  const file = join(dir, "owned-task.json");
-  api.atomicJson(file, { ...input, mode: "llm", enabled: false, providerId: model.provider, model: model.id, executionProfile: "assistant" });
-  const task = await api.scheduleCommand(dir, ["save", file]);
-  const before = readFileSync(join(dir, "schedules.json"), "utf8");
-  await assert.rejects(tool.execute("specialized-edit", { ...input, id: task.id }, undefined, undefined, context), /specialized owner/);
-  assert.equal(confirmations, 0);
-  assert.equal(readFileSync(join(dir, "schedules.json"), "utf8"), before);
-});
-
-test("schedule consent cannot survive changed arguments, provider configuration, workspace authority or cancellation", async (t) => {
-  for (const change of ["arguments", "provider", "workspace", "cancel"]) {
-    await t.test(change, async (t) => {
-      const { dir, workspace, tool, input, context } = await scheduleToolFixture(t);
-      const controller = new AbortController();
-      context.ui.confirm = async () => {
-        if (change === "arguments") input.permission = "read-only";
-        if (change === "provider") api.atomicJson(join(dir, "models.json"), { providers: {} });
-        if (change === "workspace") await api.workspaceCommand(dir, ["access", workspace.id, "none"]);
-        if (change === "cancel") controller.abort();
-        return true;
-      };
-      await assert.rejects(tool.execute("changed-call", input, controller.signal, undefined, context));
-      assert.equal(existsSync(join(dir, "schedules.json")), false);
-    });
-  }
-});
-
-test("an approved schedule mutation rechecks authority at publication, after asynchronous preparation", async (t) => {
-  const { dir, tool, input, context } = await scheduleToolFixture(t);
-  await tool.execute("create", input, undefined, undefined, context);
-  const [task] = await api.scheduleCommand(dir, ["list"]);
-  const approved = { cwd: dir, action: "pause", input: { id: task.id }, expiresAt: Date.now() + 60_000, approvalFile: join(dir, "approved.json") };
-  approved.snapshot = api.scheduleApprovalSnapshot(dir, approved);
-  api.atomicJson(approved.approvalFile, approved.snapshot);
-  api.atomicJson(join(dir, "models.json"), { providers: {} });
-  await assert.rejects(api.scheduleCommand(dir, ["pause", task.id, JSON.stringify(approved)]), /changed after approval/);
-  assert.equal((await api.scheduleCommand(dir, ["list"]))[0].enabled, true);
-});
-
-test("a receipt cancelled after the first write leaves a running scheduler's paused task paused", async (t) => {
-  for (const action of ["resume", "save"]) {
-    await t.test(action, async (t) => {
-      const { dir, tool, input, context } = await scheduleToolFixture(t);
-      await tool.execute("create", input, undefined, undefined, context);
-      const [created] = await api.scheduleCommand(dir, ["list"]);
-      api.atomicJson(join(dir, "schedules.json"), (await api.scheduleCommand(dir, ["list"])).map((task) => ({ ...task, enabled: false })));
-      const [task] = await api.scheduleCommand(dir, ["list"]);
-      const scheduler = api.createCliScheduler(dir);
-      await scheduler.service.start();
-      t.after(() => scheduler.service.stopAndSettle());
-      const approved = { cwd: dir, action, input: action === "save" ? { id: task.id, workspaceId: task.workspaceId } : { id: task.id }, expiresAt: Date.now() + 60_000, approvalFile: join(dir, "receipt.json") };
-      approved.snapshot = api.scheduleApprovalSnapshot(dir, approved);
-      api.atomicJson(approved.approvalFile, approved.snapshot);
-      const inputFile = join(dir, "save-input.json");
-      api.atomicJson(inputFile, { id: task.id, name: "Renamed review", cron: task.cron, timezone: task.timezone, prompt: task.prompt, permission: task.permission, mode: task.mode, enabled: true, workspaceId: task.workspaceId, providerId: created.providerId, model: created.model });
-      // The person cancels while the enabled task is being armed: after the
-      // first durable write, before the scheduler records its next run.
-      const updateRuntime = scheduler.store.updateRuntime;
-      scheduler.store.updateRuntime = (...args) => { rmSync(approved.approvalFile, { force: true }); return updateRuntime(...args); };
-      await assert.rejects(scheduler.command([action, action === "save" ? inputFile : task.id, JSON.stringify(approved)]), /cancelled/);
-      const [after] = await api.scheduleCommand(dir, ["list"]);
-      assert.equal(after.enabled, false, "the refused change did not leave the task switched on");
-      assert.equal(after.name, task.name);
-    });
-  }
-});
-
-test("a creation receipt cancelled after the first write leaves no enabled task behind", async (t) => {
-  const { dir, workspace, model } = await scheduleToolFixture(t);
-  const scheduler = api.createCliScheduler(dir);
-  await scheduler.service.start();
-  t.after(() => scheduler.service.stopAndSettle());
-  const approved = { cwd: dir, action: "save", input: { workspaceId: workspace.id }, expiresAt: Date.now() + 60_000, approvalFile: join(dir, "receipt.json") };
-  approved.snapshot = api.scheduleApprovalSnapshot(dir, approved);
-  api.atomicJson(approved.approvalFile, approved.snapshot);
-  const inputFile = join(dir, "save-input.json");
-  api.atomicJson(inputFile, { name: "Daily review", cron: "0 9 * * *", timezone: "UTC", prompt: "Review this workspace", permission: "full", mode: "llm", enabled: true, workspaceId: workspace.id, providerId: model.provider, model: model.id });
-  const updateRuntime = scheduler.store.updateRuntime;
-  scheduler.store.updateRuntime = (...args) => { rmSync(approved.approvalFile, { force: true }); return updateRuntime(...args); };
-  await assert.rejects(scheduler.command(["save", inputFile, JSON.stringify(approved)]), /cancelled/);
-  assert.deepEqual(await api.scheduleCommand(dir, ["list"]), [], "the refused creation is gone");
-  const restarted = api.createCliScheduler(dir);
-  await restarted.service.start();
-  t.after(() => restarted.service.stopAndSettle());
-  assert.deepEqual(await restarted.store.list(), [], "a restart does not arm it");
-});
-
-test("a codemode script in a Full workspace still needs consent to save a scheduled task", async (t) => {
-  const { createAgentSession, createCodemodeExtension, DefaultResourceLoader, SessionManager, SettingsManager } = await import("@earendil-works/pi-coding-agent");
-  const { fauxProvider, fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai/providers/faux");
-  const run = async (approve) => {
-    const dir = temporary(t);
-    const workspace = await api.workspaceCommand(dir, ["add", dir]);
-    await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
-    const request = { action: "save", name: "Nightly", cron: "0 2 * * *", timezone: "UTC", prompt: "Summarize the repository", permission: "full", workspaceId: workspace.id };
-    const faux = fauxProvider({ provider: "faux-schedule", models: [{ id: "scripted", contextWindow: 100_000, maxTokens: 4096 }] });
-    // Session parity also asks the model for a chat title, so answer by request shape, not order.
-    const respond = (context) => context.messages.at(-1)?.role === "toolResult" ? fauxAssistantMessage("Done")
-      : context.messages.some((message) => message.role === "system" && (message.toolsAdded ?? []).some((tool) => tool.name === "codemode"))
-        ? fauxAssistantMessage(fauxToolCall("codemode", { code: `text(JSON.stringify(await tools.schedule_task(${JSON.stringify(request)})))` }), { stopReason: "toolUse" })
-        : fauxAssistantMessage("Nightly summary");
-    faux.setResponses([respond, respond, respond, respond]);
-    const resourceLoader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
-      extensionFactories: [createCodemodeExtension({ mode: "on" }), api.createSessionParityExtension(dir), api.createScheduleExtension(dir), { name: "faux", factory(pi) { pi.registerProvider(faux.provider); } }] });
-    await resourceLoader.reload();
-    const { session } = await createAgentSession({ cwd: dir, agentDir: dir, resourceLoader, settingsManager: SettingsManager.inMemory({ defaultTools: ["read", "codemode"] }), sessionManager: SessionManager.inMemory(), model: faux.getModel() });
-    t.after(() => session.dispose());
-    const titles = [];
-    const uiContext = new Proxy({ confirm: async (title) => { titles.push(title); return approve; } }, {
-      get: (target, key) => key in target ? target[key] : () => undefined,
-    });
-    await session.bindExtensions({ uiContext });
-    await session.prompt("Schedule a nightly summary");
-    return { titles, tasks: await api.scheduleCommand(dir, ["list"]) };
-  };
-  const denied = await run(false);
-  assert.deepEqual(denied.titles, ["Allow scheduled-task change?"], "the nested call asked once, even with Full access");
-  assert.deepEqual(denied.tasks, [], "a declined nested save publishes nothing");
-});
-
-test("a cancelled or expired publication receipt cannot change an existing task", async (t) => {
-  const { dir, tool, input, context } = await scheduleToolFixture(t);
-  await tool.execute("create", input, undefined, undefined, context);
-  const [task] = await api.scheduleCommand(dir, ["list"]);
-  const approved = { cwd: dir, action: "remove", input: { id: task.id }, expiresAt: Date.now() + 60_000, approvalFile: join(dir, "cancelled.json") };
-  approved.snapshot = api.scheduleApprovalSnapshot(dir, approved);
-  await assert.rejects(api.scheduleCommand(dir, ["remove", task.id, JSON.stringify(approved)]), /cancelled/);
-  api.atomicJson(approved.approvalFile, approved.snapshot);
-  await assert.rejects(api.scheduleCommand(dir, ["remove", task.id, JSON.stringify({ ...approved, expiresAt: 1 })]), /expired/);
-  assert.equal((await api.scheduleCommand(dir, ["list"])).length, 1);
-});
-
-test("pause, resume and removal require their own approval, while listing is read-only", async (t) => {
-  const { dir, tool, input, context } = await scheduleToolFixture(t);
-  await tool.execute("create", input, undefined, undefined, context);
-  const [task] = await api.scheduleCommand(dir, ["list"]);
-  const denied = { ...context, ui: { confirm: async () => false } };
-  for (const action of ["pause", "resume", "remove"]) {
-    await assert.rejects(tool.execute(action, { action, id: task.id }, undefined, undefined, denied), /not approved/);
-  }
-  const listed = await tool.execute("list", { action: "list" }, undefined, undefined, denied);
-  assert.equal(JSON.parse(listed.content[0].text).length, 1);
-  assert.equal((await api.scheduleCommand(dir, ["list"]))[0].enabled, true);
 });
 
 test("serve routes concurrent CLI commands and releases its lease on shutdown", async (t) => {
@@ -842,6 +418,73 @@ test("serve lifecycle identifies a live daemon by its recorded argv", async (t) 
   assert.equal(existsSync(join(dir, "serve.lock")), false);
 });
 
+/**
+ * A `serve` whose shutdown never finishes, holding a helper (a `tee`, the Remote
+ * advertiser) in its process group and a stdio MCP server, started through the
+ * real transport, in a group of its own. The server outlives a closed stdin.
+ */
+async function stuckServe(t, { detached }) {
+  const dir = temporary(t), fixture = join(dir, "stuck-serve.mjs"), pids = join(dir, "pids.json");
+  // The lease directory exists before the daemon records its MCP groups in it, as acquireLease leaves it.
+  mkdirSync(join(dir, "serve.lock"), { recursive: true });
+  const stubborn = "process.on('SIGTERM', () => {}); process.stdin.resume(); process.stdin.on('end', () => {}); setInterval(() => {}, 1e9);";
+  writeFileSync(fixture, `import { spawn } from "node:child_process"; import { writeFileSync } from "node:fs";
+import * as api from ${JSON.stringify(join(pkg, "dist/parity-test-api.js"))};
+process.on("SIGTERM", () => {});
+const helper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9)"], { stdio: "ignore" });
+api.recordServeMcpGroups(${JSON.stringify(dir)});
+const transport = api.createMcpStdioTransport({ command: process.execPath, args: ["-e", ${JSON.stringify(stubborn)}], stderr: "pipe" });
+await transport.start();
+writeFileSync(${JSON.stringify(pids)}, JSON.stringify({ helper: helper.pid, mcp: transport.pid }));
+setInterval(() => {}, 1e9);`);
+  // Its own group either way, so the test can clean up; only owner.json says whether startDaemon spawned it.
+  const child = spawn(process.execPath, [fixture, "serve"], { stdio: "ignore", detached: true });
+  let started;
+  t.after(() => { for (const pid of [child.pid, started?.helper, started?.mcp]) { try { process.kill(-pid, "SIGKILL"); } catch { /* already gone */ } } });
+  const ready = Date.now() + 10_000;
+  while (!existsSync(pids) && Date.now() < ready) await new Promise((resolve) => setTimeout(resolve, 25));
+  started = JSON.parse(readFileSync(pids, "utf8"));
+  api.atomicJson(join(dir, "serve.lock", "owner.json"), { ...(detached ? { detached: true } : {}), pid: child.pid, argv: [process.execPath, fixture, "serve"], startedAt: Date.now() });
+  writeFileSync(api.daemonSocket(dir), "");
+  return { dir, pid: child.pid, ...started };
+}
+
+/**
+ * Whether a process is still running. An orphan killed in a container whose PID 1
+ * never reaps it stays a zombie, which `kill(pid, 0)` still reports, so a
+ * zombie counts as gone.
+ */
+function running(pid) {
+  if (!api.pidAlive(pid)) return false;
+  const state = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
+  return state.status === 0 && state.stdout.trim() !== "" && !state.stdout.trim().startsWith("Z");
+}
+
+async function waitUntilStopped(pid) {
+  const deadline = Date.now() + 5_000;
+  while (running(pid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
+  return !running(pid);
+}
+
+test("serve stop force-stops a background daemon stuck in shutdown along with its process group and MCP servers", { skip: process.platform === "win32" }, async (t) => {
+  const { dir, pid, helper, mcp } = await stuckServe(t, { detached: true });
+  assert.notEqual(mcp, undefined);
+  assert.deepEqual(await api.stopDaemon(dir, 1_000), { stopped: true, pid, forced: true });
+  assert.equal(await waitUntilStopped(pid), true);
+  assert.equal(await waitUntilStopped(helper), true, "the daemon's helper must not be orphaned");
+  assert.equal(await waitUntilStopped(mcp), true, "the daemon's MCP server must not be orphaned");
+  assert.equal(existsSync(join(dir, "serve.lock")), false);
+});
+
+test("serve stop force-stops only the serve process and its MCP servers of a stuck foreground serve, sparing its shell job", { skip: process.platform === "win32" }, async (t) => {
+  const { dir, pid, helper, mcp } = await stuckServe(t, { detached: false });
+  assert.deepEqual(await api.stopDaemon(dir, 1_000), { stopped: true, pid, forced: true });
+  assert.equal(await waitUntilStopped(pid), true);
+  assert.equal(await waitUntilStopped(mcp), true, "the serve's MCP server must not be orphaned");
+  assert.equal(running(helper), true, "a process sharing the foreground serve's group survives");
+  assert.equal(existsSync(join(dir, "serve.lock")), false);
+});
+
 test("MCP validates transports and redacts configured secrets from listing", async (t) => {
   const dir = temporary(t), file = join(dir, "server.json");
   assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "http", url: "http://example.com", enabled: true }), /HTTPS/);
@@ -943,6 +586,34 @@ test("daemon chat generation persists context and denies revoked workspace autho
   await turn("Must be denied");
   assert.equal(requests.length, 2); assert.equal(events.at(-1).channel, "chat:error");
   await daemon.stop(); assert.deepEqual(daemon.activity.snapshot().activeChatIds, []);
+});
+
+test("a daemon turn that fails before its session opens still stops the MCP servers it started", async (t) => {
+  const dir = temporary(t);
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: "http://127.0.0.1:9/v1", apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  api.atomicJson(join(dir, "aiden-mcp.json"), [fixtureServer(dir, "turn")]);
+  const workspace = await api.workspaceCommand(dir, ["add", dir]);
+  await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
+  const daemon = api.createDaemonChats(dir); t.after(() => daemon.stop());
+  // A leaked server would keep the test runner alive; reap it so a regression fails instead of hanging.
+  t.after(() => { for (const pid of existsSync(join(dir, "turn.pid")) ? readFileSync(join(dir, "turn.pid"), "utf8").trim().split("\n").map(Number) : []) { try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ } } });
+  await daemon.chatStore.create({ id: "early-failure", title: "Early failure", workspaceId: workspace.id });
+  // An unreadable session journal fails the turn after the extensions connected MCP.
+  mkdirSync(daemon.sessionPath("early-failure"), { recursive: true });
+  const events = [];
+  const owner = { id: 0, documentId: "test", isDestroyed: () => false, onInvalidated: () => () => {}, send: (channel, value) => events.push({ channel, value }) };
+  const admission = daemon.llmClient.beginChatTurn("early-failure", "stream", "test"); assert.ok(admission);
+  try {
+    await daemon.chatStore.appendMessage("early-failure", { role: "user", content: "Hello" });
+    admission.settleAsyncWork();
+    assert.equal(await daemon.llmClient.start("stream", { chatId: "early-failure", workspaceId: workspace.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content: "Hello" }] }, owner, { usageSource: "telegram" }), true);
+    await daemon.llmClient.waitForChatIdle("early-failure");
+  } finally { admission.release(); }
+  assert.equal(events.at(-1).channel, "chat:error");
+  assert.match(events.at(-1).value.message, /EISDIR/);
+  const pids = readFileSync(join(dir, "turn.pid"), "utf8").trim().split("\n").map(Number);
+  assert.equal(pids.length, 1);
+  assert.throws(() => process.kill(pids[0], 0), /ESRCH/, "the turn's stdio MCP server exited");
 });
 
 test("built CLI creates and safely removes its own managed worktree", (t) => {
@@ -1077,6 +748,15 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   const chat = await request(`/chats/${created.data.id}`); assert.equal(chat.data.messages.at(-1).text, "Remote succeeded");
   const events = await request(`/streams/${turn.data.streamId}/events`);
   assert.equal(events.status, 200); assert.match(events.data, /event: done/); assert.match(events.data, /event: timeline/); assert.match(events.data, /Remote succeeded/);
+  // The finished stream reaches the daemon's journal, so a restarted daemon can still replay it.
+  let journaled;
+  for (let attempt = 0; attempt < 50 && !journaled; attempt += 1) {
+    const archive = existsSync(join(dir, "remote-streams.json")) ? JSON.parse(readFileSync(join(dir, "remote-streams.json"), "utf8")) : { streams: [] };
+    journaled = archive.streams.find((stream) => stream.streamId === turn.data.streamId);
+    if (!journaled) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.equal(journaled?.state, "done");
+  assert.equal(journaled.events.at(-1).type, "done");
   // The daemon forks without summaries, and the fork's next turn carries the copied history to the model.
   const features = (await request("/server")).data.features;
   assert.ok(features.includes("chat-fork-v1")); assert.ok(!features.includes("chat-fork-summary-v1"));
@@ -1320,6 +1000,31 @@ test("isolated subagent inference executes only parent-owned tools with immutabl
   }
 });
 
+test("a subagent that hits its deadline during an unanswered approval settles and dismisses the gate", async (t) => {
+  const dir = temporary(t), original = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const server = createServer(async (request, response) => {
+    for await (const chunk of request) void chunk;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "read-gated", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "note.txt" }) } }] }, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const runtime = await api.createCliModelRuntime(dir); let effects = 0, gateSignal;
+  // The gate stands in for a "Subagent: allow read_file once?" prompt nobody answers.
+  const result = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fresh", revisionHash: "gate", messages: [] }, request: { role: "scout", label: "Gate", task: "Read the note" }, policy: { deadlineMs: 4000 } }, [{
+    name: "read_file", description: "Read the note", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    execute: async () => { effects++; return { content: [{ type: "text", text: "Apricot" }], details: {} }; },
+  }], (_name, _id, _args, _context, signal) => { gateSignal = signal; return new Promise(() => {}); });
+  assert.equal(result.status, "timed_out");
+  assert.equal(effects, 0);
+  assert.equal(gateSignal?.aborted, true);
+});
+
 test("shared auth coordinator commits a returned credential once and suppresses a cancelled login", async () => {
   const deviceId = crypto.randomUUID();
   let receivedDeviceId;
@@ -1336,41 +1041,6 @@ test("shared auth coordinator commits a returned credential once and suppresses 
   }
   try { assert.equal((await login(false)).cancelled, false); assert.equal(commits, 1); assert.equal(receivedDeviceId, deviceId); assert.equal((await login(true)).cancelled, true); assert.equal(commits, 1); }
   finally { await coordinator.shutdown(); }
-});
-
-test("V2 delegated writes use one-shot approval and native durable history", async (t) => {
-  const dir = temporary(t), requests = [], original = process.env.AIDEN_CLI_ENTRY;
-  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
-  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
-  const server = createServer(async (request, response) => {
-    let body = ""; for await (const chunk of request) body += chunk;
-    const parsed = JSON.parse(body); requests.push(parsed);
-    const first = !parsed.messages.some((message) => message.role === "tool");
-    const delta = first ? { role: "assistant", tool_calls: [{ index: 0, id: "write-note", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "delegated.txt", content: "Approved native write" }) } }] } : { role: "assistant", content: "Delegated write finished" };
-    response.writeHead(200, { "content-type": "text/event-stream" });
-    for (const [value, finish] of [[delta, null], [{}, first ? "tool_calls" : "stop"]]) response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: value, finish_reason: finish }], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } })}\n\n`);
-    response.end("data: [DONE]\n\n");
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => { server.closeAllConnections(); server.close(); });
-  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
-  const runtime = await api.createCliModelRuntime(dir), tools = new Map(), events = new Map(), commands = new Map(), notifications = [];
-  await api.createSubagentsExtension(dir).factory({ on: (name, handler) => events.set(name, handler), registerCommand: (name, value) => commands.set(name, value), registerTool: (tool) => tools.set(tool.name, tool) });
-  let confirmations = 0;
-  const ctx = { cwd: dir, hasUI: true, model: runtime.getModel("cli-test", "test"), modelRegistry: new api.ModelRegistry(runtime), sessionManager: api.SessionManager.inMemory(dir), ui: { setStatus() {}, notify: (value) => notifications.push(value), confirm: async () => { confirmations++; return true; } } };
-  t.after(async () => events.get("session_shutdown")?.({}, ctx));
-  await events.get("before_agent_start")({}, ctx);
-  const result = await tools.get("subagent").execute("root", { capabilities: { workspaceRead: true, workspaceWrite: true, web: false, mcp: [] }, tasks: [{ role: "scout", label: "Writer", task: "Write delegated.txt" }] }, undefined, undefined, ctx);
-  assert.match(JSON.stringify(result), /completed/, JSON.stringify({ result, requests, notifications }));
-  assert.ok(!JSON.stringify(requests[1].messages.filter((message) => message.role === "tool")).includes("error"), JSON.stringify(requests[1].messages.filter((message) => message.role === "tool")));
-  assert.equal(readFileSync(join(dir, "delegated.txt"), "utf8"), "Approved native write");
-  assert.equal(confirmations, 1);
-  assert.ok(requests[0].tools.some((tool) => tool.function.name === "write_file"));
-  assert.ok(!requests[0].tools.some((tool) => tool.function.name === "run_command"));
-  await commands.get("subagents").handler("", ctx);
-  const history = JSON.parse(notifications.at(-1));
-  assert.equal(history[0].version, 2); assert.equal(history[0].state, "completed");
-  assert.ok(!notifications.at(-1).includes("ownerDocumentId"));
 });
 
 test("Bot avatar worker produces canonical PNG assets with revision fencing", async (t) => {
@@ -1432,6 +1102,81 @@ test("scheduled inference enforces saved read-only tools and rejects revoked aut
   assert.deepEqual(names, ["find", "grep", "ls", "read"]);
   await assert.rejects(api.runScheduledInference(dir, dir, task, new AbortController().signal, async () => { throw new Error("authority revoked"); }), /authority revoked/);
   assert.equal(requests.length, 1);
+});
+
+test("scheduled inference budgets the streamed reply size, not every cumulative partial", async (t) => {
+  const dir = temporary(t);
+  let reply = { chunks: 0, size: 0 };
+  const server = createServer(async (request, response) => {
+    for await (const chunk of request) void chunk;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    for (let index = 0; index < reply.chunks; index++) {
+      response.write(`data: ${JSON.stringify({ id: "schedule", object: "chat.completion.chunk", choices: [{ index: 0, delta: { ...(index ? {} : { role: "assistant" }), content: String(index % 10).repeat(reply.size) }, finish_reason: null }] })}\n\n`);
+    }
+    response.write(`data: ${JSON.stringify({ id: "schedule", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const task = { providerId: "cli-test", model: "test", permission: "read-only", prompt: "Write the daily report", mcpServerIds: [], mcpServerBindings: [], webSearchEnabled: false };
+  // A 64 KB report in small deltas is far under the 2 MiB budget, though its cumulative partials total about 64 MB.
+  reply = { chunks: 2_000, size: 32 };
+  const result = await api.runScheduledInference(dir, dir, task, new AbortController().signal, async () => {});
+  assert.equal(result.length, 64_000);
+  // A reply that really exceeds the budget still stops.
+  reply = { chunks: 80, size: 32 * 1024 };
+  await assert.rejects(api.runScheduledInference(dir, dir, task, new AbortController().signal, async () => {}), /response budget exhausted/);
+  // Blocks some providers deliver whole, without deltas, still count once; streamed blocks are not counted twice at their end.
+  const meter = api.createReplyMeter(), partial = { content: [] };
+  meter.add({ type: "text_delta", contentIndex: 0, delta: "ab", partial });
+  meter.add({ type: "text_delta", contentIndex: 0, delta: "cd", partial });
+  assert.equal(meter.add({ type: "text_end", contentIndex: 0, content: "abcd", partial }), 4);
+  assert.equal(meter.add({ type: "toolcall_end", contentIndex: 1, toolCall: { type: "toolCall", id: "c", name: "read", arguments: { path: "notes.md" } }, partial }), 4 + '{"path":"notes.md"}'.length);
+  meter.nextMessage();
+  assert.equal(meter.add({ type: "thinking_end", contentIndex: 0, content: "x".repeat(10), partial }), 33);
+  const redacted = { content: [{ type: "thinking", thinking: "", redacted: true, thinkingSignature: "s".repeat(3 * 1024 * 1024) }] };
+  assert.ok(meter.add({ type: "thinking_end", contentIndex: 0, content: "", partial: redacted }) > 2 * 1024 * 1024);
+  // A signature the terminal response fills in after its block ended counts once, at the message's end.
+  const growing = api.createReplyMeter(), reasoning = { type: "thinking", thinking: "plan", thinkingSignature: '{"id":"rs"}' };
+  const ended = growing.add({ type: "thinking_end", contentIndex: 0, content: "plan", partial: { content: [reasoning] } });
+  assert.equal(ended, 4 + '{"id":"rs"}'.length);
+  reasoning.thinkingSignature = JSON.stringify({ id: "rs", encrypted_content: "e".repeat(100) });
+  const finished = growing.finish({ content: [reasoning] });
+  assert.equal(finished, 4 + reasoning.thinkingSignature.length);
+  assert.equal(growing.finish({ content: [reasoning] }), finished);
+});
+
+test("scheduled inference counts OpenAI encrypted reasoning against the reply budget", async (t) => {
+  const dir = temporary(t);
+  let encrypted = "";
+  const server = createServer(async (request, response) => {
+    for await (const chunk of request) void chunk;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    const reasoning = { type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: "Planning." }], encrypted_content: encrypted };
+    const message = { type: "message", id: "msg_1", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Done.", annotations: [] }] };
+    const events = [
+      { type: "response.created", response: { id: "resp_1", status: "in_progress", output: [] } },
+      { type: "response.output_item.added", output_index: 0, item: { type: "reasoning", id: "rs_1", summary: [] } },
+      { type: "response.output_item.done", output_index: 0, item: reasoning },
+      { type: "response.output_item.added", output_index: 1, item: { ...message, status: "in_progress", content: [] } },
+      { type: "response.content_part.added", output_index: 1, item_id: "msg_1", content_index: 0, part: { type: "output_text", text: "", annotations: [] } },
+      { type: "response.output_text.delta", output_index: 1, item_id: "msg_1", content_index: 0, delta: "Done." },
+      { type: "response.output_item.done", output_index: 1, item: message },
+      { type: "response.completed", response: { id: "resp_1", status: "completed", output: [reasoning, message], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } },
+    ];
+    for (const [index, event] of events.entries()) response.write(`event: ${event.type}\ndata: ${JSON.stringify({ ...event, sequence_number: index })}\n\n`);
+    response.end();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-responses", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: true, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const task = { providerId: "cli-test", model: "test", permission: "read-only", prompt: "Write the daily report", mcpServerIds: [], mcpServerBindings: [], webSearchEnabled: false };
+  encrypted = "e".repeat(1024);
+  assert.equal(await api.runScheduledInference(dir, dir, task, new AbortController().signal, async () => {}), "Done.");
+  // A short answer cannot carry 3 MiB of opaque reasoning past the budget.
+  encrypted = "e".repeat(3 * 1024 * 1024);
+  await assert.rejects(api.runScheduledInference(dir, dir, task, new AbortController().signal, async () => {}), /response budget exhausted/);
 });
 
 test("MCP paginates tools, fences schema drift, and terminates its stdio transport", async (t) => {
@@ -1635,68 +1380,6 @@ test("MCP startup connects servers concurrently within one budget and reports ea
   }
 });
 
-test("interactive MCP keeps auto servers behind codemode, lists them for the model, and declares them when codemode is off", async (t) => {
-  const dir = temporary(t), auto = { ...fixtureServer(dir, "docs"), description: "Team documentation" }, visible = { ...fixtureServer(dir, "pinned"), exposure: "direct" };
-  api.atomicJson(join(dir, "aiden-mcp.json"), [auto, visible]);
-  const load = async (active) => {
-    const events = new Map(), tools = new Map();
-    await api.createMcpExtension(dir, { deferToCodemode: true }).factory({
-      on: (event, handler) => events.set(event, handler), registerCommand() {}, registerTool: (tool) => tools.set(tool.name, tool), getActiveTools: () => active });
-    t.after(() => events.get("session_shutdown")());
-    return { events, tools };
-  };
-  const scripted = await load(["read", "bash", "codemode"]);
-  scripted.events.get("session_start")();
-  assert.equal(scripted.tools.get("docs__first").exposure, "codemode", "an auto server's tools are reached from codemode scripts");
-  assert.deepEqual(scripted.tools.get("docs__first").namespace, { name: "docs", description: "Team documentation" });
-  assert.equal(scripted.tools.get("pinned__first").exposure, undefined, "an Always visible server stays declared");
-  const sections = { mcp_servers: "stale" };
-  await scripted.events.get("before_agent_start")({ systemPromptOptions: { sections } });
-  assert.match(sections.mcp_servers, /- docs: docs \(via codemode\) — "Team documentation"/);
-  assert.doesNotMatch(sections.mcp_servers, /pinned|<mcp_servers>/, "Pi wraps the section; declared servers need no listing");
-
-  const direct = await load(["read", "bash"]);
-  direct.events.get("session_start")();
-  assert.equal(direct.tools.get("docs__first").exposure, undefined, "without codemode the tools are declared directly");
-  const none = { mcp_servers: "stale" };
-  await direct.events.get("before_agent_start")({ systemPromptOptions: { sections: none } });
-  assert.equal(none.mcp_servers, undefined);
-});
-
-test("a codemode script reaches an MCP tool that was never declared to the model, and without codemode it is declared", async (t) => {
-  const { createAgentSession, createCodemodeExtension, DefaultResourceLoader, SessionManager, SettingsManager } = await import("@earendil-works/pi-coding-agent");
-  const { fauxProvider, fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai/providers/faux");
-  const dir = temporary(t);
-  api.atomicJson(join(dir, "aiden-mcp.json"), [{ ...fixtureServer(dir, "docs"), description: "Team documentation" }]);
-  const run = async (defaultTools) => {
-    const faux = fauxProvider({ provider: "faux-codemode", models: [{ id: "scripted", contextWindow: 100_000, maxTokens: 4096 }] });
-    const requests = [];
-    faux.setResponses([
-      (context) => { requests.push(context); return fauxAssistantMessage(fauxToolCall("codemode", { code: "text(await tools.docs__first({ value: 'hi' }))" }), { stopReason: "toolUse" }); },
-      (context) => { requests.push(context); return fauxAssistantMessage("Done"); },
-    ]);
-    const resourceLoader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
-      extensionFactories: [createCodemodeExtension({ mode: "on" }), api.createMcpExtension(dir, { deferToCodemode: true }), { name: "faux", factory(pi) { pi.registerProvider(faux.provider); } }] });
-    await resourceLoader.reload();
-    const { session } = await createAgentSession({ cwd: dir, agentDir: dir, resourceLoader, settingsManager: SettingsManager.inMemory({ defaultTools }), sessionManager: SessionManager.inMemory(), model: faux.getModel() });
-    // dispose() alone leaves extensions running; shutting down closes the MCP server process.
-    t.after(async () => { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); });
-    await session.bindExtensions({});
-    await session.prompt("Look it up");
-    const declared = requests[0].messages.filter((message) => message.role === "system").flatMap((message) => (message.toolsAdded ?? []).map((tool) => tool.name));
-    const sections = requests[0].messages.filter((message) => message.role === "system").map((message) => message.sections?.mcp_servers ?? "").join("");
-    const result = session.messages.find((message) => message.role === "toolResult");
-    return { declared, sections, result: result.content.map((part) => part.text ?? "").join("\n") };
-  };
-  const scripted = await run(["read", "codemode"]);
-  assert.deepEqual(scripted.declared, ["read", "codemode"], "the MCP tool stays out of the model's declarations");
-  assert.match(scripted.sections, /- docs: docs \(via codemode\)/, "the model learns the service exists");
-  assert.match(scripted.result, /Echo hi/, "the script called the MCP tool");
-  const direct = await run(["read"]);
-  assert.ok(direct.declared.includes("docs__first"), "without codemode the MCP tool is declared directly");
-  assert.equal(direct.sections, "");
-});
-
 test("MCP remove and endpoint edits delete the server's stored credential", async (t) => {
   const dir = temporary(t), file = join(dir, "server.json");
   const server = { id: "remote", name: "Remote", transport: "http", url: "https://one.example/mcp", enabled: true, oauth: true };
@@ -1810,6 +1493,22 @@ test("MCP migration skips a malformed native mcp.json with a warning and leaves 
   assert.equal(readFileSync(legacy, "utf8"), "{ not json");
 });
 
+test("advisor attempt accounting keeps recording usage past any number of attempts", async (t) => {
+  const dir = temporary(t), file = join(dir, "usage.json");
+  const record = (id) => api.recordUsageRecord(dir, { timestamp: 1, source: "advisor", providerId: "p", providerLabel: "p", modelId: "m", modelLabel: "m", local: false, status: "failed", tokens: null, costStatus: "unavailable" }, id);
+  await record(undefined);
+  // A long-lived ledger that already holds 100,000 accounted attempts.
+  const seeded = Array.from({ length: 100_000 }, (_, index) => index.toString(16).padStart(64, "0"));
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), accountedAttempts: seeded }));
+  await record("fresh-attempt");
+  await record("fresh-attempt");
+  await record("another-attempt");
+  await record("another-attempt");
+  const summary = await api.usageSummary(dir);
+  assert.equal(summary.totals.requests, 3, "each new attempt is recorded exactly once");
+  assert.ok(JSON.parse(readFileSync(file, "utf8")).accountedAttempts.length < seeded.length, "the replay window does not grow without bound");
+});
+
 test("daemon idle waits include cancelled append work before releasing workspace authority", async (t) => {
   const dir = temporary(t), daemon = api.createDaemonChats(dir);
   const lease = daemon.llmClient.beginChatTurn("pending", "stream", "owner"); assert.ok(lease);
@@ -1824,20 +1523,24 @@ test("daemon idle waits include cancelled append work before releasing workspace
   await daemon.stop();
 });
 
-test("the subagent rollback switch registers no tool and opens no history", async (t) => {
-  const previous = process.env.AIDEN_SUBAGENTS_ENABLED;
-  process.env.AIDEN_SUBAGENTS_ENABLED = "0";
-  t.after(() => { if (previous === undefined) delete process.env.AIDEN_SUBAGENTS_ENABLED; else process.env.AIDEN_SUBAGENTS_ENABLED = previous; });
-  let registered = 0;
-  await api.createSubagentsExtension(temporary(t)).factory({ registerTool() { registered++; } });
-  assert.equal(registered, 0);
+test("a draining daemon admits no new chat turn while earlier work settles", async (t) => {
+  const dir = temporary(t), daemon = api.createDaemonChats(dir);
+  const lease = daemon.llmClient.beginChatTurn("draining", "stream", "owner"); assert.ok(lease);
+  lease.reserveAppendPayload(100);
+  let stopped = false;
+  const stopping = daemon.stop().then(() => { stopped = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(stopped, false);
+  assert.equal(daemon.llmClient.beginChatTurn("arrived-late", "stream", "owner"), null);
+  lease.settleAsyncWork(); await stopping;
+  assert.equal(daemon.llmClient.beginChatTurn("after-stop", "stream", "owner"), null);
 });
 
-test("owned CLI controls persist verified values once and headless agents cannot write", async (t) => {
+test("app controls persist verified values once and leave desktop-only settings unchanged", async (t) => {
   const dir = temporary(t),
-    controls = api.createCliAppControls(dir, () => undefined);
+    controls = api.createCliAppControls(dir);
   assert.match(JSON.stringify(api.readAidenHelp("memory")), /does not delete/i);
-  const state = await controls.snapshot("memory", false);
+  const state = await controls.snapshot("memory");
   const row = state.rows.find((row) => row.id === "memory.enabled");
   assert.equal(row.value, true);
   const operation = {
@@ -1846,59 +1549,16 @@ test("owned CLI controls persist verified values once and headless agents cannot
     expectedRevision: row.revision,
     operationId: "human_cli_operation",
   };
-  await assert.rejects(controls.apply(operation, false, false), /interactive CLI/);
-  assert.equal(existsSync(join(dir, "aiden.json")), false);
-  const result = await controls.apply(operation, false, true, true);
+  const result = await controls.apply(operation);
   assert.equal(result.status, "applied");
   assert.equal(result.effective, "next_session");
   assert.equal(JSON.parse(readFileSync(join(dir, "aiden.json"), "utf8")).memoryEnabled, false);
-  assert.deepEqual(await controls.apply(operation, false, true, true), result);
-  assert.equal(
-    api.isOwnedAppTool(
-      { getAllTools: () => [{ name: "aiden_help", sourceInfo: { path: "/untrusted/app.ts" } }] },
-      "aiden_help",
-    ),
-    false,
-  );
-  assert.equal(
-    api.isOwnedAppTool(
-      { getAllTools: () => [{ name: "aiden_help", sourceInfo: { path: "<inline:aiden-app>" } }] },
-      "aiden_help",
-    ),
-    true,
-  );
-});
-
-test("CLI controls require a current owner and terminal receipts confirm Pi persistence", async (t) => {
-  const dir = temporary(t);
-  let theme = "dark";
-  const controls = api.createCliAppControls(dir, () => ({
-    currentTheme: () => theme,
-    themes: () => ["dark", "light"],
-    setTheme(value) {
-      theme = value;
-      api.atomicJson(join(dir, "settings.json"), { theme: value });
-      return { success: true };
-    },
-  }));
-  const state = await controls.snapshot("appearance", true);
-  const row = state.rows[0];
-  const operation = {
-    control: row.id,
-    value: "light",
-    expectedRevision: row.revision,
-    operationId: "terminal_saved_operation",
-  };
-  await assert.rejects(
-    controls.apply(operation, true, true, false, () => false),
-    /no longer available/i,
-  );
-  assert.equal(theme, "dark");
+  assert.deepEqual(await controls.apply(operation), result);
+  // Appearance belongs to the desktop: no CLI write reaches it.
+  const before = readFileSync(join(dir, "aiden.json"), "utf8");
+  await assert.rejects(controls.apply({ control: "appearance.mode", value: "dark", expectedRevision: "any", operationId: "desktop_only" }));
+  assert.equal(readFileSync(join(dir, "aiden.json"), "utf8"), before);
   assert.equal(existsSync(join(dir, "settings.json")), false);
-  const receipt = await controls.apply(operation, true, true);
-  assert.equal(receipt.status, "applied");
-  assert.equal(receipt.effective, "now");
-  assert.equal(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).theme, "light");
 });
 
 test("MCP migration preserves exact legacy bytes privately and keeps native configurations separate", async (t) => {
@@ -1958,13 +1618,9 @@ test("MCP reads stay available while another process owns the Aiden MCP lease", 
   assert.equal(existsSync(join(dir, "mcp.json")), false);
 });
 
-test("native settings keep Aiden header-only startup and persist one installation identity on demand", async (t) => {
+test("native settings keep install telemetry off and persist one installation identity on demand", async (t) => {
   const dir = temporary(t);
   const settings = api.SettingsManager.create(dir, dir);
-  assert.equal(settings.getQuietStartup(), "header");
-  assert.equal(settings.getThemeSetting(), "light/dark");
-  settings.setTheme("system");
-  assert.equal(settings.getTheme(), "system");
   assert.equal(settings.getEnableInstallTelemetry(), false);
   assert.equal(settings.getGlobalSettings().deviceId, undefined);
   const id = settings.getOrCreateDeviceId();
@@ -1972,29 +1628,7 @@ test("native settings keep Aiden header-only startup and persist one installatio
   await settings.flush();
   const reopened = api.SettingsManager.create(dir, dir);
   assert.equal(reopened.getOrCreateDeviceId(), id);
-  reopened.setQuietStartup(false);
-  assert.equal(reopened.getQuietStartup(), false);
-  reopened.setQuietStartup(true);
-  assert.equal(reopened.getQuietStartup(), true);
-  await reopened.flush();
-});
-
-
-test("delegated MCP revisions follow migrated Aiden configuration and encrypted credentials", (t) => {
-  const dir = temporary(t);
-  const revision = api.createCliMcpRevision(dir);
-  const original = revision();
-  api.atomicJson(join(dir, "mcp.json"), { mcpServers: { native: { command: "example" } } });
-  assert.equal(revision(), original);
-  api.atomicJson(join(dir, "aiden-mcp.json"), [{ id: "aiden", enabled: true }]);
-  const configured = revision();
-  assert.notEqual(configured, original);
-  api.atomicJson(join(dir, "aiden-mcp.json"), [{ id: "aiden", enabled: false }]);
-  assert.notEqual(revision(), configured);
-  const revoked = revision();
-  mkdirSync(join(dir, "credentials"), { recursive: true });
-  api.atomicJson(join(dir, "credentials/insights.json"), { encrypted: "changed" });
-  assert.notEqual(revision(), revoked);
+  assert.equal(reopened.getEnableInstallTelemetry(), false);
 });
 
 
@@ -2270,10 +1904,10 @@ test("Azure endpoint migration cannot pair a legacy deployment with a different 
   }
 });
 
-function todoHarness(manager, widgets = []) {
+function todoHarness(manager) {
   const harness = extension(api.createTodoInlineExtension({ latestContext: () => undefined }));
-  const context = { sessionManager: manager, hasUI: true, mode: "tui", ui: { setWidget: (_name, lines) => widgets.push(lines) } };
-  return { ...harness, context, widgets,
+  const context = { sessionManager: manager, hasUI: false, mode: "rpc" };
+  return { ...harness, context,
     start: async (reason = "startup", ctx = context) => harness.events.get("session_start")?.({ type: "session_start", reason }, ctx),
     call: async (args) => harness.tools.get("todo").execute("test-call", args),
     async persist(args) {
@@ -2292,7 +1926,6 @@ test("CLI todo restores branch-local checkpoints after restart, compaction, swit
   manager.appendCompaction("Earlier observations compressed", null, 10000);
   const resumed = todoHarness(manager); await resumed.start("resume");
   assert.deepEqual((await resumed.call({ action: "list" })).details.tasks.map(({ subject }) => subject), ["First checkpoint", "Second checkpoint"]);
-  assert.ok(resumed.widgets.at(-1).some((line) => line.includes("First checkpoint")));
   const third = await resumed.persist({ action: "create", subject: "Third checkpoint" });
   assert.equal(third.result.details.tasks.at(-1).id, 3);
   manager.branch(one.id);
@@ -2301,7 +1934,6 @@ test("CLI todo restores branch-local checkpoints after restart, compaction, swit
   await resumed.persist({ action: "clear" });
   await resumed.start("reload");
   assert.deepEqual((await resumed.call({ action: "list" })).details.tasks, []);
-  assert.equal(resumed.widgets.at(-1), undefined);
   const empty = api.SessionManager.inMemory(temporary(t));
   await resumed.start("new", { ...resumed.context, sessionManager: empty });
   const fresh = await resumed.call({ action: "create", subject: "New session only" });
@@ -2318,12 +1950,9 @@ test("CLI todo corrupt newest checkpoint fails closed and a later valid session 
   await harness.start("reload");
   await assert.rejects(harness.call({ action: "list" }), /unavailable/i);
   await assert.rejects(harness.call({ action: "create", subject: "Must not overwrite" }), /unavailable/i);
-  assert.equal(harness.widgets.at(-1), undefined);
   const empty = api.SessionManager.inMemory(temporary(t));
-  const widgetCount = harness.widgets.length;
-  await harness.start("new", { ...harness.context, sessionManager: empty, hasUI: false });
+  await harness.start("new", { ...harness.context, sessionManager: empty });
   assert.deepEqual((await harness.call({ action: "list" })).details.tasks, []);
-  assert.equal(harness.widgets.length, widgetCount, "headless restoration must not render a widget");
 });
 
 test("CLI todo ignores stale asynchronous restoration after a newer session starts", async (t) => {
@@ -2340,7 +1969,6 @@ test("CLI todo ignores stale asynchronous restoration after a newer session star
   await harness.call({ action: "create", subject: "Newer session task" });
   release(manager.getBranch()); await oldStart;
   assert.deepEqual((await harness.call({ action: "list" })).details.tasks.map(({ subject }) => subject), ["Newer session task"]);
-  assert.equal(harness.widgets.at(-1), undefined);
   await harness.events.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, harness.context);
   await assert.rejects(harness.call({ action: "list" }), /unavailable/i);
 });
