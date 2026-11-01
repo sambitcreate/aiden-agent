@@ -21,7 +21,7 @@ Status: active 2026-10-31. Spec v2 (infinite canvas) and P0/P1 plans written. P0
 - Agent tools: `canvas_read` (tldraw-style context), `canvas_place_frame`, `canvas_update_frame`, `canvas_remove_frame`, `canvas_focus`, plus `design_mode` (consent card, `aiden_open` pattern, offered only when Inline visuals is `automatic`).
 - Widths: chat 420 (360–560); canvas at least 480. Sidebar collapses below 1100 px; below 840 px the window widens to 1280 or shows a banner. Escape never leaves design mode.
 - open-design (nexu-io) has no infinite canvas; its value is picking, comment anchoring and agent context. Avoid its CDN React/Babel, `allow-same-origin` and foreignObject screenshots.
-- Open: confirm "make it live" does not also cover Create Images.
+- Owner (2026-10-31): ship design mode only. Create Images is being reworked in another thread, so keep edits to `renderer/canvas/*` and `studio/feature-flags.ts` additive and check for its open PRs before touching them.
 
 ## P0 notes (2026-10-31)
 

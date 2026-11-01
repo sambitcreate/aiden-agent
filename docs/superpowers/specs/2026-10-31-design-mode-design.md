@@ -384,7 +384,7 @@ Plans are written before each phase starts: [P0](../plans/2026-10-31-design-mode
 4. She presses D, circles the second screen's button, notes "primary, not ghost", and sends. Aiden edits `design/onboarding-2.html`.
 5. She presses ⌘⇧D to leave. Her sidebar and panel come back as they were.
 
-## 12. Open questions
+## 12. Open questions and resolutions
 
-- "Make it live": I read this as shipping design mode. Create Images stays behind its own flag unless the owner says otherwise.
+- Resolved 2026-10-31: "make it live" means shipping design mode only. Create Images stays behind its own flag and is being worked on in a separate thread, so design mode keeps its edits to shared canvas code additive.
 - Localhost `page` frames, which would put a dev server on the canvas, are deferred until the core loop has shipped.
