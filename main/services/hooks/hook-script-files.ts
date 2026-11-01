@@ -20,7 +20,10 @@
  *   command runs, so the scan is `overLimit` and the hook won't run;
  * - commands whose code lives somewhere the scan can't follow (`cd … &&`,
  *   `source`, `bash -c`, `npx`, `npm run`, `python -m`, `make`…) are listed
- *   in `unfollowed`: approving the hook doesn't cover what they run.
+ *   in `unfollowed`: approving the hook doesn't cover what they run;
+ * - so are paths built at run time (`./scripts/*.sh`, `"$DIR"/check.sh`,
+ *   `~/bin/x`), which are not expanded: they may name a script the scan
+ *   never reads.
  *
  * Words are recorded as written, not as absolute paths, so the same script in
  * another checkout (a new worktree) gives the same digest only when its bytes
@@ -226,6 +229,27 @@ function inside(parent: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
+const RUNTIME_EXPANSION = /[$*?[\]{}~]/u;
+const SHELL_SYNTAX_WORDS = new Set(["[", "[[", "{", "}"]);
+
+/**
+ * Words that may name a file only once the shell expands them: a program
+ * name, or a word with a `/`, holding a variable, glob, brace or `~`. The
+ * project-dir variable followed by a literal path is resolved, not listed.
+ */
+function runtimeBuiltPaths(scan: HookCommandScan): string[] {
+  const found = new Set<string>();
+  for (const { text, commandPosition } of scan.words) {
+    const projectDir = PROJECT_DIR_VARIABLE.exec(text);
+    const rest = projectDir ? text.slice(projectDir[0].length) : text;
+    if (!RUNTIME_EXPANSION.test(rest)) continue;
+    // `[`, `[[` and `{` are shell syntax, and `NAME=value` sets a variable rather than naming a program.
+    const program = commandPosition && !SHELL_SYNTAX_WORDS.has(text) && !ASSIGNMENT.test(text);
+    if (program || rest.includes("/")) found.add(text);
+  }
+  return [...found];
+}
+
 function candidatePath(word: string, cwd: string): { file: string; explicit: boolean } | undefined {
   if (word.startsWith("-") || word.includes("://")) return undefined;
   const projectDir = PROJECT_DIR_VARIABLE.exec(word);
@@ -278,7 +302,7 @@ async function hashFile(file: string): Promise<Hashed> {
 export async function hookScriptFiles(command: string, options: { workspaceRoot: string; cwd: string }): Promise<HookScriptScan> {
   const roots = [path.resolve(options.workspaceRoot), path.resolve(options.cwd)];
   const commandScan = scanHookCommand(command);
-  const scan: HookScriptScan = { files: [], paths: [], unfollowed: unfollowedCommands(commandScan) };
+  const scan: HookScriptScan = { files: [], paths: [], unfollowed: [...unfollowedCommands(commandScan), ...runtimeBuiltPaths(commandScan)] };
   if (commandScan.tooLong) {
     scan.overLimit = `the command has more than ${MAX_HOOK_COMMAND_WORDS} words`;
     return scan;

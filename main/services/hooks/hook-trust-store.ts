@@ -160,12 +160,26 @@ export class HookTrustStore {
     return this.save();
   }
 
-  /** Forget every approval and flag for a hook id. */
-  revoke(hook: Pick<HookDefinition, "id" | "digest" | "scope">): Promise<void> {
+  /**
+   * Forget the approval that authorizes this hook, and its flags.
+   *
+   * An approval authorizes a hook by digest, wherever its record's id now
+   * points, so every record with this digest goes. A record under this id with
+   * another digest (an earlier version of the hook) goes too, unless that
+   * digest belongs to another hook in `current`: repo ids follow position, so
+   * the record may be the approval of a hook that has since moved.
+   */
+  revoke(
+    hook: Pick<HookDefinition, "id" | "digest" | "scope">,
+    current: ReadonlyArray<Pick<HookDefinition, "id" | "digest">> = [],
+  ): Promise<void> {
     const key = hookScopeKey(hook.scope);
     const all = this.state.approvals[key] ?? [];
-    const remaining = all.filter((record) => record.hookId !== hook.id);
-    for (const record of all) if (record.hookId === hook.id) this.clearFlags({ scope: hook.scope, digest: record.digest });
+    const heldElsewhere = (digest: string) => current.some((candidate) => candidate.digest === digest && candidate.id !== hook.id);
+    const revoked = (record: HookApprovalRecord) =>
+      record.digest === hook.digest || (record.hookId === hook.id && !heldElsewhere(record.digest));
+    const remaining = all.filter((record) => !revoked(record));
+    for (const record of all) if (revoked(record)) this.clearFlags({ scope: hook.scope, digest: record.digest });
     this.clearFlags(hook);
     if (remaining.length > 0) this.state.approvals[key] = remaining;
     else delete this.state.approvals[key];

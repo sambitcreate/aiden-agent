@@ -426,6 +426,41 @@ test("turning off a repo hook follows the hook, not its place in the file", asyn
   assert.deepEqual(commands, ["echo inserted"]);
 });
 
+test("removing the approval of a repo hook that moved stops it, and leaves the hook now in its old place alone", async (t) => {
+  const f = await fixture(t);
+  const { run, commands } = recordingRun();
+  await writeRepoHooks(f.workspace, { hooks: { Stop: [{ hooks: [{ type: "command", command: "echo first" }] }] } });
+  const service = await f.create({ run });
+  const original = (await service.listHooks(f.scopes)).hooks[0];
+  assert.ok(original && (await service.approveDigest(original.id, original.digest)).ok);
+
+  await writeRepoHooks(f.workspace, {
+    hooks: { Stop: [{ hooks: [{ type: "command", command: "echo inserted" }] }, { hooks: [{ type: "command", command: "echo first" }] }] },
+  });
+  const byCommand = async () => new Map((await service.listHooks(f.scopes)).hooks.map((hook) => [hook.handler.command, hook]));
+  const moved = (await byCommand()).get("echo first");
+  assert.ok(moved && moved.id !== original.id);
+  assert.equal(await service.setEnabled(moved.id, false), true);
+  assert.ok((await service.deleteHook(moved.id)).ok);
+
+  const after = await byCommand();
+  assert.equal(after.get("echo first")?.status, "waiting-for-approval", "removing the approval does not switch the hook back on");
+  assert.equal(after.get("echo inserted")?.status, "waiting-for-approval");
+  await service.dispatcher.dispatch("Stop", stopPayload(), f.context);
+  assert.deepEqual(commands, []);
+
+  // Removing the approval of an edited hook still forgets its old approval.
+  const inserted = after.get("echo inserted");
+  assert.ok(inserted && (await service.approveDigest(inserted.id, inserted.digest)).ok);
+  await writeRepoHooks(f.workspace, {
+    hooks: { Stop: [{ hooks: [{ type: "command", command: "echo edited" }] }, { hooks: [{ type: "command", command: "echo first" }] }] },
+  });
+  const edited = (await byCommand()).get("echo edited");
+  assert.equal(edited?.status, "changed");
+  assert.ok(edited && (await service.deleteHook(edited.id)).ok);
+  assert.equal((await byCommand()).get("echo edited")?.status, "waiting-for-approval");
+});
+
 test("the same handler in several scopes runs once", async (t) => {
   const f = await fixture(t);
   const { run, commands } = recordingRun();
@@ -514,6 +549,11 @@ test("a workspace hook lists the scripts its approval covers, and says when it c
   assert.ok(approved.ok && approved.value);
   assert.equal(approved.value.scriptCoverage, "partial");
   assert.deepEqual(approved.value.scriptFiles, ["scripts/lint.sh"]);
+
+  const globbed = await service.saveHook({ scope, event: "Stop", handler: { type: "command", command: "bash ./scripts/*.sh" } });
+  assert.ok(globbed.ok && globbed.value);
+  assert.equal(globbed.value.scriptFiles, undefined);
+  assert.equal(globbed.value.scriptCoverage, "partial", "a glob that reaches a script is not shown as covered");
 });
 
 test("a command naming more files than Aiden checks is refused, and a listed one is unsupported", async (t) => {

@@ -84,6 +84,26 @@ test("commands whose code the scan can't follow are named", () => {
   }
 });
 
+test("a script reached only through a path built at run time is reported as not covered", async (t) => {
+  const root = await workspace(t);
+  await fs.mkdir(path.join(root, "scripts"));
+  await fs.writeFile(path.join(root, "scripts", "only.sh"), "echo one\n");
+  await fs.writeFile(path.join(root, "pinned.sh"), "echo two\n");
+
+  const globbed = await scan(root, "bash ./scripts/*.sh");
+  assert.deepEqual(globbed.paths, []);
+  assert.deepEqual(globbed.unfollowed, ["./scripts/*.sh"], "the glob's script isn't pinned, so the scan says so");
+
+  const mixed = await scan(root, `./pinned.sh && "$AIDEN_PROJECT_DIR"/scripts/$NAME.sh && $RUNNER ~/bin/tool`);
+  assert.deepEqual(mixed.paths, ["pinned.sh"]);
+  assert.deepEqual(mixed.unfollowed, ["$AIDEN_PROJECT_DIR/scripts/$NAME.sh", "$RUNNER", "~/bin/tool"]);
+
+  // Variables, patterns and tests that don't name a file leave coverage alone.
+  for (const command of [`[ -n "$CI" ] && ./pinned.sh`, "grep -q 'sk-[a-z]*' && ./pinned.sh", "FOO=$BAR ./pinned.sh", `echo "$HOME"`]) {
+    assert.deepEqual((await scan(root, command)).unfollowed, [], command);
+  }
+});
+
 test("a command longer than Aiden checks is over the limit", async (t) => {
   const root = await workspace(t);
   const long = await scan(root, `echo ${Array.from({ length: 200 }, (_, index) => `w${index}`).join(" ")}`);

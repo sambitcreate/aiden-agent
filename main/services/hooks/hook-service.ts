@@ -798,7 +798,8 @@ export function createHookService(deps: HookServiceDeps): HookService {
       }
       const found = await findListing(hookId);
       if (!found) return { ok: false, reason: `There is no hook with the id ${hookId}.` };
-      await trust.revoke(found.listing);
+      const root = repoRootFor(hookId);
+      await trust.revoke(found.listing, root ? (await readRepo(root)).hooks : []);
       changed({ reason: "hooks", hookId });
       return { ok: true, value: undefined };
     },
