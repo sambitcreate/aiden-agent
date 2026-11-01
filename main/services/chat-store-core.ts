@@ -118,6 +118,8 @@ const IMAGE_SWEEP_GRACE_MS = 24 * 60 * 60 * 1000;
 /** Every image hash a chat file names, whatever state the file is in. */
 const STORED_IMAGE_HASH = /"sha256"\s*:\s*"([0-9a-f]{64})"/gu;
 const IMAGE_SWEEP_MARKER = ".sweep-needed";
+/** The longest wait before retrying a sweep that could not finish. */
+const IMAGE_SWEEP_MAX_RETRY_MS = 60 * 60 * 1000;
 /** Chats whose image lists the image-link handler keeps at once. */
 const STORED_IMAGE_LIST_CACHE = 32;
 
@@ -178,6 +180,7 @@ export function createChatStore(
   const storedImageLists = new Map<string, { stamp: string; images: Map<string, { mimeType: string; size: number }> }>();
   let imageSweepTimer: ReturnType<typeof setTimeout> | undefined;
   let imageSweepRunning: Promise<unknown> | undefined;
+  let imageSweepRetryMs: number | undefined;
   let pendingDirectorySync: string | undefined;
 
   async function syncDirectoryDurably(directory: string): Promise<void> {
@@ -1107,7 +1110,7 @@ export function createChatStore(
 
   async function sweepUnusedImages(
     options: { onlyWhenNeeded?: boolean } = {},
-  ): Promise<{ removed: number; nextDueInMs?: number }> {
+  ): Promise<{ removed: number; nextDueInMs?: number; incomplete?: true }> {
     const directory = await resolveChatsDir();
     const marker = await sweepMarkerPath();
     let mark: string | undefined;
@@ -1123,7 +1126,8 @@ export function createChatStore(
       return { removed: 0 };
     }
     const referenced = await referencedImageHashes(directory);
-    if (!referenced) return { removed: 0 };
+    // A chat file could not be read, so nothing is known to be unused yet.
+    if (!referenced) return mark === undefined ? { removed: 0 } : { removed: 0, incomplete: true };
     const startedAt = Date.now();
     const result = await images.sweep(referenced, {
       graceMs: imageSweepGraceMs,
@@ -1160,12 +1164,18 @@ export function createChatStore(
         return;
       }
       imageSweepRunning = sweepUnusedImages({ onlyWhenNeeded: true })
-        .catch((): { removed: number; nextDueInMs?: number } => ({ removed: 0 }))
+        .catch((): { removed: number; nextDueInMs?: number; incomplete?: true } => ({ removed: 0, incomplete: true }))
         .then((result) => {
           imageSweepRunning = undefined;
+          // A sweep that could not finish keeps its marker; try again later,
+          // waiting twice as long each time (up to an hour).
+          imageSweepRetryMs = result.incomplete
+            ? Math.min(Math.max(delay, (imageSweepRetryMs ?? delay / 2) * 2), IMAGE_SWEEP_MAX_RETRY_MS)
+            : undefined;
+          const nextDueInMs = imageSweepRetryMs ?? result.nextDueInMs;
           // A later request already restarted the wait; never sweep sooner than the usual delay.
-          if (result.nextDueInMs !== undefined && !imageSweepTimer) {
-            scheduleImageSweep(Math.max(delay, result.nextDueInMs));
+          if (nextDueInMs !== undefined && !imageSweepTimer) {
+            scheduleImageSweep(Math.max(delay, nextDueInMs));
           }
           return result;
         });

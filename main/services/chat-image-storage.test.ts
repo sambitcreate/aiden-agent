@@ -377,6 +377,34 @@ test("unused images still inside their grace are swept once it runs out, without
   await assert.rejects(fs.access(marker), { code: "ENOENT" });
 });
 
+test("a sweep that cannot finish is tried again later, without another delete", async (t) => {
+  const directory = await tempDir(t);
+  let failNextResolve = false;
+  const resolveDirectory = async () => {
+    if (failNextResolve) {
+      failNextResolve = false;
+      throw new Error("chats folder briefly unavailable");
+    }
+    return directory;
+  };
+  const store = createChatStore(resolveDirectory, undefined, { imageSweepDelayMs: 20, imageSweepGraceMs: 0 });
+  const chat = await store.create({});
+  await store.appendMessage(chat.id, { role: "user", content: "Look", attachments: [image("photo")] });
+  await store.remove(chat.id);
+  // The sweep the delete scheduled fails before it can look at any file.
+  failNextResolve = true;
+
+  const marker = path.join(directory, CHAT_IMAGES_DIRECTORY, ".sweep-needed");
+  const markerGone = async () => fs.access(marker).then(() => false, () => true);
+  const deadline = Date.now() + 5_000;
+  while (((await imageFiles(directory)).length > 0 || !(await markerGone())) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(failNextResolve, false, "the first sweep ran and failed");
+  assert.deepEqual(await imageFiles(directory), []);
+  await assert.rejects(fs.access(marker), { code: "ENOENT" });
+});
+
 test("the window's image link serves the stored bytes and revalidates by hash", async (t) => {
   const directory = await tempDir(t);
   const { store, chatId } = await chatWithImage(directory);
