@@ -43,8 +43,9 @@ export function HistoryPanel({
     );
   }
   const footer = saveFolderLabel ? (
-    <footer className="image-history-footer flex items-center gap-2">
-      <Text variant="small" color="secondary" className="min-w-0 flex-1">Saved to {saveFolderLabel}</Text>
+    // Leading-aligned: the app's floating Live control sits in the bottom-right corner.
+    <footer className="image-history-footer flex flex-wrap items-center gap-x-2">
+      <Text variant="small" color="secondary" className="min-w-0">Saved to {saveFolderLabel}</Text>
       <Button size="small" variant="transparent" onClick={onRevealFolder}>
         <FolderOpen aria-hidden="true" />
         Show Folder

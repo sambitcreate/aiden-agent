@@ -82,8 +82,9 @@ export function ImageLibrary({
   );
 
   const footer = saveFolderLabel ? (
-    <footer className="image-history-footer flex items-center gap-2 px-6">
-      <Text variant="small" color="secondary" className="min-w-0 flex-1">
+    // Leading-aligned: the app's floating Live control sits in the bottom-right corner.
+    <footer className="image-history-footer flex flex-wrap items-center gap-x-2 px-6">
+      <Text variant="small" color="secondary" className="min-w-0">
         Saved to {saveFolderLabel}
         {items.length >= GALLERY_MAX_ITEMS ? ` · Showing the newest ${numberFormat.format(GALLERY_MAX_ITEMS)} images` : ""}
       </Text>

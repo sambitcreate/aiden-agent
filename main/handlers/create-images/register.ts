@@ -68,6 +68,9 @@ export interface CreateImagesFileActions<Event> {
 
 const ACTION_FAILED = "Aiden couldn't finish that image action.";
 
+/** Longest a gallery read waits for background auto-saves before answering. */
+const GALLERY_AUTO_SAVE_WAIT_MS = 2_000;
+
 /** Most saves this session remembers for "Show in Finder" after Save… or Save All. */
 const SAVED_TARGETS_MAX = 50;
 
@@ -260,6 +263,9 @@ export function registerCreateImagesHandlers<Event>(deps: CreateImagesHandlerDep
     const owner = deps.owner(event);
     const request = parseGalleryRequest(input);
     const { coordinator, workflows, assets, exports } = await deps.services();
+    // A run's images are auto-saved in the background after it ends, and renderers re-read the
+    // gallery the moment it ends; wait briefly for those local writes so `saved` is not stale.
+    await exports.whenIdle(GALLERY_AUTO_SAVE_WAIT_MS);
     const titles = new Map(workflows.list().map((entry) => [entry.id, entry.title]));
     const images = selectGalleryImages(coordinator.generatedAttempts(request.workflowId, GALLERY_MAX_ITEMS), {
       exists: (assetId) => assets.get(assetId) !== undefined,

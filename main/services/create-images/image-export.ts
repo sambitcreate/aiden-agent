@@ -157,9 +157,21 @@ export class CreateImagesExports {
     }
   }
 
-  /** Resolves once every background auto-save has settled. */
-  async whenIdle(): Promise<void> {
-    while (this.pending.size > 0) await Promise.allSettled([...this.pending]);
+  /** Resolves once every background auto-save has settled, or after `timeoutMs` when given. */
+  async whenIdle(timeoutMs?: number): Promise<void> {
+    const drain = (async () => {
+      while (this.pending.size > 0) await Promise.allSettled([...this.pending]);
+    })();
+    if (timeoutMs === undefined) return drain;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    });
+    try {
+      await Promise.race([drain, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** The auto-saved copy's path when one is recorded and still on disk. */

@@ -599,6 +599,38 @@ test("save-as, save-all, reveal-saved, drag and reveal-folder write through main
   assert.deepEqual(await savedFiles(env.saveRoot), autoSaved);
 });
 
+test("a gallery read right as a run ends waits for its auto-save, so the image is not shown as unsaved", async (t) => {
+  // The auto-save's write is held until the run has ended and the gallery read has started.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const real = await import("node:fs/promises");
+  const slow: ExportFileSystem = {
+    mkdir: (target, options) => real.mkdir(target, options),
+    open: async (target, flags, mode) => {
+      await gate;
+      return real.open(target, flags, mode);
+    },
+    rm: (target, options) => real.rm(target, options),
+    stat: (target) => real.stat(target),
+  };
+  const env = await harness(t, undefined, { exportFs: slow });
+  const doc = await starter(env, "Saved before it is listed");
+  const prepared = await env.invoke<PrepareRunResponse>("imageWorkflows:prepare-run", { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } });
+  assert.ok("plan" in prepared);
+  const { runId } = await env.invoke<{ runId: string }>("imageWorkflows:start-run", { consentId: prepared.plan.consentId });
+  for (let attempt = 0; (await env.invoke<GetRunResponse>("imageWorkflows:get-run", { runId })).snapshot?.run.state !== "succeeded"; attempt += 1) {
+    assert.ok(attempt < 2_000, "the run should finish while its auto-save is held");
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  const read = env.invoke<GalleryResponse>("imageWorkflows:gallery", {});
+  setTimeout(release, 50);
+  const [item] = (await read).items;
+  assert.equal(item?.saved, true);
+  assert.equal((await savedFiles(env.saveRoot)).length, 1);
+});
+
 test("an auto-save that fails never fails the run", async (t) => {
   const denied: ExportFileSystem = {
     mkdir: async () => {
