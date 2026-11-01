@@ -1,5 +1,6 @@
 import { MAX_AGENT_HOOK_TIMEOUT_SECONDS } from "./hooks/hook-config.js";
 import { HOOKS_TOOL_NAME } from "./hooks-tool.js";
+import { LOAD_TOOLS_TOOL_NAME } from "./on-demand-tools.js";
 
 /**
  * Built-in skill that teaches the model when and how to propose Aiden hooks
@@ -11,7 +12,7 @@ export const AIDEN_HOOKS_SKILL = Object.freeze({
   description:
     "Propose Aiden hooks: shell commands that run on their own at chat events, such as formatting files after an edit, blocking a dangerous command, adding context at session start, or checking work when a turn stops.",
   instructions: [
-    `A hook is a shell command Aiden runs on its own at a chat event. Use the ${HOOKS_TOOL_NAME} tool to list them and to propose one. If ${HOOKS_TOOL_NAME} is not among your tools, hooks can't be proposed here; tell the person they can add one in Settings → Hooks.`,
+    `A hook is a shell command Aiden runs on its own at a chat event. Use the ${HOOKS_TOOL_NAME} tool to list them and to propose one. If ${HOOKS_TOOL_NAME} is not declared yet, load it with the ${LOAD_TOOLS_TOOL_NAME} tool first; only where neither offers it can hooks not be proposed, so tell the person they can add one in Settings → Hooks.`,
     "",
     "When a hook beats a reminder:",
     '- The person repeats the same correction ("run prettier", "don\'t touch dist", "run the tests before you finish", "tell me when you\'re done"). Offer a hook once; don\'t propose one they didn\'t want.',

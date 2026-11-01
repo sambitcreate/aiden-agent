@@ -111,6 +111,8 @@ export interface HookProposal {
   scriptFiles?: string[];
   /** `partial` when the command also runs something Aiden can't follow to a file. */
   scriptCoverage?: "partial";
+  /** For an update or delete: the stored hook's digest when the card was built, so approval can't overwrite a version the owner never saw. */
+  targetDigest?: string;
   createdAt: number;
   expiresAt: number;
 }
@@ -664,7 +666,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
       const definition = storedEntryListingDefinition(existing);
       return {
         ok: true,
-        value: { ...base, action: "delete", hookId: existing.id, definition, digest: definition.digest, summary: `Stops and deletes "${definition.name}". ${summarizeHook(definition)}`, warnings: [] },
+        value: { ...base, action: "delete", hookId: existing.id, definition, digest: definition.digest, targetDigest: definition.digest, summary: `Stops and deletes "${definition.name}". ${summarizeHook(definition)}`, warnings: [] },
       };
     }
     if (!isHookEvent(input.event)) return { ok: false, reason: `"${String(input.event)}" is not an event Aiden supports.` };
@@ -695,6 +697,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
         ...base,
         action: existing ? "update" : "create",
         hookId,
+        ...(existing ? { targetDigest: storedEntryListingDefinition(existing).digest } : {}),
         definition,
         digest: definition.digest,
         summary: existing ? `Changes "${definition.name}". ${summary}` : summary,
@@ -746,6 +749,11 @@ export function createHookService(deps: HookServiceDeps): HookService {
 
   const applyProposal = async (proposal: HookProposal): Promise<HookResult<HookListing | undefined>> => {
     const existing = entries.get(proposal.hookId);
+    // An update or delete applies only to the version its card showed; an edit
+    // made since (in Settings or by another approved proposal) is never overwritten.
+    if (existing && proposal.targetDigest !== undefined && storedEntryListingDefinition(existing).digest !== proposal.targetDigest) {
+      return { ok: false, reason: "The hook changed since this proposal was shown; propose it again so the owner sees the current version." };
+    }
     if (proposal.action === "delete") {
       if (!existing) return { ok: false, reason: "That hook was already deleted." };
       await entries.remove(proposal.hookId);

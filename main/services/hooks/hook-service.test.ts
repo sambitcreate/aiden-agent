@@ -274,6 +274,31 @@ test("a hand edit to a stored hook needs approval again", async (t) => {
   assert.equal((await reloaded.listHooks()).hooks[0]?.status, "changed");
 });
 
+test("an update or delete proposal never overwrites an edit made after its card was shown", async (t) => {
+  const f = await fixture(t);
+  const service = await f.create();
+  const scope = { kind: "chat" as const, chatId: "chat-1" };
+  const saved = await service.saveHook({ scope, event: "Stop", name: "Check", handler: { type: "command", command: "./old.sh" } });
+  assert.ok(saved.ok && saved.value);
+  const id = saved.value.id;
+  const update = await service.proposeHook({ scope, event: "Stop", existingId: id, handler: { type: "command", command: "./from-agent.sh" } });
+  const removal = await service.proposeHook({ scope, event: "Stop", existingId: id, delete: true });
+  assert.ok(update.ok && removal.ok);
+
+  const edited = await service.saveHook({ scope, event: "Stop", existingId: id, handler: { type: "command", command: "./owner-edit.sh" } });
+  assert.ok(edited.ok);
+  assert.equal((await service.approveProposal(update.value.id)).ok, false, "the update card showed ./old.sh");
+  assert.equal((await service.approveProposal(removal.value.id)).ok, false, "the delete card showed ./old.sh");
+  const after = (await service.listHooks()).hooks.find((hook) => hook.id === id);
+  assert.equal(after?.handler.command, "./owner-edit.sh");
+  assert.equal(after?.status, "active");
+
+  const fresh = await service.proposeHook({ scope, event: "Stop", existingId: id, handler: { type: "command", command: "./from-agent.sh" } });
+  assert.ok(fresh.ok);
+  assert.ok((await service.approveProposal(fresh.value.id)).ok, "a proposal made against the current version still applies");
+  assert.equal((await service.listHooks()).hooks.find((hook) => hook.id === id)?.handler.command, "./from-agent.sh");
+});
+
 test("deleting hooks: stored entries go away, repo hooks lose their approval", async (t) => {
   const f = await fixture(t);
   await writeRepoHooks(f.workspace, { hooks: { Stop: [{ hooks: [{ type: "command", command: "./repo-check.sh" }] }] } });

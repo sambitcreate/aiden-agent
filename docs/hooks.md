@@ -225,7 +225,7 @@ Desktop chats that run hooks can load a `hooks` tool ([tool loading](tool-loadin
 - `test`: never runs the command. It asks the agent to have you press **Test** in Settings and shows the last run.
 - `logs`: the last 10 runs, newest first.
 
-A proposal shows on the host as a card with the command, or a before-and-after of the changed fields. Only the person at the computer running the chat can approve it: phones and paired Macs see a summary they can't approve, Full access doesn't approve it, and no remembered scope or hook answers it. Proposals expire after an hour, at most 50 wait at once, and an approved hook starts with the next matching event.
+A proposal shows on the host as a card with the command, or a before-and-after of the changed fields. Only the person at the computer running the chat can approve it: phones and paired Macs see a summary they can't approve, Full access doesn't approve it, and no remembered scope or hook answers it. Proposals expire after an hour, at most 50 wait at once, and an approved hook starts with the next matching event. A proposal to change or delete a hook applies only to the version its card showed: if the hook was edited since, in Settings or by another approved proposal, approving it is refused and the agent has to propose again.
 
 ## Files agents can't write
 
