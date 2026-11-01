@@ -100,6 +100,17 @@ function describeDuration(ms: number): string {
   return minutes === 1 ? "a minute" : `${minutes} minutes`;
 }
 
+function describeBytes(bytes: number): string {
+  const units = ["bytes", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return unit === 0 ? `${value} bytes` : `${value.toFixed(1)} ${units[unit]}`;
+}
+
 async function syncDirectories(directories: Iterable<string>): Promise<void> {
   for (const directory of directories) {
     // Best effort: the unlinks already happened; a lost directory flush only
@@ -346,10 +357,7 @@ export class StudioAssetStore {
         this.options.onError?.(error);
       }
       if (this.exceedsQuota(input.bytes.byteLength)) {
-        throw new StudioAssetError(
-          "quota",
-          `Studio asset storage is full. Space from deleted projects and workflows is freed up to ${describeDuration(this.limits.gcGraceMs)} after you delete them, so try again later or delete more unused items.`,
-        );
+        throw new StudioAssetError("quota", this.quotaMessage());
       }
     }
     const target = this.blobPath(id);
@@ -371,6 +379,21 @@ export class StudioAssetStore {
       "INSERT OR IGNORE INTO assets (id, media_type, bytes, width, height, created_at, touched_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     ).run(id, image.mediaType, input.bytes.byteLength, image.width, image.height, now, now);
     return toRecord(this.requireRow(id));
+  }
+
+  private quotaMessage(): string {
+    const message = `Studio asset storage is full. Space from deleted projects and workflows is freed up to ${describeDuration(this.limits.gcGraceMs)} after you delete them, so try again later or delete more unused items.`;
+    const recovered = this.requireDb()
+      .prepare(
+        "SELECT COUNT(*) AS assets, COALESCE(SUM(bytes), 0) AS bytes FROM assets JOIN recovered ON recovered.asset_id = assets.id",
+      )
+      .get() as { assets: number; bytes: number };
+    const count = Number(recovered.assets);
+    if (count === 0) return message;
+    // Recovered images are never collected (their owners are unknown), so the
+    // grace-period promise does not cover them; say how much they hold instead.
+    const images = count === 1 ? "1 image" : `${count} images`;
+    return `${message} Aiden also keeps ${images} (${describeBytes(Number(recovered.bytes))}) recovered when its image index was rebuilt, because it cannot tell which projects still use them; deleting items does not free that space.`;
   }
 
   private exceedsQuota(incomingBytes: number): boolean {

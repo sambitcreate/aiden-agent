@@ -532,6 +532,21 @@ test("a lost database is rebuilt from stored blobs, which stay readable and in g
   assert.deepEqual(await restarted.collectGarbage(), { deletedAssets: 1, freedBytes: fresh.bytes });
 });
 
+test("a quota refusal says how much space recovered images keep, since deleting items never frees it", async (t) => {
+  const f = await fixture(t, { maxAssets: 2 });
+  const recovered = await f.store.put({ bytes: pngBytes(10, 10, 1) });
+  await f.store.close();
+  await removeDatabase(f.root);
+  const reopened = await f.open();
+  await reopened.put({ bytes: pngBytes(10, 10, 2) });
+  await assert.rejects(reopened.put({ bytes: pngBytes(10, 10, 3) }), (error: unknown) => {
+    assert.ok(error instanceof StudioAssetError && error.code === "quota");
+    assert.match(error.message, new RegExp(`keeps 1 image \\(${recovered.bytes} bytes\\) recovered`, "u"));
+    assert.match(error.message, /deleting items does not free that space/u);
+    return true;
+  });
+});
+
 test("on an ordinary start a valid blob without a row is removed, never re-indexed", async (t) => {
   // A put that crashed before its insert, or a GC that deleted the row before the
   // file, leaves exactly this: the database is intact, so it must not be resurrected.
@@ -623,6 +638,7 @@ test("hitting the quota collects eligible unheld assets first, then accepts the 
   await assert.rejects(f.store.put({ bytes: pngBytes(10, 10, 3) }), (error: unknown) => {
     assert.ok(error instanceof StudioAssetError && error.code === "quota");
     assert.match(error.message, /up to an hour after you delete them/u);
+    assert.doesNotMatch(error.message, /recovered/u);
     return true;
   });
 
