@@ -436,13 +436,13 @@ test.describe("with a workspace", () => {
     }
   });
 
-  test("needs attention view orders chats by what is waiting on the user", async ({ aiden }) => {
+  test("Inbox view orders chats by what is waiting on the user", async ({ aiden }) => {
     const { app, page } = aiden;
     await finishLmStudioOnboarding(page);
     const workspaceId = await page.evaluate(() => localStorage.getItem("aiden-agent.workspaceId"));
     expect(workspaceId).toBeTruthy();
     await app.evaluate(({ ipcMain }, workspaceId) => {
-      // Newest first by activity, so the attention order differs from recency.
+      // Newest first by activity, so the Inbox order differs from recency.
       const chats = [
         ["attention-idle", "Idle chat", 1_800_000_400_000],
         ["attention-working", "Working chat", 1_800_000_300_000],
@@ -463,8 +463,13 @@ test.describe("with a workspace", () => {
     await expect(page.locator("textarea")).toBeVisible();
 
     await page.getByRole("button", { name: "Organize sidebar" }).click();
-    await page.getByRole("menuitemradio", { name: "Needs attention" }).click();
+    await page.getByRole("menuitemradio", { name: "Inbox (Beta)" }).click();
     await expect(page.getByRole("menu")).toBeHidden();
+    const sidebar = page.locator("[data-sidebar]");
+    const earlier = sidebar.getByRole("group", { name: "Earlier" });
+    await expect(earlier.getByText("Approval chat")).toBeVisible();
+    // The pointer over the list freezes it.
+    await sidebar.locator("[data-inbox-view]").hover();
 
     await app.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.webContents.send("chats:activity-changed", {
@@ -475,16 +480,25 @@ test.describe("with a workspace", () => {
       });
     });
 
-    const sidebar = page.locator("[data-sidebar]");
+    // While frozen, rows show their new status but hold their places.
+    await expect(earlier.locator("[data-inbox-status]", { hasText: /^Approval/u })).toBeVisible();
+    await expect(sidebar.getByRole("group", { name: "Needs you" })).toHaveCount(0);
+
+    // Released, they move: approvals before questions in Needs you, then
+    // Earlier, then the Working shelf.
+    const pane = await page.locator("textarea").boundingBox();
+    await page.mouse.move(pane!.x + pane!.width / 2, pane!.y - 120);
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    const needsYou = sidebar.getByRole("group", { name: "Needs you" });
+    await expect(needsYou.locator("[data-inbox-status]")).toHaveText(["Approval", "Question"].map((label) => new RegExp(`^${label}`, "u")));
     const expected = [
-      "Needs approval",
+      "Needs you",
       "Approval chat",
-      "Needs input",
       "Input chat",
+      "Earlier",
+      "Idle chat",
       "Working",
       "Working chat",
-      "Other chats",
-      "Idle chat",
     ];
     await expect
       .poll(async () => {
@@ -498,7 +512,7 @@ test.describe("with a workspace", () => {
     await page.reload();
     await expect(page.locator("textarea")).toBeVisible();
     await page.getByRole("button", { name: "Organize sidebar" }).click();
-    await expect(page.getByRole("menuitemradio", { name: "Needs attention" })).toHaveAttribute(
+    await expect(page.getByRole("menuitemradio", { name: "Inbox (Beta)" })).toHaveAttribute(
       "aria-checked",
       "true",
     );

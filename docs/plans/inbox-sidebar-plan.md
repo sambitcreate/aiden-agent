@@ -1,6 +1,6 @@
 # Inbox Sidebar
 
-Status: Planned (2026-10-31). The owner picked Option D (Hybrid Inbox) and accepted every recommended decision. Two code-grounded edge-case reviews (local desktop; connected hosts, `aiden serve` and phones) are folded in. Nothing is implemented yet.
+Status: In progress (2026-10-31). The owner picked Option D (Hybrid Inbox) and accepted every recommended decision. Two code-grounded edge-case reviews (local desktop; connected hosts, `aiden serve` and phones) are folded in. Phase 0 and Phase 1a–1c are built on the plan branch `claude/inbox-sidebar-plan`; 1d (Bots, the Appearance setting and the user docs) and Phases 2–3 are next. See "1b and 1c as built" for where the build differs from the text below.
 
 Interactive options page (private, shared by the owner): <https://claude.ai/artifact/2KX5jwZ68w9wsejKTAAqx8>
 
@@ -187,6 +187,21 @@ New desktop-only IPC, `chats:pendingAttention`, returns for each chat `{ kind, s
 - **Open.** Clicking a row, Enter on a focused row, or ⌘1–9 opens the chat or Bot. The approval card is docked above the composer (`chat-pane.tsx:3540-3570`), so there is nothing to scroll. Opening focuses its Deny button, the existing default (`chat-pane.tsx:3128-3143`), but only when the person isn't typing and no overlay is open. With several approvals the card shows `approvals[0]` and `pendingCount` (`:3065`). A question replaces the composer (`:3667-3680`) and its answer field takes focus. When both wait, the approval comes first. Once the prompt resolves, focus goes to the composer. Approve, Deny and Always allow keep their existing rules in the chat, for local and remote chats alike.
 - **Mark read** uses `chats:markRead` for local chats and `POST /chats/{chatId}/read` with `throughMessageId` for remote chats. It is available on Updates rows and from the ••• menu.
 
+**1b and 1c as built (2026-10-31).** The view lives in `renderer/components/sidebar/inbox-view.tsx`, with its pure helpers (status label, description, row action, freeze bookkeeping) in `renderer/lib/sidebar-inbox-view.ts`. Where it differs from the text above:
+
+- Remote **Mark read** goes through the existing `markRemoteChatRead` path rather than reading a one-message window; local Mark read passes the newest message no newer than the row's `lastAssistantAt`.
+- A blocked host's rows are left out of the Inbox. The single **Reconnect** notice that replaces them is not built yet.
+- The Working shelf's 40% cap is measured from the sidebar's height with a `ResizeObserver`.
+- Changing the search text or the machine filter resets the frozen order at once, so results never wait for the pointer to leave.
+- "Nothing needs you" shows only when Needs you, Updates and Earlier are all empty; a running Working shelf doesn't hide it.
+- Section counts appear on Needs you and Working only.
+- A Question row relies on the existing `AskUserQuestionComposer` autofocus for its answer field.
+- `chats:pendingAttention` is asked about the newest 2,000 chats, its own limit.
+- When a prompt resolves, focus returns to where it was before the card took it only if that was outside the sidebar; a chat opened from a row or ⌘1–9 leaves focus with the composer.
+- A row held in Needs you by the 400 ms linger or a freeze shows its live status, not the one it entered with.
+- The freeze re-checks for open menus once it starts watching, because the Organize menu that switches to the Inbox can close before the view's observer is attached.
+- Opening a chat calls `chats:dismissDetachedAttention`, so its Unavailable row clears.
+
 **1d. Bots, Settings and docs.**
 
 - **Bots in the Inbox.** A local Bot shows in Needs you when `needsYou`, which already covers pending prompts, issues and failed runs (`live-projection.ts:1475-1505`). Its status reads "Needs you", never Approval or Question. It shows in Updates when it has an unread reply, which lives in `use-bot-sidebar-preferences.ts`, not in chat read markers. The row says it is a Bot, and opening it goes to the Bot. Remote Bots wait for Phase 2.
@@ -224,7 +239,7 @@ New desktop-only IPC, `chats:pendingAttention`, returns for each chat `{ kind, s
 - A render test for the Inbox sections, the status labels and the tooltip, and that Needs you rows render no action buttons.
 - A register-and-invoke test for `chats:pendingAttention`: it refuses unknown chat ids, caps summary length, and returns `since` and `runStartedAt` from `HostRunRegistry` and a `detached` kind after the chat's renderer detaches.
 - Update the Needs-attention coverage rather than adding beside it: `tests/e2e/chat-shell-interactions.spec.ts` and `renderer/components/sidebar-organize-menu.test.tsx`, plus a stored `"attention"` migrating to `"inbox"`.
-- A Playwright spec run through `npm run test:e2e:space`: switch to Inbox; raise an approval from a second window (or a Remote-origin run), since a prompt raised in a chat the person leaves detaches; it appears in Needs you; clicking the row opens the chat with Deny focused; Approve there moves the chat to Working; ⌘1 opens the first row, remote rows included; leaving a chat mid-approval shows an Unavailable row.
+- A Playwright spec run through `npm run test:e2e:space`: switch to Inbox; raise an approval from a second window (or a Remote-origin run), since a prompt raised in a chat the person leaves detaches; it appears in Needs you; clicking the row opens the chat with Deny focused; Approve there moves the chat to Working; ⌘1 opens the first row, remote rows included; leaving a chat mid-approval shows an Unavailable row. As built, `tests/e2e/inbox-sidebar.spec.ts` uses a Remote-origin approval (the main process's `remote:getPendingApproval` and activity events stand in for a paired phone), because Aiden has one main window. A second spec case raises a real approval, checks its Approval row and description, leaves the chat and checks the Unavailable row and tooltip. `chat-shell-interactions.spec.ts` checks that rows hold their places while the pointer is over the list.
 - Each new file is registered in `package.json` and `scripts/ci-test-registry.json`, then `npm run test:ci-policy` is run.
 - Screenshots of every new surface in light and dark go to the owner before approval.
 
