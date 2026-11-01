@@ -1463,6 +1463,9 @@ final class AidenChatViewModel {
     /// What a `git:read` branch list showed for this chat's workspace, if read.
     private(set) var workspaceHasCommits: Bool?
     @ObservationIgnored private var worktreeSetupTask: Task<AidenChatNewWorktree, Error>?
+    /// Cancel was pressed during this setup. A task that already finished
+    /// ignores `cancel()`, so the press is kept here too.
+    @ObservationIgnored private var worktreeSetupCanceled = false
     /// One key per chat and message, so a retry after a lost reply finds the
     /// worktree the Mac already made instead of failing on the moved chat.
     @ObservationIgnored private var worktreeAttempt: (text: String, key: UUID)?
@@ -1918,6 +1921,8 @@ final class AidenChatViewModel {
     /// If the Mac finishes anyway, the chat is in the worktree next time it
     /// loads, still empty.
     func cancelWorktreeSetup() {
+        guard worktreeSetupTask != nil else { return }
+        worktreeSetupCanceled = true
         worktreeSetupTask?.cancel()
     }
 
@@ -3195,6 +3200,7 @@ final class AidenChatViewModel {
                     try await client.moveChatToNewWorktree(id: chatId, revision: revision, text: text, idempotencyKey: key)
                 }
                 worktreeSetupTask = setup
+                worktreeSetupCanceled = false
                 isSettingUpWorktree = true
                 defer {
                     isSettingUpWorktree = false
@@ -3218,7 +3224,7 @@ final class AidenChatViewModel {
                 worktreeAttempt = nil
                 Task { await coordinator.refreshWorkspaces() }
                 // Canceled as the worktree arrived: the chat stays there, unsent.
-                if setup.isCancelled { throw CancellationError() }
+                if setup.isCancelled || worktreeSetupCanceled { throw CancellationError() }
             }
             let session: AidenChatDraftStore.Session
             if let existing = draftSession { session = existing }
