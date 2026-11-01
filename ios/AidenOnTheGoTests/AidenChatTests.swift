@@ -493,6 +493,44 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testAChatThatStoppedQualifyingForNewWorktreeKeepsItsMessageInsteadOfSendingToTheMainCheckout() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let mac = AidenNewWorktreeMacFixture()
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+            onCoordinator: { coordinator = $0 },
+            responseOverride: { mac.response($0) },
+            extraCapabilities: [.gitWrite, .chatNewWorktree]
+        )
+        await coordinator.refreshWorkspaces()
+        await model.load(observeProgress: false)
+        XCTAssertTrue(model.offersNewWorktree)
+        model.draft = "Fix the header"
+        model.startsInNewWorktree = true
+
+        // Another device moves the still-empty chat into a worktree while the chip is on.
+        mac.moveElsewhere()
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.workspaceId, AidenNewWorktreeMacFixture.worktreeWorkspaceId)
+        XCTAssertFalse(model.offersNewWorktree)
+
+        await model.send()
+        XCTAssertEqual(model.presentedError, AidenNewWorktreeCopy.noLongerOffered)
+        XCTAssertEqual(model.draft, "Fix the header", "the message stays in the composer")
+        XCTAssertFalse(model.startsInNewWorktree, "the chip is off, so sending again uses the chat's own folder")
+        XCTAssertTrue(model.chat.messages.isEmpty)
+        XCTAssertFalse(
+            AidenChatProgressLifecycleURLProtocol.postPaths.contains { $0.contains("/chats/") },
+            "nothing was sent to the Mac"
+        )
+        model.stopProgressObservation()
+    }
+
+    @MainActor
     func testANewWorktreeRefusalShowsTheMacsSentenceAndCancelPutsTheMessageBackUnsent() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
@@ -13254,6 +13292,8 @@ private final class AidenNewWorktreeMacFixture: @unchecked Sendable {
         set { lock.withLock { setupMode = newValue } }
     }
     var worktreeKeys: [String?] { lock.withLock { keys } }
+    /// Another device moves the still-empty chat into the worktree workspace.
+    func moveElsewhere() { lock.withLock { moved = true } }
 
     func response(_ request: URLRequest) -> (Int, String, Data)? {
         switch request.url!.path {

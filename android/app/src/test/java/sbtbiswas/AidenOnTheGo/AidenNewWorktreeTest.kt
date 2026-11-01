@@ -480,4 +480,33 @@ class AidenNewWorktreeTest {
             assertEquals("no message was sent", List(3) { "/chats/chat-new/worktree" }, mac.posted())
         }
     }
+
+    @Test
+    fun aChatThatStoppedQualifyingKeepsItsMessageInsteadOfSendingToTheMainCheckout() {
+        val mac = Mac(emptyChat)
+        withEmptyWorkspaceChat(mac, route = { path ->
+            when (path) {
+                "/chats/chat-new/worktree", "/chats/chat-new/turns" -> MockResponse().setResponseCode(500)
+                else -> null
+            }
+        }) { model, _ ->
+            assertTrue(model.offersNewWorktree)
+            model.updateDraft("Fix the header")
+            model.setStartsInNewWorktree(true)
+
+            // Another device moves the still-empty chat into a worktree while the chip is on.
+            mac.chat.set(movedChat)
+            model.loadChat()
+            withTimeout(5_000) { model.chat.first { it?.workspaceId == worktreeWorkspace.id } }
+            assertFalse(model.offersNewWorktree)
+
+            model.send()
+            withTimeout(5_000) { model.isStarting.first { !it } }
+            assertEquals(AidenNewWorktreeCopy.NO_LONGER_OFFERED, model.presentedError.value)
+            assertEquals("the message stays in the composer", "Fix the header", model.draft.value)
+            assertFalse("the chip is off, so sending again uses the chat's own folder", model.startsInNewWorktree.value)
+            assertTrue(model.chat.value!!.messages.isEmpty())
+            assertEquals("nothing was sent to the Mac", emptyList<String>(), mac.posted())
+        }
+    }
 }
