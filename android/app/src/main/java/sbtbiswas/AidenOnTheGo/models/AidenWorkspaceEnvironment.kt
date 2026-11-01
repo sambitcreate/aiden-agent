@@ -41,6 +41,8 @@ data class AidenWorkspace(
     var memoryEnabled: Boolean = true,
     val hasFolder: Boolean = false,
     val isManagedWorktree: Boolean = false,
+    /** Contract revision 50: a hidden folder the Mac made for one chat without a workspace. */
+    val noWorkspace: Boolean = false,
     val branchName: String? = null,
     val repositoryName: String? = null,
     val git: AidenWorkspaceGitSummary? = null,
@@ -48,6 +50,43 @@ data class AidenWorkspace(
     @Serializable(with = InstantIso8601Serializer::class) var updatedAt: Instant? = null,
     val revision: String
 )
+
+/**
+ * Chats without a workspace (contract revision 50). Each runs on the Mac in a hidden workspace of
+ * its own. Phones list them under one Chats group that stands on its home record, and start new
+ * ones there; the Mac gives a new chat its own folder when the home already holds one.
+ */
+object AidenNoWorkspace {
+    const val GROUP_NAME = "Chats"
+
+    /** The record that stands for the Chats group: the long-lived `default` home, else the oldest. */
+    fun home(workspaces: List<AidenWorkspace>): AidenWorkspace? {
+        val hidden = workspaces.filter { it.noWorkspace }
+        return hidden.firstOrNull { it.id == "default" }
+            ?: hidden.minWithOrNull(compareBy<AidenWorkspace> { it.createdAt ?: Instant.EPOCH }.thenBy { it.id })
+    }
+
+    /** Workspaces a person picks, opens or manages: everything but the hidden records. */
+    fun choices(workspaces: List<AidenWorkspace>): List<AidenWorkspace> = workspaces.filterNot { it.noWorkspace }
+
+    /** Workspaces as the sidebar lists them: the hidden records become one Chats group on the home. */
+    fun grouped(workspaces: List<AidenWorkspace>): List<AidenWorkspace> {
+        val home = home(workspaces) ?: return workspaces
+        return workspaces.mapNotNull { workspace ->
+            when {
+                !workspace.noWorkspace -> workspace
+                workspace.id == home.id -> workspace.copy(name = GROUP_NAME)
+                else -> null
+            }
+        }
+    }
+
+    /** The id a chat in [workspaceId] is listed under: chats in a hidden record go to the home. */
+    fun groupId(workspaceId: String, workspaces: List<AidenWorkspace>): String {
+        if (workspaces.none { it.id == workspaceId && it.noWorkspace }) return workspaceId
+        return home(workspaces)?.id ?: workspaceId
+    }
+}
 
 @Serializable
 data class AidenWorkspacePatch(

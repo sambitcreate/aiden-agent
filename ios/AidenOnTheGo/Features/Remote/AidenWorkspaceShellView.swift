@@ -126,14 +126,21 @@ private extension View {
 }
 
 enum AidenNewAgentChoice: String, CaseIterable, Identifiable {
+    case noWorkspace
     case existingWorkspace
     case newWorkspace
     case scratchWorkspace
 
     var id: String { rawValue }
 
+    /// The choices to offer: No Workspace only when the Mac lists a Chats home (revision 50).
+    static func available(noWorkspace: Bool) -> [AidenNewAgentChoice] {
+        allCases.filter { noWorkspace || $0 != .noWorkspace }
+    }
+
     var title: String {
         switch self {
+        case .noWorkspace: "No Workspace"
         case .existingWorkspace: "Existing Workspace"
         case .newWorkspace: "New Workspace"
         case .scratchWorkspace: "Managed Scratch Workspace"
@@ -142,6 +149,7 @@ enum AidenNewAgentChoice: String, CaseIterable, Identifiable {
 
     var detail: String {
         switch self {
+        case .noWorkspace: "Use your global settings. Aiden keeps a private folder for this chat."
         case .existingWorkspace: "Start another chat without creating a folder."
         case .newWorkspace: "Create a reusable workspace for ongoing work."
         case .scratchWorkspace: "Use an isolated workspace Aiden can clean up later."
@@ -150,6 +158,7 @@ enum AidenNewAgentChoice: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
+        case .noWorkspace: "bubble.left.and.bubble.right"
         case .existingWorkspace: "folder"
         case .newWorkspace: "folder.badge.plus"
         case .scratchWorkspace: "hammer.fill"
@@ -819,8 +828,11 @@ struct AidenWorkspaceSidebarProjection: Equatable {
                 left.updatedAt == right.updatedAt ? left.id < right.id : left.updatedAt > right.updatedAt
             }
         let triagedChats = aidenNeedsAttentionFirst(regularChats)
-        let chatsByWorkspace = Dictionary(grouping: triagedChats, by: \AidenChatSummary.workspaceId)
-        let sections = workspaces.compactMap { workspace -> AidenWorkspaceSidebarSection? in
+        // Chats without a workspace each have a hidden record; they share one Chats section.
+        let chatsByWorkspace = Dictionary(grouping: triagedChats) { chat in
+            AidenNoWorkspace.groupID(for: chat.workspaceId, in: workspaces)
+        }
+        let sections = AidenNoWorkspace.grouped(workspaces).compactMap { workspace -> AidenWorkspaceSidebarSection? in
             let allChats = chatsByWorkspace[workspace.id] ?? []
             let workspaceMatches = !query.isEmpty && workspace.name.localizedCaseInsensitiveContains(query)
             let visibleChats = query.isEmpty || workspaceMatches
@@ -1303,7 +1315,7 @@ struct AidenWorkspaceShellView: View {
         }
         .sheet(isPresented: $isShowingExistingWorkspacePicker) {
             NavigationStack {
-                List(activeWorkspaces) { workspace in
+                List(AidenNoWorkspace.choices(activeWorkspaces)) { workspace in
                     Button {
                         isShowingExistingWorkspacePicker = false
                         Task { await createNewAgent(in: workspace) }
@@ -1557,7 +1569,9 @@ struct AidenWorkspaceShellView: View {
                                                 .font(.caption.weight(.semibold))
                                                 .foregroundStyle(palette.secondary)
                                                 .frame(width: 12)
-                                            Image(systemName: section.workspace.hasFolder ? "folder" : "tray")
+                                            Image(systemName: section.workspace.noWorkspace
+                                                ? "bubble.left.and.bubble.right"
+                                                : section.workspace.hasFolder ? "folder" : "tray")
                                                 .font(.body.weight(.medium))
                                                 .foregroundStyle(palette.accent)
                                                 .frame(width: 22)
@@ -1574,7 +1588,9 @@ struct AidenWorkspaceShellView: View {
                                         "\(expanded ? "Collapse" : "Expand") \(section.workspace.name)"
                                     )
 
-                                    workspaceDestination(section.workspace)
+                                    if !section.workspace.noWorkspace {
+                                        workspaceDestination(section.workspace)
+                                    }
                                 }
 
                                 if expanded {
@@ -1985,12 +2001,15 @@ struct AidenWorkspaceShellView: View {
         }
         .aidenProminentGlassButton()
         .disabled(newChatUnavailable)
-        .accessibilityLabel("New Workspace Chat")
+        .accessibilityLabel("New Chat")
         .accessibilityHint("Choose the workspace for a new chat.")
         .matchedTransitionSource(id: "AidenNewAgentOptions", in: newAgentTransition)
         .popover(isPresented: $isShowingNewAgentChoices, arrowEdge: .bottom) {
             AidenNewAgentPopover(
-                canUseExistingWorkspace: !activeWorkspaces.isEmpty,
+                choices: AidenNewAgentChoice.available(
+                    noWorkspace: AidenNoWorkspace.home(in: coordinator.workspaces) != nil
+                ),
+                canUseExistingWorkspace: !AidenNoWorkspace.choices(activeWorkspaces).isEmpty,
                 onSelect: presentNewAgentChoice
             )
             .frame(width: 320)
@@ -2005,6 +2024,11 @@ struct AidenWorkspaceShellView: View {
         Task { @MainActor in
             await Task.yield()
             switch choice {
+            case .noWorkspace:
+                // The Mac gives the chat a folder of its own if the home already holds one.
+                if let home = AidenNoWorkspace.home(in: coordinator.workspaces) {
+                    await createNewAgent(in: home)
+                }
             case .existingWorkspace:
                 isShowingExistingWorkspacePicker = true
             case .newWorkspace:
@@ -2379,17 +2403,18 @@ struct AidenWorkspaceShellView: View {
 private struct AidenNewAgentPopover: View {
     @Environment(\.aidenPalette) private var palette
 
+    let choices: [AidenNewAgentChoice]
     let canUseExistingWorkspace: Bool
     let onSelect: (AidenNewAgentChoice) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("New Workspace Chat")
+                Text("New Chat")
                     .font(.title3.bold())
                     .foregroundStyle(palette.foreground)
 
-                Text("Choose the workspace for this chat.")
+                Text("Choose where this chat runs.")
                     .font(.subheadline)
                     .foregroundStyle(palette.secondary)
             }
@@ -2397,7 +2422,7 @@ private struct AidenNewAgentPopover: View {
             .padding(.top, 18)
             .padding(.bottom, 10)
 
-            ForEach(Array(AidenNewAgentChoice.allCases.enumerated()), id: \.element.id) { index, choice in
+            ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
                 Button {
                     onSelect(choice)
                 } label: {
@@ -2435,7 +2460,7 @@ private struct AidenNewAgentPopover: View {
                 .opacity(choice == .existingWorkspace && !canUseExistingWorkspace ? 0.45 : 1)
                 .accessibilityHint(detail(for: choice))
 
-                if index < AidenNewAgentChoice.allCases.count - 1 {
+                if index < choices.count - 1 {
                     Divider()
                         .overlay(palette.secondary.opacity(0.18))
                         .padding(.leading, 69)
@@ -2475,12 +2500,13 @@ private struct AidenWorkspacesDirectoryView: View {
         archiveStore.archivedWorkspaceIDs(for: coordinator.activeInstanceId)
     }
 
+    // Chats without a workspace live under Chats in the sidebar, not here.
     private var activeWorkspaces: [AidenWorkspace] {
-        coordinator.workspaces.filter { !archivedWorkspaceIDs.contains($0.id) }
+        AidenNoWorkspace.choices(coordinator.workspaces).filter { !archivedWorkspaceIDs.contains($0.id) }
     }
 
     private var archivedWorkspaces: [AidenWorkspace] {
-        coordinator.workspaces.filter { archivedWorkspaceIDs.contains($0.id) }
+        AidenNoWorkspace.choices(coordinator.workspaces).filter { archivedWorkspaceIDs.contains($0.id) }
     }
 
     private var filteredWorkspaces: [AidenWorkspace] {

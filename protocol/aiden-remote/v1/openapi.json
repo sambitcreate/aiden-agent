@@ -8671,6 +8671,11 @@
           "isManagedWorktree": {
             "type": "boolean"
           },
+          "noWorkspace": {
+            "type": "boolean",
+            "const": true,
+            "description": "Contract revision 50. Present only on a hidden folder Aiden made for one chat without a workspace. Clients list those chats under one Chats group instead of a workspace each."
+          },
           "branchName": {
             "type": "string"
           },
@@ -15514,6 +15519,11 @@
           },
           "isManagedWorktree": {
             "type": "boolean"
+          },
+          "noWorkspace": {
+            "type": "boolean",
+            "const": true,
+            "description": "Contract revision 50. Present only on a hidden folder Aiden made for one chat without a workspace. Clients list those chats under one Chats group instead of a workspace each."
           },
           "branchName": {
             "type": "string"

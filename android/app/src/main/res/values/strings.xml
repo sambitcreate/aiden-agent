@@ -291,7 +291,7 @@
     <string name="workspace_home_opening_chat">Opening chat…</string>
     <string name="workspace_home_chats_still_loading">Chats are still loading. Try again shortly.</string>
     <string name="workspace_home_create_chat_failed">Aiden couldn\'t create the chat.</string>
-    <string name="workspace_home_new_chat_cd">New Workspace Chat</string>
+    <string name="workspace_home_new_chat_cd">New Chat</string>
     <string name="workspace_home_connecting">Connecting to Aiden Agent…</string>
     <string name="workspace_home_offline">Offline — showing saved chats</string>
     <string name="workspace_home_scheduled_tasks">Scheduled Tasks</string>
@@ -308,6 +308,8 @@
     <string name="workspace_home_empty_chats_body">Start a new Workspace chat to begin.</string>
     <string name="workspace_home_loading_more">Loading more chats</string>
     <string name="workspace_home_load_more">Load more chats</string>
+    <string name="workspace_home_choice_no_workspace">No Workspace</string>
+    <string name="workspace_home_choice_no_workspace_detail">Use your global settings. Aiden keeps a private folder for this chat</string>
     <string name="workspace_home_choice_existing">Existing Workspace</string>
     <string name="workspace_home_choice_existing_detail">Choose a workspace and open a new chat</string>
     <string name="workspace_home_choice_new_detail">Create a reusable workspace and its first chat</string>

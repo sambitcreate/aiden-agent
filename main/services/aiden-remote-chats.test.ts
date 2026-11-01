@@ -71,6 +71,7 @@ function fixture(
     botPaused?: (botId: string) => Promise<boolean>;
     spendingRefusal?: (chat: { id: string; botId?: string }) => Promise<string | undefined>;
     workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
+    noWorkspace?: ConstructorParameters<typeof AidenRemoteChatService>[0]["noWorkspace"];
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
@@ -288,6 +289,7 @@ function fixture(
       fixtureOptions.botTurnAuthorityPreflight ?? (async () => undefined),
     ...(fixtureOptions.botPaused ? { botPaused: fixtureOptions.botPaused } : {}),
     ...(fixtureOptions.spendingRefusal ? { spendingRefusal: fixtureOptions.spendingRefusal } : {}),
+    ...(fixtureOptions.noWorkspace ? { noWorkspace: fixtureOptions.noWorkspace } : {}),
     ...(fixtureOptions.workspaceFolderRefusal
       ? { workspaceFolderRefusal: fixtureOptions.workspaceFolderRefusal }
       : {}),
@@ -1464,6 +1466,41 @@ test("chat create is device-scoped idempotent and CRUD checks exact revisions", 
   assert.equal(renamed.title, "Changed");
   await app.service.remove(created.id, renamed.revision);
   assert.equal(app.notifications(), 3);
+});
+
+test("a phone's chat aimed at a used No workspace folder is saved in a fresh one (revision 50)", async () => {
+  const released: string[] = [];
+  const app = fixture(chat({ workspaceId: "project" }), {
+    noWorkspace: {
+      // The home already holds a chat; any other workspace is used as asked.
+      target: async (workspaceId, chatId) =>
+        workspaceId === "default" && chatId !== "home-chat" ? "hidden-fresh" : workspaceId,
+      release: async (workspaceId) => { released.push(workspaceId); },
+    },
+  });
+  const created = await app.service.create("device-1", "chat-create-key-nows1", { workspaceId: "default" });
+  assert.equal(created.workspaceId, "hidden-fresh");
+  assert.equal(
+    (await app.service.create("device-1", "chat-create-key-nows1", { workspaceId: "default" })).workspaceId,
+    "hidden-fresh",
+    "a retried create keeps the folder it was given",
+  );
+
+  // Moving the empty chat to a project lets go of the hidden folder it left.
+  const moved = await app.service.move("device-1", created.id, created.revision, "chat-move-key-nows01", {
+    workspaceId: "project",
+    confirmedForeground: true,
+  });
+  assert.equal(moved.workspaceId, "project");
+  assert.deepEqual(released, ["hidden-fresh"]);
+
+  // And back into the Chats group: it gets a folder of its own again.
+  const back = await app.service.move("device-1", created.id, moved.revision, "chat-move-key-nows02", {
+    workspaceId: "default",
+    confirmedForeground: true,
+  });
+  assert.equal(back.workspaceId, "hidden-fresh");
+  assert.deepEqual(released, ["hidden-fresh", "project"]);
 });
 
 test("summary revisions are valid optimistic-concurrency tokens for chat mutations", async () => {

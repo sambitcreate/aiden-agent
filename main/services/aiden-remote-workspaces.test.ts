@@ -124,6 +124,18 @@ test("workspace projections omit local paths and internal managed-worktree ident
   assert.match(projected.revision, /^rev_[A-Za-z0-9_-]{43}$/u);
 });
 
+test("a hidden No workspace folder is marked for phones and ordinary workspaces are not (revision 50)", () => {
+  const hidden = projectAidenRemoteWorkspace(workspace({
+    name: "No workspace",
+    folderPath: "/private/app-data/chat-folders/quiet-otter",
+    noWorkspace: true,
+  }));
+  assert.equal(hidden.noWorkspace, true);
+  assert.equal(hidden.hasFolder, true);
+  assert.equal(JSON.stringify(hidden).includes("/private/"), false);
+  assert.equal("noWorkspace" in projectAidenRemoteWorkspace(workspace({ folderPath: "/code/project" })), false);
+});
+
 test("workspace creates are exact, idempotent per device, and notify Electron once", async () => {
   const app = fixture([]);
   const key = "workspace-create-key-0001";

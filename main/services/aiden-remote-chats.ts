@@ -1224,6 +1224,16 @@ export class AidenRemoteChatService {
        * why before its message is stored. Undefined, or absent: not refused.
        */
       workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
+      /**
+       * No workspace chats keep a hidden folder each: `target` gives the
+       * workspace a new or moved chat goes to, and `release` lets go of a
+       * hidden folder a moved chat left empty. Absent: workspaces are used as
+       * requested.
+       */
+      noWorkspace?: {
+        target(workspaceId: string, chatId?: string): Promise<string>;
+        release(workspaceId: string): Promise<void>;
+      };
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
@@ -1820,9 +1830,10 @@ export class AidenRemoteChatService {
           const selection = parsed.providerId || parsed.model
             ? await this.options.models.resolve(parsed.providerId, parsed.model)
             : undefined;
+          const workspaceId = (await this.options.noWorkspace?.target(parsed.workspaceId)) ?? parsed.workspaceId;
           const created = await this.options.application.create(
             {
-              workspaceId: parsed.workspaceId,
+              workspaceId,
               ...(selection
                 ? { providerId: selection.providerId, model: selection.modelId }
                 : {}),
@@ -1867,9 +1878,13 @@ export class AidenRemoteChatService {
         { deviceId, route: "POST /chats/{id}/move", resourceId: safeId(chatId, "chat"), key },
         { revision, ...parsed },
         async () => {
-          const moved = await this.options.application.moveEmptyToWorkspace(chatId, parsed.workspaceId, {
+          const previous = (await this.options.application.list()).find((entry) => entry.id === chatId);
+          const workspaceId = (await this.options.noWorkspace?.target(parsed.workspaceId, chatId)) ?? parsed.workspaceId;
+          const moved = await this.options.application.moveEmptyToWorkspace(chatId, workspaceId, {
             assertCurrent: (chat) => requireRevision(revision, chat),
           });
+          const left = previous ? persistedChatWorkspaceId(previous.workspaceId) : undefined;
+          if (left && left !== workspaceId) await this.options.noWorkspace?.release(left);
           this.options.notifyChanged?.(chatId);
           return projectAidenRemoteChat(moved!);
         },

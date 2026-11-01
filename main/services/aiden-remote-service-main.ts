@@ -612,6 +612,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               const workspace = await configStore.getWorkspace(workspaceId);
               return workspace ? workspaceFolderRemoteRefusal(workspace) : undefined;
             },
+            noWorkspace: {
+              target: (workspaceId, chatId) =>
+                workspaceApplicationService.workspaceForNoWorkspaceChat(workspaceId, chatId),
+              release: (workspaceId) => workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId),
+            },
             deviceSupportsSkillInvocation: async (deviceId) => {
               const device = (await state.snapshot()).devices.find(
                 (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,

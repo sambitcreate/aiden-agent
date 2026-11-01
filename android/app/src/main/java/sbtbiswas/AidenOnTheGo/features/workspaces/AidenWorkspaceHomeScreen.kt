@@ -50,6 +50,7 @@ import androidx.compose.material.icons.outlined.DataUsage
 import androidx.compose.material.icons.outlined.FolderCopy
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.FolderSpecial
+import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Person
@@ -112,6 +113,7 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.scheduled.AidenScheduledTasksScreen
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
+import sbtbiswas.AidenOnTheGo.models.AidenNoWorkspace
 import sbtbiswas.AidenOnTheGo.models.AidenUsageSummary
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceCreate
@@ -264,6 +266,9 @@ private fun AidenWorkspaceHome(
         workspaces.filterNot { archivedIds.contains(it.id) }
     }
     val activeById = remember(activeWorkspaces) { activeWorkspaces.associateBy { it.id } }
+    // Chats without a workspace are started from their own choice, not picked as a workspace.
+    val workspaceChoices = remember(activeWorkspaces) { AidenNoWorkspace.choices(activeWorkspaces) }
+    val noWorkspaceHome = remember(workspaces) { AidenNoWorkspace.home(workspaces) }
     val sidebarOrganization = runCatching {
         AidenWorkspaceSidebarOrganization.valueOf(sidebarOrganizationRaw)
     }.getOrDefault(AidenWorkspaceSidebarOrganization.WORKSPACE)
@@ -703,11 +708,22 @@ private fun AidenWorkspaceHome(
             ) {
                 Text(stringResource(R.string.workspace_home_new_chat_cd), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(10.dp))
+                // Revision 50: the Mac gives the chat a folder of its own if the home already holds one.
+                noWorkspaceHome?.let { home ->
+                    AidenNewChatChoice(
+                        stringResource(R.string.workspace_home_choice_no_workspace),
+                        stringResource(R.string.workspace_home_choice_no_workspace_detail),
+                        Icons.Outlined.Forum
+                    ) {
+                        showNewChatChoices = false
+                        createChat(home)
+                    }
+                }
                 AidenNewChatChoice(
                     stringResource(R.string.workspace_home_choice_existing),
                     stringResource(R.string.workspace_home_choice_existing_detail),
                     Icons.Outlined.FolderOpen,
-                    enabled = activeWorkspaces.isNotEmpty()
+                    enabled = workspaceChoices.isNotEmpty()
                 ) {
                     showNewChatChoices = false
                     showExistingWorkspacePicker = true
@@ -731,10 +747,10 @@ private fun AidenWorkspaceHome(
             title = { Text(stringResource(R.string.workspace_home_choice_existing)) },
             text = {
                 AidenConnectedColumn(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    activeWorkspaces.forEachIndexed { index, workspace ->
+                    workspaceChoices.forEachIndexed { index, workspace ->
                         AidenGroupCard(
                             index = index,
-                            count = activeWorkspaces.size,
+                            count = workspaceChoices.size,
                             onClick = {
                                 showExistingWorkspacePicker = false
                                 createChat(workspace)
@@ -1201,7 +1217,7 @@ internal fun AidenWorkspaceSidebarSectionRow(
                 )
                 Spacer(Modifier.width(4.dp))
                 Icon(
-                    Icons.Outlined.FolderOpen,
+                    if (section.workspace.noWorkspace) Icons.Outlined.Forum else Icons.Outlined.FolderOpen,
                     contentDescription = null,
                     tint = palette.accent,
                     modifier = Modifier.size(21.dp)

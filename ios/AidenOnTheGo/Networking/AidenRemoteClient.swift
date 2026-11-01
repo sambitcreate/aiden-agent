@@ -453,6 +453,8 @@ struct AidenWorkspace: Codable, Identifiable, Equatable, Sendable {
     var memoryEnabled: Bool = true
     let hasFolder: Bool
     let isManagedWorktree: Bool
+    /// Contract revision 50: a hidden folder the Mac made for one chat without a workspace.
+    let noWorkspace: Bool
     let branchName: String?
     let repositoryName: String?
     let git: AidenWorkspaceGitSummary?
@@ -461,7 +463,7 @@ struct AidenWorkspace: Codable, Identifiable, Equatable, Sendable {
     let revision: String
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, permission, memoryEnabled, hasFolder, isManagedWorktree
+        case id, name, permission, memoryEnabled, hasFolder, isManagedWorktree, noWorkspace
         case branchName, repositoryName, git, createdAt, updatedAt, revision
     }
 
@@ -472,6 +474,7 @@ struct AidenWorkspace: Codable, Identifiable, Equatable, Sendable {
         memoryEnabled: Bool = true,
         hasFolder: Bool,
         isManagedWorktree: Bool,
+        noWorkspace: Bool = false,
         branchName: String?,
         repositoryName: String?,
         git: AidenWorkspaceGitSummary?,
@@ -485,6 +488,7 @@ struct AidenWorkspace: Codable, Identifiable, Equatable, Sendable {
         self.memoryEnabled = memoryEnabled
         self.hasFolder = hasFolder
         self.isManagedWorktree = isManagedWorktree
+        self.noWorkspace = noWorkspace
         self.branchName = branchName
         self.repositoryName = repositoryName
         self.git = git
@@ -501,12 +505,53 @@ struct AidenWorkspace: Codable, Identifiable, Equatable, Sendable {
         memoryEnabled = try values.decodeIfPresent(Bool.self, forKey: .memoryEnabled) ?? true
         hasFolder = try values.decode(Bool.self, forKey: .hasFolder)
         isManagedWorktree = try values.decode(Bool.self, forKey: .isManagedWorktree)
+        noWorkspace = try values.decodeIfPresent(Bool.self, forKey: .noWorkspace) ?? false
         branchName = try values.decodeIfPresent(String.self, forKey: .branchName)
         repositoryName = try values.decodeIfPresent(String.self, forKey: .repositoryName)
         git = try values.decodeIfPresent(AidenWorkspaceGitSummary.self, forKey: .git)
         createdAt = try values.decode(Date.self, forKey: .createdAt)
         updatedAt = try values.decode(Date.self, forKey: .updatedAt)
         revision = try values.decode(String.self, forKey: .revision)
+    }
+}
+
+/// Chats without a workspace (contract revision 50). Each runs on the Mac in a
+/// hidden workspace of its own. Phones list them under one Chats group that
+/// stands on its home record, and start new ones there; the Mac gives a new
+/// chat its own folder when the home already holds one.
+enum AidenNoWorkspace {
+    static let groupName = "Chats"
+
+    /// The record that stands for the Chats group: the long-lived `default` home, else the oldest.
+    static func home(in workspaces: [AidenWorkspace]) -> AidenWorkspace? {
+        let hidden = workspaces.filter(\.noWorkspace)
+        return hidden.first { $0.id == "default" } ?? hidden.min { left, right in
+            left.createdAt == right.createdAt ? left.id < right.id : left.createdAt < right.createdAt
+        }
+    }
+
+    /// Workspaces a person picks, opens or manages: everything but the hidden records.
+    static func choices(_ workspaces: [AidenWorkspace]) -> [AidenWorkspace] {
+        workspaces.filter { !$0.noWorkspace }
+    }
+
+    /// Workspaces as the sidebar lists them: the hidden records become one Chats group on the home.
+    static func grouped(_ workspaces: [AidenWorkspace]) -> [AidenWorkspace] {
+        guard let home = home(in: workspaces) else { return workspaces }
+        return workspaces.compactMap { workspace in
+            guard workspace.noWorkspace else { return workspace }
+            guard workspace.id == home.id else { return nil }
+            var group = workspace
+            group.name = groupName
+            return group
+        }
+    }
+
+    /// The id a chat in `workspaceID` is listed under: chats in a hidden record go to the home.
+    static func groupID(for workspaceID: String, in workspaces: [AidenWorkspace]) -> String {
+        guard workspaces.contains(where: { $0.id == workspaceID && $0.noWorkspace }),
+              let home = home(in: workspaces) else { return workspaceID }
+        return home.id
     }
 }
 

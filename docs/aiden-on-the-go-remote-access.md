@@ -129,6 +129,10 @@ When the paired Mac has spending limits on (contract revision 47), Aiden On The 
 
 When the agent leaves something running for a workspace chat on the Mac (a dev server, a watcher, a long test run, or a server a command started), Aiden On The Go for iPhone and Android shows **N in background** beside the composer (contract revision 49, `chat:jobs`, asked for in a call of its own). Its list says how long each job has run or how it ended and which addresses a server listens on ("localhost:5173 on your Mac"; open them in a browser on the Mac), and **Stop** ends a job and everything it started. The list refreshes after each reply and every few seconds while something runs. Linux desktops serve it too; the CLI does not run background jobs. Older phones and Macs show nothing new. See [coding follow-through](coding-follow-through.md).
 
+## Chats without a workspace
+
+When the paired desktop has No workspace chats (contract revision 50), Aiden On The Go for iPhone and Android lists them in one **Chats** group, as the desktop does, and **New Chat** offers **No Workspace** first. That chat runs on the desktop with its global settings in a private folder of its own; the private folders never show up in the phone's workspace list, pickers or Scheduled Tasks. The CLI has no No workspace chats, so a phone paired to it offers nothing new. See [chats without a workspace](no-workspace-chats.md).
+
 ## Pictures in a reply
 
 When the agent shows, shares or generates a picture, Aiden On The Go for iPhone and Android draws it right beneath the step that made it, in the order the reply happened (contract revision 44). Pictures still arrive when the reply is saved, not while it streams; a picture being generated shows its placeholder in that same spot. With an older Mac they stay at the end of the reply.

@@ -164,7 +164,7 @@ class AidenBotContractTest {
         assertEquals(AidenRemoteErrorCode.APPROVAL_RESOLVED, runControlError.code)
         assertEquals("deny", runControlError.details?.decision)
         assertTrue(fixture.capabilities.none { it.rawValue in setOf("host:events", "runs:observe", "runs:control") })
-        assertEquals(listOf(true, false), fixture.workspaces.map { it.memoryEnabled })
+        assertEquals(listOf(true, false, true), fixture.workspaces.map { it.memoryEnabled })
         assertEquals(true, fixture.memorySettings?.enabled)
         assertEquals(AidenRemoteProtocol.VERSION, fixture.protocolVersion)
         assertTrue(fixture.server.features.contains(AidenRemoteProtocol.CHAT_SUMMARIES_FEATURE))

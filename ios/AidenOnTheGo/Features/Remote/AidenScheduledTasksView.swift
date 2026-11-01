@@ -145,7 +145,7 @@ final class AidenScheduledTasksModel {
     var settings: AidenScheduledSettings? { canReadSchedules ? settingsStorage : nil }
     var workspaces: [AidenWorkspace] {
         guard canManageSchedules else { return [] }
-        return coordinator.workspaces.filter { $0.permission != .none }
+        return AidenNoWorkspace.choices(coordinator.workspaces).filter { $0.permission != .none }
     }
 
     private var currentAccess: AidenScheduledTaskAccess {
