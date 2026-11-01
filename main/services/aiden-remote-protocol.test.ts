@@ -9,6 +9,7 @@ import {
 } from "./aiden-remote-protocol.js";
 import { BOT_AVATAR_COLORS, BOT_AVATAR_COLOR_HEX, BOT_AVATAR_FACE_HEX } from "../../renderer/shared/bots.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import { hostInboxPlacement, type HostInboxSignals } from "../../renderer/shared/inbox-state.js";
 import { BOT_ACTIVITY_PHASES, botActivityDisplay, botElapsedLabel } from "../../renderer/shared/bot-activity.js";
 import {
   parseAidenRemoteBotSession,
@@ -3269,6 +3270,33 @@ test("revision 48 fixtures carry Inbox signals, and a stray or malformed signal 
   assert.equal(pinned?.pinnedAt, "2026-08-18T18:45:00.000Z");
   assert.equal(pinned?.snoozedUntil, "2026-08-19T09:00:00.000Z");
   assert.equal(pinned?.doneAt, undefined);
+  // The host's bucket: the waiting run orders by its wait, the unseen failure
+  // (which outranks its snooze) by its update time.
+  assert.equal(waiting?.inboxBucket, "needs_you");
+  assert.equal(waiting?.inboxSortAt, waiting?.attentionSince);
+  assert.equal(pinned?.inboxBucket, "needs_you");
+  assert.equal(pinned?.inboxSortAt, pinned?.updatedAt);
+  // Recomputed from each row's own fields, so a placement rule change fails the fixture.
+  const at = (value: string | undefined) => (value === undefined ? undefined : Date.parse(value));
+  const beforeSnoozeEnds = Date.parse(pinned!.snoozedUntil!) - 60_000;
+  for (const row of [waiting!, pinned!]) {
+    const placed = hostInboxPlacement(
+      Object.fromEntries(Object.entries({
+        rowState: row.rowState!,
+        unread: row.unread === true,
+        failed: row.lastRunFailed === true,
+        updatedAt: Date.parse(row.updatedAt),
+        lastAssistantAt: at(row.lastAssistantAt),
+        attentionSince: at(row.attentionSince),
+        runStartedAt: at(row.runStartedAt),
+        pinnedAt: at(row.pinnedAt),
+        doneAt: at(row.doneAt),
+        snoozedUntil: at(row.snoozedUntil),
+      }).filter(([, value]) => value !== undefined)) as unknown as HostInboxSignals,
+      beforeSnoozeEnds,
+    );
+    assert.deepEqual([row.inboxBucket, row.inboxSortAt], [placed.bucket, new Date(placed.sortAt).toISOString()], row.id);
+  }
 
   const mutate = (change: (copy: Record<string, unknown>) => void) => {
     const copy = structuredClone(raw);

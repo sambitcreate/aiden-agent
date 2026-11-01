@@ -396,9 +396,9 @@ Claim the revision after the one on `main` at merge time. It is 47 today (`AIDEN
 - `freezeSummaryPage` in `main/services/aiden-remote-chats.ts` computes both fields for `GET /chat-summaries` and the host feed, so the CLI build serves them unchanged.
 - Unread is per host (the host's read markers), not per device.
 - The Needs you tier is not sent; clients read it from `rowState`.
-- The desktop parser drops an unknown bucket with its sort time, so newer hosts can add buckets without breaking a peer's page parse. It refuses a bucket without a sort time, or a sort time without a bucket.
+- The desktop parser drops a bucket it can't use with its sort time: an unknown or non-string bucket, a missing or malformed sort time, or a sort time alone. Newer hosts can add buckets, and a buggy one can't break a peer's page parse.
 - The desktop peer client keeps placing peer rows from the raw signals and ignores the bucket.
-- Tests: the summaries suite places every kind of row through the real service (including a snooze that lapses on the host clock), the parser cases, and `packages/cli/tests/inbox-host.test.mjs` reads `needs_you`, `updates`, `earlier`, `pinned` and `done` from `aiden serve`.
+- Tests: the summaries suite places every kind of row through the real service (including a snooze that lapses on the host clock, Done and Snooze held together, a question, and a snooze under a failure or a live run), the parser cases, the protocol fixture test recomputing both fixture buckets with `hostInboxPlacement`, iOS and Android tolerance tests carrying both fields, and `packages/cli/tests/inbox-host.test.mjs` reads `needs_you`, `updates`, `earlier`, `pinned` and `done` from `aiden serve`.
 
 **3b. iOS and Android Inbox.**
 

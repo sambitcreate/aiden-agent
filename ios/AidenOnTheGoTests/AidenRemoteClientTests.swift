@@ -636,9 +636,11 @@ final class AidenRemoteClientTests: XCTestCase {
         let withSignals = try XCTUnwrap(object["summaries"] as? [[String: Any]])
         XCTAssertNotNil(withSignals[0]["attentionSince"])
         XCTAssertNotNil(withSignals[1]["triageRevision"])
+        XCTAssertNotNil(withSignals[0]["inboxBucket"])
         let signalKeys = [
             "attentionSince", "runStartedAt", "lastAssistantAt",
             "triageRevision", "pinnedAt", "doneAt", "snoozedUntil",
+            "inboxBucket", "inboxSortAt",
         ]
         let decode = { (summaries: [[String: Any]]) throws -> [AidenChatSummary] in
             object["summaries"] = summaries
@@ -651,6 +653,8 @@ final class AidenRemoteClientTests: XCTestCase {
         malformed[0]["attentionSince"] = 7
         malformed[1]["triageRevision"] = "three"
         malformed[1]["snoozedUntil"] = ["at": "tomorrow"]
+        malformed[0]["inboxBucket"] = 3
+        malformed[1]["inboxSortAt"] = false
         XCTAssertEqual(current, older)
         XCTAssertEqual(try decode(malformed), older)
         XCTAssertEqual(current.map(\.displayRowState), [.needsApproval, .idle])

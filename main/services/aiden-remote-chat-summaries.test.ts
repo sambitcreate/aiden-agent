@@ -305,6 +305,12 @@ test("summaries carry the host's Inbox bucket and sort time for each kind of row
   await triage.set("chat-done-then-output", { done: true });
   triageNow = N - 6 * hour;
   await triage.set("chat-snoozed", { snoozeUntil: N + 3 * hour });
+  // Snoozes that a failure the person hasn't seen, and a running chat, outrank.
+  await triage.set("chat-failed-snoozed", { snoozeUntil: N + 3 * hour });
+  await triage.set("chat-working-snoozed", { snoozeUntil: N + 3 * hour });
+  // Done and Snooze both held: Done holds until newer output, so it wins.
+  triageNow = N - 3 * hour;
+  await triage.set("chat-done-snoozed", { done: true, snoozeUntil: N + 3 * hour });
   const readThrough = {
     "chat-failed-seen": N - 2 * hour,
     "chat-pinned": N - 3 * day,
@@ -315,11 +321,17 @@ test("summaries carry the host's Inbox bucket and sort time for each kind of row
   const times: Record<string, AidenRemoteChatRunTimes> = {
     "chat-approve": { runStartedAt: N - 10 * minute, attentionSince: N - 5 * minute },
     "chat-working": { runStartedAt: N - 2 * minute },
+    "chat-question": { runStartedAt: N - 15 * minute, attentionSince: N - 7 * minute },
+    "chat-working-snoozed": { runStartedAt: N - 3 * minute },
   };
   let now = N;
   const fixture = summaryService([
     metadata("chat-approve", N - 4 * minute),
     metadata("chat-working", N - minute),
+    metadata("chat-question", N - 6 * minute),
+    metadata("chat-working-snoozed", N - 2 * minute),
+    metadata("chat-failed-snoozed", N - 90 * minute, { lastAssistantAt: N - 90 * minute, lastAssistantFailed: true }),
+    metadata("chat-done-snoozed", N - 4 * hour, { lastAssistantAt: N - 4 * hour }),
     metadata("chat-failed", N - hour, { lastAssistantAt: N - hour, lastAssistantFailed: true }),
     metadata("chat-failed-seen", N - 2 * hour, { lastAssistantAt: N - 2 * hour, lastAssistantFailed: true }),
     metadata("chat-pinned", N - 3 * day, { lastAssistantAt: N - 3 * day }),
@@ -333,9 +345,9 @@ test("summaries carry the host's Inbox bucket and sort time for each kind of row
     now: () => now,
     activity: () => ({
       revision: 1,
-      activeChatIds: ["chat-approve", "chat-working"],
+      activeChatIds: ["chat-approve", "chat-working", "chat-question", "chat-working-snoozed"],
       approvalChatIds: ["chat-approve"],
-      inputChatIds: [],
+      inputChatIds: ["chat-question"],
     }),
     readMarkers: { snapshot: async () => ({ revision: 1, baselineAt: 0, readThrough }), markRead: async () => true },
     triage,
@@ -350,12 +362,16 @@ test("summaries carry the host's Inbox bucket and sort time for each kind of row
     // Needs you orders by the wait, falling back to the row's update time.
     "chat-approve": ["needs_you", iso(N - 5 * minute)],
     "chat-failed": ["needs_you", iso(N - hour)],
+    "chat-question": ["needs_you", iso(N - 7 * minute)],
+    "chat-failed-snoozed": ["needs_you", iso(N - 90 * minute)],
     // A failure the person has seen is an ordinary read chat.
     "chat-failed-seen": ["earlier", iso(N - 2 * hour)],
     "chat-working": ["working", iso(N - 2 * minute)],
+    "chat-working-snoozed": ["working", iso(N - 3 * minute)],
     "chat-pinned": ["pinned", iso(N - 30 * minute)],
     // Done and snoozed rows carry the time they order by once they come back.
     "chat-done": ["done", iso(N - 4 * hour)],
+    "chat-done-snoozed": ["done", iso(N - 4 * hour)],
     "chat-done-then-output": ["updates", iso(N - hour)],
     "chat-snoozed": ["snoozed", iso(N - 5 * hour)],
     "chat-new": ["updates", iso(N - 20 * minute)],
@@ -415,16 +431,24 @@ test("summary parser accepts additive row state and rejects unknown values", () 
   assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, pinnedAt: "2026-08-30T21:10:00.000Z" }), /triageRevision/u);
   assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, triageRevision: 0 }), /triageRevision/u);
   assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, runStartedAt: 1_700_000_000_000 }), /runStartedAt/u);
-  // The host's bucket travels with its sort time; a bucket from a later host is dropped with it.
+  // The host's bucket travels with its sort time; a pair the desktop can't use is dropped, never fatal.
   const bucketed = parseAidenRemoteChatSummaryProjection({ ...summary, inboxBucket: "snoozed", inboxSortAt: "2026-08-30T21:00:00Z" });
   assert.equal(bucketed.inboxBucket, "snoozed");
   assert.equal(bucketed.inboxSortAt, "2026-08-30T21:00:00Z");
   const later = parseAidenRemoteChatSummaryProjection({ ...summary, inboxBucket: "archived", inboxSortAt: "2026-08-30T21:00:00Z" });
   assert.equal("inboxBucket" in later, false);
   assert.equal("inboxSortAt" in later, false);
-  assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, inboxBucket: "done" }), /inboxSortAt/u);
-  assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, inboxSortAt: "2026-08-30T21:00:00Z" }), /inboxBucket/u);
-  assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, inboxBucket: 3, inboxSortAt: "2026-08-30T21:00:00Z" }), /inboxBucket/u);
+  for (const unusable of [
+    { inboxBucket: "done" },
+    { inboxSortAt: "2026-08-30T21:00:00Z" },
+    { inboxBucket: 3, inboxSortAt: "2026-08-30T21:00:00Z" },
+    { inboxBucket: "done", inboxSortAt: "yesterday" },
+  ]) {
+    const row = parseAidenRemoteChatSummaryProjection({ ...summary, ...unusable });
+    assert.equal("inboxBucket" in row, false);
+    assert.equal("inboxSortAt" in row, false);
+    assert.equal(row.title, "Release planning");
+  }
 });
 
 test("equal timestamps use ordinal chat ID ordering", async () => {

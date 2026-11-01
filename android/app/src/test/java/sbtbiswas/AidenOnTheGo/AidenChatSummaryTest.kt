@@ -218,9 +218,11 @@ class AidenChatSummaryTest {
         val signals = waiting +
             "\"attentionSince\":\"2026-09-01T12:00:40Z\",\"runStartedAt\":\"2026-09-01T12:00:30Z\"," +
             "\"lastAssistantAt\":\"2026-09-01T12:00:35Z\",\"triageRevision\":3," +
-            "\"pinnedAt\":\"2026-09-01T11:00:00Z\",\"snoozedUntil\":\"2026-09-02T09:00:00Z\","
+            "\"pinnedAt\":\"2026-09-01T11:00:00Z\",\"snoozedUntil\":\"2026-09-02T09:00:00Z\"," +
+            "\"inboxBucket\":\"needs_you\",\"inboxSortAt\":\"2026-09-01T12:00:40Z\","
         val malformed = waiting +
-            "\"attentionSince\":7,\"triageRevision\":\"three\",\"snoozedUntil\":{\"at\":\"tomorrow\"},"
+            "\"attentionSince\":7,\"triageRevision\":\"three\",\"snoozedUntil\":{\"at\":\"tomorrow\"}," +
+            "\"inboxBucket\":3,\"inboxSortAt\":false,"
         for (extra in listOf(signals, waiting, malformed)) {
             server.enqueue(MockResponse().setResponseCode(200).setBody(
                 """{"summaries":[${summaryJson("chat-1", extra, "active")}]}"""

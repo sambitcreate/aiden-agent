@@ -3742,9 +3742,10 @@ const INBOX_SIGNAL_TIME_FIELDS = [
  * Contract revision 48 (`inbox-signals-v1`): each RFC 3339 time a summary
  * row carries for the Inbox, the triage revision those triage times belong
  * to, and the host's `inboxBucket` with its `inboxSortAt`. Every field is
- * additive; the triage times need the revision, and a bucket needs its sort
- * time. A bucket this client doesn't know (a later host's) is dropped with
- * its sort time, so the reader places the row itself.
+ * additive; the triage times need the revision. The desktop places peer rows
+ * itself, so a bucket it can't use (one it doesn't know, one without a sort
+ * time, or a sort time without a bucket) is dropped with its pair instead of
+ * failing the page.
  */
 function parseInboxSignalFields(
   value: Record<string, unknown>,
@@ -3757,15 +3758,10 @@ function parseInboxSignalFields(
 > {
   const fields: Partial<Record<(typeof INBOX_SIGNAL_TIME_FIELDS)[number], string>> &
     Pick<AidenRemoteChatSummaryProjection, "triageRevision" | "inboxBucket" | "inboxSortAt"> = {};
-  if (hasOwn(value, "inboxBucket")) {
-    const bucket = boundedText(value.inboxBucket, `${label} inboxBucket`, 64);
-    if (isInboxBucket(bucket)) {
-      if (!hasOwn(value, "inboxSortAt")) throw new Error(`${label} inboxBucket needs an inboxSortAt.`);
-      fields.inboxBucket = bucket;
-      fields.inboxSortAt = dateTimeValue(value.inboxSortAt, `${label} inboxSortAt`);
-    }
-  } else if (hasOwn(value, "inboxSortAt")) {
-    throw new Error(`${label} inboxSortAt needs an inboxBucket.`);
+  const placement = inboxPlacementFields(value, label);
+  if (placement) {
+    fields.inboxBucket = placement.inboxBucket;
+    fields.inboxSortAt = placement.inboxSortAt;
   }
   for (const field of INBOX_SIGNAL_TIME_FIELDS) {
     if (hasOwn(value, field)) fields[field] = dateTimeValue(value[field], `${label} ${field}`);
@@ -3776,6 +3772,19 @@ function parseInboxSignalFields(
     throw new Error(`${label} triage times need a triageRevision.`);
   }
   return fields;
+}
+
+/** The host's bucket and sort time, or nothing when either is missing or unusable. */
+function inboxPlacementFields(
+  value: Record<string, unknown>,
+  label: string,
+): Required<Pick<AidenRemoteChatSummaryProjection, "inboxBucket" | "inboxSortAt">> | undefined {
+  if (!isInboxBucket(value.inboxBucket) || !hasOwn(value, "inboxSortAt")) return undefined;
+  try {
+    return { inboxBucket: value.inboxBucket, inboxSortAt: dateTimeValue(value.inboxSortAt, `${label} inboxSortAt`) };
+  } catch {
+    return undefined;
+  }
 }
 
 export function parseAidenRemoteChatSummaryPage(
