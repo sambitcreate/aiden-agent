@@ -58,6 +58,11 @@ export interface ToolContext {
   mcpProviderScope?: McpProviderExecutionScope;
   /** Exact configured server identities approved for this unattended generation. */
   mcpServerIds?: readonly string[];
+  /**
+   * Connectors the chat's workspace switched off. Applies only to the ambient
+   * set (no exact `mcpServerIds`): Bots and approved automations keep their own grants.
+   */
+  disabledMcpServerIds?: readonly string[];
   /** Exact connection fingerprints approved for this unattended generation. */
   mcpServerBindings?: readonly ScheduledMcpServerBinding[];
   /**
@@ -183,7 +188,10 @@ export async function assembleAgentTools(
   if (ctx.permission !== "none" && ctx.browserTools) tools.push(...ctx.browserTools);
   if (ctx.permission !== "none" && ctx.deviceTools) tools.push(...ctx.deviceTools);
   if (ctx.allowScheduling !== false) {
-    tools.push(createAssistantProjectTool(), createAssistantMcpServerTool());
+    tools.push(
+      createAssistantProjectTool(),
+      createAssistantMcpServerTool(undefined, ctx.disabledMcpServerIds),
+    );
   }
   tools.push(...buildSchedulingTools(ctx));
   if (ctx.allowSubagents === true) {

@@ -577,6 +577,37 @@ class AidenRemoteClientTest {
     }
 
     @Test
+    fun rateLimitedProgressStreamCarriesTheServerDelayFromBodyOrHeader() = runBlocking {
+        fun rateLimited(details: String?, retryable: Boolean = true) = MockResponse().setResponseCode(429).setBody(
+            """{"error":{"code":"rate_limited","message":"Too many progress connections.","requestId":"req_busy","retryable":$retryable${details?.let { ",\"details\":$it" } ?: ""}}}"""
+        )
+        suspend fun refusal(response: MockResponse): AidenRemoteClientException.Server {
+            server.enqueue(response)
+            try {
+                client.progressEvents("chat_progress").toList()
+                fail("Expected the full progress pool to be refused")
+                throw AssertionError()
+            } catch (error: AidenRemoteClientException.Server) {
+                assertEquals("/api/aiden/v1/chats/chat_progress/progress/events", server.takeRequest().path)
+                return error
+            }
+        }
+
+        val both = refusal(rateLimited("""{"retryAfterSeconds":5}""").setHeader("Retry-After", "30"))
+        assertTrue("the server's retryable flag survives parsing", both.isRetryableRateLimit)
+        assertEquals("the body's delay wins over the header", 5, both.retryAfterSeconds)
+
+        assertEquals(7, refusal(rateLimited(null).setHeader("Retry-After", " 7 ")).retryAfterSeconds)
+        assertEquals("a long wait is capped at a minute", 60, refusal(rateLimited("""{"retryAfterSeconds":3600}""")).retryAfterSeconds)
+        assertEquals("a zero wait still waits a second", 1, refusal(rateLimited(null).setHeader("Retry-After", "0")).retryAfterSeconds)
+        assertNull("an HTTP-date is not a delay", refusal(rateLimited(null).setHeader("Retry-After", "Wed, 21 Oct 2026 07:28:00 GMT")).retryAfterSeconds)
+
+        val final = refusal(rateLimited("""{"retryAfterSeconds":5}""", retryable = false))
+        assertFalse("a 429 the server marked final stays final", final.isRetryableRateLimit)
+        assertEquals(5, final.retryAfterSeconds)
+    }
+
+    @Test
     fun testStartTurnRejectsPrivateMetadataOutsideOpaqueParentText() = runBlocking {
         server.enqueue(
             MockResponse().setResponseCode(202).setBody(

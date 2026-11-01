@@ -687,7 +687,7 @@ struct AidenSpendingStatus: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case spending }
 }
 
-/// Contract revision 48 (`chat:jobs`): one of a chat's background jobs. It
+/// Contract revision 49 (`chat:jobs`): one of a chat's background jobs. It
 /// runs on the Mac, so its ports are addresses there, not on the phone.
 struct AidenBackgroundJob: Codable, Equatable, Identifiable, Sendable {
     enum State: String, Codable, Sendable { case running, exited, failed, stopped }
@@ -852,6 +852,19 @@ enum AidenRemoteClientError: Error, LocalizedError {
     var isCredentialRevoked: Bool {
         guard case .server(_, let body) = self else { return false }
         return body.code.rawValue == "credential_revoked"
+    }
+
+    /// A 429 the server marked `retryable`. The request was refused before it
+    /// ran, so it can be sent again after `serverRetryAfterSeconds`.
+    var isRetryableRateLimit: Bool {
+        guard case .server(429, let body) = self else { return false }
+        return body.retryable
+    }
+
+    /// The server's clamped retry delay for a 429, if it named one.
+    var serverRetryAfterSeconds: Int? {
+        guard case .server(429, let body) = self else { return nil }
+        return body.retryAfterDelaySeconds
     }
 
     var errorDescription: String? {
@@ -1477,7 +1490,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         }
     }
 
-    /// Revision 48 (`chat:jobs`): what the agent left running for the chat on the Mac.
+    /// Revision 49 (`chat:jobs`): what the agent left running for the chat on the Mac.
     func backgroundJobs(chatId: String) async throws -> AidenBackgroundJobs {
         try validateRemoteIdentifier(chatId)
         return try await send(method: "GET", path: ["chats", chatId, "jobs"])
@@ -3613,7 +3626,11 @@ final class AidenRemoteClient: @unchecked Sendable {
                 code: response.statusCode == 401 || response.statusCode == 403 ? .unauthorized : .network
             )
             if let envelope = try? AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: data) {
-                throw AidenRemoteClientError.server(statusCode: response.statusCode, body: envelope.error)
+                var body = envelope.error
+                body.retryAfterHeaderSeconds = AidenRemoteErrorEnvelope.retryAfterHeaderSeconds(
+                    response.value(forHTTPHeaderField: "Retry-After")
+                )
+                throw AidenRemoteClientError.server(statusCode: response.statusCode, body: body)
             }
             throw AidenRemoteClientError.unexpectedStatus(response.statusCode)
         }

@@ -24,7 +24,7 @@ import {
   type HostModelCatalog,
   type HostModelChoice,
 } from "../lib/hosts/host-resources";
-import { remoteAttachmentUploads } from "../lib/hosts/remote-attachments";
+import { prepareRemoteAttachmentUploads } from "../lib/hosts/remote-attachments";
 import { RemoteHostAdapter } from "../lib/hosts/remote-host-adapter";
 import {
   hostFolderChoice,
@@ -523,7 +523,7 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
 
   const send = async (text: string, attachments: Attachment[]) => {
     if (!binding) throw new Error(`Connecting to ${listed.label}…`);
-    const uploads = remoteAttachmentUploads(attachments);
+    const uploads = await prepareRemoteAttachmentUploads(attachments);
     let target = project;
     if (target === SCRATCH_PROJECT) {
       // Once created, the scratch project is the selection, so a retry never makes another.

@@ -336,7 +336,7 @@ async function runAcceptance() {
     await writeFile(path.join(userData, "config.json"), JSON.stringify(fixture.config, null, 2), "utf8");
 
     const log = path.join(temporary, "aiden.log");
-    child = spawn(executable, [`--user-data-dir=${userData}`], { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    child = spawn(executable, [`--user-data-dir=${userData}`], { env: { ...process.env, AIDEN_ANALYTICS: "0" }, stdio: ["ignore", "pipe", "pipe"] });
     if (!child.pid) throw new Error("The packaged Aiden process did not start.");
     const childState = monitorChild(child);
     const logStream = createWriteStream(log, { flags: "a", mode: 0o600 });

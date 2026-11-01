@@ -40,10 +40,10 @@ class AidenSkillTest {
     @Test
     fun skillCatalogCodecParsesBoundedEntries() {
         val catalog = AidenSkillContractCodec.parseCatalog(
-            catalogJson(listOf(entryJson(), entryJson("sk1_${"b".repeat(43)}", "ship", false)))
+            catalogJson(listOf(entryJson(name = "engineering:review-code"), entryJson("sk1_${"b".repeat(43)}", "ship", false)))
         )
         assertEquals(2, catalog.skills.size)
-        assertEquals("review-code", catalog.skills[0].name)
+        assertEquals("engineering:review-code", catalog.skills[0].name)
         assertEquals(AidenRemoteSkillSource.WORKSPACE, catalog.skills[0].source)
         assertTrue(catalog.skills[0].available)
         assertEquals("Shadowed.", catalog.skills[1].unavailableReason)

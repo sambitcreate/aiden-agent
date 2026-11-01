@@ -196,6 +196,14 @@ export const AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION = 46 as const;
 export const AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION = 47 as const;
 /**
  * Contract revision 48 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_WORKSPACE_CLONE_CONTRACT_REVISION`):
+ * paired desktops can clone a repository into a selected approved folder with
+ * optional bounded environment files. `workspace-clone-v1` is never
+ * advertised to phones.
+ */
+export const AIDEN_REMOTE_WORKSPACE_CLONE_CONTRACT_REVISION = 48 as const;
+/**
+ * Contract revision 49 (provisional; re-claim the next revision after `main`'s
  * at merge by changing only `AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION`):
  * a chat's background jobs on phones (`chat:jobs`, an opt-in capability
  * rather than a feature token, because phones already hear the most feature
@@ -205,7 +213,7 @@ export const AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION = 47 as const;
  * /chats/{chatId}/jobs/{jobId}/stop` with `{}` stops one and returns the
  * list. Older phones see nothing new.
  */
-export const AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION = 48 as const;
+export const AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION = 49 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -432,7 +440,7 @@ export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
 export const AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES = ["schedule:cards"] as const;
 
 /**
- * Contract revision 48: a device holding `chat:jobs` may list a chat's
+ * Contract revision 49: a device holding `chat:jobs` may list a chat's
  * background jobs (`GET /chats/{chatId}/jobs`, which also needs `chat:read`)
  * and stop one (`POST /chats/{chatId}/jobs/{jobId}/stop`, which also needs
  * `chat:write`). It is offered only while the host runs background jobs
@@ -2031,7 +2039,7 @@ export interface AidenRemoteContractFixture {
   browserRecordings?: AidenRemoteBrowserRecordingsFixture;
   /** Revision 47 (`spending-limits-v1`): spending status, Allow more and the refusals. */
   spending?: AidenRemoteSpendingFixture;
-  /** Revision 48 (`chat:jobs`): a chat's jobs, a stop, and an unknown job. */
+  /** Revision 49 (`chat:jobs`): a chat's jobs, a stop, and an unknown job. */
   backgroundJobs?: AidenRemoteBackgroundJobsFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
@@ -8003,7 +8011,7 @@ function parseSpendingFixture(value: unknown): AidenRemoteSpendingFixture {
   return fixture;
 }
 
-/** Revision 48: one of a chat's background jobs as a phone sees it. */
+/** Revision 49: one of a chat's background jobs as a phone sees it. */
 export interface AidenRemoteBackgroundJob {
   /** `job_` and 8 hex digits. */
   id: string;
@@ -8047,7 +8055,7 @@ function backgroundJobTime(record: Record<string, unknown>, key: string): string
   return text;
 }
 
-/** Revision 48: `GET /chats/{chatId}/jobs` and the stop response. */
+/** Revision 49: `GET /chats/{chatId}/jobs` and the stop response. */
 export function parseAidenRemoteBackgroundJobs(value: unknown): AidenRemoteBackgroundJobs {
   if (!isRecord(value)) throw new Error("Background jobs must be an object.");
   assertExactKeys(value, ["jobs"], "Background jobs");

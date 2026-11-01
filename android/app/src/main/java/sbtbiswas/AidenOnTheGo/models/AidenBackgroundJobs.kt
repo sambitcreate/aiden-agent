@@ -13,7 +13,7 @@ import java.time.Duration
 import java.time.Instant
 
 /**
- * Contract revision 48 (`chat:jobs`): one of a chat's background jobs. It runs on the Mac, so
+ * Contract revision 49 (`chat:jobs`): one of a chat's background jobs. It runs on the Mac, so
  * its ports are addresses there, not on the phone.
  */
 @Serializable

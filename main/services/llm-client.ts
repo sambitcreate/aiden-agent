@@ -36,8 +36,7 @@ import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 import { type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { convertToLlm, DEFAULT_COMPACTION_SETTINGS } from "./pi-legacy-harness.js";
 import { createInitialSystemMessage, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
-import { access, mkdir, mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { app, ipcMain, logger } from "../platform.js";
 import { buildAgentTools, buildSchedulingTools } from "./tools.js";
@@ -256,6 +255,7 @@ import { GenerationTimelineProjector, safeToolIssueDetails } from "./generation-
 import { canHostAcpHarness, createAcpGenerationHost } from "./acp/generation-host.js";
 import { acpHosts } from "./acp/hosts.js";
 import { captureRootIdentity } from "./acp/client-files.js";
+import { createAcpScratchDirectories } from "./acp/scratch-directory.js";
 import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 import { advisorRuntime } from "./advisor-runtime-main.js";
 import { ADVISOR_TOOL_NAME } from "./advisor-runtime.js";
@@ -284,7 +284,7 @@ import {
 } from "../../renderer/shared/attachment-contract.js";
 import { listWorkspaceFiles } from "./workspace-files.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
-import { assertWorkspaceFolderPresent } from "./workspace-folder-presence.js";
+import { assertWorkspaceFolderPresent, restoreNoWorkspaceFolder } from "./workspace-folder-presence.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
@@ -1199,12 +1199,15 @@ async function prepareGeneration(
       ? await configStore.getWorkspace(params.workspaceId)
       : undefined);
   if (workspace && !botBound) {
+    await restoreNoWorkspaceFolder(workspace);
     // Name a moved or deleted folder before any tool fails without saying why.
     await assertWorkspaceFolderPresent(workspace);
     await assertManagedWorktreeAdmission(workspace);
   }
   const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
+  // Connectors this workspace switched off. Bots keep their own grants.
+  const workspaceDisabledMcpServerIds = botBound ? undefined : workspace?.disabledMcpServerIds;
   // Bot and Assistant prompts retain their exact, separately granted sources.
   const agentsInstructionRoots = !botBound && !assistantMode
     ? {
@@ -1357,7 +1360,9 @@ async function prepareGeneration(
         discoveredSubagentMcpInventory,
         botSubagentMcpConnectionIdentities,
       )
-    : discoveredSubagentMcpInventory;
+    : discoveredSubagentMcpInventory.filter(
+        (scope) => !workspaceDisabledMcpServerIds?.includes(scope.serverId),
+      );
   const subagentShellBinary = resolveSubagentShellRunnerBinary();
   const subagentShellEnabled =
     allowSubagents &&
@@ -1793,6 +1798,7 @@ async function prepareGeneration(
         ? options.allowMcpTools !== false && botConnectionIds!.length > 0
         : options.allowMcpTools,
       mcpServerIds: botContext ? botConnectionIds : options.mcpServerIds,
+      disabledMcpServerIds: workspaceDisabledMcpServerIds,
       mcpServerBindings: options.mcpServerBindings,
       allowSubagents,
       mode: assistantPersonaMode
@@ -2277,6 +2283,8 @@ async function prepareGeneration(
     googleWorkspaceSnapshot,
     skillSnapshot,
     workspaceId: workspace?.id,
+    /** The folder is the hidden one behind a No workspace chat. */
+    noWorkspace: workspace?.noWorkspace === true,
     subagentSupervisor,
     showLocalModelReasoning: settings.showLocalModelReasoning,
     compactionEngine: compactionEngineFrom(settings.compactionEngine),
@@ -2289,29 +2297,10 @@ async function prepareGeneration(
   };
 }
 
-const acpScratchFallbacks = new Map<string, Promise<string>>();
-
-/** Working directory for an agent turn in a chat without a folder. It grants no file access. */
-async function acpScratchDir(chatId: string): Promise<string> {
-  const safe = chatId.replace(/[^a-zA-Z0-9_-]/gu, "_").slice(0, 80) || "chat";
-  const directory = join(app.getPath("userData"), "acp", "scratch", safe);
-  try {
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    return directory;
-  } catch (error) {
-    // Never fail a generation over its working directory; this one grants no
-    // file access either way.
-    logger.warn("acp", "Could not prepare the agent scratch directory.", error);
-    // A private directory, never the shared temp folder itself, reused for the
-    // chat so its agent session is not rebuilt on every turn.
-    let fallback = acpScratchFallbacks.get(chatId);
-    if (!fallback) {
-      fallback = mkdtemp(join(tmpdir(), "aiden-acp-scratch-")).catch(() => tmpdir());
-      acpScratchFallbacks.set(chatId, fallback);
-    }
-    return fallback;
-  }
-}
+const acpScratch = createAcpScratchDirectories({
+  root: () => join(app.getPath("userData"), "acp", "scratch"),
+  onPrepareError: (error) => logger.warn("acp", "Could not prepare the agent scratch directory.", error),
+});
 
 export const llmClient = {
   /**
@@ -2665,6 +2654,7 @@ export const llmClient = {
       googleWorkspaceSnapshot,
       skillSnapshot,
       workspaceId,
+      noWorkspace,
       subagentSupervisor,
       showLocalModelReasoning,
       compactionEngine,
@@ -3046,7 +3036,11 @@ export const llmClient = {
           const memoryWorkspace = !generationChat.workspaceId
             ? undefined
             : await configStore.getWorkspace(generationChat.workspaceId);
-          const scope = memoryScopeForChat(generationChat, memoryWorkspace?.folderPath);
+          const scope = memoryScopeForChat(
+            generationChat,
+            memoryWorkspace?.folderPath,
+            memoryWorkspace?.noWorkspace === true,
+          );
           const indexing = await memoryStore.replaceChatMetadata(
             scope,
             generationChat.id,
@@ -3300,6 +3294,7 @@ export const llmClient = {
                 true,
                 skillSnapshot,
                 new Set(toolsWithRuntimeContributions.map((tool) => tool.name)),
+                noWorkspace,
               ).then(({ systemPrompt, sections }) => {
                 hostPromptSkills = sections.skills;
                 return systemPrompt;
@@ -4845,7 +4840,7 @@ export const llmClient = {
                     }),
                   }
                 : {}),
-              scratchDir: await acpScratchDir(params.chatId),
+              scratchDir: await acpScratch.directoryFor(params.chatId),
               permission: () => permission,
               timeline,
               requestApproval: (prompt, approvalSignal) => approvals.request(prompt, approvalSignal, owner.documentId),
@@ -5193,7 +5188,17 @@ export const llmClient = {
     if (!owner || (ownerDocumentId !== undefined && owner.documentId !== ownerDocumentId)) {
       return false;
     }
-    if (initialization?.cancelRequested || generation?.cancelRequested) return false;
+    if (initialization?.cancelRequested || generation?.cancelRequested) {
+      // Quitting after Stop re-issues the abort for a turn that is still
+      // unwinding (and any child it started meanwhile). The person's Stop
+      // origin stays, so the reply is not offered for resume.
+      if (origin === "application_shutdown") {
+        generation?.agent.abort();
+        subagentRuntimeRegistry.abortGeneration(streamId);
+        approvals.cancelStream(streamId);
+      }
+      return false;
+    }
     if (initialization) {
       initialization.cancelRequested = true;
       initialization.cancellationOrigin = origin;
@@ -5307,6 +5312,11 @@ export const llmClient = {
   async stopChatWork(chatId: string): Promise<boolean> {
     cancelChatGenerations(chatId, "user_stop");
     return waitForChatSettlement(chatId, () => this.isChatBusy(chatId));
+  },
+
+  /** Remove a deleted chat's agent scratch directory. Never throws. */
+  forgetDeletedChat(chatId: string): Promise<void> {
+    return acpScratch.forget(chatId);
   },
 
   /** Close generation admission before chat deletion performs its first await. */

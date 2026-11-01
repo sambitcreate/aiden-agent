@@ -1,3 +1,6 @@
+import { hostQueryKeys } from "../lib/hosts/host-query-keys";
+import { PeerProjectCloneDialog } from "./peer-project-clone-dialog";
+import { remoteNewChatDraftKey } from "./remote-new-chat-view";
 import {
   beginChatDraftSend,
   createChatDraft,
@@ -14,6 +17,7 @@ import {
   updateChatDraftWorktree,
 } from "../lib/chat-draft";
 import { registerChatPromptTarget } from "../lib/chat-prompt-bridge";
+import { resolveModelDisplay } from "../lib/model-display";
 import { readChatDraftGitMemory, resolveDraftWorktreeDefaults } from "../lib/chat-draft-git-memory";
 import {
   draftWorkInOptions,
@@ -42,6 +46,7 @@ import { adoptWorkspace } from "../lib/use-workspace-path-intake";
 import { workspaceChangeBusyReason } from "../lib/workspace-menu";
 import {
   discardComposerDraft,
+  loadComposerDraft,
   restoreUnsentMessage,
   saveComposerDraftText,
   seedComposerAttachments,
@@ -150,6 +155,8 @@ import {
   type ApprovalPrompt,
   type GenerationHandle,
 } from "../lib/ipc";
+import { isNoWorkspace, noWorkspaceHome } from "../lib/no-workspace";
+import { noWorkspaceFolderForFirstSend } from "../lib/no-workspace-send";
 import {
   queryKeys,
   installAppendedChatSnapshot,
@@ -573,8 +580,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [contextFeed],
   );
+  const cloneDraftRef = React.useRef<{ text: string; attachments: Attachment[] }>({ text: "", attachments: [] });
   const onDraftContextChange = React.useCallback(
     (value: string, draftAttachments: Attachment[]) => {
+      cloneDraftRef.current = { text: value, attachments: draftAttachments };
       const draftText = value.trim() ? value : undefined;
       const attachments = draftAttachments.length ? draftAttachments : undefined;
       contextFeed.draftChanged(draftText || attachments ? { draftText, attachments } : undefined);
@@ -1353,13 +1362,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useEffect(() => {
     environmentPanel.setContextDetails(!draft && chat.data ? {
       chat: chat.data,
+      providerId,
       providerLabel: selectedProvider?.label ?? providerId ?? "Unavailable",
-      modelLabel: model ?? "Unavailable",
+      providerArtwork: selectedProvider?.artwork,
+      modelId: model,
+      modelLabel: model ? resolveModelDisplay(model, modelInfo.data?.[model]).label : "Unavailable",
       pressure: contextPressure,
       compacting: contextCompactPending || (displayedGenerationTimeline?.steps.some((step) => isToolStep(step) && step.toolName === "compact_context" && (step.status === "pending" || step.status === "running")) ?? false),
     } : null);
     return () => environmentPanel.setContextDetails(null);
-  }, [chat.data, draft, selectedProvider?.label, providerId, model, contextPressure, contextCompactPending, displayedGenerationTimeline, environmentPanel.setContextDetails]);
+  }, [chat.data, draft, selectedProvider?.label, selectedProvider?.artwork, providerId, model, modelInfo.data, contextPressure, contextCompactPending, displayedGenerationTimeline, environmentPanel.setContextDetails]);
 
   // The PR rail/push dialog read the presented chat even without subagents.
   React.useLayoutEffect(() => {
@@ -1594,6 +1606,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             setModelCallRetry(retry);
           },
           onAgentsInstructionNotices: (notices) => {
+            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
             for (const notice of agentsInstructionNotices.update(chatId, notices)) {
               toast.info(agentsInstructionNoticeMessage(notice));
             }
@@ -1960,12 +1973,24 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setIsStartingGeneration(true);
       try {
         let updated: Chat;
+        /** Set when this No workspace draft is saved in a fresh hidden folder. */
+        let separateNoWorkspaceId: string | undefined;
         try {
+          if (firstDraft && !worktreeRequest) {
+            const draftWorkspace = workspaces.find((entry) => entry.id === firstDraft.chat.workspaceId);
+            if (isNoWorkspace(draftWorkspace)) {
+              separateNoWorkspaceId = await noWorkspaceFolderForFirstSend(
+                { listChats: chatsApi.list, createNoWorkspace: workspacesApi.createNoWorkspace },
+                draftWorkspace!.id,
+              );
+              if (separateNoWorkspaceId) await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+            }
+          }
           const firstMessageInput = firstDraft
             ? {
                 draftId: chatId,
                 title: firstDraft.chat.title === "New agent" ? undefined : firstDraft.chat.title,
-                workspaceId: firstDraft.chat.workspaceId!,
+                workspaceId: separateNoWorkspaceId ?? firstDraft.chat.workspaceId!,
                 providerId,
                 model,
                 turnId: messageTurnId,
@@ -2082,7 +2107,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // into an unsent composer payload.
         // A New worktree send saved the chat in the worktree's workspace,
         // which this render has not seen yet.
-        if (worktreeRequest) effectiveWorkspaceIdRef.current = updated.workspaceId;
+        // A No workspace draft that needed its own folder was saved in a fresh one.
+        if (worktreeRequest || separateNoWorkspaceId) effectiveWorkspaceIdRef.current = updated.workspaceId;
         void runGeneration(messageTurnId).then((started) => {
           if (!started.ok && mountedRef.current && chatIdRef.current === chatId) {
             setError(started.error.message);
@@ -2110,6 +2136,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       model,
       qc,
       runGeneration,
+      workspaces,
     ],
   );
 
@@ -2551,11 +2578,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (environmentPanel.editorState.dirty)
         throw new Error("Save or discard the open file's edits before changing workspace access.");
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
-      await workspacesApi.update(effectiveWorkspace.id, { permission });
+      let targetId = effectiveWorkspace.id;
+      // A No workspace draft shares its folder with an existing chat until it
+      // is sent. Give it its own folder now so that chat keeps its access.
+      if (getChatDraft(chatId) && isNoWorkspace(effectiveWorkspace)) {
+        const separateId = await noWorkspaceFolderForFirstSend(
+          { listChats: chatsApi.list, createNoWorkspace: workspacesApi.createNoWorkspace },
+          effectiveWorkspace.id,
+        );
+        if (separateId) {
+          updateChatDraft(chatId, { workspaceId: separateId });
+          selectWorkspace(separateId);
+          targetId = separateId;
+        }
+      }
+      await workspacesApi.update(targetId, { permission });
       await Promise.all([
         qc.invalidateQueries({ queryKey: queryKeys.workspaces }),
         qc.invalidateQueries({
-          queryKey: queryKeys.skillCatalog(effectiveWorkspace.id),
+          queryKey: queryKeys.skillCatalog(targetId),
         }),
       ]);
     },
@@ -2568,6 +2609,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       environmentPanel.editorState.saving,
       environmentPanel.gitOperationBusy,
       qc,
+      selectWorkspace,
     ],
   );
 
@@ -2799,6 +2841,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
     workspaceChangeBusy,
   ]);
 
+  // The workspace menu's No workspace: the draft joins the Chats group. It
+  // gets its own hidden folder when sent (see noWorkspaceFolderForFirstSend).
+  const chooseNoWorkspace = React.useCallback(async () => {
+    let home = noWorkspaceHome(workspaces);
+    if (!home) {
+      home = await workspacesApi.createNoWorkspace();
+      await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+    }
+    await moveNewChatToWorkspace(home.id);
+  }, [moveNewChatToWorkspace, qc, workspaces]);
+
   // The workspace menu's Open folder… and ⌘⇧O on a draft: the native folder
   // picker registers the folder, then this draft (text, attachments and model
   // included) moves there.
@@ -2815,6 +2868,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [documentAppendReconciliationRequired, isNewChat, moveNewChatToWorkspace, qc, workspaceChangeBusy]);
 
   // The headline name and app-level entry points open the composer's menu.
+  const [cloningProject, setCloningProject] = React.useState(false);
   const [workspaceMenuRequest, setWorkspaceMenuRequest] = React.useState<WorkspaceMenuRequest>();
   const openWorkspaceMenu = React.useCallback((view: DraftWorkspaceMenuView) => {
     setWorkspaceMenuRequest((current) => ({ nonce: (current?.nonce ?? 0) + 1, view }));
@@ -3721,6 +3775,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     <RemoteMachinePicker
                       machines={newChatMachines}
                       selected="local"
+                      // Only a Git project can be cloned. A No workspace chat, a scratch
+                      // folder or any other folder outside a repository has none to offer.
+                      onAddProject={
+                        effectiveWorkspace?.folderPath && !isNoWorkspace(effectiveWorkspace) && git.data?.isRepo === true
+                          ? () => setCloningProject(true)
+                          : undefined
+                      }
                       disabled={isGenerating || isStartingGeneration}
                       onSelect={(machine) => {
                         if (machine !== "local") void navigate({ to: "/host/$hostId/new", params: { hostId: machine } });
@@ -3731,6 +3792,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 workspaces={workspaces}
                 onSelectWorkspace={moveNewChatToWorkspace}
                 onCreateScratchWorkspace={createScratchWorkspace}
+                onChooseNoWorkspace={chooseNoWorkspace}
                 onOpenFolderAsWorkspace={openFolderForDraft}
                 workspaceMenuRequest={workspaceMenuRequest}
                 onCreateGitWorktree={createGitWorktree}
@@ -3994,6 +4056,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
           />
         )}
       </ScrollArea>
+      {cloningProject && isNewChat && effectiveWorkspace ? <PeerProjectCloneDialog workspaceId={effectiveWorkspace.id} onClose={() => setCloningProject(false)} onCreated={(hostId, workspace) => {
+        const key = remoteNewChatDraftKey(hostId);
+        if (!loadComposerDraft(key).text) {
+          saveComposerDraftText(key, cloneDraftRef.current.text);
+          seedComposerAttachments(key, cloneDraftRef.current.attachments);
+        } else if (cloneDraftRef.current.text || cloneDraftRef.current.attachments.length) {
+          toast.info("The paired computer already has a draft. Your current prompt remains saved on this computer.");
+        }
+        qc.setQueryData<import("../shared/peer-host").PeerHostFeedSnapshot | null>(hostQueryKeys.feed(hostId), current => current ? { ...current, workspaces: [...current.workspaces.filter(row => row.id !== workspace.id), workspace] } : current);
+        void navigate({ to: "/host/$hostId/new", params: { hostId }, search: { workspaceId: workspace.id } });
+      }} /> : null}
       <ForkSummaryDialog
         open={forkSummaryRequest !== null}
         kind={forkSummaryRequest?.position === "before" ? "edit" : "fork"}

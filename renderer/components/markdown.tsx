@@ -135,9 +135,17 @@ const urlTransform: UrlTransform = (url, key) =>
  * Plugin lists for one message. Math plugins join only when the content has a
  * `$` and KaTeX has loaded; the first such message starts the load.
  */
+const ignoreMathLoad = () => () => {};
+const noMathVersion = () => 0;
+
 function useMarkdownPlugins(content: string, richLinks: boolean, streaming = false) {
   const needsMath = contentMayContainMath(content);
-  React.useSyncExternalStore(subscribeMarkdownMath, markdownMathVersion, markdownMathVersion);
+  // Only messages that can hold math re-render when KaTeX arrives.
+  React.useSyncExternalStore(
+    needsMath ? subscribeMarkdownMath : ignoreMathLoad,
+    needsMath ? markdownMathVersion : noMathVersion,
+    needsMath ? markdownMathVersion : noMathVersion,
+  );
   React.useEffect(() => {
     if (needsMath) void loadMarkdownMath();
   }, [needsMath]);
@@ -149,7 +157,7 @@ function useMarkdownPlugins(content: string, richLinks: boolean, streaming = fal
       ...(richLinks ? [remarkRichLinkLimit] : []),
       ...(streaming ? [remarkOpenFence] : []),
     ],
-    rehypePlugins: math ? [math.rehype] : [],
+    rehypePlugins: math ? [streaming ? math.rehypeStreaming : math.rehype] : [],
     urlTransform,
   };
 }

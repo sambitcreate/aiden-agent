@@ -38,7 +38,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 
-/** Contract revision 48 (`chat:jobs`), read from the fixture every client shares. */
+/** Contract revision 49 (`chat:jobs`), read from the fixture every client shares. */
 class AidenBackgroundJobsTest {
     private val fixture: JsonObject by lazy {
         val text = requireNotNull(javaClass.classLoader?.getResourceAsStream("contract.json")) { "contract.json" }

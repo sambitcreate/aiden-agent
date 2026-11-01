@@ -211,7 +211,7 @@ data class AidenServer(
     val supportsBotIssues: Boolean
         get() = offersBotIssues && capabilities.contains(AidenRemoteCapability.BOT_ISSUES)
 
-    /** Offered and held (revision 48): a Workspace chat lists what it has running on the Mac. */
+    /** Offered and held (revision 49): a Workspace chat lists what it has running on the Mac. */
     val supportsBackgroundJobs: Boolean
         get() = serverCapabilities?.contains(AidenRemoteCapability.CHAT_JOBS) == true &&
             capabilities.contains(AidenRemoteCapability.CHAT_JOBS)

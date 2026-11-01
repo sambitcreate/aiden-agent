@@ -433,6 +433,10 @@ export function registerProviderHandlers(): void {
       if (!isUsageLimitWaitHours(p.usageLimitWaitHours)) throw new Error("Invalid usage limit wait setting.");
       next.usageLimitWaitHours = p.usageLimitWaitHours;
     }
+    if (p.botRoutinesGoAhead !== undefined) {
+      if (typeof p.botRoutinesGoAhead !== "boolean") throw new Error("Invalid Bot routines setting.");
+      next.botRoutinesGoAhead = p.botRoutinesGoAhead;
+    }
     if (p.spendingLimits !== undefined) {
       const limits = parseSpendingLimitsSettings(p.spendingLimits);
       if (limits === undefined) throw new Error("Invalid spending limits.");

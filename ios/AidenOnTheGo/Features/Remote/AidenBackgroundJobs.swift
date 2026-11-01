@@ -1,7 +1,7 @@
 import Observation
 import SwiftUI
 
-/// Revision 48 (`chat:jobs`): what the agent left running for a chat on the
+/// Revision 49 (`chat:jobs`): what the agent left running for a chat on the
 /// Mac (a dev server, a watcher, a long test run). The words match the Mac
 /// and Android.
 enum AidenBackgroundJobCopy {

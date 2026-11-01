@@ -9,8 +9,13 @@ import type { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import type { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 import { assertWorkspaceRecordRemovalAllowed } from "./workspace-record-removal.js";
 import { withWorkspaceScheduleRestoration } from "./workspace-schedule-restoration.js";
+import { normalizeDisabledMcpServerIds, normalizeDisabledSkills } from "./workspace-capabilities.js";
 
 const PERMISSIONS: readonly WorkspacePermission[] = ["full", "ask", "none"];
+
+/** Every install's first workspace. Without a folder it becomes the shared No workspace home. */
+export const DEFAULT_WORKSPACE_ID = "default";
+export const NO_WORKSPACE_NAME = "No workspace";
 
 function nonEmptyString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -36,6 +41,8 @@ export interface WorkspaceApplicationDependencies {
   >;
   terminalService: Pick<typeof terminalService, "closeForWorkspace">;
   browserService?: { closeForWorkspace(workspaceId: string): void };
+  /** Closes the workspace's Git metadata watcher; a later display read re-observes. */
+  gitWatcher?: { close(workspaceId: string): void };
   /** Stops background jobs and done-when checks that run in the workspace folder. */
   followThrough?: { closeForWorkspace(workspaceId: string): Promise<void> };
   /** Drops the workspace's artifacts once its record is gone. */
@@ -50,6 +57,15 @@ export interface WorkspaceApplicationDependencies {
     ino?: number | bigint;
   }>;
   removeEmptyDirectory(value: string): Promise<void>;
+  /** The hidden folders behind "No workspace" chats. */
+  noWorkspace?: {
+    /** Makes a new, uniquely named folder in Aiden's app-data `chat-folders/`. */
+    createDirectory(): Promise<{ folderPath: string }>;
+    /** Workspace ids that still own at least one chat. */
+    workspaceIdsWithChats(): Promise<ReadonlySet<string>>;
+    /** Moves a released folder to the Trash. */
+    trash(folderPath: string): Promise<void>;
+  };
   createId(): string;
   now(): number;
   logError(area: string, message: string, error: unknown): void;
@@ -110,11 +126,48 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         permission,
         createdAt: now,
         updatedAt: now,
-      });
+      }, options.assertCurrent ? async () => {
+        // Revalidate after list/save admission awaits, inside the storage mutation.
+        const currentPath = await deps.realpath(folderPath);
+        const current = await deps.stat(currentPath);
+        if (!current.isDirectory() || currentPath !== canonicalPath) throw new Error("The workspace folder changed before registration.");
+        await options.assertCurrent!({ canonicalPath: currentPath,
+          ...(current.dev === undefined ? {} : { filesystemDevice: String(current.dev) }),
+          ...(current.ino === undefined ? {} : { filesystemInode: String(current.ino) }),
+        });
+      } : undefined);
     });
   };
 
-  return {
+  const requireNoWorkspace = () => {
+    if (!deps.noWorkspace) throw new Error("No workspace chats are unavailable.");
+    return deps.noWorkspace;
+  };
+
+  /** Removes the record first so nothing can start in the folder, then clears the folder away. */
+  const releaseNoWorkspace = async (workspace: Workspace) => {
+    try {
+      await service.remove(workspace.id, {
+        assertCurrent: (current) => {
+          if (!current.noWorkspace) throw new Error("Only a No workspace folder is released with its chat.");
+        },
+      });
+    } catch (error) {
+      deps.logError("workspace", "Could not release a No workspace record.", error);
+      return;
+    }
+    const folderPath = workspace.folderPath;
+    if (!folderPath) return;
+    try {
+      await deps.removeEmptyDirectory(folderPath);
+    } catch {
+      await deps.noWorkspace?.trash(folderPath).catch((error: unknown) => {
+        deps.logError("workspace", "Could not move a released No workspace folder to the Trash.", error);
+      });
+    }
+  };
+
+  const service = {
     list() {
       return deps.configStore.listWorkspaces();
     },
@@ -178,6 +231,75 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
       }
     },
 
+    /**
+     * A fresh hidden workspace for one "No workspace" chat. It runs in its own
+     * folder with global settings, so files, skills and Git work without a project.
+     */
+    async createNoWorkspace() {
+      const noWorkspace = requireNoWorkspace();
+      return serializeFolderCreation(async () => {
+        const { folderPath } = await noWorkspace.createDirectory();
+        const now = deps.now();
+        try {
+          return await deps.configStore.saveWorkspace({
+            id: deps.createId(),
+            name: NO_WORKSPACE_NAME,
+            folderPath,
+            permission: "ask",
+            noWorkspace: true,
+            createdAt: now,
+            updatedAt: now,
+          });
+        } catch (error) {
+          await deps.removeEmptyDirectory(folderPath).catch(() => undefined);
+          throw error;
+        }
+      });
+    },
+
+    /**
+     * Startup, before any renderer or draft exists: the folderless default
+     * workspace becomes the No workspace home of the chats already in it, and
+     * hidden workspaces left without a chat (an abandoned draft) are released.
+     */
+    async prepareNoWorkspaceChats() {
+      const noWorkspace = requireNoWorkspace();
+      const workspaces = await deps.configStore.listWorkspaces();
+      const legacy = workspaces.find((workspace) => workspace.id === DEFAULT_WORKSPACE_ID);
+      if (legacy && !legacy.folderPath && !legacy.noWorkspace && !legacy.managedWorktree) {
+        await serializeFolderCreation(async () => {
+          const { folderPath } = await noWorkspace.createDirectory();
+          try {
+            await deps.configStore.saveWorkspace(
+              { ...legacy, name: NO_WORKSPACE_NAME, folderPath, noWorkspace: true },
+              (current) => {
+                if (!current || current.folderPath || current.noWorkspace) {
+                  throw new Error("The default workspace changed while Aiden was preparing it.");
+                }
+              },
+            );
+          } catch (error) {
+            await deps.removeEmptyDirectory(folderPath).catch(() => undefined);
+            throw error;
+          }
+        });
+      }
+      const owners = await noWorkspace.workspaceIdsWithChats();
+      for (const workspace of workspaces) {
+        if (!workspace.noWorkspace || workspace.id === DEFAULT_WORKSPACE_ID || owners.has(workspace.id)) continue;
+        await releaseNoWorkspace(workspace);
+      }
+    },
+
+    /** After a chat is deleted: its hidden No workspace folder goes too once no chat uses it. */
+    async releaseNoWorkspaceAfterChat(workspaceId: string) {
+      if (!deps.noWorkspace || workspaceId === DEFAULT_WORKSPACE_ID) return;
+      const workspace = await deps.configStore.getWorkspace(workspaceId);
+      if (!workspace?.noWorkspace) return;
+      if ((await deps.noWorkspace.workspaceIdsWithChats()).has(workspaceId)) return;
+      await releaseNoWorkspace(workspace);
+    },
+
     async update(
       workspaceId: string,
       patch: unknown,
@@ -209,7 +331,18 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
             typeof fields.memoryEnabled === "boolean"
               ? fields.memoryEnabled
               : existing.memoryEnabled,
+          // Off-lists apply from the next message, so they never stop a reply.
+          disabledSkills:
+            "disabledSkills" in fields
+              ? normalizeDisabledSkills(fields.disabledSkills)
+              : existing.disabledSkills,
+          disabledMcpServerIds:
+            "disabledMcpServerIds" in fields
+              ? normalizeDisabledMcpServerIds(fields.disabledMcpServerIds)
+              : existing.disabledMcpServerIds,
         };
+        if (!next.disabledSkills) delete next.disabledSkills;
+        if (!next.disabledMcpServerIds) delete next.disabledMcpServerIds;
         const authorityChanged =
           next.permission !== existing.permission ||
           next.memoryEnabled !== existing.memoryEnabled;
@@ -291,9 +424,13 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         );
       } finally {
         finishMutation();
+        // Every client's removal (this Mac's IPC, a paired device's Remote
+        // request) lands here. Closing after a failed remove is harmless.
+        deps.gitWatcher?.close(id);
       }
     },
   };
+  return service;
 }
 
 export { defaultWorkspaceId };

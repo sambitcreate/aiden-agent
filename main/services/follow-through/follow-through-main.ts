@@ -99,6 +99,8 @@ async function loadState(): Promise<SavedState> {
 const runStarts = new Map<string, { chatId: string; start: number }>();
 const runWindows = new Map<string, Array<{ start: number; end: number }>>();
 const settledRuns = new Set<string>();
+/** Recently deleted chats, so a run that ends after its chat is gone leaves no window behind. */
+const deletedChats = new Set<string>();
 
 function chatWasAnswering(chatId: string, at: number): boolean {
   for (const run of runStarts.values()) {
@@ -122,6 +124,7 @@ function observeRun(summary: HostRunSummary): void {
   if (settledRuns.size > 500) settledRuns.delete(settledRuns.values().next().value!);
   const start = runStarts.get(summary.runId)?.start ?? (Date.parse(summary.startedAt) || Date.now());
   runStarts.delete(summary.runId);
+  if (deletedChats.has(summary.chatId)) return;
   const now = Date.now();
   const windows = (runWindows.get(summary.chatId) ?? []).filter((window) => window.end > now - RUN_WINDOW_KEEP_MS);
   windows.push({ start, end: Date.parse(summary.updatedAt) || now });
@@ -297,7 +300,16 @@ export async function shutdownFollowThrough(): Promise<void> {
 export async function deleteChatFollowThrough(chatId: string): Promise<void> {
   pullRequestFollows.deleteChat(chatId);
   doneWhen.clear(chatId);
+  runWindows.delete(chatId);
+  deletedChats.add(chatId);
+  if (deletedChats.size > 500) deletedChats.delete(deletedChats.values().next().value!);
+  for (const [runId, run] of runStarts) if (run.chatId === chatId) runStarts.delete(runId);
   await backgroundJobs.stopChat(chatId, "chat-deleted", true);
+}
+
+/** A delete that rolled back before its durable boundary leaves the chat in use: observe its runs again. */
+export function restoreChatFollowThrough(chatId: string): void {
+  deletedChats.delete(chatId);
 }
 
 /** Folder access changed: what ran in that folder stops. */

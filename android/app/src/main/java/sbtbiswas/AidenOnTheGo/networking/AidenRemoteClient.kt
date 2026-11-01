@@ -490,7 +490,7 @@ class AidenRemoteClient(
                 AidenDiagnosticOutcome.FAILED,
                 if (response.code == 401 || response.code == 403) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
             )
-            throw AidenRemoteClientException.Server(response.code, errorBody)
+            throw AidenRemoteClientException.Server(response.code, errorBody, AidenRetryAfter.parseHeader(response.retryAfter))
         }
 
         try {
@@ -638,7 +638,7 @@ class AidenRemoteClient(
     override suspend fun spending(owner: AidenSpendingOwner): AidenSpendingStatus =
         executeRequest(spendingPath(owner)) { bytes -> decodeSpending(bytes) }
 
-    /** Revision 48 (`chat:jobs`): what the agent left running for the chat on the Mac. */
+    /** Revision 49 (`chat:jobs`): what the agent left running for the chat on the Mac. */
     override suspend fun backgroundJobs(chatId: String): AidenBackgroundJobs {
         AidenBotWire.validateIdentifier(chatId, "chatId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
         return executeRequest("/chats/$chatId/jobs") { bytes -> AidenBackgroundJobs.decode(String(bytes, Charsets.UTF_8)) }
@@ -1080,7 +1080,7 @@ class AidenRemoteClient(
                     AidenDiagnosticOutcome.FAILED,
                     if (response.code == 401 || response.code == 403) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
                 )
-                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes))
+                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
             }
             val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
             if (contentType != "image/jpeg" && contentType != "image/png") {
@@ -1156,7 +1156,7 @@ class AidenRemoteClient(
                     AidenDiagnosticOutcome.FAILED,
                     if (response.code == 401 || response.code == 403) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
                 )
-                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes))
+                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
             }
             val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
             if (contentType != "text/html") {
@@ -1211,7 +1211,7 @@ class AidenRemoteClient(
             httpClient.newCall(request).await().use { response ->
                 if (!response.isSuccessful) {
                     val bytes = try { response.body.readBounded(1_048_576) } catch (_: Exception) { ByteArray(0) }
-                    throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes))
+                    throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
                 }
                 val mimeType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
                 if (mimeType == null || mimeType !in AidenBrowserRecordingRecap.MIME_TYPES ||
@@ -1550,7 +1550,7 @@ class AidenRemoteClient(
                     if (!response.isSuccessful) {
                         val bytes = response.body?.bytes() ?: ByteArray(0)
                         val errorBody = parseError(response.code, bytes)
-                        throw AidenRemoteClientException.Server(response.code, errorBody)
+                        throw AidenRemoteClientException.Server(response.code, errorBody, AidenRetryAfter.parseHeader(response.header("Retry-After")))
                     }
                     onOpen(response.header("Aiden-Progress-Resumed") == "true")
                     val stream = response.body?.byteStream()
@@ -2209,7 +2209,7 @@ class AidenRemoteClient(
         val bytes = response.body?.bytes() ?: ByteArray(0)
         if (!response.isSuccessful) {
             val errorBody = parseError(response.code, bytes)
-            throw AidenRemoteClientException.Server(response.code, errorBody)
+            throw AidenRemoteClientException.Server(response.code, errorBody, AidenRetryAfter.parseHeader(response.header("Retry-After")))
         }
 
         val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
@@ -2246,7 +2246,7 @@ class AidenRemoteClient(
         httpClient.newCall(request).await().use { response ->
             if (!response.isSuccessful) {
                 val bytes = try { response.body.readBounded(1_048_576) } catch (_: Exception) { ByteArray(0) }
-                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes))
+                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
             }
             val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
             if (contentType !in AidenBotSessionWire.SHARED_IMAGE_MIME_TYPES ||
@@ -3013,7 +3013,7 @@ private suspend fun Call.await(): Response = suspendCancellableCoroutine { conti
     })
 }
 
-private data class BufferedHttpResponse(val code: Int, val bytes: ByteArray, val etag: String?)
+private data class BufferedHttpResponse(val code: Int, val bytes: ByteArray, val etag: String?, val retryAfter: String? = null)
 
 /** Keep cancellation connected to the socket until the body is consumed and closed. */
 @OptIn(DelicateCoroutinesApi::class)
@@ -3035,7 +3035,7 @@ private suspend fun Call.awaitBody(maximumBytes: Int?): BufferedHttpResponse = c
                             } else {
                                 it.body?.bytes() ?: ByteArray(0)
                             }
-                            BufferedHttpResponse(it.code, bytes, it.header("ETag"))
+                            BufferedHttpResponse(it.code, bytes, it.header("ETag"), it.header("Retry-After"))
                         }
                     } catch (error: Exception) {
                         continuation.resumeWithException(error)

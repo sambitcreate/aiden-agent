@@ -3,8 +3,10 @@ import test from "node:test";
 import { SkillInvocationError } from "../../renderer/shared/slash-commands.js";
 import {
   formatAvailableSkills,
+  modelInvocableSkills,
   SkillRegistry,
   withoutSkills,
+  workspaceSkillChoices,
   type SkillRegistryDependencies,
 } from "./skill-registry.js";
 import { buildSkillTools, piResourcesForSkillSnapshot } from "./skill-tools.js";
@@ -141,6 +143,11 @@ test("disabled configured skills do not shadow discovered skills", async () => {
   assert.match(
     snapshot.catalog.find((entry) => entry.source === "global")?.unavailableReason ?? "",
     /workspace skill/u,
+  );
+  // Workspace settings offers the switch for the skill the model actually gets.
+  assert.deepEqual(
+    workspaceSkillChoices(snapshot).map(({ source, available }) => [source, available]),
+    [["workspace", true]],
   );
 });
 
@@ -510,4 +517,37 @@ test("a surface can drop a built-in skill it cannot use from the prompt, tools a
   assert.doesNotMatch(formatAvailableSkills(phone) ?? "", /desktop-only/u);
   assert.match(formatAvailableSkills(full) ?? "", /desktop-only/u);
   assert.equal(withoutSkills(full, new Set(["builtin:missing"])), full);
+});
+
+test("a skill switched off for a workspace leaves the model's view but still runs by name", async () => {
+  const h = harness();
+  h.setDiscovered([
+    discovered("global", { id: "review", name: "Review" }),
+    discovered("global", { id: "deploy", name: "Deploy" }),
+    discovered("global", { id: "notes", name: "Notes", modelInvocable: false }),
+  ]);
+  const before = await h.registry.snapshot("one");
+  h.workspaces.set("one", { ...workspace("one"), disabledSkills: ["review"] });
+  const after = await h.registry.snapshot("one");
+
+  assert.notEqual(after.fingerprint, before.fingerprint, "a changed off-list replaces the cached snapshot");
+  assert.deepEqual(modelInvocableSkills(after).map(({ name }) => name), ["Deploy"]);
+  const [skillTool] = buildSkillTools(after);
+  await assert.rejects(skillTool!.execute("call", { name: "Review" }), /No skill named "Review"/u);
+  assert.deepEqual(piResourcesForSkillSnapshot(after).skills?.map(({ name }) => name), ["Deploy"]);
+  assert.doesNotMatch(formatAvailableSkills(after) ?? "", /<name>Review<\/name>/u);
+  const review = after.catalog.find(({ name }) => name === "Review")!;
+  assert.equal((await h.registry.resolveFresh("one", review.invocationId)).name, "Review");
+
+  assert.deepEqual(
+    workspaceSkillChoices(after).map(({ name, offHere, userOnly }) => [name, offHere, userOnly]),
+    [
+      ["Deploy", false, false],
+      ["Notes", false, true],
+      ["Review", true, false],
+    ],
+  );
+  // Other workspaces keep the skill.
+  h.workspaces.set("two", workspace("two"));
+  assert.ok(modelInvocableSkills(await h.registry.snapshot("two")).some(({ name }) => name === "Review"));
 });

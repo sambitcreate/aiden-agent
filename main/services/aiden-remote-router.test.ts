@@ -117,7 +117,7 @@ async function fixture(options: {
   contextPressure?: { chatId: string; pressure: Record<string, unknown> | null };
   /** The host's spending ledger (contract revision 47). */
   spending?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["spending"];
-  /** The host's background jobs (contract revision 48). */
+  /** The host's background jobs (contract revision 49). */
   backgroundJobs?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["backgroundJobs"];
 } = {}) {
   const logs: unknown[] = [];
@@ -6422,6 +6422,7 @@ test("a fully wired host tells every device type at most the server feature budg
       `${type} hears ${features.length} feature tokens; shipped clients refuse more than ${AIDEN_REMOTE_MAX_SERVER_FEATURES}`,
     );
     assert.equal(new Set(features).size, features.length, type);
+    assert.equal(features.includes("workspace-clone-v1"), type === "mac" || type === "linux");
   }
   // Trimming the desktop list must not take away anything a paired Mac can do.
   const allTokens = new Set(

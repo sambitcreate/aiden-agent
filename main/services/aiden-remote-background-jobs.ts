@@ -1,4 +1,4 @@
-// A chat's background jobs on phones (`chat:jobs`, contract revision 48): what the
+// A chat's background jobs on phones (`chat:jobs`, contract revision 49): what the
 // agent left running for the chat, the ports each serves on the Mac, and Stop.
 // The Mac's one job registry answers; this file only projects it for the wire.
 

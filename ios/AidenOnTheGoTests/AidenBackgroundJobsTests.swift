@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import AidenOnTheGo
 
-/// Revision 48 (`chat:jobs`): a chat's background jobs on the phone, against
+/// Revision 49 (`chat:jobs`): a chat's background jobs on the phone, against
 /// a transport that behaves like the Mac's job registry.
 @MainActor
 final class AidenBackgroundJobsTests: XCTestCase {

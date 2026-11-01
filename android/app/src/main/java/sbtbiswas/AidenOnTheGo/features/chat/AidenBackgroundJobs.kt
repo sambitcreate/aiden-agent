@@ -41,7 +41,7 @@ import java.time.Instant
 
 const val AIDEN_BACKGROUND_JOBS_CHIP_TAG = "aiden-background-jobs-chip"
 
-/** Revision 48: "2 in background" beside the composer while the agent has something running on the Mac. */
+/** Revision 49: "2 in background" beside the composer while the agent has something running on the Mac. */
 @Composable
 fun AidenBackgroundJobsChip(running: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val title = AidenBackgroundJobCopy.chip(running) ?: return

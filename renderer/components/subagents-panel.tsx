@@ -1,4 +1,5 @@
 import * as React from "react";
+import { secondClock } from "../lib/second-clock";
 import { ArrowLeft } from "lucide-react";
 import { cn } from "../lib/ui-utils";
 import {
@@ -272,9 +273,9 @@ function OwnedSubagentsPanel({
 
   React.useEffect(() => {
     if (!active || (!hasActiveRuns && !hasUndelayedHandoff)) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
+    const unsubscribe = secondClock.subscribe(() => setNow(secondClock.getSnapshot()));
+    setNow(secondClock.getSnapshot());
+    return unsubscribe;
   }, [active, hasActiveRuns, hasUndelayedHandoff]);
 
   React.useLayoutEffect(() => {

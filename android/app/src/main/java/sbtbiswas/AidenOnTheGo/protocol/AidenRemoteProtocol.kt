@@ -598,7 +598,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         val BOT_ISSUES = AidenRemoteCapability("bot:issues")
 
         /**
-         * Contract revision 48: this phone may list a chat's background jobs on the Mac
+         * Contract revision 49: this phone may list a chat's background jobs on the Mac
          * (`GET /chats/{chatId}/jobs`, with `chat:read`) and stop one
          * (`POST /chats/{chatId}/jobs/{jobId}/stop`, with `chat:write`). It widens nothing a chat
          * grant does not already allow. The Mac offers it only in `serverCapabilities`, and it is
@@ -641,7 +641,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 42: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_BOT_ISSUES = listOf(BOT_ISSUES)
 
-        /** Revision 48: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        /** Revision 49: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_CHAT_JOBS = listOf(CHAT_JOBS)
 
         /** Every grant `POST /device/capabilities` may add. */

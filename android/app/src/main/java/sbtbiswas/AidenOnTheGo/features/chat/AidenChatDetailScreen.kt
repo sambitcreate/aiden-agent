@@ -204,6 +204,8 @@ fun AidenChatDetailScreen(
     val presentedError by viewModel.presentedError.collectAsStateWithLifecycle()
     val pendingSend by viewModel.pendingSend.collectAsStateWithLifecycle()
     val sendRecoveryError by viewModel.sendRecoveryError.collectAsStateWithLifecycle()
+    val isWaitingToRetryRateLimitedSend by viewModel.isWaitingToRetryRateLimitedSend.collectAsStateWithLifecycle()
+    val isPendingSendRefusedBecauseBusy by viewModel.isPendingSendRefusedBecauseBusy.collectAsStateWithLifecycle()
     val isStartingSend by viewModel.isStarting.collectAsStateWithLifecycle()
     val isRetryingInput by viewModel.isSubmittingRunInput.collectAsStateWithLifecycle()
     val hasOlderMessages by viewModel.hasOlderMessages.collectAsStateWithLifecycle()
@@ -248,7 +250,7 @@ fun AidenChatDetailScreen(
     LaunchedEffect(spendingOwner, spendingTransport, isStreaming, chat?.messages?.size, sendRecoveryError) {
         spending.refresh(spendingOwner, spendingTransport)
     }
-    // Revision 48: a Workspace chat's background jobs on the Mac. Not pushed: read after each
+    // Revision 49: a Workspace chat's background jobs on the Mac. Not pushed: read after each
     // reply settles, and every few seconds while something runs or the list is open.
     val backgroundJobs = remember(chatId) { AidenBackgroundJobsState() }
     var showsBackgroundJobs by rememberSaveable(chatId) { mutableStateOf(false) }
@@ -277,7 +279,6 @@ fun AidenChatDetailScreen(
     var selectTextFor by remember { mutableStateOf<String?>(null) }
     var visualViewerRequest by remember(chatId) { mutableStateOf<AidenVisualViewerRequest?>(null) }
     var visualSnapshotGallery by remember(chatId) { mutableStateOf<AidenMessageAttachment?>(null) }
-    val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
 
     LaunchedEffect(isStreaming, chat?.messages?.lastOrNull()?.id) {
@@ -395,7 +396,9 @@ fun AidenChatDetailScreen(
         readAloud.stop()
         voiceInput.start(
             mode = currentVoiceMode,
-            currentDraft = currentDraft,
+            // Snapshot when voice actually starts, including after permission returns.
+            // Keeping it in screen-level rememberUpdatedState would recompose the screen per edit.
+            currentDraft = viewModel.draft.value,
             client = coordinator.client.value,
             updateDraft = viewModel::updateDraft
         )
@@ -665,8 +668,7 @@ fun AidenChatDetailScreen(
                 }
                 if ((pendingSend != null || sendRecoveryError != null) && !isStartingSend && !isRetryingInput) {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                        Text(sendRecoveryError ?: if (pendingSend?.canRetry() == true) "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
-                            else "Couldn’t confirm delivery. The retry window has ended. Check the conversation on your desktop before sending another message.",
+                        Text(aidenSendRecoveryMessage(sendRecoveryError, pendingSend, isWaitingToRetryRateLimitedSend, isPendingSendRefusedBecauseBusy),
                             style = MaterialTheme.typography.bodySmall, color = palette.secondary)
                         Row {
                             TextButton(onClick = { viewModel.send(retry = true) }, enabled = viewModel.canRetrySend) { Text("Retry message") }
