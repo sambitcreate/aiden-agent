@@ -456,6 +456,24 @@ test("Add hook offers only the events the chosen place can run, and resets one i
   assert.notEqual(request.event, "RoutineRun", "the saved event is one the workspace can run");
 });
 
+test("a workspace that goes away while Add hook is open is refused, never saved as a global hook", async () => {
+  const { callsTo, set } = mount(overview(), {
+    "hooks:save": () => ({ ok: true, value: HOOKS[0] }),
+  });
+  const sheet = await openAddSheet();
+  fireEvent.click(within(sheet).getByRole("combobox", { name: "Where" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Shop" }));
+  fireEvent.change(within(sheet).getByLabelText("Command"), { target: { value: "./x.sh" } });
+
+  set(overview({ workspaces: [] }));
+  emitBotTestNotification("hooks:changed", { reason: "hooks" });
+  await waitFor(() => assert.doesNotMatch(within(sheet).getByRole("combobox", { name: "Where" }).textContent ?? "", /Shop/u));
+
+  fireEvent.click(within(sheet).getByRole("button", { name: "Add hook" }));
+  await within(sheet).findByText(/no longer available/u);
+  assert.deepEqual(callsTo("hooks:save"), [], "nothing is saved anywhere");
+});
+
 test("the detail sheet lists a repo hook's script files and warns when it can't check them all", async () => {
   const scripted = {
     ...HOOKS[1]!,

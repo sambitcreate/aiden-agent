@@ -639,6 +639,11 @@ function AddHookSheet({
   const save = async () => {
     if (!ready || parsedTimeout === null) return;
     const workspace = workspaces.find((entry) => hookScopeKey({ kind: "workspace", workspaceRoot: entry.workspaceRoot }) === scopeKey);
+    // A workspace that left the list while the sheet was open never turns into a global hook.
+    if (scopeKey !== "global" && !workspace) {
+      setError("That workspace is no longer available. Choose another place for this hook.");
+      return;
+    }
     const request: HookSaveRequest = {
       scope: workspace ? { kind: "workspace", workspaceRoot: workspace.workspaceRoot } : { kind: "global" },
       event,
