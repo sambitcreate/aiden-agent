@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { GalleryItem } from "../shared/images/ipc-types";
 import type { AttemptSnapshot, RunSnapshot, RunState } from "../shared/images/run-types";
-import { galleryRefreshKey, groupGalleryByRun, relativeTime, viewerItemsForOutputs } from "./gallery-core";
+import { galleryRefreshKey, groupGalleryByRun, relativeTime, viewerItemsForOutputs, viewerPosition } from "./gallery-core";
 
 const item = (seed: string, runId: string, createdAt: number): GalleryItem => ({
   assetId: seed.repeat(64), width: 8, height: 8, mediaType: "image/png", runId, runState: "succeeded", workflowId: "wf", nodeId: "g", variant: 0,
@@ -71,4 +71,13 @@ test("an Output node's images use the gallery's records, and the run's attempt f
     gallery: [], workflowId: "wf", nodeId: "o", assetUrls: {}, attempts: [],
   });
   assert.equal(odd[0]?.thumbUrl, "");
+});
+
+test("the viewer's position follows its image by id, and is null once the image has left the list", () => {
+  const items = [{ assetId: "a" }, { assetId: "b" }, { assetId: "c" }];
+  assert.equal(viewerPosition(items, "c"), 2);
+  // A run replaced the node's outputs: the image is gone, so the viewer must not fall back to the first.
+  assert.equal(viewerPosition([{ assetId: "x" }, { assetId: "y" }], "c"), null);
+  assert.equal(viewerPosition(items, null), null);
+  assert.equal(viewerPosition([], "a"), null);
 });

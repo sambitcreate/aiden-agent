@@ -3,7 +3,7 @@ import * as React from "react";
 import { Button, EmptyState, Text } from "../components/ui";
 import { GALLERY_MAX_ITEMS, SAVE_ALL_MAX_IMAGES, type GalleryItem } from "../shared/images/ipc-types";
 import type { ImageModelOption } from "../shared/images/port";
-import { imageCountLabel } from "./gallery-core";
+import { imageCountLabel, viewerPosition } from "./gallery-core";
 import {
   EMPTY_LIBRARY_FILTERS,
   filterLibrary,
@@ -51,8 +51,7 @@ export function ImageLibrary({
   const shown = React.useMemo(() => filterLibrary(items, filters, models), [items, filters, models]);
   const facets = React.useMemo(() => libraryFacets(items, filters, models), [items, filters, models]);
   const sections = React.useMemo(() => sectionByDay(shown, now, (timestamp) => dateFormat.format(timestamp)), [shown, now]);
-  const found = viewing === null ? -1 : shown.findIndex((item) => item.assetId === viewing);
-  const viewerIndex = found >= 0 ? found : null;
+  const viewerIndex = viewerPosition(shown, viewing);
   // The viewer hands focus back to the thumbnail of the image it closed on, found by asset id:
   // a gallery refresh or a new run's images can move it to another position meanwhile.
   const lastViewed = React.useRef<string | null>(null);

@@ -9,7 +9,7 @@ import type { WorkflowPosition } from "../shared/images/schema";
 import { ConsentSheet } from "./consent-sheet";
 import { decideCanvasConnection } from "./editor-core";
 import { WorkflowEditorContext, type WorkflowEditorContextValue } from "./editor-context";
-import { viewerItemsForOutputs } from "./gallery-core";
+import { viewerItemsForOutputs, viewerPosition } from "./gallery-core";
 import { HistoryPanel } from "./history-panel";
 import { deletionOp, interpretEdgeChanges, interpretNodeChanges, toFlowEdges, toFlowNodes, type WorkflowFlowNode } from "./flow-adapter-core";
 import { LeaveGuard } from "./leave-guard";
@@ -98,8 +98,11 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
       gallery: gallery.items, workflowId, nodeId: viewer.source.nodeId, assetUrls, attempts: snapshot?.attempts ?? [], runId: snapshot?.run.runId, runState: snapshot?.run.state,
     });
   }, [viewer, gallery.items, outputsFor, workflowId, assetUrls, snapshot]);
-  const viewerOpen = viewer !== null && viewerItems.length > 0;
-  const viewerIndex = viewerOpen ? Math.max(0, viewerItems.findIndex((item) => item.assetId === viewer.assetId)) : null;
+  const viewerIndex = viewerPosition(viewerItems, viewer?.assetId);
+  // The viewed image left the list: close, so it does not reopen if the image comes back.
+  React.useEffect(() => {
+    if (viewer !== null && viewerIndex === null) setViewer(null);
+  }, [viewer, viewerIndex]);
   const { addImageInput } = controller;
   const viewerActions = React.useMemo<ViewerAction[]>(
     () => [{
@@ -180,7 +183,7 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
               defaultViewport={doc.viewport ?? { x: 0, y: 0, zoom: 1 }}
               onMoveEnd={(_event, viewport) => controller.setViewport(viewport)}
               // React Flow's Backspace listener is document-wide; it must not delete nodes behind the viewer.
-              deleteKeyCode={viewerOpen ? null : undefined}
+              deleteKeyCode={viewerIndex !== null ? null : undefined}
               onNodesChange={(changes) => {
                 const result = interpretNodeChanges(changes, flowState.current);
                 flowState.current = { dragging: result.dragging, selected: result.selected, measured: result.measured };

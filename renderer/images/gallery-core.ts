@@ -37,6 +37,17 @@ const RUN_STATE_LABELS: Record<RunState, string> = {
   interrupted: "Interrupted",
 };
 
+/**
+ * Where the viewed image sits in the viewer's list, or null when it has left the list (a run
+ * replaced a node's outputs, or a refresh dropped it): the viewer then closes rather than
+ * showing some other image.
+ */
+export function viewerPosition(items: readonly Pick<GalleryItem, "assetId">[], assetId: string | null | undefined): number | null {
+  if (!assetId) return null;
+  const index = items.findIndex((item) => item.assetId === assetId);
+  return index >= 0 ? index : null;
+}
+
 export function runStateLabel(state: RunState): string {
   return RUN_STATE_LABELS[state];
 }
