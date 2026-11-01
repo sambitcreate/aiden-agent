@@ -1404,6 +1404,27 @@ async function prepareGeneration(
     botContext && !botContext.admission.authority.files.botHome
       ? []
       : inheritedSubagentReadToolCeiling(options.excludeToolNames);
+  // The chats whose own turns run hooks (the same gate as `chatHooks` in
+  // runChat); Bots wire their own.
+  const subagentRunsChatHooks = runsWorkspaceChatHooks({
+    usageSource: options.usageSource,
+    interactionSurface: options.interactionSurface,
+    bot: botBound,
+    design: false,
+    assistant: assistantMode,
+    harnessProvider: isAcpHarnessProvider(runtime.provider.id),
+  });
+  // A subagent's approval card fires Notification like the chat's own cards.
+  const notifySubagentApproval =
+    subagentRunsChatHooks && folderPath
+      ? (() => {
+          const hooks = createWorkspaceChatHooks({
+            chatId: params.chatId,
+            ...(workspace?.noWorkspace === true ? {} : { workspaceRoot: folderPath }),
+          });
+          return () => hooks.notify("Aiden needs your permission for a subagent", "permission_prompt");
+        })()
+      : undefined;
   let subagentProjector: SubagentEventProjector | undefined;
   const subagentPersistence =
     allowSubagents && workspace && folderPath
@@ -1425,10 +1446,12 @@ async function prepareGeneration(
           shellEnabled: subagentShellEnabled,
           shellBinary: subagentShellEnabled ? subagentShellBinary : undefined,
           delegationEnabled: subagentDelegationEnabled,
-          requestApproval: (descriptor, approvalSignal, approvalOwnerDocumentId) =>
-            approvals
+          requestApproval: (descriptor, approvalSignal, approvalOwnerDocumentId) => {
+            notifySubagentApproval?.();
+            return approvals
               .request(descriptor, approvalSignal, approvalOwnerDocumentId)
-              .then((outcome) => outcome === "allowed"),
+              .then((outcome) => outcome === "allowed");
+          },
           currentWorkspace: async (workspaceId) =>
             botContext && workspaceId === workspace.id
               ? { ...workspace }
@@ -1572,16 +1595,8 @@ async function prepareGeneration(
           modelOptions: subagentModelOptions,
           healthMetrics: subagentHealthMetrics,
           projector: subagentProjector,
-          // SubagentStop for the chats whose own turns run hooks (the same
-          // gate as `chatHooks` in runChat); Bots wire their own.
-          ...(runsWorkspaceChatHooks({
-            usageSource: options.usageSource,
-            interactionSurface: options.interactionSurface,
-            bot: botBound,
-            design: false,
-            assistant: assistantMode,
-            harnessProvider: isAcpHarnessProvider(runtime.provider.id),
-          })
+          // SubagentStop for the chats whose own turns run hooks.
+          ...(subagentRunsChatHooks
             ? {
                 stopHooks: chatSurfaceHooks(
                   {
@@ -2860,6 +2875,7 @@ export const llmClient = {
           status: (statusOptions) => computerUseStatus.status(statusOptions),
           requestAccess: async (toolCallId, approvalSignal) => {
             timeline.toolAwaitingApproval(toolCallId);
+            chatHooks?.notify("Aiden needs your permission to use Computer Use", "permission_prompt");
             const publicToolCallId = timeline.publicToolCallId(toolCallId);
             if (!publicToolCallId) throw new Error("The tool approval step was not initialized.");
             const outcome = await approvals.request(

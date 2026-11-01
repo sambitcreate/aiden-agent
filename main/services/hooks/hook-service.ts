@@ -323,6 +323,9 @@ function uncheckableScriptsReason(overLimit: string): string {
   return `Aiden can't check everything this command runs (${overLimit}), so it won't run it; move the commands into one script.`;
 }
 
+const CHAT_HOOK_SCRIPTS_WARNING =
+  "Approving this chat hook covers its command text only. A script it runs isn't checked, so an edit to that script won't stop the hook; point it at a file outside any repo the agent can edit.";
+
 function partialCoverageWarning(unfollowed: readonly string[]): string {
   const list = unfollowed.map((item) => `\`${item}\``).join(", ");
   return `Approving this doesn't cover what ${list} runs: Aiden can't follow it to a file, so an edit there won't stop the hook. Point the hook at a script file to cover it.`;
@@ -683,7 +686,15 @@ export function createHookService(deps: HookServiceDeps): HookService {
   const withProposalScripts = async (proposal: HookProposal): Promise<HookResult<HookProposal>> => {
     if (proposal.action === "delete") return { ok: true, value: proposal };
     const { digest, scan } = await scriptsOf(proposal.definition);
-    if (!scan) return { ok: true, value: proposal };
+    if (!scan) {
+      // A chat hook has no fixed folder, so nothing it runs is pinned: say so
+      // on the card rather than let it look as covered as a workspace hook.
+      if (proposal.definition.scope.kind !== "chat") return { ok: true, value: proposal };
+      return {
+        ok: true,
+        value: { ...proposal, warnings: [...proposal.warnings, CHAT_HOOK_SCRIPTS_WARNING] },
+      };
+    }
     if (scan.overLimit) return { ok: false, reason: uncheckableScriptsReason(scan.overLimit) };
     const partial = scan.unfollowed.length > 0;
     const warnings = partial ? [...proposal.warnings, partialCoverageWarning(scan.unfollowed)] : proposal.warnings;

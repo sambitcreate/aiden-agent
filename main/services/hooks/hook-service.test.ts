@@ -614,6 +614,14 @@ test("a workspace hook lists the scripts its approval covers, and says when it c
   assert.equal(globbed.value.scriptCoverage, "partial", "a glob that reaches a script is not shown as covered");
 });
 
+test("a chat hook the agent proposes says on its card that the script it runs isn't covered", async (t) => {
+  const service = await (await fixture(t)).create();
+  const proposal = await service.proposeHook({ scope: { kind: "chat", chatId: "c" }, event: "Stop", handler: { type: "command", command: "./check.sh" } });
+  assert.ok(proposal.ok);
+  assert.equal(proposal.value.scriptFiles, undefined, "nothing is pinned for a chat hook");
+  assert.ok(proposal.value.warnings.some((warning) => /covers its command text only/u.test(warning)), proposal.value.warnings.join("\n"));
+});
+
 test("a command naming more files than Aiden checks is refused, and a listed one is unsupported", async (t) => {
   const f = await fixture(t);
   const names = Array.from({ length: 17 }, (_, index) => `s${index}.sh`);
