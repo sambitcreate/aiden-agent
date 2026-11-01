@@ -3,7 +3,9 @@
 // the `.image-scan*` rules in styles.css; numbers come from IMAGE_SCAN_SPEC.
 
 import * as React from "react";
-import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
+import { useNowSecond } from "../lib/second-clock";
+import { useReduceMotion } from "../lib/use-reduce-motion";
+import { observeOffscreen } from "../lib/offscreen-pause";
 import type { Attachment } from "../lib/types";
 import { inlineImageSource } from "./message-attachments";
 import {
@@ -19,56 +21,16 @@ import {
   isLongImageScan,
 } from "../shared/image-generation/placeholder-spec";
 
-function reduceMotionActive(): boolean {
-  return typeof document !== "undefined" && document.documentElement.dataset.reduceMotion === "true";
-}
-
-function useReduceMotion(): boolean {
-  const [reduce, setReduce] = React.useState(reduceMotionActive);
-  React.useEffect(() => {
-    const update = () => setReduce(reduceMotionActive());
-    update();
-    window.addEventListener(APPEARANCE_CHANGE_EVENT, update);
-    return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, update);
-  }, []);
-  return reduce;
-}
-
-/** One shared observer pauses every offscreen placeholder. */
-let sharedObserver: IntersectionObserver | null = null;
-function visibilityObserver(): IntersectionObserver | null {
-  if (typeof IntersectionObserver === "undefined") return null;
-  sharedObserver ??= new IntersectionObserver((entries) => {
-    for (const entry of entries) entry.target.toggleAttribute("data-offscreen", !entry.isIntersecting);
-  });
-  return sharedObserver;
-}
-
 /** Pause while offscreen or while the window is hidden. */
 function usePauseWhenUnseen(ref: React.RefObject<HTMLElement | null>): void {
   React.useEffect(() => {
     const node = ref.current;
-    if (!node) return;
-    const observer = visibilityObserver();
-    observer?.observe(node);
-    const onVisibility = () => node.toggleAttribute("data-document-hidden", document.visibilityState === "hidden");
-    onVisibility();
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      observer?.unobserve(node);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
+    return node ? observeOffscreen(node) : undefined;
   }, [ref]);
 }
 
 function useElapsed(startedAt: number, running: boolean): number {
-  const [now, setNow] = React.useState(() => Date.now());
-  React.useEffect(() => {
-    if (!running) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), IMAGE_SCAN_SPEC.captionTickMs);
-    return () => window.clearInterval(timer);
-  }, [running]);
+  const now = useNowSecond(running);
   return Math.max(0, now - startedAt);
 }
 

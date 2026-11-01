@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -19,31 +18,6 @@ function runCli(args, options = {}) {
 	});
 }
 
-function rpcCommandDetails(args, options) {
-	const result = runCli(["--mode", "rpc", "--no-session", ...args], {
-		...options,
-		input: '{"id":"skills-probe","type":"get_commands"}\n',
-	});
-	assert.equal(result.status, 0, result.stderr || result.stdout);
-	const response = result.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line))
-		.find((message) => message.type === "response" && message.id === "skills-probe");
-	assert.ok(response, `missing correlated get_commands response: ${result.stdout}`);
-	assert.equal(response.command, "get_commands");
-	assert.equal(response.success, true, JSON.stringify(response));
-	return response.data.commands;
-}
-
-function rpcCommands(args, options) {
-	return rpcCommandDetails(args, options).map((command) => command.name);
-}
-
-function makeProbeSkill(root, name, description = "Skill discovery policy probe.") {
-	const dir = path.join(root, name);
-	mkdirSync(dir, { recursive: true });
-	writeFileSync(path.join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\nProbe body.\n`);
-	return dir;
-}
-
 test("--version reports the Aiden CLI version", () => {
 	const outer = JSON.parse(readFileSync(path.join(pkgDir, "package.json"), "utf-8"));
 	const result = runCli(["--version"]);
@@ -51,13 +25,43 @@ test("--version reports the Aiden CLI version", () => {
 	assert.equal(result.stdout.trim(), outer.version);
 });
 
-test("--version answers before the runtime loads and agrees with pi's own answer", () => {
-	const fast = runCli(["--version"]);
-	// A second flag skips the entry's static answer, so pi's main() replies.
-	const viaPi = runCli(["--version", "--offline"], { env: { ...process.env, PI_OFFLINE: "1" } });
-	assert.equal(viaPi.status, 0, viaPi.stderr);
-	assert.equal(fast.stdout, viaPi.stdout);
-	assert.equal(fast.stderr, "", "the static answer must not load node:sqlite or anything that warns");
+test("--version answers before the runtime loads", () => {
+	const result = runCli(["--version"]);
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(result.stderr, "", "the static answer must not load node:sqlite or anything that warns");
+});
+
+test("an Aiden command whose reader has already closed exits quietly", async () => {
+	const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-epipe-"));
+	try {
+		const child = spawn(process.execPath, [cli, "help"], { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+		// Like `aiden help | true`: the reader is gone before the command writes.
+		child.stdout.destroy();
+		let stderr = "";
+		child.stderr.on("data", (chunk) => { stderr += chunk; });
+		const code = await new Promise((resolve) => child.once("exit", resolve));
+		assert.equal(code, 0, stderr);
+		assert.doesNotMatch(stderr, /EPIPE|Unhandled 'error' event/u);
+	} finally { rmSync(agentDir, { recursive: true, force: true }); }
+});
+
+test("a deleted current folder gets one plain line instead of a crash", { skip: process.platform === "win32" }, () => {
+	const parent = mkdtempSync(path.join(tmpdir(), "aiden-deleted-cwd-"));
+	const doomed = path.join(parent, "gone");
+	mkdirSync(doomed);
+	try {
+		// The shell enters the folder, removes it, then starts the CLI there.
+		const result = spawnSync("/bin/sh", ["-c", 'cd "$1" && rmdir "$1" && exec "$2" "$3" mcp list', "sh", doomed, process.execPath, cli], {
+			encoding: "utf-8",
+			timeout: 60_000,
+			env: { ...process.env, AIDEN_CODING_AGENT_DIR: path.join(parent, "agent") },
+		});
+		assert.equal(result.status, 1, result.stderr || result.stdout);
+		assert.equal(result.stderr.trim(), "aiden: The current folder no longer exists. Change to an existing folder and try again.");
+		assert.doesNotMatch(result.stderr, /uv_cwd|at .*\.js:\d+/);
+	} finally {
+		rmSync(parent, { recursive: true, force: true });
+	}
 });
 
 test("aiden help lists the Aiden commands", () => {
@@ -86,364 +90,67 @@ test("the SQLite experimental warning is filtered and other warnings are not", (
 	assert.match(result.stderr, /Warning: SQLite probe without a type/);
 });
 
-test("--help brands the CLI as aiden", () => {
-	const result = runCli(["--help"]);
-	assert.equal(result.status, 0, result.stderr);
-	assert.match(result.stdout, /^aiden - /m);
-	assert.match(result.stdout, /Usage:\n {2}aiden /);
+test("bare aiden and --help print the command list, serve first", () => {
+	for (const args of [[], ["--help"], ["-h"]]) {
+		const result = runCli(args);
+		assert.equal(result.status, 0, `${args.join(" ")}: ${result.stderr}`);
+		assert.equal(result.stderr, "", args.join(" "));
+		const commands = result.stdout.split("\n").filter((line) => /^ {2}\S/.test(line)).map((line) => line.trim().split(/\s/)[0]);
+		assert.equal(commands[0], "serve", args.join(" "));
+		assert.ok(commands.includes("remote") && commands.includes("auth"), result.stdout);
+		for (const removed of ["theme", "reset"]) assert.ok(!commands.includes(removed), `${removed} must not be listed`);
+	}
 });
 
-test("AIDEN_CODING_AGENT_DIR isolates state (rebranded env override)", () => {
+test("modes and flags of the removed interactive CLI exit non-zero with one line", () => {
 	const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-agent-"));
-	const result = runCli(["--list-models"], {
-		env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" },
-	});
-	assert.equal(result.status, 0, result.stderr);
-	assert.doesNotMatch(result.stderr, /SQLite is an experimental feature/);
-	// The agent dir being populated proves the rebranded env var redirected
-	// state away from ~/.pi and ~/.aiden.
-	assert.ok(existsSync(path.join(agentDir, "auth.json")), "auth.json must land in the agent dir");
-	assert.ok(
-		existsSync(path.join(agentDir, "models-store.json")),
-		"models-store.json must land in the agent dir",
-	);
-});
-
-test("print mode resolves a default model offline and fails only on credentials", () => {
-	const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-agent-"));
-	const result = runCli(["-p", "hello"], {
-		env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" },
-	});
-	// Without any provider credential the run must stop at auth, not at model
-	// resolution or theme/setup failures.
-	assert.notEqual(result.status, 0);
-	assert.match(result.stderr, /No API key found|No models available/);
-});
-
-test("rpc mode answers get_state with a correlated response", () => {
-	const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-agent-"));
-	const result = runCli(["--mode", "rpc", "--no-session"], {
-		env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" },
-		input: '{"id":"t-1","type":"get_state"}\n',
-	});
-	assert.equal(result.status, 0, result.stderr);
-	const response = result.stdout
-		.split("\n")
-		.filter((line) => line.trim().length > 0)
-		.map((line) => JSON.parse(line))
-		.find((message) => message.type === "response" && message.id === "t-1");
-	assert.ok(response, "expected a response correlated to request id t-1");
-	assert.equal(response.command, "get_state");
-	assert.equal(response.success, true);
-});
-
-/**
- *. Evaluates shouldDefaultToFullscreenTui by importing the pure src/tui-default.ts
- * module with Node.s TypeScript stripping (pure: no extension imports).
- * invocations, so importing it has no side effects.
- */
-function fullscreenDefault(args, settingsPaths) {
-	const result = spawnSync(
-		process.execPath,
-		[
-			"--experimental-strip-types",
-			"--input-type=module",
-			"-e",
-			`import { shouldDefaultToFullscreenTui } from ${JSON.stringify(
-				pathToFileURL(path.join(pkgDir, "src", "tui-default.ts")).href,
-			)}; process.stdout.write(String(shouldDefaultToFullscreenTui(${JSON.stringify(args)}, ${JSON.stringify(
-				settingsPaths,
-			)})));`,
-		],
-		{ cwd: pkgDir, encoding: "utf-8", timeout: 60_000 },
-	);
-	assert.equal(result.status, 0, result.stderr);
-	return result.stdout === "true";
-}
-
-test("fullscreen TUI is the default unless overridden by flag or saved setting", () => {
-	assert.equal(fullscreenDefault([], []), true, "fresh installs default to fullscreen");
-	assert.equal(
-		fullscreenDefault(["--tui-mode", "regular"], []),
-		false,
-		"explicit --tui-mode flag wins over the default",
-	);
-	const dir = mkdtempSync(path.join(tmpdir(), "aiden-cli-tui-"));
-	const settings = path.join(dir, "settings.json");
-	writeFileSync(settings, JSON.stringify({ tuiMode: "regular" }));
-	assert.equal(
-		fullscreenDefault([], [settings]),
-		false,
-		"a saved tuiMode preference (e.g. changed in /config) wins over the default",
-	);
-	writeFileSync(settings, JSON.stringify({ theme: "slate-dark" }));
-	assert.equal(
-		fullscreenDefault([], [settings]),
-		true,
-		"settings without a tuiMode key still get the fullscreen default",
-	);
-});
-
-/** Evaluates shouldDefaultToCodemode from the pure src/codemode-default.ts module, like fullscreenDefault. */
-function codemodeDefault(args, settingsPaths) {
-	const result = spawnSync(
-		process.execPath,
-		[
-			"--experimental-strip-types",
-			"--input-type=module",
-			"-e",
-			`import { shouldDefaultToCodemode } from ${JSON.stringify(
-				pathToFileURL(path.join(pkgDir, "src", "codemode-default.ts")).href,
-			)}; process.stdout.write(String(shouldDefaultToCodemode(${JSON.stringify(args)}, ${JSON.stringify(
-				settingsPaths,
-			)})));`,
-		],
-		{ cwd: pkgDir, encoding: "utf-8", timeout: 60_000 },
-	);
-	assert.equal(result.status, 0, result.stderr);
-	return result.stdout === "true";
-}
-
-test("codemode is on by default unless a tool flag or saved defaultTools chooses otherwise", () => {
-	assert.equal(codemodeDefault([], []), true, "fresh installs get codemode next to the default tools");
-	for (const flags of [["--tools", "read,bash"], ["-t", "-codemode"], ["--no-tools"], ["-nbt"], ["--no-extensions"]]) {
-		assert.equal(codemodeDefault(flags, []), false, `${flags.join(" ")} wins over the default`);
-	}
-	const dir = mkdtempSync(path.join(tmpdir(), "aiden-cli-codemode-"));
-	const settings = path.join(dir, "settings.json");
-	writeFileSync(settings, JSON.stringify({ defaultTools: ["-codemode"] }));
-	assert.equal(codemodeDefault([], [settings]), false, "a saved -codemode turns it off");
-	writeFileSync(settings, JSON.stringify({ defaultTools: ["read", "bash"] }));
-	assert.equal(codemodeDefault([], [settings]), false, "a saved plain list replaces the defaults, codemode included");
-	writeFileSync(settings, JSON.stringify({ defaultTools: [] }));
-	assert.equal(codemodeDefault([], [settings]), false, "a saved empty list means no default tools, codemode included");
-	writeFileSync(settings, JSON.stringify({ defaultTools: ["+grep"] }));
-	assert.equal(codemodeDefault([], [settings]), true, "adding other tools keeps the codemode default");
-	writeFileSync(settings, "{ not json");
-	assert.equal(codemodeDefault([], [settings]), true, "an unreadable settings file falls through to the default");
-});
-
-
-test("desktop skills folders (~/.aiden/skills priority set) feed CLI commands", () => {
-	const home = mkdtempSync(path.join(tmpdir(), "aiden-cli-home-"));
 	try {
-		const skillDir = path.join(home, ".aiden", "skills", "injection-probe");
-		mkdirSync(skillDir, { recursive: true });
-		writeFileSync(
-			path.join(skillDir, "SKILL.md"),
-			"---\nname: injection-probe\ndescription: Probes desktop skills folder injection.\n---\nProbe body.\n",
-		);
-		const result = runCli(["--mode", "rpc", "--no-session"], {
-			env: { ...process.env, HOME: home, AIDEN_CODING_AGENT_DIR: path.join(home, "agent"), PI_OFFLINE: "1" },
-			input: '{"id":"c1","type":"get_commands"}\n',
-			cwd: home,
-		});
-		assert.equal(result.status, 0, result.stderr);
-		const commands = result.stdout
-			.split("\n")
-			.filter((line) => line.trim().length > 0)
-			.map((line) => JSON.parse(line))
-			.filter((message) => message.type === "response" && message.command === "get_commands")
-			.flatMap((message) => message.data.commands.map((command) => command.name));
-		assert.ok(commands.includes("skill:injection-probe"), `injected skill missing from: ${commands.join(", ")}`);
-	} finally {
-		rmSync(home, { recursive: true, force: true });
-	}
-});
-
-test("built CLI keeps native and explicit skills ahead of same-name automatic skills", () => {
-	const root = mkdtempSync(path.join(tmpdir(), "aiden-cli-skill-collision-"));
-	const home = path.join(root, "home");
-	const agentDir = path.join(root, "agent");
-	const project = path.join(root, "project");
-	for (const dir of [home, agentDir, project]) mkdirSync(dir);
-	makeProbeSkill(path.join(home, ".aiden", "skills"), "native-collision", "Automatic native collision probe.");
-	makeProbeSkill(path.join(agentDir, "skills"), "native-collision", "Native agent skill wins.");
-	makeProbeSkill(path.join(home, ".aiden", "skills"), "explicit-collision", "Automatic explicit collision probe.");
-	const explicitPath = makeProbeSkill(path.join(root, "explicit"), "explicit-collision", "User explicit skill wins.");
-	const options = { cwd: project, env: { ...process.env, HOME: home, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
-	const skill = (details, name) => details.find((command) => command.name === `skill:${name}`);
-	try {
-		const details = rpcCommandDetails(["--skill", explicitPath], options);
-		assert.equal(skill(details, "native-collision")?.description, "Native agent skill wins.");
-		assert.equal(skill(details, "explicit-collision")?.description, "User explicit skill wins.");
-		assert.equal(skill(details, "explicit-collision")?.sourceInfo?.path, path.join(explicitPath, "SKILL.md"));
-		const disabled = rpcCommandDetails(["--no-skills", "--skill", explicitPath], options);
-		assert.equal(skill(disabled, "explicit-collision")?.description, "User explicit skill wins.");
-		assert.equal(skill(disabled, "native-collision"), undefined);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-test("built CLI applies skill disable and project trust before automatic discovery", () => {
-	const root = mkdtempSync(path.join(tmpdir(), "aiden-cli-skill-policy-"));
-	const home = path.join(root, "home");
-	const project = path.join(root, "project");
-	const agentDir = path.join(root, "agent");
-	mkdirSync(home);
-	mkdirSync(project);
-	mkdirSync(agentDir);
-	const global = "global-probe";
-	const projectName = "untrusted-probe";
-	const explicit = "explicit-probe";
-	makeProbeSkill(path.join(home, ".aiden", "skills"), global);
-	makeProbeSkill(path.join(home, ".claude", "skills"), "global-claude-probe");
-	makeProbeSkill(path.join(project, ".claude", "skills"), projectName);
-	const explicitPath = makeProbeSkill(path.join(root, "explicit"), explicit);
-	const env = { ...process.env, HOME: home, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" };
-	const commands = (flags = []) => rpcCommands(flags, { cwd: project, env });
-	const has = (list, name) => list.includes(`skill:${name}`);
-	const trustPath = path.join(agentDir, "trust.json");
-	try {
-		writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ defaultProjectTrust: "never" }));
-		const initialDetails = rpcCommandDetails([], { cwd: project, env });
-		let found = initialDetails.map((command) => command.name);
-		assert.equal(has(found, global), true);
-		assert.equal(has(found, "global-claude-probe"), true);
-		assert.equal(has(found, projectName), false, "a .claude-only project must require trust");
-		assert.equal(initialDetails.find((command) => command.name === `skill:${global}`)?.sourceInfo?.scope, "user");
-
-		for (const flag of ["--no-approve", "-na"]) {
-			found = commands([flag]);
-			assert.equal(has(found, global), true, `${flag} must retain global skills`);
-			assert.equal(has(found, projectName), false, `${flag} must refuse project skills`);
-		}
-		for (const flag of ["--no-skills", "-ns"]) {
-			found = commands([flag]);
-			for (const name of [global, "global-claude-probe", projectName]) {
-				assert.equal(has(found, name), false, `${flag} must disable automatic ${name}`);
-			}
-		}
-		found = commands(["--no-skills", "--no-approve"]);
-		assert.equal(has(found, projectName), false);
-		assert.equal(has(found, global), false);
-
-		const approvedDetails = rpcCommandDetails(["--approve"], { cwd: project, env });
-		found = approvedDetails.map((command) => command.name);
-		assert.equal(has(found, projectName), true, "explicit project approval must admit discovery");
-		assert.equal(approvedDetails.find((command) => command.name === `skill:${projectName}`)?.sourceInfo?.scope, "project");
-		writeFileSync(trustPath, JSON.stringify({ [realpathSync(project)]: false }));
-		assert.equal(has(commands([]), projectName), false, "saved denial must win");
-		writeFileSync(trustPath, JSON.stringify({ [realpathSync(project)]: true }));
-		assert.equal(has(commands([]), projectName), true, "saved approval must admit discovery");
-		assert.equal(has(commands(["--no-approve"]), projectName), false, "explicit denial must override saved approval");
-
-		found = commands(["--no-skills", "--no-approve", "--skill", explicitPath]);
-		assert.equal(has(found, explicit), true, "only the user's explicit skill path survives refusal flags");
-		for (const name of [global, "global-claude-probe", projectName]) {
-			assert.equal(has(found, name), false, `${name} was discovered despite refusal flags`);
-		}
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-test("resumed session discovers skills from its cwd instead of the launch cwd", () => {
-	const root = mkdtempSync(path.join(tmpdir(), "aiden-cli-skill-switch-"));
-	const home = path.join(root, "home");
-	const agentDir = path.join(root, "agent");
-	const first = path.join(root, "first");
-	const second = path.join(root, "second");
-	for (const dir of [home, agentDir, first, second]) mkdirSync(dir);
-	makeProbeSkill(path.join(first, ".claude", "skills"), "first-project-probe");
-	makeProbeSkill(path.join(second, ".claude", "skills"), "second-project-probe");
-	const sessionPath = path.join(root, "other-session.jsonl");
-	writeFileSync(sessionPath, JSON.stringify({ type: "session", version: 3, id: randomUUID(), timestamp: new Date().toISOString(), cwd: second }) + "\n");
-	try {
-		const result = runCli(["--mode", "rpc", "--session", sessionPath, "--approve"], {
-			cwd: first,
-			env: { ...process.env, HOME: home, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" },
-			input: '{"id":"resumed","type":"get_commands"}\n',
-		});
-		assert.equal(result.status, 0, result.stderr || result.stdout);
-		const response = result.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line))
-			.find((message) => message.type === "response" && message.id === "resumed");
-		assert.ok(response, `missing correlated get_commands response: ${result.stdout}`);
-		assert.equal(response.command, "get_commands");
-		assert.equal(response.success, true, JSON.stringify(response));
-		const names = response.data.commands.map((command) => command.name);
-		assert.ok(names.includes("skill:second-project-probe"));
-		assert.ok(!names.includes("skill:first-project-probe"));
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-
-test("Aiden commands are available over the RPC (GUI-interop) surface", () => {
-	const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-cmds-"));
-	try {
-		const result = runCli(["--mode", "rpc", "--no-session"], {
-			env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" },
-			input: '{"id":"c2","type":"get_commands"}\n',
-		});
-		const commands = result.stdout
-			.split("\n")
-			.filter((line) => line.trim().length > 0)
-			.map((line) => JSON.parse(line))
-			.filter((message) => message.type === "response" && message.command === "get_commands")
-			.flatMap((message) => message.data.commands.map((command) => command.name));
-		for (const expected of ["usage", "voice", "dictate", "btw", "mcp"]) {
-			assert.ok(commands.includes(expected), `/${expected} missing over RPC; got: ${commands.join(", ")}`);
+		for (const args of [["-p", "hi"], ["--mode", "rpc"], ["--mode", "json", "hi"], ["--list-models"], ["--tui-mode", "fullscreen"], ["--theme", "dark"], ["fix the failing test"], ["theme", "import"], ["reset"]]) {
+			const result = runCli(args, { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" }, input: "" });
+			assert.notEqual(result.status, 0, args.join(" "));
+			assert.equal(result.stdout, "", args.join(" "));
+			assert.equal(result.stderr, "aiden: the interactive CLI was removed; run `aiden serve` or `aiden help`.\n", args.join(" "));
 		}
 	} finally {
 		rmSync(agentDir, { recursive: true, force: true });
 	}
 });
 
-test("/dictate settles and clears its status when the recorder exits early or is missing", { skip: process.platform === "win32" }, () => {
-	const root = mkdtempSync(path.join(tmpdir(), "aiden-cli-dictate-"));
+test("aiden app shows and accepts no appearance topic", () => {
+	const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-app-"));
 	try {
-		const agentDir = path.join(root, "agent"), bin = path.join(root, "bin");
-		mkdirSync(agentDir); mkdirSync(bin);
-		writeFileSync(path.join(agentDir, "aiden.json"), JSON.stringify({ voice: { provider: "gemini" } }));
-		// A recorder that exits immediately without producing audio (no microphone permission, device busy).
-		writeFileSync(path.join(bin, "rec"), "#!/bin/sh\nexit 0\n"); chmodSync(path.join(bin, "rec"), 0o755);
-		const voiceUrl = JSON.stringify(pathToFileURL(path.join(pkgDir, "src", "extensions", "voice.ts")).href);
-		const script = `
-import { createVoiceInlineExtension } from ${voiceUrl};
-const unhandled = []; process.on("unhandledRejection", (reason) => unhandled.push(String(reason)));
-const commands = new Map();
-createVoiceInlineExtension({ agentDir: ${JSON.stringify(agentDir)} }).factory({ registerCommand: (name, command) => commands.set(name, command), on: () => {} });
-async function dictate() {
-	const notes = [], statuses = {}; let dismissed = false;
-	const ctx = { mode: "tui", ui: {
-		setStatus: (key, value) => { statuses[key] = value; },
-		notify: (message, level) => notes.push(level + ": " + message),
-		// The user presses Enter after 300 ms unless the extension dismisses the prompt first.
-		input: (_title, _placeholder, opts) => new Promise((resolve) => {
-			const timer = setTimeout(() => resolve(""), 300);
-			opts?.signal?.addEventListener("abort", () => { clearTimeout(timer); dismissed = true; resolve(undefined); });
-		}),
-		pasteToEditor: () => {},
-	} };
-	await Promise.race([
-		commands.get("dictate").handler("", ctx),
-		new Promise((_, reject) => setTimeout(() => reject(new Error("/dictate hung")), 5_000)),
-	]);
-	return { notes, status: statuses["aiden-dictate"], dismissed };
-}
-process.env.PATH = ${JSON.stringify(bin)} + ":/usr/bin:/bin";
-const early = await dictate();
-process.env.PATH = "/usr/bin:/bin";
-const missing = await dictate();
-await new Promise((resolve) => setTimeout(resolve, 50));
-console.log(JSON.stringify({ early, missing, unhandled }));
-`;
-		const result = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "--no-warnings", "-e", script], {
-			encoding: "utf-8", timeout: 60_000,
-			env: { ...process.env, GEMINI_API_KEY: "test-key", AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" },
+		const env = { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" };
+		const status = runCli(["app", "status"], { env });
+		assert.equal(status.status, 0, status.stderr);
+		const ids = JSON.parse(status.stdout).flatMap((topic) => topic.rows.map((row) => row.id));
+		assert.ok(ids.includes("memory.enabled"), ids.join(", "));
+		assert.ok(!ids.some((id) => id.startsWith("appearance.")), ids.join(", "));
+		const appearance = runCli(["app", "get", "appearance"], { env });
+		assert.equal(appearance.status, 1);
+		assert.match(appearance.stderr, /^Usage: aiden app /);
+	} finally {
+		rmSync(agentDir, { recursive: true, force: true });
+	}
+});
+
+test("AIDEN_CODING_AGENT_DIR isolates state (rebranded env override)", () => {
+	const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-agent-"));
+	try {
+		const result = runCli(["provider", "list"], {
+			env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" },
 		});
 		assert.equal(result.status, 0, result.stderr);
-		const report = JSON.parse(result.stdout.trim().split("\n").pop());
-		assert.deepEqual(report.unhandled, []);
-		assert.ok(report.early.notes.some((note) => note.startsWith("error: Dictation failed:")), JSON.stringify(report.early));
-		assert.equal(report.early.status, undefined, "status must be cleared after an early recorder exit");
-		assert.equal(report.early.dismissed, true, "the prompt is dismissed once the recorder stops");
-		assert.ok(report.missing.notes.some((note) => note.includes("No audio recorder found")), JSON.stringify(report.missing));
-		assert.equal(report.missing.status, undefined);
-	} finally { rmSync(root, { recursive: true, force: true }); }
+		assert.doesNotMatch(result.stderr, /SQLite is an experimental feature/);
+		// The agent dir being populated proves the rebranded env var redirected
+		// state away from ~/.pi and ~/.aiden.
+		assert.ok(existsSync(path.join(agentDir, "auth.json")), "auth.json must land in the agent dir");
+		assert.ok(
+			existsSync(path.join(agentDir, "models-store.json")),
+			"models-store.json must land in the agent dir",
+		);
+	} finally {
+		rmSync(agentDir, { recursive: true, force: true });
+	}
 });
 
 test("aiden help names Aiden's MCP commands and no native pi-mcp routing", () => {
@@ -453,36 +160,42 @@ test("aiden help names Aiden's MCP commands and no native pi-mcp routing", () =>
   assert.doesNotMatch(result.stdout, /pi-mcp/);
 });
 
-test("Pi's built-in MCP extension stays off: /mcp is Aiden's and native mcp.json servers never start", { skip: process.platform === "win32" }, async () => {
-  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-native-mcp-"));
+test("foreground serve drains and removes its socket when its terminal hangs up", { skip: process.platform === "win32" }, async () => {
+  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-hup-"));
+  const child = spawn(process.execPath, [cli, "serve"], {
+    env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, HOME: agentDir, PI_OFFLINE: "1" }, stdio: ["ignore", "ignore", "pipe"],
+  });
   try {
-    const marker = path.join(agentDir, "native-server-started");
-    // A server in Pi's native configuration that records being launched.
-    writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { probe: {
-      command: process.execPath, args: ["-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started"); setInterval(() => {}, 1000);`],
-    } } }));
-    const child = spawn(process.execPath, [cli, "--mode", "rpc", "--no-session"], {
-      env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" }, stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "", stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    let stderr = "";
     child.stderr.on("data", (chunk) => { stderr += chunk; });
-    const exited = new Promise((resolve) => child.once("exit", resolve));
-    child.stdin.write('{"id":"mcp-probe","type":"get_commands"}\n');
-    // Long enough for a native connection to have spawned its server.
+    const exited = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
     const deadline = Date.now() + 30_000;
-    while (!stdout.includes('"mcp-probe"') && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
-    child.stdin.end();
-    await exited;
-    const response = stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line)).find((message) => message.id === "mcp-probe");
-    assert.ok(response?.success, stdout);
-    const mcp = response.data.commands.filter((command) => command.name === "mcp");
-    assert.equal(mcp.length, 1, JSON.stringify(mcp));
-    assert.match(JSON.stringify(mcp[0].sourceInfo), /aiden-mcp/u, "/mcp must come from Aiden's extension");
-    assert.equal(existsSync(marker), false, "a native mcp.json server was started");
-    assert.doesNotMatch(stderr, /was not loaded|builtin:mcp/u, "turning Pi's MCP off must not print a replacement diagnostic");
-  } finally { rmSync(agentDir, { recursive: true, force: true }); }
+    while (!/listening at (.+)\n/u.test(stderr) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+    const socket = /listening at (.+)\n/u.exec(stderr)?.[1];
+    assert.ok(socket && existsSync(socket), stderr);
+    // A foreground serve shares its shell job's process group, so it never claims one to force-kill.
+    assert.equal(JSON.parse(readFileSync(path.join(agentDir, "serve.lock", "owner.json"), "utf8")).detached, undefined);
+    child.kill("SIGHUP");
+    assert.deepEqual(await exited, { code: 0, signal: null }, stderr);
+    assert.equal(existsSync(socket), false, "a hung-up daemon must still remove its control socket");
+  } finally { child.kill("SIGKILL"); rmSync(agentDir, { recursive: true, force: true }); }
+});
+
+test("a background daemon records that it leads its own process group and stops on request", { skip: process.platform === "win32" }, async () => {
+  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-daemon-"));
+  const options = { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, HOME: agentDir, PI_OFFLINE: "1" } };
+  try {
+    const started = runCli(["serve", "--daemon"], options);
+    assert.equal(started.status, 0, started.stderr);
+    const owner = JSON.parse(readFileSync(path.join(agentDir, "serve.lock", "owner.json"), "utf8"));
+    assert.equal(owner.detached, true);
+    const stopped = runCli(["serve", "stop"], options);
+    assert.equal(stopped.status, 0, stopped.stderr);
+    assert.equal(existsSync(path.join(agentDir, "serve.lock")), false);
+  } finally {
+    runCli(["serve", "stop"], options);
+    rmSync(agentDir, { recursive: true, force: true });
+  }
 });
 
 test("a malformed or unreadable native mcp.json never blocks the CLI", () => {
@@ -506,32 +219,6 @@ test("a malformed or unreadable native mcp.json never blocks the CLI", () => {
     }
   } finally { rmSync(agentDir, { recursive: true, force: true }); }
 });
-
-for (const revoke of [false, true]) {
-  test(`bundled codemode executes nested tools with current workspace authority (revoke=${revoke})`, () => {
-    const root = mkdtempSync(path.join(tmpdir(), "aiden-cli-codemode-"));
-    const agentDir = path.join(root, "agent"), workspace = path.join(root, "workspace");
-    mkdirSync(agentDir); mkdirSync(workspace);
-    try {
-      writeFileSync(path.join(agentDir, "workspaces.json"), JSON.stringify([{ id: "fixture", name: "Fixture", folderPath: realpathSync(workspace), access: "full" }]));
-      const result = runCli(["--mode", "json", "--no-session", "--tools", "codemode,write,fixture_revoke", "-e",
-        path.resolve(pkgDir, "tests/fixtures/codemode-provider.mjs"), "--model", "offline-fixture/fixture", "Exercise codemode"], {
-        cwd: workspace,
-        env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", AIDEN_TEST_REVOKE: revoke ? "1" : "0" },
-      });
-      assert.equal(result.status, 0, result.stderr);
-      const events = result.stdout.trim().split("\n").filter((line) => line.startsWith("{")).map((line) => JSON.parse(line));
-      const nested = events.find((event) => event.type === "tool_execution_end" && event.toolName === "write" && event.parentToolCallId === "codemode-fixture");
-      assert.ok(nested, result.stderr + JSON.stringify(events.filter((event) => event.type.startsWith("tool_execution"))));
-      assert.equal(nested.isError, revoke, JSON.stringify(nested));
-      const file = path.join(workspace, "codemode-result.txt");
-      if (revoke) {
-        assert.equal(existsSync(file), false, "revoked nested write must have no filesystem effect");
-        assert.match(JSON.stringify(nested), /Workspace tool access is disabled/);
-      } else assert.equal(readFileSync(file, "utf8"), "worker executed");
-    } finally { rmSync(root, { recursive: true, force: true }); }
-  });
-}
 
 test("bundled ChatGPT OAuth module loads and rejects missing installation identity before networking", async () => {
   const module = await import(pathToFileURL(path.resolve(pkgDir, "dist/app/chunks/openai-chatgpt.js")).href);

@@ -8,3 +8,10 @@ Status (2026-10-27): implemented on branch `claude/project-thread-p5v2my-browser
 - A paired Mac viewing another computer's chat strips the recap (`withoutHostLocalRecaps` in `renderer/lib/hosts/remote-chat-mapper.ts`) because its player reads only local recordings.
 - Phones: iOS plays MP4 with AVKit (WebM says watch on the Mac); Android plays both with VideoView. Neither compiles in the cloud container; CI is the check.
 - e2e: `tests/e2e/browser.spec.ts` has the MP4 recording test and an agent-records-then-plays-in-chat test. For dark screenshots on a branch without the live theme fix, write `aiden-agent.appearance-v1` in localStorage and reload.
+
+## 2026-10-29: automatic stop and the in-memory recording map (audit 09, F6/F7)
+
+- The five-minute automatic stop no longer loses the video: its result is kept on the tab (`LiveTab.autoStopped`) and the next `browser_recording_stop` returns it (once), instead of "not recording". A new `startRecording` clears an unclaimed one; its file stays on disk.
+- The unbounded `recordings` Map in `BrowserService` is gone: `reveal_recording` always reads the disk via `findBrowserRecording`.
+- Closing a window drops its workspace entry only when the entry holds no tabs, history or servers (history is capped at 10 and servers at 12, and they are kept for a reopened window).
+- Covered by `tests/e2e/browser-throttling-native.ts` (stop after the timer fired returns a non-empty video; a second stop rejects).

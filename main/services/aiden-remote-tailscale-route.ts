@@ -17,6 +17,11 @@ function funnelOn443(status: AidenTailscaleStatus): boolean {
   });
 }
 
+/** Funnel is on for the HTTPS 443 listener, by either way `serve status --json` reports it; Aiden's route refuses to sit behind it. */
+export function aidenTailscaleFunnelOn443(status: AidenTailscaleStatus): boolean {
+  return funnelOn443(status) || Object.entries(status.Web ?? {}).some(([authority, listener]) => listener.Funnel === true && parseTailscaleAuthority(authority)?.port === 443);
+}
+
 // The public Serve prefix is the canonical API base. Tailscale strips this
 // prefix before proxying to the loopback listener, while the client retains
 // the one OpenAPI-approved `/api/aiden/v1` endpoint spelling.

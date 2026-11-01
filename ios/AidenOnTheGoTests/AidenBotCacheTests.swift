@@ -336,6 +336,121 @@ final class AidenBotCacheTests: XCTestCase {
         XCTAssertFalse(reloaded?.conversations?.conversations.contains { $0.botId == botID } ?? false)
     }
 
+    func testDraftAndPendingSendStorageIsExcludedFromBackupAfterRecreation() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "draft-backup-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AidenChatDraftStore(root: root)
+        let session = await store.beginSession(instanceId: "mac", chatId: "chat")
+        _ = try await store.save("Editable private draft", session: session)
+        let pending = AidenChatDraftStore.PendingSend(deviceId: "phone", request: .init(text: "Unconfirmed private send"),
+            key: UUID(), createdAt: Date(), attachments: [])
+        try await store.savePendingSend(pending, session: session)
+        try assertDraftBackupExclusion(root, expectedFiles: 2)
+        await store.purge(instanceId: "mac")
+        try FileManager.default.removeItem(at: root)
+        let reopened = await store.beginSession(instanceId: "mac", chatId: "chat")
+        // A pending-send-only write must also create protected, excluded storage.
+        try await store.savePendingSend(pending, session: reopened)
+        try assertDraftBackupExclusion(root, expectedFiles: 1)
+        let restored = try await store.loadPendingSend(session: reopened, deviceId: "phone")
+        XCTAssertEqual(restored, pending)
+    }
+
+    func testOpeningLegacyDraftStoreExcludesExistingRecordsWithoutAWrite() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "draft-backup-migrate-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = AidenChatDraftStore(root: root)
+        let session = await original.beginSession(instanceId: "mac", chatId: "chat")
+        _ = try await original.save("Keep the existing draft", session: session)
+        let pending = AidenChatDraftStore.PendingSend(deviceId: "phone", request: .init(text: "Unconfirmed"),
+            key: UUID(), createdAt: Date(), attachments: [])
+        try await original.savePendingSend(pending, session: session)
+        let files = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            .flatMap { try FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil) }
+        let before = try files.map { try Data(contentsOf: $0) }
+        var legacyRoot = root
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = false
+        try legacyRoot.setResourceValues(values)
+        XCTAssertEqual(try URL(filePath: root.path).resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, false)
+        let migrated = AidenChatDraftStore(root: root)
+        // Check immediately after opening, before load/save/session calls can hide a missing migration.
+        try assertDraftBackupExclusion(root, expectedFiles: 2)
+        XCTAssertEqual(try files.map { try Data(contentsOf: $0) }, before)
+        let reopened = await migrated.beginSession(instanceId: "mac", chatId: "chat")
+        let text = await migrated.load(session: reopened)
+        let attempt = try await migrated.loadPendingSend(session: reopened, deviceId: "phone")
+        XCTAssertEqual(text, "Keep the existing draft")
+        XCTAssertEqual(attempt, pending)
+    }
+
+    func testDraftWritesFailClosedWhenBackupExclusionFailsButKeepExistingDraftReadable() async throws {
+        enum ExclusionFailure: Error { case denied }
+        let root = FileManager.default.temporaryDirectory.appending(path: "draft-backup-fail-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = AidenChatDraftStore(root: root)
+        let session = await original.beginSession(instanceId: "mac", chatId: "chat")
+        _ = try await original.save("Original\nPrivate remainder", session: session)
+        let failed = AidenChatDraftStore(root: root, excludeFromBackup: { _ in throw ExclusionFailure.denied })
+        let next = await failed.beginSession(instanceId: "mac", chatId: "chat")
+        do { _ = try await failed.save("Must not persist", session: next); XCTFail("Exclusion must succeed before a text write") }
+        catch ExclusionFailure.denied { }
+        let pending = AidenChatDraftStore.PendingSend(deviceId: "phone", request: .init(text: "Must not persist"),
+            key: UUID(), createdAt: Date(), attachments: [])
+        do { try await failed.savePendingSend(pending, session: next); XCTFail("Exclusion must succeed before a pending-send write") }
+        catch ExclusionFailure.denied { }
+        await failed.consumeDraft(submitted: "Original", from: "Original\nPrivate remainder", session: next)
+        let retained = await failed.load(session: next)
+        let attempt = try await failed.loadPendingSend(session: next, deviceId: "phone")
+        XCTAssertEqual(retained, "Original\nPrivate remainder")
+        XCTAssertNil(attempt)
+    }
+
+    private func assertDraftBackupExclusion(_ root: URL, expectedFiles: Int,
+                                               file: StaticString = #filePath, line: UInt = #line) throws {
+        XCTAssertEqual(try URL(filePath: root.path).resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true, file: file, line: line)
+        let entries = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]), file: file, line: line)
+        var files = 0
+        for case let url as URL in entries {
+            if try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true { files += 1 }
+        }
+        XCTAssertEqual(files, expectedFiles, file: file, line: line)
+    }
+
+    func testDraftStoragePreservesCompleteUntilFirstUnlockProtectionWhenPlatformExposesIt() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "draft-protection-\(UUID())")
+        let control = root.appendingPathExtension("control")
+        defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: control) }
+        // An independent system-written control distinguishes unavailable simulator metadata
+        // from the store failing to apply protection on a platform that exposes it.
+        try Data("control".utf8).write(to: control, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        func protection(_ url: URL) throws -> String? {
+            let value = try FileManager.default.attributesOfItem(atPath: url.path)[.protectionKey]
+            return (value as? FileProtectionType)?.rawValue ?? value as? String
+        }
+        guard try protection(control) != nil else {
+#if targetEnvironment(simulator)
+            throw XCTSkip("This simulator does not expose Data Protection even for an independently protected control file; verify on signed physical hardware.")
+#else
+            return XCTFail("Physical iOS must expose Data Protection for the independently protected control file")
+#endif
+        }
+        let store = AidenChatDraftStore(root: root)
+        let session = await store.beginSession(instanceId: "mac", chatId: "chat")
+        _ = try await store.save("Private draft", session: session)
+        try await store.savePendingSend(.init(deviceId: "phone", request: .init(text: "Private pending send"),
+            key: UUID(), createdAt: Date(), attachments: []), session: session)
+        XCTAssertEqual(try protection(control), FileProtectionType.completeUntilFirstUserAuthentication.rawValue)
+        func verifyTreeProtection() throws {
+            XCTAssertEqual(try protection(root), FileProtectionType.completeUntilFirstUserAuthentication.rawValue)
+            let entries = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+            for case let url as URL in entries {
+                XCTAssertEqual(try protection(url), FileProtectionType.completeUntilFirstUserAuthentication.rawValue)
+            }
+        }
+        try verifyTreeProtection()
+    }
+
     func testDraftStoreSharesTextByInstallationAndChatWhileRejectingOldSessions() async throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "aiden-drafts-\(UUID().uuidString)", directoryHint: .isDirectory)

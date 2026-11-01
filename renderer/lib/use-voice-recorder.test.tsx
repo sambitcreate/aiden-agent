@@ -9,6 +9,8 @@ afterEach(() => cleanup());
 
 let decodes = 0;
 let mediaRecorders = 0;
+let contextsClosed = 0;
+let tracksStopped = 0;
 
 class FakeAudioWorkletNode {
   static latest: FakeAudioWorkletNode | null = null;
@@ -46,7 +48,9 @@ class FakeAudioContext {
     return { connect: <T,>(node: T) => node, disconnect() {} };
   }
   async resume() {}
-  async close() {}
+  async close() {
+    contextsClosed += 1;
+  }
   async decodeAudioData() {
     decodes += 1;
     return { duration: 1 };
@@ -65,13 +69,25 @@ class FakeMediaRecorder {
 function installCapture() {
   decodes = 0;
   mediaRecorders = 0;
+  contextsClosed = 0;
+  tracksStopped = 0;
   const globals = globalThis as Record<string, unknown>;
   globals.AudioContext = FakeAudioContext;
   globals.AudioWorkletNode = FakeAudioWorkletNode;
   globals.MediaRecorder = FakeMediaRecorder;
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
-    value: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) },
+    value: {
+      getUserMedia: async () => ({
+        getTracks: () => [
+          {
+            stop() {
+              tracksStopped += 1;
+            },
+          },
+        ],
+      }),
+    },
   });
   (window as unknown as { aidenAPI: Record<string, unknown> }).aidenAPI.systemPreferences = {
     getMediaAccessStatus: async () => "granted",
@@ -136,4 +152,35 @@ test("a model that can keep up shows live words while recording, and the final d
   // The final decode still gets the whole recording, not just what the preview saw.
   const final = calls.find((call) => call.channel === "voice:transcribeLocal")!;
   assert.ok((final.args[0] as ArrayBuffer).byteLength > 6_400);
+});
+
+test("a composer recording that reaches the on-device limit stops and transcribes what was kept, once", async () => {
+  const calls = installBotTestIpc({
+    "voice:resolveProvider": () => ({ kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true }),
+    "localVoice:warm": () => undefined,
+    "voice:transcribeLocal": () => "kept words",
+  });
+  installCapture();
+  const heard: string[] = [];
+  const { result } = renderHook(() => useVoiceRecorder((text) => heard.push(text), { maxRecordingSamples: 1_000 }));
+  await act(() => result.current.start());
+  assert.equal(result.current.recording, true);
+  // Two posts make one whole 100 ms chunk (1,600 samples), past the 1,000-sample limit.
+  act(() => {
+    FakeAudioWorkletNode.latest!.speak();
+    FakeAudioWorkletNode.latest!.speak();
+  });
+  await waitFor(() => assert.deepEqual(heard, ["kept words"]));
+  assert.equal(result.current.recording, false, "the composer no longer shows recording");
+  assert.equal(contextsClosed, 1, "the audio graph is released");
+  assert.ok(tracksStopped >= 1, "the microphone is released");
+
+  // A late press of stop, or audio arriving after the limit, sends nothing more.
+  act(() => result.current.stop());
+  act(() => FakeAudioWorkletNode.latest!.speak());
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const sent = calls.filter((call) => call.channel === "voice:transcribeLocal");
+  assert.equal(sent.length, 1);
+  assert.equal((sent[0]!.args[0] as ArrayBuffer).byteLength, 2_000, "exactly the kept 1,000 samples");
+  assert.deepEqual(heard, ["kept words"]);
 });

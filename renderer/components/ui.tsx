@@ -16,7 +16,7 @@ import {
 } from "radix-ui";
 import { Command as CommandPrimitive } from "cmdk";
 import { createPortal } from "react-dom";
-import { ArrowDownToLine, PanelLeft, Check, ChevronDown, Search } from "lucide-react";
+import { ArrowDownToLine, PanelLeft, Check, ChevronDown, Menu, Search } from "lucide-react";
 import { Toaster as SonnerToaster, toast } from "sonner";
 import { reportRendererDiagnostic } from "../lib/dev-log";
 import {
@@ -42,6 +42,13 @@ import {
   type CompactSidebarFocusState,
 } from "../lib/compact-sidebar-focus";
 import { ariaKeyShortcut } from "../shared/keybindings";
+import {
+  collapsedHeaderInset,
+  leadingClusterOffset,
+  useTrailingWindowControlsClearance,
+  useWindowChrome,
+} from "../lib/window-chrome";
+import { windowControlsApi } from "../lib/ipc";
 
 export { toast };
 export function Toaster(props: React.ComponentProps<typeof SonnerToaster>) {
@@ -158,6 +165,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(fun
 });
 
 type TextProps = React.HTMLAttributes<HTMLElement> & {
+  ref?: React.Ref<HTMLElement>;
   as?: keyof React.JSX.IntrinsicElements;
   variant?: "heading1" | "strong" | "regular" | "small" | "small-strong";
   color?: "primary" | "secondary" | "tertiary" | "quaternary" | "red" | "status-red";
@@ -409,10 +417,13 @@ const SplitContext = React.createContext<{
 
 /**
  * Left padding that keeps a full-width header clear of the window controls and
- * the leading sidebar-toggle/history cluster while the sidebar is collapsed.
- * The cluster starts at 90px and holds up to three 28px actions.
+ * the leading sidebar-toggle/history cluster while the sidebar is collapsed,
+ * or undefined while it is open. See `collapsedHeaderInset` for the geometry.
  */
-export const SPLIT_VIEW_COLLAPSED_HEADER_INSET = 190;
+export function useSplitViewCollapsedHeaderInset(): number | undefined {
+  const chrome = useWindowChrome();
+  return React.useContext(SplitContext)?.collapsed === true ? collapsedHeaderInset(chrome) : undefined;
+}
 
 /** Whether the leading sidebar is collapsed, for full-height chrome that must clear the window controls. */
 export function useSplitViewCollapsed(): boolean {
@@ -601,6 +612,7 @@ function SplitViewRoot({
     };
   }, [collapseKey, compactOpen, leadingAnchor]);
 
+  const chrome = useWindowChrome();
   const splitContext = React.useMemo(
     () => ({ collapsed, toggle, leadingAnchor }),
     [collapsed, toggle, leadingAnchor],
@@ -673,10 +685,12 @@ function SplitViewRoot({
           ref={setLeadingAnchor}
           inert={contentModalOpen ? true : undefined}
           aria-hidden={contentModalOpen ? true : undefined}
+          data-leading-cluster
           className={cn(
-            "absolute left-[90px] top-0 z-40 flex h-13 items-center gap-0.5",
+            "absolute top-0 z-40 flex h-13 items-center gap-0.5",
             contentModalOpen && "pointer-events-none",
           )}
+          style={{ left: leadingClusterOffset(chrome) }}
         />
       </div>
     </SplitContext.Provider>
@@ -684,17 +698,48 @@ function SplitViewRoot({
 }
 
 /**
+ * Linux main menu: with Aiden's own title bar there is no menu bar, so this
+ * opens the same File, Edit, View, Go, Chat, Window and Help menus as a popup.
+ */
+function WindowMenuButton() {
+  const open = (event: React.MouseEvent<HTMLButtonElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    void windowControlsApi.showMenu({ x: rect.left, y: rect.bottom + 4 }).catch(() => {
+      toast.error("Aiden couldn't open the menu.");
+    });
+  };
+  return (
+    <Button
+      iconOnly
+      size="small"
+      variant="bar"
+      data-window-menu
+      className="no-drag"
+      aria-label="Main menu"
+      aria-haspopup="menu"
+      title="Main menu"
+      onClick={open}
+    >
+      <Menu />
+    </Button>
+  );
+}
+
+/**
  * The sidebar toggle, portaled beside the window controls so it stays put
  * whether the sidebar is open or collapsed. `children` follow it in the same
- * cluster (history navigation).
+ * cluster (history navigation). With Aiden's Linux title bar the main menu
+ * button leads the cluster.
  */
 function SidebarToggle({ children }: { children?: React.ReactNode }) {
   const context = React.useContext(SplitContext);
+  const chrome = useWindowChrome();
   const shortcut = useShortcutLabel("sidebar.toggle");
   const shortcutBinding = useShortcutBinding("sidebar.toggle");
   if (!context) return null;
   const cluster = (
     <>
+      {chrome === "aiden" ? <WindowMenuButton /> : null}
       <Button
         iconOnly
         size="small"
@@ -770,6 +815,7 @@ export function Sidebar({
   return (
     <div
       data-sidebar
+      data-focus-region="sidebar"
       className="glass-surface relative flex h-full min-h-0 flex-col overflow-hidden"
     >
       <div className="drag-region flex h-13 shrink-0 items-center justify-end px-3">{actions}</div>
@@ -819,7 +865,7 @@ export const SidebarFooter = ({ className, ...props }: React.HTMLAttributes<HTML
     {...props}
   />
 );
-export const SidebarList = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
+export const SidebarList = ({ className, ...props }: React.ComponentProps<"div">) => (
   <div className={cn("flex flex-col px-2.5 pb-3", className)} {...props} />
 );
 export function SidebarListGroup({
@@ -949,9 +995,18 @@ export function ScrollArea({
   scrollToBottomButtonOffset = 0,
   scrollContentBottomOffset = 0,
   scrollRestorationId,
+  focusRegion,
+  overlay,
   className,
   children,
 }: React.PropsWithChildren<{
+  /**
+   * Marks the scrollport as the conversation F6 moves to, so arrow keys and
+   * Page Up/Down scroll it once it has focus.
+   */
+  focusRegion?: "chat";
+  /** Floats at the top right, just below the toolbar, such as Find in chat. */
+  overlay?: React.ReactNode;
   /**
    * Names this scrollport for the router's scroll restoration, so a page never
    * inherits another page's offset just because their scrollports sit at the
@@ -997,12 +1052,18 @@ export function ScrollArea({
   // The follow latch lives in a ref so scroll, wheel, and resize handlers read
   // the latest decision synchronously; React state only mirrors it for paint.
   const followRef = React.useRef<FollowState>(INITIAL_FOLLOW_STATE);
+  const scrollSampleRef = React.useRef<{ top: number; height: number; viewport: number } | null>(null);
+  // Upward movement too small to count yet. Kept apart from the sample, which
+  // content snaps overwrite, so fractional scrolls add up across a stream.
+  const upwardDriftRef = React.useRef(0);
   const followFrameRef = React.useRef(0);
   const offerJumpTimerRef = React.useRef(0);
   const jumpSettleTimerRef = React.useRef(0);
   const autoScrollRef = React.useRef(autoScrollToBottom);
   const streamingRef = React.useRef(streaming);
-  const split = React.useContext(SplitContext);
+  const collapsedInset = useSplitViewCollapsedHeaderInset();
+  const headerRef = React.useRef<HTMLElement>(null);
+  const trailingClearance = useTrailingWindowControlsClearance(headerRef);
 
   autoScrollRef.current = autoScrollToBottom;
   streamingRef.current = streaming;
@@ -1056,6 +1117,7 @@ export function ScrollArea({
     if (autoScrollRef.current && state.following && !state.jumpPending && !state.scrollbarHeld) {
       element.scrollTop = element.scrollHeight;
     }
+    scrollSampleRef.current = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
     dispatchFollow({ type: "contentResize", distance: measureDistance(element), scrollTop: element.scrollTop });
   }, [dispatchFollow, measureDistance]);
 
@@ -1071,6 +1133,9 @@ export function ScrollArea({
       !streamingRef.current &&
       distance > 1 &&
       document.documentElement.dataset.reduceMotion !== "true";
+    // A jump starts any small upward movement over; an instant one lands
+    // without a scroll event that would otherwise reset it.
+    upwardDriftRef.current = 0;
     dispatchFollow({ type: "jump", smooth });
     window.clearTimeout(jumpSettleTimerRef.current);
     if (smooth) {
@@ -1142,6 +1207,8 @@ export function ScrollArea({
       // Only the viewport's own box (its scrollbar) starts a scrollbar hold.
       // The press itself keeps follow: only where the thumb settles counts.
       if (event.target !== element) return;
+      scrollSampleRef.current = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
+      upwardDriftRef.current = 0;
       dispatchFollow({ type: "scrollbarHold" });
     };
     const onPointerUp = () => {
@@ -1245,6 +1312,7 @@ export function ScrollArea({
 
   React.useLayoutEffect(() => {
     if (autoScrollResetKey === undefined) return;
+    upwardDriftRef.current = 0;
     dispatchFollow({ type: "reset" });
     if (autoScrollToBottom) scheduleFollowBottom();
   }, [autoScrollResetKey, autoScrollToBottom, dispatchFollow, scheduleFollowBottom]);
@@ -1275,7 +1343,11 @@ export function ScrollArea({
       <header
         data-toolbar
         className="scroll-area-header drag-region relative flex min-h-13 items-center gap-3 px-4 transition-[padding] duration-300 ease-emphasized motion-reduce:transition-none"
-        style={{ paddingLeft: split?.collapsed ? SPLIT_VIEW_COLLAPSED_HEADER_INSET : undefined }}
+        ref={headerRef}
+        style={{
+          paddingLeft: collapsedInset,
+          paddingRight: trailingClearance ? trailingClearance + 4 : undefined,
+        }}
       >
         <div className="no-drag flex shrink-0 items-center">{leading}</div>
         <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -1291,6 +1363,7 @@ export function ScrollArea({
 
   return (
     <div
+      data-scroll-area
       className={cn("relative isolate h-full min-h-0 overflow-hidden bg-background", className)}
       // Sticky descendants (transcript section headers) rest just below the
       // overlaid toolbar instead of sliding underneath it.
@@ -1307,7 +1380,19 @@ export function ScrollArea({
         data-scroll-top={atTop}
         data-scroll-bottom={atScrollEnd}
         data-follow={autoScrollToBottom ? following : undefined}
-        className="scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain"
+        {...(focusRegion
+          ? {
+              "data-focus-region": focusRegion,
+              "data-focus-region-entry": "",
+              role: "region",
+              "aria-label": "Conversation",
+              tabIndex: -1,
+            }
+          : {})}
+        className={cn(
+          "scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain",
+          focusRegion && "conversation-scrollport",
+        )}
         style={{
           paddingTop: toolbarHeight,
           paddingBottom: footerHeight + Math.max(0, scrollContentBottomOffset),
@@ -1318,10 +1403,30 @@ export function ScrollArea({
           overflowAnchor: autoScrollToBottom && following ? "none" : undefined,
         }}
         onScroll={(event) => {
+          const element = event.currentTarget;
+          const sample = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
+          const previous = scrollSampleRef.current;
+          const clamped = previous !== null &&
+            (sample.height < previous.height || sample.viewport !== previous.viewport);
+          // Sandboxed frame input cannot reach our wheel/touch listeners. Its
+          // chained host scroll can still reveal the reader moving upward.
+          // Fractional upward movement adds up across events, including across
+          // a streaming snap; a downward move or a jump starts over.
+          if (!previous || clamped || followRef.current.jumpPending || sample.top > previous.top) {
+            upwardDriftRef.current = 0;
+          } else {
+            upwardDriftRef.current += previous.top - sample.top;
+          }
+          const movedUp = upwardDriftRef.current > 1;
+          if (movedUp) upwardDriftRef.current = 0;
+          scrollSampleRef.current = sample;
+          if (autoScrollRef.current && movedUp && !followRef.current.jumpPending && !followRef.current.scrollbarHeld) {
+            dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: true });
+          }
           dispatchFollow({
-            type: "settle",
-            distance: measureDistance(event.currentTarget),
-            scrollTop: event.currentTarget.scrollTop,
+            type: clamped ? "contentResize" : "settle",
+            distance: measureDistance(element),
+            scrollTop: element.scrollTop,
           });
         }}
       >
@@ -1329,6 +1434,18 @@ export function ScrollArea({
           {children}
         </div>
       </div>
+      {focusRegion ? (
+        // The conversation's keyboard focus ring, drawn below the overlaid toolbar.
+        <div aria-hidden className="conversation-focus-ring pointer-events-none absolute inset-x-0 bottom-0 z-20" style={{ top: toolbarHeight }} />
+      ) : null}
+      {overlay ? (
+        <div
+          className="pointer-events-none absolute inset-x-0 z-30 flex justify-end px-4"
+          style={{ top: toolbarHeight + 8 }}
+        >
+          <div className="pointer-events-auto">{overlay}</div>
+        </div>
+      ) : null}
       {showScrollToBottomButton && offerJump ? (
         // The button floats over the scrollport like the footer, but is centred
         // on the same chat column as the composer, so it follows the column
@@ -1407,14 +1524,16 @@ type DialogProps = React.PropsWithChildren<{
   busy?: boolean;
   onConfirm?: () => void | Promise<void>;
   returnFocus?: () => HTMLElement | null;
-  /** "full" fills the window (an image's full view). */
-  size?: "large" | "full";
+  /** "wide" fits a two-pane dialog with its own tab list; "full" fills the window (an image's full view). */
+  size?: "large" | "wide" | "full";
   layer?: DialogLayer;
   /**
    * Run the confirm action on Enter in a single-line field, or Mod+Enter anywhere in the
    * dialog, while confirm is visible, enabled, and not busy.
    */
   submitOnEnter?: boolean;
+  /** Runs before Escape dismisses the dialog; call `preventDefault()` to keep it open. */
+  onEscapeKeyDown?: (event: KeyboardEvent) => void;
 }>;
 
 export function Dialog({
@@ -1439,6 +1558,7 @@ export function Dialog({
   size,
   layer = "default",
   submitOnEnter = false,
+  onEscapeKeyDown,
   children,
 }: DialogProps) {
   const dismissBlocked = Boolean(
@@ -1467,7 +1587,10 @@ export function Dialog({
               target.focus();
             }
           }}
-          onEscapeKeyDown={(event) => dismissBlocked && event.preventDefault()}
+          onEscapeKeyDown={(event) => {
+            onEscapeKeyDown?.(event);
+            if (dismissBlocked) event.preventDefault();
+          }}
           onPointerDownOutside={(event) => dismissBlocked && event.preventDefault()}
           onKeyDown={
             submitOnEnter
@@ -1495,6 +1618,7 @@ export function Dialog({
             "fixed left-1/2 top-1/2 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 outline-none",
             layer === "onboarding" ? "z-[70] shadow-onboarding" : "z-50 shadow-modal",
             size === "large" && "w-[min(92vw,680px)]",
+            size === "wide" && "w-[min(92vw,860px)]",
             size === "full" && "h-[94vh] max-h-[94vh] w-[96vw]",
           )}
         >

@@ -218,6 +218,33 @@ test("a saved native visual renders after its tool row and sends follow-ups thro
   assert.deepEqual(prompts, ["Tell me more"]);
 });
 
+test("a reply starting or ending updates a saved visual's pending follow-up", () => {
+  const list = (busy: boolean) => (
+    <MessageList
+      chatId="chat-saved"
+      messages={[{ id: "m-1", role: "assistant", content: "Board.", createdAt: 1, uiVisuals: [NATIVE] }]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      onVisualPrompt={() => undefined}
+      visualFollowUpBusy={busy}
+      agentActivity={null}
+      error={null}
+    />
+  );
+  const view = render(list(false));
+  fireEvent.click(view.getByRole("button", { name: "More" }));
+  assert.ok(view.getByRole("button", { name: "Send" }));
+  view.rerender(list(true));
+  assert.ok(view.getByRole("button", { name: "Add to draft" }));
+  assert.equal(view.queryByRole("button", { name: "Send" }), null);
+  view.rerender(list(false));
+  assert.ok(view.getByRole("button", { name: "Send" }));
+});
+
 test("a streaming native draft is inert in its row and the presented visual replaces it", () => {
   const step = toolStep("tool-1", "call-ui", "render_ui", 0);
   const timeline: GenerationTimeline = { version: 3, generationId: "g", status: "running", startedAt: 1, steps: [step] };

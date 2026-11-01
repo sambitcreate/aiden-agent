@@ -34,11 +34,13 @@ export async function buildSystemPromptWithSections(
   skillsAvailable = true,
   skillSnapshot?: SkillRegistrySnapshot,
   availableToolNames?: ReadonlySet<string>,
+  /** The folder is the hidden one behind a "No workspace" chat, not a user project. */
+  noWorkspace = false,
 ): Promise<ChatSystemPromptWithSections> {
   const base = PI_CHAT_SYSTEM_PROMPT + (availableToolNames?.has("aiden_help") ? `\n\n${aidenAppGuidance(availableToolNames)}` : "");
   const skillsText =
     skillsAvailable && skillSnapshot
-      ? formatAvailableSkills(skillSnapshot, availableToolNames)
+      ? formatAvailableSkills(skillSnapshot, availableToolNames, permission !== "none")
       : undefined;
   const skillsSuffix = skillsText ? `\n\n${skillsText}` : "";
   const browserSuffix = availableToolNames?.has("browser_open")
@@ -70,6 +72,9 @@ export async function buildSystemPromptWithSections(
   const systemPrompt =
     `${base}\n\n` +
     `You are working inside the folder: ${folderPath}.${git} ` +
+    (noWorkspace
+      ? "This chat has no project: the folder is a private one Aiden made for this chat alone, so use it freely for downloads, clones and scratch files. "
+      : "") +
     capability +
     workflow +
     (permission === "ask"

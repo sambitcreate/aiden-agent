@@ -1,13 +1,14 @@
 // The one calm line a working Bot shows (spec §5, §6, §14): an activity mark
 // and a word, a hover/focus peek at the current step on the Mac, elapsed time
-// and Stop after 20 seconds, and a still-going note after 2 minutes. Screen
+// after 20 seconds, and a still-going note after 2 minutes. Stop lives only in
+// the composer, beside Queue, as it does on phones. Screen
 // readers hear it through `BotStatusAnnouncer`, a live region the chat keeps
 // mounted while the line comes and goes, at most once every 2 seconds.
 
 import * as React from "react";
-import { Square } from "lucide-react";
+import { useNowSecond } from "../../lib/second-clock";
 import { AidenActivityMark } from "../../components/aiden-activity-mark";
-import { Button, Text } from "../../components/ui";
+import { Text } from "../../components/ui";
 import {
   BOT_STILL_GOING_AFTER_MS,
   botActivityDisplay,
@@ -17,16 +18,7 @@ import {
 } from "../../shared/bot-activity";
 import type { BotLiveActivity } from "../../shared/bot-live";
 import type { BotChatActivityWording } from "../../shared/bots";
-
-function useClock(fixed: number | undefined): number {
-  const [now, setNow] = React.useState(() => fixed ?? Date.now());
-  React.useEffect(() => {
-    if (fixed !== undefined) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [fixed]);
-  return fixed ?? now;
-}
+import { pauseWhenUnseen } from "../../lib/offscreen-pause";
 
 const SILENT: BotAnnouncement = { text: "", at: Number.NEGATIVE_INFINITY };
 
@@ -89,20 +81,18 @@ export function BotStatusLine({
   activity,
   wording,
   now: fixedNow,
-  onStop,
   onLayoutChange,
 }: {
   activity: BotLiveActivity;
   wording: BotChatActivityWording;
   /** A fixed clock (tests and previews); otherwise the line ticks each second. */
   now?: number;
-  /** Shown as Stop once the turn has run for 20 seconds. */
-  onStop?(): void;
   /** Reports which optional parts are showing, so a pinned scroll view can follow the height change. */
   onLayoutChange?(key: string): void;
 }) {
   const { display, detail } = botStatusParts(activity, wording);
-  const now = useClock(fixedNow);
+  const clockNow = useNowSecond(fixedNow === undefined);
+  const now = fixedNow ?? clockNow;
   const elapsed = botElapsedLabel(activity.startedAt, now);
   // Waiting on the person, or already stopping: "I'll message you when it's done" would mislead.
   const stillGoing =
@@ -112,35 +102,26 @@ export function BotStatusLine({
     onLayoutChange?.(layoutKey);
     return () => onLayoutChange?.("");
   }, [layoutKey, onLayoutChange]);
-  const stoppable = Boolean(elapsed && onStop) && activity.phase !== "stopping";
   const shimmer = display.phase !== "waiting" && display.phase !== "stopping";
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      <div className="flex min-w-0 items-center gap-2">
-        <div
-          role="group"
-          aria-label={botStatusSpeech(activity, wording)}
-          tabIndex={wording === "follows" ? 0 : undefined}
-          data-bot-status-phase={display.phase}
-          className="group/status flex h-6 min-w-0 max-w-full items-center gap-2 rounded-control outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-        >
-          <AidenActivityMark mark={display.mark} size={20} className="shrink-0 text-primary" />
-          <span aria-hidden="true" className="flex min-w-0 items-center gap-1 text-small text-secondary">
-            <span className={`shrink-0 ${shimmer ? "agent-thinking-shimmer" : ""}`}>{display.word}</span>
-            {detail ? (
-              <span className="hidden min-w-0 truncate text-tertiary group-hover/status:inline group-focus-visible/status:inline">
-                · {detail}
-              </span>
-            ) : null}
-            {elapsed ? <span className="shrink-0 tabular-nums text-tertiary">· {elapsed}</span> : null}
-          </span>
-        </div>
-        {stoppable ? (
-          <Button variant="transparent" size="small" onClick={onStop}>
-            <Square aria-hidden="true" />
-            Stop
-          </Button>
-        ) : null}
+      <div
+        role="group"
+        aria-label={botStatusSpeech(activity, wording)}
+        tabIndex={wording === "follows" ? 0 : undefined}
+        data-bot-status-phase={display.phase}
+        className="group/status flex h-6 min-w-0 self-start max-w-full items-center gap-2 rounded-control outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+      >
+        <AidenActivityMark mark={display.mark} size={20} className="shrink-0 text-primary" />
+        <span aria-hidden="true" className="flex min-w-0 items-center gap-1 text-small text-secondary">
+          <span ref={shimmer ? pauseWhenUnseen : undefined} className={`shrink-0 ${shimmer ? "agent-thinking-shimmer" : ""}`}>{display.word}</span>
+          {detail ? (
+            <span className="hidden min-w-0 truncate text-tertiary group-hover/status:inline group-focus-visible/status:inline">
+              · {detail}
+            </span>
+          ) : null}
+          {elapsed ? <span className="shrink-0 tabular-nums text-tertiary">· {elapsed}</span> : null}
+        </span>
       </div>
       {stillGoing ? (
         <Text as="p" variant="small" color="tertiary" role="note" className="py-1 text-center">

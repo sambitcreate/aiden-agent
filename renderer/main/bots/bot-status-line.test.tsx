@@ -1,7 +1,7 @@
 import "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, mock, test } from "node:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import type { BotLiveActivity } from "../../shared/bot-live";
 import { BotStatusAnnouncer, BotStatusLine } from "./bot-status-line";
 
@@ -43,32 +43,17 @@ test("waiting keeps its word under Always Thinking, and an unknown phase reads a
   assert.equal(said(), "Working");
 });
 
-test("after 20 seconds the line shows elapsed time and Stop; after 2 minutes, a still-going note", () => {
-  const calls: string[] = [];
-  render(<BotStatusLine activity={reading} wording="follows" now={1_000 + 19_000} onStop={() => calls.push("stop")} />);
-  assert.equal(screen.queryByRole("button", { name: "Stop" }) === null, true);
+test("after 20 seconds the line shows elapsed time; after 2 minutes, a still-going note", () => {
+  render(<BotStatusLine activity={reading} wording="follows" now={1_000 + 19_000} />);
   assert.equal(screen.queryByText(/19s/u) === null, true);
   cleanup();
-  render(<BotStatusLine activity={reading} wording="follows" now={1_000 + 72_000} onStop={() => calls.push("stop")} />);
+  render(<BotStatusLine activity={reading} wording="follows" now={1_000 + 72_000} />);
   assert.ok(screen.getByText("· 1m 12s"));
-  fireEvent.click(screen.getByRole("button", { name: "Stop" }));
-  assert.deepEqual(calls, ["stop"]);
   assert.equal(screen.queryByRole("note") === null, true);
   cleanup();
   render(<BotStatusLine activity={reading} wording="follows" now={1_000 + 121_000} />);
   assert.ok(screen.getByRole("note"));
   assert.ok(screen.getByText("Still going. I'll message you when it's done."));
-});
-
-test("Stop needs a handler, and goes away while the Bot is already stopping", () => {
-  render(<BotStatusLine activity={reading} wording="follows" now={1_000 + 72_000} />);
-  assert.equal(screen.queryByRole("button", { name: "Stop" }) === null, true, "no handler, no Stop");
-  cleanup();
-  render(
-    <BotStatusLine activity={{ phase: "stopping", startedAt: 1_000 }} wording="follows" now={1_000 + 72_000} onStop={() => {}} />,
-  );
-  assert.equal(said(), "Stopping");
-  assert.equal(screen.queryByRole("button", { name: "Stop" }) === null, true, "already stopping");
 });
 
 test("the still-going note is only for work in progress, not while it waits on you or stops", () => {
@@ -134,4 +119,54 @@ test("hiding the line clears the region at once, and the gap still holds for wha
   assert.equal(announced(), "", "inside the gap since the last announcement");
   act(() => mock.timers.tick(1_000));
   assert.equal(announced(), "Editing files");
+});
+
+test("running labels share one second clock, stay current across staggered mounts, and stop it when unused", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 40_250 });
+  const pending = new Set<ReturnType<typeof setTimeout>>();
+  let scheduled = 0;
+  t.mock.method(window, "setTimeout", (handler: () => void, delay: number) => {
+    scheduled += 1;
+    const handle = setTimeout(() => {
+      pending.delete(handle);
+      handler();
+    }, delay);
+    pending.add(handle);
+    return handle as unknown as number;
+  });
+  t.mock.method(window, "clearTimeout", (handle: number) => {
+    pending.delete(handle as unknown as ReturnType<typeof setTimeout>);
+    clearTimeout(handle as unknown as ReturnType<typeof setTimeout>);
+  });
+  const Labels = ({ count, fixed = false }: { count: number; fixed?: boolean }) => (
+    <>
+      {Array.from({ length: count }, (_, index) => (
+        <BotStatusLine key={index} activity={reading} wording="thinking" now={fixed ? 40_250 : undefined} />
+      ))}
+    </>
+  );
+  try {
+    const view = render(<Labels count={1} />);
+    assert.equal(pending.size, 1);
+    assert.equal(screen.getByText("· 39s").textContent, "· 39s");
+    act(() => t.mock.timers.tick(250));
+    view.rerender(<Labels count={10} />);
+    assert.equal(pending.size, 1, "new labels join the existing clock");
+    assert.equal(scheduled, 1, "staggered mounts do not reschedule its phase");
+    act(() => t.mock.timers.tick(500));
+    assert.equal(screen.getAllByText("· 40s").length, 10, "all labels tick on the same wall-clock second");
+    assert.equal(pending.size, 1);
+    view.rerender(<Labels count={2} />);
+    assert.equal(pending.size, 1, "unmounting some labels keeps the clock for the others");
+    view.rerender(<Labels count={2} fixed />);
+    assert.equal(pending.size, 0, "fixed previews never keep the clock alive");
+    act(() => t.mock.timers.tick(5_000));
+    view.rerender(<Labels count={2} />);
+    assert.equal(screen.getAllByText("· 45s").length, 2, "resuming after idle refreshes the cached time immediately");
+    assert.equal(pending.size, 1);
+    view.unmount();
+    assert.equal(pending.size, 0, "the final unmount cancels the only timer");
+  } finally {
+    cleanup();
+  }
 });
