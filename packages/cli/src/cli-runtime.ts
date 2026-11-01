@@ -3,73 +3,24 @@
  * a dynamic import so `aiden --version` and `aiden help` never evaluate pi,
  * the providers, or the Aiden cores.
  *
- * Code-splitting places this module in dist/app/chunks/, so paths that belong
- * beside the bundle entry (themes, the app package.json) come from `appDir`
- * rather than this module's own URL.
+ * Aiden's CLI is a headless server and its administration commands. Pi's
+ * interactive terminal UI, print mode and JSON/RPC modes are not reachable:
+ * anything `dispatchCommand` does not recognize gets one line saying so.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { main, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { createAidenInlineExtensions } from "./extensions/index.ts";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { dispatchCommand } from "./commands.ts";
 import { exitAfterFlush } from "./exit-after-flush.ts";
-import { CLI_COMMAND_HELP } from "./command-help.ts";
 import { migrateCliAzureConfig } from "./azure-config-migration.ts";
 import { migrateAidenMcpConfigOnce } from "./mcp.ts";
-import { shouldDefaultToFullscreenTui } from "./tui-default.ts";
-import { shouldDefaultToCodemode } from "./codemode-default.ts";
-
-/**
- * Extra Aiden theme presets shipped beside the bundle. pi only auto-loads
- * dark.json/light.json as built-ins, so the remaining presets are registered
- * through the public `--theme <path>` flag, which makes them selectable in
- * /theme, --use-theme, and first-run setup like any other theme.
- */
-function bundledThemePaths(appDir: string): string[] {
-	const themesDir = join(appDir, "themes");
-	if (!existsSync(themesDir)) {
-		return [];
-	}
-	return readdirSync(themesDir)
-		.filter((name) => name.endsWith(".json"))
-		.map((name) => join(themesDir, name))
-		.sort();
-}
-
-/**
- * Mirrors pi's own resolution for where a preference (tuiMode, defaultTools) could be saved:
- * the rebranded agent dir (env override, else <home>/<configDir>/agent) and
- * the current project's settings.
- */
-function settingsPaths(appDir: string): string[] {
-	let configDir = ".aiden";
-	let appName = "aiden";
-	try {
-		const pkg = JSON.parse(readFileSync(join(appDir, "package.json"), "utf-8")) as {
-			piConfig?: { name?: string; configDir?: string };
-		};
-		configDir = pkg.piConfig?.configDir ?? configDir;
-		appName = pkg.piConfig?.name ?? appName;
-	} catch {
-		// Fall back to the committed defaults; the generated app package.json
-		// always carries both.
-	}
-	const paths: string[] = [];
-	const envAgentDir = process.env[`${appName.toUpperCase()}_CODING_AGENT_DIR`];
-	if (envAgentDir) {
-		paths.push(join(envAgentDir, "settings.json"));
-	} else {
-		paths.push(join(homedir(), configDir, "agent", "settings.json"));
-	}
-	paths.push(join(process.cwd(), configDir, "settings.json"));
-	return paths;
-}
 
 /** The one line printed when the CLI starts in a folder that was deleted. */
 export const DELETED_WORKING_DIRECTORY_MESSAGE =
 	"aiden: The current folder no longer exists. Change to an existing folder and try again.";
+
+/** The one line printed for a flag or mode of the removed interactive CLI, or any other unknown command. */
+export const REMOVED_INTERACTIVE_CLI_MESSAGE =
+	"aiden: the interactive CLI was removed; run `aiden serve` or `aiden help`.";
 
 /** The current folder, or undefined when it was deleted after the shell entered it. */
 function currentDirectory(): string | undefined {
@@ -81,9 +32,9 @@ function currentDirectory(): string | undefined {
 	}
 }
 
-export async function runCli(argv: string[], appDir: string): Promise<void> {
-	// Everything below reads the current folder (settings, migrations, pi's
-	// own startup), so a deleted one gets one plain line instead of `uv_cwd`.
+export async function runCli(argv: string[], _appDir: string): Promise<void> {
+	// Everything below reads the current folder (settings, migrations), so a
+	// deleted one gets one plain line instead of `uv_cwd`.
 	if (currentDirectory() === undefined) {
 		console.error(DELETED_WORKING_DIRECTORY_MESSAGE);
 		await exitAfterFlush(1);
@@ -97,30 +48,11 @@ export async function runCli(argv: string[], appDir: string): Promise<void> {
 			// `aiden mcp` commands retry it and report the same error.
 			process.stderr.write(`aiden: MCP migration deferred (${error instanceof Error ? error.message : String(error)})\n`);
 		}
-		if (await dispatchCommand(getAgentDir(), process.cwd(), argv)) await exitAfterFlush(0);
+		if (await dispatchCommand(getAgentDir(), process.cwd(), argv)) await exitAfterFlush(Number(process.exitCode ?? 0));
 	} catch (error) {
-		console.error(error instanceof Error ? error.message : String(error)); await exitAfterFlush(1);
+		console.error(error instanceof Error ? error.message : String(error));
+		await exitAfterFlush(1);
 	}
-	if (argv.includes("--help")) process.stdout.write(CLI_COMMAND_HELP + "\n");
-	// Aiden's extension owns MCP (aiden-mcp.json, /mcp). Disabling Pi's built-in
-	// MCP extension outright keeps Pi from reporting it as replaced on every launch.
-	if (!argv.includes("--no-mcp")) argv.push("--no-mcp");
-	for (const themePath of bundledThemePaths(appDir)) {
-		argv.push("--theme", themePath);
-	}
-	const savedSettings = settingsPaths(appDir);
-	if (shouldDefaultToFullscreenTui(argv, savedSettings)) {
-		argv.push("--tui-mode", "fullscreen");
-	}
-	// Codemode is on by default, as on the desktop; an explicit tool choice wins.
-	if (shouldDefaultToCodemode(argv, savedSettings)) {
-		argv.push("--tools", "+codemode");
-	}
-	try {
-		const extensionFactories = await createAidenInlineExtensions();
-		await main(argv, { extensionFactories });
-	} catch (error) {
-		console.error(error instanceof Error ? (error.stack ?? error.message) : error);
-		process.exitCode = 1;
-	}
+	console.error(REMOVED_INTERACTIVE_CLI_MESSAGE);
+	await exitAfterFlush(1);
 }

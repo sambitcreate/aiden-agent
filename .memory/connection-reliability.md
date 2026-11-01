@@ -52,6 +52,9 @@ CI also exposed an unrelated Git watcher flake: the unstaged-edit test received 
 generation-1 notification; its one focused local rerun passed all 6 cases. No timeout
 or assertion was weakened. Evidence: PR #370 core-git job 112626770363 in run
 37569980985. The PR records the symptom and link; this flake remains an open bug.
+Update 2026-10-31: it recurred on #570 and #575. Cause: macOS delivers the setup
+commit's `.git` events after the watch starts. PR #684 drains them with a branch change
+before taking the test's baseline.
 
 PR review follow-up: optional Tailscale advertisement discovery no longer delays
 LAN identity or healthy-wake checks. Ads are partial observations and omission

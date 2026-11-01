@@ -212,7 +212,7 @@ data class AidenServer(
         get() = offersBotIssues && capabilities.contains(AidenRemoteCapability.BOT_ISSUES)
 
     /**
-     * Offered and held (revision 48), with `git:write` and `chat:write`: an empty Workspace chat
+     * Offered and held (revision 49), with `git:write` and `chat:write`: an empty Workspace chat
      * may start in a new worktree on the Mac.
      */
     val supportsNewWorktrees: Boolean

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
@@ -7,6 +8,7 @@ import test from "node:test";
 import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
 import { AidenRemoteWorkspaceBrowserService } from "./aiden-remote-workspace-browser.js";
 import { AidenRemoteWorkspaceService } from "./aiden-remote-workspaces.js";
+import { GitRepoWatcher } from "./git-repo-watcher.js";
 import { createWorkspaceApplicationService } from "./workspace-application-service.js";
 import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
@@ -20,6 +22,8 @@ test("HTTP client completes approved-folder selection and revision-checked works
   await fs.mkdir(path.join(approvedPath, "Selected"));
   const selectedMarker = path.join(approvedPath, "Selected", "kept-after-unregister.txt");
   await fs.writeFile(selectedMarker, "workspace files stay on disk");
+  execFileSync("git", ["init", "-q"], { cwd: path.join(approvedPath, "Selected") });
+  const gitWatcher = new GitRepoWatcher({ notify: () => undefined });
   const approvedIdentity = await fs.stat(approvedPath, { bigint: true });
   let sequence = 0;
   let workspaces: Workspace[] = [{
@@ -63,6 +67,7 @@ test("HTTP client completes approved-folder selection and revision-checked works
     createId: () => `workspace-${++sequence}`,
     now: () => 10_000 + sequence,
     logError: () => undefined,
+    gitWatcher,
   });
   const state = {
     snapshot: async () => ({
@@ -156,6 +161,8 @@ test("HTTP client completes approved-folder selection and revision-checked works
     assert.equal(created.name, "Remote Selected");
     assert.equal(created.hasFolder, true);
     assert.equal(JSON.stringify(created).includes(approvedPath), false);
+    await gitWatcher.observe(created.id, path.join(approvedPath, "Selected"));
+    assert.equal(gitWatcher.watchedWorkspaceCount, 1);
 
     const patchResponse = await fetch(`${base}/workspaces/${created.id}`, {
       method: "PATCH",
@@ -178,8 +185,52 @@ test("HTTP client completes approved-folder selection and revision-checked works
     const listed = await (await fetch(`${base}/workspaces`, { headers })).json();
     assert.deepEqual(listed.workspaces.map((workspace: { id: string }) => workspace.id), ["default"]);
     assert.equal(await fs.readFile(selectedMarker, "utf8"), "workspace files stay on disk");
+    assert.equal(gitWatcher.watchedWorkspaceCount, 0, "removing a workspace from a paired device closes its Git watcher");
   } finally {
+    gitWatcher.dispose();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await fs.rm(temporary, { recursive: true, force: true });
   }
+});
+
+test("project cloning is desktop-only, requires folder browsing, and cancels with its HTTP request", async t => {
+  let type: "mac" | "iphone" = "iphone";
+  let browse = true;
+  let calls = 0;
+  let captured: AbortSignal | undefined;
+  let opened!: () => void;
+  const ready = new Promise<void>(resolve => { opened = resolve; });
+  const handler = createAidenRemoteRequestHandler({
+    instanceId: "instance", displayName: () => "Host", appVersion: "test", connectionMode: () => "lan", now: Date.now, log: () => undefined,
+    pairing: { exchange: async () => { throw new Error("not used"); } },
+    devices: { acquireDeviceAuthorization: () => () => undefined, authenticate: async () => ({ id: "device", type, revoked: false, capabilities: new Set(["workspace:manage" as const, ...(browse ? ["workspace:browse" as const] : [])]) }) },
+    workspaces: {
+      supportsClone: true, list: async () => ({ workspaces: [] }), get: async () => { throw new Error("not used"); }, update: async () => { throw new Error("not used"); }, remove: async () => undefined,
+      create: async (_device, _key, _input, signal) => {
+        calls++; captured = signal; opened();
+        await new Promise<void>(resolve => { if (signal?.aborted) resolve(); else signal?.addEventListener("abort", () => resolve(), { once: true }); });
+        throw new Error("cancelled");
+      },
+    },
+  });
+  const server = createServer(handler);
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const endpoint = `http://127.0.0.1:${address.port}/api/aiden/v1/workspaces`;
+  const options = { method: "POST", headers: { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "idempotency-key": "clone-http-request", "content-type": "application/json" }, body: JSON.stringify({ mode: "clone", selection: `sel_${"a".repeat(43)}`, url: "https://example.invalid/widget.git", files: [] }) };
+  assert.equal((await fetch(endpoint, options)).status, 403);
+  assert.equal(calls, 0);
+  type = "mac"; browse = false;
+  assert.equal((await fetch(endpoint, options)).status, 403);
+  assert.equal(calls, 0);
+  browse = true;
+  const controller = new AbortController();
+  const cloning = fetch(endpoint, { ...options, signal: controller.signal }).catch(() => undefined);
+  await ready; controller.abort(); await cloning;
+  await new Promise(resolve => setImmediate(resolve));
+  // The server observes socket closure asynchronously.
+  if (!captured?.aborted) await new Promise<void>(resolve => captured!.addEventListener("abort", () => resolve(), { once: true }));
+  assert.equal(captured?.aborted, true);
+  assert.equal(calls, 1);
 });

@@ -32,6 +32,52 @@ final class AidenRemoteClientTests: XCTestCase {
         await fulfillment(of: [opened], timeout: 1)
     }
 
+    func testRateLimitedProgressStreamCarriesTheServerDelayFromBodyOrHeader() async throws {
+        func respondRateLimited(details: String?, retryAfter: String?, retryable: Bool = true) {
+            AidenRemoteMockURLProtocol.handler = { request in
+                var headers = ["Content-Type": "application/json"]
+                if let retryAfter { headers["Retry-After"] = retryAfter }
+                let detailsJSON = details.map { #","details":\#($0)"# } ?? ""
+                let body = #"{"error":{"code":"rate_limited","message":"Too many progress connections","requestId":"request-1","retryable":\#(retryable)\#(detailsJSON)}}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 429, httpVersion: nil, headerFields: headers)!, Data(body.utf8))
+            }
+        }
+        func failure() async -> AidenRemoteClientError? {
+            do {
+                for try await _ in makeClient().progressEvents(chatId: "chat-1", after: 0, epoch: nil, onOpen: { _ in }) {}
+                XCTFail("A 429 must end the progress stream with an error")
+                return nil
+            } catch {
+                return error as? AidenRemoteClientError
+            }
+        }
+
+        respondRateLimited(details: #"{"retryAfterSeconds":5}"#, retryAfter: "9")
+        var error = await failure()
+        XCTAssertEqual(error?.isRetryableRateLimit, true)
+        XCTAssertEqual(error?.serverRetryAfterSeconds, 5, "The envelope's delay wins over the header")
+
+        respondRateLimited(details: nil, retryAfter: " 7 ")
+        error = await failure()
+        XCTAssertEqual(error?.serverRetryAfterSeconds, 7, "Without an envelope delay the header is used")
+
+        respondRateLimited(details: #"{"retryAfterSeconds":3600}"#, retryAfter: nil)
+        error = await failure()
+        XCTAssertEqual(error?.serverRetryAfterSeconds, 60, "A long delay is clamped to a minute")
+
+        respondRateLimited(details: nil, retryAfter: "0")
+        error = await failure()
+        XCTAssertEqual(error?.serverRetryAfterSeconds, 1, "A zero delay still waits a second")
+
+        respondRateLimited(details: nil, retryAfter: "Wed, 21 Oct 2026 07:28:00 GMT")
+        error = await failure()
+        XCTAssertNil(error?.serverRetryAfterSeconds, "An HTTP-date Retry-After is ignored")
+
+        respondRateLimited(details: #"{"retryAfterSeconds":5}"#, retryAfter: "5", retryable: false)
+        error = await failure()
+        XCTAssertEqual(error?.isRetryableRateLimit, false, "The server's retryable flag is kept as sent")
+    }
+
     func testConditionalReadReusesValidatedBytesAndRejectsUnsolicited304() async throws {
         let client = makeClient()
         AidenRemoteMockURLProtocol.handler = { request in
@@ -1067,7 +1113,7 @@ final class AidenRemoteClientTests: XCTestCase {
         )
     }
 
-    /// Revision 48: New worktree posts the first message's text with the chat's
+    /// Revision 49: New worktree posts the first message's text with the chat's
     /// revision and a key, and accepts only the still-empty chat it asked about.
     func testNewWorktreeMovesTheEmptyChatAndRefusesAnythingElse() async throws {
         let client = makeClient()
@@ -3887,6 +3933,52 @@ final class AidenRemoteClientTests: XCTestCase {
 
         XCTAssertTrue(first === second)
         XCTAssertEqual(factoryCalls, 1)
+    }
+
+    @MainActor
+    func testUnavailableComputerCanSwitchToAnotherPairingWithoutRetryingIt() async throws {
+        let store = AidenInstallationStore(keychain: AidenRemoteMemoryKeychain())
+        _ = try store.savePairing(
+            makeExchange(instanceId: "unavailable", deviceId: "old-device", credential: "old-credential"),
+            trust: makeSystemTrust(), name: "Unavailable Mac"
+        )
+        _ = try store.savePairing(
+            makeExchange(instanceId: "available", deviceId: "new-device", credential: "new-credential"),
+            trust: makeSystemTrust(), name: "Available Mac"
+        )
+        try store.setActive("unavailable")
+        var unavailableAttempts = 0
+        let session = makeSession()
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer new-credential")
+            if request.url?.path == "/api/aiden/v1/server" {
+                return Self.response(for: request, status: 200, json: """
+                {"protocolVersion":1,"instanceId":"available","name":"Available Mac",
+                "appVersion":"1.0.0","capabilities":["server:read","workspace:read"],
+                "connectionMode":"lan","serverTime":"2026-08-19T07:00:00.000Z"}
+                """)
+            }
+            return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+        }
+        let coordinator = AidenRemoteCoordinator(installationStore: store, clientFactory: { installation, credential in
+            if installation.id == "unavailable" {
+                unavailableAttempts += 1
+                throw URLError(.cannotConnectToHost)
+            }
+            return AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+        })
+        await coordinator.connectActiveInstallation()
+        guard case .offline = coordinator.connectionState else { return XCTFail("Expected offline recovery") }
+        XCTAssertEqual(coordinator.connectionIssue?.title, "Computer unavailable")
+
+        let outcome = await coordinator.switchInstallationOutcome(to: "available")
+
+        guard case .success = outcome else { return XCTFail("Switch should connect to the available computer") }
+        XCTAssertEqual(coordinator.activeInstanceId, "available")
+        XCTAssertEqual(coordinator.connectionState, .connected)
+        XCTAssertNil(coordinator.connectionIssue)
+        XCTAssertEqual(unavailableAttempts, 1, "Switching must not first retry the unavailable computer")
+        XCTAssertEqual(store.installations.count, 2, "Recovery must preserve both pairings")
     }
 
     @MainActor

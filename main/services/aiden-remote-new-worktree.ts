@@ -1,4 +1,4 @@
-// New worktree for a phone's first message (contract revision 48).
+// New worktree for a phone's first message (contract revision 49).
 //
 // A phone has no branch menu, so the worktree starts where a desktop draft's
 // would by default (`resolveWorktreeDefaults`) and is named from the message.

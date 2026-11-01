@@ -1,0 +1,504 @@
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createHttpsServer } from "node:https";
+import { createServer as createNetServer } from "node:net";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+const api = await import("../dist/parity-test-api.js");
+
+const linux = { platform: "linux", uid: 1000, user: "sam" };
+
+/** A tailscale CLI that answers status, Serve status and prefs from fixtures. */
+function tailscaleRunner({ backend = "Running", online = true, dnsName = "box.tail1234.ts.net.", certDomains = ["box.tail1234.ts.net"], funnel = {}, web, prefs = { OperatorUser: "sam" } } = {}) {
+  return {
+    async run(args) {
+      if (args[0] === "status") return JSON.stringify({ BackendState: backend, Self: { Online: online, ...(dnsName ? { DNSName: dnsName } : {}) }, CertDomains: certDomains });
+      if (args[0] === "serve") return JSON.stringify({ AllowFunnel: funnel, ...(web ? { Web: web } : {}) });
+      if (args[0] === "debug" && prefs instanceof Error) throw prefs;
+      if (args[0] === "debug") return JSON.stringify(prefs);
+      throw new Error(`unexpected tailscale ${args.join(" ")}`);
+    },
+  };
+}
+
+test("a signed-in tailnet with HTTPS certificates is ready, and the install question suggests both networks", async () => {
+  const facts = await api.readTailscaleFacts(tailscaleRunner(), linux);
+  assert.deepEqual(facts, { installed: true, signedIn: true, dnsName: "box.tail1234.ts.net", httpsCertificates: true, funnelOn443: false, operatorNeeded: false, exitNodeWithoutLan: false });
+  const question = api.networkQuestion(facts, false, "linux");
+  assert.equal(question.recommended, "both");
+  assert.match(question.text, /Tailscale: ready as box\.tail1234\.ts\.net\./);
+  assert.ok(api.tailscaleChecklist(facts, "linux").every((item) => item.state === "ok"));
+});
+
+test("each missing Tailscale step is named with its own fix, and the install question falls back to the local network", async () => {
+  const cases = [
+    [null, /not installed.*tailscale\.com\/download/],
+    [tailscaleRunner({ backend: "NeedsLogin", online: false }), /not signed in.*sudo tailscale up/],
+    [tailscaleRunner({ certDomains: [] }), /HTTPS certificates are off.*login\.tailscale\.com\/admin\/dns/],
+    [tailscaleRunner({ prefs: { OperatorUser: "" } }), /sudo tailscale set --operator=\$USER/],
+    [tailscaleRunner({ funnel: { "box.tail1234.ts.net:443": true } }), /Funnel is on for HTTPS port 443/],
+    // Some Tailscale versions mark Funnel on the 443 listener itself; Aiden's route refuses that too.
+    [tailscaleRunner({ web: { "box.tail1234.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:3000" } }, Funnel: true } } }), /Funnel is on for HTTPS port 443/],
+  ];
+  for (const [runner, fix] of cases) {
+    const facts = await api.readTailscaleFacts(runner, linux);
+    assert.equal(api.tailscaleReady(facts), false, String(fix));
+    assert.equal(api.recommendNetwork(facts, false), "local");
+    const failed = api.tailscaleChecklist(facts, "linux").filter((item) => item.state === "fail");
+    assert.equal(failed.length, 1, `only the step that is missing fails: ${fix}`);
+    assert.match(failed[0].text, fix);
+    assert.match(api.networkQuestion(facts, false, "linux").text, fix);
+  }
+});
+
+test("the operator step is a Linux non-root concern, and unreadable settings leave it unverified rather than ready", async () => {
+  assert.equal((await api.readTailscaleFacts(tailscaleRunner({ prefs: { OperatorUser: "" } }), { ...linux, uid: 0, user: "root" })).operatorNeeded, false);
+  assert.equal((await api.readTailscaleFacts(tailscaleRunner({ prefs: new Error("access denied") }), { ...linux, uid: 0, user: "root" })).operatorNeeded, false);
+  assert.equal((await api.readTailscaleFacts(tailscaleRunner({ prefs: { OperatorUser: "" } }), { platform: "darwin", uid: 501, user: "sam" })).operatorNeeded, undefined);
+  const unreadable = await api.readTailscaleFacts(tailscaleRunner({ prefs: new Error("access denied") }), linux);
+  assert.equal(unreadable.operatorNeeded, undefined);
+  assert.equal(api.tailscaleReady(unreadable), false);
+  assert.equal(api.recommendNetwork(unreadable, false), "local");
+  const checklist = api.tailscaleChecklist(unreadable, "linux");
+  assert.equal(checklist.filter((item) => item.state === "fail").length, 0);
+  assert.match(checklist.find((item) => item.state === "warn").text, /sudo tailscale set --operator=\$USER/);
+  assert.match(api.networkQuestion(unreadable, false, "linux").text, /could not check/);
+  const unreadableMac = await api.readTailscaleFacts(tailscaleRunner({ prefs: new Error("access denied") }), { platform: "darwin", uid: 501, user: "sam" });
+  assert.equal(api.tailscaleReady(unreadableMac), true);
+  assert.match(api.tailscaleChecklist({ ...unreadable, signedIn: false }, "darwin").at(-1).text, /Open the Tailscale app and sign in/);
+});
+
+test("a Tailscale that does not answer is reported as such instead of holding up the check", async () => {
+  const wedged = { run: () => new Promise(() => {}) };
+  const started = Date.now();
+  const facts = await api.readTailscaleFacts(wedged, linux, 50);
+  assert.ok(Date.now() - started < 5_000, "the read gives up at its deadline");
+  assert.equal(facts.unresponsive, true);
+  assert.equal(api.tailscaleReady(facts), false);
+  assert.equal(api.recommendNetwork(facts, false), "local");
+  const checklist = api.tailscaleChecklist(facts, "linux");
+  assert.equal(checklist.length, 1);
+  assert.equal(checklist[0].state, "fail");
+  assert.match(checklist[0].text, /did not answer.*tailscale status/);
+  assert.match(api.networkQuestion(facts, false, "linux").text, /did not answer/);
+  assert.equal((await api.readTailscaleFacts(tailscaleRunner(), linux, 5_000)).unresponsive, undefined, "a prompt answer is read as usual");
+});
+
+test("a Tailscale command still running at the deadline is killed, so the CLI leaves nothing behind", { skip: process.platform === "win32" }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "aiden-wedged-tailscale-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const pidFile = join(dir, "pid");
+  const binary = join(dir, "tailscale");
+  // A Tailscale that never answers: it records its process id, then sleeps as that same process.
+  writeFileSync(binary, `#!/bin/sh\necho $$ > "${pidFile}"\nexec sleep 30\n`, { mode: 0o755 });
+  const facts = await api.readSystemTailscaleFacts(linux, 300, async () => binary);
+  assert.equal(facts.unresponsive, true);
+  const pid = Number(readFileSync(pidFile, "utf8"));
+  const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  for (let waited = 0; alive() && waited < 2_000; waited += 50) await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  if (alive()) process.kill(pid, "SIGKILL");
+  assert.equal(alive(), false, "the stalled tailscale command was stopped at the deadline");
+});
+
+test("an exit node without local network access is a warning, not a failure", async () => {
+  const facts = await api.readTailscaleFacts(tailscaleRunner({ prefs: { OperatorUser: "sam", ExitNodeID: "nExit1", ExitNodeAllowLANAccess: false } }), linux);
+  assert.equal(api.tailscaleReady(facts), true);
+  const items = api.tailscaleChecklist(facts, "linux");
+  assert.equal(items.at(-1).state, "warn");
+  assert.match(items.at(-1).text, /exit-node-allow-lan-access/);
+  const allowed = await api.readTailscaleFacts(tailscaleRunner({ prefs: { OperatorUser: "sam", ExitNodeID: "nExit1", ExitNodeAllowLANAccess: true } }), linux);
+  assert.equal(allowed.exitNodeWithoutLan, false);
+});
+
+test("a cloud server is pointed at Tailscale, even before Tailscale is set up", async () => {
+  const ready = await api.readTailscaleFacts(tailscaleRunner(), linux);
+  const missing = await api.readTailscaleFacts(null, linux);
+  for (const facts of [ready, missing]) {
+    const question = api.networkQuestion(facts, true, "linux");
+    assert.equal(question.recommended, "tailscale");
+    assert.match(question.text, /cloud server/);
+  }
+  const lan = api.serverChecklist({ connectionMode: "lan", lanEndpoint: "https://box.local:49320/api/aiden/v1", tailscaleConnected: false }, missing, true);
+  assert.deepEqual(lan.map((item) => item.state), ["ok", "warn", "off"]);
+  assert.match(lan[1].text, /aiden remote network tailscale/);
+});
+
+test("the cloud check answers yes only when the metadata address accepts a connection", async () => {
+  const listener = createNetServer((socket) => socket.end());
+  listener.listen(0, "127.0.0.1");
+  await once(listener, "listening");
+  const { port } = listener.address();
+  const { connect } = await import("node:net");
+  try {
+    assert.equal(await api.looksLikeCloudServer(300, (options) => connect({ ...options, host: "127.0.0.1", port })), true);
+    const closed = createNetServer();
+    closed.listen(0, "127.0.0.1");
+    await once(closed, "listening");
+    const closedPort = closed.address().port;
+    closed.close();
+    await once(closed, "close");
+    assert.equal(await api.looksLikeCloudServer(300, (options) => connect({ ...options, host: "127.0.0.1", port: closedPort })), false);
+  } finally {
+    listener.close();
+  }
+});
+
+test("the server checklist reports the Tailscale route and whether its address answered", async () => {
+  const facts = await api.readTailscaleFacts(tailscaleRunner(), linux);
+  const endpoint = "https://box.tail1234.ts.net/api/aiden/v1";
+  const connected = { connectionMode: "both", lanEndpoint: "https://box.local:49320/api/aiden/v1", tailscaleEndpoint: endpoint, tailscaleConnected: true };
+  assert.deepEqual(api.serverChecklist(connected, facts, false, true).map((item) => item.state), ["ok", "ok", "ok"]);
+  const silent = api.serverChecklist(connected, facts, false, false).at(-1);
+  assert.equal(silent.state, "fail");
+  assert.match(silent.text, /did not answer.*HTTPS certificate/);
+  const denied = api.serverChecklist({ connectionMode: "tailscale", tailscaleConnected: false, tailscaleErrorCode: "permission_denied" }, facts, false);
+  assert.deepEqual(denied.map((item) => item.state), ["off", "fail"]);
+  assert.match(denied[1].text, /sudo tailscale set --operator/);
+  assert.match(api.serverChecklist({ connectionMode: "lan", lanEndpoint: "https://box.local:49320/api/aiden/v1" }, facts, false).at(-1).text, /ready.*aiden remote network both/);
+  assert.match(api.serverChecklist(undefined, facts, false)[0].text, /not running/);
+});
+
+test("a Serve path Aiden cannot simply connect gets its own fix, not the reconnect hint", async () => {
+  const facts = await api.readTailscaleFacts(tailscaleRunner(), linux);
+  const routeItem = (tailscaleRouteState) => api.serverChecklist({ connectionMode: "tailscale", tailscaleConnected: false, tailscaleRouteState }, facts, false).at(-1);
+  for (const [state, fix] of [
+    ["reconciliation_required", /aiden remote tailscale-reconcile/],
+    ["other_aiden_live", /Another running Aiden install owns/],
+    ["other_aiden_stale", /aiden remote tailscale-review/],
+    ["unrelated_conflict", /already points somewhere else/],
+    ["funnel_conflict", /Funnel is on for HTTPS port 443/],
+  ]) {
+    const item = routeItem(state);
+    assert.equal(item.state, "fail", state);
+    assert.match(item.text, fix, state);
+    assert.doesNotMatch(item.text, /aiden remote network/, state);
+  }
+  // A route nobody holds is one `remote network` can connect.
+  assert.match(routeItem("available").text, /not connected\. Run `aiden remote network tailscale`/);
+});
+
+/** A control socket that answers like a running server and records what it was asked. */
+async function fakeDaemon(answer) {
+  const dir = mkdtempSync(join(tmpdir(), "aiden-reach-"));
+  const asked = [];
+  const server = createNetServer((socket) => {
+    socket.setEncoding("utf8");
+    let buffer = "";
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      if (!buffer.includes("\n")) return;
+      const { command, args } = JSON.parse(buffer);
+      asked.push([command, ...args].join(" "));
+      const result = answer(command, args);
+      socket.end(JSON.stringify(result instanceof Error ? { error: result.message } : { result }) + "\n");
+    });
+  });
+  server.listen(join(dir, "serve.sock"));
+  await once(server, "listening");
+  return { dir, asked, close: () => { server.close(); rmSync(dir, { recursive: true, force: true }); } };
+}
+
+function sink() {
+  const stream = { text: "", write(chunk) { stream.text += chunk; return true; } };
+  return stream;
+}
+
+test("remote check prints both sections and fails when the Tailscale address does not answer", async () => {
+  const endpoint = "https://box.tail1234.ts.net/api/aiden/v1";
+  const daemon = await fakeDaemon(() => ({ connectionMode: "tailscale", tailscaleEndpoint: endpoint, tailscaleConnected: true }));
+  const probed = [];
+  try {
+    for (const answers of [true, false]) {
+      const out = sink();
+      const passed = await api.remoteCheckCommand(daemon.dir, { runner: tailscaleRunner(), host: linux, cloud: async () => false, probe: async (value) => { probed.push(value); return answers; }, out });
+      assert.equal(passed, answers);
+      assert.match(out.text, /^Tailscale on this machine\n {2}✓ Tailscale is installed\n/);
+      assert.match(out.text, /\n\nAiden server\n {2}– Local network: off/);
+      assert.match(out.text, answers ? /✓ https:\/\/box\.tail1234\.ts\.net\/api\/aiden\/v1 answers/ : /✗ https:\/\/box\.tail1234\.ts\.net\/api\/aiden\/v1 did not answer/);
+    }
+    assert.deepEqual(probed, [endpoint, endpoint]);
+  } finally {
+    daemon.close();
+  }
+  const remoteOff = await fakeDaemon(() => new Error("Remote is off for this server. Restart it with `aiden serve` (without --no-remote) to use Remote controls."));
+  try {
+    const out = sink();
+    assert.equal(await api.remoteCheckCommand(remoteOff.dir, { runner: tailscaleRunner(), host: linux, cloud: async () => false, out }), false);
+    assert.match(out.text, /✗ The server is running with Remote off\. Restart it without `--no-remote`/);
+    assert.doesNotMatch(out.text, /not running/, "a running server is not reported as stopped");
+  } finally {
+    remoteOff.close();
+  }
+  // Something holds the control socket but never answers: that is a stuck server, not a stopped one.
+  const stuckDir = mkdtempSync(join(tmpdir(), "aiden-reach-stuck-"));
+  const held = [];
+  const stuck = createNetServer((socket) => { held.push(socket); });
+  stuck.listen(join(stuckDir, "serve.sock"));
+  await once(stuck, "listening");
+  try {
+    const out = sink();
+    assert.equal(await api.remoteCheckCommand(stuckDir, { runner: tailscaleRunner(), host: linux, cloud: async () => false, out, statusTimeoutMs: 200 }), false);
+    assert.match(out.text, /✗ The Aiden server did not answer\./);
+    assert.doesNotMatch(out.text, /not running/, "a stuck server is not reported as stopped");
+  } finally {
+    for (const socket of held) socket.destroy();
+    stuck.close();
+    rmSync(stuckDir, { recursive: true, force: true });
+  }
+  const localOnly = await fakeDaemon(() => ({ connectionMode: "lan", lanEndpoint: "https://box.local:49320/api/aiden/v1", tailscaleConnected: false }));
+  try {
+    const out = sink();
+    assert.equal(await api.remoteCheckCommand(localOnly.dir, { runner: null, host: linux, cloud: async () => false, out }), true, "a local-network server does not fail for a missing Tailscale");
+    assert.match(out.text, /– Tailscale is not installed/);
+  } finally {
+    localOnly.close();
+  }
+});
+
+test("Tailscale pairing warms the address before the window opens, and says so when it does not answer", async () => {
+  const endpoint = "https://box.tail1234.ts.net/api/aiden/v1";
+  const pairing = { sessionId: "pairing_test", qrPayload: "aiden-pair:test", manualCode: "ABCD-1234", bootstrap: { expiresAt: new Date(Date.now() + 60_000).toISOString() } };
+  const daemon = await fakeDaemon((command, args) => {
+    if (args[0] === "pair") return pairing;
+    if (args[0] === "status" || args[0] === "tailscale-prepare") return { connectionMode: "tailscale", tailscaleEndpoint: endpoint, tailscaleConnected: true };
+    return { sessionId: "pairing_test", state: "failed" };
+  });
+  try {
+    for (const answers of [true, false]) {
+      daemon.asked.length = 0;
+      const out = sink(), err = sink();
+      let pairedBeforeWait;
+      await api.showStartupPairing(daemon.dir, "tailscale", new AbortController().signal, out, err, async (value) => {
+        assert.equal(value, endpoint);
+        pairedBeforeWait = daemon.asked.includes("remote pair tailscale");
+        return answers;
+      });
+      // Pairing reads the address's certificate with a short timeout, so the slow first request must come first.
+      assert.equal(pairedBeforeWait, false);
+      // The address comes from the prepare step's own answer, so no second (possibly slow) status read can skip the warm-up.
+      assert.deepEqual(daemon.asked.slice(0, 2), ["remote tailscale-prepare", "remote pair tailscale"]);
+      assert.match(out.text, /Checking that https:\/\/box\.tail1234\.ts\.net\/api\/aiden\/v1 answers[^]*Manual code: ABCD-1234/);
+      if (answers) assert.doesNotMatch(err.text, /did not answer/);
+      else assert.match(err.text, /did not answer yet.*aiden remote check/);
+    }
+  } finally {
+    daemon.close();
+  }
+});
+
+test("a Tailscale setup problem found while preparing opens no pairing window and names the fix", async () => {
+  const daemon = await fakeDaemon((command, args) => args[0] === "tailscale-prepare" ? new Error("Tailscale is not signed in. Run `sudo tailscale up`, then `aiden remote pair tailscale`") : new Error(`unexpected ${args.join(" ")}`));
+  const out = sink(), err = sink();
+  try {
+    await api.showStartupPairing(daemon.dir, "tailscale", new AbortController().signal, out, err, async () => assert.fail("nothing to wait for"));
+    assert.deepEqual(daemon.asked, ["remote tailscale-prepare"]);
+    assert.match(err.text, /Could not open a Tailscale pairing window\. Tailscale is not signed in.*sudo tailscale up/);
+    assert.equal(out.text, "");
+  } finally {
+    daemon.close();
+  }
+});
+
+test("pairing through a server from an older build skips the prepare step and still opens the window", async () => {
+  const pairing = { sessionId: "pairing_test", qrPayload: "aiden-pair:test", manualCode: "ABCD-1234", bootstrap: { expiresAt: new Date(Date.now() + 60_000).toISOString() } };
+  // An older server has no `tailscale-prepare` and answers with its usage line, as the router does for an unknown command.
+  const daemon = await fakeDaemon((command, args) => {
+    if (args[0] === "tailscale-prepare") return new Error("Usage: remote status|devices|pair lan|tailscale|tailscale-connect|tailscale-reconcile");
+    if (args[0] === "pair") return pairing;
+    return { sessionId: "pairing_test", state: "failed" };
+  });
+  const out = sink(), err = sink();
+  try {
+    await api.showStartupPairing(daemon.dir, "tailscale", new AbortController().signal, out, err, async () => assert.fail("no address wait without the prepare step"));
+    assert.deepEqual(daemon.asked.slice(0, 2), ["remote tailscale-prepare", "remote pair tailscale"]);
+    assert.ok(!daemon.asked.includes("remote status"));
+    assert.match(out.text, /Manual code: ABCD-1234/);
+    assert.doesNotMatch(err.text, /Could not open/);
+  } finally {
+    daemon.close();
+  }
+});
+
+test("waiting for the Tailscale address retries until it answers or the time runs out", async () => {
+  let calls = 0;
+  assert.equal(await api.waitForTailscaleAddress("https://x/api/aiden/v1", new AbortController().signal, 10_000, async () => ++calls === 3), true);
+  assert.equal(calls, 3);
+  const started = Date.now();
+  assert.equal(await api.waitForTailscaleAddress("https://x/api/aiden/v1", new AbortController().signal, 1_500, async () => false), false);
+  assert.ok(Date.now() - started < 5_000);
+});
+
+test("stopping the server ends a Tailscale check that is still waiting on the address", async (t) => {
+  // Accepts the connection but never answers the TLS handshake, like a Serve name whose certificate is still on its way.
+  const sockets = new Set();
+  const silent = createNetServer((socket) => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
+  silent.listen(0, "127.0.0.1");
+  await once(silent, "listening");
+  t.after(() => { for (const socket of sockets) socket.destroy(); silent.close(); });
+  const endpoint = `https://127.0.0.1:${silent.address().port}/api/aiden/v1`;
+
+  const stop = new AbortController();
+  setTimeout(() => stop.abort(), 100);
+  let started = Date.now();
+  assert.equal(await api.waitForTailscaleAddress(endpoint, stop.signal, 30_000), false);
+  assert.ok(Date.now() - started < 2_000, `a probe in flight ends with the stop, took ${Date.now() - started}ms`);
+
+  let probes = 0;
+  const pausing = new AbortController();
+  setTimeout(() => pausing.abort(), 100);
+  started = Date.now();
+  assert.equal(await api.waitForTailscaleAddress(endpoint, pausing.signal, 30_000, async () => { probes += 1; return false; }), false);
+  assert.ok(Date.now() - started < 600, `the pause between tries ends with the stop, took ${Date.now() - started}ms`);
+  assert.equal(probes, 1, "no try after the stop");
+});
+
+test("the health probe accepts only Aiden's own answer over HTTPS", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "aiden-reach-tls-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  try {
+    execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost", "-days", "1", "-keyout", join(dir, "key.pem"), "-out", join(dir, "cert.pem")], { stdio: "ignore" });
+  } catch {
+    t.skip("openssl is not available");
+    return;
+  }
+  const cert = readFileSync(join(dir, "cert.pem"));
+  let body = JSON.stringify({ ok: true, protocolVersion: 1 });
+  const server = createHttpsServer({ key: readFileSync(join(dir, "key.pem")), cert }, (request, response) => {
+    if (request.url !== "/api/aiden/v1/health") { response.writeHead(404).end(); return; }
+    response.writeHead(200, { "content-type": "application/json" }).end(body);
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => server.close());
+  const endpoint = `https://localhost:${server.address().port}/api/aiden/v1`;
+  assert.equal(await api.probeAidenHealth(endpoint, 5_000, { ca: cert }), true);
+  assert.equal(await api.probeAidenHealth(endpoint, 5_000), false, "an untrusted certificate is not Aiden");
+  body = "<html>Bad gateway</html>";
+  assert.equal(await api.probeAidenHealth(endpoint, 5_000, { ca: cert }), false);
+});
+
+test("uninstall takes down Aiden's Tailscale route only when it is connected", async () => {
+  let connected = true;
+  const daemon = await fakeDaemon((command, args) => {
+    if (args[0] === "status") return { tailscaleConnected: connected };
+    if (args[0] === "tailscale-disconnect") { connected = false; return { tailscaleConnected: false }; }
+    return new Error("unexpected");
+  });
+  try {
+    assert.match(await api.releaseTailscaleRoute(daemon.dir), /Removed Aiden's Tailscale route/);
+    assert.equal(await api.releaseTailscaleRoute(daemon.dir), undefined);
+    assert.deepEqual(daemon.asked, ["remote status", "remote tailscale-disconnect", "remote status"]);
+  } finally {
+    daemon.close();
+  }
+  const unfinished = await fakeDaemon((command, args) => args[0] === "status" ? { tailscaleConnected: false, tailscaleRouteState: "reconciliation_required" } : new Error("unexpected"));
+  try {
+    assert.match(await api.releaseTailscaleRoute(unfinished.dir), /unfinished change.*tailscale serve --https=443/);
+    assert.deepEqual(unfinished.asked, ["remote status"]);
+  } finally {
+    unfinished.close();
+  }
+  assert.equal(await api.releaseTailscaleRoute(mkdtempSync(join(tmpdir(), "aiden-reach-none-"))), undefined, "no running server, nothing to remove");
+});
+
+test("uninstall stops the service before it touches the route, and leaves the route when the stop fails", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "aiden-reach-home-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const timeline = [];
+  let stopFails = true;
+  const host = {
+    platform: "linux", home, uid: 501, user: "sam",
+    run: (command, args) => {
+      const line = [command, ...args].join(" ");
+      timeline.push(line);
+      return line.startsWith("systemctl --user disable") && stopFails ? { status: 1, stdout: "", stderr: "Failed to connect to bus" } : { status: 0, stdout: "", stderr: "" };
+    },
+  };
+  const unit = api.serviceFile(host);
+  mkdirSync(dirname(unit), { recursive: true });
+  writeFileSync(unit, "[Unit]\n");
+  let connected = true;
+  const daemon = await fakeDaemon((command, args) => {
+    timeline.push(`daemon ${args[0]}`);
+    if (args[0] === "status") return { tailscaleConnected: connected };
+    if (args[0] === "tailscale-disconnect") { connected = false; return { tailscaleConnected: false }; }
+    return new Error("unexpected");
+  });
+  const write = process.stdout.write;
+  let output = "";
+  process.stdout.write = (chunk) => { output += chunk; return true; };
+  try {
+    await assert.rejects(api.serviceCommand(daemon.dir, ["uninstall"], host), /Could not stop the Aiden service/);
+    assert.ok(!timeline.some((line) => line.startsWith("daemon")), "a failed stop leaves the running server's route alone");
+    assert.equal(connected, true);
+    stopFails = false;
+    timeline.length = 0;
+    await api.serviceCommand(daemon.dir, ["uninstall"], host);
+    const stop = timeline.findIndex((line) => line.startsWith("systemctl --user disable"));
+    const disconnect = timeline.indexOf("daemon tailscale-disconnect");
+    assert.ok(stop >= 0 && disconnect > stop, `the service is stopped first, then the route is removed (${timeline.join(", ")})`);
+    assert.match(output, /Removed the Aiden service\.[\s\S]*Removed Aiden's Tailscale route/);
+  } finally {
+    process.stdout.write = write;
+    daemon.close();
+  }
+});
+
+test("uninstall removes the route a stopped server saved as its own, through Tailscale directly", async (t) => {
+  const agentDir = mkdtempSync(join(tmpdir(), "aiden-reach-stopped-"));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+  const target = "http://127.0.0.1:43177/api/aiden/v1";
+  const ownership = { path: "/api/aiden/v1", target };
+  const saveOwnership = (extra = {}) => writeFileSync(join(agentDir, "remote.json"), JSON.stringify({ version: 1, connectionMode: "both", tailscaleOwnership: ownership, ...extra }));
+  let routed = true;
+  const calls = [];
+  const runner = {
+    async run(args) {
+      calls.push(args.join(" "));
+      if (args[0] === "serve" && args[1] === "status") {
+        const handlers = { "/other": { Proxy: "http://127.0.0.1:9" }, ...(routed ? { "/api/aiden/v1": { Proxy: target } } : {}) };
+        return JSON.stringify({ TCP: { "443": { HTTPS: true } }, Web: { "box.tail1234.ts.net:443": { Handlers: handlers } } });
+      }
+      if (args.includes("off")) { routed = false; return ""; }
+      throw new Error(`unexpected tailscale ${args.join(" ")}`);
+    },
+  };
+  const offline = { runner, withRouteLock: (action) => action() };
+
+  saveOwnership();
+  assert.match(await api.releaseTailscaleRoute(agentDir, offline), /Removed Aiden's Tailscale route/);
+  assert.ok(calls.includes("serve --https=443 --set-path=/api/aiden/v1 off"), calls.join("\n"));
+  assert.equal(routed, false);
+  assert.equal(JSON.parse(readFileSync(join(agentDir, "remote.json"), "utf8")).tailscaleOwnership, undefined, "the saved ownership is cleared with the route");
+  assert.equal(await api.releaseTailscaleRoute(agentDir, offline), undefined, "nothing saved, nothing to remove");
+
+  // Someone else's handler now sits on Aiden's path: it is left alone, with the command to remove it by hand.
+  saveOwnership();
+  routed = true;
+  const foreign = { async run(args) { if (args[1] === "status") return JSON.stringify({ Web: { "box.tail1234.ts.net:443": { Handlers: { "/api/aiden/v1": { Proxy: "http://127.0.0.1:5000" } } } } }); throw new Error(`unexpected tailscale ${args.join(" ")}`); } };
+  assert.match(await api.releaseTailscaleRoute(agentDir, { runner: foreign, withRouteLock: (action) => action() }), /no longer Aiden's.*tailscale serve --https=443 --set-path=\/api\/aiden\/v1 off/);
+
+  saveOwnership({ tailscalePendingOutcome: { operation: "connect" } });
+  assert.match(await api.releaseTailscaleRoute(agentDir, offline), /unfinished change.*tailscale serve --https=443/);
+
+  // A first connect that never reported back has a pending outcome but no saved ownership yet; it is still named.
+  writeFileSync(join(agentDir, "remote.json"), JSON.stringify({ version: 1, connectionMode: "both", tailscalePendingOutcome: { operation: "connect", target } }));
+  calls.length = 0;
+  assert.match(await api.releaseTailscaleRoute(agentDir, offline), /unfinished change.*tailscale serve --https=443/);
+  assert.deepEqual(calls, [], "an unfinished change is never touched");
+});
+
+test("aiden remote check exits non-zero when a step fails", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "aiden-reach-cli-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, "home"));
+  const cli = join(resolve(dirname(fileURLToPath(import.meta.url)), ".."), "dist", "app", "cli.js");
+  const result = spawnSync(process.execPath, [cli, "remote", "check"], { encoding: "utf8", timeout: 60_000, env: { ...process.env, HOME: join(root, "home"), AIDEN_CODING_AGENT_DIR: join(root, "agent"), PI_OFFLINE: "1" } });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stdout, /✗ The Aiden server is not running/);
+});

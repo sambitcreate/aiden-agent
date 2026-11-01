@@ -668,7 +668,7 @@ struct AidenSpending: Codable, Equatable, Sendable {
     }
 }
 
-/// Contract revision 48 (`chat:new-worktree`): the empty chat, now in its
+/// Contract revision 49 (`chat:new-worktree`): the empty chat, now in its
 /// new worktree's workspace, and the worktree's branch.
 struct AidenChatNewWorktree: Decodable, Equatable, Sendable {
     /// The server's `AIDEN_REMOTE_MAX_NEW_WORKTREE_TEXT`.
@@ -788,6 +788,19 @@ enum AidenRemoteClientError: Error, LocalizedError {
     var isCredentialRevoked: Bool {
         guard case .server(_, let body) = self else { return false }
         return body.code.rawValue == "credential_revoked"
+    }
+
+    /// A 429 the server marked `retryable`. The request was refused before it
+    /// ran, so it can be sent again after `serverRetryAfterSeconds`.
+    var isRetryableRateLimit: Bool {
+        guard case .server(429, let body) = self else { return false }
+        return body.retryable
+    }
+
+    /// The server's clamped retry delay for a 429, if it named one.
+    var serverRetryAfterSeconds: Int? {
+        guard case .server(429, let body) = self else { return nil }
+        return body.retryAfterDelaySeconds
     }
 
     var errorDescription: String? {
@@ -1815,7 +1828,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
     }
 
-    /// Revision 48 (`chat:new-worktree`, with `git:write`): the Mac makes a
+    /// Revision 49 (`chat:new-worktree`, with `git:write`): the Mac makes a
     /// worktree named from `text`, the chat's first message, and moves the
     /// still-empty chat into it. It sends nothing; the turn follows as usual.
     /// A long message sends only its first 4,000 characters for the name.
@@ -3561,7 +3574,11 @@ final class AidenRemoteClient: @unchecked Sendable {
                 code: response.statusCode == 401 || response.statusCode == 403 ? .unauthorized : .network
             )
             if let envelope = try? AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: data) {
-                throw AidenRemoteClientError.server(statusCode: response.statusCode, body: envelope.error)
+                var body = envelope.error
+                body.retryAfterHeaderSeconds = AidenRemoteErrorEnvelope.retryAfterHeaderSeconds(
+                    response.value(forHTTPHeaderField: "Retry-After")
+                )
+                throw AidenRemoteClientError.server(statusCode: response.statusCode, body: body)
             }
             throw AidenRemoteClientError.unexpectedStatus(response.statusCode)
         }

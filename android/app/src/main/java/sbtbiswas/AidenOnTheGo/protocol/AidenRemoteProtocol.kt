@@ -598,7 +598,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         val BOT_ISSUES = AidenRemoteCapability("bot:issues")
 
         /**
-         * Contract revision 48: with `git:write`, this phone may move an empty Workspace chat into
+         * Contract revision 49: with `git:write`, this phone may move an empty Workspace chat into
          * a new worktree made from its first message (`POST /chats/{chatId}/worktree`, with
          * `chat:write`). The Mac offers it only in `serverCapabilities`, and it is asked for in a
          * call of its own.
@@ -640,7 +640,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 42: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_BOT_ISSUES = listOf(BOT_ISSUES)
 
-        /** Revision 48: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        /** Revision 49: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_CHAT_NEW_WORKTREE = listOf(CHAT_NEW_WORKTREE)
 
         /** Every grant `POST /device/capabilities` may add. */

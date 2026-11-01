@@ -2,7 +2,7 @@
 
 Status: Release draft. Public identity, category, age-rating answers, privacy-label answers, and screenshot specifications are resolved from the shipping app and current Apple definitions. App Store Connect publication and release-specific owner decisions remain open.
 
-The executable canonical ASC localization draft lives in `app-store/metadata/`. The first internal TestFlight train is `0.1.0`; build `1` was rejected during upload for an alpha-bearing App Store icon, builds `2`–`22` progressively corrected the icon and expanded the native companion, and build `22` is the current processed internal candidate. The version directory and Xcode targets match that decision. Offline validation is safe, but no metadata may be applied until the public mobile privacy/support copy and owner decisions below are complete.
+The executable canonical ASC localization draft lives in `app-store/metadata/`. The first internal TestFlight train is `0.1.0`; build `1` was rejected during upload for an alpha-bearing App Store icon, builds `2`–`39` progressively corrected the icon and expanded the native companion, and build `39` is the current processed internal candidate. The version directory and Xcode targets match that decision. Offline validation is safe, but no metadata may be applied until the public mobile privacy/support copy and owner decisions below are complete.
 
 ## Resolved public identity
 
@@ -80,7 +80,7 @@ Evidence for that answer in the current distribution candidate:
 - Dictation uses either Apple’s native recognizer or, only when the person selects **Paired desktop**, a bounded recording sent directly over the authenticated pinned-TLS connection to the speech model selected on that desktop (Parakeet v3 by default). Neither endpoint retains that recording. Read Aloud asks the paired desktop, over the same connection, to voice a selected response with the speech provider configured on that desktop (`tts-v1`); the desktop sends that text to the provider only after an explicit Play, and the phone only plays the returned audio. Aiden's developer operates no speech collection service.
 - Photos/files selected by the user are sent directly to their paired desktop and may then be sent to model providers the user configured there. Aiden's developer cannot access them. Provider processing remains governed by each selected provider and should be described in the public policy.
 - Optional Bot image generation uses Apple's system Image Playground on supported devices and may use Private Cloud Compute. Aiden disables person/Photos personalization and supplies only the visible Bot name and purpose as starting concepts. Aiden's developer runs no image-generation or proxy service and cannot access those concepts, rejected candidates, or results. When the person chooses **Use this image**, the app sends only that normalized image directly to the paired desktop, which stores the canonical Bot photo.
-- Local Network or Tailscale traffic goes directly to the paired installation. Aiden does not run a central account, synchronization service, analytics endpoint, or proxy.
+- Local Network or Tailscale traffic goes directly to the paired installation. Aiden does not run a central account, synchronization service, or proxy, and the phone app sends nothing to an analytics endpoint. (The desktop app can send anonymous usage data to PostHog; that is separate from the phone app and its privacy label.)
 - Live Activity state is device-local and response excerpts are off by default.
 - External transcript media can contact the media host without forwarding Aiden credentials; the public policy should disclose that a remote host can observe an ordinary network request when its media is displayed.
 - `PrivacyInfo.xcprivacy` declares no tracking, no collected data types, and only the `UserDefaults` required-reason API (`CA92.1`).
@@ -104,7 +104,7 @@ Current Apple reference: `https://developer.apple.com/help/app-store-connect/ref
 
 ## Owner decisions still required
 
-- Internal TestFlight starts at marketing version `0.1.0`; build `1` was rejected before processing and build `22` is the current processed internal candidate. Advance the build number for later uploads in the same train and reserve `1.0.0` for the first public release decision.
+- Internal TestFlight starts at marketing version `0.1.0`; build `1` was rejected before processing and build `39` is the current processed internal candidate. Advance the build number for later uploads in the same train and reserve `1.0.0` for the first public release decision.
 - Enter Developer Tools / Productivity in App Store Connect, or deliberately override this documented recommendation.
 - Verify and publish the drafted 13+ age-rating answers in the exact current questionnaire.
 - Verify and publish the drafted “No data collected” App Privacy answer against the final distributed build and operational services.

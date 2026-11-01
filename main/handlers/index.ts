@@ -37,6 +37,8 @@ import { registerImageGenerationHandlers } from "./image-generation.js";
 import { registerModelPaceHandlers } from "./model-pace.js";
 import { registerUsageLimitHandlers } from "./usage-limits.js";
 import { registerSpendingHandlers } from "./spending.js";
+import { registerAnalyticsHandlers } from "./analytics.js";
+import { analyticsService } from "../services/analytics/analytics-main.js";
 import { registerDictationHandlers } from "./dictation.js";
 import { registerScheduledTaskHandlers } from "./scheduled-tasks.js";
 import { registerAssistantHandlers } from "./assistant.js";
@@ -124,6 +126,10 @@ export function registerHandlers(): void {
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     spending,
   });
+  registerAnalyticsHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    analytics: analyticsService(),
+  });
   registerDictationHandlers();
   registerScheduledTaskHandlers();
   // Bot routines are scheduled tasks owned by a Bot; they exist only where Bots do.
@@ -148,11 +154,4 @@ export function registerHandlers(): void {
   registerCreateImagesIpc();
 
   logger.info("handlers", "✓ IPC handlers registered");
-
-  // TODO: Add more handlers here using ipcMain.handle()
-  // Example:
-  // ipcMain.handle('file:read', async (event, path) => {
-  //   const fs = await import('fs/promises');
-  //   return await fs.readFile(path, 'utf-8');
-  // });
 }

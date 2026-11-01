@@ -49,6 +49,11 @@ export interface AidenRemoteHostFeedState {
 }
 
 export interface AidenRemoteHostFeedSource {
+  /**
+   * Every item is a new object or one returned unchanged by an earlier read:
+   * the feed serializes each item object once, so mutating a returned item in
+   * place would hide that change.
+   */
   read(): Promise<AidenRemoteHostFeedState>;
 }
 
@@ -134,6 +139,7 @@ export class AidenRemoteHostFeedService {
    */
   private readonly audiences = new Map<string, { audience: Audience; since: number }>();
   private closed = false;
+  private readonly serializedItems = new WeakMap<object, string>();
 
   constructor(private readonly options: AidenRemoteHostFeedOptions) {
     this.epoch = options.epoch ?? randomBytes(9).toString("base64url");
@@ -328,11 +334,11 @@ export class AidenRemoteHostFeedService {
     next: readonly { id: string }[],
     botOnly: boolean,
   ): void {
-    const before = new Map(previous.map((item) => [item.id, JSON.stringify(item)]));
+    const before = new Map(previous.map((item) => [item.id, this.serialized(item)]));
     const seen = new Set<string>();
     for (const item of next) {
       seen.add(item.id);
-      if (before.get(item.id) !== JSON.stringify(item)) {
+      if (before.get(item.id) !== this.serialized(item)) {
         this.append(`${kind}.upsert`, item as unknown as Record<string, unknown>, botOnly);
       }
     }
@@ -348,7 +354,7 @@ export class AidenRemoteHostFeedService {
    */
   private diffBots(previous: AidenRemoteHostFeedState, next: AidenRemoteHostFeedState): void {
     const rows = (bots: readonly AidenRemoteHostFeedBot[]) =>
-      new Map(bots.map((bot) => [bot.id, { bot, json: JSON.stringify(bot) }]));
+      new Map(bots.map((bot) => [bot.id, { bot, json: this.serialized(bot) }]));
     const before = { legacy: rows(previous.bots), handoffs: rows(previous.handoffBots ?? previous.bots) };
     const after = { legacy: rows(next.bots), handoffs: rows(next.handoffBots ?? next.bots) };
     const ids = new Set([...after.legacy.keys(), ...after.handoffs.keys(), ...before.legacy.keys(), ...before.handoffs.keys()]);
@@ -367,6 +373,20 @@ export class AidenRemoteHostFeedService {
       }
       for (const change of changes) this.appendBot(id, change.row?.bot, change.audience);
     }
+  }
+
+  /**
+   * An item's JSON, computed once per object. The previous read's items were
+   * serialized when they were the newest, and both Bot audiences usually
+   * share row objects, so a refresh serializes each new item only once.
+   */
+  private serialized(item: object): string {
+    let json = this.serializedItems.get(item);
+    if (json === undefined) {
+      json = JSON.stringify(item);
+      this.serializedItems.set(item, json);
+    }
+    return json;
   }
 
   private appendBot(id: string, bot: AidenRemoteHostFeedBot | undefined, audience: Audience): void {

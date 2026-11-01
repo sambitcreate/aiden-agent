@@ -1,3 +1,4 @@
+import type { PeerProjectSource } from "../shared/peer-project-clone";
 import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
 import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
 import type { SavedChatIntent } from "../shared/chat-intent";
@@ -17,6 +18,7 @@ import {
   type SpendingChangedEvent,
   type SpendingStatusView,
 } from "../shared/spending";
+import type { AnalyticsNoticeChoice, AnalyticsRegistryView, AnalyticsStatusView } from "../shared/analytics";
 import type {
   WorkspaceClonePreview,
   WorkspaceCloneProgress,
@@ -584,6 +586,25 @@ function parseBotSpendingLimitChoice(value: unknown): BotSpendingLimitChoice {
   return usd === undefined ? { kind: "default" } : { kind: "amount", usd };
 }
 
+function parseAnalyticsStatus(value: unknown): AnalyticsStatusView {
+  const status = value as Partial<Record<keyof AnalyticsStatusView, unknown>> | null;
+  return {
+    enabled: status?.enabled === true,
+    envDisabled: status?.envDisabled === true,
+    hasKey: status?.hasKey === true,
+    noticePending: status?.noticePending === true,
+  };
+}
+
+/** Usage-data consent (Settings → Diagnostics, onboarding and the one-time notice). */
+export const analyticsApi = {
+  status: async () => parseAnalyticsStatus(await invoke<unknown>("analytics:status")),
+  setEnabled: async (enabled: boolean) => parseAnalyticsStatus(await invoke<unknown>("analytics:setEnabled", enabled)),
+  markNoticeShown: async (choice: AnalyticsNoticeChoice) =>
+    parseAnalyticsStatus(await invoke<unknown>("analytics:markNoticeShown", choice)),
+  registry: () => invoke<AnalyticsRegistryView>("analytics:registry"),
+};
+
 export const spendingApi = {
   status: async (ownerKind: SpendingStatusView["ownerKind"], ownerId: string) =>
     parseSpendingStatusView(await invoke<unknown>("spending:status", ownerKind, ownerId)),
@@ -662,6 +683,12 @@ export const skillsApi = {
   catalog: async (workspaceId: string): Promise<SkillCatalogEntry[]> =>
     parseSkillCatalog(await invoke<unknown>("skills:catalog", workspaceId)),
   /** @deprecated Compatibility alias for the renderer-safe catalog. */
+  /** Every skill a workspace could switch off, with whether it is off there. */
+  workspaceChoices: (workspaceId: string) =>
+    invoke<import("../../main/services/skill-registry").WorkspaceSkillChoice[]>(
+      "skills:workspaceChoices",
+      workspaceId,
+    ),
   discovered: async (workspaceId: string): Promise<SkillCatalogEntry[]> =>
     parseSkillCatalog(await invoke<unknown>("skills:discovered", workspaceId)),
 };
@@ -985,6 +1012,9 @@ export const modelsApi = {
 
 // ── Workspaces ────────────────────────────────────────────────────────
 export const workspacesApi = {
+  peerClonePreview: (workspaceId: string) => invoke<PeerProjectSource>("workspaces:peerClonePreview", workspaceId),
+  peerClone: (input: { cloneId: string; hostId: string; workspaceId: string; selection: string; files: string[] }) => invoke<PeerOperationOutcome>("workspaces:peerClone", input),
+  cancelPeerClone: (cloneId: string) => invoke<boolean>("workspaces:peerCloneCancel", cloneId),
   list: () => invoke<Workspace[]>("workspaces:list"),
   memoryFacts: (workspaceId: string) =>
     invoke<import("../../main/services/workspace-memory-facts").WorkspaceMemoryFactView[]>(
@@ -1025,7 +1055,13 @@ export const workspacesApi = {
     onNotification<WorkspaceCloneProgress>("workspaces:clone-progress", handler),
   update: (
     id: string,
-    patch: { name?: string; permission?: WorkspacePermission; memoryEnabled?: boolean },
+    patch: {
+      name?: string;
+      permission?: WorkspacePermission;
+      memoryEnabled?: boolean;
+      disabledSkills?: string[];
+      disabledMcpServerIds?: string[];
+    },
   ) => invoke<Workspace>("workspaces:update", id, patch),
   remove: (id: string) => invoke<void>("workspaces:remove", id),
   gitInfo: (workspaceId: string) => invoke<GitInfo>("workspaces:gitInfo", workspaceId),
@@ -2034,6 +2070,9 @@ export function startGeneration(
         }
         return { ok: true as const };
       }
+      // Main never took the turn, so nothing will ever arrive on this stream.
+      fallbackDetachedLifecycleStream(streamId);
+      dispose();
       return {
         ok: false as const,
         error: new Error("Generation was rejected before it accepted this message."),

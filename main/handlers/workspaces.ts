@@ -23,7 +23,7 @@ import {
   type GitPushInput,
 } from "../services/git.js";
 import { githubCurrentPullRequest } from "../services/github/github-runtime-main.js";
-import { GitRepoWatcher } from "../services/git-repo-watcher.js";
+import { workspaceGitWatcher as gitRepoWatcher } from "../services/workspace-git-watcher-main.js";
 import { workspaceApplicationService } from "../services/workspace-application-service-main.js";
 import { displayWorkspaceFolder, workspaceFolderPresence } from "../services/workspace-folder-presence.js";
 import {
@@ -147,11 +147,10 @@ async function withOptionalWorkspaceOperation<T>(
   );
 }
 
-// Repository changes (commit, checkout, stage, fetch, push) are pushed to the
-// renderer so its Git queries can poll slowly as a safety net only.
-const gitRepoWatcher = new GitRepoWatcher({
-  notify: (workspaceId, generation) => ipcMain.broadcast("git:changed", { workspaceId, generation }),
-});
+/** Closes every Git metadata watcher; called once at quit. */
+export function disposeWorkspaceGitWatchers(): void {
+  gitRepoWatcher.dispose();
+}
 
 function observeGitRepository(resolved: WorkspaceEnvironmentDirectory | undefined): void {
   if (!resolved) return;

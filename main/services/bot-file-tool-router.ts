@@ -40,6 +40,8 @@ export interface BotFileToolRouterOptions {
   readonly protectedRoots?: () => readonly BotFileToolProtectedRoot[];
   /** Installation-owned native helper used for edit_file. */
   readonly fileMutatorBinary?: string;
+  /** After write_file or edit_file succeeds: the real absolute path it changed. */
+  readonly onWrite?: (absolutePath: string) => void | Promise<void>;
 }
 
 /** File tools that change a file; only these are fenced from protected roots. */
@@ -321,11 +323,18 @@ export function buildBotFileTools(options: BotFileToolRouterOptions): AgentTool[
         if (WRITING_TOOLS.has(name) && (await writesIntoSkillDirectory(selected.root, underlyingParams))) {
           throw new Error("Skills need the person's OK. Use propose_skill instead.");
         }
+        let result: Awaited<ReturnType<AgentTool["execute"]>>;
         try {
-          return await underlying.execute(toolCallId, underlyingParams, signal, onUpdate);
+          result = await underlying.execute(toolCallId, underlyingParams, signal, onUpdate);
         } catch (error) {
           throw redactLocationRoots(error, prepared);
         }
+        if (options.onWrite && WRITING_TOOLS.has(name) && typeof underlyingParams.path === "string") {
+          const written = await realTarget(path.resolve(selected.root, underlyingParams.path)).catch(() => undefined);
+          // Awaited, so the journal holds the version this call left before the call returns.
+          if (written) await Promise.resolve(options.onWrite(written)).catch(() => undefined);
+        }
+        return result;
       },
     };
   });

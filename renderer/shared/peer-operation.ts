@@ -36,6 +36,7 @@ export type PeerWriteOperation =
   | "respondApproval"
   | "selectFolder"
   | "createWorkspace"
+  | "cloneWorkspace"
   | "markRead"
   | "interruptAgent"
   | "respondQuestion"

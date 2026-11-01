@@ -39,9 +39,22 @@ A connector served by a Mac app (iMCP, `macApp` in the catalog) appears only whe
 
 Settings → Providers → Manage shows **Let custom connectors use this key** (off by default) only for a built-in provider with a saved API key; the custom-connector key picker lists only providers with it turned on.
 
+## Workspace settings
+
+Workspace settings is a pop-up, not a Settings page (`renderer/components/workspace-settings-dialog.tsx`). It opens from **Workspace settings…** in a workspace's ⋯ menu in the sidebar, the same item in the top-bar workspace chip menu, the command palette, or `⇧⌘,`. Only a workspace with a folder has one. Chats without a workspace, including No workspace chats in their hidden managed folders, follow Settings: the Chats group row and the No workspace chip menu have no Workspace settings item, and the config store drops any off-list saved on a No workspace record. It uses the shared `Dialog` at `size="wide"` (860px) with a vertical tab list on the left (General, Skills, Connectors; arrow keys move between tabs and selection is the list-selection fill) and the shared `FieldSet` cards on the right. Below 640px the tabs sit in a row above the content. Done closes it.
+
+- **General:** Name (saves on Enter or when the field loses focus; the first Escape undoes an edit), Folder with Show in Finder, Access (Full access, Ask first, No access) and the per-workspace Memory switch.
+- **Skills** and **Connectors:** a header with "n of m on", a search field once there are more than 8 rows, and a ⋯ menu with Turn all off here and Turn all on here. Each row has a trailing switch and a soft gray "Off here" `Badge` when it is switched off for this workspace. When Settings decides (a connector off in Settings or off for the model, a skill that only runs by name or is unavailable), the switch is disabled and the row's line says why, with a link back to Settings. A connector that can't connect shows a soft red badge, its error and Fix in Settings. Skills are grouped as Your skills, From this folder, and Built-in and global. When Skills are off in Settings the tab shows one callout instead of the list.
+
+Switches save at once on screen and roll back with a toast if saving fails. A short line under each list says changes apply from the next message. The stored off-lists (`Workspace.disabledSkills`, by canonical skill name, and `Workspace.disabledMcpServerIds`) live with the workspace in the device-local config. The main process enforces them for every chat in that workspace, including chats started from a phone and the subagents they start; Bots keep their own access, and the CLI does not read them yet.
+
 ## Limits & spending
 
 Settings → Limits & spending (section id `limits`, in the Agent group) has two `FieldSet` groups. **Usage limits** has one row, "Wait for a limit to clear", with a trailing Select of the longest wait (Don't wait, Up to 1, 6, 12 or 24 hours; default 6), backed by `AppSettings.usageLimitWaitHours`. **Spending limits** has four rows with trailing Selects: Each chat, Each Bot per month, Each routine run (No limit or a preset amount, `AppSettings.spendingLimits`) and "A Bot's month starts on" (1st to 28th). Each row's one secondary line says what the limit covers. A Bot's Profile has a "Spending" group with one "Monthly limit" row (Default, No limit or an amount) and a secondary line with this month's spend. The spending notices above a composer use a warning-tone icon and a soft raised fill, never a colored border; Allow more is the shared primary button. See [usage limits and spending limits](usage-limits-and-spending.md).
+
+## Bots
+
+Settings → Bots (section id `bots`, in the Agent group, before Bot computers) has two `FieldSet` groups. **Routines** has one trailing switch, "Go ahead without asking" (`AppSettings.botRoutinesGoAhead`, off by default), saved at once and put back if the save fails. **Always comes to you** lists what the switch never covers, each row with a trailing lock and "Always", the same treatment as a Bot's locked rules: passwords, 2FA codes and money; steps a Bot's rules hand off; and Computer Use on the person's Mac (only where this Mac offers Computer Use). A secondary line under the groups says what routines do while the switch is off. Each Bot's Rules group ends with a secondary line saying what routines do with Ask first steps and an inline "Change this for every Bot" link to the page. See [Bot rules](bot-rules.md#routines-that-go-ahead-settings--bots).
 
 ## Web pages
 

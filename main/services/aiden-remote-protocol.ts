@@ -196,6 +196,14 @@ export const AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION = 46 as const;
 export const AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION = 47 as const;
 /**
  * Contract revision 48 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_WORKSPACE_CLONE_CONTRACT_REVISION`):
+ * paired desktops can clone a repository into a selected approved folder with
+ * optional bounded environment files. `workspace-clone-v1` is never
+ * advertised to phones.
+ */
+export const AIDEN_REMOTE_WORKSPACE_CLONE_CONTRACT_REVISION = 48 as const;
+/**
+ * Contract revision 49 (provisional; re-claim the next revision after `main`'s
  * at merge by changing only `AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION`):
  * New worktree on phones (`chat:new-worktree`, an opt-in capability rather
  * than a feature token, because phones already hear the most feature tokens
@@ -205,7 +213,7 @@ export const AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION = 47 as const;
  * moves the still-empty chat into it, so the first message runs there. Older
  * phones see nothing new.
  */
-export const AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION = 48 as const;
+export const AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION = 49 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -432,7 +440,7 @@ export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
 export const AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES = ["schedule:cards"] as const;
 
 /**
- * Contract revision 48: a device holding `chat:new-worktree` may put an empty
+ * Contract revision 49: a device holding `chat:new-worktree` may put an empty
  * chat in a new managed worktree (`POST /chats/{chatId}/worktree`, which also
  * needs `chat:write` and `git:write`). It is offered only while the host can
  * create worktrees, and widens nothing those grants do not already allow.
@@ -2030,7 +2038,7 @@ export interface AidenRemoteContractFixture {
   browserRecordings?: AidenRemoteBrowserRecordingsFixture;
   /** Revision 47 (`spending-limits-v1`): spending status, Allow more and the refusals. */
   spending?: AidenRemoteSpendingFixture;
-  /** Revision 48 (`chat:new-worktree`): an empty chat moved into a new worktree, and a chat with messages refused. */
+  /** Revision 49 (`chat:new-worktree`): an empty chat moved into a new worktree, and a chat with messages refused. */
   chatNewWorktree?: AidenRemoteChatNewWorktreeFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
@@ -8005,7 +8013,7 @@ function parseSpendingFixture(value: unknown): AidenRemoteSpendingFixture {
 /** Longest message text `POST /chats/{chatId}/worktree` takes; only its first words name the branch. */
 export const AIDEN_REMOTE_MAX_NEW_WORKTREE_TEXT = 4_000;
 
-/** Revision 48: the body of `POST /chats/{chatId}/worktree`. */
+/** Revision 49: the body of `POST /chats/{chatId}/worktree`. */
 export interface AidenRemoteChatNewWorktreeRequest {
   /** The first message, about to be sent; the branch is named from it (`aiden/<words>`). */
   text: string;
@@ -8021,7 +8029,7 @@ export function parseAidenRemoteChatNewWorktreeRequest(value: unknown): AidenRem
   return { text };
 }
 
-/** Revision 48: the response of `POST /chats/{chatId}/worktree`. */
+/** Revision 49: the response of `POST /chats/{chatId}/worktree`. */
 export interface AidenRemoteChatNewWorktreeResponse {
   /** The chat, now in the worktree's workspace and still without messages. */
   chat: AidenRemoteChatProjection;

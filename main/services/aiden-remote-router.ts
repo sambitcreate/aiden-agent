@@ -1,3 +1,4 @@
+import { PEER_PROJECT_CLONE_FEATURE } from "../../renderer/shared/peer-project-clone.js";
 import type { remoteAppControls } from "./aiden-remote-app-controls.js";
 import type { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
 import { projectBotDetailForAudience, projectBotSummaryForAudience } from "./aiden-remote-bot-handoffs.js";
@@ -200,7 +201,7 @@ export interface AidenRemoteRouterDependencies {
     AidenRemotePairingRequestService,
     "accepting" | "create" | "reveal" | "poll" | "cancel"
   >;
-  workspaces?: Pick<AidenRemoteWorkspaceService, "list" | "get" | "create" | "update" | "remove">;
+  workspaces?: Pick<AidenRemoteWorkspaceService, "list" | "get" | "create" | "update" | "remove"> & { supportsClone?: boolean };
   workspaceBrowser?: Pick<
     AidenRemoteWorkspaceBrowserService,
     "listRoots" | "listChildren" | "createSelection"
@@ -834,6 +835,12 @@ function writeError(
       ...(error.details ? { details: error.details } : {}),
     },
   };
+  // The envelope carries the wait for Aiden clients; the standard header lets
+  // generic HTTP stacks honor it too.
+  const retryAfter = error.details?.retryAfterSeconds;
+  if (retryAfter !== undefined && Number.isFinite(retryAfter) && retryAfter > 0) {
+    response.setHeader("retry-after", String(Math.ceil(retryAfter)));
+  }
   writeJson(response, error.status, envelope);
 }
 
@@ -1502,8 +1509,31 @@ function selectionLocation(value: unknown): string {
   return (value as { location: string }).location;
 }
 
-function sourceIdentity(request: IncomingMessage): string {
+function isLoopbackAddress(address: string | undefined): boolean {
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
+function singleHeader(request: IncomingMessage, name: string): string | undefined {
+  const value = request.headers[name];
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * The key for per-source pairing budgets. Tailscale Serve proxies every
+ * tailnet peer through one loopback socket, so on that listener the peer is
+ * named by the headers tailscaled sets (it replaces any client-sent copies):
+ * the forwarded tailnet address, else the tailnet login. Pairing secrets are
+ * high-entropy, so these budgets only keep one device from crowding out
+ * others; they are not what protects the secret.
+ */
+function sourceIdentity(request: IncomingMessage, tailscale: boolean): string {
   const address = request.socket.remoteAddress ?? "unknown";
+  if (tailscale && isLoopbackAddress(address)) {
+    const forwarded = singleHeader(request, "x-forwarded-for")?.split(",").pop()?.trim();
+    if (forwarded && /^[0-9A-Fa-f:.]{2,45}$/u.test(forwarded)) return `tailscale:${forwarded}`;
+    const login = singleHeader(request, "tailscale-user-login")?.trim();
+    if (login && /^[\x21-\x7e]{1,128}$/u.test(login)) return `tailscale-user:${login}`;
+  }
   return address.length <= 128 ? address : "unknown";
 }
 
@@ -1522,7 +1552,7 @@ function requireEmptyObject(value: unknown): void {
   }
 }
 
-/** Revision 48: whether phones can put an empty chat in a new worktree. */
+/** Revision 49: whether phones can put an empty chat in a new worktree. */
 function newWorktreesWired(dependencies: AidenRemoteRouterDependencies): boolean {
   return dependencies.chats?.supportsNewWorktrees === true && dependencies.chats.moveToNewWorktree !== undefined;
 }
@@ -1623,6 +1653,7 @@ export interface AidenRemoteServerFeatureSupport {
   botAttachments: boolean;
   spending: boolean;
   mobileSimulators: boolean;
+  workspaceClone?: boolean;
 }
 
 /**
@@ -1641,6 +1672,7 @@ export function aidenRemoteServerFeatures(
   return [
     ...(phone && support.appControls ? ["chat-ui-panels-v1"] : []),
     ...(phone && support.appControlsEnabled ? ["chat-ui-panels-enabled-v1"] : []),
+    ...(desktop && support.workspaceClone ? [PEER_PROJECT_CLONE_FEATURE] : []),
     ...(desktop && support.peerRoutes ? ["peer-routes-v1"] : []),
     ...(phone && support.providers ? [AIDEN_REMOTE_PROVIDER_CREATE_FEATURE] : []),
     ...(phone && support.readAloud ? [REMOTE_TTS_FEATURE] : []),
@@ -1977,7 +2009,7 @@ function advertisedServerCapabilities(
       : []),
     // Revision 39: a display opt-in for any device type while approvals are served.
     ...(scheduleCardsWired(dependencies) ? AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES : []),
-    // Revision 48: offered only while the host makes worktrees for phones.
+    // Revision 49: offered only while the host makes worktrees for phones.
     ...(newWorktreesWired(dependencies) ? AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES : []),
     ...(device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
@@ -2193,7 +2225,7 @@ export function createAidenRemoteRequestHandler(
         route = "pairingExchange";
         const result = await dependencies.pairing.exchange(
           await readJsonBody(request),
-          sourceIdentity(request),
+          sourceIdentity(request, dependencies.acceptStrippedBasePath === true),
         );
         writeJson(response, 200, result);
         return;
@@ -2219,7 +2251,7 @@ export function createAidenRemoteRequestHandler(
         const secret = pairingSecretHeader(request);
         if (route === "pairingRequests" && request.method === "POST") {
           const created = await service.create(await readJsonBody(request, 2_048), {
-            source: sourceIdentity(request),
+            source: sourceIdentity(request, dependencies.acceptStrippedBasePath === true),
             transport: dependencies.acceptStrippedBasePath === true ? "tailscale" : "lan",
           });
           writeJson(response, 201, created);
@@ -2288,6 +2320,7 @@ export function createAidenRemoteRequestHandler(
             : {}),
           connectionMode: dependencies.connectionMode(),
           features: aidenRemoteServerFeatures(device, {
+            workspaceClone: dependencies.workspaces?.supportsClone === true,
             appControls: Boolean(dependencies.appControls),
             appControlsEnabled: (await dependencies.appControls?.enabled()) === true,
             peerRoutes: peerRoutes !== undefined,
@@ -2411,7 +2444,7 @@ export function createAidenRemoteRequestHandler(
               throw new AidenRemoteServiceError("not_found", "Schedule cards are unavailable on this Aiden installation.", 404);
             }
           } else if ((AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 48: offered only while the host makes worktrees for phones.
+            // Revision 49: offered only while the host makes worktrees for phones.
             if (!newWorktreesWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "New worktrees are unavailable on this Aiden installation.", 404);
             }
@@ -3215,11 +3248,18 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.workspaces) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(
-          response,
-          201,
-          await dependencies.workspaces.create(device.id, key, body),
-        );
+        const cloning = body !== null && typeof body === "object" && (body as { mode?: unknown }).mode === "clone";
+        if (cloning && (!isDesktopDevice(device) || !device.capabilities.has("workspace:browse"))) throw new AidenRemoteServiceError("capability_denied", "Cloning projects requires a paired desktop with folder browsing access.", 403);
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        if (cloning) {
+          response.once("close", abort);
+          if (response.destroyed || request.aborted) abort();
+        }
+        try {
+          const result = await dependencies.workspaces.create(device.id, key, body, controller.signal);
+          if (!controller.signal.aborted) writeJson(response, 201, result);
+        } finally { response.off("close", abort); }
         return;
       }
       const workspaceMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})$/u.exec(path);

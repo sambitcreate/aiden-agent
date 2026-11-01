@@ -91,3 +91,59 @@ Control, then live mode on the winner) and 2a (live words in the pill, one paste
   scripts/ci-test-registry.json), plus catalog/downloads/protocol/worker-core/remote-speech/hook/pill/settings.
 - Pending: packaged-app check on the Mac (dylib + koffi from asar.unpacked), timing and live words by hand; then
   delete ~/.cache/aiden-voice-spike (3.5 GB) on the Mac.
+
+## Speech and media audit fixes (branch claude/audit-fix-speech-media-vms, 2026-10-29)
+
+- Worker host (`local-speech-worker-host.ts`, a2404240e): every disposed worker (retire, hang, crash, cancel, a
+  fork that lost a race) is tracked until it exits; after `exitWaitMs` (2 s) it gets SIGKILL by pid (`signalPid`
+  injectable), then one more bounded wait. `acquire` forks only after all retirements settle, so two native models
+  are never resident. Model delete runs release + file removal inside the speech lane (a queued warm-up can't reload
+  mid-delete) and retires a worker whose load failed part-way. An engine status probe that forked a worker only for
+  itself retires it afterwards. `shutDown()` stays synchronous (no change to main/index.ts sequencing). A launch
+  whose generation was retired while it waited for an old worker to exit throws before `fork()` (review follow-up).
+- Downloads (093c9ea5c): the stall timer pauses while the write stream drains (slow/full disk no longer reads as a
+  network stall; cancel ends the wait); tar failures map to the disk message (ENOSPC, quota) or plain retry advice.
+  Linux GlobalShortcuts portal ignores unknown informational event types; fails only on error/close or a known event
+  out of order.
+- Paste (7f1672ad4): the AppleScript transaction `log`s `KEYSTROKE_SENT_MARKER` to stderr after ⌘V. If osascript is
+  killed by its 5 s timeout after that, `runAtomicMacPaste` throws `PasteAfterKeystrokeError` and dictation restores
+  the saved clipboard (only if it still holds the transcript) instead of writing the transcript over it.
+  Review follow-up: the marker only proves ⌘V was posted, and a queued ⌘V could still paste a restored clipboard
+  (maybe a password). So after a killed transaction dictation waits `PASTE_CONFIRM_DELAY_MS` (1 s), then runs a
+  bounded (1.5 s) AX read (`PASTE_CONFIRM_SCRIPT`: focused element's AXValue contains the transcript, case-sensitive,
+  text passed as argv). Confirmed → restore and report pasted; unreadable or not found → transcript stays on the
+  clipboard, "Check the field — transcript copied." The saved clipboard is text/HTML/RTF only (no `readImage()` on
+  every paste); images, file URLs and app-specific types are neither read nor restored.
+  Second review (2026-10-29): a frontmost-field "contains" check confirmed pastes that never happened (the person
+  ⌘-Tabs to a Terminal already showing "yes", or the field already held the transcript), so the restore let a queued
+  ⌘V paste the old clipboard. Now the marker line is `<marker> pid=<targetPid> count=<n>`, n = case-exact copies of
+  the transcript in the field before ⌘V (`unknown` when unreadable). `parseKeystrokeMarker` puts both on
+  `PasteAfterKeystrokeError.target`; the confirm script gets them as argv, reads AXFocusedUIElement of *that pid*
+  (not the frontmost app) and confirms only when the count rose (`deliveryVerdict` in `PASTE_SCRIPT_HANDLERS`,
+  shared with the transaction's own quiet-window restore). No target or unknown count → never confirmed, no read.
+  The unconfirmed path no longer writes the transcript (the transaction already put it there; a write would clobber
+  what the person copied during the ~2.5 s wait). The handlers are tested by running them under osascript.
+  Third review (2026-10-29, superseded the two above): even pinned to the pid, the confirm script read that app's
+  *currently* focused element, so moving focus to another field in the same app that holds the transcript (or text
+  that predated the paste) still authorized a restore a late ⌘V could paste. No AX read can prove that *this* ⌘V
+  landed in the *original* element, so the post-timeout restore is gone: after `PasteAfterKeystrokeError` the
+  transcript simply stays on the clipboard (no restore, no extra write), "Check the field — transcript copied."
+  Removed: `PASTE_CONFIRM_SCRIPT`, `confirmMacPasteDelivered`, `parseKeystrokeMarker`, `PasteTarget`,
+  `PasteDeps.saveClipboard/confirmDelivered/wait` and `saveClipboardForPaste` in dictation.ts. The marker is a bare
+  `KEYSTROKE_SENT_MARKER` line again. The transaction's own quiet-window restore (inside osascript, reading the
+  original `targetElement` reference and requiring the count to rise) is unchanged.
+  Deferred: a "previous clipboard couldn't be restored" note for image/file clipboards needs the pill to render a
+  message on `pasted`, which it does not today (UI change, needs screenshots).
+- Pill cap (24971dcc8): `PcmRecorder` keeps at most `PCM_MAX_RECORDING_SAMPLES` (30 min at 16 kHz, main's on-device
+  limit), trims the crossing chunk, fires `onlimit` once; the pill stops and transcribes what was kept. No warning UI.
+  Review follow-up: the composer hook (`use-voice-recorder.ts`) now sets `onlimit` too: it marks a pending stop and
+  stops the recorder, so the kept audio is transcribed once and the mic/audio graph are released. The cap is
+  injectable via `VoiceRecorderOptions.maxRecordingSamples` (passed to `createVoiceRecorder`), used by tests.
+- Audio path (90015e20b): pill waveform writes a bar only when its rounded height changes and skips the analyser read
+  while the live transcript or a hint hides the bars (scaleY/clip-path were rejected: they squash the rounded caps).
+  The capture worklet and the PCM16 encoder fill preallocated chunks; the encoder keeps its fractional offset across
+  pushes, so output no longer depends on how input was split. Positions are integer ticks (input sample =
+  16000 ticks, step = sourceRate ticks): the float step drifted at 44.1 kHz (30 s emitted 480001 samples).
+  The disk-wait in the download loop (stall timer paused during `drain`) still has no upper bound; noted in the PR.
+- Skipped: one shared AudioContext for pcm-recorder, analyser and live-pcm-capture (shared Live code, high risk for a
+  LOW item); the CLI speech host's dispose is left to its owner.

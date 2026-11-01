@@ -59,13 +59,22 @@ Branch `perf/storage-durability`, from the main-process optimization audit (MAIN
 - Migration: dual-read (inline or blob), and write blobs only for new attachments. Do not rewrite old chats eagerly.
 - Needs Remote protocol and mobile consumer review before landing, because summaries and transcripts may embed attachment data.
 
+## Done on `claude/audit-fix-persistence-cpu` (2026-10-29)
+- MAIN-15: the diagnostic journal batches every line queued during one drain into a single append, and prunes expired rotations only when due. The full directory validation runs once; each append re-checks the directory's dev/ino with one lstat and revalidates (refusing a symlink) if it changed. Lines lost to a failed append count in `droppedWrites`. No persistent fd: batching gets the CPU win and keeps the rename/delete semantics.
+- MAIN-13 (partial): the usage store indexes buckets in a Map and coalesces saves for 2 s (unref'd timer, compact JSON). `usageStore.flush()` joins the quit flush in `main/index.ts`, and from then on the store is write-through, so usage recorded by work that settles later in shutdown (Create Images, routines, Bots) still saves. A failed timed save re-arms the timer. The CLI passes no delay, so it still saves per record.
+- Usage aggregates accepted in the last 2 s can be lost on a crash or force-kill (not on a normal quit). Accepted trade-off for MAIN-13; usage is a statistics ledger, not billing truth. Roll-up of old buckets is NOT done: it changes the "all" range, streaks and day series, so it needs an owner decision.
+- MAIN-29 (partial): `generationProfiles` and `ambientProfiles` are `RecentChatCache` LRUs of 16 chats. `promptCacheRefreshes` stays an unbounded Map on purpose (tiny entries; evicting one would show a warm cache as expired). Each `journalSnapshots` entry is dropped by an unref'd timer at its TTL. Pi compaction `sessions` is NOT bounded: there is no lease or refcount, so evicting a session in use would let `openChat` create a second writer for the same JSONL journal. It needs a lease design first.
+- MAIN-19 (partial): memory-store caches prepared statements per open `DatabaseSync` (a WeakMap, so closing drops them), and the cached `db()` path no longer re-chmods on every call. Modes are still repaired at open, after writes and on close. `busy_timeout` is unchanged: lowering it would turn rare stalls into failed memory writes. The real fix is a worker/utility process.
+- `DataStore.writeNow` clones the previous value only when a publish hook needs it.
+- `secrets.ts` keeps the parsed (still encrypted) key map, validated by an lstat stamp (dev, ino, size, mtimeNs, ctimeNs), and writes through `writeFileAtomic` with the mutation guard and authority invalidation in `beforePublish`.
+- App-controls ledger: unresolved (`outcome_unknown`) receipts are kept on purpose. `docs/aiden-remote-api-v1.md` documents that the ledger rejects new operations at 500 records rather than drop replay protection. Expiring them is an owner decision.
+
 ## Not done yet (audit leads, still open)
-- MAIN-13 usage-store debounce and roll-up
+- MAIN-13 roll-up of old usage buckets (see above).
 - MAIN-14 subagent run-store memo
-- MAIN-15 diagnostic-journal fd and batching
 - MAIN-27 local-model swap/staging/`stopDownloads`
-- MAIN-29 bounded `ambientProfiles` / `journalSnapshots` / Pi `sessions` maps. `journalSnapshots` retains full message arrays per viewed chat for the process lifetime.
-- MAIN-19 memory-store prepared statements.
+- MAIN-29 Pi compaction `sessions` lease and idle eviction (see above).
+- MAIN-19 moving SQLite off the main thread.
 - `ensureUserDataDir` memo: skipped, because memoizing would break recovery if the folder is deleted while running, and `mkdir -p` on an existing directory is cheap.
 
 ## Known pre-existing failures (also on main `3f86d41af`)

@@ -37,7 +37,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 const val AIDEN_NEW_WORKTREE_CHIP_TAG = "aiden-new-worktree-chip"
 const val AIDEN_NEW_WORKTREE_SETUP_TAG = "aiden-new-worktree-setup"
 
-/** Revision 48: on, the chat's first message makes a worktree on the Mac before it sends. */
+/** Revision 49: on, the chat's first message makes a worktree on the Mac before it sends. */
 @Composable
 fun AidenNewWorktreeChip(
     isOn: Boolean,
