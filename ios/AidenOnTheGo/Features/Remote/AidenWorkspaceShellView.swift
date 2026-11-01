@@ -2001,7 +2001,7 @@ struct AidenWorkspaceShellView: View {
         }
         .aidenProminentGlassButton()
         .disabled(newChatUnavailable)
-        .accessibilityLabel("New Chat")
+        .accessibilityLabel("New Workspace Chat")
         .accessibilityHint("Choose the workspace for a new chat.")
         .matchedTransitionSource(id: "AidenNewAgentOptions", in: newAgentTransition)
         .popover(isPresented: $isShowingNewAgentChoices, arrowEdge: .bottom) {

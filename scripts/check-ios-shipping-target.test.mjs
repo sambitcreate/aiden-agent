@@ -585,7 +585,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(
     shell,
-    /func createNewAgentInScratchWorkspace\(\)[\s\S]*?workspaceCreate: \.scratch[\s\S]*?func createNewAgent\([\s\S]*?createChat\(workspaceId: workspace\.id\)/u,
+    /func createNewAgentInScratchWorkspace\(\)[\s\S]*?workspaceCreate: \.scratch[\s\S]*?func createNewAgent\([\s\S]*?createChat\(workspaceId: workspace\.id[,)]/u,
   );
   assert.match(
     shell,

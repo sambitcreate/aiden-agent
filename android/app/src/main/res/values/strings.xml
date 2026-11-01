@@ -291,7 +291,7 @@
     <string name="workspace_home_opening_chat">Opening chat…</string>
     <string name="workspace_home_chats_still_loading">Chats are still loading. Try again shortly.</string>
     <string name="workspace_home_create_chat_failed">Aiden couldn\'t create the chat.</string>
-    <string name="workspace_home_new_chat_cd">New Chat</string>
+    <string name="workspace_home_new_chat_cd">New Workspace Chat</string>
     <string name="workspace_home_connecting">Connecting to Aiden Agent…</string>
     <string name="workspace_home_offline">Offline — showing saved chats</string>
     <string name="workspace_home_scheduled_tasks">Scheduled Tasks</string>
