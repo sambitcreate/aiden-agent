@@ -11,13 +11,13 @@ import {
 
 test("capability-aware settings destinations hide Computer Use everywhere", () => {
   assert.equal(
-    availableSettingsDestinations({ computerUse: false, devices: true, botComputers: true }).some(
+    availableSettingsDestinations({ computerUse: false, devices: true, botComputers: true, hooks: true }).some(
       (destination) => destination.id === "computerUse",
     ),
     false,
   );
   assert.equal(
-    availableSettingsDestinations({ computerUse: true, devices: true, botComputers: true }).some(
+    availableSettingsDestinations({ computerUse: true, devices: true, botComputers: true, hooks: true }).some(
       (destination) => destination.id === "computerUse",
     ),
     true,
@@ -25,11 +25,11 @@ test("capability-aware settings destinations hide Computer Use everywhere", () =
 });
 
 test("capability-aware settings destinations hide Simulator without the devices capability", () => {
-  const ids = (capabilities: { computerUse: boolean; devices: boolean; botComputers: boolean }) =>
+  const ids = (capabilities: { computerUse: boolean; devices: boolean; botComputers: boolean; hooks: boolean }) =>
     availableSettingsDestinations(capabilities).map((destination) => destination.id);
-  assert.equal(ids({ computerUse: true, devices: false, botComputers: true }).includes("simulator"), false);
-  assert.equal(ids({ computerUse: true, devices: true, botComputers: true }).includes("simulator"), true);
-  const linux = ids({ computerUse: false, devices: false, botComputers: false });
+  assert.equal(ids({ computerUse: true, devices: false, botComputers: true, hooks: true }).includes("simulator"), false);
+  assert.equal(ids({ computerUse: true, devices: true, botComputers: true, hooks: true }).includes("simulator"), true);
+  const linux = ids({ computerUse: false, devices: false, botComputers: false, hooks: true });
   assert.equal(linux.includes("simulator"), false);
   assert.equal(linux.includes("computerUse"), false);
   assert.equal(linux.includes("botComputers"), false);
@@ -38,7 +38,7 @@ test("capability-aware settings destinations hide Simulator without the devices 
 
 test("Bot computers appear only on Apple silicon, in Agent, and are found by VM words", () => {
   const ids = (botComputers: boolean) =>
-    availableSettingsDestinations({ computerUse: true, devices: true, botComputers }).map((destination) => destination.id);
+    availableSettingsDestinations({ computerUse: true, devices: true, botComputers, hooks: true }).map((destination) => destination.id);
   assert.equal(ids(false).includes("botComputers"), false, "an Intel Mac has Computer Use but no Bot computers");
   assert.equal(ids(true).includes("botComputers"), true);
   assert.equal(SETTINGS_DESTINATIONS.find((entry) => entry.id === "botComputers")?.group, "Agent");
@@ -51,6 +51,18 @@ test("Bot computers appear only on Apple silicon, in Agent, and are found by VM 
   // The assistant never offers a page this Mac can't show.
   assert.equal(assistantSettingsSections({ devices: true, botComputers: false }).includes("botComputers"), false);
   assert.equal(assistantSettingsSections({ devices: true, botComputers: true }).includes("botComputers"), true);
+});
+
+test("Hooks appear only where the host can run them", () => {
+  const ids = (hooks: boolean) =>
+    availableSettingsDestinations({ computerUse: true, devices: true, botComputers: true, hooks }).map((destination) => destination.id);
+  assert.equal(ids(false).includes("hooks"), false, "a host without process-group support has no Hooks page");
+  assert.equal(ids(true).includes("hooks"), true);
+  // Only Hooks goes; every other page stays.
+  assert.deepEqual(
+    ids(true).filter((id) => id !== "hooks"),
+    ids(false),
+  );
 });
 
 test("accepts known settings deep links and rejects arbitrary search values", () => {
@@ -167,7 +179,7 @@ test("Image Generation is an Agent destination reachable by deep link and model 
   }
   // Every platform shows it; no capability gates image generation.
   assert.ok(
-    availableSettingsDestinations({ computerUse: false, devices: false, botComputers: false }).some(
+    availableSettingsDestinations({ computerUse: false, devices: false, botComputers: false, hooks: false }).some(
       (entry) => entry.id === "imageGeneration",
     ),
   );

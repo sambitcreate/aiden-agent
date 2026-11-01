@@ -37,6 +37,10 @@ import { registerImageGenerationHandlers } from "./image-generation.js";
 import { registerModelPaceHandlers } from "./model-pace.js";
 import { registerUsageLimitHandlers } from "./usage-limits.js";
 import { registerSpendingHandlers } from "./spending.js";
+import { registerHookHandlers } from "./hooks.js";
+import { getHookService } from "../services/hooks/hook-service-main.js";
+import { workspaceApplicationService } from "../services/workspace-application-service-main.js";
+import { HOOKS_CHANGED_CHANNEL } from "../../renderer/shared/hooks-settings.js";
 import { registerAnalyticsHandlers } from "./analytics.js";
 import { analyticsService } from "../services/analytics/analytics-main.js";
 import { registerDictationHandlers } from "./dictation.js";
@@ -125,6 +129,18 @@ export function registerHandlers(): void {
   registerSpendingHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     spending,
+  });
+  registerHookHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    service: getHookService,
+    workspaces: async () =>
+      (await workspaceApplicationService.list()).flatMap((workspace) =>
+        workspace.folderPath && !workspace.noWorkspace ? [{ workspaceRoot: workspace.folderPath, name: workspace.name }] : [],
+      ),
+    broadcast: (change) => ipcMain.broadcast(HOOKS_CHANGED_CHANNEL, change),
+    requireSender: (event) => {
+      rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Hooks settings need the active window."));
+    },
   });
   registerAnalyticsHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, handler),

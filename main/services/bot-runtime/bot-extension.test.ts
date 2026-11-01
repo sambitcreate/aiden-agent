@@ -24,6 +24,8 @@ import { createBotPauseStore } from "../bot-pause-store.js";
 import { botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
 import { botTranscriptRows } from "../../../renderer/main/bots/bot-transcript-rows.js";
 import { BOT_HANDOFF_RESULT_ENTRY_KIND } from "../../../renderer/shared/bot-handoffs.js";
+import { MAX_STOP_HOOK_CONTINUATIONS } from "../agent-surface-hooks.js";
+import type { HookDispatcher, HookEvent, HookOutcome, HookPayload, HookScope } from "../hooks/hook-types.js";
 import { createBotRegistry, type BotExtensionDeps, type BotRegistry } from "./bot-extension.js";
 import { handoffSkippedText, ruleHandoffDoneBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
 import { recordRuleHandoffEntry } from "./bot-handoffs.js";
@@ -48,7 +50,7 @@ after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
-type ToolResultModel = { isError: boolean; toolName: string; content: Array<{ text?: string }> };
+type ToolResultModel = { isError: boolean; toolName: string; toolCallId: string; content: Array<{ text?: string }> };
 
 async function toolResults(root: Conversation): Promise<ToolResultModel[]> {
   const view = await root.context(ctx);
@@ -879,5 +881,204 @@ test("(k) a pause that lands while a rule hand-off's answer is being recorded cl
     assert.ok(resultText(result).includes(ruleHandoffDoneBlock(SCENARIO_RULE_HANDOFF.summary, "Booked for two")));
   } finally {
     await service.shutdown();
+  }
+});
+
+/* ------------------------------------------------------------------------- */
+/* Hooks: the person's global and Bot hooks around the Bot's own rules       */
+/* ------------------------------------------------------------------------- */
+
+type FakeHookAnswers = Partial<Record<HookEvent, (payload: HookPayload) => HookOutcome>>;
+
+/** A dispatcher whose hooks answer each event as `answers` says, recording every run. */
+function fakeHooks(answers: FakeHookAnswers) {
+  const runs: Array<{ event: HookEvent; payload: HookPayload; scopes: HookScope[]; cwd: string }> = [];
+  const dispatcher: HookDispatcher = {
+    hasHooks: (event) => answers[event] !== undefined,
+    dispatch: async (event, payload, context) => {
+      runs.push({ event, payload, scopes: context.scopes, cwd: context.cwd });
+      return answers[event]?.(payload) ?? { ranHooks: [] };
+    },
+  };
+  return { runs, dispatcher: () => dispatcher };
+}
+
+function withHooks(deps: ReturnType<typeof recordingDeps>, hooks: ReturnType<typeof fakeHooks>, folder = "/bots/bot-1") {
+  deps.hooks = {
+    cwd: async () => folder,
+    attended: (requestIds) => !requestIds.some((id) => id?.startsWith("routine:")),
+    dispatcher: hooks.dispatcher,
+  };
+  return deps;
+}
+
+test("(hk1) a PreToolUse deny blocks an allowed tool; the model reads the fenced reason, never the raw one", async () => {
+  const tool = countingTool("lookup");
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("lookup", { text: "x" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("understood"),
+  ]);
+  const hooks = fakeHooks({
+    PreToolUse: () => ({ decision: "deny", reason: "RAW reason", reasonForModel: "<hook-data>no lookups today</hook-data>", ranHooks: ["guard"] }),
+  });
+  const deps = withHooks(recordingDeps({ tools: [{ tool, replay: "unsafe" }] }), hooks);
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+    assert.deepEqual(tool.executions, []);
+    const [result] = await toolResults(root);
+    assert.equal(result!.isError, true);
+    const text = result!.content.map((part) => part.text ?? "").join("\n");
+    assert.match(text, /Blocked by hook guard/u);
+    assert.match(text, /no lookups today/u);
+    assert.doesNotMatch(text, /RAW reason/u);
+    const [run] = hooks.runs;
+    assert.deepEqual(run!.scopes, [{ kind: "global" }, { kind: "bot", botId: "bot-1" }]);
+    assert.equal(run!.cwd, "/bots/bot-1");
+    assert.equal(run!.payload.aiden_tool_name, "lookup");
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("(hk2) a hook's allow never loosens the Bot's rules: a forbidden tool stays blocked and the hook never runs", async () => {
+  const tool = countingTool("forbidden");
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("forbidden", { text: "x" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("understood"),
+  ]);
+  const hooks = fakeHooks({ PreToolUse: () => ({ decision: "allow", ranHooks: ["yes-man"] }) });
+  const deps = withHooks(recordingDeps({ tools: [{ tool, replay: "unsafe" }], policy: () => ({ allowed: false, reason: "Files are off for this Bot." }) }), hooks);
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+    assert.deepEqual(tool.executions, []);
+    assert.equal(hooks.runs.filter((run) => run.event === "PreToolUse").length, 0);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("(hk3) a hook's ask opens the approval card when someone is there, and blocks a routine run without a card", async () => {
+  const askHooks = () => fakeHooks({ PreToolUse: () => ({ decision: "ask", reason: "Check the recipient", reasonForModel: "<hook-data>Check the recipient</hook-data>", ranHooks: ["mail-guard"] }) });
+  const turn = async (requestId?: string) => {
+    const tool = countingTool("send");
+    const fauxModels = createFauxModels([
+      fauxAssistantMessage([fauxToolCall("send", { text: "x" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("done"),
+    ]);
+    const deps = withHooks(recordingDeps({ tools: [{ tool, replay: "unsafe" }] }), askHooks());
+    const { harness, root } = await memoryHarness(deps, fauxModels);
+    try {
+      await (await root.submit({ type: "input", content: "go", ...(requestId === undefined ? {} : { requestId }) }, ctx)).wait(ctx);
+      return { deps, tool, results: await toolResults(root) };
+    } finally {
+      await harness.close(ctx);
+    }
+  };
+  const attended = await turn();
+  assert.equal(attended.deps.approvals.length, 1);
+  assert.match(attended.deps.approvals[0]!.summary, /Hook mail-guard: Check the recipient/u);
+  assert.match(attended.deps.approvals[0]!.summary, /Check the recipient/u);
+  assert.equal(attended.tool.executions.length, 1, "allowed on the card, the tool runs");
+
+  const unattended = await turn("routine:t1:1");
+  assert.equal(unattended.deps.approvals.length, 0);
+  assert.deepEqual(unattended.tool.executions, []);
+  assert.match(unattended.results[0]!.content[0]!.text ?? "", /No one is here to approve it on this turn\./u);
+});
+
+test("(hk4) a Stop hook that always says keep going ends after the shared cap", async () => {
+  const fauxModels = createFauxModels(
+    Array.from({ length: MAX_STOP_HOOK_CONTINUATIONS + 3 }, (_, index) => fauxAssistantMessage(`answer ${index}`)),
+  );
+  const hooks = fakeHooks({
+    Stop: () => ({ continueTurn: true, reason: "again", reasonForModel: "<hook-data>again</hook-data>", ranHooks: ["nag"] }),
+  });
+  const deps = withHooks(recordingDeps(), hooks);
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    const settled = await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+    assert.equal(settled.status, "done");
+    assert.equal(fauxModels.calls(), MAX_STOP_HOOK_CONTINUATIONS + 1, "the first answer plus one per continuation");
+    const stops = hooks.runs.filter((run) => run.event === "Stop");
+    assert.equal(stops.length, MAX_STOP_HOOK_CONTINUATIONS);
+    assert.equal(stops[0]!.payload.stop_hook_active, false);
+    assert.equal(stops[1]!.payload.stop_hook_active, true);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("(hk5) PreToolUse context joins PostToolUse's in the tool result; hook messages reach the person, never the model", async () => {
+  const tool = countingTool("lookup");
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("lookup", { text: "x" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("understood"),
+  ]);
+  const hooks = fakeHooks({
+    PreToolUse: () => ({ additionalContext: "<hook-data>PRE-CONTEXT</hook-data>", systemMessages: ["Policy checked the lookup."], ranHooks: ["guard"] }),
+    PostToolUse: () => ({ additionalContext: "<hook-data>POST-CONTEXT</hook-data>", notices: ["A hook failed open."], ranHooks: ["after"] }),
+  });
+  const deps = withHooks(recordingDeps({ tools: [{ tool, replay: "unsafe" }] }), hooks);
+  const reported: string[] = [];
+  deps.hooks!.report = (_botId, lines) => {
+    reported.push(...lines);
+    throw new Error("a broken reporter changes nothing");
+  };
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+    assert.equal(tool.executions.length, 1);
+    const [result] = await toolResults(root);
+    const text = result!.content.map((part) => part.text ?? "").join("\n");
+    assert.match(text, /PRE-CONTEXT[\s\S]*POST-CONTEXT/u);
+    assert.doesNotMatch(text, /Policy checked|failed open/u);
+    assert.ok(reported.some((line) => line.includes("Policy checked the lookup.")), JSON.stringify(reported));
+    assert.ok(reported.includes("A hook failed open."), JSON.stringify(reported));
+    // Both events name the same call, so a hook can pair a result with its request.
+    const [pre, post] = [hooks.runs.find((run) => run.event === "PreToolUse"), hooks.runs.find((run) => run.event === "PostToolUse")];
+    assert.equal(typeof pre!.payload.tool_use_id, "string");
+    assert.notEqual(pre!.payload.tool_use_id, "");
+    assert.equal(post!.payload.tool_use_id, pre!.payload.tool_use_id);
+    assert.equal(pre!.payload.tool_use_id, result!.toolCallId);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("(hk6) a PreCompact hook's messages reach the person through the Bot's reporter, never the summary", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage(`Noted. ${"Planning detail. ".repeat(60)}`), fauxAssistantMessage("ok")]);
+  const hooks = fakeHooks({
+    PreCompact: () => ({ systemMessages: ["Archived the transcript."], notices: ["Hook archive timed out."], ranHooks: ["archive"] }),
+  });
+  const deps = withHooks(recordingDeps(), hooks);
+  const reported: string[] = [];
+  deps.hooks!.report = (_botId, lines) => {
+    reported.push(...lines);
+  };
+  deps.beforeCompact = async () => ({ summary: "Kept." });
+  const registry = createBotRegistry("bot-1", deps);
+  await registry.refresh();
+  const harness = await Harness.open(
+    new MemoryStorage(),
+    { models: fauxModels.models, registry, settings: { compaction: { keepRecentTokens: 100, backgroundTokens: 0 } } },
+    ctx,
+  );
+  registry.attachHarness(harness);
+  const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  try {
+    await (await root.submit({ type: "input", content: `Hello. ${"Some background. ".repeat(60)}` }, ctx)).wait(ctx);
+    await (await root.submit({ type: "input", content: "ok" }, ctx)).wait(ctx);
+    await root.compact(undefined, ctx);
+    for (let attempt = 0; attempt < 100 && reported.length === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const compactions = hooks.runs.filter((run) => run.event === "PreCompact");
+    assert.equal(compactions.length, 1);
+    assert.equal(compactions[0]!.payload.trigger, "manual");
+    assert.deepEqual(reported, ["Hook archive: Archived the transcript.", "Hook archive timed out."]);
+  } finally {
+    await harness.close(ctx);
   }
 });

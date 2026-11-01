@@ -35,9 +35,24 @@ interface ChatArtifactNotification {
 }
 interface ChatStatus {
   streamId: string;
-  phase: ChatStatusPhase | "agents_instructions_limited" | "retrying";
+  phase: ChatStatusPhase | "agents_instructions_limited" | "retrying" | "hook_messages";
   notices?: unknown;
   retry?: unknown;
+  messages?: unknown;
+}
+
+/** At most this many hook messages per notification, each at most this long. */
+const MAX_HOOK_MESSAGES = 8;
+const MAX_HOOK_MESSAGE_CHARS = 500;
+
+function parseHookMessages(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((message): message is string => typeof message === "string" && message.trim().length > 0)
+    .slice(0, MAX_HOOK_MESSAGES)
+    .map((message) =>
+      message.length > MAX_HOOK_MESSAGE_CHARS ? `${message.slice(0, MAX_HOOK_MESSAGE_CHARS - 1)}…` : message,
+    );
 }
 interface ChatDone {
   streamId: string;
@@ -142,6 +157,9 @@ export function subscribeGenerationStream(
       if (p.phase === "agents_instructions_limited") {
         const notices = parseAgentsInstructionNotices(p.notices);
         if (notices) callbacks.onAgentsInstructionNotices?.(notices);
+      } else if (p.phase === "hook_messages") {
+        const messages = parseHookMessages(p.messages);
+        if (messages.length > 0) callbacks.onHookMessages?.(messages);
       } else if (p.phase === "retrying") {
         const retry = parseModelCallRetryView(p.retry);
         if (retry) callbacks.onRetrying?.(retry);

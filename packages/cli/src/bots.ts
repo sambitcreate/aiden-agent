@@ -271,7 +271,9 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     setScheduler(scheduler: ReturnType<typeof createCliScheduler>) {
       if (!durable) return;
       routineScheduler = scheduler;
-      scheduler.setBotPorts(durable.runtime);
+      // RoutineRun / RoutineFailed hooks run in the Bot's folder.
+      scheduler.setBotPorts({ ...durable.runtime, hookCwd: async (botId) => (await managedWorkspace.resolve(botId)).homePath,
+        hookReport: (botId, lines) => { for (const line of lines) process.stderr.write(`aiden: Bot ${botId} routine hook: ${line.replace(/[\r\n]+/gu, " ").slice(0, 500)}\n`); } });
       routines = createBotRoutineService({ store: scheduler.store, service: scheduler.service,
         botExists: async (botId) => Boolean(await botStore.get(botId)), isPaused,
         defaultTimezone: () => Intl.DateTimeFormat().resolvedOptions().timeZone, notifyChanged: () => {},

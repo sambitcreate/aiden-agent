@@ -82,6 +82,7 @@ import { flushDiagnosticHealth } from "./services/diagnostic-health.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { scheduleService } from "./services/schedule-service.js";
 import { analyticsService } from "./services/analytics/analytics-main.js";
+import { initializeHookService } from "./services/hooks/hook-service-main.js";
 import { telegramService } from "./services/telegram/telegram-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
 import {
@@ -2265,6 +2266,15 @@ if (!ownsSingleInstanceLock) {
         logger.warn(
           "aiden-live",
           "Aiden Live thread recovery is unavailable; Live starts will retry before writing session metadata.",
+          error,
+        );
+      }
+      try {
+        await initializeHookService();
+      } catch (error) {
+        logger.warn(
+          "hooks",
+          "Hook settings could not be loaded; tool calls are blocked until they load, and each event tries again.",
           error,
         );
       }

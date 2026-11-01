@@ -153,6 +153,54 @@ test("a full-Mac Bot cannot edit Aiden's settings files but can write next to th
   }
 });
 
+test("a full-Mac Bot cannot write hook or agent settings files in any project, but can read them", async () => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-file-router-hooks-"));
+  const project = path.join(parent, "code", "app");
+  const claudeSettings = path.join(project, ".claude", "settings.json");
+  try {
+    await fs.mkdir(path.dirname(claudeSettings), { recursive: true });
+    await fs.writeFile(claudeSettings, '{"hooks":{}}', "utf8");
+    const tools = buildBotFileTools({
+      defaultLocation: { id: "loc.mac.opaque", label: "This Mac", root: parent },
+      protectedRoots: () => [],
+    });
+    const write = byName(tools, "write_file");
+    const edit = byName(tools, "edit_file");
+    const refusal = /cannot change hook or agent settings files[\s\S]*Settings → Hooks/u;
+
+    for (const target of [
+      "code/app/.claude/settings.json",
+      "code/app/.claude/settings.local.json",
+      "code/app/.claude/hooks/stop.sh",
+      "code/app/.aiden/hooks.json",
+      ".codex/config.toml",
+    ]) {
+      await assert.rejects(write.execute("w", { path: target, content: "{}" }), refusal, target);
+    }
+    await assert.rejects(
+      edit.execute("e", { path: "code/app/.claude/settings.json", old_string: "{}", new_string: "[]" }),
+      refusal,
+    );
+    assert.equal(await fs.readFile(claudeSettings, "utf8"), '{"hooks":{}}');
+    await assert.rejects(fs.access(path.join(project, ".aiden")));
+    await assert.rejects(fs.access(path.join(parent, ".codex")));
+    assert.equal(
+      textContent(await byName(tools, "read_file").execute("r", { path: "code/app/.claude/settings.json" })),
+      '{"hooks":{}}',
+    );
+
+    // Skills keep their existing Bot rule: proposed, never written directly.
+    await assert.rejects(
+      write.execute("s", { path: "code/app/.claude/skills/x/SKILL.md", content: "# x" }),
+      /Use propose_skill instead/u,
+    );
+    await write.execute("ok", { path: "code/app/CLAUDE.md", content: "notes" });
+    assert.equal(await fs.readFile(path.join(project, "CLAUDE.md"), "utf8"), "notes");
+  } finally {
+    await fs.rm(parent, { recursive: true, force: true });
+  }
+});
+
 test("a CLI Bot cannot edit the CLI's settings, credentials, Bot storage or the portable config", async () => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-file-router-cli-settings-"));
   const agentDir = path.join(parent, "agent");

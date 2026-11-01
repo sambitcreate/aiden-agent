@@ -125,6 +125,17 @@ Phones and Macs paired with the server see its workspaces, chats, Bots, schedule
 
 Server chats have no schedule tool, so the model can't create or change schedules. Manage them with the `aiden schedule` commands or from a paired app.
 
+## Hooks
+
+Hooks run your own shell commands at points in an agent's work, in the Claude Code format; see [docs/hooks.md](../../docs/hooks.md). The server runs them on macOS and Linux, from its own store in `<agent dir>/hooks/` plus each registered workspace's `.aiden/hooks.json`. It does not share the desktop's store.
+
+- `aiden hooks list` shows every hook with its scope, status, command and digest, and lists `envAllow` names only. `hooks approve <id> <digest>` approves a workspace hook, which never runs until approved and needs approving again after its file, or a script file in the workspace that its command runs, changes. The digest is the one `hooks list` printed, so the approval covers exactly what you read. `hooks disable|enable <id>`, `hooks pause|resume` and `hooks test <id> <digest>` (a fixture run that leaves health and the run log alone, refused when the hook no longer matches the digest or while hooks are paused or off) do the rest. `approve` and `enable` must be run by a person at a terminal: they refuse unless stdin and stdout are both a TTY. That check stops a casual agent shell command, but it is not a security boundary: a process running as your user can still reach the server's socket or write `hooks-trust.json` directly. The commands go through the running server, or open the store directly when none runs.
+- There is no command to add a hook. Add it to the workspace's `.aiden/hooks.json` by hand, then approve it, or use the desktop's Settings → Hooks for the desktop's own store.
+- Workspace chats, from phones, Telegram and scheduled tasks, run PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, Stop (at most 8 continuations), PreCompact and SessionEnd (when a chat is deleted). Hooks run after Aiden's own access rules, so they can only tighten them. On a Telegram or scheduled turn a hook that asks for approval blocks the tool, and `updatedInput` is never applied. Hooks match the desktop tool names (`Bash`, `Write`, `Edit`, `Read` and their Aiden spellings).
+- A message a UserPromptSubmit hook refuses (a block or `continue: false`) ends that turn with a `chat:error`, stays in the transcript with a stored blocked mark (phones and paired Macs show the message without the mark for now), and never reaches the model later, including in forks. `continue: false` from PreToolUse or PostToolUse ends the turn after that tool. PreToolUse `additionalContext` joins the tool's result ahead of PostToolUse context. `systemMessage` text and hook notices go to clients as `chat:status` events with `phase: "hook_messages"`, never to the model; Bot hook messages go to stderr.
+- Bots run their global and Bot hooks (PreToolUse, PostToolUse, Stop, SessionStart, PreCompact) in the Bot's folder. Routines fire RoutineRun and RoutineFailed, Bot subagents fire SubagentStop, and a new managed worktree fires WorktreeSetup in the new checkout, using the source workspace's hooks.
+- File tools cannot write `.aiden/hooks.json`, `.claude/settings.json`, Codex hook files or the hooks store, even with Full access. `AIDEN_HOOKS=0` turns every hook off.
+
 ## MCP connectors
 
 The desktop's per-workspace skill and connector switches (Workspace settings) are not read by the server yet; it uses every skill and connector it has.
@@ -158,6 +169,7 @@ The desktop's per-workspace skill and connector switches (Workspace settings) ar
 | `web-search show\|import <settings.json>` | Web Search provider routing; keys from environment variables |
 | `schedule list\|save\|preview\|status\|runs\|notifications\|run\|pause\|resume\|remove` | Scheduled tasks |
 | `bots …`, `bots enable-durable` | Bot administration (server must be running) |
+| `hooks list\|approve <id> <digest>\|disable <id>\|enable <id>\|pause\|resume\|test <id> <digest>` | Hooks: list, approve, switch off or test (macOS and Linux) |
 | `telegram status\|connect\|configure <file>\|disable\|disconnect` | Telegram bridge |
 | `speech status\|download\|select\|delete <id>\|transcribe <pcm16-file> <model-id>` | On-device transcription models used by Remote dictation |
 | `search <query>`, `import <file>`, `export <session.jsonl> [output]` | Find, import and export conversations |
@@ -180,7 +192,7 @@ Notes:
 
 | Path | Contents |
 | --- | --- |
-| `~/.aiden/agent/` | Server state: `settings.json`, `auth.json`, `aiden.json` (device-local feature settings), `aiden-mcp.json`, `web-search.json`, `remote.json` (Remote identity and paired devices), `schedules.json`, `sessions/`, `bots/`, `bot-service/`, `artifacts/`, `credentials/`, `serve.log` and the private control socket |
+| `~/.aiden/agent/` | Server state: `settings.json`, `auth.json`, `aiden.json` (device-local feature settings), `aiden-mcp.json`, `web-search.json`, `remote.json` (Remote identity and paired devices), `schedules.json`, `hooks/` (hooks, approvals and run log), `sessions/`, `bots/`, `bot-service/`, `artifacts/`, `credentials/`, `serve.log` and the private control socket |
 | `~/.aiden/` | Shared Aiden home (the desktop's portable `config.json`, `skills/`, `scripts/`; `memory/` is the shared desktop and server memory store, `ws-<folder-hash>` scopes) |
 | `AIDEN_CODING_AGENT_DIR` | Environment override for the agent directory (mirrors Pi's `PI_CODING_AGENT_DIR`; use it for tests and for running more than one server) |
 

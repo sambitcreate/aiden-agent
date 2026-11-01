@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
+import type { Readable, Writable } from "node:stream";
 import { createProcessGroupTerminator, decodeCappedUtf8, waitForChildExit } from "../shared/process-group.js";
 
 export interface BoundedShellCommandOptions {
@@ -9,6 +10,8 @@ export interface BoundedShellCommandOptions {
   /** Combined stdout and stderr bytes kept; more stops the command. */
   maxOutputBytes: number;
   signal?: AbortSignal;
+  /** Written to the command's stdin, which is then closed. Without it stdin is ignored. */
+  input?: string;
 }
 
 export interface BoundedShellCommandResult {
@@ -38,7 +41,7 @@ const PIPE_DRAIN_MS = 1_000;
  * for that cleanup. When the shell exits but a background job still holds its
  * output pipe, the command settles after a short drain and the group is
  * stopped, instead of waiting for the job or the timeout. Used by
- * `run_command` and by workspace artifact sources and buttons.
+ * `run_command`, hooks, and workspace artifact sources and buttons.
  */
 export async function runBoundedShellCommand(options: BoundedShellCommandOptions): Promise<BoundedShellCommandResult> {
   const { signal } = options;
@@ -51,8 +54,14 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
     detached: process.platform !== "win32",
     env: options.env,
     shell: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+    // stdout and stderr are always pipes; stdin is a pipe only when there is input.
+    stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+  }) as ChildProcessByStdio<Writable | null, Readable, Readable>;
+  if (options.input !== undefined && child.stdin) {
+    // A command may exit without reading its input; a broken pipe is not an error.
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(options.input);
+  }
   const terminator = createProcessGroupTerminator(child, { killGraceMs: KILL_GRACE_MS });
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];

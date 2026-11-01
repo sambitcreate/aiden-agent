@@ -187,3 +187,33 @@ test("a retry wait reaches its own stream only, and a malformed one is dropped",
     bridge.restore();
   }
 });
+
+test("hook messages reach their own stream as text, never as a status, and junk entries are dropped", () => {
+  const bridge = installFakeBridge();
+  try {
+    const received: string[][] = [];
+    const statuses: string[] = [];
+    const stream = subscribeGenerationStream("hook-stream", { chatId: "chat-hook" }, {
+      onDelta: () => undefined,
+      onDone: () => undefined,
+      onError: (message) => assert.fail(message),
+      onStatus: (phase) => statuses.push(phase),
+      onHookMessages: (messages) => received.push(messages),
+    });
+    bridge.emit("chat:status", { streamId: "other-stream", phase: "hook_messages", messages: ["elsewhere"] });
+    bridge.emit("chat:status", {
+      streamId: "hook-stream",
+      phase: "hook_messages",
+      messages: ["Hook lint: formatted 3 files", 42, "", "x".repeat(2_000)],
+    });
+    bridge.emit("chat:status", { streamId: "hook-stream", phase: "hook_messages", messages: "not a list" });
+    assert.equal(received.length, 1);
+    assert.equal(received[0]![0], "Hook lint: formatted 3 files");
+    assert.equal(received[0]!.length, 2);
+    assert.ok(received[0]![1]!.length <= 500);
+    assert.deepEqual(statuses, []);
+    stream.dispose();
+  } finally {
+    bridge.restore();
+  }
+});

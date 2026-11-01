@@ -23,6 +23,7 @@ export const INVOKE_PREFIXES = [
   "exa:",
   "formFill:",
   "git:",
+  "hooks:",
   "imageGeneration:",
   "imageWorkflows:",
   "localModels:",
@@ -156,6 +157,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   /** The replies waiting for a usage limit changed: `UsageLimitsChangedEvent`. */
   "usageLimits:changed",
   "spending:changed",
+  /** Hooks, hook proposals, a hook run or an auto-disable changed: `HooksChangedEvent`. */
+  "hooks:changed",
   "voice:stream-text",
   "workspaces:changed",
   /** An agent tool may have changed files in this workspace's folder: `{ workspaceId }`. */

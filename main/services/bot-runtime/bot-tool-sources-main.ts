@@ -45,6 +45,7 @@ import { inheritedSubagentReadToolCeiling } from "../subagents/capability-profil
 import { subagentsAllowedForGeneration } from "../subagents/eligibility.js";
 import { subagentHealthMetrics } from "../subagents/subagent-health-metrics.js";
 import { SubagentSupervisor } from "../subagents/subagent-supervisor.js";
+import { botSurfaceHooks } from "../agent-surface-hooks.js";
 import { createSubagentTool } from "../subagents/subagent-tool.js";
 import { buildAgentTools } from "../tools.js";
 import { botMcpLiveToolMatchesGrant } from "../bot-tool-authority.js";
@@ -286,6 +287,10 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
               permission: "full",
               inheritedCeiling: authority.files.botHome ? inheritedSubagentReadToolCeiling(undefined) : [],
               healthMetrics: subagentHealthMetrics,
+              // SubagentStop runs the Bot's hooks, in the Bot's folder.
+              stopHooks: botSurfaceHooks(botId, authority.workingDirectory, undefined, {
+                report: (lines) => logger.info("hooks", `Bot ${botId} hook messages.`, lines),
+              }),
             });
             return createSubagentTool(supervisor).execute(toolCallId, params, signal, onUpdate);
           },

@@ -13,6 +13,7 @@ import {
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
+  type FauxResponseFactory,
 } from "@earendil-works/pi-ai/providers/faux";
 import { type AfterToolCallResult, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { convertToLlm, createCompactionSummaryMessage } from "./pi-legacy-harness.js";
@@ -48,7 +49,9 @@ import { executeMcpAgentTool } from "./mcp-tool-result.js";
 import { chatContextPressureFromProjection, createGenerationContextTransform } from "./generation-context.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { flushDiagnosticJournal, initDiagnosticJournal } from "./diagnostic-journal.js";
-import { createChatRunInputAdmission } from "./chat-run-input-admission.js";
+import { createChatRunInputAdmission, type ChatRunInputGenerationRef } from "./chat-run-input-admission.js";
+import { createRunInputContexts, createWorkspaceChatHooks } from "./workspace-chat-hooks.js";
+import type { HookDispatcher } from "./hooks/hook-types.js";
 import type { Chat, ChatMessage } from "./types.js";
 
 function testHarness(
@@ -1630,6 +1633,122 @@ test("without continuation a dropped stream still retries its reply from the sta
   assert.deepEqual(retriedRequest[retriedRequest.length - 1], { role: "user", text: "Answer" });
 });
 
+test("a host Stop callback keeps a finished reply going with its text, and later turns replay it", async () => {
+  let continuationRequest: { role: string; text: string }[] = [];
+  const { core, harness, session } = await managedTestHarness([
+    fauxAssistantMessage("Draft done."),
+    (context) => {
+      continuationRequest = context.messages.map((message) => ({ role: message.role, text: messageText(message) }));
+      return fauxAssistantMessage("Tests pass too.");
+    },
+  ]);
+  const asked: Array<[number, number, string]> = [];
+  const outcome = await harness.runManaged(
+    { kind: "append-and-run", message: cutOffPrompt("Fix it") },
+    {
+      maxStopContinuations: 8,
+      onStop: ({ continuations, maxContinuations, finalMessage }) => {
+        asked.push([continuations, maxContinuations, messageText(finalMessage)]);
+        return continuations === 0 ? { continueWith: "Run the tests before you finish." } : undefined;
+      },
+    },
+  );
+  assert.equal(outcome.kind, "completed");
+  assert.equal(messageText(outcome.finalMessage), "Tests pass too.");
+  assert.equal(core.state.callCount, 2);
+  assert.deepEqual(asked, [[0, 8, "Draft done."], [1, 8, "Tests pass too."]]);
+  assert.deepEqual(continuationRequest.slice(-3), [
+    { role: "user", text: "Fix it" },
+    { role: "assistant", text: "Draft done." },
+    { role: "user", text: "Run the tests before you finish." },
+  ]);
+  const journaled = (await session.buildContext()).messages.slice(-3).map((message) => messageText(message));
+  assert.deepEqual(journaled, ["Draft done.", "Run the tests before you finish.", "Tests pass too."]);
+});
+
+test("Stop continuations stop at their cap, and a blank or failing callback completes the reply", async () => {
+  const capped = await managedTestHarness([
+    fauxAssistantMessage("one"),
+    fauxAssistantMessage("two"),
+    fauxAssistantMessage("three"),
+    fauxAssistantMessage("must not run"),
+  ]);
+  const asked: number[] = [];
+  const cappedOutcome = await capped.harness.runManaged(
+    { kind: "append-and-run", message: cutOffPrompt("Go") },
+    {
+      maxStopContinuations: 2,
+      onStop: ({ continuations }) => {
+        asked.push(continuations);
+        return { continueWith: "Keep going." };
+      },
+    },
+  );
+  assert.equal(cappedOutcome.kind, "completed");
+  assert.equal(messageText(cappedOutcome.finalMessage), "three");
+  assert.equal(capped.core.state.callCount, 3);
+  assert.deepEqual(asked, [0, 1]);
+
+  for (const onStop of [
+    () => ({ continueWith: "   " }),
+    () => {
+      throw new Error("hook host broke");
+    },
+    async () => Promise.reject(new Error("hook host broke")),
+  ]) {
+    const quiet = await managedTestHarness([fauxAssistantMessage("Done."), fauxAssistantMessage("must not run")]);
+    const outcome = await quiet.harness.runManaged(
+      { kind: "append-and-run", message: cutOffPrompt("Go") },
+      { maxStopContinuations: 8, onStop },
+    );
+    assert.equal(outcome.kind, "completed");
+    assert.equal(messageText(outcome.finalMessage), "Done.");
+    assert.equal(quiet.core.state.callCount, 1);
+  }
+});
+
+test("Stop is never asked after a failed or cut-off reply, and the person's Stop wins over a continuation", async () => {
+  let asked = 0;
+  const onStop = () => {
+    asked += 1;
+    return { continueWith: "Keep going." };
+  };
+  const failed = await managedTestHarness(
+    [fauxAssistantMessage("", { stopReason: "error", errorMessage: "invalid request" }), fauxAssistantMessage("must not run")],
+    { maxRetries: 0 },
+  );
+  const failedOutcome = await failed.harness.runManaged(
+    { kind: "append-and-run", message: cutOffPrompt("Go") },
+    { maxStopContinuations: 8, onStop },
+  );
+  assert.equal(failedOutcome.kind, "provider_failed");
+  const limited = await managedTestHarness([
+    fauxAssistantMessage("Half", { stopReason: "length" }),
+    fauxAssistantMessage("must not run"),
+  ]);
+  const limitedOutcome = await limited.harness.runManaged(
+    { kind: "append-and-run", message: cutOffPrompt("Go") },
+    { maxStopContinuations: 8, onStop },
+  );
+  assert.equal(limitedOutcome.kind, "provider_failed");
+  assert.equal(asked, 0);
+
+  const stopped = await managedTestHarness([fauxAssistantMessage("Done."), fauxAssistantMessage("must not run")]);
+  const stoppedOutcome = await stopped.harness.runManaged(
+    { kind: "append-and-run", message: cutOffPrompt("Go") },
+    {
+      maxStopContinuations: 8,
+      onStop: () => {
+        // The person presses Stop while the hook decides.
+        stopped.harness.abort();
+        return { continueWith: "Keep going." };
+      },
+    },
+  );
+  assert.notEqual(stoppedOutcome.kind, "provider_failed");
+  assert.equal(stopped.core.state.callCount, 1);
+});
+
 test("managed startup infrastructure failures stay out of the journal and use host taxonomy", async () => {
   const { harness, session } = await managedTestHarness([], {
     streamFn: (model) => {
@@ -3053,6 +3172,79 @@ test("admitted steering appears once in the visible chat and journals its commit
     true,
   );
   assert.deepEqual(fixture.harness.takeUndeliveredQueuedMessages(), { messages: [] });
+});
+
+test("two inputs admitted in the same millisecond each reach the model with only their own hook context", async () => {
+  // The run's prompt shares that millisecond too, and an input the queue
+  // refuses leaves no context behind for a later message to pick up.
+  const contexts = createRunInputContexts();
+  const hooks = createWorkspaceChatHooks({ chatId: "chat-1" }, () => ({ hasHooks: () => false }) as unknown as HookDispatcher);
+  const userTexts: string[][] = [];
+  const recordUserTexts: FauxResponseFactory = (context) => {
+    userTexts.push(
+      context.messages
+        .filter((message) => message.role === "user")
+        .map((message) =>
+          typeof message.content === "string"
+            ? message.content
+            : message.content.map((block) => (block.type === "text" ? block.text : "")).join("\n"),
+        ),
+    );
+    return fauxAssistantMessage("done");
+  };
+  const { tool, atTool, release } = steerWaitTool();
+  // Pi hands over one steer per turn boundary, so each input gets a request.
+  const { harness } = await managedTestHarness(
+    [fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }), recordUserTexts, recordUserTexts],
+    {
+      tools: [tool],
+      extensions: [
+        hooks.extension({ promptTimestamp: () => 5, turnContext: () => undefined, inputContext: contexts.lookup }),
+      ],
+      beforeQueuedUser: async () => "visible",
+    },
+  );
+  let ids = 0;
+  const generation: ChatRunInputGenerationRef = {
+    chatId: "chat-1",
+    owner: { documentId: "doc-1" },
+    cancelRequested: false,
+    inputHooks: {
+      screen: async ({ text }) => ({ context: `context-for-${text}` }),
+      attachContext: contexts.attach,
+    },
+    agent: {
+      queueAdmissionBlocked: () => harness.queueAdmissionBlocked(),
+      queueSteer: (message, options) =>
+        message.role === "user" && message.content === "gamma"
+          ? { accepted: false, reason: "capacity" }
+          : harness.queueSteer(message, options),
+      queueFollowUp: (message, options) => harness.queueFollowUp(message, options),
+    },
+  };
+  const admission = createChatRunInputAdmission({
+    active: new Map([["stream-1", generation]]),
+    isChatDeleting: () => false,
+    appendMessage: async (chatId) => ({ id: chatId, messages: [] }) as unknown as Chat,
+    readChat: async () => null,
+    now: () => 5,
+    newMessageId: () => `committed-${(ids += 1)}`,
+  });
+  const running = harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "start", timestamp: 5 } });
+  await atTool;
+  assert.equal((await admission.admit({ streamId: "stream-1", mode: "steer", text: "alpha" })).admitted, true);
+  assert.equal((await admission.admit({ streamId: "stream-1", mode: "steer", text: "gamma" })).admitted, false);
+  assert.equal((await admission.admit({ streamId: "stream-1", mode: "steer", text: "beta" })).admitted, true);
+  release();
+  assert.equal((await running).kind, "completed");
+
+  const [start, alpha, beta, ...rest] = userTexts[userTexts.length - 1]!;
+  assert.deepEqual(rest, [], "the refused input never reached the model");
+  assert.equal(start, "start");
+  assert.match(alpha!, /^alpha\n.*context-for-alpha$/su);
+  assert.doesNotMatch(alpha!, /context-for-(beta|gamma)/u);
+  assert.match(beta!, /^beta\n.*context-for-beta$/su);
+  assert.doesNotMatch(beta!, /context-for-(alpha|gamma)/u);
 });
 
 test("Stop before Pi reads admitted steering keeps it as history, not undelivered guidance", async () => {

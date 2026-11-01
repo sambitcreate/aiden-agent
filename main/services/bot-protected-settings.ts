@@ -44,5 +44,7 @@ export function cliBotProtectedRoots(agentDir: string, configDir = aidenConfigDi
     path.join(agentDir, "authority"),
     path.join(configDir, "config.json"),
     ...CLI_SETTINGS_FILES.map((name) => path.join(agentDir, name)),
+    // The person's hooks and their approvals: a Bot must never add or approve one.
+    path.join(agentDir, "hooks"),
   ];
 }

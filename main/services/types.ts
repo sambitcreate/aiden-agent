@@ -366,6 +366,8 @@ export interface ChatMessage {
   skill?: SkillProvenanceV1;
   /** A user-role follow-up notice (job ended, pull request news, check result), drawn as a card. */
   notice?: import("../../renderer/shared/agent-notices.js").AgentNoticeV1;
+  /** Set when a UserPromptSubmit hook blocked this user message; it never reaches a model. */
+  hookBlocked?: import("./hook-blocked-prompt.js").HookBlockedPromptV1;
   /** Renderer-safe tool milestones associated with this assistant response. */
   timeline?: GenerationTimeline;
   /** Content-free turn duration and provider-reported token totals for the footer. */

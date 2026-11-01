@@ -16,6 +16,7 @@ test("Darwin exposes Apple-owned host integrations", () => {
     nativeShare: true,
     macAppConnectors: true,
     backgroundJobs: true,
+    hooks: true,
   });
 });
 test("Linux exposes Bots while keeping Apple-owned host integrations disabled", () => {
@@ -31,6 +32,7 @@ test("Linux exposes Bots while keeping Apple-owned host integrations disabled", 
     nativeShare: false,
     macAppConnectors: false,
     backgroundJobs: true,
+    hooks: true,
   });
 });
 
@@ -43,6 +45,7 @@ test("unsupported hosts cannot widen native capabilities", () => {
   assert.equal(capabilities.dictationHoldToTalk, false);
   assert.equal(capabilities.macAppConnectors, false);
   assert.equal(capabilities.backgroundJobs, false);
+  assert.equal(capabilities.hooks, false);
 });
 
 test("Bot computers need Apple silicon: Intel Macs and Linux on Arm get none", () => {

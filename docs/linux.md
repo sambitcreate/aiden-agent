@@ -108,7 +108,7 @@ schedules, terminal, Git, file editor, generative UI artifacts, workspace
 artifacts, coding follow-through (background jobs, followed pull requests and
 `/until` checks), diagnostics,
 Gemini voice transcription, remote access, notifications, profile, themes, and
-native subagents use the same contracts as macOS. Linux-specific integrations include:
+native subagents and [hooks](hooks.md) use the same contracts as macOS. Linux-specific integrations include:
 
 - native distro window chrome and conventional File/Edit/View/Window/Help menus;
 - Ctrl-based app and global shortcuts, including the Wayland Global Shortcuts

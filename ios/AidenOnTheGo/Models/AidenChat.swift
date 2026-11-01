@@ -3085,7 +3085,10 @@ enum AidenRunInputPresentation {
                 return String(localized: "Saved to the chat — the run was cancelled before it could use it")
             case .capacity:
                 return String(localized: "Saved to the chat — the run queue was full")
-            case .runNotActive, .invalid, .none:
+            case .invalid:
+                // A hook refused it, so it's kept in the chat but never queued.
+                return String(localized: "Saved to the chat — it wasn't sent to the run")
+            case .runNotActive, .none:
                 return String(localized: "Saved to the chat — the run ended before it could use it")
             }
         }

@@ -3,7 +3,9 @@ import { WorktreeCapacityUnavailableError, WORKTREE_GIT_METADATA_BYTES } from ".
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Workspace } from "./types.js";
-import { createWorkspaceWorktreeApplicationService } from "./workspace-worktree-application-service.js";
+import { createWorkspaceWorktreeApplicationService, type WorkspaceWorktreeApplicationDependencies } from "./workspace-worktree-application-service.js";
+import { runWorktreeSetupHooks } from "./agent-surface-hooks.js";
+import type { HookDispatcher, HookPayload, HookScope } from "./hooks/hook-types.js";
 
 const owner = {
   isDestroyed: () => false,
@@ -670,4 +672,131 @@ test("restore through the real environment settles, serializes same-snapshot res
     /snapshot does not exist/u,
   );
   await registry.cancelAndSettle(source.id, { timeoutMs: 100 });
+});
+
+/** Just enough of the service to create one managed worktree from `source`. */
+function creationOnlyDeps(
+  source: Workspace,
+  events: string[],
+  overrides: Partial<WorkspaceWorktreeApplicationDependencies>,
+): WorkspaceWorktreeApplicationDependencies {
+  const signal = new AbortController().signal;
+  const unexpected = (name: string) => async (): Promise<never> => { throw new Error(`unexpected ${name}`); };
+  return {
+    environment: {
+      resolve: async (id) => (id === source.id ? { folderPath: source.folderPath!, workspace: source } : undefined),
+      run: async (_owner, _id, operation) => operation({ folderPath: source.folderPath!, workspace: source }, signal),
+      runRecord: unexpected("runRecord"),
+    },
+    ensureWorktreeRoot: async () => "/aiden/worktrees",
+    ensureSnapshotRoot: async () => "/aiden/worktree-snapshots",
+    checkoutBytes: async () => 1_024,
+    checkCreateCapacity: async () => undefined,
+    checkWorktreeAllocation: async () => undefined,
+    checkSnapshotCapacity: async () => undefined,
+    provisionIncludedFiles: async () => [],
+    repositoryPaths: async (folderPath) => ({ topLevel: folderPath, commonDir: `${folderPath}/.git` }),
+    dirtyState: unexpected("dirtyState"),
+    expandIgnoredPaths: unexpected("expandIgnoredPaths"),
+    snapshotContentBytes: async () => 0,
+    captureWorktreeSnapshot: unexpected("snapshot"),
+    snapshotRefCommit: async () => undefined,
+    deleteSnapshotRef: async () => true,
+    restoreManagedCheckout: unexpected("restore"),
+    resumeManagedCheckout: unexpected("resume"),
+    applyWorktreeSnapshot: async () => undefined,
+    createWorktree: async (_folderPath, _root, branch) => ({
+      path: "/aiden/worktrees/mobile",
+      workspacePath: "/aiden/worktrees/mobile",
+      repositoryPath: "/canonical/source",
+      worktreeGitDir: "/canonical/source/.git/worktrees/mobile",
+      ownershipToken: "a".repeat(64),
+      worktreeDevice: 1,
+      worktreeInode: 2,
+      createdFromHead: "b".repeat(40),
+      head: "b".repeat(40),
+      branch,
+      bare: false,
+      detached: false,
+      current: false,
+    }),
+    rollbackWorktree: async () => { events.push("rollback"); },
+    deleteManagedWorktree: unexpected("delete"),
+    managedWorktreeDeletionPending: async () => false,
+    managedWorktreeRegistered: async () => false,
+    managedWorktreeUsable: async () => false,
+    finalizeManagedWorktreeDeletion: async () => undefined,
+    workspacePathExists: async () => false,
+    saveWorkspace: async (workspace) => { events.push("save"); return workspace; },
+    removeWorkspace: async () => { events.push("remove"); },
+    beginWorkspaceMutation: () => () => undefined,
+    workspaceIsChanging: () => false,
+    cancelWorkspaceOperations: async () => undefined,
+    closeWorkspaceTerminals: async () => undefined,
+    cancelWorkspaceGeneration: async () => undefined,
+    cancelWorkspaceSchedules: async () => undefined,
+    resumeWorkspaceSchedules: async () => undefined,
+    createWorkspaceId: () => "workspace-managed",
+    now: () => 3,
+    notifyChanged: () => { events.push("notify"); },
+    logError: (area) => { events.push(`log:${area}`); },
+    ...overrides,
+  };
+}
+
+const hookSource: Workspace = {
+  id: "workspace-source",
+  name: "Source",
+  folderPath: "/canonical/source",
+  permission: "ask",
+  createdAt: 1,
+  updatedAt: 2,
+};
+
+test("a new managed worktree runs the source workspace's WorktreeSetup hooks inside the new checkout", async () => {
+  const events: string[] = [];
+  const runs: Array<{ payload: HookPayload; scopes: HookScope[]; cwd: string; key?: string }> = [];
+  const dispatcher: HookDispatcher = {
+    hasHooks: (event) => event === "WorktreeSetup",
+    dispatch: async (_event, payload, context) => {
+      events.push("hook");
+      runs.push({ payload, scopes: context.scopes, cwd: context.cwd, key: context.idempotencyKey });
+      return { ranHooks: ["install"], systemMessages: ["dependencies installed"] };
+    },
+  };
+  const notices: string[] = [];
+  const service = createWorkspaceWorktreeApplicationService(creationOnlyDeps(hookSource, events, {
+    onWorktreeCreated: async (event) => {
+      notices.push(...await runWorktreeSetupHooks({
+        sourceFolderPath: event.sourceFolderPath,
+        sourceRoot: event.sourceRoot,
+        worktreePath: event.worktreePath,
+        workspacePath: event.workspacePath,
+        workspaceId: event.workspace.id,
+        branch: event.branch,
+      }, () => dispatcher));
+    },
+  }));
+
+  const created = await service.create(owner, hookSource.id, "feature/mobile", "Mobile Workspace");
+  assert.equal(created.id, "workspace-managed");
+  assert.deepEqual(events, ["save", "notify", "hook"], "the hook runs once the worktree is saved, before create returns");
+  const [run] = runs;
+  assert.equal(run!.cwd, "/aiden/worktrees/mobile");
+  assert.deepEqual(run!.scopes, [{ kind: "global" }, { kind: "workspace", workspaceRoot: "/canonical/source" }]);
+  assert.equal(run!.payload.worktree_path, "/aiden/worktrees/mobile");
+  assert.equal(run!.payload.branch, "feature/mobile");
+  assert.equal(run!.payload.source_root, "/canonical/source");
+  assert.equal(run!.payload.session_id, "workspace-managed");
+  assert.deepEqual(notices, ["Hook install: dependencies installed"]);
+});
+
+test("a WorktreeSetup hook that fails never rolls back the new worktree", async () => {
+  const events: string[] = [];
+  const service = createWorkspaceWorktreeApplicationService(creationOnlyDeps(hookSource, events, {
+    onWorktreeCreated: async () => { throw new Error("npm install failed"); },
+  }));
+  const created = await service.create(owner, hookSource.id, "feature/mobile", "Mobile Workspace");
+  assert.equal(created.id, "workspace-managed");
+  assert.deepEqual(events, ["save", "notify", "log:hooks"]);
 });

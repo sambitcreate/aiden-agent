@@ -1,3 +1,6 @@
+import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
+import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { compactionEngineFrom } from "../../renderer/shared/compaction.js";
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
@@ -6,6 +9,7 @@ import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { configStore } from "./config-store.js";
 import { ContextLifecycleService } from "./context-lifecycle-service.js";
 import { resolveGenerationThinkingLevel } from "./generation-runtime.js";
+import { runsWorkspaceChatHooks } from "./hooks-tool.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import { llmClient } from "./llm-client.js";
 import { resolveModelRuntime, resolveCompactionModelMetadata } from "./model-runtime.js";
@@ -18,6 +22,11 @@ import { assistantUsageRecord, isLocalModelProvider } from "./usage-accounting.j
 import { spending } from "./spending-main.js";
 import { responseCostUsd, spendCounts } from "./spending-service.js";
 import { usageStore } from "./usage-store.js";
+import {
+  createWorkspaceChatHooks,
+  markWorkspaceChatCompacted,
+  preCompactSummaryInstructions,
+} from "./workspace-chat-hooks.js";
 
 export const contextLifecycleService = new ContextLifecycleService({
   compactionEnabled: () => piUpgradeBehaviorEnabledAtStartup,
@@ -63,6 +72,34 @@ export const contextLifecycleService = new ContextLifecycleService({
       }),
     );
   },
+  // PreCompact for a compaction outside a turn: the person's Compact action
+  // ("manual") or recovery ("auto"), in the chats whose turns run hooks.
+  preCompact: async (chat, { audience, trigger, signal }) => {
+    if (
+      !runsWorkspaceChatHooks({
+        usageSource: "chat",
+        interactionSurface: audience.kind === "telegram" ? "telegram" : undefined,
+        bot: Boolean(chat.botId),
+        design: chat.owner !== undefined,
+        assistant: persistedChatWorkspaceId(chat.workspaceId) === ASSISTANT_WORKSPACE_ID,
+        harnessProvider: Boolean(chat.providerId && isAcpHarnessProvider(chat.providerId)),
+      })
+    ) {
+      return undefined;
+    }
+    const workspace = chat.workspaceId ? await configStore.getWorkspace(chat.workspaceId) : undefined;
+    const hooks = createWorkspaceChatHooks({
+      chatId: chat.id,
+      ...(workspace?.folderPath && workspace.noWorkspace !== true ? { workspaceRoot: workspace.folderPath } : {}),
+    });
+    return preCompactSummaryInstructions(hooks, {
+      trigger,
+      reason: trigger === "manual" ? "manual" : "automatic-recovery",
+      signal,
+    });
+  },
+  // The next SessionStart reports `compact`, as after a compaction in a turn.
+  compacted: (chat) => markWorkspaceChatCompacted(chat.id),
   resolveThinkingLevel: async (chat, audience, runtime) => {
     const settings = await configStore.getSettings();
     const requested =

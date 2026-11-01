@@ -4,6 +4,7 @@ import {
   appendChatMessageWithReconciliation,
   isAppendReconciliationRequiredError,
 } from "./chat-append-commit.js";
+import { holdHookBlockedPrompt } from "./hook-blocked-prompt.js";
 import { AidenOperationUnknownOutcomeError } from "./aiden-remote-operation-contract.js";
 import type { PiRuntimeQueueOptions, PiRuntimeQueueReceipt } from "./pi-agent-runtime-harness.js";
 import type { Chat, ChatMessage } from "./types.js";
@@ -32,11 +33,31 @@ export interface ChatRunInputGenerationRef {
    * this a steer would wait for every child to finish.
    */
   stopSubagentsForGuidance?(): void;
+  /**
+   * The person's UserPromptSubmit hooks, for a chat that runs them. Mid-flight
+   * input is the person's prompt too, so it is screened before it is saved
+   * or queued, the same as the prompt that started the run.
+   */
+  inputHooks?: ChatRunInputHooks;
   agent: {
     queueAdmissionBlocked(): "not-active" | "cancelled" | "capacity" | undefined;
     queueSteer(message: AgentMessage, options?: PiRuntimeQueueOptions): PiRuntimeQueueReceipt;
     queueFollowUp(message: AgentMessage, options?: PiRuntimeQueueOptions): PiRuntimeQueueReceipt;
   };
+}
+
+/** What the person's UserPromptSubmit hooks made of one mid-flight input. */
+export type ChatRunInputScreening = { blocked: string } | { context?: string };
+
+export interface ChatRunInputHooks {
+  /** Runs the hooks for this input; never throws (a failed dispatch is no outcome). */
+  screen(input: { text: string; messageId: string }): Promise<ChatRunInputScreening>;
+  /**
+   * Hook context for this one queued input, never saved as the person's
+   * words. Called only once the queue has accepted the input; the timestamp
+   * is unique among this run's queued inputs and the text pins it further.
+   */
+  attachContext(input: { timestamp: number; text: string }, context: string): void;
 }
 
 export interface ChatRunInputAdmissionDeps {
@@ -46,7 +67,11 @@ export interface ChatRunInputAdmissionDeps {
   appendMessage(
     chatId: string,
     message: Omit<ChatMessage, "id" | "createdAt"> & { id?: string; createdAt?: number },
-    meta?: { isCurrent?: () => boolean },
+    meta?: {
+      isCurrent?: () => boolean;
+      /** Host-only: save the input already marked as refused by a hook, in the same write. */
+      hookBlockedReason?: string;
+    },
   ): Promise<Chat>;
   readChat(chatId: string): Promise<Chat | null>;
   now?(): number;
@@ -84,10 +109,18 @@ function rejectionReason(
  * only residual race is the run closing between persistence and the
  * synchronous admission call; in that case the committed message stays as
  * conversation history and the client is told it was committed.
+ *
+ * In a chat that runs hooks, UserPromptSubmit screens the input after the
+ * probe and before it is saved. A refused input is saved with its blocked
+ * mark in the same write, so no saved copy ever lacks it, and is never queued
+ * (`invalid`, committed); accepted input carries its hook context to the
+ * model on that message only.
  */
 export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
   const now = deps.now ?? Date.now;
   const newMessageId = deps.newMessageId ?? (() => `message_${randomUUID()}`);
+  // The last timestamp each run's queued input used, so no two share one.
+  const lastQueuedAt = new WeakMap<ChatRunInputGenerationRef, number>();
 
   async function admit(
     input: ChatRunInputAdmissionRequest,
@@ -112,6 +145,30 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
       return { admitted: false, reason: rejectionReason(blocked), committed: false };
     }
     const messageId = newMessageId();
+    // A notice is Aiden's own message, not the person's prompt, so hooks
+    // never screen it.
+    const screening =
+      generation.inputHooks && !input.notice
+        ? await generation.inputHooks.screen({ text: input.text, messageId })
+        : undefined;
+    const hookBlocked = screening && "blocked" in screening ? screening.blocked : undefined;
+    if (screening) {
+      // The hooks took time; the run may have ended or filled meanwhile.
+      if (deps.active.get(input.streamId) !== generation) {
+        return { admitted: false, reason: "run_not_active", committed: false };
+      }
+      if (generation.cancelRequested || deps.isChatDeleting(generation.chatId)) {
+        return { admitted: false, reason: "cancelled", committed: false };
+      }
+      const blockedNow = hookBlocked ? undefined : generation.agent.queueAdmissionBlocked();
+      if (blockedNow) {
+        return { admitted: false, reason: rejectionReason(blockedNow), committed: false };
+      }
+    }
+    // A refused input stays visible but marked, so no model ever sees it
+    // (the same as a refused prompt that starts a run). It is held out of
+    // every projection in this process, and saved already marked.
+    if (hookBlocked) holdHookBlockedPrompt(messageId);
     try {
       await appendChatMessageWithReconciliation({
         messageId,
@@ -128,6 +185,7 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
               isCurrent: () =>
                 deps.active.get(input.streamId) === generation &&
                 !generation.cancelRequested,
+              ...(hookBlocked ? { hookBlockedReason: hookBlocked } : {}),
             },
           ),
         recover: () => deps.readChat(generation.chatId),
@@ -144,13 +202,17 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
         committed: false,
       };
     }
+    if (hookBlocked) {
+      return { admitted: false, reason: "invalid", committed: true, messageId };
+    }
     if (deps.active.get(input.streamId) !== generation) {
       return { admitted: false, reason: "run_not_active", committed: true, messageId };
     }
     if (generation.cancelRequested) {
       return { admitted: false, reason: "cancelled", committed: true, messageId };
     }
-    const message: AgentMessage = { role: "user", content: input.text, timestamp: now() };
+    const timestamp = Math.max(now(), (lastQueuedAt.get(generation) ?? -Infinity) + 1);
+    const message: AgentMessage = { role: "user", content: input.text, timestamp };
     // The transcript already holds this input; Pi must reuse that visible
     // message on emission instead of projecting a second copy.
     const committed = { visibleChatMessageId: messageId };
@@ -173,6 +235,12 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
         committed: true,
         messageId,
       };
+    }
+    lastQueuedAt.set(generation, timestamp);
+    // Pi takes queued input at its next turn boundary, never synchronously,
+    // so the context is in place before the model can see the message.
+    if (screening && "context" in screening && screening.context) {
+      generation.inputHooks?.attachContext({ timestamp, text: input.text }, screening.context);
     }
     if (input.mode === "steer") {
       try {

@@ -41,6 +41,10 @@ export async function botRoutinePorts(): Promise<BotRoutineExecutorPorts> {
     consumeStall: (botId) => botRunStalls.consume(botId),
     checkClaims: async (botId) => (await import("./bot-runtime/bot-session-main.js")).botTurnClaims(botId),
     spendingStop: (_botId, requestId) => botSpendingStop(requestId),
+    // RoutineRun / RoutineFailed hooks run in the Bot's folder.
+    hookCwd: async (botId) =>
+      (await (await import("./bot-capability-services-main.js")).botManagedWorkspace.resolve(botId)).homePath,
+    hookReport: (botId, lines) => logger.info("hooks", `Bot ${botId} routine hook messages.`, lines),
   };
 }
 

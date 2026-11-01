@@ -327,6 +327,29 @@ export interface PiRuntimeRunOptions {
   maxCutOffContinuations?: number;
   /** Called before the continuation is sent; a dropped stream also reports its retry. */
   onContinue?: (event: PiRuntimeContinueEvent) => Promise<void> | void;
+  /**
+   * Asked when a reply ends normally (stop reason "stop"), before the run
+   * completes. Returning `continueWith` text keeps the run going with that
+   * text as a host message, at most `maxStopContinuations` times per run.
+   * Never asked after an abort, an error, an output-limit stop or a Stop by
+   * the person; a throw or a cancellation completes the run as it was.
+   */
+  onStop?: (event: PiRuntimeStopEvent) => Promise<PiRuntimeStopDecision | undefined> | PiRuntimeStopDecision | undefined;
+  /** Unset or 0 never asks `onStop`. */
+  maxStopContinuations?: number;
+}
+
+export interface PiRuntimeStopEvent {
+  finalMessage: AssistantMessage;
+  /** Stop continuations already made in this run; 0 for the first ask. */
+  continuations: number;
+  maxContinuations: number;
+  signal: AbortSignal;
+}
+
+export interface PiRuntimeStopDecision {
+  /** The host message the model receives before it continues. Blank ends the run. */
+  continueWith?: string;
 }
 
 export interface PiRuntimeQueueOptions {
@@ -1916,6 +1939,10 @@ export class PiAgentRuntimeHarness {
     let attempts = 0;
     let continuations = 0;
     const maxContinuations = Math.max(0, options.maxCutOffContinuations ?? 0);
+    let stopContinuations = 0;
+    const maxStopContinuations = options.onStop
+      ? Math.max(0, Math.floor(options.maxStopContinuations ?? 0))
+      : 0;
     const cancelled = () => this.appCancelRequested || abortController.signal.aborted;
     const finish = async (outcome: PiRuntimeTerminalOutcome): Promise<PiRuntimeTerminalOutcome> => {
       let finalized = outcome;
@@ -2027,6 +2054,37 @@ export class PiAgentRuntimeHarness {
         return await finish({ kind: "app_cancelled", finalMessage, attempts });
       }
       return await appendCutOffMessages([cutOffContinuationMessage()], finalMessage);
+    };
+    // A completed reply the host asks to keep going (a Stop hook). The host
+    // message joins the live context and the journal like a cut-off
+    // continuation. "continue" means the loop sends the next attempt.
+    const continueAfterStop = async (
+      finalMessage: AssistantMessage,
+    ): Promise<PiRuntimeTerminalOutcome | "continue" | undefined> => {
+      const onStop = options.onStop;
+      if (!onStop || stopContinuations >= maxStopContinuations || cancelled()) return undefined;
+      const decision = await waitForManagedPromise(
+        Promise.resolve().then(() =>
+          onStop({
+            finalMessage: structuredClone(finalMessage),
+            continuations: stopContinuations,
+            maxContinuations: maxStopContinuations,
+            signal: abortController.signal,
+          }),
+        ),
+        abortController.signal,
+      );
+      // The person's Stop wins, and a failing host callback never breaks a
+      // reply that already completed.
+      if (decision.kind !== "completed" || cancelled()) return undefined;
+      const text = decision.value?.continueWith?.trim();
+      if (!text) return undefined;
+      stopContinuations += 1;
+      const stopped = await appendCutOffMessages(
+        [{ role: "user", content: [{ type: "text", text }], timestamp: Date.now() }],
+        finalMessage,
+      );
+      return stopped ?? "continue";
     };
     this.runtimeEvents?.setAttempt(0);
     this.runtimeEvents?.emit({ type: "run_start", input: input.kind });
@@ -2547,6 +2605,11 @@ export class PiAgentRuntimeHarness {
           }
           if (recovery.value.messages) this.installCompactedMessages(recovery.value.messages);
           this.pendingEmergencyCheckpoint = false;
+        }
+        if (assistant.stopReason === "stop") {
+          const afterStop = await continueAfterStop(assistant);
+          if (afterStop === "continue") continue;
+          if (afterStop) return afterStop;
         }
         return await finish({ kind: "completed", finalMessage: assistant, attempts });
       }

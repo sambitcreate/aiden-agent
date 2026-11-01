@@ -391,3 +391,28 @@ test("a run that takes no mid-flight input refuses steer and queue before touchi
   assert.equal(f.appended.length, 0);
   assert.equal(f.steered.length + f.followedUp.length, 0);
 });
+
+test("input whose run is stopped, ended or filled while its hooks run is not saved, so the draft stays", async () => {
+  const cases: Array<[string, (f: ReturnType<typeof fixture>) => void, string]> = [
+    ["cancelled", (f) => (f.generation.cancelRequested = true), "cancelled"],
+    ["ended", (f) => f.active.delete("stream-1"), "run_not_active"],
+    ["full", (f) => f.setProbe("capacity"), "capacity"],
+  ];
+  for (const [label, during, reason] of cases) {
+    const f = fixture();
+    f.generation.inputHooks = {
+      screen: async () => {
+        during(f);
+        return {};
+      },
+      attachContext: () => assert.fail("nothing is queued"),
+    };
+    assert.deepEqual(
+      await f.admission.admit({ streamId: "stream-1", mode: "steer", text: "use the staging db", ownerDocumentId: "doc-1" }),
+      { admitted: false, reason, committed: false },
+      label,
+    );
+    assert.equal(f.appended.length, 0, label);
+    assert.equal(f.steered.length, 0, label);
+  }
+});

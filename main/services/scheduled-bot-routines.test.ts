@@ -23,6 +23,8 @@ import {
   parseBotRoutineUpdate,
 } from "./scheduled-bot-routines.js";
 import type { ScheduledTask } from "./types.js";
+import type { BotRoutineExecutorPorts } from "./scheduled-bot-routines.js";
+import type { HookDispatcher, HookEvent, HookPayload, HookScope } from "./hooks/hook-types.js";
 
 class MemoryPersistence<T> {
   constructor(private data: T) {}
@@ -120,19 +122,24 @@ class FakeBotSession implements BotRoutinePorts {
   }
 }
 
-function harness(options: { bots?: string[]; pendingRetryIntervalMs?: number } = {}) {
+function harness(options: { bots?: string[]; pendingRetryIntervalMs?: number; hooks?: () => HookDispatcher } = {}) {
   const bots = new Set(options.bots ?? ["bot-chef", "bot-scout"]);
   const store = createScheduleStore(
     new MemoryPersistence<unknown[]>([]),
     new MemoryPersistence<unknown[]>([]),
   );
   const session = new FakeBotSession();
+  // With hooks, each Bot's routine hooks run in its own folder.
+  const ports: BotRoutineExecutorPorts = options.hooks
+    ? Object.assign(session, { hookCwd: async (botId: string) => `/bots/${botId}` })
+    : session;
   const controllers = new Map<string, AbortController>();
   const executor = createBotRoutineExecutor({
     store,
-    ports: () => session,
+    ports: () => ports,
     deliver: (input) => session.deliver(input),
     broadcast: () => undefined,
+    ...(options.hooks ? { hookDispatcher: options.hooks } : {}),
   });
   const run = (task: ScheduledTask, runId?: string, trigger?: ScheduledRunTrigger) => {
     const controller = new AbortController();
@@ -1551,4 +1558,86 @@ test("a wake-up marker cannot be added through the routine IPC parser", () => {
       wakeUp: { setAt: 1 },
     }),
   );
+});
+
+/** Routine hooks that record what they were told; `hang` keeps every run waiting. */
+function routineHooks(options: { hang?: boolean } = {}) {
+  const runs: Array<{ event: HookEvent; payload: HookPayload; scopes: HookScope[]; cwd: string }> = [];
+  const dispatcher: HookDispatcher = {
+    hasHooks: (event) => event === "RoutineRun" || event === "RoutineFailed",
+    dispatch: async (event, payload, context) => {
+      runs.push({ event, payload, scopes: context.scopes, cwd: context.cwd });
+      if (options.hang) await new Promise(() => undefined);
+      return { ranHooks: ["notify"] };
+    },
+  };
+  return { runs, dispatcher: () => dispatcher };
+}
+
+async function settleHooks(runs: readonly unknown[], count: number) {
+  for (let attempt = 0; attempt < 100 && runs.length < count; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+test("a finished routine run fires RoutineRun in its Bot's folder with the Bot's hooks", async () => {
+  const hooks = routineHooks();
+  const h = harness({ hooks: hooks.dispatcher });
+  const routine = await h.routines.create({
+    botId: "bot-scout",
+    name: "Inbox sweep",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Tell me about urgent mail.",
+  });
+  const run = await h.run((await h.store.get(routine.id))!, undefined, { kind: "automatic", fireTime: 1 });
+  assert.equal(run.result, "success");
+  await settleHooks(hooks.runs, 1);
+  assert.equal(hooks.runs.length, 1);
+  const [fired] = hooks.runs;
+  assert.equal(fired!.event, "RoutineRun");
+  assert.equal(fired!.cwd, "/bots/bot-scout");
+  assert.deepEqual(fired!.scopes, [{ kind: "global" }, { kind: "bot", botId: "bot-scout" }]);
+  assert.equal(fired!.payload.routine_id, routine.id);
+  assert.equal(fired!.payload.routine_name, "Inbox sweep");
+  assert.equal(fired!.payload.run_id, run.id);
+  assert.equal(fired!.payload.result, "success");
+});
+
+test("a failed routine fires RoutineFailed, and a hook that never answers changes neither the run nor its notification", async () => {
+  const hooks = routineHooks({ hang: true });
+  const h = harness({ hooks: hooks.dispatcher });
+  const routine = await h.routines.create({
+    botId: "bot-scout",
+    name: "Inbox sweep",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Tell me about urgent mail.",
+  });
+  h.session.replies.push({ kind: "failed", error: "The AI service is unreachable." });
+  const run = await h.run((await h.store.get(routine.id))!, undefined, { kind: "automatic", fireTime: 1 });
+  assert.equal(run.result, "error");
+  assert.equal(run.error, "The AI service is unreachable.");
+  assert.deepEqual(h.notifications.map((entry) => entry.body), ["The AI service is unreachable."]);
+  await settleHooks(hooks.runs, 1);
+  const [fired] = hooks.runs;
+  assert.equal(fired!.event, "RoutineFailed");
+  assert.equal(fired!.payload.error, "The AI service is unreachable.");
+  assert.equal(fired!.payload.will_retry, false);
+  const [stored] = await h.store.runs(routine.id);
+  assert.equal(stored?.result, "error");
+});
+
+test("a routine skipped because its Bot is paused fires no routine hook", async () => {
+  const hooks = routineHooks();
+  const h = harness({ hooks: hooks.dispatcher });
+  const routine = await h.routines.create({
+    botId: "bot-scout",
+    name: "Inbox sweep",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Tell me about urgent mail.",
+  });
+  h.session.states.set("bot-scout", PERSON_PAUSED);
+  const run = await h.run((await h.store.get(routine.id))!, undefined, { kind: "automatic", fireTime: 1 });
+  assert.equal(run.result, "skipped");
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(hooks.runs, []);
 });

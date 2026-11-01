@@ -12,6 +12,8 @@ export const CLI_COMMAND_HELP = `Aiden commands:
   provider list|import <models.json>         Custom OpenAI-compatible/Ollama/LM Studio providers
   workspace list|add|remove|access|scratch    Workspace registry and tool approval tiers
   mcp list|presets|add|preset|login|logout|remove  MCP servers and browser OAuth
+  hooks list|approve <id> [digest]|disable|enable|test <id>|pause|resume
+                                            Commands Aiden runs on chat, Bot and routine events
   schedule list|save <file>|preview <cron> [timezone]|runs|notifications [since-ms]|run|pause|resume|remove <id>
   bots list|get|catalog|notice|acknowledge|create|update|access|chat|chat-access|pause|unpause <id>
   bots enable-durable                       Back up legacy Bot history; restart daemon to switch

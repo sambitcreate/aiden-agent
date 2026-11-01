@@ -6,6 +6,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
 import { parseAttachments } from "../../../main/services/attachment-contract.js";
 import { createChatForkService } from "../../../main/services/chat-fork-service.js";
+import { withoutHookBlockedPrompts } from "../../../main/services/hook-blocked-prompt.js";
 import type { ChatMessage } from "../../../main/services/types.js";
 import type { createDaemonChats } from "./daemon-chats.ts";
 import type { createCliWorkspaceApplication } from "./workspace-application.ts";
@@ -42,7 +43,8 @@ export function createCliChatForks(daemon: ReturnType<typeof createDaemonChats>,
         const file = daemon.sessionPath(input.targetChatId);
         // Each turn opens the journal with the workspace folder as its cwd.
         const manager = SessionManager.create(dirname(file), dirname(file));
-        for (const message of input.visible) manager.appendMessage(journalMessage(message));
+        // A prompt a hook blocked never reached the model, so it is not journaled.
+        for (const message of withoutHookBlockedPrompts(input.visible)) manager.appendMessage(journalMessage(message));
         // Pi defers persistence until a reply, so write the seeded journal now.
         mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
         const temporary = `${file}.${randomUUID()}.tmp`;
