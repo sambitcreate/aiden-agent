@@ -4752,6 +4752,129 @@ export class GitService {
     }
   }
 
+  /**
+   * Undo a failed restore's own removal: move its checkout and Git record
+   * back from wherever the removal set them aside and drop that removal's
+   * journal. True when both are back in place.
+   */
+  private async returnSetAsideRestore(
+    target: string,
+    gitDir: string,
+    token: string,
+    checkout: { dev: number; ino: number },
+  ): Promise<boolean> {
+    const removal = this.managedWorktreeRemovalPaths(target, gitDir, token);
+    // Something set aside goes back only to a free path; with nothing set
+    // aside, what is at the path must be the original (for the checkout, the
+    // very directory this restore made). Anything else keeps the journal.
+    const putBack = async (original: string, setAside: string[], isOriginal: () => Promise<boolean>) => {
+      const moved = [];
+      for (const candidate of setAside) if (await this.pathExists(candidate)) moved.push(candidate);
+      if (moved.length > 1) return false;
+      if (moved.length === 1) return this.restoreQuarantinedPath(moved[0]!, original);
+      return isOriginal();
+    };
+    const checkoutBack = await putBack(target, [removal.checkout, removal.checkoutAuthorization], async () => {
+      const now = await fs.lstat(target).catch(() => undefined);
+      return now !== undefined && now.isDirectory() && now.dev === checkout.dev && now.ino === checkout.ino;
+    });
+    // A checkout that cannot go back leaves its Git record set aside too, as
+    // the removal's journal describes it.
+    if (!checkoutBack) return false;
+    const recordBack = await putBack(gitDir, [removal.gitDir, removal.gitDirAuthorization], () => this.pathExists(gitDir));
+    if (!recordBack) return false;
+    await fs.rm(removal.journal, { force: true });
+    return true;
+  }
+
+  /**
+   * Take a worktree's record out of Git's list in one rename, without touching
+   * any file at its checkout path: Git no longer sees the worktree, and a
+   * folder that comes back at that path keeps everything in it. Returns where
+   * the record went, outside `worktrees/` so Git does not list it there.
+   */
+  private async setAsideWorktreeRecord(repo: GitRepository, gitDir: string): Promise<string> {
+    const record = this.validatedWorktreeGitDir(repo, gitDir);
+    const setAside = path.join(repo.commonDir, `aiden-discarding-${randomUUID()}`);
+    await fs.rename(record, setAside);
+    await this.syncDirectory(path.dirname(record));
+    await this.syncDirectory(repo.commonDir);
+    return setAside;
+  }
+
+  /** Delete a worktree record already moved out of Git's list. */
+  private async discardSetAsideRecord(setAside: string): Promise<void> {
+    await fs.rm(setAside, { recursive: true, force: true });
+  }
+
+  /**
+   * After a failed restore that kept its folder, make the checkout's Git
+   * record match the workspace's record again, so "delete the folder, then
+   * Restore again" works. The record the restore added usually reuses the
+   * workspace's recorded Git directory: it gets the recorded ownership back,
+   * and the kept folder stays a working checkout. Under any other name it is
+   * dropped instead (only Git's bookkeeping goes; the folder's files stay).
+   * A record that carries another owner's marker is left alone.
+   */
+  private async settleKeptRestoreRecord(
+    repo: GitRepository,
+    targets: readonly string[],
+    owned: { gitDir: string; token: string } | undefined,
+    recorded: { gitDir: string; token: string },
+  ): Promise<void> {
+    const registrations = path.join(repo.commonDir, "worktrees");
+    const recordedGitDir = this.validatedWorktreeGitDir(repo, recorded.gitDir);
+    const candidates = owned
+      ? [owned.gitDir]
+      : (await fs.readdir(registrations).catch(() => [] as string[])).map((name) => path.join(registrations, name));
+    for (const candidate of candidates) {
+      let gitFile: string;
+      try {
+        gitFile = (await fs.readFile(path.join(candidate, "gitdir"), "utf8")).trim();
+      } catch {
+        continue;
+      }
+      const checkout = path.dirname(path.isAbsolute(gitFile) ? path.resolve(gitFile) : path.resolve(candidate, gitFile));
+      if (!targets.includes(checkout)) continue;
+      const markerPath = path.join(candidate, WORKTREE_OWNER_MARKER);
+      const marker = await fs.readFile(markerPath, "utf8").then(
+        (value) => value.trim(),
+        () => undefined,
+      );
+      if (marker !== undefined && marker !== owned?.token) continue;
+      if (path.resolve(candidate) === recordedGitDir) {
+        await fs.rm(markerPath, { force: true });
+        await this.persistWorktreeOwnership(candidate, recorded.token);
+      } else if (await this.moveKeptRecordToRecordedName(candidate, recordedGitDir, checkout)) {
+        // Restore made the checkout under a fresh name (see the placeholder in
+        // restoreDeletedManagedWorktreeCheckout); back under its recorded name
+        // it is the checkout the workspace record expects, so Restore can be
+        // tried again once the folder is deleted.
+        await fs.rm(path.join(recordedGitDir, WORKTREE_OWNER_MARKER), { force: true });
+        await this.persistWorktreeOwnership(recordedGitDir, recorded.token);
+      } else {
+        const setAside = await this.setAsideWorktreeRecord(repo, candidate);
+        await fs.rm(setAside, { recursive: true, force: true });
+      }
+    }
+  }
+
+  /** Renames a kept checkout's Git record to `recordedGitDir` and points the checkout at it. */
+  private async moveKeptRecordToRecordedName(candidate: string, recordedGitDir: string, checkout: string): Promise<boolean> {
+    const dotGit = path.join(checkout, ".git");
+    const pointer = await fs.lstat(dotGit).catch(() => undefined);
+    if (!pointer?.isFile() || (await this.pathExists(recordedGitDir))) return false;
+    await fs.rename(candidate, recordedGitDir);
+    try {
+      await fs.writeFile(dotGit, `gitdir: ${recordedGitDir}\n`);
+    } catch (error) {
+      await fs.rename(recordedGitDir, candidate).catch(() => undefined);
+      throw error;
+    }
+    await this.syncDirectory(path.dirname(recordedGitDir));
+    return true;
+  }
+
   private async restoreQuarantinedPath(quarantine: string, original: string): Promise<boolean> {
     try {
       if (await this.pathExists(original)) return false;
@@ -6769,6 +6892,282 @@ export class GitService {
   }
 
   /**
+   * Put back the checkout of a managed worktree whose folder was deleted
+   * outside Aiden, at the same path and on its branch as the branch stands
+   * now. Git's stale registration is cleared only when it is the one Aiden
+   * recorded (its administrative directory and ownership marker) and still
+   * points at this path. A new ownership marker is written for the new
+   * registration. The branch is never created, moved or deleted: a branch
+   * that is gone, or checked out in another worktree, is refused, and so is a
+   * worktree Aiden was in the middle of removing.
+   *
+   * `commit` records the restored checkout (the workspace save) while the
+   * repository's mutation lock is still held. If anything after `worktree
+   * add` fails, `commit` included, the new checkout is removed again so the
+   * folder stays missing and Restore can be retried.
+   */
+  async restoreDeletedManagedWorktreeCheckout(
+    cwd: string,
+    root: string,
+    worktreePath: string,
+    branch: string,
+    worktreeGitDir: string,
+    ownershipToken: string,
+    workspaceSubpath: string,
+    commit: (restored: GitCreatedWorktree) => Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<GitCreatedWorktree> {
+    const repo = this.requireRepository(await this.repository(cwd));
+    await this.validateBranchName(repo, branch);
+    if (
+      workspaceSubpath !== "" &&
+      normalizedRelativeWorktreePath(workspaceSubpath) !== workspaceSubpath
+    ) {
+      throw new GitServiceError("invalid_input", "The managed worktree workspace path is invalid.");
+    }
+    return this.enqueueMutation(repo.commonDir, async () => {
+      const managedRoot = await fs.realpath(root);
+      const requestedTarget = path.resolve(worktreePath);
+      let canonicalParent: string;
+      try {
+        const parent = path.dirname(requestedTarget);
+        const parentStat = await fs.lstat(parent);
+        if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) throw new Error("not a directory");
+        canonicalParent = await fs.realpath(parent);
+      } catch (cause) {
+        throw new GitServiceError(
+          "command_failed",
+          "Aiden's worktree folder could not be verified.",
+          cause,
+        );
+      }
+      const target = path.join(canonicalParent, path.basename(requestedTarget));
+      const relativeTarget = path.relative(managedRoot, target);
+      if (relativeTarget.length === 0 || relativeTarget.startsWith("..") || path.isAbsolute(relativeTarget)) {
+        throw new GitServiceError(
+          "invalid_input",
+          "The worktree must be restored inside Aiden's worktree folder.",
+        );
+      }
+      if (await this.pathExists(target)) {
+        throw new GitServiceError("command_failed", "The worktree folder is already there.");
+      }
+      let removing: boolean;
+      try {
+        removing = await this.managedWorktreeDeletionPending(worktreePath, worktreeGitDir, ownershipToken);
+      } catch {
+        removing = true;
+      }
+      if (removing) {
+        // Its files may sit in Aiden's quarantine, waiting for the removal to
+        // finish; a new checkout here would strand them.
+        throw new GitServiceError(
+          "command_failed",
+          "Aiden was removing this worktree when it stopped, so it can't be restored.",
+        );
+      }
+      const worktrees = await this.inspectWorktrees(repo, repo.cwd);
+      const stale = await this.managedWorktreeRegistration(
+        repo,
+        worktrees,
+        worktreePath,
+        branch,
+        worktreeGitDir,
+        ownershipToken,
+      );
+      if (stale && path.resolve(stale.path) !== requestedTarget && path.resolve(stale.path) !== target) {
+        throw new GitServiceError(
+          "command_failed",
+          "This worktree was moved, so Aiden can't restore it in its old place.",
+        );
+      }
+      const others = worktrees.filter((worktree) => worktree !== stale);
+      if (others.some((worktree) => worktree.branch === branch)) {
+        throw new GitServiceError(
+          "invalid_ref",
+          `The branch “${branch}” is checked out in another worktree, so this one can't be restored.`,
+        );
+      }
+      if (others.some((worktree) => [requestedTarget, target].includes(path.resolve(worktree.path)))) {
+        throw new GitServiceError("command_failed", "Another worktree is registered at this folder.");
+      }
+      const head = await this.managedWorktreeBranchHead(repo.cwd, branch);
+      if (head === undefined) {
+        throw new GitServiceError(
+          "invalid_ref",
+          `The branch “${branch}” no longer exists, so the worktree can't be restored.`,
+        );
+      }
+      // The branch may have changed since its first checkout: admit it the way
+      // creation does (no checkout filters, room on both volumes) before Git's
+      // record is touched or any file is written.
+      const checkoutBytes = await this.managedWorktreeCheckoutBytes(repo.topLevel, head);
+      await checkWorktreeAllocation(root, repo.commonDir, checkoutBytes);
+      let staleRecord: { setAside: string; gitDir: string } | undefined;
+      if (stale) {
+        // Checked again here, after the slow size and space checks: a folder
+        // put back from the Trash meanwhile holds work (ignored files too)
+        // that a plain `worktree remove` of a clean checkout would delete.
+        if ((await this.pathExists(stale.path)) || (await this.pathExists(target))) {
+          throw new GitServiceError("command_failed", "The worktree folder is already there.");
+        }
+        const staleGitDir = this.validatedWorktreeGitDir(repo, worktreeGitDir);
+        if (await this.pathExists(path.join(staleGitDir, "locked"))) {
+          throw new GitServiceError("command_failed", "Git has this worktree locked, so Aiden can't restore it.");
+        }
+        // Only Git's record is cleared, never with `worktree remove`: that
+        // deletes a clean checkout's folder, ignored files and all, if one
+        // came back after the check above. Moving the record aside touches
+        // nothing at the checkout path, and the path is checked once more
+        // before the record is gone for good.
+        staleRecord = { setAside: await this.setAsideWorktreeRecord(repo, staleGitDir), gitDir: staleGitDir };
+        if ((await this.pathExists(stale.path)) || (await this.pathExists(target))) {
+          await this.restoreQuarantinedPath(staleRecord.setAside, staleRecord.gitDir);
+          throw new GitServiceError("command_failed", "The worktree folder is already there.");
+        }
+      }
+      // A folder that was moved rather than deleted (to the Trash, say) still
+      // points at the old record's name. An empty placeholder holds that name
+      // while Git makes the new checkout, so Git picks a fresh one and the
+      // moved copy can never share the new checkout's index and HEAD.
+      let placeholder: string | undefined;
+      if (staleRecord) {
+        try {
+          await fs.mkdir(staleRecord.gitDir);
+          placeholder = staleRecord.gitDir;
+        } catch (error) {
+          await this.restoreQuarantinedPath(staleRecord.setAside, staleRecord.gitDir);
+          throw error;
+        }
+      }
+      try {
+        await this.run(repo.cwd, ["worktree", "add", "--", target, branch], {
+          hooksDisabled: true,
+          mutation: true,
+          signal,
+        });
+      } catch (error) {
+        // A folder put back from the Trash after the last look gets its Git
+        // record back: the old record is kept until the new checkout exists.
+        if (placeholder) await fs.rmdir(placeholder).catch(() => undefined);
+        if (staleRecord) await this.restoreQuarantinedPath(staleRecord.setAside, staleRecord.gitDir);
+        throw error;
+      }
+      if (placeholder) await fs.rmdir(placeholder).catch(() => undefined);
+      // The old record is out of Git's list already; failing to delete it only
+      // leaves a stray folder in the Git directory, never a stranded checkout.
+      if (staleRecord) await this.discardSetAsideRecord(staleRecord.setAside).catch(() => undefined);
+      // The folder this call made, so a rollback never touches a replacement.
+      const added = await fs.lstat(target).catch(() => undefined);
+      let owned: { gitDir: string; token: string } | undefined;
+      try {
+        const registered = (await this.inspectWorktrees(repo, target)).find(
+          (worktree) => worktree.branch === branch && path.resolve(worktree.path) === target,
+        );
+        if (!registered) {
+          throw new GitServiceError("command_failed", "The restored worktree could not be verified.");
+        }
+        const gitDirResult = await this.run(registered.path, ["rev-parse", "--path-format=absolute", "--git-dir"]);
+        const newGitDir = this.validatedWorktreeGitDir(repo, await fs.realpath(gitDirResult.stdout.trim()));
+        const newToken = randomUUID();
+        await this.persistWorktreeOwnership(newGitDir, newToken);
+        owned = { gitDir: newGitDir, token: newToken };
+        const checkout = await fs.lstat(registered.path);
+        if (!checkout.isDirectory() || checkout.isSymbolicLink()) {
+          throw new GitServiceError("command_failed", "The restored worktree could not be verified.");
+        }
+        // A workspace in a subfolder needs that subfolder on the branch as it
+        // stands now; otherwise the record would point at a missing folder
+        // that no notice offers to restore.
+        if (workspaceSubpath !== "") {
+          const workspaceFolder = await fs.lstat(path.join(registered.path, workspaceSubpath)).catch(() => undefined);
+          if (!workspaceFolder?.isDirectory() || workspaceFolder.isSymbolicLink()) {
+            throw new GitServiceError(
+              "command_failed",
+              "The branch no longer has this workspace's folder, so the worktree can't be restored for it.",
+            );
+          }
+        }
+        const restored: GitCreatedWorktree = {
+          ...registered,
+          branch,
+          workspacePath: path.join(registered.path, workspaceSubpath),
+          repositoryPath: repo.topLevel,
+          worktreeGitDir: newGitDir,
+          ownershipToken: newToken,
+          worktreeDevice: checkout.dev,
+          worktreeInode: checkout.ino,
+          createdFromHead: head,
+        };
+        await commit(restored);
+        return restored;
+      } catch (error) {
+        // Remove only the checkout this call just added, and only while it
+        // still holds nothing but the branch's committed files: the folder is
+        // visible at once, so an editor may already have written into it.
+        // The folder is moved aside before it is checked, so nothing written
+        // after the check can be deleted with it. Anything changed, new or
+        // ignored keeps the folder in place. The branch always stays.
+        let kept: GitServiceError | undefined;
+        try {
+          const now = await fs.lstat(target).catch(() => undefined);
+          const same = added !== undefined && now !== undefined && now.dev === added.dev && now.ino === added.ino;
+          if (now !== undefined && (!same || owned === undefined)) {
+            kept = new GitServiceError(
+              "dirty_worktree",
+              "Restoring the worktree failed, and Aiden kept the folder it had made. Delete the folder, then choose Restore again.",
+              error,
+            );
+          } else if (now !== undefined && added !== undefined && owned !== undefined) {
+            try {
+              await this.quarantineAndRemoveManagedWorktree(
+                repo,
+                target,
+                owned.gitDir,
+                owned.token,
+                added.dev,
+                added.ino,
+                branch,
+                head,
+                normalizedDeletionPolicy(undefined),
+                undefined,
+                () => undefined,
+              );
+            } catch (removalError) {
+              // The removal may stop after setting the folder and its Git
+              // record aside (a write landed late): put both back first, so
+              // "kept" means the folder is where it was.
+              if (!(await this.returnSetAsideRestore(target, owned.gitDir, owned.token, added))) throw removalError;
+              kept = new GitServiceError(
+                "dirty_worktree",
+                "Restoring the worktree failed after something changed in its folder, so Aiden kept the folder. Copy out what you need, then delete the folder and choose Restore again.",
+                error,
+              );
+            }
+          }
+          // The workspace still names its old Git record, so a kept folder's
+          // new record must match it, or the next Restore would refuse even
+          // after the folder is deleted.
+          if (kept) {
+            await this.settleKeptRestoreRecord(repo, [target, requestedTarget], owned, {
+              gitDir: worktreeGitDir,
+              token: ownershipToken,
+            });
+          }
+        } catch (rollbackError) {
+          throw new GitServiceError(
+            "command_failed",
+            "Restoring the worktree failed, and Aiden could not undo it.",
+            { operationError: error, rollbackError },
+          );
+        }
+        if (kept) throw kept;
+        throw error;
+      }
+    });
+  }
+
+  /**
    * Apply a snapshot commit to a restored worktree: the working tree gains the
    * snapshot contents while HEAD and index stay at the base commit, so the
    * delta reports as ordinary unstaged/untracked dirt and the synthetic commit
@@ -6912,6 +7311,30 @@ export const gitRestoreManagedWorktreeCheckout = (
     workspaceSubpath,
     signal,
   );
+export const gitRestoreDeletedManagedWorktreeCheckout = (
+  folderPath: string,
+  root: string,
+  worktreePath: string,
+  branch: string,
+  worktreeGitDir: string,
+  ownershipToken: string,
+  workspaceSubpath: string,
+  commit: (restored: GitCreatedWorktree) => Promise<void>,
+  signal?: AbortSignal,
+) =>
+  gitService.restoreDeletedManagedWorktreeCheckout(
+    folderPath,
+    root,
+    worktreePath,
+    branch,
+    worktreeGitDir,
+    ownershipToken,
+    workspaceSubpath,
+    commit,
+    signal,
+  );
+export const gitManagedWorktreeBranchHead = (folderPath: string, branch: string) =>
+  gitService.managedWorktreeBranchHead(folderPath, branch);
 export const gitApplyManagedWorktreeSnapshot = (
   folderPath: string,
   worktreePath: string,
