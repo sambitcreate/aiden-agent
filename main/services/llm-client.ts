@@ -243,7 +243,6 @@ import {
   projectVisibleHistoryWithoutSkills,
   ensurePiForkSummary,
   type PiVisibleTurnLease,
-  appendPiMessages,
 } from "./pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { createInMemoryPiSession } from "./pi-session-repository-port.js";
@@ -467,14 +466,6 @@ import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
 import { createGenerationHarness } from "./generation-harness.js";
 import {
-  resolveGenerationProfile,
-  selectRuntimeExtensions,
-  type DesignRunBinding,
-  type GenerationProfile,
-} from "./generation-profile.js";
-import { designGenerationWiring, designRunOutcome } from "./design/design-generation.js";
-import type { DesignRunOutcome } from "./design/store-core.js";
-import {
   createAskUserQuestionExtension,
   resolveAskUserQuestionTimeoutMs,
   shouldEnableAskUserQuestionExtension,
@@ -576,8 +567,6 @@ export interface GenerationExecutionOptions {
   visualAudience?: "remote";
   /** Main-owned stable principal used for the versioned Bot Full Access notice. */
   botAudienceId?: string;
-  /** Main-only Design Studio run; parseParams can never produce it (ADR-DS §4). */
-  designRun?: DesignRunBinding;
   /**
    * Main-owned follow-up turn nobody is watching (a background job ended, a
    * followed pull request or a "done when" check needs the agent). Approvals
@@ -614,8 +603,6 @@ interface ActiveGeneration {
   loadMonitor?: LoadMonitorState;
   releaseSkillReservation: () => void;
   releaseBotAuthority: () => void;
-  /** Runs that take no mid-flight input (Design Studio). */
-  inputClosed: boolean;
   /** A steered send stops this run's still-running subagents. */
   stopSubagentsForGuidance?: () => void;
 }
@@ -1097,58 +1084,6 @@ async function prepareGeneration(
     botContext?.prepared.runtime ??
     (await resolveModelRuntime(params.providerId, params.model, signal, chat.id));
 
-  if (options.designRun) {
-    // A design run composes exactly its binding's extension (designGenerationWiring);
-    // createGenerationHarness refuses any other extension, tool or skill (ADR-DS §4).
-    const designSettings = await configStore.getSettings();
-    const designModel = runtime.model;
-    return {
-      runtime: { ...runtime, model: designModel },
-      agentsInstructions: undefined,
-      agentsInstructionRoots: undefined,
-      browserDiscovery: undefined,
-      browserSelection: { initialized: false } as { initialized: boolean; tabId?: string },
-      browserFileApprovals: new Map<string, PreparedBrowserFile>(),
-      browserActionApprovals: new Map<
-        string,
-        { approval: BrowserToolApproval; args: Record<string, unknown> }
-      >(),
-      permission: "none" as GenerationPermission,
-      folderPath: undefined,
-      git: await generationGitContext(undefined, signal),
-      tools: [] as AgentTool[],
-      generationExtensions,
-      modelImageReferences,
-      lateMcpDiscovery: NO_LATE_MCP_DISCOVERY as McpLateDiscovery,
-      displayedImages,
-      displayedHtmlArtifacts,
-      appPanels,
-      htmlArtifactPlacements,
-      imagePlacements,
-      displayedUiVisuals,
-      uiVisualPlacements,
-      supportsImages: runtimeSupportsImages(designModel),
-      thinkingLevel: resolveGenerationThinkingLevel(
-        params.providerId,
-        designModel,
-        params.thinkingLevel ?? savedGenerationThinkingLevel(designSettings, params.providerId, params.model, runtime.provider),
-      ),
-      computerUse: undefined,
-      formFill: undefined,
-      googleWorkspaceSnapshot: undefined,
-      skillSnapshot: undefined,
-      workspaceId: undefined,
-      subagentSupervisor: undefined,
-      showLocalModelReasoning: designSettings.showLocalModelReasoning,
-      compactionEngine: compactionEngineFrom(designSettings.compactionEngine),
-      compactionModelOverrides: designSettings.compactionModelOverrides,
-      cacheWarmingEnabled: false,
-      sharedImages,
-      botContext: undefined,
-      botApprovedRoots: [] as string[],
-      botMutatingToolNames: new Set<string>(),
-    };
-  }
   const botBound = botContext !== undefined;
   const botApprovedRoots = botContext
     ? await resolveBotRuntimeApprovedRoots(botContext.admission.authority)
@@ -2307,8 +2242,6 @@ export const llmClient = {
     owner: ChatGenerationOwner,
     options: GenerationExecutionOptions = {},
   ): Promise<boolean> {
-    const designRun = options.designRun;
-    const designWiring = designRun ? designGenerationWiring(designRun, appendPiMessages) : undefined;
     const turnId = options.turnId;
     const ownsTurn =
       typeof turnId === "string" &&
@@ -2397,7 +2330,6 @@ export const llmClient = {
     let authoritativeBot: BotDefinition | undefined;
     let botContext: BotGenerationAuthorityContext | undefined;
     let authoritativeMode: ChatStartParams["mode"];
-    let generationProfile: GenerationProfile = { kind: "default" };
     const initializationTerminalState = { attempted: false };
     const persistInitializationTerminal = async (
       status: "failed" | "cancelled",
@@ -2429,9 +2361,12 @@ export const llmClient = {
       if (!chat) {
         throw new Error("This chat is no longer available.");
       }
-      // A design-owned chat runs only with its own project's main-built binding.
-      // It throws before authoritativeChat is set, so no failure turn is written.
-      generationProfile = resolveGenerationProfile(chat, options);
+      // A feature-owned chat (the retired Design Studio's hidden project chats)
+      // never runs as an ordinary agent. It throws before authoritativeChat is
+      // set, so no failure turn is written.
+      if (chat.owner !== undefined) {
+        throw new Error("This conversation belongs to a feature that is no longer available.");
+      }
       authoritativeChat = chat;
       authoritativeMode = authoritativeChatGenerationMode(chat.workspaceId, params.mode);
       if (chat.botId && !hostPlatformCapabilities().bots) {
@@ -2862,9 +2797,7 @@ export const llmClient = {
             reasoning: reasoning.trim() ? reasoning : undefined,
             pi: lastAssistantMessage
               ? storedPiAssistantMessage(
-                  designWiring
-                    ? designWiring.storedAssistantMessage(lastAssistantMessage)
-                    : lastAssistantMessage,
+                  lastAssistantMessage,
                 )
               : undefined,
             providerFailure,
@@ -3011,9 +2944,9 @@ export const llmClient = {
         tools: [createVccRecallTool(async () => piSession!)],
       };
       let memoryExtension: PiAgentRuntimeExtension | undefined;
-      // Design runs never read or write durable memory. Bots keep their own
-      // memory files (`bot-memory/`) and never use the workspace store.
-      if (generationProfile.kind === "default" && !generationChat.botId) {
+      // Bots keep their own memory files (`bot-memory/`) and never use the
+      // workspace store.
+      if (!generationChat.botId) {
         try {
           const memoryEligible = piUpgradeMemoryEligible(piUpgradePolicy, generationChat, {
             development: !isPackagedRuntime(),
@@ -3105,10 +3038,7 @@ export const llmClient = {
       // Only the explicitly admitted task extension and history recall enter
       // Bot prompts and schemas.
       const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] =
-        generationProfile.kind === "design"
-          ? // Exactly the binding's extension; an empty base fails the composition check.
-            [...(designWiring?.extensions ?? [])]
-          : preparedBotContext
+        preparedBotContext
         ? [
             ...(todoRuntimeExtension ? [todoRuntimeExtension] : []),
             // Journalless runs must not offer VCC recall over an empty
@@ -3142,9 +3072,7 @@ export const llmClient = {
         tools,
         baseRuntimeExtensions,
       ).tools;
-      // A design run composes exactly its own extension: no advisor, codemode or
-      // other base extension may join it (ADR-DS §4).
-      const advisorExtension = generationProfile.kind === "design" ? undefined : await advisorRuntime.extensionForGeneration({
+      const advisorExtension = await advisorRuntime.extensionForGeneration({
         scope: {
           usageSource: options.usageSource,
           interactionSurface: options.interactionSurface,
@@ -3195,9 +3123,7 @@ export const llmClient = {
           : {}),
       });
       const codemodeExtension: PiAgentRuntimeExtension | undefined =
-        generationProfile.kind === "design"
-          ? undefined
-          : workspaceCodemodeEnabled({
+        workspaceCodemodeEnabled({
             workspaceId,
             folderPath,
             bot: Boolean(preparedBotContext),
@@ -3221,10 +3147,11 @@ export const llmClient = {
               }).toolSearch] : [])],
             }
           : undefined;
-      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = selectRuntimeExtensions(
-        generationProfile,
-        { base: baseRuntimeExtensions, advisor: advisorExtension, codemode: codemodeExtension },
-      );
+      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = [
+        ...baseRuntimeExtensions,
+        ...(advisorExtension ? [advisorExtension] : []),
+        ...(codemodeExtension ? [codemodeExtension] : []),
+      ];
       const toolsWithRuntimeContributions = resolvePiAgentRuntimeStaticContributions(
         "",
         tools,
@@ -3250,9 +3177,7 @@ export const llmClient = {
       const telegramInteractive = options.interactionSurface === "telegram";
       let hostPromptSkills: string | undefined;
       const baseSystemPrompt =
-        generationProfile.kind === "design"
-          ? (designWiring?.baseSystemPrompt ?? "")
-          : authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
+        authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
               settingsSections: assistantSettingsSections({
                 devices: devicesEnabled(),
@@ -3592,7 +3517,7 @@ export const llmClient = {
             ),
           );
       const promptCacheTtl = promptCacheTtlMs(model);
-      candidate = createGenerationHarness(generationProfile, {
+      candidate = createGenerationHarness({
         contributions: { ...runtimeContributions, tools: runtimeTools },
         deferredTools,
         contextPromptSections,
@@ -3676,8 +3601,6 @@ export const llmClient = {
           compactionReserveTokens: compactionInputReserveTokens,
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
-          // Design HTML lives in the project store, never in the Pi journal (ADR-DS §10).
-          ...(designWiring ? { appendMessages: designWiring.journalAppend } : {}),
           beforeQueuedUser: async (message, signal) => {
             if (message.role !== "user" || typeof message.content !== "string" || !message.content.trim()) {
               throw new Error("Queued guidance must contain text.");
@@ -4707,7 +4630,6 @@ export const llmClient = {
       rendererDetached: initialization.rendererDetached,
       computerUse,
       formFill,
-      inputClosed: designWiring?.inputClosed ?? false,
       ...(subagentSupervisor
         ? {
             stopSubagentsForGuidance: () => {
@@ -4841,8 +4763,6 @@ export const llmClient = {
             }),
           )
         : undefined;
-    // A throw before the outcome is known is Aiden's failure, not the provider's.
-    let designOutcome: DesignRunOutcome = "host_failed";
     const completion = (async () => {
       try {
         const fullLengthBeforeAttempt = full.length;
@@ -4939,7 +4859,6 @@ export const llmClient = {
           }
         }
         const emergencyError = generationEmergencyUserError(runtimeOutcome.emergencyProjection);
-        let replyNotSaved = false;
         const finalError =
           emergencyError ??
           (runtimeOutcome.kind === "provider_failed"
@@ -4979,8 +4898,7 @@ export const llmClient = {
             full,
             uniqueResponseImages(sharedImages, displayedImages).length +
               displayedHtmlArtifacts.length +
-              displayedUiVisuals.length +
-              (designRun?.acceptedCount() ?? 0),
+              displayedUiVisuals.length,
           ) &&
           !wasCancelled
         ) {
@@ -5008,7 +4926,6 @@ export const llmClient = {
           );
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
-          replyNotSaved = Boolean(persisted.error);
           if (persisted.error) {
             sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
               streamId,
@@ -5027,14 +4944,6 @@ export const llmClient = {
             }));
           }
         }
-        // Only after persistence: a reply that throws while saving stays host_failed.
-        designOutcome = designRunOutcome({
-          runtimeKind: runtimeOutcome.kind,
-          emergency: Boolean(emergencyError),
-          cancelled: wasCancelled,
-          cancellationOrigin: activeGeneration.cancellationOrigin,
-          persistenceFailed: replyNotSaved,
-        });
       } catch (error) {
         pendingPiDurabilitySettlement ??= agent.pendingDurabilitySettlement();
         collectUndeliveredGuidance();
@@ -5079,8 +4988,6 @@ export const llmClient = {
             activeGeneration.workspaceId,
             params.workspaceId,
           );
-          // Exactly once per started run; pre-run failures reach DesignRunService through start().
-          designRun?.onSettled(designOutcome);
         }
       }
     })();
@@ -5236,7 +5143,7 @@ export const llmClient = {
     input: { text: string; notice: AgentNoticeV1 },
   ): Promise<ChatRunInputAdmissionResult | null> {
     const streamId = [...active.entries()].find(
-      ([, entry]) => entry.chatId === chatId && !entry.cancelRequested && !entry.inputClosed,
+      ([, entry]) => entry.chatId === chatId && !entry.cancelRequested,
     )?.[0];
     if (!streamId) return null;
     return runInputAdmission.admit({

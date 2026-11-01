@@ -2,32 +2,28 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CREATE_IMAGES_FEATURE_FLAG,
-  DESIGN_STUDIO_FEATURE_FLAG,
   studioAssetsEnabled,
   studioCapabilities,
 } from "./feature-flags.js";
 
-test("studio features stay off unless their own experimental flag is set", () => {
-  assert.deepEqual(studioCapabilities({}), { designStudio: false, createImages: false });
-  assert.deepEqual(studioCapabilities({ [DESIGN_STUDIO_FEATURE_FLAG]: "1" }), {
-    designStudio: true,
-    createImages: false,
-  });
-  assert.deepEqual(studioCapabilities({ [CREATE_IMAGES_FEATURE_FLAG]: " TRUE " }), {
-    designStudio: false,
-    createImages: true,
-  });
+// The retired Design Studio flag, still set in some developers' shells.
+const RETIRED_DESIGN_STUDIO_FLAG = "AIDEN_EXPERIMENTAL_DESIGN_STUDIO";
+
+test("Create Images stays off unless its own experimental flag is set", () => {
+  assert.deepEqual(studioCapabilities({}), { createImages: false });
+  assert.deepEqual(studioCapabilities({ [CREATE_IMAGES_FEATURE_FLAG]: " TRUE " }), { createImages: true });
   for (const value of ["0", "", "yes", "on", "false"]) {
-    assert.deepEqual(
-      studioCapabilities({ [DESIGN_STUDIO_FEATURE_FLAG]: value, [CREATE_IMAGES_FEATURE_FLAG]: value }),
-      { designStudio: false, createImages: false },
-      value,
-    );
+    assert.deepEqual(studioCapabilities({ [CREATE_IMAGES_FEATURE_FLAG]: value }), { createImages: false }, value);
   }
 });
 
-test("the shared asset store opens when either studio feature is on", () => {
+test("the retired Design Studio flag turns nothing on", () => {
+  assert.deepEqual(studioCapabilities({ [RETIRED_DESIGN_STUDIO_FLAG]: "1" }), { createImages: false });
+  assert.equal(studioAssetsEnabled({ [RETIRED_DESIGN_STUDIO_FLAG]: "1" }), false);
+});
+
+test("the shared asset store opens only while Create Images is on", () => {
   assert.equal(studioAssetsEnabled({}), false);
-  assert.equal(studioAssetsEnabled({ [DESIGN_STUDIO_FEATURE_FLAG]: "1" }), true);
+  assert.equal(studioAssetsEnabled({ [CREATE_IMAGES_FEATURE_FLAG]: "1" }), true);
   assert.equal(studioAssetsEnabled({ [CREATE_IMAGES_FEATURE_FLAG]: "true" }), true);
 });

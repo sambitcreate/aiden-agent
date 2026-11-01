@@ -17,7 +17,6 @@ export const INVOKE_PREFIXES = [
   "devices:",
   "chats:",
   "computerUse:",
-  "designProjects:",
   "dictation:",
   "diagnostics:",
   "exa:",
@@ -118,8 +117,6 @@ export const NOTIFICATION_CHANNEL_VALUES = [
    */
   "chats:follow-through-changed",
   "chats:settled",
-  "designProjects:changed",
-  "designProjects:run-changed",
   "git:changed",
   "imageWorkflows:run-changed",
   "dictation:state",

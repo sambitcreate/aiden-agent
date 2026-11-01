@@ -115,9 +115,7 @@ import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.
 import { createMainVisualSnapshotQueue } from "./services/visual-snapshot-main.js";
 import { disposeVisualSnapshots, installVisualSnapshotQueue } from "./services/visual-snapshot-service.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
-import { createImagesEnabled, designStudioEnabled, studioAssetsEnabled } from "./services/studio/feature-flags.js";
-import { designProjectStore, designRunService } from "./services/design/main.js";
-import { startDesignStudio } from "./services/design/startup-core.js";
+import { createImagesEnabled, studioAssetsEnabled } from "./services/studio/feature-flags.js";
 import { createImagesRuntime } from "./services/create-images/main.js";
 import { ImageQuitCoverage, imageRunsAllowQuit } from "./services/create-images/quit-confirm-core.js";
 import { registerStudioAssetProtocol } from "./services/studio-assets/protocol.js";
@@ -394,7 +392,6 @@ const SHUTDOWN_BUDGET_MS = {
   botRuntime: 5_000,
   subagentRunStore: 3_000,
   terminalHistory: 2_000,
-  designWork: 2_000,
   imageRuns: 2_000,
   studioAssets: 2_000,
   browser: 3_000,
@@ -441,7 +438,6 @@ const SHUTDOWN_HARD_CEILING_MS = (() => {
     b.botIngress + b.botRuntime,
     b.subagentRunStore,
     b.terminalHistory,
-    b.designWork,
     b.imageRuns + b.studioAssets,
     b.browser,
     b.botComputers,
@@ -620,13 +616,6 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
       await subagentRunStore.close();
     }),
     settleShutdownStep("terminal", "Terminal history", SHUTDOWN_BUDGET_MS.terminalHistory, () => terminalService.flushHistory()),
-    // Run settlements record their end through the project store, so they drain
-    // first and in-flight store writes after them. A store that was never
-    // opened (flags off) resolves at once.
-    settleShutdownStep("design", "Design work", SHUTDOWN_BUDGET_MS.designWork, async () => {
-      await designRunService.drain();
-      await designProjectStore.drain();
-    }),
     (async () => {
       // Image runs record their end (and close the run ledger) before the asset store closes.
       // A ledger that was never opened (flag off) resolves at once.
@@ -2287,7 +2276,7 @@ if (!ownsSingleInstanceLock) {
         onError: (error) =>
           logger.warn(
             "studio",
-            "Studio assets are unavailable; Design and Images will report a storage error.",
+            "Studio assets are unavailable; Images will report a storage error.",
             error,
           ),
       });
@@ -2352,16 +2341,6 @@ if (!ownsSingleInstanceLock) {
       // After deletions settle and before any renderer draft exists.
       await workspaceApplicationService.prepareNoWorkspaceChats().catch((error: unknown) => {
         logger.warn("workspace", "No workspace chats could not be prepared; they keep their current folders.", error);
-      });
-      await startDesignStudio({
-        enabled: designStudioEnabled(),
-        store: designProjectStore,
-        onError: (error) =>
-          logger.warn(
-            "design",
-            "Design projects could not be restored; Design Studio will report a storage error.",
-            error,
-          ),
       });
       if (displayImageArtifactAvailability.available) {
         try {

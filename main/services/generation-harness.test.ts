@@ -4,19 +4,12 @@ import { Type } from "@earendil-works/pi-ai";
 import { createFauxCore, fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { createGenerationHarness } from "./generation-harness.js";
-import { resolveGenerationProfile } from "./generation-profile.js";
 import { convertToLlm } from "./pi-legacy-harness.js";
 import {
   PiAgentRuntimeHarness,
-  resolvePiAgentRuntimeContributionSnapshot,
   type PiAgentRuntimeExtension,
   type PiAgentRuntimeHarnessOptions,
 } from "./pi-agent-runtime-harness.js";
-
-const design = resolveGenerationProfile(
-  { owner: { kind: "design-project", projectId: "project-1" } },
-  { designRun: { projectId: "project-1", runId: "run-1" } },
-);
 
 function tool(name: string): AgentTool {
   return {
@@ -28,7 +21,7 @@ function tool(name: string): AgentTool {
   };
 }
 
-const designExtension: PiAgentRuntimeExtension = { id: "aiden.design.render", tools: [tool("render_artifact")] };
+const searchExtension: PiAgentRuntimeExtension = { id: "aiden.example.search", tools: [tool("web_search")] };
 
 function harnessOptions(overrides: Partial<PiAgentRuntimeHarnessOptions>, tools: AgentTool[] = []) {
   const core = createFauxCore({ provider: `aiden-profile-${Math.random().toString(36).slice(2)}` });
@@ -42,57 +35,7 @@ function harnessOptions(overrides: Partial<PiAgentRuntimeHarnessOptions>, tools:
   return { core, options };
 }
 
-test("a design harness builds with render_artifact alone", () => {
-  const { options } = harnessOptions({ extensions: [designExtension] });
-  assert.ok(createGenerationHarness(design, options) instanceof PiAgentRuntimeHarness);
-});
-
-test("any other contributed tool refuses to build a design harness before a provider request", () => {
-  const cases: Array<[string, ReturnType<typeof harnessOptions>]> = [
-    ["an extension tool", harnessOptions({ extensions: [designExtension, { id: "aiden.memory", tools: [tool("memory_search")] }] })],
-    ["a base tool", harnessOptions({ extensions: [designExtension] }, [tool("bash")])],
-    [
-      "a contribution snapshot",
-      harnessOptions({ contributions: resolvePiAgentRuntimeContributionSnapshot("", [tool("read")], {}, [designExtension]) }),
-    ],
-  ];
-  for (const [label, { core, options }] of cases) {
-    assert.throws(() => createGenerationHarness(design, options), /design profile cannot expose/u, label);
-    assert.equal(core.state.callCount, 0, label);
-  }
-});
-
-test("an extension without tools refuses to build a design harness before a provider request", () => {
-  const memory: PiAgentRuntimeExtension = { id: "aiden.memory", transformContext: async (messages) => messages };
-  const instructions: PiAgentRuntimeExtension = { id: "aiden.agents-instructions", systemPrompt: "Follow AGENTS.md." };
-  const cases: Array<[string, ReturnType<typeof harnessOptions>]> = [
-    ["a context transform", harnessOptions({ extensions: [designExtension, memory] })],
-    ["a system prompt", harnessOptions({ extensions: [designExtension, instructions] })],
-    [
-      "a contribution snapshot",
-      harnessOptions({ contributions: resolvePiAgentRuntimeContributionSnapshot("", [], {}, [designExtension, memory]) }),
-    ],
-    ["no design extension", harnessOptions({ extensions: [] })],
-  ];
-  for (const [label, { core, options }] of cases) {
-    assert.throws(() => createGenerationHarness(design, options), /design profile cannot compose/u, label);
-    assert.equal(core.state.callCount, 0, label);
-  }
-});
-
-test("skills or prompt templates refuse to build a design harness", () => {
-  const skill = { name: "deploy", description: "Deploy the app", content: "Run the deploy script.", filePath: "/skills/deploy/SKILL.md" };
-  const cases: Array<[string, ReturnType<typeof harnessOptions>]> = [
-    ["a base skill", harnessOptions({ extensions: [designExtension], resources: { skills: [skill] } })],
-    ["an extension skill", harnessOptions({ extensions: [{ ...designExtension, resources: { skills: [skill] } }] })],
-  ];
-  for (const [label, { core, options }] of cases) {
-    assert.throws(() => createGenerationHarness(design, options), /design profile cannot compose/u, label);
-    assert.equal(core.state.callCount, 0, label);
-  }
-});
-
 test("the default profile builds with any tool set", () => {
-  const { options } = harnessOptions({ extensions: [designExtension] }, [tool("bash"), tool("read")]);
-  assert.ok(createGenerationHarness({ kind: "default" }, options) instanceof PiAgentRuntimeHarness);
+  const { options } = harnessOptions({ extensions: [searchExtension] }, [tool("bash"), tool("read")]);
+  assert.ok(createGenerationHarness(options) instanceof PiAgentRuntimeHarness);
 });
