@@ -99,7 +99,7 @@ export async function runHookCommand(input: HookRunInput): Promise<HookRawRun> {
       command: input.hook.handler.command,
       cwd: input.cwd,
       env,
-      timeoutMs: clampHookTimeout(input.hook.handler.timeout) * 1000,
+      timeoutMs: clampHookTimeout(input.hook.handler.timeout, input.hook.handler.async) * 1000,
       maxOutputBytes: HOOK_OUTPUT_LIMIT_BYTES,
       signal: input.signal,
       input: JSON.stringify(input.payload),

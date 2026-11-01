@@ -37,7 +37,7 @@ import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
-import { boundedHookBlockedReason, parseHookBlockedPrompt } from "./hook-blocked-prompt.js";
+import { boundedHookBlockedReason, hookBlockedField } from "./hook-blocked-prompt.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
 import { parseChatHtmlArtifacts, parseChatImagePlacements, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
 import { parseChatUiVisualV1, parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
@@ -895,10 +895,8 @@ export function createChatStore(
           message.role === "user"
             ? parseAgentNoticeV1(message.notice)
             : undefined,
-        hookBlocked:
-          message.role === "user"
-            ? parseHookBlockedPrompt(message.hookBlocked)
-            : undefined,
+        // Only a blocked prompt carries the key, so unmarked messages keep their old shape.
+        ...hookBlockedField(message),
       };
     });
     if (policy !== "pure") {
@@ -1487,10 +1485,7 @@ export function createChatStore(
               message.role === "user"
                 ? parseAgentNoticeV1(message.notice)
                 : undefined,
-            hookBlocked:
-              message.role === "user"
-                ? parseHookBlockedPrompt(message.hookBlocked)
-                : undefined,
+            ...hookBlockedField(message),
             providerFailure:
               message.role === "assistant"
                 ? parseProviderFailureV1(message.providerFailure)

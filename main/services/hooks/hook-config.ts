@@ -3,9 +3,10 @@
  *
  *   { "hooks": { "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "…" }] }] } }
  *
- * Nothing is dropped silently: unknown events, non-`command` handlers,
- * `async` and other fields Aiden does not implement come back as listings
- * with status `unsupported` and a reason. Pure; no filesystem access.
+ * Nothing is dropped silently: unknown events, non-`command` handlers, an
+ * event that never runs in the file's scope and other fields Aiden does not
+ * implement come back as listings with status `unsupported` and a reason.
+ * Pure; no filesystem access.
  */
 
 import { createHash } from "node:crypto";
@@ -13,6 +14,7 @@ import * as path from "node:path";
 import { compileHookMatcher } from "./hook-matcher.js";
 import {
   HOOK_EVENTS,
+  HOOK_EVENT_SCOPE_KINDS,
   type HookCommandHandler,
   type HookDefinition,
   type HookEvent,
@@ -24,6 +26,8 @@ export { aidenToolInput, aidenToolName, claudeToolInput, claudeToolName, toolInp
 
 export const DEFAULT_HOOK_TIMEOUT_SECONDS = 30;
 export const MAX_HOOK_TIMEOUT_SECONDS = 120;
+/** `async: true` hooks run in the background, so they may run longer. */
+export const MAX_ASYNC_HOOK_TIMEOUT_SECONDS = 600;
 export const MAX_AGENT_HOOK_TIMEOUT_SECONDS = 30;
 export const MAX_HOOK_COMMAND_LENGTH = 4096;
 export const MAX_HOOK_ENV_ALLOW = 32;
@@ -47,11 +51,30 @@ export const RESERVED_HOOK_ENV_NAMES: ReadonlySet<string> = new Set([
   "CLAUDE_PROJECT_DIR",
 ]);
 
-const HANDLER_KEYS = new Set(["type", "command", "timeout", "failClosed", "envAllow", "statusMessage"]);
+const HANDLER_KEYS = new Set(["type", "command", "timeout", "async", "failClosed", "envAllow", "statusMessage"]);
 const GROUP_KEYS = new Set(["matcher", "hooks"]);
 
 export function isHookEvent(value: unknown): value is HookEvent {
   return typeof value === "string" && (HOOK_EVENTS as readonly string[]).includes(value);
+}
+
+const SCOPE_PHRASES: Record<HookScope["kind"], string> = {
+  global: "everywhere",
+  workspace: "a workspace",
+  chat: "a chat",
+  bot: "a Bot",
+};
+
+/**
+ * Why `event` never fires for a hook saved in `scope`, or undefined when it
+ * can. See `HOOK_EVENT_SCOPE_KINDS`.
+ */
+export function hookEventScopeProblem(event: HookEvent, scope: Pick<HookScope, "kind">): string | undefined {
+  const kinds = HOOK_EVENT_SCOPE_KINDS[event];
+  if (kinds.includes(scope.kind)) return undefined;
+  const where = kinds.filter((kind) => kind !== "global").map((kind) => SCOPE_PHRASES[kind]);
+  const list = where.length <= 1 ? where.join("") : `${where.slice(0, -1).join(", ")} or ${where[where.length - 1]}`;
+  return `${event} hooks never run for ${SCOPE_PHRASES[scope.kind]}; save it globally or for ${list}.`;
 }
 
 /** Normalized workspace root: absolute, no trailing separator. */
@@ -100,15 +123,22 @@ export function hookScopeIdPart(scope: HookScope): string {
   return `${scope.kind}-${createHash("sha256").update(hookScopeKey(scope)).digest("hex").slice(0, 12)}`;
 }
 
-export function clampHookTimeout(seconds: number | undefined): number {
+/** The longest a handler may run: 600 seconds for `async` hooks, 120 otherwise. */
+export function maxHookTimeoutSeconds(async: boolean | undefined): number {
+  return async === true ? MAX_ASYNC_HOOK_TIMEOUT_SECONDS : MAX_HOOK_TIMEOUT_SECONDS;
+}
+
+export function clampHookTimeout(seconds: number | undefined, async?: boolean): number {
   if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return DEFAULT_HOOK_TIMEOUT_SECONDS;
-  return Math.min(MAX_HOOK_TIMEOUT_SECONDS, seconds);
+  return Math.min(maxHookTimeoutSeconds(async), seconds);
 }
 
 /**
  * sha256 over everything that decides what a hook does: event, matcher,
- * command, timeout, failClosed, the sorted envAllow names and the scope
- * (which also fixes its working directory). Any change needs re-approval.
+ * command, timeout, failClosed, async, the sorted envAllow names and the
+ * scope (which also fixes its working directory). Any change needs
+ * re-approval. `async` is folded in only when set, so approvals of hooks
+ * saved before it existed keep their digest.
  */
 export function hookDigest(input: { event: string; matcher: string; handler: HookCommandHandler; scope: HookScope; configuredType?: string }): string {
   const canonical = JSON.stringify({
@@ -117,8 +147,9 @@ export function hookDigest(input: { event: string; matcher: string; handler: Hoo
     matcher: input.matcher,
     type: input.configuredType ?? input.handler.type,
     command: input.handler.command,
-    timeout: clampHookTimeout(input.handler.timeout),
+    timeout: clampHookTimeout(input.handler.timeout, input.handler.async),
     failClosed: input.handler.failClosed === true,
+    ...(input.handler.async === true ? { async: true } : {}),
     envAllow: [...new Set(input.handler.envAllow ?? [])].sort(),
     scope: hookScopeKey(input.scope),
   });
@@ -165,8 +196,9 @@ export function validateHookHandler(raw: unknown, options: { maxTimeoutSeconds?:
         : `"${configuredType}" hooks are not supported in Aiden; only "command" hooks run.`,
     );
   }
-  if (record.async === true) return fail("Async hooks are not supported in Aiden.");
-  const unknown = Object.keys(record).filter((key) => !HANDLER_KEYS.has(key) && !(key === "async" && record.async === false));
+  if (record.async !== undefined && typeof record.async !== "boolean") return fail("async must be true or false.");
+  const isAsync = record.async === true;
+  const unknown = Object.keys(record).filter((key) => !HANDLER_KEYS.has(key));
   if (unknown.length > 0) return fail(`Unsupported field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}.`);
   if (!commandText.trim()) return fail("The hook has no command.");
   if (commandText.length > MAX_HOOK_COMMAND_LENGTH) return fail(`The command is longer than ${MAX_HOOK_COMMAND_LENGTH} characters.`);
@@ -177,14 +209,18 @@ export function validateHookHandler(raw: unknown, options: { maxTimeoutSeconds?:
     if (typeof record.timeout !== "number" || !Number.isFinite(record.timeout) || record.timeout <= 0) {
       return fail("The timeout must be a positive number of seconds.");
     }
-    const ceiling = options.maxTimeoutSeconds ?? MAX_HOOK_TIMEOUT_SECONDS;
+    const maximum = maxHookTimeoutSeconds(isAsync);
+    const ceiling = Math.min(options.maxTimeoutSeconds ?? maximum, maximum);
     if (options.maxTimeoutSeconds !== undefined && record.timeout > ceiling) {
       return fail(`The timeout can be at most ${ceiling} seconds.`);
     }
-    timeout = Math.min(record.timeout, MAX_HOOK_TIMEOUT_SECONDS);
-    if (record.timeout > MAX_HOOK_TIMEOUT_SECONDS) warnings.push(`The timeout was lowered to Aiden's maximum of ${MAX_HOOK_TIMEOUT_SECONDS} seconds.`);
+    timeout = Math.min(record.timeout, maximum);
+    if (record.timeout > maximum) {
+      warnings.push(`The timeout was lowered to Aiden's maximum of ${maximum} seconds${isAsync ? " for async hooks" : ""}.`);
+    }
   }
   if (record.failClosed !== undefined && typeof record.failClosed !== "boolean") return fail("failClosed must be true or false.");
+  if (isAsync && record.failClosed === true) return fail("An async hook can not be failClosed: Aiden does not wait for it.");
   let envAllow: string[] | undefined;
   if (record.envAllow !== undefined) {
     if (!Array.isArray(record.envAllow) || record.envAllow.some((name) => typeof name !== "string" || !ENV_NAME.test(name))) {
@@ -198,6 +234,7 @@ export function validateHookHandler(raw: unknown, options: { maxTimeoutSeconds?:
   }
   const handler: HookCommandHandler = { type: "command", command: commandText };
   if (timeout !== undefined) handler.timeout = timeout;
+  if (isAsync) handler.async = true;
   if (record.failClosed === true) handler.failClosed = true;
   if (envAllow && envAllow.length > 0) handler.envAllow = envAllow;
   return { ok: true, handler, warnings };
@@ -274,7 +311,9 @@ export function parseHooksConfig(raw: unknown, options: ParseHooksOptions): Pars
         }
         const id = `${options.idPrefix}:${configuredEvent}:${groupIndex}.${handlerIndex}`;
         const validation = validateHookHandler(rawHandler);
-        const reason = !known ? unknownEventReason(configuredEvent) : groupReason ?? (validation.ok ? undefined : validation.reason);
+        const reason = !known
+          ? unknownEventReason(configuredEvent)
+          : groupReason ?? (validation.ok ? hookEventScopeProblem(configuredEvent, scope) : validation.reason);
         const handler: HookCommandHandler = validation.ok ? validation.handler : { type: "command", command: validation.command };
         const configuredType = validation.ok ? "command" : validation.configuredType;
         if (validation.ok) result.warnings.push(...validation.warnings);

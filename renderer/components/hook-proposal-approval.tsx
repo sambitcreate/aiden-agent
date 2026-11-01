@@ -1,5 +1,7 @@
 import type * as React from "react";
 import type { HookProposalApprovalDetails, HookProposalApprovalHook } from "../shared/hook-proposal-approval";
+import { ApprovalCodeWell } from "./approval-code-well";
+import { HookScriptCoverage } from "./hook-script-coverage";
 import { Text } from "./ui";
 
 export function hookProposalHeadline(details: HookProposalApprovalDetails): string {
@@ -11,6 +13,10 @@ export const HOOK_PROPOSAL_APPROVAL_FOOTER =
 
 function matcherLabel(matcher: string): string {
   return matcher === "" ? "Everything" : matcher;
+}
+
+function runsLabel(async: boolean): string {
+  return async ? "In the background; it can't block or steer the chat" : "Before the chat goes on";
 }
 
 function timeoutLabel(seconds: number): string {
@@ -44,10 +50,12 @@ function Row({
       <dd className={mono ? "min-w-0 break-all font-mono text-primary" : "min-w-0 break-words text-primary"} data-hook-row-changed={changed ? "true" : undefined}>
         {changed ? (
           <>
-            <del className="text-tertiary" aria-label={`Was ${previous}`}>
+            <del className="text-tertiary">
+              <span className="sr-only">Before: </span>
               {previous}
             </del>{" "}
-            <ins className="no-underline" aria-label={`Now ${value}`}>
+            <ins className="no-underline">
+              <span className="sr-only">After: </span>
               {value}
             </ins>
           </>
@@ -56,22 +64,6 @@ function Row({
         )}
       </dd>
     </>
-  );
-}
-
-function CommandBlock({ label, command, ariaLabel }: { label: string; command: string; ariaLabel: string }): React.ReactElement {
-  return (
-    <div>
-      <Text as="p" variant="small-strong" color="tertiary">
-        {label}
-      </Text>
-      <pre
-        className="mt-1 max-h-48 select-text overflow-auto whitespace-pre-wrap break-all rounded-control bg-well px-3 py-2 text-small text-primary"
-        aria-label={ariaLabel}
-      >
-        {command}
-      </pre>
-    </div>
   );
 }
 
@@ -97,6 +89,9 @@ export function HookProposalApproval({
         <Row label="Event" value={details.event} previous={previous?.event} mono />
         <Row label="Matches" value={matcherLabel(details.matcher)} previous={previous ? matcherLabel(previous.matcher) : undefined} mono />
         <Row label="Time limit" value={timeoutLabel(details.timeoutSeconds)} previous={previous ? timeoutLabel(previous.timeoutSeconds) : undefined} />
+        {details.async || previous?.async ? (
+          <Row label="Runs" value={runsLabel(details.async)} previous={previous ? runsLabel(previous.async) : undefined} />
+        ) : null}
         {details.event === "PreToolUse" || previous?.event === "PreToolUse" ? (
           <Row label="If it fails" value={failureLabel(details.failClosed)} previous={previous ? failureLabel(previous.failClosed) : undefined} />
         ) : null}
@@ -105,16 +100,13 @@ export function HookProposalApproval({
       </dl>
       {commandChanged ? (
         <>
-          <CommandBlock label="Current command" command={previous.command} ariaLabel="Current hook command" />
-          <CommandBlock label="New command" command={details.command} ariaLabel="Complete new hook command" />
+          <ApprovalCodeWell label="Current command">{previous.command}</ApprovalCodeWell>
+          <ApprovalCodeWell label="New command">{details.command}</ApprovalCodeWell>
         </>
       ) : (
-        <CommandBlock
-          label={details.action === "delete" ? "Command to delete" : "Complete command"}
-          command={details.command}
-          ariaLabel="Complete hook command"
-        />
+        <ApprovalCodeWell label={details.action === "delete" ? "Command to delete" : "Complete command"}>{details.command}</ApprovalCodeWell>
       )}
+      <HookScriptCoverage files={details.scriptFiles} coverage={details.scriptCoverage} />
       {details.warnings.length > 0 ? (
         <ul className="space-y-1 rounded-control bg-status-warning-surface px-3 py-2 text-small text-status-warning" aria-label="Warnings">
           {details.warnings.map((warning, index) => (

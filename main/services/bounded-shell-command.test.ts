@@ -47,11 +47,30 @@ test("a backgrounded child holding the output does not hold the command to its d
   assert.equal(result.aborted, false);
 });
 
-test("what the command left running on its output is stopped once the command is done", posixOnly, async () => {
+test("what the command left running on its output is stopped once the command is done, and says so", posixOnly, async () => {
   const result = await run("sleep 30 & echo $!");
   const pid = Number(result.stdout.trim());
   assert.ok(Number.isInteger(pid) && pid > 0, result.stdout);
+  assert.equal(result.backgroundStopped, true);
   assert.ok(await waitUntil(() => !alive(pid), 3_000), "the background sleep is gone");
+});
+
+test("a background process that redirected its output away keeps running", posixOnly, async (t) => {
+  const result = await run("nohup sleep 30 >/dev/null 2>&1 & echo $!");
+  const pid = Number(result.stdout.trim());
+  assert.ok(Number.isInteger(pid) && pid > 0, result.stdout);
+  t.after(() => {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.backgroundStopped, undefined);
+  // Past the drain and the SIGKILL grace period, it is still running.
+  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  assert.equal(alive(pid), true, "the detached server is still running");
 });
 
 test("output written just before exit is kept in full, with the exit code", posixOnly, async () => {

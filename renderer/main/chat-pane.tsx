@@ -75,6 +75,7 @@ import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../lib/
 import { useSpendingStatus } from "../lib/use-spending-status";
 import { SpendingLimitNotice } from "../components/spending/spending-limit-notice";
 import { spendingNotice } from "../shared/spending";
+import { hookMessagesNotice } from "../shared/hooks-settings";
 import { useMarkChatRead } from "../lib/use-mark-chat-read";
 import { localHostAdapter } from "../lib/hosts/local-host-adapter";
 import { useObservedLocalRun } from "../lib/hosts/use-observed-local-run";
@@ -1607,7 +1608,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
           },
           onHookMessages: (messages) => {
             if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
-            for (const message of messages) toast.info(message);
+            const notice = hookMessagesNotice(messages);
+            if (!notice) return;
+            const description =
+              notice.lines.length || notice.more ? (
+                <span className="flex flex-col">
+                  {notice.lines.map((line, index) => (
+                    <span key={index}>{line}</span>
+                  ))}
+                  {notice.more ? <span>{`and ${notice.more} more`}</span> : null}
+                </span>
+              ) : undefined;
+            toast.info(notice.title, description ? { description } : undefined);
           },
           onContextPressure: (pressure) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {

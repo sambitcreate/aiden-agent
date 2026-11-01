@@ -1672,6 +1672,36 @@ test("run_command output-limit termination is an error even when output starts n
   }
 });
 
+test("run_command tells the model when it stopped a background process still holding output", async () => {
+  if (process.platform === "win32") return;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-background-"));
+  try {
+    const runCommand = buildCodingTools(root).find((tool) => tool.name === "run_command")!;
+    const stopped = await runCommand.execute("held", { command: "sleep 30 & echo started" });
+    const stoppedText = stopped.content[0].type === "text" ? stopped.content[0].text : "";
+    assert.notEqual(stopped.isError, true);
+    assert.match(stoppedText, /^started\n/u);
+    assert.match(stoppedText, /background process still holding output was stopped/u);
+    assert.match(stoppedText, /nohup/u);
+
+    const detached = await runCommand.execute("detached", { command: "nohup sleep 30 >/dev/null 2>&1 & echo $!" });
+    const detachedText = detached.content[0].type === "text" ? detached.content[0].text : "";
+    const pid = Number(detachedText.trim());
+    try {
+      assert.ok(Number.isInteger(pid) && pid > 0, detachedText);
+      assert.doesNotMatch(detachedText, /was stopped/u);
+    } finally {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("run_command cancellation kills the shell process group", async () => {
   if (process.platform === "win32") return;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-"));

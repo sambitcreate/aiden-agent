@@ -244,12 +244,14 @@ export function availableSettingsDestinations(capabilities: {
   computerUse: boolean;
   devices: boolean;
   botComputers: boolean;
+  hooks: boolean;
 }): typeof SETTINGS_DESTINATIONS {
   return SETTINGS_DESTINATIONS.filter(
     (destination) =>
       (destination.id !== "computerUse" || capabilities.computerUse) &&
       (destination.id !== "simulator" || capabilities.devices) &&
-      (destination.id !== "botComputers" || capabilities.botComputers),
+      (destination.id !== "botComputers" || capabilities.botComputers) &&
+      (destination.id !== "hooks" || capabilities.hooks),
   );
 }
 

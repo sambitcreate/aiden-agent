@@ -4,7 +4,8 @@
 
 import path from "node:path";
 import { HOOK_EVENTS, type HookEvent, type HookListing, type HookScope } from "../services/hooks/hook-types.js";
-import { MAX_HOOK_COMMAND_LENGTH, MAX_HOOK_TIMEOUT_SECONDS, normalizeWorkspaceRoot } from "../services/hooks/hook-config.js";
+import { MAX_HOOK_COMMAND_LENGTH, maxHookTimeoutSeconds, normalizeWorkspaceRoot } from "../services/hooks/hook-config.js";
+import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import type { HookChange, HookList, HookService } from "../services/hooks/hook-service.js";
 import {
   HOOK_MAX_MATCHER_LENGTH,
@@ -60,6 +61,8 @@ export interface HookHandlerDependencies<Event> {
   broadcast(change: HookChange): void;
   /** For the `AIDEN_HOOKS=0` note before the service has started. */
   env?: NodeJS.ProcessEnv;
+  /** Whether this host can run hooks at all (macOS and Linux). Defaults to the host capability. */
+  hooksSupported?: () => boolean;
   /** Throws unless the request came from a window that owns a renderer document. */
   requireSender(event: Event): void;
 }
@@ -76,7 +79,10 @@ export function registerHookHandlers<Event>(dependencies: HookHandlerDependencie
     });
   };
 
+  const supported = dependencies.hooksSupported ?? (() => hostPlatformCapabilities().hooks);
+
   const ready = (): HookService => {
+    if (!supported()) throw new Error("Hooks need macOS or Linux.");
     const service = dependencies.service();
     if (!service) throw new Error("Hooks are still starting. Try again in a moment.");
     if (subscribedTo !== service) {
@@ -100,7 +106,8 @@ export function registerHookHandlers<Event>(dependencies: HookHandlerDependencie
   };
 
   handle("hooks:list", async (): Promise<HooksOverview> => {
-    const service = dependencies.service();
+    // On a host that can't run hooks, nothing is listed even if a service exists.
+    const service = supported() ? dependencies.service() : undefined;
     if (!service) {
       return {
         available: false,
@@ -154,19 +161,27 @@ export function registerHookHandlers<Event>(dependencies: HookHandlerDependencie
     if (typeof input.command !== "string" || input.command.includes("\u0000") || input.command.length > MAX_HOOK_COMMAND_LENGTH) invalid();
     const command = input.command.trim();
     if (!command) invalid();
+    const isAsync = input.async === undefined ? false : bool(input.async);
     let timeout: number | undefined;
     if (input.timeout !== undefined && input.timeout !== null) {
-      if (typeof input.timeout !== "number" || !Number.isInteger(input.timeout) || input.timeout < 1 || input.timeout > MAX_HOOK_TIMEOUT_SECONDS) invalid();
+      // An async hook may run for up to 600 seconds; one Aiden waits for, 120.
+      if (typeof input.timeout !== "number" || !Number.isInteger(input.timeout) || input.timeout < 1 || input.timeout > maxHookTimeoutSeconds(isAsync)) invalid();
       timeout = input.timeout;
     }
     const failClosed = input.failClosed === undefined ? false : bool(input.failClosed);
-    if (failClosed && hookEvent !== "PreToolUse") invalid();
+    if (failClosed && (hookEvent !== "PreToolUse" || isAsync)) invalid();
     return ready().saveHook({
       scope,
       event: hookEvent,
       matcher: optionalText(input.matcher, HOOK_MAX_MATCHER_LENGTH),
       name: optionalText(input.name, HOOK_MAX_NAME_LENGTH),
-      handler: { type: "command", command, ...(timeout ? { timeout } : {}), ...(failClosed ? { failClosed: true } : {}) },
+      handler: {
+        type: "command",
+        command,
+        ...(timeout ? { timeout } : {}),
+        ...(failClosed ? { failClosed: true } : {}),
+        ...(isAsync ? { async: true } : {}),
+      },
     });
   });
 

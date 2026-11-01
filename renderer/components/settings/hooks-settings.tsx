@@ -27,18 +27,20 @@ import {
   toast,
 } from "../ui";
 import { hooksApi } from "../../lib/ipc";
+import { BotPageSkeleton } from "../../main/bots/bot-page-shell";
+import { HookScriptCoverage } from "../hook-script-coverage";
 import { cn } from "../../lib/ui-utils";
 import {
   groupHooksByScope,
   HOOK_DEFAULT_TIMEOUT_SECONDS,
   HOOK_EVENT_DESCRIPTIONS,
-  HOOK_EVENTS,
   HOOK_MAX_COMMAND_LENGTH,
   HOOK_MAX_MATCHER_LENGTH,
   HOOK_MAX_NAME_LENGTH,
   HOOK_MAX_TIMEOUT_SECONDS,
   HOOK_TOOL_EVENTS,
   hookMatcherLabel,
+  hookEventsForScope,
   hookNeedsApproval,
   hookScopeKey,
   hookScopeLabel,
@@ -139,7 +141,7 @@ function HookRow({
         <button
           type="button"
           onClick={onOpen}
-          className="-mx-1 rounded-md px-1 text-left text-strong text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-focus-ring"
+          className="-mx-1 rounded-control px-1 text-left text-strong text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
           {listing.name}
         </button>
@@ -330,19 +332,26 @@ function HookDetailSheet({
             </DetailRow>
             <DetailRow label="Runs">{enabled ? "On" : "Off"}</DetailRow>
           </dl>
+          <HookScriptCoverage files={listing.scriptFiles} coverage={listing.scriptCoverage} />
 
           <div className="flex flex-col gap-2">
             <Text variant="small-strong">Last runs</Text>
             {runLog.isError ? (
               <Text variant="small" color="secondary">Couldn’t read its runs.</Text>
-            ) : runLog.isSuccess && runs.length === 0 ? (
+            ) : !runLog.isSuccess ? (
+              <span role="status" aria-label="Reading its runs" className="flex flex-col gap-2">
+                <span className="h-3 w-48 max-w-full rounded-full bg-control motion-safe:animate-pulse" />
+                <span className="h-3 w-32 max-w-full rounded-full bg-control motion-safe:animate-pulse" />
+              </span>
+            ) : runs.length === 0 ? (
               <Text variant="small" color="secondary">It hasn’t run yet.</Text>
             ) : (
               <ul aria-label="Last runs" className="flex flex-col gap-2">
-                {runs.slice(-10).reverse().map((run) => {
+                {runs.slice(-10).reverse().map((run, index) => {
                   const result = RUN_RESULT_LABEL[run.result];
                   return (
-                    <li key={`${run.startedAt}-${run.event}`} className="flex flex-col gap-1">
+                    // Two runs can share a start time and event, so the position keeps keys unique.
+                    <li key={`${index}:${run.startedAt}:${run.event}`} className="flex flex-col gap-1">
                       <span className="flex flex-wrap items-center gap-2 text-small text-secondary">
                         <Badge color={result.color}>{result.label}</Badge>
                         <span>{formatWhen(run.startedAt)}</span>
@@ -374,7 +383,7 @@ function HookDetailSheet({
               {testing ? "Testing…" : "Test"}
             </Button>
             {repoHook && needsApproval ? null : (
-              <Button variant="transparent" className="text-status-red" disabled={deleting} onClick={() => setConfirmDelete(true)}>
+              <Button variant="destructive" disabled={deleting} onClick={() => setConfirmDelete(true)}>
                 {repoHook ? "Remove approval" : "Delete"}
               </Button>
             )}
@@ -390,7 +399,7 @@ function HookDetailSheet({
         title="Run this command now?"
         description={
           <span className="flex flex-col gap-2">
-            <span>You haven’t approved this version. Testing runs it once on this Mac.</span>
+            <span>You haven’t approved this version. Testing runs it once on this computer.</span>
             <CommandBlock command={listing.handler.command} />
           </span>
         }
@@ -600,6 +609,9 @@ function AddHookSheet({
   const [failClosed, setFailClosed] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const scopeKind: "global" | "workspace" = scopeKey === "global" ? "global" : "workspace";
+  // Only events that can ever fire for the chosen scope are offered.
+  const events = hookEventsForScope(scopeKind);
   const toolEvent = HOOK_TOOL_EVENTS.has(event);
   const parsedTimeout = parseHookTimeoutField(timeout);
   const ready = command.trim() !== "" && parsedTimeout !== null;
@@ -642,7 +654,18 @@ function AddHookSheet({
       <div className="flex flex-col gap-4">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <FormRow label="Where" htmlFor={`${ids}-scope`}>
-            <Select value={scopeKey} onValueChange={setScopeKey}>
+            <Select
+              value={scopeKey}
+              onValueChange={(value) => {
+                setScopeKey(value);
+                const next = hookEventsForScope(value === "global" ? "global" : "workspace");
+                // An event the new scope never fires on goes back to the first one it does.
+                if (!next.includes(event)) {
+                  setEvent(next[0] ?? "PreToolUse");
+                  if (next[0] !== "PreToolUse") setFailClosed(false);
+                }
+              }}
+            >
               <SelectTrigger id={`${ids}-scope`} aria-label="Where">
                 <SelectValue />
               </SelectTrigger>
@@ -668,7 +691,7 @@ function AddHookSheet({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {HOOK_EVENTS.map((option) => (
+                {events.map((option) => (
                   <SelectItem key={option} value={option}>
                     {option}
                   </SelectItem>
@@ -780,7 +803,7 @@ function WhatHooksSeeSheet({ onOpenChange }: { onOpenChange: (open: boolean) => 
         {section(
           "A minimal environment",
           <p>
-            Only {mono(["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "USER", "SHELL"])} come from your Mac, plus{" "}
+            Only {mono(["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "USER", "SHELL"])} come from this computer, plus{" "}
             {mono(["AIDEN_PROJECT_DIR", "AIDEN_HOOK_EVENT", "AIDEN_SESSION_ID"])}. API keys and other variables reach a hook only if it
             names them, and that list is part of what you approve.
           </p>,
@@ -954,7 +977,7 @@ export function HooksSettings() {
             <span className="flex flex-col gap-2">
               <span>
                 It will run this command on {eventAndMatcher(confirmApprove)} in{" "}
-                {hookScopeLabel(confirmApprove.scope, data?.workspaces ?? [])}, on this Mac.
+                {hookScopeLabel(confirmApprove.scope, data?.workspaces ?? [])}, on this computer.
               </span>
               <CommandBlock command={confirmApprove.handler.command} />
             </span>
@@ -991,6 +1014,26 @@ export interface HooksSettingsViewProps {
   children?: React.ReactNode;
 }
 
+/** The page's one heading, with Add hook trailing it as on Connectors and Providers. */
+function HooksHeading({ canAdd, onAdd }: { canAdd: boolean; onAdd: () => void }) {
+  return (
+    <header className="settings-page-heading flex items-start justify-between gap-4">
+      <div className="min-w-0 flex-1">
+        <Text as="h1" variant="heading1">
+          Hooks
+        </Text>
+        <Text as="p" variant="small" color="secondary" className="mt-0.5 block">
+          Run your own shell commands at points in a chat, such as before a tool runs. Each one runs only after you approve it.
+        </Text>
+      </div>
+      <Button variant="filled" size="small" className="shrink-0" disabled={!canAdd} onClick={onAdd}>
+        <Plus className="size-4" aria-hidden="true" />
+        Add hook
+      </Button>
+    </header>
+  );
+}
+
 export function HooksSettingsView({
   overview,
   error,
@@ -1008,21 +1051,23 @@ export function HooksSettingsView({
   onRejectProposal,
   children,
 }: HooksSettingsViewProps) {
+  const heading = <HooksHeading canAdd={overview?.available === true} onAdd={onAdd} />;
   if (!overview) {
     return (
-      <FieldSet>
-        <Field>
-          {error ? (
-            <Callout color="red" role="alert">
-              {error}
-            </Callout>
-          ) : (
-            <Text role="status" variant="small" color="secondary">
-              Reading your hooks…
-            </Text>
-          )}
-        </Field>
-      </FieldSet>
+      <>
+        {heading}
+        {error ? (
+          <FieldSet>
+            <Field>
+              <Callout color="red" role="alert">
+                {error}
+              </Callout>
+            </Field>
+          </FieldSet>
+        ) : (
+          <BotPageSkeleton label="Reading your hooks" groups={[2, 3]} />
+        )}
+      </>
     );
   }
   const groups = groupHooksByScope(overview);
@@ -1031,6 +1076,7 @@ export function HooksSettingsView({
 
   return (
     <>
+      {heading}
       {overview.disabledByEnvironment ? (
         <Callout color="warning" role="status" className="mb-5">
           AIDEN_HOOKS=0 is set for this launch, so no hook runs. Quit Aiden and open it without that variable to use hooks.
@@ -1076,26 +1122,14 @@ export function HooksSettingsView({
       ) : null}
 
       {empty ? (
-        <FieldSet title="Hooks">
+        <FieldSet>
           <EmptyState
             title="No hooks yet"
-            description="A hook runs your own shell command at a point in a chat, such as before a tool runs."
-            action={
-              <Button variant="accent" disabled={!overview.available} onClick={onAdd}>
-                <Plus aria-hidden="true" />
-                Add hook
-              </Button>
-            }
+            description="A hook runs your own shell command at a point in a chat, such as before a tool runs. Use Add hook to make one."
           />
         </FieldSet>
       ) : (
         <>
-          <div className="mb-3 flex items-center justify-end px-1">
-            <Button variant="accent" disabled={!overview.available} onClick={onAdd}>
-              <Plus aria-hidden="true" />
-              Add hook
-            </Button>
-          </div>
           {groups.map((group) => (
             <FieldSet
               key={group.key}

@@ -193,17 +193,22 @@ export class HookTrustStore {
     return this.save();
   }
 
-  /** Count a failure; returns true when this one reached the limit and disabled the hook. */
-  async recordFailure(hook: HookStateTarget): Promise<boolean> {
+  /**
+   * Count a failure. At the limit the hook is turned off, unless `canDisable`
+   * is false (a fail-closed hook: turning it off would quietly lift the block
+   * it exists for), in which case it keeps counting. `autoDisabled` is true
+   * only for the failure that turned it off.
+   */
+  async recordFailure(hook: HookStateTarget, options: { canDisable?: boolean } = {}): Promise<{ autoDisabled: boolean; consecutive: number }> {
     const key = hookStateKey(hook);
     const entry = this.state.failures[key] ?? { consecutive: 0 };
-    if (entry.autoDisabled) return false;
+    if (entry.autoDisabled) return { autoDisabled: false, consecutive: entry.consecutive };
     entry.consecutive += 1;
-    const reached = entry.consecutive >= HOOK_FAILURE_LIMIT;
+    const reached = entry.consecutive >= HOOK_FAILURE_LIMIT && options.canDisable !== false;
     if (reached) entry.autoDisabled = true;
     this.state.failures[key] = entry;
     await this.save();
-    return reached;
+    return { autoDisabled: reached, consecutive: entry.consecutive };
   }
 
   async recordSuccess(hook: HookStateTarget): Promise<void> {

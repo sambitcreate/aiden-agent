@@ -76,7 +76,7 @@ test("Simulator is an Agent settings destination hidden without the devices capa
   assert.ok(destination?.keywords.includes("ios"));
   // The settings nav and the command palette both filter through this helper.
   const hasSimulator = (devices: boolean) =>
-    availableSettingsDestinations({ computerUse: true, devices, botComputers: true }).some((entry) => entry.id === "simulator");
+    availableSettingsDestinations({ computerUse: true, devices, botComputers: true, hooks: true }).some((entry) => entry.id === "simulator");
   assert.equal(hasSimulator(false), false);
   assert.equal(hasSimulator(true), true);
   assert.match(read("../../main/settings-view.tsx"), /simulator: SimulatorSettings/u);

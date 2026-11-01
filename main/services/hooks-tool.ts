@@ -27,7 +27,9 @@ import { fenceAsData } from "../../renderer/shared/agent-notices.js";
 import {
   HOOK_PROPOSAL_APPROVAL_KIND,
   HOOK_PROPOSAL_LABEL_LIMIT,
+  HOOK_PROPOSAL_MAX_SCRIPT_FILES,
   HOOK_PROPOSAL_MAX_WARNINGS,
+  HOOK_PROPOSAL_SCRIPT_FILE_LIMIT,
   HOOK_PROPOSAL_WARNING_LIMIT,
   isHookProposalApprovalDetails,
   type HookProposalApprovalDetails,
@@ -110,6 +112,7 @@ interface HooksToolParams {
   command?: string;
   timeout?: number;
   failClosed?: boolean;
+  async?: boolean;
   envAllow?: string[];
   name?: string;
 }
@@ -140,11 +143,17 @@ const PARAMETERS = Type.Object(
         description: 'propose create: "workspace" runs in every chat of this folder, "chat" only in this chat.',
       }),
     ),
-    event: Type.Optional(Type.String({ maxLength: 40, description: `propose: one of ${HOOK_EVENTS.join(", ")}.` })),
+    event: Type.Optional(
+      Type.String({
+        maxLength: 40,
+        description: `propose: one of ${HOOK_EVENTS.join(", ")}. WorktreeSetup takes scope "workspace" only; RoutineRun and RoutineFailed run only for global and Bot hooks, which the owner adds in Settings → Hooks.`,
+      }),
+    ),
     matcher: Type.Optional(
       Type.String({
         maxLength: 500,
-        description: 'propose: tool names for PreToolUse/PostToolUse (for example "run_command|Bash" or "write_file|edit_file"), the source for SessionStart; empty matches all.',
+        description:
+          'propose: tool names for PreToolUse/PostToolUse (for example "run_command|Bash" or "write_file|edit_file"); startup, resume or compact for SessionStart; manual or auto for PreCompact; permission_prompt or elicitation_dialog for Notification. Other events ignore it. Empty matches all.',
       }),
     ),
     command: Type.Optional(
@@ -158,6 +167,11 @@ const PARAMETERS = Type.Object(
     ),
     failClosed: Type.Optional(
       Type.Boolean({ description: "propose, PreToolUse only: block the tool when the hook crashes or times out." }),
+    ),
+    async: Type.Optional(
+      Type.Boolean({
+        description: "propose: run it in the background. Aiden doesn't wait for it, so it can't block or add context; its systemMessage reaches the person when it finishes. Not with failClosed.",
+      }),
     ),
     envAllow: Type.Optional(
       Type.Array(Type.String({ maxLength: 128 }), {
@@ -189,7 +203,8 @@ function approvalHook(event: string, matcher: string, handler: HookCommandHandle
     event,
     matcher,
     command: handler.command,
-    timeoutSeconds: clampHookTimeout(handler.timeout),
+    timeoutSeconds: clampHookTimeout(handler.timeout, handler.async),
+    async: handler.async === true,
     failClosed: handler.failClosed === true,
     envAllow: [...(handler.envAllow ?? [])],
   };
@@ -234,8 +249,10 @@ function describeListing(hook: HookListing): string {
     `  name: ${hook.name}`,
     `  event: ${hook.configuredEvent}${hook.matcher ? `, matcher: ${hook.matcher}` : ""}`,
     `  command: ${hook.handler.command}`,
-    `  timeout: ${clampHookTimeout(hook.handler.timeout)} s${hook.handler.failClosed ? ", fail closed" : ""}${hook.handler.envAllow?.length ? `, env: ${hook.handler.envAllow.join(", ")}` : ""}`,
+    `  timeout: ${clampHookTimeout(hook.handler.timeout, hook.handler.async)} s${hook.handler.async ? ", runs in the background" : ""}${hook.handler.failClosed ? ", fail closed" : ""}${hook.handler.envAllow?.length ? `, env: ${hook.handler.envAllow.join(", ")}` : ""}`,
   ];
+  if (hook.scriptFiles?.length) lines.push(`  approval covers: ${hook.scriptFiles.join(", ")}${hook.scriptCoverage === "partial" ? " (not everything the command runs)" : ""}`);
+  else if (hook.scriptCoverage === "partial") lines.push("  approval covers: the command only, not everything it runs");
   if (hook.unsupportedReason) lines.push(`  not supported: ${hook.unsupportedReason}`);
   if (hook.lastRun) lines.push(`  last run: ${describeRun(hook.lastRun)}`);
   return lines.join("\n");
@@ -411,7 +428,7 @@ export function createHooksTool(deps: HooksToolDependencies): PiRuntimeTool {
     const verb = proposal.action === "delete" ? "delete" : proposal.action === "update" ? "change" : "add";
     const card: HooksToolApprovalCard = {
       // Phones and paired Macs see only this line and can't approve it.
-      summary: `Aiden wants to ${verb} a hook. Review and approve it on the Mac running this chat. ${cardLine(proposal.summary, 600)}`,
+      summary: `Aiden wants to ${verb} a hook. Review and approve it on the computer running this chat. ${cardLine(proposal.summary, 600)}`,
       details,
     };
     let outcome: ToolApprovalOutcome;
@@ -475,18 +492,25 @@ function handlerFrom(params: HooksToolParams, existing: HookCommandHandler | und
   const command = (params.command ?? existing?.command ?? "").trim();
   const timeout = params.timeout ?? existing?.timeout;
   const failClosed = params.failClosed ?? existing?.failClosed;
+  const runsAsync = params.async ?? existing?.async;
   const envAllow = params.envAllow ?? existing?.envAllow;
   return {
     type: "command",
     command,
     ...(timeout !== undefined ? { timeout } : {}),
     ...(failClosed !== undefined ? { failClosed } : {}),
+    ...(runsAsync !== undefined ? { async: runsAsync } : {}),
     ...(envAllow && envAllow.length > 0 ? { envAllow: [...envAllow] } : {}),
   };
 }
 
 function approvalDetails(proposal: HookProposal, existing: HookListing | undefined): HookProposalApprovalDetails {
   const { definition } = proposal;
+  // Paths are display-only here (the digest already covers the files); clean them the way the card expects.
+  const scriptFiles = (proposal.scriptFiles ?? [])
+    .map((file) => cardLine(file, HOOK_PROPOSAL_SCRIPT_FILE_LIMIT))
+    .filter(Boolean)
+    .slice(0, HOOK_PROPOSAL_MAX_SCRIPT_FILES);
   return {
     kind: HOOK_PROPOSAL_APPROVAL_KIND,
     action: proposal.action,
@@ -502,5 +526,7 @@ function approvalDetails(proposal: HookProposal, existing: HookListing | undefin
         : null,
     digestPrefix: definition.digest.slice(0, 12),
     ...approvalHook(definition.event, definition.matcher, definition.handler),
+    ...(scriptFiles.length > 0 ? { scriptFiles } : {}),
+    ...(proposal.scriptCoverage ? { scriptCoverage: proposal.scriptCoverage } : {}),
   };
 }

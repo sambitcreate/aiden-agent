@@ -20,6 +20,11 @@ export interface BoundedShellCommandResult {
   timedOut: boolean;
   outputLimitExceeded: boolean;
   aborted: boolean;
+  /**
+   * The shell exited but something it started in the background still held
+   * stdout or stderr, so Aiden stopped it. Absent otherwise.
+   */
+  backgroundStopped?: boolean;
 }
 
 /**
@@ -37,7 +42,10 @@ export const BOUNDED_SHELL_DRAIN_MS = 250;
  * The command is finished when its shell exits, not when every process that
  * inherited its output does: after a short drain for the last output, anything
  * it left running in the background that still holds the pipes (`sleep 30 &`)
- * is stopped, so a backgrounded child can't hold the caller to the deadline.
+ * is stopped and reported as `backgroundStopped`, so a backgrounded child
+ * can't hold the caller to the deadline. A background process that redirected
+ * its output away (`nohup server >log 2>&1 &`) holds neither pipe and keeps
+ * running.
  */
 export function runBoundedShellCommand(options: BoundedShellCommandOptions): Promise<BoundedShellCommandResult> {
   const { signal } = options;
@@ -70,6 +78,9 @@ export function runBoundedShellCommand(options: BoundedShellCommandOptions): Pro
     let forceKill: ReturnType<typeof setTimeout> | undefined;
     let finishTermination: (() => void) | undefined;
     let terminationCleanup: Promise<void> | undefined;
+    let backgroundStopped = false;
+    let stdoutOpen = true;
+    let stderrOpen = true;
 
     const processGroupExists = () => {
       if (process.platform === "win32" || !child.pid) return false;
@@ -124,6 +135,12 @@ export function runBoundedShellCommand(options: BoundedShellCommandOptions): Pro
     };
     child.stdout.on("data", capture(stdout));
     child.stderr.on("data", capture(stderr));
+    child.stdout.once("close", () => {
+      stdoutOpen = false;
+    });
+    child.stderr.once("close", () => {
+      stderrOpen = false;
+    });
     child.once("error", (error) => {
       if (settled) return;
       settled = true;
@@ -155,6 +172,7 @@ export function runBoundedShellCommand(options: BoundedShellCommandOptions): Pro
           timedOut,
           outputLimitExceeded,
           aborted,
+          ...(backgroundStopped ? { backgroundStopped: true } : {}),
         });
       })();
     };
@@ -166,6 +184,12 @@ export function runBoundedShellCommand(options: BoundedShellCommandOptions): Pro
     child.once("exit", (exitCode) => {
       drain = setTimeout(() => {
         if (settled) return;
+        if (!stdoutOpen && !stderrOpen) {
+          // Both pipes are done; whatever is still running redirected its
+          // output away on purpose (`nohup server >log 2>&1 &`). Leave it be.
+          finish(exitCode);
+          return;
+        }
         if (!processGroupExists()) {
           // Nothing of the command is left, so the pipes are only draining
           // (a slow machine) or held outside the group (`setsid`); allow a
@@ -175,6 +199,7 @@ export function runBoundedShellCommand(options: BoundedShellCommandOptions): Pro
         }
         // The shell is gone but something it started still holds stdout or
         // stderr. Stop the rest of the group and stop reading.
+        backgroundStopped = true;
         signalProcess("SIGTERM");
         setTimeout(() => {
           if (processGroupExists()) signalProcess("SIGKILL");

@@ -969,8 +969,9 @@ test("supervisor records only canonical non-interrupted terminal outcomes", asyn
   assert.equal(health.cleanupFailures, 0);
 });
 
-test("a desktop chat's subagents each fire SubagentStop once with the chat's hooks", async () => {
+test("a desktop chat's subagents each fire SubagentStop once with the chat's hooks and show their messages", async () => {
   const dispatched: Array<{ event: string; payload: Record<string, unknown>; scopes: unknown; idempotencyKey?: string }> = [];
+  const reported: string[][] = [];
   const supervisor = new SubagentSupervisor({
     generationId: "subagent-stop",
     ...TEST_SUPERVISOR_SCOPE,
@@ -985,9 +986,12 @@ test("a desktop chat's subagents each fire SubagentStop once with the chat's hoo
         hasHooks: (event) => event === "SubagentStop",
         dispatch: async (event, payload, context) => {
           dispatched.push({ event, payload, scopes: context.scopes, idempotencyKey: context.idempotencyKey });
-          return { ranHooks: ["notify"] };
+          return payload.aiden_status === "failed"
+            ? { ranHooks: ["notify"], systemMessages: ["Subagent failed; paged you."], notices: ["Hook notify timed out."] }
+            : { ranHooks: ["notify"] };
         },
       }),
+      { report: (lines) => reported.push(lines) },
     ),
     runChild: async ({ request: task }) =>
       task.label === "Failed"
@@ -1012,6 +1016,8 @@ test("a desktop chat's subagents each fire SubagentStop once with the chat's hoo
     { kind: "chat", chatId: "chat-test" },
   ]);
   assert.equal(new Set(dispatched.map((entry) => entry.idempotencyKey)).size, 2);
+  // Only the run whose hook had something to say reaches the person; the quiet one reports nothing.
+  assert.deepEqual(reported, [["Hook notify: Subagent failed; paged you.", "Hook notify timed out."]]);
 });
 
 test("a No workspace chat's subagents skip workspace hooks", async () => {

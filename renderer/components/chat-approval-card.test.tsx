@@ -486,6 +486,7 @@ function hookProposal(overrides: Partial<HookProposalApprovalDetails> = {}): Hoo
     matcher: "run_command",
     command: "jq -r '.tool_input.command' | grep -q 'push -f' && exit 2 || exit 0",
     timeoutSeconds: 30,
+    async: false,
     failClosed: false,
     envAllow: [],
     ...overrides,
@@ -495,7 +496,7 @@ function hookProposal(overrides: Partial<HookProposalApprovalDetails> = {}): Hoo
 function mountHook(details: HookProposalApprovalDetails | Record<string, unknown>, extra: Partial<ApprovalPrompt> = {}) {
   return mount({
     toolName: "hooks",
-    summary: "Aiden wants to add a hook. Review and approve it on the Mac running this chat.",
+    summary: "Aiden wants to add a hook. Review and approve it on the computer running this chat.",
     details: details as unknown as ApprovalPrompt["details"],
     ...extra,
   });
@@ -517,7 +518,7 @@ test("a proposed hook shows where and when it runs and its whole command, and ca
     Digest: "0123456789ab",
   });
   assert.equal(
-    within(card).getByLabelText("Complete hook command").textContent,
+    within(card).getByRole("group", { name: "Complete command" }).textContent,
     "jq -r '.tool_input.command' | grep -q 'push -f' && exit 2 || exit 0",
   );
   assert.deepEqual(
@@ -535,13 +536,49 @@ test("a hook change shows the current command beside the new one", () => {
       command: "npx prettier --write \"$FILE\"",
       event: "PostToolUse",
       matcher: "write_file",
-      previous: { event: "PostToolUse", matcher: "write_file", command: "npx prettier --write .", timeoutSeconds: 10, failClosed: false, envAllow: [] },
+      previous: { event: "PostToolUse", matcher: "write_file", command: "npx prettier --write .", timeoutSeconds: 10, async: false, failClosed: false, envAllow: [] },
     }),
   );
   assert.ok(screen.getByRole("region", { name: "Change this hook?" }));
-  assert.equal(within(card).getByLabelText("Current hook command").textContent, "npx prettier --write .");
-  assert.equal(within(card).getByLabelText("Complete new hook command").textContent, "npx prettier --write \"$FILE\"");
-  assert.equal(facts(card)["Time limit"], "10 s 30 s");
+  const current = within(card).getByRole("group", { name: "Current command" });
+  assert.equal(current.textContent, "npx prettier --write .");
+  // A long command scrolls inside its well, so the well takes keyboard focus.
+  assert.equal(current.tabIndex, 0);
+  assert.equal(within(card).getByRole("group", { name: "New command" }).textContent, "npx prettier --write \"$FILE\"");
+  // The old and new time limits both read out, each named for screen readers rather than by strike-through alone.
+  const timeLimit = facts(card)["Time limit"];
+  assert.match(timeLimit, /Before: 10 s/u);
+  assert.match(timeLimit, /After: 30 s/u);
+});
+
+test("a background hook says so, and a change to a long-running background hook still shows its card", () => {
+  const { card } = mountHook(
+    hookProposal({
+      action: "update",
+      event: "PostToolUse",
+      matcher: "write_file",
+      command: "./scripts/index.sh",
+      async: true,
+      previous: { event: "PostToolUse", matcher: "write_file", command: "./scripts/index.sh", timeoutSeconds: 600, async: true, failClosed: false, envAllow: [] },
+    }),
+  );
+  assert.match(facts(card).Runs, /In the background/u);
+  assert.match(facts(card)["Time limit"], /Before: 600 s/u);
+});
+
+test("a proposed repo hook names the script files its approval covers, and warns when it can't follow them all", () => {
+  const { card } = mountHook(
+    hookProposal({ command: "./scripts/lint.sh && npm run check", scriptFiles: ["scripts/lint.sh"], scriptCoverage: "partial" }),
+  );
+  const files = within(card).getByRole("list", { name: "Script files" });
+  assert.deepEqual(within(files).getAllByRole("listitem").map((item) => item.textContent), ["scripts/lint.sh"]);
+  assert.match(within(card).getByRole("note").textContent ?? "", /can’t check every file this command runs/u);
+  assert.ok(within(card).getByRole("button", { name: "Allow once" }), "a partial check still lets the owner decide");
+  cleanup();
+
+  const { card: plain } = mountHook(hookProposal());
+  assert.equal(within(plain).queryByRole("list", { name: "Script files" }) === null, true);
+  assert.equal(within(plain).queryByRole("note") === null, true);
 });
 
 test("a malformed hook proposal is blocked instead of shown", () => {
@@ -549,11 +586,14 @@ test("a malformed hook proposal is blocked instead of shown", () => {
     { ...hookProposal(), command: "echo ok\u202e" },
     { ...hookProposal(), extra: true },
     { ...hookProposal(), action: "update", previous: null },
+    { ...hookProposal(), scriptFiles: ["scripts/ok.sh", "scripts/\u202eevil.sh"] },
+    { ...hookProposal(), scriptFiles: "scripts/lint.sh" },
+    { ...hookProposal(), scriptCoverage: "full" },
   ]) {
     const { card } = mountHook(details);
     assert.ok(within(card).getByText("Invalid privileged approval blocked"));
     assert.equal(within(card).queryByRole("button", { name: "Allow once" }), null);
-    assert.equal(within(card).queryByLabelText("Complete hook command"), null);
+    assert.equal(within(card).queryByRole("group", { name: "Complete command" }), null);
     cleanup();
   }
 });

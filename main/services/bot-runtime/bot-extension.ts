@@ -556,19 +556,21 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       // A Bot whose folder can't be read runs no hooks this time; nothing else changes.
       return undefined;
     }
-    const client = botSurfaceHooks(botId, cwd, hookDeps.dispatcher);
+    const report = (lines: string[]): void => {
+      try {
+        hookDeps.report?.(botId, lines);
+      } catch {
+        // Reporting is best effort; the hook's answer still applies.
+      }
+    };
+    // Observe-only events (PreCompact) report through the same channel as dispatched ones.
+    const client = botSurfaceHooks(botId, cwd, hookDeps.dispatcher, { report });
     hookClient = {
       ...client,
       dispatch: async (...args) => {
         const outcome = await client.dispatch(...args);
         const lines = hookNoticeLines(outcome);
-        if (lines.length > 0) {
-          try {
-            hookDeps.report?.(botId, lines);
-          } catch {
-            // Reporting is best effort; the hook's answer still applies.
-          }
-        }
+        if (lines.length > 0) report(lines);
         return outcome;
       },
     };
@@ -647,7 +649,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     const stored = await api.memo<PreToolHookMemo>(PRE_TOOL_HOOK_MEMO, context);
     if (stored !== undefined) return stored;
     if (!client.has("PreToolUse", call.name)) return undefined;
-    const outcome = await client.dispatch("PreToolUse", hookToolPayload(call.name, call.arguments), {
+    const outcome = await client.dispatch("PreToolUse", hookToolPayload(call.name, call.arguments, call.id), {
       idempotencyKey: `PreToolUse:bot:${botId}:${call.id}`,
       signal: context.abortSignal,
     });
@@ -896,7 +898,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
             .join("\n");
           const outcome = await client.dispatch(
             "PostToolUse",
-            { ...hookToolPayload(call.name, call.arguments), tool_response: { content: text, is_error: result.isError === true } },
+            { ...hookToolPayload(call.name, call.arguments, call.id), tool_response: { content: text, is_error: result.isError === true } },
             { idempotencyKey: `PostToolUse:bot:${botId}:${call.id}`, signal: context.abortSignal },
           );
           stored = await api.memo<HookTextMemo>(POST_TOOL_HOOK_MEMO, { text: hookPostToolAdditions(outcome) ?? null }, context);

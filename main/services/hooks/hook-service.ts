@@ -11,6 +11,11 @@
  * A workspace hook's digest also covers the in-workspace script files its
  * command runs (see hook-script-files.ts), read from the folder it runs in,
  * so editing or swapping a script stops the hook until it is approved again.
+ * The files are read again just before the command starts, so a script
+ * swapped after the check refuses to run instead of running unapproved code.
+ * A command whose scripts can't all be checked (too many words or files, or
+ * a file over the size cap) is unsupported; one that also runs something the
+ * scan can't follow (`npm run`, `bash -c`, `cd`…) is listed as partial.
  */
 
 import { randomBytes } from "node:crypto";
@@ -20,6 +25,8 @@ import { createHookDispatcher, normalizeHookPayload, type AidenHookDispatcher, t
 import { claudeToolName } from "./hook-aliases.js";
 import {
   hookDefinitionFor,
+  hookDigest,
+  hookEventScopeProblem,
   hookScopeKey,
   hookScopesEqual,
   isHookEvent,
@@ -31,7 +38,7 @@ import {
 import { compileHookMatcher, matcherMatchesTool, matcherMatchesValue } from "./hook-matcher.js";
 import { mergeHookResults } from "./hook-merge.js";
 import { interpretHookRun, runHookCommand, type HookHandlerResult, type HookRawRun, type ShellRunner } from "./hook-runner.js";
-import { digestWithScriptFiles, hookScriptFiles } from "./hook-script-files.js";
+import { digestWithScriptFiles, hookScriptFiles, type HookScriptScan } from "./hook-script-files.js";
 import {
   HookEntryStore,
   listingDefinition,
@@ -100,6 +107,10 @@ export interface HookProposal {
   /** One or two plain sentences for the approval card. */
   summary: string;
   warnings: string[];
+  /** Workspace files the approval also covers, relative to the workspace root. */
+  scriptFiles?: string[];
+  /** `partial` when the command also runs something Aiden can't follow to a file. */
+  scriptCoverage?: "partial";
   createdAt: number;
   expiresAt: number;
 }
@@ -244,7 +255,8 @@ function describeTrigger(event: HookEvent, matcher: string): string {
 export function summarizeHook(definition: Pick<HookDefinition, "event" | "matcher" | "handler" | "scope">): string {
   const command = definition.handler.command.length > 200 ? `${definition.handler.command.slice(0, 200)}…` : definition.handler.command;
   const parts = [`Runs "${command}" ${describeTrigger(definition.event, definition.matcher)} ${describeScope(definition.scope)}.`];
-  const details = [`Stops after ${clampHookTimeout(definition.handler.timeout)} s`];
+  const details = [`Stops after ${clampHookTimeout(definition.handler.timeout, definition.handler.async)} s`];
+  if (definition.handler.async) details.push("runs in the background; Aiden doesn't wait for it");
   if (definition.event === "PreToolUse") details.push(definition.handler.failClosed ? "blocks the tool if it fails" : "lets the tool run if it fails");
   if (definition.handler.envAllow?.length) details.push(`can read ${definition.handler.envAllow.join(", ")}`);
   parts.push(`${details.join("; ")}.`);
@@ -302,6 +314,52 @@ function fixtureMatches(definition: HookDefinition, payload: HookPayload): boole
   return true;
 }
 
+function uncheckableScriptsReason(overLimit: string): string {
+  return `Aiden can't check everything this command runs (${overLimit}), so it won't run it; move the commands into one script.`;
+}
+
+function partialCoverageWarning(unfollowed: readonly string[]): string {
+  const list = unfollowed.map((item) => `\`${item}\``).join(", ");
+  return `Approving this doesn't cover what ${list} runs: Aiden can't follow it to a file, so an edit there won't stop the hook. Point the hook at a script file to cover it.`;
+}
+
+/** The refusal recorded when a workspace hook's scripts changed between the check and the start. */
+export const HOOK_SCRIPTS_CHANGED_ERROR = "a script it runs changed after Aiden checked it, so it didn't run";
+
+/**
+ * Wraps a runner so a workspace hook's script files are read again just
+ * before the command starts. If they no longer match the approved digest
+ * (or can no longer all be checked) the command does not start; the run
+ * reports a start failure, which a failClosed PreToolUse hook turns into a
+ * deny. Other scopes run unchanged.
+ */
+export function recheckScriptsBeforeRun(run: HookRunFunction, now: () => number = Date.now): HookRunFunction {
+  return async (hook, payload, context) => {
+    const root = workspaceRootOf(hook.scope);
+    if (!root) return run(hook, payload, context);
+    let unchanged = false;
+    try {
+      const scan = await hookScriptFiles(hook.handler.command, { workspaceRoot: root, cwd: context.cwd });
+      const base = hookDigest({ event: hook.event, matcher: hook.matcher, handler: hook.handler, scope: hook.scope });
+      unchanged = !scan.overLimit && digestWithScriptFiles(base, scan.files) === hook.digest;
+    } catch {
+      unchanged = false;
+    }
+    if (unchanged) return run(hook, payload, context);
+    return {
+      startedAt: now(),
+      durationMs: 0,
+      exitCode: null,
+      timedOut: false,
+      outputLimitExceeded: false,
+      aborted: false,
+      stdout: "",
+      stderr: "",
+      spawnError: HOOK_SCRIPTS_CHANGED_ERROR,
+    };
+  };
+}
+
 export function createHookService(deps: HookServiceDeps): HookService {
   const now = deps.now ?? Date.now;
   const env = deps.env ?? process.env;
@@ -349,12 +407,27 @@ export function createHookService(deps: HookServiceDeps): HookService {
    * `cwd` (the workspace root unless the hook runs elsewhere, as WorktreeSetup
    * hooks do in the new worktree). Other scopes have no fixed folder to read.
    */
-  const withScripts = async <T extends Pick<HookListing, "scope" | "handler" | "digest">>(listing: T, cwd?: string): Promise<T> => {
-    const root = workspaceRootOf(listing.scope);
-    if (!root || typeof listing.handler?.command !== "string") return listing;
-    const files = await hookScriptFiles(listing.handler.command, { workspaceRoot: root, cwd: cwd ?? root });
-    const digest = digestWithScriptFiles(listing.digest, files);
-    return digest === listing.digest ? listing : { ...listing, digest };
+  const scriptsOf = async (
+    hook: Pick<HookDefinition, "scope" | "handler" | "digest">,
+    cwd?: string,
+  ): Promise<{ digest: string; scan?: HookScriptScan }> => {
+    const root = workspaceRootOf(hook.scope);
+    if (!root || typeof hook.handler?.command !== "string") return { digest: hook.digest };
+    const scan = await hookScriptFiles(hook.handler.command, { workspaceRoot: root, cwd: cwd ?? root });
+    return { digest: digestWithScriptFiles(hook.digest, scan.files), scan };
+  };
+
+  const withScripts = async (listing: HookListing, cwd?: string): Promise<HookListing> => {
+    const { digest, scan } = await scriptsOf(listing, cwd);
+    if (!scan) return listing;
+    const next: HookListing = { ...listing, digest };
+    if (scan.paths.length > 0) next.scriptFiles = scan.paths;
+    if (scan.unfollowed.length > 0) next.scriptCoverage = "partial";
+    if (scan.overLimit) {
+      next.status = "unsupported";
+      next.unsupportedReason = uncheckableScriptsReason(scan.overLimit);
+    }
+    return next;
   };
 
   /** A stored entry as a listing with its scripts folded in, before trust decides its status. */
@@ -386,7 +459,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
     (await Promise.all(entries.entries().filter((entry) => hookScopesEqual(entry.scope, scope)).map((entry) => storedListing(entry, cwd)))).map(statusOf);
 
   const dispatcher = createHookDispatcher({
-    run: runOne,
+    run: recheckScriptsBeforeRun(runOne, now),
     now,
     source: {
       async activeHooks(event, scopes, cwd) {
@@ -428,7 +501,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
     },
     health: {
       recordSuccess: (hook) => trust.recordSuccess(hook),
-      recordFailure: (hook) => trust.recordFailure(hook),
+      recordFailure: (hook, options) => trust.recordFailure(hook, options),
     },
     onRun: (hook) => emit({ reason: "run", hookId: hook.id }),
     onAutoDisabled: (hook) => emit({ reason: "auto-disabled", hookId: hook.id }),
@@ -515,6 +588,8 @@ export function createHookService(deps: HookServiceDeps): HookService {
       };
     }
     if (!isHookEvent(input.event)) return { ok: false, reason: `"${String(input.event)}" is not an event Aiden supports.` };
+    const scopeProblem = hookEventScopeProblem(input.event, scope);
+    if (scopeProblem) return { ok: false, reason: scopeProblem };
     const matcher = typeof input.matcher === "string" ? input.matcher : "";
     const compiled = compileHookMatcher(matcher);
     if (!compiled.ok) return { ok: false, reason: compiled.reason };
@@ -541,7 +616,9 @@ export function createHookService(deps: HookServiceDeps): HookService {
         definition,
         digest: definition.digest,
         summary: existing ? `Changes "${definition.name}". ${summary}` : summary,
-        warnings: validation.warnings,
+        warnings: definition.handler.async
+          ? [...validation.warnings, "It runs in the background: Aiden doesn't wait for it, so it can't block or change anything."]
+          : validation.warnings,
       },
     };
   };
@@ -552,11 +629,29 @@ export function createHookService(deps: HookServiceDeps): HookService {
     return { id, name, event: entry.event, matcher, handler, scope, source, digest };
   };
 
-  /** The proposal with its scripts read now, so the card shows what approval would trust. */
-  const withProposalScripts = async (proposal: HookProposal): Promise<HookProposal> => {
-    if (proposal.action === "delete") return proposal;
-    const definition = await withScripts(proposal.definition);
-    return definition === proposal.definition ? proposal : { ...proposal, definition, digest: definition.digest };
+  /**
+   * The proposal with its scripts read now, so the card shows what approval
+   * would trust. A command whose scripts can't all be checked is refused, and
+   * one that runs something the scan can't follow says so.
+   */
+  const withProposalScripts = async (proposal: HookProposal): Promise<HookResult<HookProposal>> => {
+    if (proposal.action === "delete") return { ok: true, value: proposal };
+    const { digest, scan } = await scriptsOf(proposal.definition);
+    if (!scan) return { ok: true, value: proposal };
+    if (scan.overLimit) return { ok: false, reason: uncheckableScriptsReason(scan.overLimit) };
+    const partial = scan.unfollowed.length > 0;
+    const warnings = partial ? [...proposal.warnings, partialCoverageWarning(scan.unfollowed)] : proposal.warnings;
+    return {
+      ok: true,
+      value: {
+        ...proposal,
+        definition: { ...proposal.definition, digest },
+        digest,
+        warnings,
+        ...(scan.paths.length > 0 ? { scriptFiles: scan.paths } : {}),
+        ...(partial ? { scriptCoverage: "partial" as const } : {}),
+      },
+    };
   };
 
   const applyProposal = async (proposal: HookProposal): Promise<HookResult<HookListing | undefined>> => {
@@ -571,7 +666,9 @@ export function createHookService(deps: HookServiceDeps): HookService {
     if (proposal.action === "update" && !existing) return { ok: false, reason: "The hook this proposal changes was deleted." };
     if (proposal.action === "create" && existing) return { ok: false, reason: "This proposal was already applied." };
     const { definition } = proposal;
-    if ((await withScripts({ ...definition, digest: hookDefinitionFor(definition).digest })).digest !== proposal.digest) {
+    const current = await scriptsOf({ ...definition, digest: hookDefinitionFor(definition).digest });
+    if (current.scan?.overLimit) return { ok: false, reason: uncheckableScriptsReason(current.scan.overLimit) };
+    if (current.digest !== proposal.digest) {
       return { ok: false, reason: "A script this hook runs changed after it was proposed; propose it again so the owner sees the current version." };
     }
     const time = now();
@@ -627,7 +724,9 @@ export function createHookService(deps: HookServiceDeps): HookService {
       pruneProposals();
       const built = buildProposal(input);
       if (!built.ok) return built;
-      const proposal = await withProposalScripts(built.value);
+      const scripted = await withProposalScripts(built.value);
+      if (!scripted.ok) return scripted;
+      const proposal = scripted.value;
       if (proposals.size >= MAX_PENDING_HOOK_PROPOSALS) {
         const oldest = [...proposals.values()].sort((a, b) => a.createdAt - b.createdAt)[0];
         if (oldest) proposals.delete(oldest.id);
@@ -660,7 +759,8 @@ export function createHookService(deps: HookServiceDeps): HookService {
     async saveHook(input) {
       const built = buildProposal({ ...input, origin: "owner" });
       if (!built.ok) return built;
-      return applyProposal(await withProposalScripts(built.value));
+      const scripted = await withProposalScripts(built.value);
+      return scripted.ok ? applyProposal(scripted.value) : scripted;
     },
 
     async approveDigest(hookId, expectedDigest) {
@@ -705,6 +805,8 @@ export function createHookService(deps: HookServiceDeps): HookService {
 
     async setPaused(paused) {
       await trust.setPaused(paused);
+      // Pausing also stops hooks still running in the background.
+      if (paused) dispatcher.stopBackgroundHooks();
       changed({ reason: "hooks" });
     },
 

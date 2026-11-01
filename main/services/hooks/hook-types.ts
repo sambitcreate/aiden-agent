@@ -31,11 +31,39 @@ export type HookScope =
   | { kind: "chat"; chatId: string }
   | { kind: "bot"; botId: string };
 
+/**
+ * The scope kinds each event is ever dispatched with, read from the dispatch
+ * sites: workspace chats (desktop and `aiden serve`) pass global, workspace
+ * and chat; Bots, their routines and their subagents pass global and bot;
+ * WorktreeSetup passes global and the source workspace. A hook saved for any
+ * other pair could never run, so proposals and Settings refuse it.
+ */
+export const HOOK_EVENT_SCOPE_KINDS: Readonly<Record<HookEvent, readonly HookScope["kind"][]>> = {
+  PreToolUse: ["global", "workspace", "chat", "bot"],
+  PostToolUse: ["global", "workspace", "chat", "bot"],
+  UserPromptSubmit: ["global", "workspace", "chat"],
+  SessionStart: ["global", "workspace", "chat", "bot"],
+  SessionEnd: ["global", "workspace", "chat"],
+  Stop: ["global", "workspace", "chat", "bot"],
+  SubagentStop: ["global", "workspace", "chat", "bot"],
+  Notification: ["global", "workspace", "chat"],
+  PreCompact: ["global", "workspace", "chat", "bot"],
+  WorktreeSetup: ["global", "workspace"],
+  RoutineRun: ["global", "bot"],
+  RoutineFailed: ["global", "bot"],
+};
+
 export interface HookCommandHandler {
   type: "command";
   command: string;
-  /** Seconds. Default 30, maximum 120 (30 when proposed by the agent). */
+  /** Seconds. Default 30, maximum 120 (600 for `async` hooks; 30 when proposed by the agent). */
   timeout?: number;
+  /**
+   * Claude-compatible: start the command and do not wait for it. Its decision,
+   * blocking and context output are ignored; the run is logged and a
+   * `systemMessage` is shown as a notice. Part of the digest.
+   */
+  async?: boolean;
   /** PreToolUse only: a crash or timeout blocks the tool instead of failing open. */
   failClosed?: boolean;
   /** Extra environment variable names passed through; part of the digest. */
@@ -85,6 +113,18 @@ export interface HookListing extends Omit<HookDefinition, "event"> {
   /** Why it is unsupported, when it is. */
   unsupportedReason?: string;
   lastRun?: HookRunRecord;
+  /**
+   * Workspace hooks: the workspace files folded into the digest, relative to
+   * the workspace root. A file edit changes the digest and the hook waits for
+   * approval again.
+   */
+  scriptFiles?: string[];
+  /**
+   * `partial` when the command also runs something Aiden can not follow to a
+   * file (a `cd … &&`, `source`, `bash -c`, `npx`, `npm run`, `python -m`,
+   * `make`…): editing what that runs does not change the digest.
+   */
+  scriptCoverage?: "partial";
 }
 
 export type HookPermissionDecision = "allow" | "deny" | "ask";
@@ -156,7 +196,14 @@ export interface HookDispatchContext {
   sessionId: string;
   /** Idempotency key so a durable replay never re-runs a hook: event + chat + tool-call id. */
   idempotencyKey?: string;
+  /** Ends this dispatch's own hooks. `async` hooks run on and are not stopped by it. */
   signal?: AbortSignal;
+  /**
+   * Where the lines from this dispatch's `async` hooks go once they finish
+   * (their `systemMessage` and Aiden's notices), for the person only, never
+   * the model. Without it they reach only the hook's run log.
+   */
+  reportAsync?: (lines: string[]) => void;
 }
 
 export interface HookDispatcher {

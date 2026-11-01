@@ -193,12 +193,9 @@ import {
   MAX_STOP_HOOK_CONTINUATIONS,
   createWorkspaceChatHooks,
   endWorkspaceChatSession,
-  hookTurnContextText,
   markWorkspaceChatCompacted,
-  markWorkspaceChatSessionStarted,
   preCompactSummaryInstructions,
-  promptBlockedMessage,
-  workspaceChatSessionStartSource,
+  runPromptIntakeHooks,
 } from "./workspace-chat-hooks.js";
 import { chatSurfaceHooks } from "./agent-surface-hooks.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
@@ -1581,11 +1578,22 @@ async function prepareGeneration(
             harnessProvider: isAcpHarnessProvider(runtime.provider.id),
           })
             ? {
-                stopHooks: chatSurfaceHooks({
-                  chatId: params.chatId,
-                  cwd: folderPath,
-                  ...(workspace.noWorkspace === true ? {} : { workspaceRoot: folderPath }),
-                }),
+                stopHooks: chatSurfaceHooks(
+                  {
+                    chatId: params.chatId,
+                    cwd: folderPath,
+                    ...(workspace.noWorkspace === true ? {} : { workspaceRoot: folderPath }),
+                  },
+                  undefined,
+                  {
+                    // Shown in the chat while its turn is live, else logged; never the model's.
+                    report: (messages) => {
+                      const live = active.has(streamId) || initializing.has(streamId);
+                      if (live && sendGeneration(streamId, "chat:status", { streamId, phase: "hook_messages", messages })) return;
+                      logger.warn("hooks", `SubagentStop hooks for chat ${params.chatId}: ${messages.join("\n")}`);
+                    },
+                  },
+                ),
               }
             : {}),
         })
@@ -1611,7 +1619,7 @@ async function prepareGeneration(
   }
   // The agent's hooks tool and its skill: where workspace chat hooks run, and
   // only while someone can answer the owner's card. Design runs returned above.
-  const offerHooksTool = offersHooksTool({
+  const offerHooksTool = hostPlatformCapabilities().hooks && offersHooksTool({
     usageSource: options.usageSource,
     interactionSurface: options.interactionSurface,
     bot: Boolean(botContext),
@@ -3562,54 +3570,22 @@ export const llmClient = {
       const priorVisibleMessages = currentUser
         ? generationChat.messages.filter((message) => message.id !== currentUser.id)
         : generationChat.messages;
-      if (chatHooks) {
-        // SessionStart, then UserPromptSubmit, before the model sees the turn.
-        // Their context rides this turn only (the `aiden.hooks` extension) and
-        // is never saved as the person's words.
-        const sessionStartSource = workspaceChatSessionStartSource(
-          params.chatId,
-          priorVisibleMessages.length > 0,
-        );
-        const sessionStart = sessionStartSource
-          ? await chatHooks.dispatch(
-              "SessionStart",
-              { source: sessionStartSource },
-              { signal: initialization.controller.signal },
-            )
-          : undefined;
-        if (sessionStartSource) markWorkspaceChatSessionStarted(chatHooks.target);
-        const promptSubmit = currentUser
-          ? await chatHooks.dispatch(
-              "UserPromptSubmit",
-              { prompt: currentUser.content },
-              {
-                idempotencyKey: `UserPromptSubmit:${params.chatId}:${streamId}`,
-                signal: initialization.controller.signal,
-              },
-            )
-          : undefined;
-        if (promptSubmit?.blockPrompt || promptSubmit?.stopTurn) {
-          // No model call: the turn fails with the hook's reason as its error.
-          // The prompt stays visible but is marked, so no later turn, fork or
-          // summary ever projects it into a model's context.
-          const blocked = promptBlockedMessage(promptSubmit);
-          if (currentUser) {
-            await chatStore.setPromptHookBlock(params.chatId, currentUser.id, blocked).catch((error: unknown) => {
-              logger.error("hooks", "Could not mark a hook-blocked prompt.", error);
-            });
-          }
-          throw new Error(blocked);
-        }
-        hookTurnContext = hookTurnContextText([
-          sessionStart?.additionalContext,
-          promptSubmit?.additionalContext,
-        ]);
-      }
-      if (currentUser?.hookBlocked) {
-        // This prompt is being sent now (a retry after the hook changed or was
-        // turned off), so it is no longer a blocked prompt.
-        await chatStore.setPromptHookBlock(params.chatId, currentUser.id, undefined);
-      }
+      // SessionStart, then UserPromptSubmit, before the model sees the turn.
+      // Their context rides this turn only (the `aiden.hooks` extension) and
+      // is never saved as the person's words. A SessionStart `continue: false`
+      // or a refused prompt throws here, so the turn ends with no model call.
+      // A retried prompt that was blocked before loses its mark, on
+      // `currentUser` too, so the journal takes it in order below.
+      hookTurnContext = await runPromptIntakeHooks({
+        target: chatHooks?.target ?? { chatId: params.chatId },
+        ...(chatHooks ? { dispatch: chatHooks.dispatch } : {}),
+        hasPriorMessages: priorVisibleMessages.length > 0,
+        prompt: currentUser,
+        store: chatStore,
+        idempotencyKeys: { userPromptSubmit: `UserPromptSubmit:${params.chatId}:${streamId}` },
+        signal: initialization.controller.signal,
+        onStoreError: (message, error) => logger.error("hooks", message, error),
+      });
       const skillsEnabledForTurn = (await configStore.getSettings()).skillsEnabled !== false;
       // A forked chat's summary of where its source went after the fork
       // point sits right after the last copied message.
@@ -5602,7 +5578,9 @@ export const llmClient = {
   /** Remove a deleted chat's agent scratch directory. Never throws. */
   forgetDeletedChat(chatId: string): Promise<void> {
     // SessionEnd for a chat whose hooks ran in this process; never awaited.
-    endWorkspaceChatSession(chatId);
+    endWorkspaceChatSession(chatId, undefined, {
+      onMessages: (lines) => logger.warn("hooks", `SessionEnd hooks for a deleted chat: ${lines.join("\n")}`),
+    });
     return acpScratch.forget(chatId);
   },
 

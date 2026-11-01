@@ -264,3 +264,34 @@ test("hooks of another chat are invisible", async (t) => {
   await assert.rejects(call(tool, { action: "logs", hookId: other.value.id }), /no hook/u);
   assert.doesNotMatch(await call(tool, { action: "list" }), /other\.sh/u);
 });
+
+test("an async proposal says it runs in the background, and the card names the scripts approval covers", async (t) => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.workspace, "setup.sh"), "#!/bin/sh\nnpm ci\n");
+  const reply = await call(f.tool(["allowed"]), {
+    action: "propose",
+    scope: "workspace",
+    event: "WorktreeSetup",
+    command: "./setup.sh && npm run build",
+    async: true,
+  });
+  assert.match(reply, /approved/u);
+  const [card] = f.cards;
+  assert.ok(card && isHookProposalApprovalDetails(card.details));
+  assert.deepEqual(card.details.scriptFiles, ["setup.sh"]);
+  assert.equal(card.details.scriptCoverage, "partial");
+  assert.ok(card.details.warnings.some((warning) => /runs in the background/u.test(warning)));
+  assert.ok(card.details.warnings.some((warning) => /doesn't cover what `npm run` runs/u.test(warning)));
+
+  const listing = await call(f.tool(), { action: "list" });
+  assert.match(listing, /runs in the background/u);
+  assert.match(listing, /approval covers: setup\.sh \(not everything the command runs\)/u);
+});
+
+test("events that can't fire for the requested scope are refused before any card", async (t) => {
+  const f = await fixture(t);
+  await assert.rejects(call(f.tool(["allowed"]), { action: "propose", scope: "workspace", event: "RoutineRun", command: "./x.sh" }), /RoutineRun hooks never run for a workspace/u);
+  await assert.rejects(call(f.tool(["allowed"]), { action: "propose", scope: "chat", event: "WorktreeSetup", command: "./x.sh" }), /WorktreeSetup hooks never run for a chat/u);
+  await assert.rejects(call(f.tool(["allowed"]), { action: "propose", scope: "chat", event: "Stop", command: "./x.sh", async: true, failClosed: true }));
+  assert.equal(f.cards.length, 0);
+});

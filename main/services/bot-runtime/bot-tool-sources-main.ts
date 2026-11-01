@@ -288,7 +288,9 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
               inheritedCeiling: authority.files.botHome ? inheritedSubagentReadToolCeiling(undefined) : [],
               healthMetrics: subagentHealthMetrics,
               // SubagentStop runs the Bot's hooks, in the Bot's folder.
-              stopHooks: botSurfaceHooks(botId, authority.workingDirectory),
+              stopHooks: botSurfaceHooks(botId, authority.workingDirectory, undefined, {
+                report: (lines) => logger.info("hooks", `Bot ${botId} hook messages.`, lines),
+              }),
             });
             return createSubagentTool(supervisor).execute(toolCallId, params, signal, onUpdate);
           },

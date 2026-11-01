@@ -283,7 +283,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
         <div className="settings-responsive mx-auto w-full max-w-5xl px-5 py-6">
           <SettingsPage
             heading={
-              !["providers", "skills", "mcp", "appearance", "websearch", "shortcut"].includes(
+              !["providers", "skills", "mcp", "appearance", "websearch", "shortcut", "hooks"].includes(
                 section,
               )
             }

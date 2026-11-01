@@ -181,12 +181,43 @@ test("a hook Aiden turned off after failures shows off, and its switch turns it 
   assert.equal(screen.getByRole("switch", { name: "Run Flaky check" }).getAttribute("aria-checked"), "true");
 });
 
+/** Add hook lives in the page heading and is ready once the hook service has answered. */
+async function openAddSheet() {
+  const add = await screen.findByRole("button", { name: "Add hook" });
+  await waitFor(() => assert.equal(add.hasAttribute("disabled"), false));
+  fireEvent.click(add);
+  return screen.findByRole("dialog");
+}
+
 test("with no hooks the page explains them in one line and offers Add hook; AIDEN_HOOKS=0 is called out", async () => {
   mount(overview({ disabledByEnvironment: true }));
   await screen.findByText("No hooks yet");
   screen.getByText(/A hook runs your own shell command/u);
   screen.getByText(/AIDEN_HOOKS=0 is set/u);
-  assert.equal(screen.getAllByRole("button", { name: "Add hook" }).length, 1);
+  assert.equal(screen.getAllByRole("button", { name: "Add hook" }).length, 1, "one Add hook, in the page heading");
+  assert.ok(screen.getByRole("heading", { level: 1, name: "Hooks" }));
+});
+
+test("the first read shows a skeleton under the heading, and Add hook waits for the hook service", async () => {
+  let answer: (value: HooksOverview) => void = () => {};
+  const pending = new Promise<HooksOverview>((resolve) => {
+    answer = resolve;
+  });
+  mount(overview(), { "hooks:list": () => pending });
+  await screen.findByRole("status", { name: "Reading your hooks" });
+  screen.getByRole("heading", { level: 1, name: "Hooks" });
+  assert.equal(screen.getByRole("button", { name: "Add hook" }).hasAttribute("disabled"), true);
+  answer(overview());
+  await screen.findByText("No hooks yet");
+  assert.equal(screen.queryByRole("status", { name: "Reading your hooks" }) === null, true);
+  assert.equal(screen.getByRole("button", { name: "Add hook" }).hasAttribute("disabled"), false);
+});
+
+test("Add hook is off while the hook service hasn't started", async () => {
+  mount(overview({ available: false }));
+  const add = await screen.findByRole("button", { name: "Add hook" });
+  await waitFor(() => assert.equal(screen.queryByRole("status", { name: "Reading your hooks" }) === null, true));
+  assert.equal(add.hasAttribute("disabled"), true);
 });
 
 test("the page re-reads when main says hooks changed", async () => {
@@ -245,7 +276,7 @@ test("an agent proposal shows exactly what will run, and its edit as a before an
     within(edited).getAllByText(/guard\.sh/u).map((line) => line.textContent),
     ["− Before: ~/.aiden/hooks/guard.sh", "+ After: ~/.aiden/hooks/guard.sh --git"],
   );
-  assert.equal(within(edited).queryByText("Event"), null, "fields that don't change are left out");
+  assert.equal(within(edited).queryByText("Event") === null, true, "fields that don't change are left out");
 
   fireEvent.click(within(created).getByRole("button", { name: "Approve" }));
   fireEvent.click(within(edited).getByRole("button", { name: "Reject" }));
@@ -257,8 +288,7 @@ test("Add hook saves a global PreToolUse hook with its tools, timeout and Block 
   const { callsTo } = mount(overview(), {
     "hooks:save": () => ({ ok: true, value: HOOKS[0] }),
   });
-  fireEvent.click(await screen.findByRole("button", { name: "Add hook" }));
-  const sheet = await screen.findByRole("dialog");
+  const sheet = await openAddSheet();
   const add = within(sheet).getByRole("button", { name: "Add hook" });
   assert.equal(add.hasAttribute("disabled"), true, "a command is required");
   fireEvent.change(within(sheet).getByLabelText("Command"), { target: { value: "  ./guard.sh  " } });
@@ -279,8 +309,7 @@ test("a refused save stays open with main's reason", async () => {
   mount(overview(), {
     "hooks:save": () => ({ ok: false, reason: "That command is too long." }),
   });
-  fireEvent.click(await screen.findByRole("button", { name: "Add hook" }));
-  const sheet = await screen.findByRole("dialog");
+  const sheet = await openAddSheet();
   fireEvent.change(within(sheet).getByLabelText("Command"), { target: { value: "./x.sh" } });
   fireEvent.click(within(sheet).getByRole("button", { name: "Add hook" }));
   await within(sheet).findByText("That command is too long.");
@@ -314,4 +343,94 @@ test("the detail sheet tests only on the Test press, and asks first for a hook t
   fireEvent.click(within(confirm).getByRole("button", { name: "Run once" }));
   await waitFor(() => assert.deepEqual(callsTo("hooks:test"), [["workspace:shop:PreToolUse:0", digest("b")]], "the test is pinned to the version on screen"));
   await screen.findByText("lint ok");
+});
+
+test("Add hook offers only the events the chosen place can run, and resets one it can't", async () => {
+  const { callsTo } = mount(overview(), {
+    "hooks:save": () => ({ ok: true, value: HOOKS[0] }),
+  });
+  const sheet = await openAddSheet();
+  fireEvent.click(within(sheet).getByRole("combobox", { name: "When" }));
+  const everyChat = (await screen.findAllByRole("option")).map((option) => option.textContent);
+  assert.ok(everyChat.includes("RoutineRun"), "a global hook can follow Bot routines");
+  fireEvent.click(screen.getByRole("option", { name: "RoutineRun" }));
+  await waitFor(() => assert.match(within(sheet).getByRole("combobox", { name: "When" }).textContent ?? "", /RoutineRun/u));
+
+  fireEvent.click(within(sheet).getByRole("combobox", { name: "Where" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Shop" }));
+  await waitFor(() => assert.doesNotMatch(within(sheet).getByRole("combobox", { name: "When" }).textContent ?? "", /RoutineRun/u));
+
+  fireEvent.click(within(sheet).getByRole("combobox", { name: "When" }));
+  const inShop = (await screen.findAllByRole("option")).map((option) => option.textContent);
+  assert.ok(inShop.includes("WorktreeSetup"));
+  for (const routineEvent of ["RoutineRun", "RoutineFailed"]) {
+    assert.equal(inShop.includes(routineEvent), false, `a workspace hook never sees ${routineEvent}`);
+  }
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+
+  fireEvent.change(within(sheet).getByLabelText("Command"), { target: { value: "./x.sh" } });
+  fireEvent.click(within(sheet).getByRole("button", { name: "Add hook" }));
+  await waitFor(() => assert.equal(callsTo("hooks:save").length, 1));
+  const [[request]] = callsTo("hooks:save") as [[{ scope: unknown; event: string }]];
+  assert.deepEqual(request.scope, { kind: "workspace", workspaceRoot: WORKSPACE });
+  assert.notEqual(request.event, "RoutineRun", "the saved event is one the workspace can run");
+});
+
+test("the detail sheet lists a repo hook's script files and warns when it can't check them all", async () => {
+  const scripted = {
+    ...HOOKS[1]!,
+    handler: { type: "command" as const, command: "./scripts/lint.sh && npx eslint ." },
+    scriptFiles: ["scripts/lint.sh", "scripts/lib/common.sh"],
+    scriptCoverage: "partial" as const,
+  };
+  mount(overview({ hooks: [scripted] }));
+  fireEvent.click(await screen.findByRole("button", { name: "Lint on edit" }));
+  const sheet = await screen.findByRole("dialog");
+  const files = within(sheet).getByRole("list", { name: "Script files" });
+  assert.deepEqual(
+    within(files).getAllByRole("listitem").map((item) => item.textContent),
+    ["scripts/lint.sh", "scripts/lib/common.sh"],
+  );
+  within(sheet).getByText(/Editing one of these files asks you to approve the hook again/u);
+  assert.match(within(sheet).getByRole("note").textContent ?? "", /can’t check every file this command runs/u);
+});
+
+test("a hook with nothing to follow shows no script section", async () => {
+  mount(overview({ hooks: [HOOKS[0]!] }));
+  fireEvent.click(await screen.findByRole("button", { name: "Guard shell" }));
+  const sheet = await screen.findByRole("dialog");
+  assert.equal(within(sheet).queryByRole("list", { name: "Script files" }) === null, true);
+  assert.equal(within(sheet).queryByRole("note") === null, true);
+});
+
+test("Last runs shows a placeholder, not an empty list, until the run log arrives", async () => {
+  let answer: (runs: unknown[]) => void = () => {};
+  const runs = new Promise<unknown[]>((resolve) => {
+    answer = resolve;
+  });
+  const startedAt = Date.UTC(2026, 9, 31, 12);
+  mount(overview({ hooks: [HOOKS[0]!] }), { "hooks:runLog": () => runs });
+  fireEvent.click(await screen.findByRole("button", { name: "Guard shell" }));
+  const sheet = await screen.findByRole("dialog");
+  await within(sheet).findByRole("status", { name: "Reading its runs" });
+  assert.equal(within(sheet).queryByRole("list", { name: "Last runs" }) === null, true);
+  const run = { hookId: "hk_guard", event: "PreToolUse", startedAt, durationMs: 4, exitCode: 0, timedOut: false, outputExcerpt: "", result: "ok" };
+  // Two runs that started together are both listed.
+  answer([run, { ...run, exitCode: 2, result: "blocked" }]);
+  const list = await within(sheet).findByRole("list", { name: "Last runs" });
+  assert.equal(within(list).getAllByRole("listitem").length, 2);
+  assert.equal(within(sheet).queryByRole("status", { name: "Reading its runs" }) === null, true);
+});
+
+test("Delete asks first, then deletes the hook by id", async () => {
+  const { callsTo } = mount(overview({ hooks: [HOOKS[0]!] }), {
+    "hooks:delete": () => ({ ok: true, value: undefined }),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Guard shell" }));
+  const sheet = await screen.findByRole("dialog");
+  fireEvent.click(within(sheet).getByRole("button", { name: "Delete" }));
+  const confirm = await screen.findByRole("alertdialog");
+  assert.deepEqual(callsTo("hooks:delete"), [], "nothing is deleted before the owner confirms");
+  fireEvent.click(within(confirm).getByRole("button", { name: "Delete" }));
+  await waitFor(() => assert.deepEqual(callsTo("hooks:delete"), [["hk_guard"]]));
 });

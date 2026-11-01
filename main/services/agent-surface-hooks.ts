@@ -41,15 +41,32 @@ export interface SurfaceHooks {
   dispatch(
     event: HookEvent,
     payload: SurfaceHookPayload,
-    options?: { idempotencyKey?: string; signal?: AbortSignal },
+    options?: { idempotencyKey?: string; signal?: AbortSignal; report?: HookLinesReporter },
   ): Promise<HookOutcome | undefined>;
-  /** Fire-and-forget for observe-only events: never delays or fails the caller. */
-  observe(event: HookEvent, payload: SurfaceHookPayload, options?: { idempotencyKey?: string }): void;
+  /**
+   * Fire-and-forget for observe-only events: never delays or fails the
+   * caller. The hooks' messages and Aiden's notices go to `report` (this
+   * call's, else the surface's), for the person only, never the model.
+   */
+  observe(
+    event: HookEvent,
+    payload: SurfaceHookPayload,
+    options?: { idempotencyKey?: string; report?: HookLinesReporter },
+  ): void;
+}
+
+/** Where a surface shows hook messages and notices to the person. Never model context. */
+export type HookLinesReporter = (lines: string[]) => void;
+
+export interface SurfaceHookOptions {
+  /** The default reporter for `observe` and for background (`async`) hooks' messages. */
+  report?: HookLinesReporter;
 }
 
 export function createSurfaceHooks(
   target: SurfaceHookTarget,
   dispatcher: () => HookDispatcher = getHookDispatcher,
+  surfaceOptions: SurfaceHookOptions = {},
 ): SurfaceHooks {
   const has = (event: HookEvent, toolName?: string): boolean => {
     try {
@@ -62,6 +79,7 @@ export function createSurfaceHooks(
     if (!has(event, typeof payload.aiden_tool_name === "string" ? payload.aiden_tool_name : undefined)) {
       return undefined;
     }
+    const reportAsync = options?.report ?? surfaceOptions.report;
     try {
       return await dispatcher().dispatch(
         event,
@@ -72,6 +90,7 @@ export function createSurfaceHooks(
           sessionId: target.sessionId,
           ...(options?.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
           ...(options?.signal ? { signal: options.signal } : {}),
+          ...(reportAsync ? { reportAsync } : {}),
         },
       );
     } catch {
@@ -84,14 +103,28 @@ export function createSurfaceHooks(
     dispatch,
     observe(event, payload, options) {
       if (!has(event)) return;
-      void dispatch(event, payload, options).catch(() => undefined);
+      const report = options?.report ?? surfaceOptions.report;
+      void dispatch(event, payload, {
+        ...(options?.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
+        ...(report ? { report } : {}),
+      })
+        .then((outcome) => {
+          const lines = hookNoticeLines(outcome);
+          if (lines.length > 0) report?.(lines);
+        })
+        .catch(() => undefined);
     },
   };
 }
 
 /** A Bot's hooks: global, then that Bot's own; they run in its folder and `session_id` is the Bot. */
-export function botSurfaceHooks(botId: string, botFolder: string, dispatcher?: () => HookDispatcher): SurfaceHooks {
-  return createSurfaceHooks({ scopes: hookScopesFor({ botId }), cwd: botFolder, sessionId: botId }, dispatcher);
+export function botSurfaceHooks(
+  botId: string,
+  botFolder: string,
+  dispatcher?: () => HookDispatcher,
+  options?: SurfaceHookOptions,
+): SurfaceHooks {
+  return createSurfaceHooks({ scopes: hookScopesFor({ botId }), cwd: botFolder, sessionId: botId }, dispatcher, options);
 }
 
 /**
@@ -103,10 +136,12 @@ export function botSurfaceHooks(botId: string, botFolder: string, dispatcher?: (
 export function chatSurfaceHooks(
   input: { chatId: string; cwd: string; workspaceRoot?: string },
   dispatcher?: () => HookDispatcher,
+  options?: SurfaceHookOptions,
 ): SurfaceHooks {
   return createSurfaceHooks(
     { scopes: hookScopesFor({ workspaceRoot: input.workspaceRoot, chatId: input.chatId }), cwd: input.cwd, sessionId: input.chatId },
     dispatcher,
+    options,
   );
 }
 
@@ -114,12 +149,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** `tool_name` (Claude spelling), `aiden_tool_name` and `tool_input` for a tool event. */
-export function hookToolPayload(toolName: string, input: unknown): SurfaceHookPayload {
+/**
+ * `tool_name` (Claude spelling), `aiden_tool_name`, `tool_input` and, when
+ * the call has one, `tool_use_id` for a tool event.
+ */
+export function hookToolPayload(toolName: string, input: unknown, toolUseId?: string): SurfaceHookPayload {
   return {
     tool_name: claudeToolName(toolName),
     aiden_tool_name: toolName,
     tool_input: claudeToolInput(isRecord(input) ? input : undefined) ?? {},
+    ...(toolUseId ? { tool_use_id: toolUseId } : {}),
   };
 }
 

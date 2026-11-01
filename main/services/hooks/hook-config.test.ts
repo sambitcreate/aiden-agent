@@ -60,10 +60,11 @@ test("unsupported entries are listed with a reason instead of dropped", () => {
         PreToolUse: [
           { matcher: "Bash", hooks: [{ type: "http", url: "https://example.com/hook" }] },
           { matcher: "Bash", hooks: [{ type: "prompt", prompt: "Is this safe?" }] },
-          { matcher: "Bash", hooks: [{ type: "command", command: "./slow.sh", async: true }] },
+          { matcher: "Bash", hooks: [{ type: "command", command: "./slow.sh", async: "yes" }] },
           { matcher: "(", hooks: [{ type: "command", command: "./bad-matcher.sh" }] },
         ],
         TeammateIdle: [{ hooks: [{ type: "command", command: "./idle.sh" }] }],
+        RoutineRun: [{ hooks: [{ type: "command", command: "./routine.sh" }] }],
       },
     },
     options,
@@ -76,9 +77,12 @@ test("unsupported entries are listed with a reason instead of dropped", () => {
       ["PreToolUse", "PreToolUse", "command", "unsupported"],
       ["PreToolUse", "PreToolUse", "command", "unsupported"],
       ["TeammateIdle", "unknown", "command", "unsupported"],
+      ["RoutineRun", "RoutineRun", "command", "unsupported"],
     ],
   );
   for (const hook of parsed.hooks) assert.ok(hook.unsupportedReason, `${hook.id} explains why`);
+  // A repo file is a workspace scope, where routines never run.
+  assert.match(parsed.hooks[parsed.hooks.length - 1]?.unsupportedReason ?? "", /RoutineRun hooks never run for a workspace; save it globally or for a Bot/u);
 });
 
 test("file-level problems are reported without throwing", () => {
@@ -106,6 +110,41 @@ test("handler validation enforces the timeout, env and command rules", () => {
   assert.ok(accepted.ok);
   assert.deepEqual(accepted.handler.envAllow, ["A_TOKEN", "B_TOKEN"]);
   assert.equal(accepted.handler.failClosed, true);
+});
+
+test("async handlers run in the background with a longer timeout and can't block", () => {
+  const background = validateHookHandler({ type: "command", command: "./setup.sh", async: true, timeout: 600 });
+  assert.ok(background.ok);
+  assert.equal(background.handler.async, true);
+  assert.equal(background.handler.timeout, 600);
+  assert.deepEqual(background.warnings, []);
+
+  const capped = validateHookHandler({ type: "command", command: "./setup.sh", async: true, timeout: 900 });
+  assert.ok(capped.ok);
+  assert.equal(capped.handler.timeout, 600);
+  assert.match(capped.warnings[0] ?? "", /600 seconds for async hooks/u);
+
+  // A synchronous hook still stops at 120 seconds.
+  const sync = validateHookHandler({ type: "command", command: "./setup.sh", timeout: 600 });
+  assert.ok(sync.ok);
+  assert.equal(sync.handler.timeout, 120);
+
+  assert.equal(validateHookHandler({ type: "command", command: "./x.sh", async: true, failClosed: true }).ok, false);
+  assert.equal(validateHookHandler({ type: "command", command: "./x.sh", async: "yes" }).ok, false);
+  // `async: false` is the default and leaves nothing behind.
+  const explicitSync = validateHookHandler({ type: "command", command: "./x.sh", async: false });
+  assert.ok(explicitSync.ok);
+  assert.equal(explicitSync.handler.async, undefined);
+});
+
+test("making a hook async changes its digest; async: false does not", () => {
+  const document = (handler: Record<string, unknown>) => ({ hooks: { Stop: [{ hooks: [{ type: "command", command: "./check.sh", ...handler }] }] } });
+  const plain = parseHooksConfig(document({}), options).hooks[0];
+  const explicitSync = parseHooksConfig(document({ async: false }), options).hooks[0];
+  const background = parseHooksConfig(document({ async: true }), options).hooks[0];
+  assert.equal(explicitSync?.digest, plain?.digest, "approvals of existing hooks stay valid");
+  assert.notEqual(background?.digest, plain?.digest, "turning on async needs approval again");
+  assert.equal(background?.status, "waiting-for-approval");
 });
 
 test("scopes for a run are ordered global, workspace, bot, chat", () => {

@@ -39,7 +39,8 @@ export function createBotSubagentTool(agentDir: string, admission: BotRuntimeAut
         onSnapshot: async (snapshot) => { await store.upsert(snapshot); } });
       supervisor = new SubagentSupervisor({ generationId, chatId: cliSubagentIdentity(authority.chatId), workspaceId: cliSubagentIdentity(authority.managedHome.workspaceId),
         workspaceRoot: authority.workingDirectory, runtime, thinkingLevel: "off", permission: "full", inheritedCeiling: SUBAGENT_READ_TOOL_NAMES.filter((name) => reads.some((tool) => tool.name === name)),
-        loadPersistedChatForFork: loadChat, projector, stopHooks: botSurfaceHooks(authority.botId, authority.workingDirectory),
+        loadPersistedChatForFork: loadChat, projector, stopHooks: botSurfaceHooks(authority.botId, authority.workingDirectory, undefined, {
+          report: (lines) => { for (const line of lines) process.stderr.write(`aiden: Bot ${authority.botId} hook: ${line.replace(/[\r\n]+/gu, " ").slice(0, 500)}\n`); } }),
         runChild: (input) => runCliSubagent(agentDir, input, reads, async () => { combined.throwIfAborted(); await admission.revalidateBeforeEffect(); }),
       });
       return await supervisor.execute(params, combined);

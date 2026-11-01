@@ -139,6 +139,8 @@ export interface BotRoutineExecutorPorts extends BotRoutinePorts {
   spendingStop?(botId: string, requestId: string): string | undefined;
   /** The Bot's folder, where its `RoutineRun` and `RoutineFailed` hooks run. No folder, no hooks. */
   hookCwd?(botId: string): Promise<string>;
+  /** Where those hooks' messages and Aiden's notices go: the person's log, never the Bot's context. */
+  hookReport?(botId: string, lines: string[]): void;
 }
 
 export interface BotRoutineExecutorDependencies {
@@ -186,10 +188,18 @@ function observeRoutineHooks(
   const event = run.result === "error" ? "RoutineFailed" : run.result === "success" || run.result === "silent" ? "RoutineRun" : undefined;
   if (!event) return;
   void (async () => {
-    const hookCwd = (await ports()).hookCwd;
+    const { hookCwd, hookReport } = await ports();
     if (!hookCwd) return;
     const cwd = await hookCwd(task.botId);
-    const hooks = botSurfaceHooks(task.botId, cwd, dispatcher);
+    const hooks = botSurfaceHooks(task.botId, cwd, dispatcher, {
+      report: (lines) => {
+        try {
+          hookReport?.(task.botId, lines);
+        } catch {
+          // Reporting is best effort.
+        }
+      },
+    });
     hooks.observe(event, {
       bot_id: task.botId,
       routine_id: task.id,

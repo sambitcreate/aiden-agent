@@ -35,6 +35,12 @@ import type {
   HookScope,
 } from "./hooks/hook-types.js";
 import { aidenToolInput, claudeToolInput, claudeToolName } from "./hooks/hook-aliases.js";
+import {
+  clearPromptHookBlock,
+  isHookBlockedPrompt,
+  markPromptHookBlocked,
+  type PromptHookBlockStore,
+} from "./hook-blocked-prompt.js";
 import type {
   PiAgentRuntimeExtension,
   PiRuntimeStopDecision,
@@ -224,6 +230,8 @@ export function createWorkspaceChatHooks(
     scopes,
     cwd,
     sessionId: target.chatId,
+    // Background (`async`) hooks' messages arrive after their dispatch returns.
+    reportAsync: report,
   };
   const has = (event: HookEvent, toolName?: string): boolean => {
     try {
@@ -253,10 +261,11 @@ export function createWorkspaceChatHooks(
     report(hookNoticeLines(outcome));
     return outcome;
   };
-  const toolPayload = (toolName: string, input: unknown) => ({
+  const toolPayload = (toolName: string, input: unknown, toolUseId: string) => ({
     tool_name: claudeToolName(toolName),
     aiden_tool_name: toolName,
     tool_input: claudeToolInput(isRecord(input) ? input : undefined) ?? {},
+    tool_use_id: toolUseId,
   });
 
   return {
@@ -265,7 +274,7 @@ export function createWorkspaceChatHooks(
     dispatch,
     async preToolUse({ toolCallId, toolName, args, tools, signal }) {
       if (!has("PreToolUse", toolName)) return { kind: "none" };
-      const outcome = await dispatch("PreToolUse", toolPayload(toolName, args), {
+      const outcome = await dispatch("PreToolUse", toolPayload(toolName, args, toolCallId), {
         idempotencyKey: `PreToolUse:${target.chatId}:${toolCallId}`,
         signal,
       });
@@ -363,7 +372,7 @@ export function createWorkspaceChatHooks(
             ? await dispatch(
                 "PostToolUse",
                 {
-                  ...toolPayload(toolName, context.args),
+                  ...toolPayload(toolName, context.args, context.toolCall.id),
                   tool_response: { content: textOf(context.result), is_error: context.isError },
                 },
                 { idempotencyKey: `PostToolUse:${target.chatId}:${context.toolCall.id}`, signal },
@@ -410,6 +419,87 @@ export async function preCompactSummaryInstructions(
     .catch(() => undefined);
   const context = outcome?.additionalContext?.trim();
   return context ? `Keep what the person's PreCompact hooks point out:\n\n${context}` : undefined;
+}
+
+/** The person's prompt; `id` is its stored message, when the chat store holds one. */
+export interface PromptIntakeMessage {
+  id?: string;
+  content: string;
+  hookBlocked?: unknown;
+}
+
+export interface PromptIntakeInput {
+  target: WorkspaceChatHookTarget;
+  /** The chat's hook dispatch, which also shows hook messages; absent when the chat runs no hooks. */
+  dispatch?: WorkspaceChatHooks["dispatch"];
+  /** Whether the chat had earlier messages, which picks `startup` or `resume`. */
+  hasPriorMessages: boolean;
+  /** The stored prompt this turn sends, when there is one. */
+  prompt: PromptIntakeMessage | undefined;
+  store: PromptHookBlockStore;
+  idempotencyKeys: { sessionStart?: string; userPromptSubmit: string };
+  signal?: AbortSignal;
+  /** A failed write of the prompt's blocked mark; the turn goes on regardless. */
+  onStoreError: (message: string, error: unknown) => void;
+}
+
+/**
+ * SessionStart, then UserPromptSubmit, before the model sees a turn. Returns
+ * the hook context for this turn only. Throws, so the turn ends before any
+ * model call, when SessionStart's `continue: false` stops it (the session is
+ * not marked started, so the next message runs SessionStart again) or when
+ * UserPromptSubmit refuses the prompt (it is marked so it never reaches a
+ * model). A prompt that was blocked before and goes through now loses its
+ * mark, on `prompt` itself too, so this turn journals it in order.
+ */
+export async function runPromptIntakeHooks(input: PromptIntakeInput): Promise<string | undefined> {
+  const { dispatch, prompt } = input;
+  let context: string | undefined;
+  if (dispatch) {
+    const source = workspaceChatSessionStartSource(input.target.chatId, input.hasPriorMessages);
+    const sessionStart = source
+      ? await dispatch(
+          "SessionStart",
+          { source },
+          {
+            ...(input.idempotencyKeys.sessionStart ? { idempotencyKey: input.idempotencyKeys.sessionStart } : {}),
+            ...(input.signal ? { signal: input.signal } : {}),
+          },
+        )
+      : undefined;
+    if (sessionStart?.stopTurn) throw new Error(hookStopMessage(sessionStart));
+    if (source) markWorkspaceChatSessionStarted(input.target);
+    const promptSubmit = prompt
+      ? await dispatch(
+          "UserPromptSubmit",
+          { prompt: prompt.content },
+          {
+            idempotencyKey: input.idempotencyKeys.userPromptSubmit,
+            ...(input.signal ? { signal: input.signal } : {}),
+          },
+        )
+      : undefined;
+    if (promptSubmit?.blockPrompt || promptSubmit?.stopTurn) {
+      // The prompt stays visible but is marked, so no later turn, fork or
+      // summary ever projects it into a model's context.
+      const blocked = promptBlockedMessage(promptSubmit);
+      if (prompt?.id) {
+        await markPromptHookBlocked(input.store, input.target.chatId, prompt.id, blocked, (error) =>
+          input.onStoreError("Could not mark a hook-blocked prompt.", error),
+        );
+      }
+      throw new Error(blocked);
+    }
+    context = hookTurnContextText([sessionStart?.additionalContext, promptSubmit?.additionalContext]);
+  }
+  if (prompt?.id && isHookBlockedPrompt({ ...prompt, role: "user" })) {
+    // Sent now (a retry after the hook changed or was turned off), so it is
+    // no longer a blocked prompt.
+    await clearPromptHookBlock(input.store, input.target.chatId, prompt as PromptIntakeMessage & { id: string }, (error) =>
+      input.onStoreError("Could not clear a hook-blocked prompt's mark.", error),
+    );
+  }
+  return context;
 }
 
 /**
@@ -461,12 +551,14 @@ export function markWorkspaceChatCompacted(chatId: string): void {
 export function endWorkspaceChatSession(
   chatId: string,
   dispatcher: () => HookDispatcher = getHookDispatcher,
+  options: WorkspaceChatHookOptions = {},
 ): void {
   const target = startedSessions.get(chatId);
   startedSessions.delete(chatId);
   compactedSessions.delete(chatId);
   if (!target) return;
-  const hooks = createWorkspaceChatHooks(target, dispatcher);
+  // The chat is gone, so its hooks' messages go where the caller says (the app log, or stderr).
+  const hooks = createWorkspaceChatHooks(target, dispatcher, options);
   void hooks.dispatch("SessionEnd", { reason: "other", aiden_reason: "chat_deleted" }).catch(() => {});
 }
 

@@ -45,7 +45,11 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
     displayImageArtifactStore: artifacts, generativeUiArtifactStore: artifacts,
     subagentRunStore: privateHistory,
     // SessionEnd for a deleted chat whose hooks ran in this daemon, as on the desktop; never awaited.
-    forgetDeletedChat: async (id) => { endWorkspaceChatSession(id); },
+    forgetDeletedChat: async (id) => {
+      endWorkspaceChatSession(id, undefined, {
+        onMessages: (lines) => { for (const line of lines) process.stderr.write(`aiden: hook: ${line}\n`); },
+      });
+    },
     piRuntimeEffectStore: { deleteChat: async (id) => { await rm(daemon.sessionPath(id), { force: true }); } },
     piCompactionSessionStore: { deleteChat: async () => {} }, // Compaction checkpoints are in that same pi journal.
     workspaceMutationGate: workspace.mutationGate, workspaceOperationRegistry: workspace.operationRegistry,

@@ -2,10 +2,10 @@
 // group and label hooks. The hook contract itself lives in
 // main/services/hooks/hook-types.ts; this file only shapes it for display.
 
-import { HOOK_EVENTS, type HookEvent, type HookListing, type HookRunRecord, type HookScope, type HookStatus } from "../../main/services/hooks/hook-types.js";
+import { HOOK_EVENT_SCOPE_KINDS, HOOK_EVENTS, type HookEvent, type HookListing, type HookRunRecord, type HookScope, type HookStatus } from "../../main/services/hooks/hook-types.js";
 import type { HookProposal, HookTestResult, HookWorkspaceFileStatus } from "../../main/services/hooks/hook-service.js";
 
-export { HOOK_EVENTS };
+export { HOOK_EVENT_SCOPE_KINDS, HOOK_EVENTS };
 export type { HookEvent, HookListing, HookProposal, HookRunRecord, HookScope, HookStatus, HookTestResult, HookWorkspaceFileStatus };
 
 /** Main → renderer: hooks, proposals, a run or an auto-disable changed. */
@@ -71,6 +71,37 @@ export const HOOK_EVENT_DESCRIPTIONS: Record<HookEvent, string> = {
   RoutineRun: "After a Bot routine run succeeds.",
   RoutineFailed: "When a Bot routine fails.",
 };
+
+/** The events a hook saved for this kind of scope can ever run on, in Settings order. */
+export function hookEventsForScope(kind: HookScope["kind"]): HookEvent[] {
+  return HOOK_EVENTS.filter((event) => HOOK_EVENT_SCOPE_KINDS[event].includes(kind));
+}
+
+/** How many extra hook messages one notice lists before it summarizes the rest. */
+export const HOOK_MESSAGES_NOTICE_LINES = 3;
+
+export interface HookMessagesNotice {
+  title: string;
+  /** The next few messages, one per line. */
+  lines: string[];
+  /** Messages beyond those, summarized as "and N more". */
+  more: number;
+}
+
+/**
+ * One notice for a batch of hook messages, so several hooks finishing at once
+ * show one toast rather than a stack. `null` when there is nothing to say.
+ */
+export function hookMessagesNotice(messages: readonly string[]): HookMessagesNotice | null {
+  const said = messages.map((message) => message.trim()).filter((message) => message !== "");
+  const [title, ...rest] = said;
+  if (title === undefined) return null;
+  return {
+    title,
+    lines: rest.slice(0, HOOK_MESSAGES_NOTICE_LINES),
+    more: Math.max(0, rest.length - HOOK_MESSAGES_NOTICE_LINES),
+  };
+}
 
 export interface HookStatusPresentation {
   label: string;

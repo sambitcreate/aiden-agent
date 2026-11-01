@@ -33,7 +33,7 @@ import type { GenerationCancellationOrigin } from "../../../renderer/shared/gene
 import { mcpToolActivityLabel } from "../../../main/services/mcp-tool-identity.js";
 import { MAX_STOP_HOOK_CONTINUATIONS, botSurfaceHooks, createSurfaceHooks, hookAskText, hookBlockText, hookNoticeLines, hookPostToolAdditions, hookStopContinuation, hookStopMessage, hookToolPayload } from "../../../main/services/agent-surface-hooks.js";
 import type { HookOutcome } from "../../../main/services/hooks/hook-types.js";
-import { hookTurnContextText, markWorkspaceChatCompacted, markWorkspaceChatSessionStarted, promptBlockedMessage, workspaceChatHookScopes, workspaceChatSessionStartSource } from "../../../main/services/workspace-chat-hooks.js";
+import { markWorkspaceChatCompacted, runPromptIntakeHooks, workspaceChatHookScopes } from "../../../main/services/workspace-chat-hooks.js";
 import { isProtectedAgentConfigPath, PROTECTED_AGENT_CONFIG_WRITE_MESSAGE } from "../../../main/services/protected-agent-config-paths.js";
 
 /**
@@ -206,10 +206,11 @@ export function createDaemonChats(agentDir: string) {
         // person's global, workspace and chat hooks; a legacy Bot chat runs
         // global and Bot hooks, for its tools only.
         const hookTarget = { chatId: chat.id, ...(workspace.folderPath ? { workspaceRoot: workspace.folderPath } : {}) };
-        const hooks = botAdmission ? botSurfaceHooks(chat.botId!, cwd) : createSurfaceHooks({ scopes: workspaceChatHookScopes(hookTarget), cwd, sessionId: chat.id });
-        let turnHookContext: string | undefined;
         // Hook messages reach the person as transcript status events, never the model.
         const reportHookLines = (messages: readonly string[]) => { if (messages.length) send("chat:status", { streamId, phase: "hook_messages", messages: [...messages] }); };
+        const hookReport = { report: reportHookLines };
+        const hooks = botAdmission ? botSurfaceHooks(chat.botId!, cwd, undefined, hookReport) : createSurfaceHooks({ scopes: workspaceChatHookScopes(hookTarget), cwd, sessionId: chat.id }, undefined, hookReport);
+        let turnHookContext: string | undefined;
         // PreToolUse context waits for its tool's result; a hook's `continue: false` ends the turn after the tool.
         const preToolContext = new Map<string, string>();
         let hookStop: string | undefined;
@@ -330,7 +331,7 @@ export function createDaemonChats(agentDir: string) {
             });
             pi.on("session_before_compact", (event) => {
               hooks.observe("PreCompact", { trigger: event.reason === "manual" ? "manual" : "auto", aiden_reason: event.reason },
-                { idempotencyKey: `PreCompact:${chat.id}:${streamId}:${event.reason}` });
+                { idempotencyKey: `PreCompact:${chat.id}:${streamId}:${event.reason}`, report: reportHookLines });
             });
             pi.on("session_compact", () => { if (!botAdmission) markWorkspaceChatCompacted(chat.id); });
           } }],
@@ -375,25 +376,21 @@ export function createDaemonChats(agentDir: string) {
         const attachments = parseAttachments(input.attachments ?? []) ?? [];
         const text = [input.content, ...attachments.filter((item) => item.kind === "image" && !model.input.includes("image")).map((item) => `Attached image: ${visionAttachmentAlias(item)} (${item.name}). Use inspect_image to analyze it.`), ...attachments.filter((item) => item.kind === "text").map((item) => `Attachment: ${item.name}\n${item.text ?? ""}`)].join("\n\n");
         if (!botAdmission) {
-          const hookContext: (string | undefined)[] = [];
-          const source = workspaceChatSessionStartSource(chat.id, chat.messages.some((message) => message.role === "assistant"));
-          if (source) {
-            const started = await dispatchHook("SessionStart", { source }, { idempotencyKey: `SessionStart:${chat.id}:${streamId}`, signal: entry.abort.signal });
-            markWorkspaceChatSessionStarted(hookTarget);
-            hookContext.push(started?.additionalContext);
-          }
-          const submitted = await dispatchHook("UserPromptSubmit", { prompt: input.content }, { idempotencyKey: `UserPromptSubmit:${chat.id}:${streamId}`, signal: entry.abort.signal });
-          if (submitted?.blockPrompt || submitted?.stopTurn) {
-            // The prompt never reaches the journal; marking the stored copy keeps forks and summaries from sending it later.
-            const blocked = promptBlockedMessage(submitted);
-            const stored = chat.messages.findLast((message) => message.role === "user");
-            if (stored?.content === input.content) {
-              await chatStore.setPromptHookBlock(chat.id, stored.id, blocked).catch(() => { process.stderr.write("aiden: Could not mark a hook-blocked prompt.\n"); });
-            }
-            throw new Error(blocked);
-          }
-          hookContext.push(submitted?.additionalContext);
-          turnHookContext = hookTurnContextText(hookContext);
+          // SessionStart then UserPromptSubmit, as on the desktop. A SessionStart `continue: false` or a refused
+          // prompt throws before the model runs; a refused prompt never reaches the journal, and its stored copy
+          // is marked (by id) so forks and summaries never send it later. A retried prompt that goes through now
+          // loses the mark.
+          const stored = "id" in input && typeof input.id === "string"
+            ? chat.messages.find((message) => message.id === input.id && message.role === "user")
+            : chat.messages.findLast((message) => message.role === "user" && message.content === input.content);
+          turnHookContext = await runPromptIntakeHooks({
+            target: hookTarget, dispatch: dispatchHook,
+            hasPriorMessages: chat.messages.some((message) => message.role === "assistant"),
+            prompt: stored ?? { content: input.content }, store: chatStore,
+            idempotencyKeys: { sessionStart: `SessionStart:${chat.id}:${streamId}`, userPromptSubmit: `UserPromptSubmit:${chat.id}:${streamId}` },
+            signal: entry.abort.signal,
+            onStoreError: (message) => { process.stderr.write(`aiden: ${message}\n`); },
+          });
         }
         await assertAuthority();
         await session.prompt(text, { expandPromptTemplates: false, preflightResult: (accepted) => { if (accepted) options.onTurnAccepted?.(); }, images: (model.input.includes("image") ? attachments : []).flatMap((item) => item.kind === "image" && item.data ? [{ type: "image" as const, data: item.data, mimeType: item.mimeType }] : []) });

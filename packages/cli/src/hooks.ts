@@ -48,8 +48,21 @@ export async function startCliHooks(agentDir: string): Promise<HookService | und
   return service;
 }
 
+/** Background hooks get this long to stop once the daemon shuts down. */
+const BACKGROUND_STOP_MS = 2_000;
+
 export async function stopCliHooks(service: HookService | undefined): Promise<void> {
   setHookDispatcher(undefined);
+  if (service) {
+    // `async` hooks die with the daemon instead of outliving it.
+    service.dispatcher.stopBackgroundHooks();
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      service.dispatcher.whenBackgroundIdle(),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, BACKGROUND_STOP_MS); timer.unref(); }),
+    ]);
+    clearTimeout(timer);
+  }
   await service?.flush();
 }
 
@@ -69,7 +82,10 @@ function hookRow(hook: HookListing) {
     source: hook.source, status: hook.status, command: hook.handler.command, digest: hook.digest,
     ...(hook.handler.timeout !== undefined ? { timeout: hook.handler.timeout } : {}),
     ...(hook.handler.failClosed ? { failClosed: true } : {}),
+    ...(hook.handler.async ? { async: true } : {}),
     ...(hook.handler.envAllow?.length ? { envAllow: hook.handler.envAllow } : {}),
+    ...(hook.scriptFiles?.length ? { scriptFiles: hook.scriptFiles } : {}),
+    ...(hook.scriptCoverage ? { scriptCoverage: hook.scriptCoverage } : {}),
     ...(hook.unsupportedReason ? { unsupportedReason: hook.unsupportedReason } : {}),
     ...(hook.lastRun ? { lastRun: { at: new Date(hook.lastRun.startedAt).toISOString(), result: hook.lastRun.result, exitCode: hook.lastRun.exitCode, timedOut: hook.lastRun.timedOut, durationMs: hook.lastRun.durationMs } } : {}),
   };

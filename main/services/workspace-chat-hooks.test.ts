@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs/promises";
 import os from "node:os";
+import * as path from "node:path";
 import test from "node:test";
-import { Type } from "@earendil-works/pi-ai";
+import { Type, fauxProvider, type Api, type Model } from "@earendil-works/pi-ai";
 import type { AfterToolCallContext, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type {
   HookDispatchContext,
@@ -17,6 +19,9 @@ import {
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import { convertToLlm } from "./pi-legacy-harness.js";
+import { createChatStore } from "./chat-store-core.js";
+import { isHookBlockedPrompt } from "./hook-blocked-prompt.js";
+import { PiCompactionSessionStore, syncChatMessagesToPiSession } from "./pi-compaction-session-store.js";
 import { PiAgentRuntimeHarness } from "./pi-agent-runtime-harness.js";
 import {
   MAX_STOP_HOOK_CONTINUATIONS,
@@ -29,6 +34,7 @@ import {
   preCompactSummaryInstructions,
   promptBlockedMessage,
   resetWorkspaceChatSessionsForTests,
+  runPromptIntakeHooks,
   workspaceChatSessionStartSource,
 } from "./workspace-chat-hooks.js";
 
@@ -106,6 +112,7 @@ test("PreToolUse deny blocks with the hooks' names and reason; ask and allow are
   assert.equal(deny.calls[0]!.payload.aiden_tool_name, "edit_file");
   assert.equal((deny.calls[0]!.payload.tool_input as Record<string, unknown>).file_path, "src/a.ts");
   assert.equal(deny.calls[0]!.context.idempotencyKey, "PreToolUse:c:call-1");
+  assert.equal(deny.calls[0]!.payload.tool_use_id, "call-1");
 
   const ask = fakeDispatcher({ PreToolUse: { decision: "ask", reason: "check the diff", ranHooks: ["review"] } });
   assert.deepEqual(
@@ -222,6 +229,7 @@ test("PostToolUse feedback and context are appended to the tool result the model
   assert.deepEqual(calls[0]!.payload.tool_response, { content: "ok", is_error: false });
   assert.equal(calls[0]!.payload.tool_name, "Bash");
   assert.equal(calls[0]!.context.idempotencyKey, "PostToolUse:c:call-9");
+  assert.equal(calls[0]!.payload.tool_use_id, "call-9");
 
   const quiet = createWorkspaceChatHooks({ chatId: "c" }, fakeDispatcher({ PostToolUse: { ranHooks: ["log"] } }).dispatcher);
   const unchanged = await quiet
@@ -300,15 +308,20 @@ test("SessionStart sources follow the chat's life in this process, and deleting 
   markWorkspaceChatCompacted("old");
   assert.equal(workspaceChatSessionStartSource("old", true), "resume");
 
-  const { dispatcher, calls } = fakeDispatcher({ SessionEnd: { ranHooks: ["cleanup"] } });
-  endWorkspaceChatSession("life", dispatcher);
-  endWorkspaceChatSession("life", dispatcher);
+  const { dispatcher, calls } = fakeDispatcher({
+    SessionEnd: { ranHooks: ["cleanup"], systemMessages: ["Removed the scratch branch."] },
+  });
+  const shown: string[][] = [];
+  endWorkspaceChatSession("life", dispatcher, { onMessages: (lines) => shown.push(lines) });
+  endWorkspaceChatSession("life", dispatcher, { onMessages: (lines) => shown.push(lines) });
   endWorkspaceChatSession("never-started", dispatcher);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(
-    calls.map((call) => [call.event, call.payload.session_id, call.payload.cwd, call.payload.aiden_reason]),
-    [["SessionEnd", "life", "/work/app", "chat_deleted"]],
+    calls.map((call) => [call.event, call.payload.session_id, call.payload.cwd, call.payload.reason, call.payload.aiden_reason]),
+    [["SessionEnd", "life", "/work/app", "other", "chat_deleted"]],
   );
+  // The chat is gone, so its hook's message goes where the caller says, once.
+  assert.deepEqual(shown, [["Hook cleanup: Removed the scratch branch."]]);
   resetWorkspaceChatSessionsForTests();
 });
 
@@ -488,5 +501,130 @@ test("this process forgets the least recently started chat once it tracks too ma
   assert.equal(workspaceChatSessionStartSource("second", true), "resume", "the oldest chat was forgotten, compaction too");
   assert.equal(workspaceChatSessionStartSource("first", true), undefined);
   assert.equal(workspaceChatSessionStartSource(`chat-${MAX_TRACKED_HOOK_SESSIONS - 2}`, true), undefined);
+  resetWorkspaceChatSessionsForTests();
+});
+
+/* Prompt intake: SessionStart, then UserPromptSubmit, before the model sees a turn. */
+
+async function tempDir(t: test.TestContext, prefix: string): Promise<string> {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  return directory;
+}
+
+function fauxModel(): Model<Api> {
+  return fauxProvider({
+    api: "openai-completions",
+    provider: `hook-intake-${Math.random().toString(36).slice(2)}`,
+    models: [{ id: "hook-intake-model", contextWindow: 8_000, maxTokens: 1_000 }],
+  }).getModel() as Model<Api>;
+}
+
+test("a blocked prompt the person retries once the hook lets it through reaches the model before its reply", async (t) => {
+  resetWorkspaceChatSessionsForTests();
+  const chatsRoot = await tempDir(t, "aiden-hook-intake-chats-");
+  const store = createChatStore(async () => chatsRoot);
+  const chat = await store.create({ workspaceId: "workspace" });
+  const appended = await store.appendMessage(chat.id, { role: "user", content: "Deploy the staging branch" });
+  const promptId = appended.messages.slice(-1)[0]!.id;
+  const errors: string[] = [];
+  const intake = (dispatcher: () => HookDispatcher, prompt: Parameters<typeof runPromptIntakeHooks>[0]["prompt"], turn: string) =>
+    runPromptIntakeHooks({
+      target: { chatId: chat.id },
+      dispatch: createWorkspaceChatHooks({ chatId: chat.id }, dispatcher).dispatch,
+      hasPriorMessages: false,
+      prompt,
+      store,
+      idempotencyKeys: { userPromptSubmit: `UserPromptSubmit:${chat.id}:${turn}` },
+      onStoreError: (message) => errors.push(message),
+    });
+
+  const refusing = fakeDispatcher({ UserPromptSubmit: { blockPrompt: true, reason: "deploys are frozen", ranHooks: ["freeze"] } });
+  await assert.rejects(intake(refusing.dispatcher, appended.messages.slice(-1)[0]!, "1"), /Blocked by hook freeze: deploys are frozen/u);
+  assert.equal((await store.get(chat.id))!.messages.slice(-1)[0]!.hookBlocked?.reason, "Blocked by hook freeze: deploys are frozen");
+
+  // The retry turn loads the stored prompt, mark and all, and the hook now passes it.
+  const currentUser = (await store.get(chat.id))!.messages.find((message) => message.id === promptId)!;
+  const passing = fakeDispatcher({ UserPromptSubmit: { ranHooks: ["freeze"] } });
+  await intake(passing.dispatcher, currentUser, "2");
+  assert.equal(currentUser.hookBlocked, undefined, "the turn's own copy is unmarked before the journal takes it");
+  assert.equal((await store.get(chat.id))!.messages.slice(-1)[0]!.hookBlocked, undefined, "the stored mark is cleared");
+  assert.deepEqual(errors, []);
+
+  // The turn journals its prompt, then the reply, in that order.
+  const model = fauxModel();
+  const piRoot = await tempDir(t, "aiden-hook-intake-pi-");
+  const sessions = new PiCompactionSessionStore({ root: async () => piRoot });
+  const session = await sessions.openChat(chat.id);
+  await syncChatMessagesToPiSession(session, [currentUser], model, false);
+  const replied = await store.appendMessage(chat.id, { role: "assistant", content: "Staging is deploying now." });
+  await syncChatMessagesToPiSession(session, replied.messages, model, false);
+  const context = JSON.stringify(await session.buildContext());
+  const promptAt = context.indexOf("Deploy the staging branch");
+  assert.ok(promptAt >= 0, "the retried prompt reaches the model");
+  assert.ok(context.indexOf("Staging is deploying now.") > promptAt, "and it comes before its reply");
+});
+
+test("a prompt stays out of the model's context when writing its blocked mark fails", async (t) => {
+  resetWorkspaceChatSessionsForTests();
+  let writes = 0;
+  const failingStore = {
+    async setPromptHookBlock(): Promise<boolean> {
+      writes += 1;
+      throw new Error("disk full");
+    },
+  };
+  const errors: string[] = [];
+  const prompt = { id: `prompt-${Math.random().toString(36).slice(2)}`, content: "ship it with key sk-live-FAILCLOSED" };
+  const { dispatcher } = fakeDispatcher({ UserPromptSubmit: { blockPrompt: true, reason: "secret in prompt", ranHooks: ["scan"] } });
+  await assert.rejects(
+    runPromptIntakeHooks({
+      target: { chatId: "fail-closed" },
+      dispatch: createWorkspaceChatHooks({ chatId: "fail-closed" }, dispatcher).dispatch,
+      hasPriorMessages: false,
+      prompt,
+      store: failingStore,
+      idempotencyKeys: { userPromptSubmit: "UserPromptSubmit:fail-closed:1" },
+      onStoreError: (message) => errors.push(message),
+    }),
+    /Blocked by hook scan: secret in prompt/u,
+  );
+  assert.equal(writes, 2, "the write is retried once");
+  assert.deepEqual(errors, ["Could not mark a hook-blocked prompt."]);
+
+  // The unmarked message, as the store still holds it, never reaches a journal.
+  const stored = { ...prompt, role: "user" as const, createdAt: Date.now() };
+  assert.equal(isHookBlockedPrompt(stored), true);
+  const piRoot = await tempDir(t, "aiden-hook-failclosed-pi-");
+  const sessions = new PiCompactionSessionStore({ root: async () => piRoot });
+  const session = await sessions.openChat("fail-closed");
+  await syncChatMessagesToPiSession(session, [stored], fauxModel(), false);
+  assert.doesNotMatch(JSON.stringify(await session.buildContext()), /sk-live-FAILCLOSED/u);
+});
+
+test("SessionStart continue: false ends the turn before the prompt is checked, and the next message starts the session again", async () => {
+  resetWorkspaceChatSessionsForTests();
+  const { dispatcher, calls } = fakeDispatcher({
+    SessionStart: { stopTurn: true, stopReason: "the repo is locked", ranHooks: ["gate"] },
+    UserPromptSubmit: { ranHooks: ["audit"] },
+  });
+  let writes = 0;
+  const hooks = createWorkspaceChatHooks({ chatId: "locked" }, dispatcher);
+  await assert.rejects(
+    runPromptIntakeHooks({
+      target: { chatId: "locked" },
+      dispatch: hooks.dispatch,
+      hasPriorMessages: false,
+      prompt: { id: "locked-prompt", content: "hello" },
+      store: { setPromptHookBlock: async () => { writes += 1; return true; } },
+      idempotencyKeys: { userPromptSubmit: "UserPromptSubmit:locked:1" },
+      onStoreError: () => {},
+    }),
+    (error: Error) => error.message === "Stopped by hook gate: the repo is locked",
+  );
+  assert.deepEqual(calls.map((call) => call.event), ["SessionStart"], "UserPromptSubmit never runs");
+  assert.equal(writes, 0, "the prompt is not marked blocked");
+  assert.equal(isHookBlockedPrompt({ id: "locked-prompt", role: "user" }), false);
+  assert.equal(workspaceChatSessionStartSource("locked", false), "startup", "the session did not start");
   resetWorkspaceChatSessionsForTests();
 });

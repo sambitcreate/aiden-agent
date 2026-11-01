@@ -12,7 +12,7 @@ import type { HookListing } from "../services/hooks/hook-types.js";
 import type { HooksOverview } from "../../renderer/shared/hooks-settings.js";
 import { registerHookHandlers } from "./hooks.js";
 
-async function fixture(t: test.TestContext, options: { started?: boolean; env?: NodeJS.ProcessEnv } = {}) {
+async function fixture(t: test.TestContext, options: { started?: boolean; env?: NodeJS.ProcessEnv; hooksSupported?: boolean } = {}) {
   const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-hook-handlers-")));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const workspace = path.join(base, "repo");
@@ -38,6 +38,7 @@ async function fixture(t: test.TestContext, options: { started?: boolean; env?: 
     ],
     broadcast: (change) => void broadcasts.push(change),
     env: options.env,
+    hooksSupported: () => options.hooksSupported ?? true,
     // Stands in for `rendererDocumentOwner`: only an Aiden window's document passes.
     requireSender: (event) => {
       if ((event as { aidenWindow?: boolean }).aidenWindow !== true) throw new Error("Hooks settings need the active window.");
@@ -116,6 +117,9 @@ test("save refuses hooks for folders that are not workspaces, and bad fields", a
   await refuse({ scope: { kind: "global" }, event: "Stop", command: "./x.sh", timeout: 1.5 });
   await refuse({ scope: { kind: "global" }, event: "Stop", command: "./x.sh", failClosed: true });
   await refuse({ scope: { kind: "global" }, event: "PreToolUse", command: "./x.sh", failClosed: "yes" });
+  await refuse({ scope: { kind: "global" }, event: "Stop", command: "./x.sh", async: "yes" });
+  await refuse({ scope: { kind: "global" }, event: "Stop", command: "./x.sh", async: true, timeout: 601 });
+  await refuse({ scope: { kind: "global" }, event: "PreToolUse", command: "./x.sh", async: true, failClosed: true });
   await refuse(null);
   assert.deepEqual((await f.list()).hooks, []);
 
@@ -193,6 +197,39 @@ test("agent proposals are listed, then approved or rejected by id", async (t) =>
 
   assert.equal(((await f.invoke("hooks:approveProposal", keep.id)) as { ok: boolean }).ok, false, "a proposal is answered once");
   await assert.rejects(f.invoke("hooks:approveProposal", { id: keep.id }), /Invalid hooks request/u);
+});
+
+test("an async hook may run up to 600 seconds; one Aiden waits for stops at 120", async (t) => {
+  const f = await fixture(t);
+  const background = (await f.invoke("hooks:save", { scope: { kind: "global" }, event: "Stop", command: "./slow.sh", async: true, timeout: 600 })) as {
+    ok: boolean;
+    value?: HookListing;
+  };
+  assert.equal(background.ok, true);
+  assert.equal(background.value?.handler.async, true);
+  assert.equal(background.value?.handler.timeout, 600);
+  await assert.rejects(f.invoke("hooks:save", { scope: { kind: "global" }, event: "Stop", command: "./slow.sh", timeout: 600 }), /Invalid hooks request/u);
+});
+
+test("a hook that can never fire for its scope is refused with the reason", async (t) => {
+  const f = await fixture(t);
+  const saved = (await f.invoke("hooks:save", { scope: { kind: "workspace", workspaceRoot: f.workspace }, event: "RoutineRun", command: "./r.sh" })) as {
+    ok: boolean;
+    reason?: string;
+  };
+  assert.equal(saved.ok, false);
+  assert.match(saved.reason ?? "", /RoutineRun hooks never run for a workspace/u);
+  assert.deepEqual((await f.list()).hooks, []);
+});
+
+test("on a host that can't run hooks nothing is listed and every change is refused", async (t) => {
+  const f = await fixture(t, { hooksSupported: false });
+  const overview = await f.list();
+  assert.equal(overview.available, false);
+  assert.deepEqual(overview.hooks, []);
+  await assert.rejects(f.invoke("hooks:save", { scope: { kind: "global" }, event: "Stop", command: "./x.sh" }), /need macOS or Linux/u);
+  await assert.rejects(f.invoke("hooks:setPaused", true), /need macOS or Linux/u);
+  assert.deepEqual((await f.service?.listHooks())?.hooks, [], "nothing reached the service");
 });
 
 test("before the service starts the list says so, and writes are refused", async (t) => {

@@ -581,17 +581,18 @@ test("agent hook proposals remain Mac-only approvals", async () => {
     matcher: "run_command",
     command: "jq -r '.tool_input.command' | grep -q 'push -f' && exit 2 || exit 0",
     timeoutSeconds: 30,
+    async: false,
     failClosed: false,
     envAllow: [],
   };
   owner.owner.send("chat:approval", {
     approvalId: "approval-hook",
-    summary: "Aiden wants to add a hook. Review and approve it on the Mac running this chat.",
+    summary: "Aiden wants to add a hook. Review and approve it on the computer running this chat.",
     details,
   });
   const pending = app.service.pendingApproval("device-1", "stream-1");
   assert.equal(pending?.canAllow, false);
-  assert.match(pending?.summary ?? "", /on the Mac running this chat/u);
+  assert.match(pending?.summary ?? "", /on the computer running this chat/u);
   await assert.rejects(
     app.service.respondApproval("device-1", "approval-hook", "allow", "approval-hook-allow-key", inputPassthrough),
     (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "capability_denied",

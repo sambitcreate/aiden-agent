@@ -1974,6 +1974,10 @@ export function runCommandEnv(
   return { ...environment, PATH: current ? `${prefix}${path.delimiter}${current}` : prefix };
 }
 
+/** Told to the model when the shell exited but a background process still held its output. */
+export const BACKGROUND_STOPPED_NOTE =
+  "[Aiden: a background process still holding output was stopped; redirect its output and use nohup to keep it running, e.g. `nohup server >server.log 2>&1 &`.]";
+
 function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOptions = {}): AgentTool {
   const root = workspace.lexical;
   return {
@@ -2009,7 +2013,8 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
       if (result.aborted) {
         throw signal?.reason instanceof Error ? signal.reason : new Error("Command cancelled.");
       }
-      const combined = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+      const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+      const combined = result.backgroundStopped ? [output, BACKGROUND_STOPPED_NOTE].filter(Boolean).join("\n") : output;
       if (result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded) {
         return markHostCommandObservation(textResult(await boundedToolOutput(combined || "[no output]", MAX_OUTPUT_CHARS)), result);
       }

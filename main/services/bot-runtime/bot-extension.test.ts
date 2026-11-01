@@ -50,7 +50,7 @@ after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
-type ToolResultModel = { isError: boolean; toolName: string; content: Array<{ text?: string }> };
+type ToolResultModel = { isError: boolean; toolName: string; toolCallId: string; content: Array<{ text?: string }> };
 
 async function toolResults(root: Conversation): Promise<ToolResultModel[]> {
   const view = await root.context(ctx);
@@ -1036,6 +1036,48 @@ test("(hk5) PreToolUse context joins PostToolUse's in the tool result; hook mess
     assert.doesNotMatch(text, /Policy checked|failed open/u);
     assert.ok(reported.some((line) => line.includes("Policy checked the lookup.")), JSON.stringify(reported));
     assert.ok(reported.includes("A hook failed open."), JSON.stringify(reported));
+    // Both events name the same call, so a hook can pair a result with its request.
+    const [pre, post] = [hooks.runs.find((run) => run.event === "PreToolUse"), hooks.runs.find((run) => run.event === "PostToolUse")];
+    assert.equal(typeof pre!.payload.tool_use_id, "string");
+    assert.notEqual(pre!.payload.tool_use_id, "");
+    assert.equal(post!.payload.tool_use_id, pre!.payload.tool_use_id);
+    assert.equal(pre!.payload.tool_use_id, result!.toolCallId);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("(hk6) a PreCompact hook's messages reach the person through the Bot's reporter, never the summary", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage(`Noted. ${"Planning detail. ".repeat(60)}`), fauxAssistantMessage("ok")]);
+  const hooks = fakeHooks({
+    PreCompact: () => ({ systemMessages: ["Archived the transcript."], notices: ["Hook archive timed out."], ranHooks: ["archive"] }),
+  });
+  const deps = withHooks(recordingDeps(), hooks);
+  const reported: string[] = [];
+  deps.hooks!.report = (_botId, lines) => {
+    reported.push(...lines);
+  };
+  deps.beforeCompact = async () => ({ summary: "Kept." });
+  const registry = createBotRegistry("bot-1", deps);
+  await registry.refresh();
+  const harness = await Harness.open(
+    new MemoryStorage(),
+    { models: fauxModels.models, registry, settings: { compaction: { keepRecentTokens: 100, backgroundTokens: 0 } } },
+    ctx,
+  );
+  registry.attachHarness(harness);
+  const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  try {
+    await (await root.submit({ type: "input", content: `Hello. ${"Some background. ".repeat(60)}` }, ctx)).wait(ctx);
+    await (await root.submit({ type: "input", content: "ok" }, ctx)).wait(ctx);
+    await root.compact(undefined, ctx);
+    for (let attempt = 0; attempt < 100 && reported.length === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const compactions = hooks.runs.filter((run) => run.event === "PreCompact");
+    assert.equal(compactions.length, 1);
+    assert.equal(compactions[0]!.payload.trigger, "manual");
+    assert.deepEqual(reported, ["Hook archive: Archived the transcript.", "Hook archive timed out."]);
   } finally {
     await harness.close(ctx);
   }

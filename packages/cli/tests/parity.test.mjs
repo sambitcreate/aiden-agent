@@ -2474,6 +2474,28 @@ test("daemon chats run approved hooks after Aiden's own rules, and file tools ca
   assert.equal(hooks.getRunLog(listed.hooks[0].id).length, 1, "the hook ran once, for the write it matched");
 });
 
+test("aiden hooks list shows background hooks, and stopping the daemon stops them", async (t) => {
+  const dir = temporary(t);
+  const hooks = await api.startCliHooks(dir);
+  assert.ok(hooks);
+  let stopped = false;
+  t.after(() => (stopped ? undefined : api.stopCliHooks(hooks)));
+  const saved = await hooks.saveHook({ scope: { kind: "global" }, event: "Stop", handler: { type: "command", command: "sleep 30", async: true, timeout: 600 } });
+  assert.ok(saved.ok, JSON.stringify(saved));
+  const [row] = (await api.hooksCommand(dir, hooks, ["list"])).hooks;
+  assert.equal(row.async, true);
+  assert.equal(row.timeout, 600);
+
+  const outcome = await hooks.dispatcher.dispatch("Stop", { hook_event_name: "Stop", session_id: "chat", cwd: dir }, { scopes: [{ kind: "global" }], cwd: dir, sessionId: "chat" });
+  assert.deepEqual(outcome.ranHooks, [], "the daemon does not wait for it");
+  assert.equal(hooks.dispatcher.backgroundHookCount(), 1);
+  const started = Date.now();
+  await api.stopCliHooks(hooks);
+  stopped = true;
+  assert.equal(hooks.dispatcher.backgroundHookCount(), 0);
+  assert.ok(Date.now() - started < 5_000, "the sleep was stopped, not waited out");
+});
+
 test("daemon chats keep hook-blocked prompts from the model, carry PreToolUse context, end on continue:false, and send hook messages", async (t) => {
   const dir = temporary(t), repo = join(dir, "repo"), requests = [];
   mkdirSync(join(repo, ".aiden"), { recursive: true });
@@ -2565,4 +2587,61 @@ test("daemon chats keep hook-blocked prompts from the model, carry PreToolUse co
   assert.equal(requests.length, 4);
   assert.match(JSON.stringify(requests[3]), /Read the notes/u);
   assert.doesNotMatch(JSON.stringify(requests[3]), /sk-live/u);
+});
+
+test("daemon chats send a retried prompt once its hook lets it through, and drop the stored block mark", async (t) => {
+  const dir = temporary(t), repo = join(dir, "repo"), marker = join(dir, "block-prompts"), requests = [];
+  mkdirSync(join(repo, ".aiden"), { recursive: true });
+  writeFileSync(marker, "on");
+  const blockPrompt = JSON.stringify({ decision: "block", reason: "Prompts are paused." });
+  writeFileSync(join(repo, ".aiden", "hooks.json"), JSON.stringify({ hooks: {
+    UserPromptSubmit: [{ hooks: [{ type: "command", command: `test -f '${marker}' && printf '%s' '${blockPrompt}' || true` }] }],
+  } }));
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    requests.push(JSON.parse(body));
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ id: "retry", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: "Shipped." }, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "retry", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const workspace = await api.workspaceCommand(dir, ["add", repo]);
+  const listed = await api.hooksAdminCommand(dir, ["list"]);
+  for (const hook of listed.hooks) await api.hooksAdminCommand(dir, ["approve", hook.id, hook.digest], { isInteractive: () => true });
+  const hooks = await api.startCliHooks(dir);
+  t.after(() => api.stopCliHooks(hooks));
+  const daemon = api.createDaemonChats(dir);
+  t.after(() => daemon.stop());
+  await daemon.chatStore.create({ id: "retried", title: "Retried", workspaceId: workspace.id });
+  const events = [];
+  const owner = { id: 0, documentId: "test", isDestroyed: () => false, onInvalidated: () => () => {}, send: (channel, value) => events.push({ channel, value }) };
+  const run = async (streamId, message, append) => {
+    const admission = daemon.llmClient.beginChatTurn("retried", streamId, "test"); assert.ok(admission);
+    try {
+      if (append) await daemon.chatStore.appendMessage("retried", message);
+      admission.settleAsyncWork();
+      await daemon.llmClient.start(streamId, { chatId: "retried", workspaceId: workspace.id, providerId: "cli-test", model: "test", messages: [message] }, owner, { usageSource: "chat" });
+      await daemon.llmClient.waitForChatIdle("retried");
+    } finally { admission.release(); }
+    return events.filter((event) => event.value?.streamId === streamId);
+  };
+
+  const first = await run("first", { role: "user", content: "Ship the release" }, true);
+  assert.match(first.find((event) => event.channel === "chat:error")?.value.message ?? "", /Prompts are paused\./u);
+  assert.equal(requests.length, 0);
+  const stored = (await daemon.chatStore.get("retried")).messages.find((message) => message.role === "user");
+  assert.match(stored?.hookBlocked?.reason ?? "", /Prompts are paused/u);
+
+  // The person lifts the block and retries the same stored message: it reaches the model and is no longer marked.
+  rmSync(marker);
+  const retry = await run("retry", { id: stored.id, role: "user", content: stored.content }, false);
+  assert.equal(retry.filter((event) => event.channel === "chat:error").length, 0, JSON.stringify(retry));
+  assert.equal(requests.length, 1);
+  assert.match(JSON.stringify(requests[0]), /Ship the release/u);
+  const after = await daemon.chatStore.get("retried");
+  assert.equal(after.messages.filter((message) => message.role === "user").length, 1, "the retry reused the stored message");
+  assert.equal(after.messages.find((message) => message.id === stored.id)?.hookBlocked, undefined);
 });
