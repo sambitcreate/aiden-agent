@@ -2493,6 +2493,18 @@ final class AidenRemoteClientTests: XCTestCase {
         }
     }
 
+    func testAChatStartedUnderChatsAsksTheMacForAFolderOfItsOwn() async throws {
+        let client = makeClient()
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats")
+            XCTAssertEqual(try Self.jsonBody(request)["workspaceId"] as? String, "default")
+            XCTAssertEqual(try Self.jsonBody(request)["noWorkspace"] as? Bool, true)
+            return Self.chatResponse(for: request, status: 201, revision: "revision-1")
+        }
+        _ = try await client.createChat(workspaceId: "default", noWorkspace: true)
+    }
+
     func testChatCRUDModelsTurnCancelAndApprovalUseCanonicalRoutes() async throws {
         let client = makeClient()
         var step = 0
@@ -2509,6 +2521,8 @@ final class AidenRemoteClientTests: XCTestCase {
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertNotNil(request.value(forHTTPHeaderField: "Idempotency-Key"))
                 XCTAssertEqual(try Self.jsonBody(request)["workspaceId"] as? String, "workspace-1")
+                // An ordinary create never asks the Mac for a No workspace folder (revision 50).
+                XCTAssertNil(try Self.jsonBody(request)["noWorkspace"])
                 return Self.chatResponse(for: request, status: 201, revision: "revision-1")
             case 3:
                 XCTAssertEqual(request.httpMethod, "PATCH")

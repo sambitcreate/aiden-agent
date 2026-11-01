@@ -337,7 +337,7 @@ private fun AidenWorkspaceHome(
         creationStatus = status
         scope.launch {
             try {
-                val chat = activeClient.createChat(workspace.id)
+                val chat = activeClient.createChat(workspace.id, noWorkspace = workspace.noWorkspace)
                 viewModel.accept(chat)
                 // A No workspace chat can land in a fresh hidden workspace the phone hasn't listed yet.
                 if (workspaces.none { it.id == chat.workspaceId }) coordinator.refreshWorkspaces()

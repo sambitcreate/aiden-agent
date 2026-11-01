@@ -873,12 +873,15 @@ export function projectAidenRemoteChat(
   }
 }
 
-function parseCreate(input: unknown): { workspaceId: string; providerId?: string; model?: string } {
+function parseCreate(
+  input: unknown,
+): { workspaceId: string; providerId?: string; model?: string; noWorkspace?: true } {
   const record = ownRecord(input);
   if (
     !record ||
-    !exactKeys(record, ["workspaceId"], ["providerId", "modelId"]) ||
+    !exactKeys(record, ["workspaceId"], ["providerId", "modelId", "noWorkspace"]) ||
     !boundedString(record.workspaceId, 128) ||
+    (record.noWorkspace !== undefined && record.noWorkspace !== true) ||
     (record.providerId !== undefined && !boundedString(record.providerId, 256)) ||
     (record.modelId !== undefined && !boundedString(record.modelId, 256))
   ) {
@@ -888,6 +891,7 @@ function parseCreate(input: unknown): { workspaceId: string; providerId?: string
     workspaceId: safeId(record.workspaceId, "workspace"),
     ...(typeof record.providerId === "string" ? { providerId: record.providerId } : {}),
     ...(typeof record.modelId === "string" ? { model: record.modelId } : {}),
+    ...(record.noWorkspace === true ? { noWorkspace: true as const } : {}),
   };
 }
 
@@ -1844,7 +1848,11 @@ export class AidenRemoteChatService {
             ? await this.options.models.resolve(parsed.providerId, parsed.model)
             : undefined;
           const created = await this.assigningNoWorkspace(async () => {
-            const workspaceId = (await this.options.noWorkspace?.target(parsed.workspaceId)) ?? parsed.workspaceId;
+            // Only a phone that knows the Chats group (revision 50) asks for a folder of its own;
+            // an older phone keeps the workspace it named, as it always has.
+            const workspaceId = parsed.noWorkspace
+              ? ((await this.options.noWorkspace?.target(parsed.workspaceId)) ?? parsed.workspaceId)
+              : parsed.workspaceId;
             return this.options.application.create(
               {
                 workspaceId,
@@ -1897,7 +1905,7 @@ export class AidenRemoteChatService {
           // between the emptiness check and its removal.
           const moved = await this.assigningNoWorkspace(async () => {
             const previous = (await this.options.application.list()).find((entry) => entry.id === chatId);
-            const workspaceId = (await this.options.noWorkspace?.target(parsed.workspaceId, chatId)) ?? parsed.workspaceId;
+            const workspaceId = parsed.workspaceId;
             const moved = await this.options.application.moveEmptyToWorkspace(chatId, workspaceId, {
               assertCurrent: (chat) => requireRevision(revision, chat),
             });

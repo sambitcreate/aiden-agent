@@ -1004,6 +1004,8 @@ final class AidenRemoteClient: @unchecked Sendable {
         let workspaceId: String
         let providerId: String?
         let modelId: String?
+        /// Revision 50: a chat started under Chats gets a hidden folder of its own. Omitted otherwise.
+        let noWorkspace: Bool?
     }
 
     private struct ChatUpdateRequest: Encodable {
@@ -1692,6 +1694,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         workspaceId: String,
         providerId: String? = nil,
         modelId: String? = nil,
+        noWorkspace: Bool = false,
         idempotencyKey: UUID = UUID()
     ) async throws -> AidenChat {
         try await send(
@@ -1700,7 +1703,8 @@ final class AidenRemoteClient: @unchecked Sendable {
             body: ChatCreateRequest(
                 workspaceId: workspaceId,
                 providerId: providerId,
-                modelId: modelId
+                modelId: modelId,
+                noWorkspace: noWorkspace ? true : nil
             ),
             headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()],
             acceptedStatus: [201]

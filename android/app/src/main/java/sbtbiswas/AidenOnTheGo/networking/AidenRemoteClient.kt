@@ -907,11 +907,12 @@ class AidenRemoteClient(
         workspaceId: String,
         providerId: String? = null,
         modelId: String? = null,
+        noWorkspace: Boolean = false,
         idempotencyKey: UUID = UUID.randomUUID()
     ): AidenChat = executeRequest(
         "/chats",
         method = "POST",
-        bodyJson = json.encodeToString(ChatCreateRequest(workspaceId, providerId, modelId)),
+        bodyJson = json.encodeToString(ChatCreateRequest(workspaceId, providerId, modelId, noWorkspace.takeIf { it })),
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(201),
         botScope = AidenBotPrivateResponseScope.ChatProjection
@@ -2881,7 +2882,9 @@ class AidenRemoteClient(
     private data class ChatCreateRequest(
         val workspaceId: String,
         val providerId: String? = null,
-        val modelId: String? = null
+        val modelId: String? = null,
+        /** Revision 50: a chat started under Chats gets a hidden folder of its own. Omitted otherwise. */
+        val noWorkspace: Boolean? = null
     )
 
     @Serializable

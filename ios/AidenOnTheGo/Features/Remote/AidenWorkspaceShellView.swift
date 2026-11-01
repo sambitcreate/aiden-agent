@@ -2123,7 +2123,8 @@ struct AidenWorkspaceShellView: View {
         }
 
         do {
-            let chat = try await coordinator.remoteClient(for: context).createChat(workspaceId: workspace.id)
+            let chat = try await coordinator.remoteClient(for: context)
+                .createChat(workspaceId: workspace.id, noWorkspace: workspace.noWorkspace)
             guard coordinator.isCurrent(context) else { return }
             guard !chat.isBotChat else {
                 coordinator.presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
@@ -2175,9 +2176,11 @@ struct AidenWorkspaceShellView: View {
 
     @ViewBuilder
     private func workspaceDetail(workspaceID: String?) -> some View {
+        // A hidden No workspace record has no page of its own (no chat list, settings or Remove).
         if let workspaceID,
            !archivedWorkspaceIDs.contains(workspaceID),
-           let workspace = coordinator.workspaces.first(where: { $0.id == workspaceID }) {
+           let workspace = coordinator.workspaces.first(where: { $0.id == workspaceID }),
+           !workspace.noWorkspace {
             AidenWorkspaceDetailView(
                 coordinator: coordinator,
                 workspace: workspace,
@@ -2223,9 +2226,11 @@ struct AidenWorkspaceShellView: View {
 
     private func commitOpenChat(_ chat: AidenChat, startsVoice: Bool = false) {
         guard activeWorkspaceIDs.contains(chat.workspaceId) else { return }
-        selectedWorkspaceId = chat.workspaceId
+        // A chat without a workspace is listed under the Chats group, which stands on the home.
+        let sectionID = AidenNoWorkspace.groupID(for: chat.workspaceId, in: coordinator.workspaces)
+        selectedWorkspaceId = sectionID
         navigationStore.ensureExpandedSidebarWorkspace(
-            chat.workspaceId,
+            sectionID,
             for: coordinator.activeInstanceId
         )
         if !usesSplitNavigation { compactWorkspacePath = [] }
@@ -2367,7 +2372,9 @@ struct AidenWorkspaceShellView: View {
                     coordinator.presentedError = String(localized: "The requested workspace is unavailable. Choose or add a workspace first.")
                     return
                 }
-                chat = try await coordinator.remoteClient(for: context).createChat(workspaceId: workspaceId)
+                let underChats = coordinator.workspaces.contains { $0.id == workspaceId && $0.noWorkspace }
+                chat = try await coordinator.remoteClient(for: context)
+                    .createChat(workspaceId: workspaceId, noWorkspace: underChats)
                 guard coordinator.isCurrent(context) else { return }
                 guard !chat.isBotChat else {
                     coordinator.presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")

@@ -312,7 +312,8 @@ struct ContentView: View {
                       coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .chatWrite) == true else { return nil }
                 // A chat started under Chats can land in a fresh hidden workspace of its own.
                 let startsUnderChats = coordinator.workspaces.contains { $0.id == target.workspaceID && $0.noWorkspace }
-                let chat = try await coordinator.remoteClient(for: context).createChat(workspaceId: target.workspaceID)
+                let chat = try await coordinator.remoteClient(for: context)
+                    .createChat(workspaceId: target.workspaceID, noWorkspace: startsUnderChats)
                 guard coordinator.isCurrent(context), scenePhase == .active, !chat.isBotChat,
                       chat.workspaceId == target.workspaceID || startsUnderChats else { return nil }
                 if !coordinator.workspaces.contains(where: { $0.id == chat.workspaceId }) {

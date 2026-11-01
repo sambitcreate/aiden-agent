@@ -127,7 +127,7 @@ class MainActivity : ComponentActivity() {
                         // A chat started under Chats can land in a fresh hidden workspace of its own.
                         val startsUnderChats = coordinator.workspaces.value.any { it.id == target.workspaceId && it.noWorkspace }
                         val chat = newChatConsent.perform(target, ::valid) {
-                            requireNotNull(client).createChat(target.workspaceId)
+                            requireNotNull(client).createChat(target.workspaceId, noWorkspace = startsUnderChats)
                         } ?: return@launch
                         if (chat.isBotChat || (chat.workspaceId != target.workspaceId && !startsUnderChats)) return@launch
                         if (coordinator.workspaces.value.none { it.id == chat.workspaceId }) coordinator.refreshWorkspaces()

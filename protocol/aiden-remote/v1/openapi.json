@@ -781,6 +781,11 @@
                   },
                   "modelId": {
                     "type": "string"
+                  },
+                  "noWorkspace": {
+                    "type": "boolean",
+                    "const": true,
+                    "description": "Contract revision 50. Sent by a phone starting a chat under Chats (workspaceId names a hidden No workspace record): the host saves the chat in a hidden folder of its own, a fresh one when the named record already holds a chat. Without it the chat stays in the workspace named."
                   }
                 },
                 "additionalProperties": false

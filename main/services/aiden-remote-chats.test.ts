@@ -1473,34 +1473,34 @@ test("a phone's chat aimed at a used No workspace folder is saved in a fresh one
   const app = fixture(chat({ workspaceId: "project" }), {
     noWorkspace: {
       // The home already holds a chat; any other workspace is used as asked.
-      target: async (workspaceId, chatId) =>
-        workspaceId === "default" && chatId !== "home-chat" ? "hidden-fresh" : workspaceId,
+      target: async (workspaceId) => (workspaceId === "default" ? "hidden-fresh" : workspaceId),
       release: async (workspaceId) => { released.push(workspaceId); },
     },
   });
-  const created = await app.service.create("device-1", "chat-create-key-nows1", { workspaceId: "default" });
+  const request = { workspaceId: "default", noWorkspace: true };
+  const created = await app.service.create("device-1", "chat-create-key-nows1", request);
   assert.equal(created.workspaceId, "hidden-fresh");
   assert.equal(
-    (await app.service.create("device-1", "chat-create-key-nows1", { workspaceId: "default" })).workspaceId,
+    (await app.service.create("device-1", "chat-create-key-nows1", request)).workspaceId,
     "hidden-fresh",
     "a retried create keeps the folder it was given",
   );
 
+  // A phone from before revision 50 doesn't ask, so its chat stays in the workspace it named.
+  const older = await app.service.create("device-2", "chat-create-key-nows2", { workspaceId: "default" });
+  assert.equal(older.workspaceId, "default");
+  await assert.rejects(
+    app.service.create("device-1", "chat-create-key-nows3", { workspaceId: "default", noWorkspace: false }),
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "invalid_request",
+  );
+
   // Moving the empty chat to a project lets go of the hidden folder it left.
-  const moved = await app.service.move("device-1", created.id, created.revision, "chat-move-key-nows01", {
+  const moved = await app.service.move("device-2", older.id, older.revision, "chat-move-key-nows01", {
     workspaceId: "project",
     confirmedForeground: true,
   });
   assert.equal(moved.workspaceId, "project");
-  assert.deepEqual(released, ["hidden-fresh"]);
-
-  // And back into the Chats group: it gets a folder of its own again.
-  const back = await app.service.move("device-1", created.id, moved.revision, "chat-move-key-nows02", {
-    workspaceId: "default",
-    confirmedForeground: true,
-  });
-  assert.equal(back.workspaceId, "hidden-fresh");
-  assert.deepEqual(released, ["hidden-fresh", "project"]);
+  assert.deepEqual(released, ["default"]);
 });
 
 test("two phones starting No workspace chats at once never share a hidden folder (revision 50)", async () => {
@@ -1518,8 +1518,8 @@ test("two phones starting No workspace chats at once never share a hidden folder
     },
   });
   const [first, second] = await Promise.all([
-    app.service.create("device-1", "chat-create-key-race1", { workspaceId: "default" }),
-    app.service.create("device-2", "chat-create-key-race2", { workspaceId: "default" }),
+    app.service.create("device-1", "chat-create-key-race1", { workspaceId: "default", noWorkspace: true }),
+    app.service.create("device-2", "chat-create-key-race2", { workspaceId: "default", noWorkspace: true }),
   ]);
   assert.notEqual(first.id, second.id);
   assert.deepEqual([first.workspaceId, second.workspaceId].sort(), ["default", "hidden-1"]);
