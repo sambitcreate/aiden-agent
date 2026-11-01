@@ -6975,6 +6975,7 @@ export class GitService {
       // record is touched or any file is written.
       const checkoutBytes = await this.managedWorktreeCheckoutBytes(repo.topLevel, head);
       await checkWorktreeAllocation(root, repo.commonDir, checkoutBytes);
+      let staleRecord: { setAside: string; gitDir: string } | undefined;
       if (stale) {
         // Checked again here, after the slow size and space checks: a folder
         // put back from the Trash meanwhile holds work (ignored files too)
@@ -6991,18 +6992,25 @@ export class GitService {
         // came back after the check above. Moving the record aside touches
         // nothing at the checkout path, and the path is checked once more
         // before the record is gone for good.
-        const setAside = await this.setAsideWorktreeRecord(repo, staleGitDir);
+        staleRecord = { setAside: await this.setAsideWorktreeRecord(repo, staleGitDir), gitDir: staleGitDir };
         if ((await this.pathExists(stale.path)) || (await this.pathExists(target))) {
-          await this.restoreQuarantinedPath(setAside, staleGitDir);
+          await this.restoreQuarantinedPath(staleRecord.setAside, staleRecord.gitDir);
           throw new GitServiceError("command_failed", "The worktree folder is already there.");
         }
-        await fs.rm(setAside, { recursive: true, force: true });
       }
-      await this.run(repo.cwd, ["worktree", "add", "--", target, branch], {
-        hooksDisabled: true,
-        mutation: true,
-        signal,
-      });
+      try {
+        await this.run(repo.cwd, ["worktree", "add", "--", target, branch], {
+          hooksDisabled: true,
+          mutation: true,
+          signal,
+        });
+      } catch (error) {
+        // A folder put back from the Trash after the last look gets its Git
+        // record back: the old record is kept until the new checkout exists.
+        if (staleRecord) await this.restoreQuarantinedPath(staleRecord.setAside, staleRecord.gitDir);
+        throw error;
+      }
+      if (staleRecord) await fs.rm(staleRecord.setAside, { recursive: true, force: true });
       // The folder this call made, so a rollback never touches a replacement.
       const added = await fs.lstat(target).catch(() => undefined);
       let owned: { gitDir: string; token: string } | undefined;
@@ -7021,6 +7029,18 @@ export class GitService {
         const checkout = await fs.lstat(registered.path);
         if (!checkout.isDirectory() || checkout.isSymbolicLink()) {
           throw new GitServiceError("command_failed", "The restored worktree could not be verified.");
+        }
+        // A workspace in a subfolder needs that subfolder on the branch as it
+        // stands now; otherwise the record would point at a missing folder
+        // that no notice offers to restore.
+        if (workspaceSubpath !== "") {
+          const workspaceFolder = await fs.lstat(path.join(registered.path, workspaceSubpath)).catch(() => undefined);
+          if (!workspaceFolder?.isDirectory() || workspaceFolder.isSymbolicLink()) {
+            throw new GitServiceError(
+              "command_failed",
+              "The branch no longer has this workspace's folder, so the worktree can't be restored for it.",
+            );
+          }
         }
         const restored: GitCreatedWorktree = {
           ...registered,

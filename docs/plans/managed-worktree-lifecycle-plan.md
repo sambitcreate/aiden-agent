@@ -85,8 +85,10 @@ notice above the composer offers two actions:
   Git's admin directory, clears the stale registration by moving that admin
   directory out of `worktrees/` in one rename (never `git worktree remove`,
   which would delete a clean folder put back from the Trash meanwhile), looks
-  for the folder once more and puts the record back if it is there, checks the
-  same branch out again at the same managed path with hooks disabled, writes a
+  for the folder once more and puts the record back if it is there (or if
+  `worktree add` then fails), checks the same branch out again at the same
+  managed path with hooks disabled, refuses a workspace subfolder the branch
+  no longer has, writes a
   new ownership token and saves the workspace record. If any step after
   `worktree add` fails, the save included, the new checkout is removed again
   so Restore can be retried. When the folder has to be kept (something was

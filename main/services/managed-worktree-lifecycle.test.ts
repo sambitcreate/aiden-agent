@@ -1136,6 +1136,61 @@ test("a restore leaves alone a folder put back from the Trash just as Git's old 
   );
 });
 
+test("a folder put back from the Trash just before the new checkout keeps its Git record", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "aiden/at-add");
+  await fs.writeFile(path.join(created.path, ".gitignore"), ".env\n");
+  await git(created.path, ["add", ".gitignore"]);
+  await git(created.path, ["commit", "-m", "Ignore .env"]);
+  await fs.writeFile(path.join(created.path, ".env"), "SECRET=1\n");
+  const trash = path.join(await temporaryDirectory(t), "in-the-trash");
+  await fs.rename(created.path, trash);
+  // The folder comes back after the last look for it, as Git starts the checkout.
+  const run = service["run"].bind(service);
+  service["run"] = async (...args) => {
+    if (args[1][0] === "worktree" && args[1][1] === "add") await fs.rename(trash, created.path).catch(() => undefined);
+    return run(...args);
+  };
+  await assert.rejects(
+    service.restoreDeletedManagedWorktreeCheckout(
+      repository, root, created.path, "aiden/at-add", created.worktreeGitDir, created.ownershipToken, "",
+      async () => undefined,
+    ),
+  );
+  assert.equal(await fs.readFile(path.join(created.path, ".env"), "utf8"), "SECRET=1\n", "the ignored file it held is kept");
+  assert.equal(
+    await git(created.path, ["branch", "--show-current"]),
+    "aiden/at-add",
+    "and Git's record of it is back, so it is still a checkout",
+  );
+});
+
+test("a workspace in a subfolder the branch no longer has is not restored", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "aiden/nested");
+  await fs.mkdir(path.join(created.path, "app"));
+  await fs.writeFile(path.join(created.path, "app", "index.txt"), "app\n");
+  await git(created.path, ["add", "app"]);
+  await git(created.path, ["commit", "-m", "Add app"]);
+  await git(created.path, ["rm", "-r", "-q", "app"]);
+  await git(created.path, ["commit", "-m", "Remove app"]);
+  await fs.rm(created.path, { recursive: true, force: true });
+  let saved = false;
+  await assert.rejects(
+    service.restoreDeletedManagedWorktreeCheckout(
+      repository, root, created.path, "aiden/nested", created.worktreeGitDir, created.ownershipToken, "app",
+      async () => { saved = true; },
+    ),
+    /no longer has this workspace's folder/u,
+  );
+  assert.equal(saved, false, "nothing is recorded for a folder that is not there");
+  await assert.rejects(fs.lstat(created.path), { code: "ENOENT" }, "the checkout it made is taken away again");
+});
+
 test("a failed restore puts the folder back when a late write stops its removal", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);
