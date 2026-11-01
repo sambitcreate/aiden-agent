@@ -334,6 +334,31 @@ class AidenInboxUiTest {
     }
 
     @Test
+    fun aConfirmationGoesWhenTheDesktopsUndoWindowCloses() {
+        compose.mainClock.autoAdvance = false
+        val snackbar = SnackbarHostState()
+        val dismissed = mutableStateListOf<java.util.UUID>()
+        // Posted four seconds ago: about one second of Undo is left, well
+        // short of the snackbar's own long duration.
+        val notice = AidenInboxNotice.Changed(
+            AidenChatTriageChange.done(true), "earlier", AidenChatTriageChange.done(false),
+            postedAt = Instant.now().minusSeconds(4)
+        )
+        compose.setContent {
+            AidenTheme(config = AidenAppearanceConfig(mode = AidenAppearanceMode.LIGHT)) {
+                AidenInboxNoticeEffect(notice, snackbar, onUndo = { _, _ -> }, onDismissed = { dismissed += it })
+                SnackbarHost(snackbar) { AidenSnackbar(it) }
+            }
+        }
+        compose.mainClock.advanceTimeBy(500)
+        compose.onNodeWithText("Undo").assertIsDisplayed()
+
+        compose.mainClock.advanceTimeBy(4_500)
+        compose.onAllNodesWithText("Undo").assertCountEquals(0)
+        assertEquals(listOf(notice.id), dismissed.toList())
+    }
+
+    @Test
     fun workingShelfShowsTheRing() {
         compose.mainClock.autoAdvance = false
         show(AidenAppearanceMode.DARK)

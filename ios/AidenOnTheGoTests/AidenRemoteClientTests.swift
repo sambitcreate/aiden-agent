@@ -6424,7 +6424,12 @@ private final class AidenRemoteMockURLProtocol: URLProtocol, @unchecked Sendable
         if let gate = Self.hold?(request) {
             let request = request
             DispatchQueue.global().async {
-                _ = gate.wait(timeout: .now() + 5)
+                // A gate never opened is a test that went wrong: fail the
+                // request rather than answer as if it had been let go.
+                guard gate.wait(timeout: .now() + 5) == .success else {
+                    self.client?.urlProtocol(self, didFailWithError: URLError(.timedOut))
+                    return
+                }
                 self.answer(request, with: handler)
             }
             return
@@ -6738,7 +6743,7 @@ extension AidenRemoteClientTests {
             guard viewsDuringWrite else { return }
             DispatchQueue.main.sync { MainActor.assumeIsolated { home?.markViewed(chatID: Self.inboxChatID) } }
         }
-        var readStatus = 500
+        let readStatus = 500
         let inbox = try await makeInboxHome(
             failed: true,
             triage: { _, body in
@@ -6776,12 +6781,11 @@ extension AidenRemoteClientTests {
         unread()
         await inbox.home.markRead(chatID: Self.inboxChatID, coordinator: inbox.coordinator)
         XCTAssertTrue(inbox.home.chats[0].unread)
-        readStatus = 204
     }
 
     @MainActor
     func testInboxWriteOutDuringASwitchToAnotherMacSettlesOnTheMacItWasSentTo() async throws {
-        for refused in [true, false] {
+        for (refused, readRefused) in [(true, false), (false, false), (false, true)] {
             let arrived = expectation(description: "triage sent")
             let release = DispatchSemaphore(value: 0)
             var readMarks = 0
@@ -6793,7 +6797,7 @@ extension AidenRemoteClientTests {
                         ? (500, Self.inboxError("internal_error", retryable: true))
                         : (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z"))
                 },
-                markRead: { readMarks += 1; return 204 }
+                markRead: { readMarks += 1; return readRefused ? 500 : 204 }
             )
             defer { try? FileManager.default.removeItem(at: inbox.root) }
             XCTAssertEqual(inbox.coordinator.activeInstanceId, "instance-inbox")
@@ -6823,6 +6827,10 @@ extension AidenRemoteClientTests {
                 XCTAssertEqual(readMarks, 0)
             } else {
                 XCTAssertEqual(readMarks, 1, "The Mac that took Done is still sent the read marker.")
+                XCTAssertEqual(row.inbox.triageRevision, 4, "The first Mac's saved row takes its answer.")
+                XCTAssertEqual(row.inbox.doneAt, try Self.remoteDate("2026-08-18T19:06:00.000Z"))
+                XCTAssertEqual(row.inbox.pinnedAt, try Self.remoteDate("2026-08-18T18:45:00.000Z"))
+                XCTAssertEqual(row.unread, readRefused, "A refused read marker brings the saved dot back.")
             }
         }
     }

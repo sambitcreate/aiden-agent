@@ -292,7 +292,8 @@ class AidenInboxTriageTest {
     @Test
     fun aConfirmationGoesStaleAfterTheDesktopsUndoWindow() {
         val notice = AidenInboxNotice.Changed(AidenChatTriageChange.done(true), "chat-1", AidenChatTriageChange.done(false), postedAt = now)
-        assertFalse(notice.isStale(now.plusSeconds(5)))
-        assertTrue(notice.isStale(now.plusSeconds(6)))
+        assertFalse(notice.isStale(now.plusMillis(4_999)))
+        // The desktop's window closes at five seconds exactly.
+        assertTrue(notice.isStale(now.plusSeconds(5)))
     }
 }

@@ -323,17 +323,28 @@ final class AidenHomeModel {
             return false
         }
         func isShown() -> Bool { coordinator.isCurrent(context) && contentContext == context }
-        if isShown(), let index = chats.firstIndex(where: { $0.id == chatID }) {
-            chats[index].inbox.pinnedAt = result.pinnedAt
-            chats[index].inbox.doneAt = result.doneAt
-            chats[index].inbox.snoozedUntil = result.snoozedUntil
-            chats[index].inbox.triageRevision = result.revision > 0 ? result.revision : nil
+        let settled: @Sendable (AidenChatSummary) -> AidenChatSummary = { row in
+            var row = row
+            row.inbox.pinnedAt = result.pinnedAt
+            row.inbox.doneAt = result.doneAt
+            row.inbox.snoozedUntil = result.snoozedUntil
+            row.inbox.triageRevision = result.revision > 0 ? result.revision : nil
             // A bucket the host reported before this write no longer describes the row.
-            chats[index].inbox.invalidateHostPlacement()
-            persistCurrentSummaries(changedID: chatID)
-            if offersUndo, !retried, let undo = AidenInbox.undo(of: change, before: before, now: now) {
-                inboxNotice = AidenInboxNotice(message: change.confirmation, undo: undo, chatID: chatID)
+            row.inbox.invalidateHostPlacement()
+            return row
+        }
+        if isShown() {
+            if let index = chats.firstIndex(where: { $0.id == chatID }) {
+                chats[index] = settled(chats[index])
+                persistCurrentSummaries(changedID: chatID)
+                if offersUndo, !retried, let undo = AidenInbox.undo(of: change, before: before, now: now) {
+                    inboxNotice = AidenInboxNotice(message: change.confirmation, undo: undo, chatID: chatID)
+                }
             }
+        } else {
+            // The Mac it was sent to is no longer shown: its saved row takes
+            // the answer, so it doesn't keep the old revision.
+            await updateSavedRow(chatID: chatID, instanceId: context.instanceId, settled)
         }
         if alsoMarkRead {
             // Sent with the write's own client: the Mac took Done, so it
@@ -341,10 +352,18 @@ final class AidenHomeModel {
             do {
                 try await client.markChatRead(id: chatID)
             } catch {
-                if isShown(), viewStamp(chatID) == viewed,
-                   let index = chats.firstIndex(where: { $0.id == chatID }), !chats[index].unread {
-                    chats[index].unread = before.unread
-                    persistCurrentSummaries(changedID: chatID)
+                if viewStamp(chatID) == viewed {
+                    let wasUnread = before.unread
+                    if !isShown() {
+                        await updateSavedRow(chatID: chatID, instanceId: context.instanceId) { row in
+                            var row = row
+                            if !row.unread { row.unread = wasUnread }
+                            return row
+                        }
+                    } else if let index = chats.firstIndex(where: { $0.id == chatID }), !chats[index].unread {
+                        chats[index].unread = wasUnread
+                        persistCurrentSummaries(changedID: chatID)
+                    }
                 }
             }
         }
@@ -390,10 +409,19 @@ final class AidenHomeModel {
             persistCurrentSummaries(changedID: chatID)
             return
         }
-        let writeToken = chatCache.reserveSummaryWrite(instanceId: context.instanceId)
-        try? await chatCache.updateChatSummary(id: chatID, instanceId: context.instanceId, writeToken: writeToken) {
+        await updateSavedRow(chatID: chatID, instanceId: context.instanceId) {
             AidenInbox.rollingBack($0, optimistic: optimistic, before: before, restoresUnread: restoresUnread)
         }
+    }
+
+    /// Changes a Mac's saved row while another Mac is shown.
+    private func updateSavedRow(
+        chatID: String,
+        instanceId: String,
+        _ update: @escaping @Sendable (AidenChatSummary) -> AidenChatSummary
+    ) async {
+        let writeToken = chatCache.reserveSummaryWrite(instanceId: instanceId)
+        try? await chatCache.updateChatSummary(id: chatID, instanceId: instanceId, writeToken: writeToken, update)
     }
 
     func removeChat(id: String) {

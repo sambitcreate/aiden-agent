@@ -77,6 +77,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
 import sbtbiswas.AidenOnTheGo.models.AidenChatTriageChange
@@ -92,6 +93,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenWorkingIndicator
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -254,8 +256,9 @@ object AidenInboxNoticeText {
 
 /**
  * Shows an Inbox notice as a snackbar, with Undo when the change can be put
- * back. Long enough to reach Undo; with TalkBack it stays until dismissed.
- * A confirmation first shown past its Undo window is dropped instead.
+ * back. A confirmation goes when its Undo window closes, as on the desktop,
+ * even while queued behind another snackbar; with TalkBack it stays until
+ * dismissed. One first shown past that window is dropped instead.
  * [onUndo] runs the inverse write; [onDismissed] gets the notice's id.
  */
 @Composable
@@ -279,14 +282,20 @@ fun AidenInboxNoticeEffect(
             return@LaunchedEffect
         }
         val undo = (shown as? AidenInboxNotice.Changed)?.undo
-        val duration = if (accessibilityManager?.isTouchExplorationEnabled == true) SnackbarDuration.Indefinite
-        else SnackbarDuration.Long
-        val result = snackbarHostState.showSnackbar(
-            message = AidenInboxNoticeText.message(resources, shown, Instant.now()),
-            actionLabel = if (undo != null) undoLabel else null,
-            withDismissAction = true,
-            duration = duration
-        )
+        val talkBack = accessibilityManager?.isTouchExplorationEnabled == true
+        val duration = if (talkBack) SnackbarDuration.Indefinite else SnackbarDuration.Long
+        val show: suspend () -> SnackbarResult = {
+            snackbarHostState.showSnackbar(
+                message = AidenInboxNoticeText.message(resources, shown, Instant.now()),
+                actionLabel = if (undo != null) undoLabel else null,
+                withDismissAction = true,
+                duration = duration
+            )
+        }
+        // Cancelling showSnackbar takes the snackbar down, or drops it unshown.
+        val closesAt = (shown as? AidenInboxNotice.Changed)?.takeIf { !talkBack }?.staleAt
+        val result = if (closesAt == null) show()
+        else withTimeoutOrNull(Duration.between(Instant.now(), closesAt).toMillis().coerceAtLeast(0)) { show() }
         if (result == SnackbarResult.ActionPerformed && shown is AidenInboxNotice.Changed && undo != null) {
             currentOnUndo(shown.chatId, undo)
         }

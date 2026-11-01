@@ -6,7 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.MainCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -79,6 +79,8 @@ class AidenInboxHomeTriageTest {
         val heldTriage = ConcurrentHashMap<String, CountDownLatch>()
         val triageArrived = ConcurrentHashMap<String, CountDownLatch>()
         val triageWrites = AtomicInteger()
+        /** Triage writes answered, counted once a held one is let go. */
+        val triageAnswered = AtomicInteger()
         val readWrites = AtomicInteger()
 
         init {
@@ -108,6 +110,7 @@ class AidenInboxHomeTriageTest {
                             triageWrites.incrementAndGet()
                             triageArrived[chatId]?.countDown()
                             heldTriage[chatId]?.let { check(it.await(8, TimeUnit.SECONDS)) }
+                            triageAnswered.incrementAndGet()
                             val body = request.body.readUtf8()
                             val done = if (body.contains("\"done\":true")) "\"doneAt\":\"$doneAt\"," else ""
                             MockResponse().setBody("""{"chatId":"$chatId","revision":${triageWrites.get()},$done"updatedAt":"$doneAt"}""")
@@ -198,12 +201,28 @@ class AidenInboxHomeTriageTest {
         }
     }
 
+    /**
+     * One Main thread. With [inPlace], as on Android, `Main.immediate` work
+     * started on it runs in place. [executor] lets a test queue work there.
+     */
+    private class TestMain(inPlace: Boolean = false) : MainCoroutineDispatcher() {
+        @Volatile private var thread: Thread? = null
+        val executor = Executors.newSingleThreadExecutor { task -> Thread(task, "test-main").also { thread = it } }
+        override val immediate: MainCoroutineDispatcher = if (!inPlace) this else object : MainCoroutineDispatcher() {
+            override val immediate: MainCoroutineDispatcher get() = this
+            override fun isDispatchNeeded(context: CoroutineContext) = Thread.currentThread() !== thread
+            override fun dispatch(context: CoroutineContext, block: Runnable) = executor.execute(block)
+        }
+        override fun dispatch(context: CoroutineContext, block: Runnable) = executor.execute(block)
+        fun close() { executor.shutdownNow() }
+    }
+
     private fun scenario(
         desks: List<Desk>,
         cacheWriteDispatcher: CoroutineDispatcher = Dispatchers.IO,
+        main: TestMain = TestMain(),
         body: suspend Harness.() -> Unit
     ) {
-        val main = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
         Dispatchers.setMain(main)
         try {
             runBlocking(main) {
@@ -350,8 +369,10 @@ class AidenInboxHomeTriageTest {
             home.setInboxTriage("chat-1", AidenChatTriageChange.done(true))
             withContext(Dispatchers.IO) { check(secondArrived.await(5, TimeUnit.SECONDS)) }
             firstHeld.countDown()
-            waitFor("old write answered") { a.triageWrites.get() == 2 }
-            kotlinx.coroutines.delay(200)
+            waitFor("old write answered") { a.triageAnswered.get() == 1 }
+            // The old answer's revision reaches A's saved row; by then its
+            // write has ended here too.
+            waitFor("old answer saved") { saved("chat-1")?.triageRevision == 2 }
             assertNull("A late answer from before the switch shows nothing", home.inboxNotice.value)
 
             // The old write's end must not count as the new one's: the new
@@ -361,6 +382,61 @@ class AidenInboxHomeTriageTest {
             secondHeld.countDown()
             waitFor("new Done confirmed") { home.inboxNotice.value is AidenInboxNotice.Changed }
         }
+    }
+
+    @Test
+    fun aMarkReadMadeAsAPageSaveReturnsStaysRead() {
+        val desk = Desk("home-a")
+        desk.page = listOf(summary("chat-1", unread = true))
+        // Mark read must run on Main in place, inside the gap.
+        val main = TestMain(inPlace = true)
+        lateinit var harness: Harness
+        val pool = Executors.newCachedThreadPool()
+        val interceptNextWrite = AtomicBoolean(false)
+        val holdNextWrite = AtomicBoolean(false)
+        val releaseUpsert = CountDownLatch(1)
+        val swiped = CountDownLatch(1)
+        // The page save runs while Main is kept busy; once it has written the
+        // cache, Mark read is swiped on Main before the save's caller resumes,
+        // and that swipe's own cache write is held.
+        val cacheWrites = object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) {
+                val intercepted = interceptNextWrite.getAndSet(false)
+                val held = holdNextWrite.getAndSet(false)
+                pool.execute {
+                    if (held) check(releaseUpsert.await(8, TimeUnit.SECONDS))
+                    if (!intercepted) return@execute block.run()
+                    val mainBusy = CountDownLatch(1)
+                    val saveDone = CountDownLatch(1)
+                    main.executor.execute {
+                        mainBusy.countDown()
+                        check(saveDone.await(8, TimeUnit.SECONDS))
+                        holdNextWrite.set(true)
+                        harness.home.markInboxRead("chat-1")
+                        swiped.countDown()
+                    }
+                    check(mainBusy.await(8, TimeUnit.SECONDS))
+                    block.run()
+                    saveDone.countDown()
+                }
+            }
+        }
+        try {
+            scenario(listOf(desk), cacheWriteDispatcher = cacheWrites, main = main) {
+                harness = this
+                connectedTo(desk)
+                assertTrue(row("chat-1").unread)
+                val release = holdReload(desk)
+                interceptNextWrite.set(true)
+                release.countDown()
+                waitFor("swiped in the gap and the page landed") { swiped.count == 0L && !home.isLoading.value }
+                assertFalse("The page must not bring back the dot the swipe cleared", row("chat-1").unread)
+
+                releaseUpsert.countDown()
+                waitFor("read marker sent") { desk.readWrites.get() == 1 }
+                assertFalse(row("chat-1").unread)
+            }
+        } finally { releaseUpsert.countDown(); pool.shutdownNow() }
     }
 
     private fun summary(

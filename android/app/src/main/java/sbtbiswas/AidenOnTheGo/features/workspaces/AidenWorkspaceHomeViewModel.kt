@@ -372,10 +372,13 @@ class AidenWorkspaceHomeViewModel(
         val isCurrent = { coordinator.activeInstanceId == instanceId && coordinator.client.value === client }
         val generation = triageGeneration
         return AidenInboxTriage(
-            // After a switch the write still settles on the host it was sent to.
+            // After a switch the write still settles on the host it was sent
+            // to, from that host's saved row: even back on the same host, the
+            // list may now show a newer swipe's optimistic fields.
             row = { id ->
-                (if (coordinator.activeInstanceId == instanceId) _chats.value.firstOrNull { it.id == id } else null)
-                    ?: chatCache.summaries.value[instanceId]?.get(id)
+                (if (coordinator.activeInstanceId == instanceId && triageGeneration == generation) {
+                    _chats.value.firstOrNull { it.id == id }
+                } else null) ?: chatCache.summaries.value[instanceId]?.get(id)
             },
             publish = { row ->
                 if (coordinator.activeInstanceId == instanceId && triageGeneration == generation) {
@@ -554,7 +557,11 @@ class AidenWorkspaceHomeViewModel(
             throw IllegalStateException("Chats changed while loading. Refresh and try again.")
         }
         paginationBoundary = summaries.lastOrNull() ?: boundary
-        _chats.value = regularNewestFirst(chatCache.summaries.value[instanceId]?.values.orEmpty().toList())
+        // A swipe made after the save, whose own cache write is still on its
+        // way, is not in the saved rows yet.
+        _chats.value = regularNewestFirst(
+            chatCache.summaries.value[instanceId]?.values.orEmpty().map { overlayingTriage(it, writeToken) }
+        )
             .filter { it.workspaceId in coordinator.workspaces.value.map(AidenWorkspace::id).toSet() }
     }
 

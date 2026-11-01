@@ -27,7 +27,10 @@ sealed interface AidenInboxNotice {
         val postedAt: Instant = Instant.now(),
         override val id: UUID = UUID.randomUUID()
     ) : AidenInboxNotice {
-        fun isStale(now: Instant): Boolean = Duration.between(postedAt, now) > UNDO_WINDOW
+        fun isStale(now: Instant): Boolean = !now.isBefore(staleAt)
+
+        /** When the Undo window closes. */
+        val staleAt: Instant get() = postedAt.plus(UNDO_WINDOW)
     }
 
     /** The host refused the change; the row is back where it was. */
