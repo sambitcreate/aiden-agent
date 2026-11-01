@@ -4,6 +4,7 @@ import { ASSISTANT_WORKSPACE_ID } from "../shared/assistant";
 import type { ChatPendingAttention } from "../shared/chat-pending-attention";
 import {
   botInboxEntries,
+  botInboxRows,
   botInboxKey,
   debounceNeedsYouLeave,
   filterInboxEntries,
@@ -311,6 +312,23 @@ test("a Bot with an unread reply is in Updates and offers Mark read; a read or m
   assert.ok(fresh);
   assert.equal(inboxState(fresh.signals, NOW).shelf, "updates");
   assert.equal(inboxRowAction(fresh, "updates", inboxRowStatus(fresh, "updates", NOW), false), "mark_read");
+});
+
+test("Bots the Inbox doesn't list still have rows, with their live state, for the list to hold in place", () => {
+  const { listed, unlisted } = botInboxRows({
+    bots: [
+      { bot: bot("fresh"), activityAt: NOW, needsYou: false, lastReplyAt: NOW - MINUTE },
+      { bot: bot("seen"), activityAt: NOW, needsYou: false, lastReplyAt: NOW - HOUR },
+    ],
+    openBotId: null,
+    unread: (botId) => botId === "fresh",
+  });
+  assert.deepEqual(listed.map((item) => item.key), [botInboxKey("fresh")]);
+  assert.deepEqual(unlisted.map((item) => item.key), [botInboxKey("seen")]);
+  const [seen] = unlisted;
+  assert.ok(seen);
+  assert.equal(seen.signals.unread, false);
+  assert.equal(inboxState(seen.signals, NOW).shelf, "earlier", "held, it reads as a quiet row");
 });
 
 test("the open Bot stays listed while it is open, never as unread, and its key can't collide with a chat's", () => {

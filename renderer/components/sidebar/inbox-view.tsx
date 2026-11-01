@@ -51,9 +51,14 @@ export interface InboxViewProps {
   entries: readonly InboxEntry[];
   /**
    * Every row key that still exists, listed or not. A held row missing from it
-   * was deleted and goes at once. Defaults to the entries' keys.
+   * was deleted and goes at once. Defaults to the keys of `entries` and `unlisted`.
    */
   present?: ReadonlySet<string>;
+  /**
+   * Rows that exist but aren't listed now (a read Bot), by key. A row the list
+   * holds in place after it stopped qualifying shows its live state from here.
+   */
+  unlisted?: ReadonlyMap<string, InboxEntry>;
   /** Search reaches past the recent window and the Earlier cap, and never freezes. */
   searching?: boolean;
   /** A change (search, machine filter) re-lays the list at once, without animation. */
@@ -242,6 +247,7 @@ function liveStatusSection(entry: InboxEntry, now: number): InboxSection {
 export function InboxView({
   entries,
   present: presentProp,
+  unlisted,
   searching = false,
   resetKey = "",
   activeKey = null,
@@ -285,7 +291,7 @@ export function InboxView({
   const fullResetKey = `${resetKey}\u0000${showAllEarlier ? "all" : "capped"}\u0000${searching ? "search" : ""}`;
   const reset = resetRef.current !== fullResetKey;
   const entryByKey = new Map(entries.map((entry) => [entry.key, entry] as const));
-  const present = presentProp ?? new Set(entryByKey.keys());
+  const present = presentProp ?? new Set([...entryByKey.keys(), ...(unlisted?.keys() ?? [])]);
   const organization = organizeInbox(
     entries,
     now,
@@ -322,7 +328,9 @@ export function InboxView({
   for (const hostId of [...offlineSince.keys()]) if (!offlineHosts.has(hostId)) offlineSince.delete(hostId);
   for (const hostId of offlineHosts) if (!offlineSince.has(hostId)) offlineSince.set(hostId, now);
 
-  const entryFor = (key: string) => entryByKey.get(key) ?? lastEntriesRef.current.get(key);
+  // A held row shows its live state when it has one, else the last it showed.
+  const entryFor = (key: string) =>
+    entryByKey.get(key) ?? unlisted?.get(key) ?? lastEntriesRef.current.get(key);
   const shownRows = (section: InboxSection) =>
     held[section].flatMap((row) => {
       const entry = entryFor(row.key);

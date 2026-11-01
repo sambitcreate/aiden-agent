@@ -2,7 +2,7 @@
 // on there, where ‹ in the Bots sidebar goes back to (spec §8, §9), and
 // whether the person asked for the Bot list while the Inbox is the sidebar view.
 
-import * as React from "react";
+import type { RouterHistory } from "@tanstack/react-router";
 
 const BOT_CHAT_ROUTE = /^\/bots\/([^/]+)\/chat\/?$/u;
 const BOT_ROUTE = /^\/bots\/([^/]+)(?:\/chat)?\/?$/u;
@@ -55,61 +55,70 @@ export function botChatPath(botId: string): { to: "/bots/$botId/chat"; params: {
   return { to: "/bots/$botId/chat", params: { botId } };
 }
 
-/** `/bots` itself: the Bots nav entry, `bots.open` and "All Bots" all land here. */
-export function isBotListPath(pathname: string): boolean {
-  return pathname === "/bots" || pathname === "/bots/";
-}
-
-let lastNonBotHref = "/";
-let botListRequested = false;
-const botListListeners = new Set<() => void>();
-
-function setBotListRequested(requested: boolean): void {
-  if (botListRequested === requested) return;
-  botListRequested = requested;
-  for (const listener of botListListeners) listener();
-}
-
-/**
- * Called on every chat-shell navigation. Bots pages are never a back target.
- * Arriving at `/bots` asks for the Bot list, and the ask lasts through the
- * Bots pages that follow (its redirect to a Bot, opening other Bots) until
- * the person leaves Bots.
- */
-export function rememberRoute(href: string): void {
-  const pathname = href.split(/[?#]/u, 1)[0] ?? href;
-  if (!isBotsPath(pathname)) {
-    lastNonBotHref = href;
-    setBotListRequested(false);
-  } else if (isBotListPath(pathname)) {
-    setBotListRequested(true);
+declare module "@tanstack/history" {
+  interface HistoryState {
+    /** Set on the history entry when the person asked for the Bot list (see `botListLocation`). */
+    aidenBotList?: boolean;
   }
 }
 
-/** Whether the person asked for the Bot list since they last entered Bots. */
-export function botListRequestedSinceEnteringBots(): boolean {
-  return botListRequested;
+/**
+ * The Bot list, asked for: the Bots nav entry, `bots.open` and the All Bots
+ * links navigate here. The ask lives on the history entry, so Back and Forward
+ * bring it back with the page, and a plain `/bots` (after deleting a Bot, or
+ * from an error) doesn't count as one.
+ */
+export function botListLocation(): { to: "/bots"; state: { aidenBotList: true } } {
+  return { to: "/bots", state: { aidenBotList: true } };
 }
 
-function subscribeBotListRequested(listener: () => void): () => void {
-  botListListeners.add(listener);
-  return () => botListListeners.delete(listener);
+type HistoryStateLike = { aidenBotList?: unknown } | null | undefined;
+
+function pathnameOf(href: string): string {
+  return href.split(/[?#]/u, 1)[0] ?? href;
 }
 
 /**
- * Whether the sidebar shows the Bot list on `pathname` while the Inbox is the
- * stored view. A Bot opened from the Inbox keeps the Inbox (it owns ⌘1–9
- * there); `/bots`, and every Bots page after it until the person leaves Bots,
- * shows the list. The pathname check covers the frame before the navigation
- * is remembered.
+ * The state a new history entry keeps. An ask for the Bot list lasts through
+ * the Bots pages that follow it (the `/bots` redirect to the last Bot, opening
+ * other Bots) and ends when the person leaves Bots; an entry that says either
+ * way itself keeps what it says.
  */
-export function useBotListRequested(pathname: string): boolean {
-  const requested = React.useSyncExternalStore(
-    subscribeBotListRequested,
-    botListRequestedSinceEnteringBots,
-    botListRequestedSinceEnteringBots,
-  );
-  return isBotListPath(pathname) || (isBotsPath(pathname) && requested);
+export function nextBotListState<T extends object>(current: HistoryStateLike, href: string, state: T | undefined): T | undefined {
+  if (!isBotsPath(pathnameOf(href))) {
+    if (!state || !("aidenBotList" in state)) return state;
+    const { aidenBotList: _dropped, ...rest } = state as T & { aidenBotList?: unknown };
+    return rest as T;
+  }
+  if (state && "aidenBotList" in state) return state;
+  return current?.aidenBotList === true ? ({ ...state, aidenBotList: true } as T) : state;
+}
+
+/** Carry an ask for the Bot list from entry to entry within Bots (see `nextBotListState`). */
+export function carryBotListRequest<T extends RouterHistory>(history: T): T {
+  const push = history.push;
+  const replace = history.replace;
+  history.push = (path, state, options) => push(path, nextBotListState(history.location.state, path, state), options);
+  history.replace = (path, state, options) => replace(path, nextBotListState(history.location.state, path, state), options);
+  return history;
+}
+
+/**
+ * Whether the sidebar shows the Bot list rather than the workspace sidebar. On
+ * any Bots page it does, except with the Inbox as the view: a Bot opened from
+ * the Inbox, a notification or a redirect keeps the Inbox (it owns ⌘1–9
+ * there), and the list shows only on an entry where the person asked for it.
+ */
+export function sidebarShowsBotList(location: { pathname: string; state?: HistoryStateLike }, inboxView: boolean): boolean {
+  if (!isBotsPath(location.pathname)) return false;
+  return !inboxView || location.state?.aidenBotList === true;
+}
+
+let lastNonBotHref = "/";
+
+/** Called on every resolved chat-shell navigation. Bots pages are never a back target. */
+export function rememberRoute(href: string): void {
+  if (!isBotsPath(pathnameOf(href))) lastNonBotHref = href;
 }
 
 /** Where ‹ in the Bots sidebar goes: the last page outside Bots this session, else the latest chat (`/`). */

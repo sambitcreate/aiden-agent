@@ -2781,9 +2781,9 @@ textarea {
   height: 7px;
   margin: 0 -6%;
   width: 112%;
-  /* Several times the row-sized surface, so the miniature reads at its size. */
-  background: color-mix(in srgb, var(--status-warning) 28%, transparent);
-  opacity: 1;
+  /* Drawn like the other bars, in the status tone, so the miniature reads at its size. */
+  background: var(--status-warning);
+  opacity: 0.4;
 }
 
 .appearance-sidebar-option-label {

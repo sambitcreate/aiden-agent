@@ -210,7 +210,10 @@ test("Bots that need you or have news sit in the Inbox, open there, and the Bots
   await app.evaluate(({ ipcMain }, bots) => {
     const byId = new Map(bots.map((bot) => [bot.id, bot]));
     const [askerBot] = bots;
-    const repliedAt = Date.now();
+    const updatedAt = Date.now();
+    // An hour ahead, so the reply is newer than the Bot read record however
+    // long the launch takes to write it: unread never hangs on timing.
+    const repliedAt = updatedAt + 60 * 60_000;
     for (const channel of [
       "bots:list",
       "bots:get",
@@ -224,7 +227,7 @@ test("Bots that need you or have news sit in the Inbox, open there, and the Bots
     ipcMain.handle("bots:live:summary", (_event, botId: string) => ({
       botId,
       preview: botId === askerBot!.id ? "Which dates work?" : "Here’s today’s digest.",
-      updatedAt: repliedAt,
+      updatedAt,
       state: { kind: "idle" },
       needsYou: botId === askerBot!.id,
       lastReplyAt: botId === askerBot!.id ? null : repliedAt,
@@ -243,8 +246,6 @@ test("Bots that need you or have news sit in the Inbox, open there, and the Bots
     ipcMain.handle("bots:getCanonicalPhoto", () => null);
     ipcMain.handle("bots:pendingApprovals", () => []);
   }, [asker, writer]);
-  // A reply counts as unread when it is newer than the Bot read record, which
-  // the sidebar writes at launch, so the stub's reply time is after it.
   await switchToInbox(page);
 
   const sidebar = page.locator("[data-sidebar]");
@@ -256,15 +257,20 @@ test("Bots that need you or have news sit in the Inbox, open there, and the Bots
   await expect(botRow(asker.id)).toContainText("Bot");
   await expect(updates.locator(`[data-inbox-row="local:${encodeURIComponent(`bot:${writer.id}`)}"]`)).toBeVisible();
 
-  // Mark read clears the Bot's news, the way opening it would.
+  // Mark read clears the Bot's news. Like any row acted on, it takes its live
+  // place at once, even under the pointer, and a read Bot's place is off the list.
   await botRow(writer.id).hover();
   await page.getByRole("button", { name: "Mark read: News Digest" }).click();
-  await pointerToPane(page);
   await expect(botRow(writer.id)).toHaveCount(0);
-  expect(await page.evaluate(() => {
-    const stored = JSON.parse(localStorage.getItem("aiden-agent.bots-sidebar.v1") ?? "{}") as { seenReplyAt?: Record<string, number> };
-    return Object.keys(stored.seenReplyAt ?? {});
-  })).toContain(writer.id);
+  await expect(botRow(asker.id)).toBeVisible();
+  // It records the reply as seen, not a visit, so the Bots button still opens the last Bot viewed.
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("aiden-agent.bots-sidebar.v1") ?? "{}") as {
+      seenReplyAt?: Record<string, number>;
+      lastViewed?: Record<string, number>;
+    });
+  expect(Object.keys(stored.seenReplyAt ?? {})).toContain(writer.id);
+  expect(Object.keys(stored.lastViewed ?? {})).not.toContain(writer.id);
 
   // Opening a Bot from its row keeps the Inbox and marks the row as the open page.
   await botRow(asker.id).locator("[data-roving-item]").click();

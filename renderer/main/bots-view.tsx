@@ -2,7 +2,7 @@ import * as React from "react";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { Plus, RotateCcw } from "lucide-react";
 import { Button, Callout, EmptyState, ScrollArea, Text } from "../components/ui";
-import { botChatPath } from "../lib/bot-routes";
+import { botChatPath, botListLocation } from "../lib/bot-routes";
 import { lastViewedBotId } from "../lib/bot-sidebar-preferences";
 import { useBot } from "../lib/queries";
 import type { BotDefinition } from "../shared/bots";
@@ -119,7 +119,7 @@ function BotPage({ botId }: { botId: string }) {
   const [deleting, setDeleting] = React.useState(false);
   React.useEffect(() => setPage(initialPage), [botId, initialPage]);
   const openPage = setPage;
-  const allBots = () => void navigate({ to: "/bots" });
+  const allBots = () => void navigate(botListLocation());
 
   if (bot.isLoading) {
     return (

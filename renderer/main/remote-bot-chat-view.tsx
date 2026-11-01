@@ -22,6 +22,7 @@ import {
   Text,
   toast,
 } from "../components/ui";
+import { botListLocation } from "../lib/bot-routes";
 import { insertTextIntoTextarea } from "../lib/composer-type-focus";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import { hostServesBotHandoffs, hostSharesBotSessions } from "../lib/hosts/remote-bot-session";
@@ -235,7 +236,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           title="This device isn't paired anymore"
           description="Pair it again in Settings to use its Bots here."
           action={
-            <Button variant="filled" onClick={() => void navigate({ to: "/bots" })}>
+            <Button variant="filled" onClick={() => void navigate(botListLocation())}>
               All Bots
             </Button>
           }
@@ -254,7 +255,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
               : `Update Aiden on ${hostName} to chat with its Bots here.`
           }
           action={
-            <Button variant="filled" onClick={() => void navigate({ to: "/bots" })}>
+            <Button variant="filled" onClick={() => void navigate(botListLocation())}>
               All Bots
             </Button>
           }
@@ -269,7 +270,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           title="Bot not found"
           description={`This Bot may have been deleted on ${hostName}, or this Mac may no longer use it.`}
           action={
-            <Button variant="filled" onClick={() => void navigate({ to: "/bots" })}>
+            <Button variant="filled" onClick={() => void navigate(botListLocation())}>
               All Bots
             </Button>
           }

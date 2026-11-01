@@ -22,6 +22,7 @@ import { useAppCapabilities } from "../lib/app-capabilities";
 import { parseBotPageSearch } from "./bots/bot-page-search";
 import { StudioCapabilityRoute } from "./studio-capability-route";
 import { guardHistoryTraversal } from "../lib/guarded-history";
+import { carryBotListRequest } from "../lib/bot-routes";
 import { reopenClosedChatDraft } from "../lib/chat-draft";
 
 // Chat is the startup surface, so only its shell and pane are in the entry
@@ -285,8 +286,9 @@ const queryClient = createAppQueryClient();
 
 const router = createRouter({
   routeTree,
-  // Back/Forward (sidebar history buttons, Settings' Back to app) run leave guards too.
-  history: guardHistoryTraversal(createMemoryHistory()),
+  // Back/Forward (sidebar history buttons, Settings' Back to app) run leave guards too,
+  // and an ask for the Bot list rides on its history entries.
+  history: guardHistoryTraversal(carryBotListRequest(createMemoryHistory())),
   defaultPreloadStaleTime: 0,
   scrollRestoration: true,
   context: {

@@ -80,7 +80,7 @@ import { isChatUnread } from "../shared/chat-row-state";
 import { CHAT_ROW_INBOX_ACTIONS, ChatRow, type ChatRowInbox, type ChatRowMenu } from "./sidebar/chat-row";
 import { InboxView, type InboxRowContext } from "./sidebar/inbox-view";
 import {
-  botInboxEntries,
+  botInboxRows,
   botInboxKey,
   filterInboxEntries,
   inboxRowAction,
@@ -100,11 +100,11 @@ import { ChatRowContextGlyphs } from "./chat-row-context";
 import { sidebarPullRequestChatIds } from "../lib/chat-row-context";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
 import { useAppCapabilities } from "../lib/app-capabilities";
-import { botChatPath, botRouteBotId, isBotsPath, useBotListRequested } from "../lib/bot-routes";
+import { botChatPath, botListLocation, botRouteBotId, sidebarShowsBotList } from "../lib/bot-routes";
 import { useRovingRows } from "../lib/roving-rows";
 import { BotSidebar } from "../main/bots/bot-sidebar";
 import { useBotRows } from "../main/bots/bot-sidebar-rows";
-import { useBotSidebarPreferences } from "../main/bots/use-bot-sidebar-preferences";
+import { botSidebarPreferenceActions, useBotSidebarPreferencesWhen } from "../main/bots/use-bot-sidebar-preferences";
 import { isBotUnread } from "../lib/bot-sidebar-preferences";
 import { AvatarFace } from "./bot-avatar";
 import {
@@ -420,17 +420,17 @@ function GeneratedTitleReveal({ previousTitle, title }: { previousTitle: string;
 /**
  * On any Bots page the sidebar lists only Bots (spec §9); everywhere else it is
  * the workspace outline. With the Inbox as the view, a Bot opened from the
- * Inbox keeps the Inbox (it owns ⌘1–9 there), and the Bot list shows once the
- * person goes to `/bots` (the Bots nav entry, `bots.open`, All Bots), until
- * they leave Bots. Only one of the two sidebars mounts, so only one registers
- * the jump shortcuts.
+ * Inbox keeps the Inbox (it owns ⌘1–9 there), and the Bot list shows on the
+ * history entries where the person asked for it (the Bots nav entry,
+ * `bots.open`, All Bots) until they leave Bots. Only one of the two sidebars
+ * mounts, so only one registers the jump shortcuts.
  */
 export function ChatSidebar(props: ChatSidebarProps) {
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
   const capabilities = useAppCapabilities();
   const { view } = useSidebarView();
-  const botListRequested = useBotListRequested(pathname);
-  return capabilities.bots && isBotsPath(pathname) && (view !== "inbox" || botListRequested)
+  const inboxView = view === "inbox";
+  const showsBotList = useRouterState({ select: (state) => sidebarShowsBotList(state.location, inboxView) });
+  return capabilities.bots && showsBotList
     ? <BotSidebar />
     : <WorkspaceChatSidebar {...props} />;
 }
@@ -608,9 +608,23 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   // This Mac's Bots join the Inbox when they need the person or have an unread
   // reply. Their unread comes from the Bots sidebar's own record, not chat read markers.
   const inboxBotsShown = inboxActive && capabilities.bots;
+  // Both read nothing, and the preferences re-render nothing, until then.
   const botRows = useBotRows({ enabled: inboxBotsShown });
-  const { preferences: botPreferences, markViewed: markBotViewed } = useBotSidebarPreferences();
+  const botPreferences = useBotSidebarPreferencesWhen(inboxBotsShown);
   const openBotId = capabilities.bots ? botRouteBotId(pathname) : null;
+  // Every Bot, listed or not: a Bot that stops qualifying while the list holds
+  // it (a freeze, the Needs you linger) still exists and shows its live state.
+  const botInbox = React.useMemo(
+    () =>
+      inboxBotsShown && botPreferences
+        ? botInboxRows({
+            bots: botRows.rows,
+            openBotId,
+            unread: (botId, lastReplyAt) => isBotUnread(botPreferences, botId, lastReplyAt),
+          })
+        : { listed: [], unlisted: [] },
+    [botPreferences, botRows.rows, inboxBotsShown, openBotId],
+  );
   const allInboxEntries = React.useMemo(() => {
     if (!inboxActive) return [];
     const pending = new Map((pendingAttention.data ?? []).map((item) => [item.chatId, item] as const));
@@ -631,21 +645,12 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         peerHosts.hosts,
         (hostId, chatId) => activeRemoteChat?.hostId === hostId && activeRemoteChat.chatId === chatId,
       ),
-      ...(inboxBotsShown
-        ? botInboxEntries({
-            bots: botRows.rows,
-            openBotId,
-            unread: (botId, lastReplyAt) => isBotUnread(botPreferences, botId, lastReplyAt),
-          })
-        : []),
+      ...botInbox.listed,
     ];
   }, [
     activeChatId,
     activeRemoteChat,
-    botPreferences,
-    botRows.rows,
-    inboxBotsShown,
-    openBotId,
+    botInbox.listed,
     chatActivity,
     chats.data,
     environmentPanel.agentBusy,
@@ -661,8 +666,12 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     [allInboxEntries, search, shownMachines],
   );
   const inboxPresent = React.useMemo(
-    () => new Set(allInboxEntries.map((entry) => entry.key)),
-    [allInboxEntries],
+    () => new Set([...allInboxEntries, ...botInbox.unlisted].map((entry) => entry.key)),
+    [allInboxEntries, botInbox.unlisted],
+  );
+  const inboxUnlisted = React.useMemo(
+    () => new Map(botInbox.unlisted.map((entry) => [entry.key, entry] as const)),
+    [botInbox.unlisted],
   );
   const inboxEntriesByKey = React.useMemo(
     () => new Map(inboxEntries.map((entry) => [entry.key, entry] as const)),
@@ -1531,7 +1540,9 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     const { bot } = source;
     const shortcutNumber = inboxShortcutNumbers.get(entry.key);
     const shortcutBinding = shortcutNumber ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId) : null;
-    const inboxParts = inboxRowParts(entry, context, () => markBotViewed(bot.id, source.lastReplyAt));
+    // Mark read clears the unread reply only: it isn't a visit, so `/bots` still opens the Bot last viewed.
+    const inboxParts = inboxRowParts(entry, context, () =>
+      botSidebarPreferenceActions.markReplySeen(bot.id, source.lastReplyAt));
     const inboxAction = inboxParts.action;
     const open = () => void navigate(botChatPath(bot.id));
     return (
@@ -1820,7 +1831,8 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
           onNewAgent={() => void newAgent()}
           onNewChatIn={() => execute("chat.newIn")}
           newChatInKeyShortcut={ariaKeyShortcut(commandBinding("chat.newIn"))}
-          onNavigate={(to) => void navigate({ to })}
+          onNavigate={(to) => void navigate(to === "/bots" ? botListLocation() : { to })}
+          openBotShownBelow={botInbox.listed.some((entry) => entry.signals.isOpen && inboxEntriesByKey.has(entry.key))}
         />
 
         {hasHosts ? (
@@ -2156,6 +2168,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
             <InboxView
               entries={inboxEntries}
               present={inboxPresent}
+              unlisted={inboxUnlisted}
               searching={searching}
               resetKey={`${search.trim()}\u0000${shownMachines}`}
               activeKey={activeInboxKey}

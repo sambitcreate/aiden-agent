@@ -30,19 +30,10 @@ export function ChatLayout() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   // ‹ in the Bots sidebar returns to the last page outside Bots (spec §9). The
   // href is read from the router, not selected, so search-only changes don't re-render the layout.
-  // Every navigation is remembered as it starts, not only once it resolves:
-  // `/bots` redirects straight to a Bot, and that redirect can supersede the
-  // `/bots` load before it ever resolves, losing the person's ask for the list.
   const router = useRouter();
   React.useEffect(() => {
     rememberRoute(router.state.location.href);
-    const remember = ({ toLocation }: { toLocation: { href: string } }) => rememberRoute(toLocation.href);
-    const stopBefore = router.subscribe("onBeforeNavigate", remember);
-    const stopResolved = router.subscribe("onResolved", remember);
-    return () => {
-      stopBefore();
-      stopResolved();
-    };
+    return router.subscribe("onResolved", ({ toLocation }) => rememberRoute(toLocation.href));
   }, [router]);
   // The workspace Environment, Quick View and device mini player are hidden, not
   // closed, on Bots pages: the Bot has its own panel, and leaving restores them.

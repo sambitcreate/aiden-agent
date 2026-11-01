@@ -36,11 +36,12 @@ test("the Sidebar setting offers the three views, checks the stored one and keep
   renderPicker();
   const group = screen.getByRole("radiogroup", { name: "Sidebar" });
   assert.ok(group);
+  // Each choice is found by its accessible name, in this order.
   assert.deepEqual(
-    screen.getAllByRole("radio").map((radio) => radio.getAttribute("aria-label") ?? radio.textContent),
-    ["By workspace", "Recent only", "Inbox (Beta)"],
+    screen.getAllByRole("radio"),
+    ["By workspace", "Recent only", "Inbox (Beta)"].map((name) => screen.getByRole("radio", { name })),
   );
-  assert.deepEqual(checked().map((radio) => radio.textContent), ["Recent only"]);
+  assert.deepEqual(checked(), [screen.getByRole("radio", { name: "Recent only" })]);
   assert.deepEqual(
     screen.getAllByRole("radio").map((radio) => radio.tabIndex),
     [-1, 0, -1],
@@ -55,7 +56,7 @@ test("choosing Inbox switches the sidebar's view, and the Organize menu's change
   assert.equal(screen.getByRole("radio", { name: "Inbox (Beta)" }).getAttribute("aria-checked"), "true");
 
   act(() => fireEvent.click(screen.getByTestId("organize")));
-  assert.deepEqual(checked().map((radio) => radio.textContent), ["Recent only"]);
+  assert.deepEqual(checked(), [screen.getByRole("radio", { name: "Recent only" })]);
 });
 
 test("arrow keys move the choice and focus together, wrapping at the ends", () => {
@@ -69,4 +70,24 @@ test("arrow keys move the choice and focus together, wrapping at the ends", () =
   fireEvent.keyDown(document.activeElement!, { key: "Home" });
   assert.equal(storedView(), "projects");
   assert.equal(document.activeElement, first);
+});
+
+test("ArrowRight and ArrowDown move forward, wrapping past the last choice, and End jumps to it", () => {
+  localStorage.setItem(SIDEBAR_PREFERENCES_KEY, JSON.stringify({ view: "projects" }));
+  renderPicker();
+  const radio = (name: string) => screen.getByRole("radio", { name });
+  radio("By workspace").focus();
+  fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+  assert.equal(storedView(), "recent");
+  assert.equal(document.activeElement, radio("Recent only"));
+  fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+  assert.equal(storedView(), "inbox");
+  assert.equal(document.activeElement, radio("Inbox (Beta)"));
+  fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+  assert.equal(storedView(), "projects", "ArrowDown on the last choice wraps to the first");
+  assert.equal(document.activeElement, radio("By workspace"));
+  fireEvent.keyDown(document.activeElement!, { key: "End" });
+  assert.equal(storedView(), "inbox");
+  assert.equal(document.activeElement, radio("Inbox (Beta)"));
+  assert.deepEqual(checked(), [radio("Inbox (Beta)")]);
 });

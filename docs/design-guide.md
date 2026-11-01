@@ -183,8 +183,8 @@ The sidebar's Inbox view ([plan](plans/inbox-sidebar-plan.md)) uses a compact
 two-line row (`data-chat-row-layout="inbox"` in `renderer/components/sidebar/chat-row.tsx`)
 instead of the one-line chat row. Line 1 is quiet `text-small` meta (the
 workspace, plus the host for a paired Mac, or "Bot" led by a 14px copy of the
-Bot's face) with the status trailing it. Rows carry no leading avatar, so every
-title starts at the same edge; line 2 is the title, in medium weight while unread. In Needs you
+Bot's face) with the status trailing it. A Bot carries its face in that meta
+line, not as a leading avatar, so every title starts at the same edge; line 2 is the title, in medium weight while unread. In Needs you
 the status is a soft pill (`bg-status-warning-surface` or
 `bg-status-red-surface` with its matching text token, an icon and a short label
 such as "Needs you" or "Approval") followed by the wait; elsewhere it is plain

@@ -146,6 +146,18 @@ export function botInboxKey(botId: string): string {
   return projectOrderKey(LOCAL_SIDEBAR_HOST_ID, `bot:${botId}`);
 }
 
+/** Every local Bot's row, split by whether the Inbox lists it. */
+export interface BotInboxRows {
+  /** Bots that need the person, have an unread reply, or are open. */
+  listed: InboxEntry[];
+  /**
+   * Every other Bot. They still exist, so a row the list holds in place after
+   * it stopped qualifying (a freeze, the Needs you linger) reads its live
+   * state here, and isn't taken for deleted.
+   */
+  unlisted: InboxEntry[];
+}
+
 /**
  * This Mac's Bots, listed only while they need the person (`needsYou`, which
  * covers pending prompts, issues and failed runs) or have an unread reply
@@ -153,39 +165,44 @@ export function botInboxKey(botId: string): string {
  * open chat does. Bot chats never show as chats; a Bot that is only running
  * isn't listed, so Bots never join the Working shelf.
  */
-export function botInboxEntries(input: BotInboxInput): InboxEntry[] {
-  return input.bots.flatMap((row): InboxEntry[] => {
+export function botInboxRows(input: BotInboxInput): BotInboxRows {
+  const rows: BotInboxRows = { listed: [], unlisted: [] };
+  for (const row of input.bots) {
     const isOpen = row.bot.id === input.openBotId;
     const unread = !isOpen && input.unread(row.bot.id, row.lastReplyAt);
-    if (!row.needsYou && !unread && !isOpen) return [];
-    return [
-      {
-        key: botInboxKey(row.bot.id),
-        title: row.bot.name,
-        project: INBOX_BOT_PROJECT_LABEL,
-        hostId: LOCAL_SIDEBAR_HOST_ID,
-        hostLabel: LOCAL_MACHINE_LABEL,
-        source: {
-          kind: "bot",
-          bot: row.bot,
-          lastReplyAt: row.lastReplyAt,
-          working: row.state?.kind === "running",
-        },
-        signals: {
-          // Placement needs only that the Bot waits; its status reads "Needs you" whatever the wait is.
-          rowState: row.needsYou ? "needs_input" : "idle",
-          unread,
-          failed: false,
-          isOpen,
-          hostOnline: true,
-          updatedAt: row.activityAt,
-          ...(row.lastReplyAt !== null ? { lastAssistantAt: row.lastReplyAt } : {}),
-          // The Bot's chat last changed when the wait began, near enough.
-          ...(row.needsYou ? { attentionSince: row.activityAt } : {}),
-        },
+    const entry: InboxEntry = {
+      key: botInboxKey(row.bot.id),
+      title: row.bot.name,
+      project: INBOX_BOT_PROJECT_LABEL,
+      hostId: LOCAL_SIDEBAR_HOST_ID,
+      hostLabel: LOCAL_MACHINE_LABEL,
+      source: {
+        kind: "bot",
+        bot: row.bot,
+        lastReplyAt: row.lastReplyAt,
+        working: row.state?.kind === "running",
       },
-    ];
-  });
+      signals: {
+        // Placement needs only that the Bot waits; its status reads "Needs you" whatever the wait is.
+        rowState: row.needsYou ? "needs_input" : "idle",
+        unread,
+        failed: false,
+        isOpen,
+        hostOnline: true,
+        updatedAt: row.activityAt,
+        ...(row.lastReplyAt !== null ? { lastAssistantAt: row.lastReplyAt } : {}),
+        // The Bot's chat last changed when the wait began, near enough.
+        ...(row.needsYou ? { attentionSince: row.activityAt } : {}),
+      },
+    };
+    (row.needsYou || unread || isOpen ? rows.listed : rows.unlisted).push(entry);
+  }
+  return rows;
+}
+
+/** The Bots the Inbox lists (`botInboxRows(input).listed`). */
+export function botInboxEntries(input: BotInboxInput): InboxEntry[] {
+  return botInboxRows(input).listed;
 }
 
 /**

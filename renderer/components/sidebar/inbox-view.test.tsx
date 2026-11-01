@@ -7,7 +7,8 @@ import { createPortal } from "react-dom";
 import { TooltipProvider } from "../ui";
 import { ChatRow } from "./chat-row";
 import { InboxView, type InboxRowContext } from "./inbox-view";
-import { inboxRowAction, type InboxEntry } from "../../lib/sidebar-inbox-view";
+import { botInboxRows, inboxRowAction, type InboxEntry } from "../../lib/sidebar-inbox-view";
+import { botFixture } from "../../main/bots/test-fixtures";
 import type { InboxSignals } from "../../lib/sidebar-inbox";
 import { projectOrderKey } from "../../lib/sidebar-organization";
 import { writeSidebarPreferences } from "../../lib/use-sidebar-view";
@@ -74,6 +75,7 @@ function renderRow(onMarkRead: (key: string) => void = () => {}) {
 function view(
   entries: readonly InboxEntry[],
   extra: {
+    unlisted?: readonly InboxEntry[];
     onMarkRead?: (key: string) => void;
     searching?: boolean;
     shelfHost?: HTMLElement | null;
@@ -84,6 +86,7 @@ function view(
     <TooltipProvider>
       <InboxView
         entries={entries}
+        {...(extra.unlisted ? { unlisted: new Map(extra.unlisted.map((item) => [item.key, item] as const)) } : {})}
         now={clock}
         searching={extra.searching ?? false}
         shelfHost={extra.shelfHost ?? null}
@@ -234,6 +237,56 @@ test("a row that leaves Needs you lingers 400ms before it moves", () => {
   rerender(view([entry("a")]));
   assert.equal(screen.queryByRole("group", { name: "Needs you" }), null);
   assert.deepEqual(rowTitles(section("Earlier")), ["Chat a"]);
+});
+
+/** A local Bot's rows, built by the sidebar's own rule; `seenAt` is the newest reply marked read. */
+function botRows(state: { needsYou?: boolean; lastReplyAt?: number | null; seenAt?: number }) {
+  return botInboxRows({
+    bots: [{
+      bot: botFixture({ id: "b1", name: "Trip Planner" }),
+      activityAt: NOW - 5 * MINUTE,
+      needsYou: state.needsYou ?? false,
+      lastReplyAt: state.lastReplyAt ?? null,
+    }],
+    openBotId: null,
+    unread: (_botId, lastReplyAt) => lastReplyAt !== null && lastReplyAt > (state.seenAt ?? 0),
+  });
+}
+
+test("a Bot read elsewhere while the pointer is on the list stays put, read, until it leaves", () => {
+  const unread = botRows({ lastReplyAt: NOW - 2 * MINUTE });
+  const { rerender } = render(view(unread.listed, { unlisted: unread.unlisted }));
+  const botRow = () => screen.getByRole("button", { name: /^Trip Planner,/u });
+  assert.match(botRow().getAttribute("aria-label") ?? "", /Unread/u);
+  fireEvent.pointerOver(inboxRoot());
+
+  // Read from the Bot list or its chat: the Bot no longer qualifies, so it leaves the listed rows.
+  const read = botRows({ lastReplyAt: NOW - 2 * MINUTE, seenAt: NOW - 2 * MINUTE });
+  assert.equal(read.listed.length, 0);
+  rerender(view(read.listed, { unlisted: read.unlisted }));
+  assert.deepEqual(rowTitles(section("Updates")), ["Trip Planner"]);
+  assert.doesNotMatch(botRow().getAttribute("aria-label") ?? "", /Unread/u, "it shows its live, read state");
+
+  fireEvent.pointerOver(document.body);
+  assert.equal(screen.queryByRole("button", { name: /^Trip Planner,/u }), null);
+});
+
+test("a Bot answered elsewhere lingers 400ms in Needs you; a deleted one goes at once", () => {
+  const waiting = botRows({ needsYou: true });
+  const answered = botRows({});
+  const { rerender } = render(view(waiting.listed, { unlisted: waiting.unlisted }));
+  assert.deepEqual(rowTitles(section("Needs you")), ["Trip Planner"]);
+  rerender(view(answered.listed, { unlisted: answered.unlisted }));
+  assert.deepEqual(rowTitles(section("Needs you")), ["Trip Planner"]);
+  nowMs = NOW + 450;
+  rerender(view(answered.listed, { unlisted: answered.unlisted }));
+  assert.equal(screen.queryByRole("group", { name: "Needs you" }), null);
+
+  cleanup();
+  nowMs = NOW;
+  const again = render(view(waiting.listed, { unlisted: waiting.unlisted }));
+  again.rerender(view([], { unlisted: [] }));
+  assert.equal(screen.queryByRole("group", { name: "Needs you" }), null, "a Bot that no longer exists doesn't linger");
 });
 
 test("the Working shelf collapses to its header and drops its rows from the list", () => {

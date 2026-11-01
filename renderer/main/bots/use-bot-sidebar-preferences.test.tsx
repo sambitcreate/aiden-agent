@@ -8,10 +8,13 @@ type HookModule = typeof import("./use-bot-sidebar-preferences");
 
 // The hook keeps module-level state, so each test loads its own copy.
 let loads = 0;
-async function loadHook(): Promise<HookModule["useBotSidebarPreferences"]> {
+async function loadModule(): Promise<HookModule> {
   const specifier = `./use-bot-sidebar-preferences?fresh=${++loads}`;
-  const loaded = (await import(specifier)) as HookModule;
-  return loaded.useBotSidebarPreferences;
+  return (await import(specifier)) as HookModule;
+}
+
+async function loadHook(): Promise<HookModule["useBotSidebarPreferences"]> {
+  return (await loadModule()).useBotSidebarPreferences;
 }
 
 interface StubStorage {
@@ -95,4 +98,24 @@ test("pruning with no live Bots keeps the pin, and pruning with live Bots drops 
   act(() => result.current.prune(new Set(["b2"])));
   assert.equal(result.current.preferences.pinnedBotId, null);
   assert.equal(stored().pinnedBotId, null);
+});
+
+test("the gated preferences read and write nothing until enabled, then follow every change", async () => {
+  const { useBotSidebarPreferencesWhen, botSidebarPreferenceActions } = await loadModule();
+  let renders = 0;
+  const { result, rerender } = renderHook(({ enabled }) => {
+    renders += 1;
+    return useBotSidebarPreferencesWhen(enabled);
+  }, { initialProps: { enabled: false } });
+  assert.equal(result.current === null, true, "a disabled caller reads nothing");
+  assert.equal(stub.writes, 0, "a person who never enables it gets no stored record");
+  const before = renders;
+  act(() => botSidebarPreferenceActions.markViewed("b1", 5));
+  assert.equal(renders, before, "a Bot visit doesn't re-render a disabled caller");
+
+  rerender({ enabled: true });
+  assert.equal(result.current?.lastViewed.b1 !== undefined, true, "enabling reads the current record");
+  act(() => botSidebarPreferenceActions.markReplySeen("b2", 40));
+  assert.equal(result.current?.seenReplyAt.b2, 40);
+  assert.equal(result.current?.lastViewed.b2, undefined, "marking a reply read is not a view");
 });

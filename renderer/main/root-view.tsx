@@ -20,7 +20,7 @@ import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/t
 import { EnvironmentPanelProvider, useEnvironmentPanel } from "../components/environment-panel";
 import { toast } from "../components/ui";
 import { RoutedBotPanelProvider, useBotPanelActions } from "./bots/bot-panel-context";
-import { environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
+import { botListLocation, environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { queryKeys } from "../lib/queries";
 import { subscribeGitQuerySync } from "../lib/git-query-sync";
@@ -219,7 +219,7 @@ function RootContent() {
         toast.info(navigationBlockedReason);
         return;
       }
-      void navigate({ to });
+      void navigate(to === "/bots" ? botListLocation() : { to });
     },
     [navigate, navigationBlockedReason],
   );

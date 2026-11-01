@@ -16,6 +16,8 @@ export interface SidebarPrimaryNavProps {
   /** ARIA form of the New chat in… shortcut, when one is bound. */
   newChatInKeyShortcut?: string;
   onNavigate: (destination: SidebarPrimaryDestination) => void;
+  /** The open Bot is already selected below (its Inbox row), so Bots doesn't read as selected too. */
+  openBotShownBelow?: boolean;
 }
 
 /** Top-level destinations above the workspace outline. Studio rows exist only behind their flags. */
@@ -27,6 +29,7 @@ export function SidebarPrimaryNav({
   onNewChatIn,
   newChatInKeyShortcut,
   onNavigate,
+  openBotShownBelow = false,
 }: SidebarPrimaryNavProps) {
   const studio = studioFeatureForPath(pathname);
   return (
@@ -72,7 +75,7 @@ export function SidebarPrimaryNav({
         <SidebarListItem
           icon={<BotSidebarIcon />}
           title="Bots"
-          selected={pathname.startsWith("/bots")}
+          selected={pathname.startsWith("/bots") && !openBotShownBelow}
           onClick={() => onNavigate("/bots")}
         />
       ) : null}
