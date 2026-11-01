@@ -188,6 +188,8 @@ class AidenChatViewModel(
     val workspaceHasCommits: StateFlow<Boolean?> = _workspaceHasCommits.asStateFlow()
 
     private var worktreeSetup: Deferred<AidenChatNewWorktree>? = null
+    /** Cancel was chosen for the current setup, even one whose answer had already arrived. */
+    private var worktreeSetupCanceled = false
 
     /**
      * One key per chat and message, so a retry after a lost reply finds the worktree the Mac
@@ -460,7 +462,9 @@ class AidenChatViewModel(
      * anyway, the chat is in the worktree next time it loads, still empty.
      */
     fun cancelWorktreeSetup() {
-        worktreeSetup?.cancel()
+        val setup = worktreeSetup ?: return
+        worktreeSetupCanceled = true
+        setup.cancel()
     }
 
     // --- Fork (contract revision 21) ---
@@ -1678,6 +1682,7 @@ class AidenChatViewModel(
                     val setup = viewModelScope.async {
                         client.moveChatToNewWorktree(chatId, currentChat.revision, text, key)
                     }
+                    worktreeSetupCanceled = false
                     worktreeSetup = setup
                     _isSettingUpWorktree.value = true
                     val moved = try {
@@ -1691,12 +1696,17 @@ class AidenChatViewModel(
                         _isSettingUpWorktree.value = false
                         worktreeSetup = null
                     }
+                    // Cancel can land after the answer arrived but before this resumed: cancelling
+                    // a finished job does nothing, so the choice is read from the flag.
+                    val canceledAsItArrived = worktreeSetupCanceled
                     if (activeClient() !== client) throw AidenNewWorktreeCanceled()
                     _chat.value = _chat.value?.copy(workspaceId = moved.chat.workspaceId, revision = moved.chat.revision)
                     sentChat = sentChat.copy(workspaceId = moved.chat.workspaceId, revision = moved.chat.revision)
                     _startsInNewWorktree.value = false
                     worktreeAttempt = null
                     coordinator.refreshWorkspaces()
+                    // Canceled as the worktree arrived: the chat stays there, unsent (as on iOS).
+                    if (canceledAsItArrived) throw AidenNewWorktreeCanceled()
                 }
                 val session = draftSession ?: error("The chat draft is not ready.")
                 withContext(ioDispatcher) { draftStore.savePendingSend(attempt, session) }
