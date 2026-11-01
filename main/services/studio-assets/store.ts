@@ -41,7 +41,7 @@ export interface StudioAssetStoreOptions {
  * means usable, and "failed" means the last initialize() could not open the
  * database; initialize() may be called again to retry.
  *
- * Design Studio and Create Images report a storage error when status() is not
+ * Create Images reports a storage error when status() is not
  * "open": a "failed" store is a startup failure worth surfacing, while any
  * operation on a store that is not open rejects with StudioAssetError
  * ("unavailable"), which the aiden-asset: handler maps to HTTP 503.
@@ -79,7 +79,7 @@ function toRecord(row: AssetRow): StudioAssetRecord {
 }
 
 /**
- * Content-addressed image store shared by Design Studio and Create Images.
+ * Content-addressed image store for Create Images.
  * Bytes are immutable files named by sha256; SQLite holds metadata and which
  * holders (projects, workflows, runs) keep each asset alive. An asset with no
  * holder is collected after a grace period measured from its last put or release.

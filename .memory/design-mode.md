@@ -26,7 +26,7 @@ Status: active 2026-10-31. Spec v2 (infinite canvas) and P0/P1 plans written. P0
 ## P0 notes (2026-10-31)
 
 - Stale `/design` and `/design/$projectId` links use `beforeLoad: redirectRetiredRoute` (in `renderer/main/studio-capability-route.tsx`) and land on `/`. P1 replaces these routes.
-- `llm-client` refuses a chat with any `owner` ("belongs to a feature that is no longer available"), keeping the old `resolveGenerationProfile` refusal for hidden `design-project` chats.
-- `createGenerationHarness(options)` takes no profile now; `chat-run-input-admission`'s generic `inputClosed` stays, but `llm-client` no longer sets it.
+- `llm-client` refuses a chat with any `owner` ("belongs to a feature that is no longer available"), keeping the old `resolveGenerationProfile` refusal for hidden `design-project` chats. The rule is `chatRunRefusal(chat)` in `renderer/shared/chat-visibility.ts` (keyed on surface "feature"), tested in `chat-visibility.test.ts`.
+- `generation-harness.ts` (`createGenerationHarness`) is gone; `llm-client` builds `new PiAgentRuntimeHarness(...)` directly. The dead `inputClosed` admission flag was removed too. Extensions compose inline as base, then advisor, then codemode.
 - ⌘⇧D is unbound after P0, but `dictation.toggle` still declares `defaultBinding: "Command+Shift+D"` with `defaultEnabled: false`. P1's ⌘⇧D must resolve that collision.
 - Under Node, TanStack router-core always runs in server mode, so a `beforeLoad` redirect sets `router.state.redirect` without following it; tests follow it with `router.navigate`.

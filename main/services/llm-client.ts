@@ -56,6 +56,7 @@ import {
 import type { PreparedBrowserFile } from "./browser/files.js";
 import { createBrowserDiscovery } from "./browser-discovery.js";
 import { resolveBrowserAgentAccess } from "../../renderer/shared/browser.js";
+import { chatRunRefusal } from "../../renderer/shared/chat-visibility.js";
 import {
   canUseDeviceTools,
   createDeviceAgentTools,
@@ -464,7 +465,6 @@ import { GENERATIVE_UI_EXTENSION_ID } from "./generative-ui-extension.js";
 import { createArtifactPlacementLedger, imageAttachmentPlacements, presentPlacedImage } from "./generative-ui-placements.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
-import { createGenerationHarness } from "./generation-harness.js";
 import {
   createAskUserQuestionExtension,
   resolveAskUserQuestionTimeoutMs,
@@ -2361,11 +2361,11 @@ export const llmClient = {
       if (!chat) {
         throw new Error("This chat is no longer available.");
       }
-      // A feature-owned chat (the retired Design Studio's hidden project chats)
-      // never runs as an ordinary agent. It throws before authoritativeChat is
-      // set, so no failure turn is written.
-      if (chat.owner !== undefined) {
-        throw new Error("This conversation belongs to a feature that is no longer available.");
+      // A feature-owned chat never runs as an ordinary agent. It throws before
+      // authoritativeChat is set, so no failure turn is written.
+      const runRefusal = chatRunRefusal(chat);
+      if (runRefusal) {
+        throw new Error(runRefusal);
       }
       authoritativeChat = chat;
       authoritativeMode = authoritativeChatGenerationMode(chat.workspaceId, params.mode);
@@ -3517,7 +3517,7 @@ export const llmClient = {
             ),
           );
       const promptCacheTtl = promptCacheTtlMs(model);
-      candidate = createGenerationHarness({
+      candidate = new PiAgentRuntimeHarness({
         contributions: { ...runtimeContributions, tools: runtimeTools },
         deferredTools,
         contextPromptSections,

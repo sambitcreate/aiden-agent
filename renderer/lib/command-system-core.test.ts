@@ -193,8 +193,14 @@ test("palette omits studio commands while their capability is off", () => {
 
 test("no capability set offers a Design Studio command", () => {
   for (const createImages of [false, true]) {
-    const titles = paletteCommands({ createImages }).map(({ title }) => title);
-    assert.equal(titles.some((title) => /design/iu.test(title)), false, `createImages: ${createImages}`);
+    const commands = paletteCommands({ createImages });
+    const ids: readonly string[] = commands.map(({ id }) => id);
+    assert.equal(ids.includes("design.open"), false, `createImages: ${createImages}`);
+    assert.equal(
+      commands.some(({ title }) => /Design Studio/u.test(title)),
+      false,
+      `createImages: ${createImages}`,
+    );
   }
 });
 

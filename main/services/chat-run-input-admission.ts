@@ -24,8 +24,6 @@ export interface ChatRunInputGenerationRef {
   chatId: string;
   owner: { documentId: string };
   cancelRequested: boolean;
-  /** Runs that take no mid-flight input (Design Studio). */
-  inputClosed?: boolean;
   /**
    * Stop the run's still-running subagents once steering is accepted. Pi
    * delivers steering only after the current tool call returns, so without
@@ -99,9 +97,6 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
       (input.ownerDocumentId !== undefined &&
         generation.owner.documentId !== input.ownerDocumentId)
     ) {
-      return { admitted: false, reason: "run_not_active", committed: false };
-    }
-    if (generation.inputClosed) {
       return { admitted: false, reason: "run_not_active", committed: false };
     }
     if (generation.cancelRequested || deps.isChatDeleting(generation.chatId)) {
