@@ -614,6 +614,7 @@ test("a gallery read right as a run ends waits for its auto-save, so the image i
     },
     link: (existing, target) => real.link(existing, target),
     rename: (from, to) => real.rename(from, to),
+    readdir: (target) => real.readdir(target),
     rm: (target, options) => real.rm(target, options),
     stat: (target) => real.stat(target),
   };
@@ -645,6 +646,9 @@ test("an auto-save that fails never fails the run", async (t) => {
       throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
     },
     rename: async () => {
+      throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    },
+    readdir: async () => {
       throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
     },
     rm: async () => undefined,
@@ -683,6 +687,7 @@ test("a Save As that fails while writing keeps the file it was replacing", async
     },
     link: (existing, target) => real.link(existing, target),
     rename: (from, to) => real.rename(from, to),
+    readdir: (target) => real.readdir(target),
     rm: (target, options) => real.rm(target, options),
     stat: (target) => real.stat(target),
   };
@@ -717,6 +722,7 @@ test("a Save All that writes only some images says how many, and can still show 
     },
     link: (existing, target) => real.link(existing, target),
     rename: (from, to) => real.rename(from, to),
+    readdir: (target) => real.readdir(target),
     rm: (target, options) => real.rm(target, options),
     stat: (target) => real.stat(target),
   };

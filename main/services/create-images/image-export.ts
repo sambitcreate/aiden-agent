@@ -24,6 +24,11 @@ export const IMAGE_EXTENSIONS: Readonly<Record<ImageMediaType, string>> = Object
 /** UTF-16 units of the workflow title kept in a file name (the stem is also capped at 180 UTF-8 bytes). */
 const MAX_TITLE_UNITS = 80;
 const MAX_UNIQUE_ATTEMPTS = 1_000;
+/** The hidden file a write is staged in before it gets its visible name. */
+const STAGED_FILE = /^\.aiden-[0-9a-f-]{36}\.tmp$/u;
+const DAY_FOLDER = /^\d{4}-\d{2}-\d{2}$/u;
+/** How many of the newest day folders the start-of-session sweep looks in. */
+const SWEPT_DAY_FOLDERS = 14;
 
 /** The slice of `node:fs/promises` the exporter uses; tests inject failures through it. */
 export interface ExportFileSystem {
@@ -33,6 +38,7 @@ export interface ExportFileSystem {
   link(existingPath: string, newPath: string): Promise<void>;
   /** Replaces `newPath` in one step, so a reader never sees it half-written. */
   rename(oldPath: string, newPath: string): Promise<void>;
+  readdir(target: string): Promise<string[]>;
   rm(target: string, options: { force: true }): Promise<void>;
   stat(target: string): Promise<{ isFile(): boolean }>;
 }
@@ -183,6 +189,8 @@ export class CreateImagesExports {
   private readonly pending = new Set<Promise<unknown>>();
   /** One export at a time per asset, so an auto-save and a Reveal never write two copies. */
   private readonly inFlight = new Map<string, Promise<string>>();
+  /** The once-per-session removal of staged files a forced quit or crash left behind. */
+  private sweep: Promise<void> | null = null;
 
   constructor(private readonly options: CreateImagesExportsOptions) {
     this.fs = options.fs ?? (nodeFs as unknown as ExportFileSystem);
@@ -280,11 +288,34 @@ export class CreateImagesExports {
   private async export(ref: Pick<OutputRef, "assetId" | "mediaType">, workflowTitle?: string): Promise<string> {
     const existing = await this.savedPath(ref.assetId);
     if (existing) return existing;
+    // Before this session stages anything, so the sweep can only meet files no write still owns.
+    this.sweep ??= this.removeLeftoverStagedFiles();
+    await this.sweep;
     const { directory, fileName } = this.target(ref, workflowTitle);
     const { bytes } = await this.options.assets.read(ref.assetId);
     const written = await writeUniqueFile(this.fs, directory, fileName, bytes);
     this.options.ledger.recordExport(ref.assetId, written);
     return written;
+  }
+
+  /**
+   * A write cut off by a forced quit, a crash or the quit-time wait running out leaves its hidden
+   * staging file in a day folder. Best effort, and only in the newest day folders, so a large
+   * archive is never walked.
+   */
+  private async removeLeftoverStagedFiles(): Promise<void> {
+    try {
+      const root = this.folder();
+      const days = (await this.fs.readdir(root)).filter((name) => DAY_FOLDER.test(name)).sort().reverse().slice(0, SWEPT_DAY_FOLDERS);
+      for (const day of days) {
+        const directory = path.join(root, day);
+        for (const name of await this.fs.readdir(directory).catch(() => [])) {
+          if (STAGED_FILE.test(name)) await this.fs.rm(path.join(directory, name), { force: true }).catch(() => undefined);
+        }
+      }
+    } catch {
+      // No save folder yet, or it cannot be listed: there is nothing to tidy.
+    }
   }
 
   private async isFile(target: string): Promise<boolean> {

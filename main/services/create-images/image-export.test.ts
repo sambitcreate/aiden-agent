@@ -54,6 +54,27 @@ function exporter(root: string | null, overrides: Partial<CreateImagesExportsOpt
   return { exports, recorded, reads, issues };
 }
 
+test("the first save of a session removes staged files a cut-off write left in recent day folders, and nothing else", async (t) => {
+  const root = await directory(t);
+  const leftover = ".aiden-0b5e6a1c-3f7d-4e2a-9c81-2d4f6b8a0e13.tmp";
+  for (const day of ["2026-10-30", "2026-10-31"]) {
+    await fs.mkdir(path.join(root, day), { recursive: true });
+    await fs.writeFile(path.join(root, day, leftover), "half an image");
+    await fs.writeFile(path.join(root, day, "070509 Bikes 12345678.png"), "a saved image");
+  }
+  await fs.writeFile(path.join(root, "2026-10-31", ".aiden-notes.tmp"), "not a staged write");
+  await fs.writeFile(path.join(root, ".aiden-0b5e6a1c-3f7d-4e2a-9c81-2d4f6b8a0e13.tmp"), "outside a day folder");
+  const { exports } = exporter(root);
+  await exports.ensureExported(ref());
+  assert.deepEqual(await filesUnder(root), [
+    ".aiden-0b5e6a1c-3f7d-4e2a-9c81-2d4f6b8a0e13.tmp",
+    "2026-10-30/070509 Bikes 12345678.png",
+    "2026-10-31/.aiden-notes.tmp",
+    "2026-10-31/070509 Bikes 12345678.png",
+    "2026-10-31/070509 Image ab12cd34.png",
+  ]);
+});
+
 test("names use the local day folder, local time, a safe workflow title and the hash prefix", () => {
   assert.equal(exportDayFolder(AT), "2026-10-31");
   assert.equal(exportFileName({ at: AT, workflowTitle: "Bikes", assetId: ASSET, mediaType: "image/png" }), "070509 Bikes ab12cd34.png");
