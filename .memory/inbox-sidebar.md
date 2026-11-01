@@ -1,4 +1,4 @@
-# Inbox sidebar (planned 2026-10-31; Phase 0, all of Phase 1 (1a–1d), 2a, 2b and 2c built)
+# Inbox sidebar (planned 2026-10-31; Phase 0, all of Phase 1 (1a–1d) and all of Phase 2 (2a–2d) built)
 
 Plan: `docs/plans/inbox-sidebar-plan.md`. Before/after page: https://claude.ai/artifact/TvjFoaj4FL5Ej5pn69GVqc (private). Research came from 10 passes over OpenCode's Inbox (`~/projects/opencode`) and T3 Code's sidebar (`~/projects/opp/t3code`).
 
@@ -174,3 +174,11 @@ Plan: `docs/plans/inbox-sidebar-plan.md`. Before/after page: https://claude.ai/a
 - Deliberate: unseen failure in a chat open in a hidden/minimized window counts; sidebar machine filter ignored; legacy `attention` view reads as inbox so badge is on by default. Renderer report failure logs one console.warn per window.
 
 Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control]].
+
+### Phase 2d `aiden serve` hosts (2026-11-01)
+- CLI serves `/host/events`, run streams and run control, read markers and triage from the desktop's code: shared `createAidenRemoteHostFeedSource` (`main/services/aiden-remote-host-feed-source.ts`) and `markChatReadThrough` (`chat-read-markers.ts`); the CLI makes no copies.
+- `daemon-chats.ts` keeps a `HostRunRegistry` (begin at hand-off, record every event, approvals through `ChatActivityRegistry`, settle on release); `cancelRun` and `approveAsHost` back host run control.
+- `remote-chats.ts` keeps `chat-read-markers.json` and `chat-triage.json` in the data dir; the baseline is stamped at creation; the snooze timer and wake-on-attention stop in `stopInbox()`.
+- `remote.ts` builds the feed and the run service in `workspaceApi`, closes them on stop, and revokes them on device revoke.
+- Gaps: no Bot needsYou/failed/lastReplyAt, no Bot change hook, no run questions or input, re-pair needed for host grants, no wake/unlock snooze re-check. Revision stays 48.
+- Test: `packages/cli/tests/inbox-host.test.mjs` (in the CLI `test` script, port 49376).

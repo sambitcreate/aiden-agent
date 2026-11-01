@@ -105,7 +105,7 @@ The service runs the built `dist/app/cli.js` of this checkout with the current N
 Phones and Macs paired with the server see its workspaces, chats, Bots, scheduled tasks and files. Chats run on the server through Pi's SDK with a headless tool set: workspace tools under the workspace's access tier, memory, todo, MCP, web search, advisor, and artifact export (HTML visuals are written to `<agentDir>/artifacts` and the path is returned). Image display in the terminal and `ask_user_question` are not available on the server. Server sessions don't load codemode and declare MCP tools directly.
 
 - **Forks.** Paired phones fork server chats with the Remote `chat-fork-v1` feature; the fork's journal is seeded from the copied visible messages, so tool results before the cut are not carried. The server does not offer Fork with summary (`chat-fork-summary-v1`).
-- **Desktop limits.** The server does not serve the host feed or live runs, so paired desktops cannot list its chats.
+- **Paired desktops.** A Mac or Linux desktop paired to the server lists its chats in the sidebar and the Inbox. The server serves the host feed (`GET /host/events`), live-run observation and run control (Stop and approvals), shared read markers (`POST /chats/{id}/read`), and the Inbox's Pin, Done and Snooze (`POST /chats/{id}/triage`), with the same `inbox-signals-v1` row times as the desktop. Read markers and triage are kept in `chat-read-markers.json` and `chat-triage.json` in the server's data directory, and snoozes end on a timer that runs with `aiden serve`. A desktop paired before this server version must pair again to receive the host-feed grants. The server's runs don't take questions or mid-run input, and its Bot rows carry no Needs you, Failed or last-reply signals, so its Bots appear in a desktop's Inbox only while they are open.
 - **Scheduled-run notifications.** Run completions show up through `aiden schedule runs <id>`, `aiden schedule notifications` and, for tasks with `notify`, local notifications on paired phones via the Remote `scheduled-tasks/notifications` feed.
 
 ## Bots
@@ -178,7 +178,7 @@ Notes:
 
 | Path | Contents |
 | --- | --- |
-| `~/.aiden/agent/` | Server state: `settings.json`, `auth.json`, `aiden.json` (device-local feature settings), `aiden-mcp.json`, `web-search.json`, `remote.json` (Remote identity and paired devices), `schedules.json`, `sessions/`, `bots/`, `bot-service/`, `artifacts/`, `credentials/`, `serve.log` and the private control socket |
+| `~/.aiden/agent/` | Server state: `settings.json`, `auth.json`, `aiden.json` (device-local feature settings), `aiden-mcp.json`, `web-search.json`, `remote.json` (Remote identity and paired devices), `chat-read-markers.json` and `chat-triage.json` (Inbox read state and Pin, Done and Snooze), `schedules.json`, `sessions/`, `bots/`, `bot-service/`, `artifacts/`, `credentials/`, `serve.log` and the private control socket |
 | `~/.aiden/` | Shared Aiden home (the desktop's portable `config.json`, `skills/`, `scripts/`; `memory/` is the shared desktop and server memory store, `ws-<folder-hash>` scopes) |
 | `AIDEN_CODING_AGENT_DIR` | Environment override for the agent directory (mirrors Pi's `PI_CODING_AGENT_DIR`; use it for tests and for running more than one server) |
 

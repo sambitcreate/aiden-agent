@@ -1040,3 +1040,10 @@ A desktop that wrote triage keeps its own answer until the host reports a `triag
 **Clients.** A paired desktop's Inbox lists a host's chats with these times and that host's Pin, Done and Snooze, and lists the host's Bots that need you, failed, or are open. Aiden On The Go for iOS and Android decode summaries exactly as before; a summary that carries these fields, or a malformed one of them, reads the same as one that does not.
 
 **Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` has `contractRevision` 48: `chat_fixture_summary_02` carries `attentionSince`, `runStartedAt` and `lastAssistantAt`; `chat_fixture_summary_01` carries `lastAssistantAt` and a triage entry with `pinnedAt` and `snoozedUntil`; and the `run.state` host-feed event carries an `attentionSummary`. The desktop parser refuses an `attentionSummary` on a run that is not waiting, one that is not trimmed, and triage times without `triageRevision`.
+
+**CLI host (`aiden serve`).** The CLI host serves the same surfaces from the desktop's own code. A paired desktop sees `host-events-v1`, `run-streams-v1`, `run-control-v1`, `chat-read-state-v1`, `chat-triage-v1` and `inbox-signals-v1`, and `GET /host/events`, the run streams, `POST /chats/{chatId}/read`, `POST /chats/{chatId}/triage` and the summary fields above behave as they do on a Mac. Read markers and triage are kept in the server's data directory. There are some differences:
+
+- Pairing grants `host:events`, `runs:observe` and `runs:control` only from this server version on, so a desktop paired earlier must pair again.
+- Run control stops runs and answers approvals, including approvals raised by a phone's turn. The CLI's runs ask no questions and take no mid-run input: an answer is refused, and input is refused as `run_not_active`.
+- Host-feed Bot rows carry no `needsYou`, `failed` or `lastReplyAt`, and a Bot edit reaches the feed only with its next other change (a chat, workspace, run, read marker or triage change).
+- A snooze is re-checked at least once a minute while `aiden serve` runs. The host does not re-check it when the computer wakes or unlocks.

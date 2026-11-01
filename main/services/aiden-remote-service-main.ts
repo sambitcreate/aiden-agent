@@ -131,7 +131,6 @@ import { botMemoryService } from "./bot-memory/bot-memory-main.js";
 import { botRoutineProposals } from "./bot-routine-proposals-main.js";
 import { createBotNotificationFeed } from "./bot-routine-notifications.js";
 import { botIssues } from "./bot-issues/service-main.js";
-import { projectBotSummaryIssuesForAudience } from "./aiden-remote-bot-issues.js";
 import { botDeliveryLog } from "./bot-delivery/funnel-main.js";
 import {
   AidenRemoteBotSessionService,
@@ -140,7 +139,6 @@ import {
 import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
 import { botQuestions } from "./bot-runtime/bot-questions-main.js";
 import { botHandoffs } from "./bot-runtime/bot-handoffs-main.js";
-import { LEGACY_AUDIENCE, projectBotSummaryForAudience } from "./aiden-remote-bot-handoffs.js";
 import { botRunStarts, botTurnIntents } from "./bot-runtime/bot-turn-intents-main.js";
 import { botMutationGate } from "./bot-mutation-gate.js";
 import { botApplicationService } from "./bot-application-service-main.js";
@@ -178,16 +176,11 @@ import {
 } from "./bot-runtime-inventory-lease.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
-import {
-  AidenRemoteHostFeedService,
-  hostFeedBotSignals,
-  type AidenRemoteHostFeedBot,
-  type AidenRemoteHostFeedBotSignals,
-} from "./aiden-remote-host-feed.js";
+import { AidenRemoteHostFeedService, hostFeedBotSignals } from "./aiden-remote-host-feed.js";
+import { createAidenRemoteHostFeedSource } from "./aiden-remote-host-feed-source.js";
 import { hostRunRegistry } from "./host-runs-main.js";
 import { liveRunAttention } from "./chat-pending-attention.js";
 import { gitCachedRepositoryIdentity } from "./git.js";
-import { projectAidenRemoteWorkspace } from "./aiden-remote-workspaces.js";
 import { aidenRemoteHostPlatform, type AidenRemotePendingQuestion } from "./aiden-remote-protocol.js";
 import type { ToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 
@@ -1035,57 +1028,21 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               return run ? liveRunAttention(run.chatId, hostRunRegistry)?.summary : undefined;
             },
             liveRuns: () => hostRunRegistry.list(),
-            source: {
-              read: async () => {
-                const [{ summaries, botChatIds }, workspaceRows, botList] = await Promise.all([
-                  chats.hostFeedChats(),
-                  workspaceApplicationService.list(),
-                  bots ? bots.list() : Promise.resolve(undefined),
-                ]);
-                // Revision 48: each Bot's Needs you, Failed and last reply, from the
-                // same live summaries this Mac's sidebar reads. A failed read leaves them out.
-                const botSignals = new Map<string, AidenRemoteHostFeedBotSignals>();
-                if (botList && botList.bots.length > 0) {
-                  const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
-                  const live = botLiveProjection();
-                  const rows = await mapWithConcurrency(botList.bots, 4, async (bot) =>
-                    [bot.id, hostFeedBotSignals(await live.summary(bot.id).catch(() => undefined))] as const,
-                  );
-                  for (const [id, signals] of rows) botSignals.set(id, signals);
-                }
-                return {
-                  summaries,
-                  botChatIds,
-                  workspaces: workspaceRows.map((workspace) => {
-                    const repository = workspace.folderPath
-                      ? gitCachedRepositoryIdentity(workspace.folderPath)
-                      : undefined;
-                    return {
-                      ...projectAidenRemoteWorkspace(workspace),
-                      ...(repository ? { repository } : {}),
-                    };
-                  }),
-                  // A desktop without `bot:handoffs` gets the revision-35 rows (a paused
-                  // Bot reads as unavailable); a holder gets `paused` (revision 37).
-                  // `issueCount` (revision 42) is a phone shape: the host feed keeps
-                  // its revision-40 rows for every desktop.
-                  bots: (botList?.bots ?? []).map((bot) => ({
-                    ...projectBotSummaryIssuesForAudience(
-                      projectBotSummaryForAudience(bot, LEGACY_AUDIENCE),
-                      { issues: false },
-                    ),
-                    ...botSignals.get(bot.id),
-                  })) as unknown as AidenRemoteHostFeedBot[],
-                  handoffBots: (botList?.bots ?? []).map((bot) => ({
-                    ...projectBotSummaryIssuesForAudience(
-                      projectBotSummaryForAudience(bot, { handoffs: true }),
-                      { issues: false },
-                    ),
-                    ...botSignals.get(bot.id),
-                  })) as unknown as AidenRemoteHostFeedBot[],
-                };
+            source: createAidenRemoteHostFeedSource({
+              chats,
+              listWorkspaces: () => workspaceApplicationService.list(),
+              repositoryIdentity: gitCachedRepositoryIdentity,
+              ...(bots ? { listBots: () => bots.list() } : {}),
+              // Revision 48: each Bot's Needs you, Failed and last reply, from the
+              // same live summaries this Mac's sidebar reads. A failed read leaves them out.
+              botSignals: async (botRows) => {
+                const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
+                const live = botLiveProjection();
+                return new Map(await mapWithConcurrency(botRows, 4, async (bot) =>
+                  [bot.id, hostFeedBotSignals(await live.summary(bot.id).catch(() => undefined))] as const,
+                ));
               },
-            },
+            }),
           });
           activeHostFeed = hostFeed;
           const hostFeedChannels = new Set([
