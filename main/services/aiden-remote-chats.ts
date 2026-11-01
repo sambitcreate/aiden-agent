@@ -266,11 +266,39 @@ export interface AidenRemoteChatSummaryProjection {
   lastRunFailed?: true;
   /** Additive (protocol revision 21): fork lineage, without its summary. */
   forkedFrom?: Omit<AidenRemoteChatForkLineageProjection, "summary">;
+  /**
+   * Additive (protocol revision 48, `inbox-signals-v1`): when the live run's
+   * oldest waiting approval or question was raised. Absent without one.
+   */
+  attentionSince?: string;
+  /** Additive (protocol revision 48): when the chat's live run started. Absent without a live run. */
+  runStartedAt?: string;
+  /** Additive (protocol revision 48): when the newest assistant output arrived. */
+  lastAssistantAt?: string;
+  /**
+   * Additive (protocol revision 48): the chat's triage revision, which a
+   * client compares with its own writes. Present whenever the chat has a
+   * triage entry, with `pinnedAt`, `doneAt` and `snoozedUntil` as set.
+   */
+  triageRevision?: number;
+  pinnedAt?: string;
+  doneAt?: string;
+  snoozedUntil?: string;
 }
+
+/** The revision-48 fields `freezeSummaryPage` adds to a row. */
+type InboxSignalField =
+  | "attentionSince"
+  | "runStartedAt"
+  | "lastAssistantAt"
+  | "triageRevision"
+  | "pinnedAt"
+  | "doneAt"
+  | "snoozedUntil";
 
 type SafeSummaryRow = Omit<
   AidenRemoteChatSummaryProjection,
-  "titlePending" | "activity" | "rowState" | "unread" | "lastRunFailed"
+  "titlePending" | "activity" | "rowState" | "unread" | "lastRunFailed" | InboxSignalField
 > & { lastAssistantAt?: number; lastAssistantSequence?: number; lastAssistantFailed?: boolean };
 
 /** Shared, main-owned read markers used for honest unread summaries. */
@@ -294,6 +322,49 @@ export interface AidenRemoteChatTriageProjection {
   pinnedAt?: string;
   doneAt?: string;
   snoozedUntil?: string;
+}
+
+/** A chat's live-run times (revision 48), epoch milliseconds. */
+export interface AidenRemoteChatRunTimes {
+  /** When the run's oldest waiting approval or question was raised. */
+  attentionSince?: number;
+  /** When the run started. */
+  runStartedAt?: number;
+}
+
+function isoTime(at: number | undefined): string | undefined {
+  if (at === undefined || !Number.isSafeInteger(at) || at < 0) return undefined;
+  const date = new Date(at);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
+
+/**
+ * A summary row's revision-48 fields: each time in RFC 3339, and the triage
+ * entry's revision with whichever of Pin, Done and Snooze it holds. A field
+ * whose time is unknown or out of range is left out.
+ */
+export function inboxSignalFields(
+  lastAssistantAt: number | undefined,
+  run: AidenRemoteChatRunTimes | undefined,
+  triage: ChatTriageEntry | undefined,
+): Pick<AidenRemoteChatSummaryProjection, InboxSignalField> {
+  const fields: Pick<AidenRemoteChatSummaryProjection, InboxSignalField> = {};
+  const attentionSince = isoTime(run?.attentionSince);
+  const runStartedAt = isoTime(run?.runStartedAt);
+  const lastAssistant = isoTime(lastAssistantAt);
+  if (attentionSince) fields.attentionSince = attentionSince;
+  if (runStartedAt) fields.runStartedAt = runStartedAt;
+  if (lastAssistant) fields.lastAssistantAt = lastAssistant;
+  if (triage && Number.isSafeInteger(triage.revision) && triage.revision > 0) {
+    fields.triageRevision = triage.revision;
+    const pinnedAt = isoTime(triage.pinnedAt);
+    const doneAt = isoTime(triage.doneAt);
+    const snoozedUntil = isoTime(triage.snoozedUntil);
+    if (pinnedAt) fields.pinnedAt = pinnedAt;
+    if (doneAt) fields.doneAt = doneAt;
+    if (snoozedUntil) fields.snoozedUntil = snoozedUntil;
+  }
+  return fields;
 }
 
 export function projectAidenRemoteChatTriage(chatId: string, entry: ChatTriageEntry | null): AidenRemoteChatTriageProjection {
@@ -1348,8 +1419,13 @@ export class AidenRemoteChatService {
       activitySnapshot?: () => ChatActivitySnapshot;
       /** Enables `unread` summaries and `POST /chats/{chatId}/read`. */
       readMarkers?: AidenRemoteChatReadMarkers;
-      /** Enables `POST /chats/{chatId}/triage` (`chat-triage-v1`). */
+      /** Enables `POST /chats/{chatId}/triage` (`chat-triage-v1`) and the summaries' triage fields. */
       triage?: AidenRemoteChatTriage;
+      /**
+       * Revision 48: a chat's live-run times, epoch milliseconds, for the
+       * summaries' `attentionSince` and `runStartedAt`. Undefined without a live run.
+       */
+      runTimes?: (chatId: string) => AidenRemoteChatRunTimes | undefined;
       /** Enables `POST /chats/{chatId}/fork` (`chat-fork-v1`). */
       forks?: {
         service: Pick<ChatForkService, "fork" | "supportsSummaries">;
@@ -1482,8 +1558,11 @@ export class AidenRemoteChatService {
     const activeChatIds = new Set(activity?.activeChatIds ?? this.options.activeChatIds?.() ?? []);
     const approvalChatIds = new Set(activity?.approvalChatIds ?? []);
     const inputChatIds = new Set(activity?.inputChatIds ?? []);
-    // A marker read failure hides unread dots rather than failing the list.
-    const markers = await this.options.readMarkers?.snapshot().catch(() => null);
+    // A marker or triage read failure leaves those fields out rather than failing the list.
+    const [markers, triage] = await Promise.all([
+      this.options.readMarkers?.snapshot().catch(() => null),
+      this.options.triage?.snapshot().catch(() => null),
+    ]);
     return summaries.map(({ lastAssistantAt, lastAssistantSequence, lastAssistantFailed, ...summary }) => ({
       ...summary,
       ...(lastAssistantFailed === true ? { lastRunFailed: true as const } : {}),
@@ -1495,6 +1574,11 @@ export class AidenRemoteChatService {
         needsInput: inputChatIds.has(summary.id),
       }),
       unread: isChatUnread(lastAssistantAt, markers, summary.id, lastAssistantSequence),
+      ...inboxSignalFields(
+        lastAssistantAt,
+        activeChatIds.has(summary.id) ? this.options.runTimes?.(summary.id) : undefined,
+        triage?.chats[summary.id],
+      ),
     }));
   }
 

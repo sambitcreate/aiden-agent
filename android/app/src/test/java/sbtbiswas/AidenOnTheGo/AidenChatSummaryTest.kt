@@ -210,6 +210,32 @@ class AidenChatSummaryTest {
     }
 
     @Test
+    fun inboxSignalsAreDesktopOnlyAndNeverChangeThePhonesRows() = runBlocking {
+        // Revision 48 summaries carry the desktop Inbox's run times and triage.
+        // Phones neither request nor render them, so a row reads the same with
+        // them, without them, or with a malformed one from a buggy host.
+        val waiting = "\"rowState\":\"needs_approval\","
+        val signals = waiting +
+            "\"attentionSince\":\"2026-09-01T12:00:40Z\",\"runStartedAt\":\"2026-09-01T12:00:30Z\"," +
+            "\"lastAssistantAt\":\"2026-09-01T12:00:35Z\",\"triageRevision\":3," +
+            "\"pinnedAt\":\"2026-09-01T11:00:00Z\",\"snoozedUntil\":\"2026-09-02T09:00:00Z\","
+        val malformed = waiting +
+            "\"attentionSince\":7,\"triageRevision\":\"three\",\"snoozedUntil\":{\"at\":\"tomorrow\"},"
+        for (extra in listOf(signals, waiting, malformed)) {
+            server.enqueue(MockResponse().setResponseCode(200).setBody(
+                """{"summaries":[${summaryJson("chat-1", extra, "active")}]}"""
+            ))
+        }
+
+        val current = client.chatSummaryPage(limit = 100).summaries.single()
+        val older = client.chatSummaryPage(limit = 100).summaries.single()
+        val broken = client.chatSummaryPage(limit = 100).summaries.single()
+        assertEquals(older, current)
+        assertEquals(older, broken)
+        assertEquals(AidenChatRowState.NEEDS_APPROVAL, current.displayRowState)
+    }
+
+    @Test
     fun readBoundaryBelongsToOpenedSnapshotWithEqualMessageTimestamps() {
         val time = Instant.ofEpochSecond(500)
         val chat = AidenChat(id = "chat-read", workspaceId = "workspace", title = "Read", messages = emptyList(), createdAt = time, updatedAt = time, revision = "r1")

@@ -11265,6 +11265,41 @@
                 "$ref": "#/components/schemas/ChatForkLineageRow"
               }
             ]
+          },
+          "attentionSince": {
+            "description": "Additive in contract revision 48 (inbox-signals-v1). While a live run waits on an approval or question, when the oldest one was raised. Absent otherwise.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "runStartedAt": {
+            "description": "Additive in contract revision 48. While a run is live, when it started. Absent otherwise.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastAssistantAt": {
+            "description": "Additive in contract revision 48. When the chat's newest assistant output (or failed turn) was persisted. Absent before the first reply.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "pinnedAt": {
+            "description": "Additive in contract revision 48. When the chat was pinned in the Inbox. Present only with triageRevision.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "doneAt": {
+            "description": "Additive in contract revision 48. When the chat was marked done. Newer output brings it back. Present only with triageRevision.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "snoozedUntil": {
+            "description": "Additive in contract revision 48. When the chat's snooze ends. Present only with triageRevision.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "triageRevision": {
+            "description": "Additive in contract revision 48. The revision of the chat's triage entry (chat-triage-v1); absent when the chat has never been triaged. Clients send it as ifRevision and drop their own pending write once the host reports it.",
+            "type": "integer",
+            "minimum": 1
           }
         },
         "additionalProperties": true

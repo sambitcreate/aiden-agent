@@ -3255,3 +3255,39 @@ test("the host's full context projection is reduced to the documented counts", (
   const { staticTokens: _staticTokens, ...partial } = desktop;
   assert.throws(() => projectAidenRemoteContextPressure(partial));
 });
+
+test("revision 48 fixtures carry Inbox signals, and a stray or malformed signal fails closed", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, unknown>;
+  const fixture = parseAidenRemoteContractFixture(raw);
+  const byId = new Map(fixture.chatSummaries.summaries.map((summary) => [summary.id, summary]));
+  const waiting = byId.get("chat_fixture_summary_02");
+  assert.equal(waiting?.attentionSince, "2026-08-18T19:01:08.000Z");
+  assert.equal(waiting?.runStartedAt, "2026-08-18T19:01:00.000Z");
+  assert.equal(waiting?.triageRevision, undefined);
+  const pinned = byId.get("chat_fixture_summary_01");
+  assert.equal(pinned?.triageRevision, 3);
+  assert.equal(pinned?.pinnedAt, "2026-08-18T18:45:00.000Z");
+  assert.equal(pinned?.snoozedUntil, "2026-08-19T09:00:00.000Z");
+  assert.equal(pinned?.doneAt, undefined);
+
+  const mutate = (change: (copy: Record<string, unknown>) => void) => {
+    const copy = structuredClone(raw);
+    change(copy);
+    return () => parseAidenRemoteContractFixture(copy);
+  };
+  const runState = (copy: Record<string, unknown>) => {
+    const events = copy.hostFeedEvents as Record<string, unknown>[];
+    return record(events.find((event) => event.type === "run.state")!.payload, "run.state payload");
+  };
+  const summary = (copy: Record<string, unknown>, id: string) => {
+    const page = record(copy.chatSummaries, "chatSummaries");
+    return (page.summaries as Record<string, unknown>[]).find((row) => row.id === id)!;
+  };
+  assert.throws(mutate((copy) => { runState(copy).state = "working"; }), /belongs to a waiting run/u);
+  assert.throws(mutate((copy) => { runState(copy).attentionSummary = " Allow a write operation?"; }), /must be trimmed/u);
+  assert.throws(mutate((copy) => { runState(copy).attentionSummary = "x".repeat(201); }));
+  assert.throws(mutate((copy) => { delete summary(copy, "chat_fixture_summary_01").triageRevision; }), /triage times need a triageRevision/u);
+  assert.throws(mutate((copy) => { summary(copy, "chat_fixture_summary_02").attentionSince = "yesterday"; }));
+  // A waiting run with no ask is still a waiting run.
+  assert.doesNotThrow(mutate((copy) => { delete runState(copy).attentionSummary; }));
+});

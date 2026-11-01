@@ -1,4 +1,4 @@
-# Inbox sidebar (planned 2026-10-31; Phase 0 and all of Phase 1, 1a–1d, built)
+# Inbox sidebar (planned 2026-10-31; Phase 0, all of Phase 1 (1a–1d), 2a and 2b built)
 
 Plan: `docs/plans/inbox-sidebar-plan.md`. Before/after page: https://claude.ai/artifact/TvjFoaj4FL5Ej5pn69GVqc (private). Research came from 10 passes over OpenCode's Inbox (`~/projects/opencode`) and T3 Code's sidebar (`~/projects/opp/t3code`).
 
@@ -127,6 +127,18 @@ Plan: `docs/plans/inbox-sidebar-plan.md`. Before/after page: https://claude.ai/a
 - Peer client: `RemoteHostAdapter.setTriage` (one key, one same-key retry on `outcome_unknown`; `revision_conflict` → `{conflict: currentRevision}`); refused under `hostControlRefusal`. Not in `PEER_CHAT_MUTATIONS`, no intent store (deliberate).
 - Renderer: pure rules in `renderer/lib/inbox-triage.ts` (`predictTriage` mirrors the store; `newerTriage`; `mergeInboxTriageUndo`; `inboxTriageUndoWrites` with `ifRevision`; `groupByHost`; `formatSnoozeUntil`; toast texts) and shared `renderer/shared/chat-triage.ts` (`snoozeOptions`, `inverseTriagePatch`). Hook `use-inbox-triage.ts` (overlay, sends per host in order, hosts in parallel, toast id `inbox-triage`, 5 s). Menu items `components/sidebar/inbox-triage-menu.tsx`; `ChatRowMenu` is now `(Item, Separator, SubMenu)` with Radix Sub wrappers in `ui.tsx`. `chat-sidebar.tsx` adds triage to local and remote Inbox rows (remote only with the `triage` capability); never Bot rows.
 - Placement: `inboxState` ranks attention > done/snooze > pinned > updates > earlier; `"pinned"` section between needs_you and updates in `inbox-view.tsx`.
-- Gaps (for 2b): remote rows' `reported` triage comes from 2b summary fields; until then a remote overlay never expires. No client tracks `serverTime` skew.
+- Gaps (closed/handed on in 2b): remote rows' `reported` triage now comes from 2b summary fields. No client tracks `serverTime` skew (still open).
+
+### Phase 2b (2026-11-01)
+- Remote revision 48 (provisional; bump only `AIDEN_REMOTE_INBOX_SIGNALS_CONTRACT_REVISION` in `aiden-remote-protocol.ts` at merge). Token `AIDEN_REMOTE_INBOX_SIGNALS_FEATURE = "inbox-signals-v1"`, router announces it to `mac`/`linux` devices only, while Chat Summaries are served (`support.inboxSignals`). Phones spend 0 tokens (the reserved one goes to 3a).
+- Summary fields (all RFC 3339, only when known): `attentionSince`, `runStartedAt` (`liveRunAttention(chatId, runs)` in `main/services/chat-pending-attention.ts`), `lastAssistantAt`, `pinnedAt`/`doneAt`/`snoozedUntil` + `triageRevision` (2a store). `parseInboxSignalFields` fails closed: a triage time without `triageRevision` throws "triage times need a triageRevision".
+- `run.state` `attentionSummary`: `clipPendingAttentionSummary` (`renderer/shared/chat-pending-attention.ts`: whitespace collapsed, ≤200 chars, "…"), only while `needs_approval`/`needs_input`, only to `runs:observe` devices: the journal entry carries an alternate `observerFrame` that `open()` picks per device (replay too). Fixture parser rejects it on a non-waiting run ("belongs to a waiting run") or untrimmed ("must be trimmed"). `peer-host-feed-cache.ts` clips again and drops malformed.
+- Bot feed rows: `hostFeedBotSignals` (`aiden-remote-host-feed.ts`) adds `needsYou`, `failed` (last state `interrupted`/`model_error`), `lastReplyAt`; feed channel `bots:attention` added.
+- Renderer: `remoteInboxEntries` reads the times; `remoteBotInboxRows({hosts, feeds, openKey})` + `remoteBotInboxKey(hostId, botId)` in `sidebar-inbox-view.ts`: listed while needs you / failed / open; no row action, no triage; opens via `useRemoteBots().open`; descriptions "Waiting for you on Studio", "The last run failed on Studio", + ". Studio is offline". `chat-sidebar.tsx` builds `remoteTriageReported` (row key → host entry) for `useInboxTriage({views, reported})`; `settledTriageOverlayKeys` (`inbox-triage.ts`) drops an overlay entry once the reported revision ≥ the overlay's.
+- Gaps: remote Bot has no wait start (orders by `lastReplyAt` or definition `updatedAt`); remote Bot replies never unread (no read marker in the feed); serverTime skew.
+- Mobile: no model changes (iOS custom `init(from:)` and Android `ignoreUnknownKeys` ignore the keys). Tests: iOS `testChatSummaryInboxSignalsAreDesktopOnlyAndNeverChangeThePhonesRows` (+ fixture revision 48 in `AidenRemotePhase0Tests`), Android `inboxSignalsAreDesktopOnlyAndNeverChangeThePhonesRows` in `AidenChatSummaryTest.kt`.
+- 2a bug fixed here: `useInboxTriage` returned an unstable object (in `allInboxEntries` deps) -> Inbox render loop, React #185 (found via `InboxView` `useLayoutEffect(checkFocus)` -> `setFocusInside`). Now `React.useMemo(() => ({ entryFor, act }))`; `useRemoteBots().open` is ref-stable. E2E `inbox-sidebar.spec.ts` 5/5 in a Cua space after the fix.
+- Env: Android Gradle needs `ANDROID_HOME=$HOME/Library/Android/sdk` and `JAVA_HOME` = Android Studio JBR. `test:aiden-remote` has 4 pre-existing openssl failures (`-days 0` on OpenSSL 4.1).
+- Docs: API doc section "Inbox signals, revision 48", plan "2b as built", plans README row.
 
 Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control]].

@@ -65,6 +65,7 @@ import {
 import { useHeldModifierReveal } from "../lib/use-held-modifier-reveal";
 import { queryKeys, useAllRegularChats, useFoundationModelsConnection, useSidebarChatPullRequests } from "../lib/queries";
 import { MAX_SIDEBAR_PULL_REQUEST_CHATS } from "../shared/chat-pull-requests";
+import type { ChatTriageEntry } from "../shared/chat-triage";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
 import type { ChatMeta, Workspace } from "../lib/types";
@@ -82,6 +83,7 @@ import { InboxView, type InboxRowContext } from "./sidebar/inbox-view";
 import {
   botInboxRows,
   botInboxKey,
+  remoteBotInboxRows,
   filterInboxEntries,
   INBOX_SHORTCUT_LIMIT,
   inboxRowAction,
@@ -105,7 +107,8 @@ import { ChatRowContextGlyphs } from "./chat-row-context";
 import { sidebarPullRequestChatIds } from "../lib/chat-row-context";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
 import { useAppCapabilities } from "../lib/app-capabilities";
-import { botChatPath, botListLocation, botRouteBotId, sidebarShowsBotList } from "../lib/bot-routes";
+import { botChatPath, botListLocation, botRouteBotId, hostBotChatRouteKey, sidebarShowsBotList } from "../lib/bot-routes";
+import { useRemoteBots } from "../main/remote-bots";
 import { useRovingRows } from "../lib/roving-rows";
 import { BotSidebar } from "../main/bots/bot-sidebar";
 import { useBotRows } from "../main/bots/bot-sidebar-rows";
@@ -431,8 +434,9 @@ function GeneratedTitleReveal({ previousTitle, title }: { previousTitle: string;
  * mounts, so only one registers the jump shortcuts.
  */
 /** A paired host's chat as a triage target. */
+/** A paired host's row for triage, with the entry its summary reports (revision 48). */
 function remoteTriageRow(chat: RemoteSidebarChat): InboxTriageRow {
-  return { key: chat.key, hostId: chat.hostId, chatId: chat.chatId };
+  return { key: chat.key, hostId: chat.hostId, chatId: chat.chatId, reported: chat.triage ?? null };
 }
 
 export function ChatSidebar(props: ChatSidebarProps) {
@@ -523,7 +527,6 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       ),
     [peerHosts.views],
   );
-  const triage = useInboxTriage({ views: peerHosts.views });
   const shownMachines = effectiveMachineFilter(machineFilter, peerHosts.hosts);
   const initializedExpansionRef = React.useRef(false);
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null);
@@ -560,6 +563,16 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       ),
     [activeRemoteChat, peerHosts.feeds, peerHosts.hosts],
   );
+  // Each paired host's reported triage, so this device's optimistic writes give
+  // way once the host's summaries catch up.
+  const remoteTriageReported = React.useMemo(() => {
+    const reported = new Map<string, ChatTriageEntry>();
+    for (const rows of remoteRows) {
+      for (const chat of rows.chats) if (chat.triage) reported.set(chat.key, chat.triage);
+    }
+    return reported;
+  }, [remoteRows]);
+  const triage = useInboxTriage({ views: peerHosts.views, reported: remoteTriageReported });
   // Read by an in-flight remote rename, which outlives the render that started it.
   const remoteRowsRef = React.useRef(remoteRows);
   remoteRowsRef.current = remoteRows;
@@ -636,6 +649,16 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         : { listed: [], unlisted: [] },
     [botPreferences, botRows.rows, inboxBotsShown, openBotId],
   );
+  // Paired hosts' Bots join while their host says they need the person or failed (revision 48).
+  const openRemoteBotKey = hostBotChatRouteKey(pathname);
+  const { open: openHostBot, opening: openingHostBot } = useRemoteBots();
+  const remoteBotInbox = React.useMemo(
+    () =>
+      inboxActive
+        ? remoteBotInboxRows({ hosts: peerHosts.hosts, feeds: peerHosts.feeds, openKey: openRemoteBotKey })
+        : { listed: [], unlisted: [] },
+    [inboxActive, openRemoteBotKey, peerHosts.feeds, peerHosts.hosts],
+  );
   const allInboxEntries = React.useMemo(() => {
     if (!inboxActive) return [];
     const pending = new Map((pendingAttention.data ?? []).map((item) => [item.chatId, item] as const));
@@ -660,11 +683,13 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         (chat) => triage.entryFor(remoteTriageRow(chat)),
       ),
       ...botInbox.listed,
+      ...remoteBotInbox.listed,
     ];
   }, [
     activeChatId,
     activeRemoteChat,
     botInbox.listed,
+    remoteBotInbox.listed,
     chatActivity,
     chats.data,
     environmentPanel.agentBusy,
@@ -681,19 +706,22 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     [allInboxEntries, search, shownMachines],
   );
   const inboxPresent = React.useMemo(
-    () => new Set([...allInboxEntries, ...botInbox.unlisted].map((entry) => entry.key)),
-    [allInboxEntries, botInbox.unlisted],
+    () => new Set([...allInboxEntries, ...botInbox.unlisted, ...remoteBotInbox.unlisted].map((entry) => entry.key)),
+    [allInboxEntries, botInbox.unlisted, remoteBotInbox.unlisted],
   );
   const inboxUnlisted = React.useMemo(
-    () => new Map(botInbox.unlisted.map((entry) => [entry.key, entry] as const)),
-    [botInbox.unlisted],
+    () => new Map([...botInbox.unlisted, ...remoteBotInbox.unlisted].map((entry) => [entry.key, entry] as const)),
+    [botInbox.unlisted, remoteBotInbox.unlisted],
   );
   const inboxEntriesByKey = React.useMemo(
     () => new Map(inboxEntries.map((entry) => [entry.key, entry] as const)),
     [inboxEntries],
   );
+  const openRemoteBot = openRemoteBotKey ? remoteBotInbox.listed.find((entry) => entry.signals.isOpen) : undefined;
   const activeInboxKey = openBotId
     ? botInboxKey(openBotId)
+    : openRemoteBot
+    ? openRemoteBot.key
     : activeRemoteChat
     ? projectOrderKey(activeRemoteChat.hostId, activeRemoteChat.chatId)
     : activeChatId
@@ -1028,9 +1056,10 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       if (!entry) return;
       if (entry.source.kind === "remote") void openRemoteChat(entry.source.chat);
       else if (entry.source.kind === "bot") void navigate(botChatPath(entry.source.bot.id));
+      else if (entry.source.kind === "remoteBot") openHostBot(entry.hostId, entry.source.botId);
       else void openChat(entry.source.chat);
     },
-    [navigate, openChat, openRemoteChat],
+    [navigate, openChat, openRemoteChat, openHostBot],
   );
 
   // In the Inbox, ⌘1–9 and previous/next follow its visible rows, remote ones
@@ -1608,6 +1637,38 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
             }
           : {})}
         onOpen={open}
+      />
+    );
+  };
+
+  // A paired host's Bot: opening it opens its chat on that host. It has no read
+  // state there, so it offers no Mark read; its next run clears a failure.
+  const renderRemoteBotInboxRow = (
+    entry: InboxEntry,
+    source: Extract<InboxEntry["source"], { kind: "remoteBot" }>,
+    context: InboxRowContext,
+  ) => {
+    const shortcutNumber = inboxShortcutNumbers.get(entry.key);
+    const shortcutBinding = shortcutNumber ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId) : null;
+    const inboxParts = inboxRowParts(entry, context, () => undefined);
+    return (
+      <ChatRow
+        key={entry.key}
+        title={source.name}
+        status={{
+          state: entry.signals.rowState === "needs_input" ? "needs_input" : source.working ? "working" : "idle",
+          unread: entry.signals.unread,
+          failed: entry.signals.failed,
+        }}
+        selected={entry.signals.isOpen}
+        layout="inbox"
+        remote={{ hostLabel: entry.hostLabel, stale: !entry.signals.hostOnline }}
+        inbox={{ ...inboxParts, ...(source.avatar ? { metaIcon: <AvatarFace avatar={source.avatar} /> } : {}) }}
+        shortcutHint={shortcutBinding ? prettyAccelerator(shortcutBinding) : undefined}
+        shortcutsRevealed={chatShortcutsVisible}
+        ariaKeyShortcuts={ariaKeyShortcut(shortcutBinding)}
+        busy={openingHostBot === `${entry.hostId}/${source.botId}`}
+        onOpen={() => openHostBot(entry.hostId, source.botId)}
       />
     );
   };
@@ -2245,7 +2306,9 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                   ? renderRemoteChatRow(entry.source.chat, false, { entry, context })
                   : entry.source.kind === "bot"
                     ? renderBotInboxRow(entry, entry.source, context)
-                    : renderChatRow(entry.source.chat, false, false, { entry, context })
+                    : entry.source.kind === "remoteBot"
+                      ? renderRemoteBotInboxRow(entry, entry.source, context)
+                      : renderChatRow(entry.source.chat, false, false, { entry, context })
               }
             />
           ) : organized.chatSections.length === 0 ? (

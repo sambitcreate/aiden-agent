@@ -5,6 +5,7 @@ import {
   type ChatTriagePatch,
 } from "../shared/chat-triage";
 import type { InboxSignals } from "./sidebar-inbox";
+import { LOCAL_SIDEBAR_HOST_ID, parseProjectOrderKey } from "./sidebar-organization";
 
 /**
  * The Inbox's triage actions (docs/plans/inbox-sidebar-plan.md, Phase 2a):
@@ -71,6 +72,25 @@ export function newerTriage(
   if (!written) return reported ?? undefined;
   if (!reported) return written;
   return written.revision > reported.revision ? written : reported;
+}
+
+/**
+ * The overlay keys whose host has since reported the same revision or a newer
+ * one: this Mac's store for local rows, the host's chat summaries (Remote
+ * revision 48) for a paired host's. A host that reports nothing for a row,
+ * such as one older than revision 48, keeps its overlay entry.
+ */
+export function settledTriageOverlayKeys(
+  overlay: ReadonlyMap<string, ChatTriageEntry>,
+  local: Readonly<Record<string, ChatTriageEntry>> | undefined,
+  reported: ReadonlyMap<string, ChatTriageEntry> | undefined,
+): string[] {
+  return [...overlay].flatMap(([key, entry]) => {
+    const parsed = parseProjectOrderKey(key);
+    if (!parsed) return [];
+    const known = parsed.hostId === LOCAL_SIDEBAR_HOST_ID ? local?.[parsed.projectId] : reported?.get(key);
+    return known !== undefined && known.revision >= entry.revision ? [key] : [];
+  });
 }
 
 /** The placement signals one entry contributes to a row. */

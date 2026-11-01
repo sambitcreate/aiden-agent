@@ -22,7 +22,8 @@ import {
   type SidebarHost,
 } from "./sidebar-remote-groups";
 import type { ChatMeta, Workspace } from "./types";
-import type { BotDefinition } from "../shared/bots";
+import { isBotAvatarAppearance, type BotAvatar, type BotDefinition } from "../shared/bots";
+import type { PeerHostFeedSnapshot } from "../shared/peer-host";
 
 /**
  * The Inbox view's pure parts (docs/plans/inbox-sidebar-plan.md, Phase 1b):
@@ -50,6 +51,14 @@ export type InboxEntrySource =
       bot: BotDefinition;
       /** The newest reply the row rendered; Mark read records it as seen. */
       lastReplyAt: number | null;
+      working: boolean;
+    }
+  | {
+      kind: "remoteBot";
+      botId: string;
+      name: string;
+      /** The Bot's drawn avatar, when the host sent a valid one. */
+      avatar?: BotAvatar;
       working: boolean;
     };
 
@@ -210,6 +219,78 @@ export function botInboxEntries(input: BotInboxInput): InboxEntry[] {
   return botInboxRows(input).listed;
 }
 
+export interface RemoteBotInboxInput {
+  hosts: readonly SidebarHost[];
+  feeds: ReadonlyMap<string, PeerHostFeedSnapshot | null | undefined>;
+  /** The paired host's Bot whose chat is open, as `hostId/botId` (`hostBotChatRouteKey`), if any. */
+  openKey: string | null;
+}
+
+/** A paired host's Bot's row key. Bot ids never collide with chat ids under it. */
+export function remoteBotInboxKey(hostId: string, botId: string): string {
+  return projectOrderKey(hostId, `bot:${botId}`);
+}
+
+function feedTime(value: unknown): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/**
+ * Paired hosts' Bots (Remote revision 48), listed while their host says they
+ * need the person (`needsYou`), their last run failed (`failed`), or their
+ * chat is open here. A host has no read state for a Bot's replies, so a
+ * remote Bot's replies never read as unread; a failed one reads as an unseen
+ * failure, Failed in Needs you, until its next run. Older hosts send neither field, so their Bots stay out.
+ * A blocked host's Bots are left out, like its chats.
+ */
+export function remoteBotInboxRows(input: RemoteBotInboxInput): BotInboxRows {
+  const rows: BotInboxRows = { listed: [], unlisted: [] };
+  for (const host of input.hosts) {
+    if (host.availability === "blocked") continue;
+    const feed = input.feeds.get(host.id);
+    if (!feed || feed.hostId !== host.id) continue;
+    const hostOnline = !feed.stale && host.availability === "online";
+    for (const row of feed.bots) {
+      const needsYou = row.needsYou === true;
+      const failed = !needsYou && row.failed === true;
+      const isOpen = input.openKey === `${host.id}/${row.id}`;
+      const lastReplyAt = feedTime(row.lastReplyAt);
+      // The feed has no time a Bot's wait began; its newest reply, else its last edit, stands in.
+      const updatedAt = lastReplyAt ?? feedTime(row.updatedAt) ?? 0;
+      const name = typeof row.name === "string" && row.name.trim() ? row.name : "Untitled Bot";
+      const semantic = (row.avatar as { semantic?: unknown } | undefined)?.semantic;
+      const entry: InboxEntry = {
+        key: remoteBotInboxKey(host.id, row.id),
+        title: name,
+        project: INBOX_BOT_PROJECT_LABEL,
+        hostId: host.id,
+        hostLabel: host.label.trim() || INBOX_UNNAMED_HOST_LABEL,
+        source: {
+          kind: "remoteBot",
+          botId: row.id,
+          name,
+          ...(isBotAvatarAppearance(semantic) ? { avatar: semantic } : {}),
+          working: hostOnline && row.sessionState === "running",
+        },
+        signals: {
+          rowState: needsYou ? "needs_input" : "idle",
+          // The host keeps no read state for Bots: a failure stays unseen until the next run.
+          unread: failed,
+          failed,
+          isOpen,
+          hostOnline,
+          updatedAt,
+          ...(lastReplyAt !== undefined ? { lastAssistantAt: lastReplyAt } : {}),
+        },
+      };
+      (needsYou || failed || isOpen ? rows.listed : rows.unlisted).push(entry);
+    }
+  }
+  return rows;
+}
+
 /**
  * Paired hosts' rows. A blocked host's rows are left out: its "Needs
  * re-pairing" notice above the list (`RemoteHostStatusList`) stands in for
@@ -244,7 +325,11 @@ export function remoteInboxEntries(
             isOpen: isOpen(chat.hostId, chat.chatId),
             hostOnline: !chat.stale,
             updatedAt: chat.lastActivityAt ?? chat.createdAt ?? 0,
-            ...triageSignals(triage?.(chat)),
+            // Revision 48 hosts report these; older hosts leave the row on updatedAt.
+            ...(chat.attentionSince !== undefined ? { attentionSince: chat.attentionSince } : {}),
+            ...(chat.runStartedAt !== undefined ? { runStartedAt: chat.runStartedAt } : {}),
+            ...(chat.lastAssistantAt !== undefined ? { lastAssistantAt: chat.lastAssistantAt } : {}),
+            ...triageSignals(triage ? triage(chat) : chat.triage),
           },
         },
       ];
@@ -307,6 +392,7 @@ export function inboxNeedsYouKind(entry: InboxEntry, now: number): InboxNeedsYou
   const placement = inboxState(entry.signals, now);
   if (placement.shelf !== "needs_you") return null;
   if (entry.source.kind === "bot") return "needs_you";
+  if (entry.source.kind === "remoteBot") return placement.tier === INBOX_TIERS.failed ? "failed" : "needs_you";
   switch (placement.tier) {
     case INBOX_TIERS.approval:
       return "approval";
@@ -348,8 +434,8 @@ export function inboxRowStatus(entry: InboxEntry, section: InboxSection, now: nu
 
 /**
  * The row's tooltip and `aria-description`: the pending command, question or
- * failure for local chats; status, host and wait for remote chats, whose
- * summaries can't carry prompt text until Phase 2.
+ * failure for local chats; for remote chats, what a waiting run asks (Remote
+ * revision 48, for `runs:observe` devices) or else status, host and wait.
  */
 export function inboxRowDescription(entry: InboxEntry, status: InboxRowStatus): string | undefined {
   const offline = entry.signals.hostOnline ? "" : `. ${entry.hostLabel} is offline`;
@@ -357,9 +443,17 @@ export function inboxRowDescription(entry: InboxEntry, status: InboxRowStatus): 
     return entry.signals.hostOnline ? undefined : `${entry.hostLabel} is offline`;
   }
   if (entry.source.kind === "remote") {
+    // Revision 48 hosts send what a waiting run asks, to devices that may observe runs.
+    const asked = entry.source.chat.attentionSummary?.trim();
+    const prefix = status.needsYou === "approval" ? "Approve" : status.needsYou === "question" ? "Question" : null;
+    if (asked && prefix) return `${prefix}: ${asked}. On ${entry.hostLabel}, waiting ${status.wait}${offline}`;
     return `${status.label} on ${entry.hostLabel}, waiting ${status.wait}${offline}`;
   }
   if (entry.source.kind === "bot") return INBOX_BOT_NEEDS_YOU_DESCRIPTION;
+  if (entry.source.kind === "remoteBot") {
+    const what = status.needsYou === "failed" ? "The last run failed" : INBOX_BOT_NEEDS_YOU_DESCRIPTION;
+    return `${what} on ${entry.hostLabel}${offline}`;
+  }
   const summary = entry.pending?.summary.trim() ?? "";
   const more = entry.pending && entry.pending.count > 1 ? ` (+${entry.pending.count - 1} more)` : "";
   switch (status.needsYou) {
@@ -391,6 +485,8 @@ export function inboxRowAction(
   remoteCanMarkRead: boolean,
 ): InboxRowActionKind | null {
   if (entry.source.kind === "remote" && (!remoteCanMarkRead || !entry.signals.hostOnline)) return null;
+  // A paired host's Bot has no read state to acknowledge: its next run clears it.
+  if (entry.source.kind === "remoteBot") return null;
   if (section === "needs_you") return status.needsYou === "failed" ? "acknowledge" : null;
   if (section !== "updates" && section !== "earlier") return null;
   return entry.signals.unread && !entry.signals.isOpen ? "mark_read" : null;

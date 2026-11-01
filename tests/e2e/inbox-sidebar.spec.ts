@@ -175,6 +175,78 @@ test("a remote-origin approval opens from its row or ⌘1 with Deny focused, and
   await expect(needsYou).toHaveCount(0);
 });
 
+async function storedTriage(root: string, chatId: string): Promise<{ snoozedUntil?: number } | undefined> {
+  try {
+    const file = JSON.parse(await readFile(path.join(root, "chat-triage.json"), "utf8")) as {
+      chats?: Record<string, { snoozedUntil?: number }>;
+    };
+    return file.chats?.[chatId];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+test("Snooze hides a chat, even the open one, and an approval in it brings it back and ends the snooze", async ({ aiden }) => {
+  test.setTimeout(120_000);
+  const { page, lmStudio, userDataDir } = aiden;
+  await finishLmStudioOnboarding(page);
+  await switchToInbox(page);
+
+  const composer = page.locator("textarea");
+  await composer.fill("Check the release notes");
+  await composer.press("Enter");
+  await expect(page.getByText(E2E_ASSISTANT_RESPONSE).last()).toBeVisible({ timeout: 15_000 });
+  await expect.poll(async () => (await regularChatIds(userDataDir)).length).toBe(1);
+  const [chatId] = await regularChatIds(userDataDir);
+
+  const sidebar = page.locator("[data-sidebar]");
+  const row = inboxRow(page, chatId!);
+  await expect(sidebar.getByRole("group", { name: "Earlier" }).locator(`[data-inbox-row="local:${chatId}"]`)).toBeVisible();
+
+  // Snooze for an hour from the row's ••• menu. The row goes at once, though its chat stays open.
+  await row.hover();
+  await row.getByRole("button", { name: /^More for /u }).click();
+  await page.getByRole("menuitem", { name: "Snooze" }).click();
+  await page.locator('[role="menuitem"][data-snooze-preset="hour"]').click();
+  await expect(row).toHaveCount(0);
+  await expect(page.getByText(/^Snoozed until /u)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Undo" })).toBeVisible();
+  await expect.poll(async () => (await storedTriage(userDataDir, chatId!))?.snoozedUntil ?? 0)
+    .toBeGreaterThan(Date.now());
+
+  // A run in the snoozed chat that waits on an approval brings it back to Needs you.
+  const prompt = "Make me a weekday workspace brief";
+  lmStudio.enqueueToolScenario!({
+    prompt,
+    calls: [{
+      name: "schedule_task",
+      arguments: {
+        action: "create",
+        name: "Workspace brief",
+        cron: "0 9 * * 1-5",
+        timezone: "America/New_York",
+        prompt: "Summarize important workspace changes without modifying files.",
+      },
+    }],
+    finalText: "Scheduled the workspace brief.",
+  });
+  await composer.fill(prompt);
+  await composer.press("Enter");
+  await expect(page.getByRole("button", { name: "Allow once" })).toBeVisible({ timeout: 15_000 });
+  await pointerToPane(page);
+  await expect(sidebar.getByRole("group", { name: "Needs you" }).locator(`[data-inbox-row="local:${chatId}"]`))
+    .toBeVisible();
+  await expect(row.locator("[data-inbox-status]")).toHaveText(/^Approval/u);
+
+  // The host ended the snooze, so once answered the chat stays listed rather than hiding again.
+  await expect.poll(async () => (await storedTriage(userDataDir, chatId!))?.snoozedUntil).toBeUndefined();
+  await page.getByRole("button", { name: "Allow once" }).click();
+  await expect(page.getByText("Scheduled the workspace brief.").last()).toBeVisible({ timeout: 15_000 });
+  await expect(sidebar.getByRole("group", { name: "Earlier" }).locator(`[data-inbox-row="local:${chatId}"]`))
+    .toBeVisible({ timeout: 15_000 });
+});
+
 test("Settings → Appearance → Sidebar switches the view, and the Organize menu agrees", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);

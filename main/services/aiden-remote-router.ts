@@ -35,6 +35,7 @@ import {
   AIDEN_REMOTE_CHAT_SUMMARY_FEATURE,
   AIDEN_REMOTE_CHAT_READ_STATE_FEATURE,
   AIDEN_REMOTE_CHAT_TRIAGE_FEATURE,
+  AIDEN_REMOTE_INBOX_SIGNALS_FEATURE,
   AIDEN_REMOTE_BOT_CONNECTION_REQUESTS_FEATURE,
   AIDEN_REMOTE_BOT_DELETE_FEATURE,
   AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE,
@@ -1622,6 +1623,11 @@ export interface AidenRemoteServerFeatureSupport {
   readState: boolean;
   /** `POST /chats/{chatId}/triage` (desktop-only token while phones' list is full). */
   triage: boolean;
+  /**
+   * Revision 48 Inbox signals on summaries, `run.state` and Bot rows
+   * (desktop-only token; phones decode the additive fields without it).
+   */
+  inboxSignals: boolean;
   tasks: boolean;
   agents: boolean;
   agentInterrupt: boolean;
@@ -1675,6 +1681,7 @@ export function aidenRemoteServerFeatures(
     ...(support.readState ? [AIDEN_REMOTE_CHAT_READ_STATE_FEATURE] : []),
     // Inbox triage: phones already hear AIDEN_REMOTE_MAX_SERVER_FEATURES tokens.
     ...(desktop && support.triage ? [AIDEN_REMOTE_CHAT_TRIAGE_FEATURE] : []),
+    ...(desktop && support.inboxSignals ? [AIDEN_REMOTE_INBOX_SIGNALS_FEATURE] : []),
     ...(support.tasks ? [AIDEN_REMOTE_CHAT_TASKS_FEATURE] : []),
     ...(support.agents ? [AIDEN_REMOTE_CHAT_AGENTS_FEATURE] : []),
     ...(support.agentInterrupt ? [AIDEN_REMOTE_CHAT_AGENT_INTERRUPT_FEATURE] : []),
@@ -2323,6 +2330,7 @@ export function createAidenRemoteRequestHandler(
             chatSummaries: Boolean(dependencies.chats?.listSummaries),
             readState: Boolean(dependencies.chats?.markRead) && dependencies.chats?.supportsReadMarkers === true,
             triage: Boolean(dependencies.chats?.setTriage) && dependencies.chats?.supportsTriage === true,
+            inboxSignals: Boolean(dependencies.chats?.listSummaries),
             tasks: progressCapabilitySupported(dependencies, "tasks:read"),
             agents: progressCapabilitySupported(dependencies, "agents:read"),
             agentInterrupt: agentInterruptSupported(dependencies),

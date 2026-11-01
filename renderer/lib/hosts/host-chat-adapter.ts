@@ -48,6 +48,11 @@ export type HostChatCapability =
   | "contextPressure"
   /** Pin, mark done and snooze the chat in the Inbox (`chat-triage-v1`). */
   | "triage"
+  /**
+   * The host's summaries report triage and live-run times (`inbox-signals-v1`),
+   * so a summary without a triage revision means the chat is untriaged.
+   */
+  | "inboxSignals"
   // Host-wide: starting new work on the host.
   | "createChat"
   | "browseFolders"

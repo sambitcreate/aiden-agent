@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   AidenRemoteChatService,
   type AidenRemoteChatReadMarkers,
+  type AidenRemoteChatRunTimes,
   type AidenRemoteChatTriage,
 } from "./aiden-remote-chats.js";
 import { ChatTriageStore } from "./chat-triage.js";
@@ -45,6 +46,7 @@ function summaryService(
     activity?: () => ChatActivitySnapshot;
     readMarkers?: AidenRemoteChatReadMarkers;
     triage?: AidenRemoteChatTriage;
+    runTimes?: (chatId: string) => AidenRemoteChatRunTimes | undefined;
   } = {},
 ) {
   let rows = structuredClone(initial);
@@ -89,6 +91,7 @@ function summaryService(
     ...(options.activity ? { activitySnapshot: options.activity } : {}),
     ...(options.readMarkers ? { readMarkers: options.readMarkers } : {}),
     ...(options.triage ? { triage: options.triage } : {}),
+    ...(options.runTimes ? { runTimes: options.runTimes } : {}),
   });
   return {
     service,
@@ -229,9 +232,47 @@ test("summaries project attention row states and honest unread from shared marke
     page.summaries.filter((summary) => "lastRunFailed" in summary).map(({ id }) => id),
     ["chat-failed"],
   );
-  // The internal assistant timestamp never reaches the wire.
-  assert.ok(page.summaries.every((summary) => !("lastAssistantAt" in summary)));
+  // The newest output's time goes out as RFC 3339 (revision 48), and only when there is one.
+  assert.equal(byId["chat-new"]!.lastAssistantAt, new Date(2_800).toISOString());
+  assert.equal("lastAssistantAt" in byId["chat-ask"]!, false);
   assert.ok(page.summaries.every((summary) => !("lastAssistantFailed" in summary)));
+});
+
+test("revision 48 summaries carry a live run's times and the chat's triage", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-signals-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const pinnedAt = Date.parse("2026-11-01T09:00:00.000Z");
+  let now = pinnedAt;
+  const triage = new ChatTriageStore(() => directory, { now: () => now });
+  await triage.set("chat-pinned", { pinned: true });
+  now += 60_000;
+  await triage.set("chat-pinned", { snoozeUntil: pinnedAt + 8 * 3_600_000 });
+  // A chat whose only write was undone has a revision but no times.
+  await triage.set("chat-cleared", { done: true });
+  await triage.set("chat-cleared", { done: false });
+  const times: Record<string, AidenRemoteChatRunTimes> = {
+    "chat-waiting": { runStartedAt: 3_000, attentionSince: 3_500 },
+    "chat-ended": { runStartedAt: 1_000 },
+  };
+  const fixture = summaryService([
+    metadata("chat-waiting", 4_000),
+    metadata("chat-ended", 3_900),
+    metadata("chat-pinned", 3_800),
+    metadata("chat-cleared", 3_700),
+  ], { active: new Set(["chat-waiting"]), runTimes: (chatId) => times[chatId], triage });
+  const page = parseAidenRemoteChatSummaryPage(await fixture.service.listSummaries());
+  const byId = Object.fromEntries(page.summaries.map((summary) => [summary.id, summary]));
+  assert.equal(byId["chat-waiting"]!.runStartedAt, new Date(3_000).toISOString());
+  assert.equal(byId["chat-waiting"]!.attentionSince, new Date(3_500).toISOString());
+  // A chat with no live run reports no run times, whatever the registry last held.
+  assert.equal("runStartedAt" in byId["chat-ended"]!, false);
+  assert.equal(byId["chat-pinned"]!.triageRevision, 2);
+  assert.equal(byId["chat-pinned"]!.pinnedAt, new Date(pinnedAt).toISOString());
+  assert.equal(byId["chat-pinned"]!.snoozedUntil, new Date(pinnedAt + 8 * 3_600_000).toISOString());
+  assert.equal(byId["chat-cleared"]!.triageRevision, 2);
+  assert.equal("doneAt" in byId["chat-cleared"]!, false);
+  // A chat never triaged carries no revision, so a client can tell "never" from "cleared".
+  assert.equal("triageRevision" in byId["chat-waiting"]!, false);
 });
 
 test("a failing marker store hides unread dots instead of failing the list", async () => {
@@ -268,6 +309,19 @@ test("summary parser accepts additive row state and rejects unknown values", () 
     () => parseAidenRemoteChatSummaryProjection({ ...summary, lastRunFailed: false }),
     /lastRunFailed/u,
   );
+  // Revision 48: RFC 3339 times, and triage times only beside the revision that wrote them.
+  const signals = parseAidenRemoteChatSummaryProjection({
+    ...summary,
+    attentionSince: "2026-08-30T21:05:00Z",
+    lastAssistantAt: "2026-08-30T21:04:00.000Z",
+    triageRevision: 3,
+    doneAt: "2026-08-30T21:10:00.000Z",
+  });
+  assert.equal(signals.triageRevision, 3);
+  assert.equal(signals.doneAt, "2026-08-30T21:10:00.000Z");
+  assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, pinnedAt: "2026-08-30T21:10:00.000Z" }), /triageRevision/u);
+  assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, triageRevision: 0 }), /triageRevision/u);
+  assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, runStartedAt: 1_700_000_000_000 }), /runStartedAt/u);
 });
 
 test("equal timestamps use ordinal chat ID ordering", async () => {
@@ -698,6 +752,8 @@ test("triage writes need chat:write and an Idempotency-Key, replay, and refuse a
   })).json()) as { features?: string[] }).features ?? [];
   assert.ok((await features(writer)).includes("chat-triage-v1"));
   assert.equal((await features(phone)).includes("chat-triage-v1"), false, "phones' feature list is full");
+  assert.ok((await features(writer)).includes("inbox-signals-v1"));
+  assert.equal((await features(phone)).includes("inbox-signals-v1"), false, "phones decode the fields without the token");
 });
 
 test("feature-owned chats never reach summaries or the host feed", async () => {

@@ -250,3 +250,32 @@ export function pendingAttentionForChat(
   if (live) return { chatId, kind: "working", summary: "", runStartedAt, count: 0 };
   return undefined;
 }
+
+/** A detached-prompt log nothing records to, for reads that want live runs only. */
+const NO_DETACHED_PROMPTS = new DetachedPromptLog();
+
+export interface LiveRunAttention {
+  /** When the live run's oldest waiting approval or question was raised. */
+  attentionSince?: number;
+  /** When the live run started. */
+  runStartedAt?: number;
+  /** That prompt's bounded summary or question text; absent while nothing waits. */
+  summary?: string;
+}
+
+/**
+ * A chat's live run, for paired devices' Inbox signals (Remote revision 48):
+ * its start, and the oldest live approval or question with its summary.
+ * Detached and interrupted waits are this Mac's own rows and are left out.
+ * Undefined when no run is live.
+ */
+export function liveRunAttention(chatId: string, runs: PendingAttentionRuns): LiveRunAttention | undefined {
+  const attention = pendingAttentionForChat(chatId, { runs, detached: NO_DETACHED_PROMPTS });
+  if (!attention) return undefined;
+  const waiting = attention.kind === "approval" || attention.kind === "question";
+  return {
+    ...(attention.runStartedAt !== undefined ? { runStartedAt: attention.runStartedAt } : {}),
+    ...(waiting && attention.since !== undefined ? { attentionSince: attention.since } : {}),
+    ...(waiting && attention.summary ? { summary: attention.summary } : {}),
+  };
+}

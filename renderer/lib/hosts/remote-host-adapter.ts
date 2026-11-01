@@ -75,6 +75,7 @@ export function remoteHostCapabilities(host: Pick<PeerHostView, "features" | "ca
   if (features.has("run-streams-v1") && grants.has("runs:observe")) capabilities.add("observe");
   if (features.has("chat-read-state-v1") && grants.has("chat:read")) capabilities.add("markRead");
   if (features.has("chat-context-pressure-v1") && grants.has("chat:read")) capabilities.add("contextPressure");
+  if (features.has("inbox-signals-v1") && grants.has("chat:read")) capabilities.add("inboxSignals");
   if (grants.has("workspace:browse")) capabilities.add("browseFolders");
   if (grants.has("workspace:manage")) capabilities.add("createWorkspace");
   if (grants.has("chat:write")) {

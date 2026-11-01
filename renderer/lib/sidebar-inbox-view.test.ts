@@ -15,6 +15,8 @@ import {
   localInboxEntries,
   markReadThroughMessageId,
   pendingAttentionRequest,
+  remoteBotInboxKey,
+  remoteBotInboxRows,
   remoteInboxEntries,
   type InboxEntry,
 } from "./sidebar-inbox-view";
@@ -23,6 +25,7 @@ import type { BotDefinition } from "../shared/bots";
 import { botFixture } from "../main/bots/test-fixtures";
 import { projectOrderKey } from "./sidebar-organization";
 import type { RemoteSidebarRows, SidebarHost } from "./sidebar-remote-groups";
+import type { PeerFeedRow, PeerHostFeedSnapshot } from "../shared/peer-host";
 import type { ChatMeta, Workspace } from "./types";
 
 const MINUTE = 60_000;
@@ -360,4 +363,103 @@ test("the open Bot stays listed while it is open, never as unread, and its key c
   assert.equal(open.signals.unread, false);
   assert.equal(inboxState(open.signals, NOW).shelf, "earlier");
   assert.notEqual(botInboxKey("b1"), projectOrderKey("local", "b1"));
+});
+
+test("a revision-48 host's own triage and run times place its rows when nothing here overrides them", () => {
+  const rows: RemoteSidebarRows[] = [{
+    projects: [],
+    chats: [
+      { key: projectOrderKey("studio", "pinned"), chatId: "pinned", hostId: "studio", hostLabel: "Studio", projectKey: "x", title: "Pinned", rowState: "idle", unread: false, lastRunFailed: false, stale: false, createdAt: NOW - HOUR, triage: { revision: 3, updatedAt: NOW, pinnedAt: NOW - MINUTE } },
+      { key: projectOrderKey("studio", "asks"), chatId: "asks", hostId: "studio", hostLabel: "Studio", projectKey: "x", title: "Asks", rowState: "needs_approval", unread: false, lastRunFailed: false, stale: false, createdAt: NOW - HOUR, lastActivityAt: NOW - MINUTE, attentionSince: NOW - 7 * MINUTE, attentionSummary: "npm publish" },
+      { key: projectOrderKey("studio", "busy"), chatId: "busy", hostId: "studio", hostLabel: "Studio", projectKey: "x", title: "Busy", rowState: "working", unread: false, lastRunFailed: false, stale: false, createdAt: NOW - HOUR, runStartedAt: NOW - 2 * HOUR },
+    ] as never,
+  }];
+  const hosts = [{ id: "studio", label: "Studio", availability: "online" }] as unknown as SidebarHost[];
+  const byTitle = new Map(remoteInboxEntries(rows, hosts).map((item) => [item.title, item]));
+  assert.equal(inboxState(byTitle.get("Pinned")!.signals, NOW).shelf, "pinned");
+  const asks = byTitle.get("Asks")!;
+  const status = inboxRowStatus(asks, "needs_you", NOW);
+  assert.equal(status.wait, "7m", "the wait counts from when the ask was raised, not the last activity");
+  assert.equal(inboxRowDescription(asks, status), "Approve: npm publish. On Studio, waiting 7m");
+  assert.equal(inboxRowStatus(byTitle.get("Busy")!, "working", NOW).label, "Working 2h");
+});
+
+function remoteBotFeed(hostId: string, bots: PeerFeedRow[], stale = false): PeerHostFeedSnapshot {
+  return { hostId, epoch: "e1", sequence: 1, stale, summaries: [], workspaces: [], bots, runs: [] };
+}
+
+test("a paired host's Bot is listed while it needs you, has failed or is open, and offers no row action", () => {
+  const hosts = [
+    { id: "studio", label: "Studio", availability: "online" },
+    { id: "old", label: "Old", availability: "blocked" },
+  ] as unknown as SidebarHost[];
+  const feeds = new Map([
+    ["studio", remoteBotFeed("studio", [
+      { id: "asks", name: "Planner", needsYou: true, sessionState: "running", lastReplyAt: new Date(NOW - 5 * MINUTE).toISOString(), avatar: { semantic: "not an avatar" } },
+      { id: "broke", name: " ", failed: true, updatedAt: new Date(NOW - 3 * HOUR).toISOString() },
+      { id: "quiet", name: "Quiet", lastReplyAt: new Date(NOW - MINUTE).toISOString() },
+      { id: "open", name: "Open" },
+    ])],
+    ["old", remoteBotFeed("old", [{ id: "hidden", name: "Hidden", needsYou: true }])],
+  ]);
+  const { listed, unlisted } = remoteBotInboxRows({ hosts, feeds, openKey: "studio/open" });
+  assert.deepEqual(listed.map((item) => item.key), ["asks", "broke", "open"].map((id) => remoteBotInboxKey("studio", id)));
+  assert.deepEqual(unlisted.map((item) => item.title), ["Quiet"], "a reply alone never lists a remote Bot");
+  const [asks, broke, open] = listed;
+
+  const asksStatus = inboxRowStatus(asks!, "needs_you", NOW);
+  assert.deepEqual([asksStatus.label, asksStatus.needsYou, asksStatus.wait], ["Needs you", "needs_you", "5m"]);
+  assert.equal(inboxRowDescription(asks!, asksStatus), "Waiting for you on Studio");
+  assert.equal(asks!.source.kind === "remoteBot" && asks!.source.working, true);
+  assert.equal(asks!.source.kind === "remoteBot" && "avatar" in asks!.source, false, "a malformed avatar is left out");
+
+  assert.equal(broke!.title, "Untitled Bot");
+  assert.equal(inboxState(broke!.signals, NOW).shelf, "needs_you");
+  const brokeStatus = inboxRowStatus(broke!, "needs_you", NOW);
+  assert.deepEqual([brokeStatus.label, brokeStatus.tone], ["Failed", "danger"]);
+  assert.equal(inboxRowDescription(broke!, brokeStatus), "The last run failed on Studio");
+
+  assert.equal(open!.signals.isOpen, true);
+  for (const item of listed) {
+    for (const section of ["needs_you", "updates", "earlier"] as const) {
+      assert.equal(inboxRowAction(item!, section, inboxRowStatus(item!, section, NOW), true), null, `${item!.title} ${section}`);
+    }
+  }
+  // A Bot's key never collides with a chat of the same id on that host.
+  assert.notEqual(remoteBotInboxKey("studio", "asks"), projectOrderKey("studio", "asks"));
+});
+
+test("an offline or stale host's Bot stays listed but never reads as working, and an older host's Bots stay out", () => {
+  const waiting: PeerFeedRow = { id: "asks", name: "Planner", needsYou: true, sessionState: "running" };
+  const offline = remoteBotInboxRows({
+    hosts: [{ id: "studio", label: "Studio", availability: "offline" }] as unknown as SidebarHost[],
+    feeds: new Map([["studio", remoteBotFeed("studio", [waiting])]]),
+    openKey: null,
+  }).listed[0]!;
+  assert.equal(offline.signals.hostOnline, false);
+  assert.equal(offline.source.kind === "remoteBot" && offline.source.working, false);
+  assert.equal(
+    inboxRowDescription(offline, inboxRowStatus(offline, "needs_you", NOW)),
+    "Waiting for you on Studio. Studio is offline",
+  );
+  const stale = remoteBotInboxRows({
+    hosts: [{ id: "studio", label: "Studio", availability: "online" }] as unknown as SidebarHost[],
+    feeds: new Map([["studio", remoteBotFeed("studio", [waiting], true)]]),
+    openKey: null,
+  }).listed[0]!;
+  assert.equal(stale.signals.hostOnline, false);
+
+  const older = remoteBotInboxRows({
+    hosts: [{ id: "studio", label: "Studio", availability: "online" }] as unknown as SidebarHost[],
+    feeds: new Map([["studio", remoteBotFeed("studio", [{ id: "b", name: "B", sessionState: "running" }])]]),
+    openKey: null,
+  });
+  assert.deepEqual([older.listed.length, older.unlisted.length], [0, 1]);
+  // A feed filed under the wrong host is ignored.
+  const crossed = remoteBotInboxRows({
+    hosts: [{ id: "studio", label: "Studio", availability: "online" }] as unknown as SidebarHost[],
+    feeds: new Map([["studio", remoteBotFeed("laptop", [waiting])]]),
+    openKey: null,
+  });
+  assert.deepEqual([crossed.listed.length, crossed.unlisted.length], [0, 0]);
 });

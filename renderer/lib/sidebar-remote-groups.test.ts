@@ -412,6 +412,55 @@ test("a chat row carries the host's revision for a rename, and an older host's r
   assert.equal("revision" in byId.get("old")!, false);
 });
 
+test("a revision-48 row carries its run times, triage and the waiting ask; an older host's row carries none", () => {
+  const rows = remoteSidebarRows(
+    host("studio", "Studio"),
+    snapshot("studio", {
+      workspaces: [workspaceRow("w", "App")],
+      summaries: [
+        summaryRow("waiting", "w", {
+          activity: "active",
+          attentionSince: iso(3),
+          runStartedAt: iso(2.5),
+          lastAssistantAt: iso(2.75),
+          triageRevision: 4,
+          pinnedAt: iso(1),
+          snoozedUntil: iso(30),
+        }),
+        summaryRow("cleared", "w", { triageRevision: 2 }),
+        summaryRow("busy", "w", { activity: "active", runStartedAt: iso(2) }),
+        summaryRow("old", "w", { pinnedAt: iso(1), attentionSince: "yesterday" }),
+      ],
+      runs: [
+        { chatId: "waiting", runId: "r1", state: "needs_approval", unread: false, attentionSummary: "Run npm test" },
+        { chatId: "busy", runId: "r2", state: "working", unread: false, attentionSummary: "Stale ask" },
+      ],
+    }),
+  );
+  const byId = new Map(rows.chats.map((chat) => [chat.chatId, chat]));
+  const waiting = byId.get("waiting")!;
+  assert.equal(waiting.rowState, "needs_approval");
+  assert.equal(waiting.attentionSince, T0 + 3 * 3_600_000);
+  assert.equal(waiting.runStartedAt, T0 + 2.5 * 3_600_000);
+  assert.equal(waiting.lastAssistantAt, T0 + 2.75 * 3_600_000);
+  assert.equal(waiting.attentionSummary, "Run npm test");
+  assert.deepEqual(
+    { revision: waiting.triage?.revision, pinnedAt: waiting.triage?.pinnedAt, snoozedUntil: waiting.triage?.snoozedUntil, doneAt: waiting.triage?.doneAt },
+    { revision: 4, pinnedAt: T0 + 3_600_000, snoozedUntil: T0 + 30 * 3_600_000, doneAt: undefined },
+  );
+  // A cleared entry still reports its revision, so a newer local change can be told from it.
+  assert.deepEqual(
+    [byId.get("cleared")?.triage?.revision, byId.get("cleared")?.triage?.pinnedAt],
+    [2, undefined],
+  );
+  // A working run's leftover ask is not shown.
+  assert.equal(byId.get("busy")?.attentionSummary, undefined);
+  // Triage times without a revision, or an unparsable time, read as unknown.
+  const old = byId.get("old")!;
+  assert.equal(old.triage, undefined);
+  assert.equal(old.attentionSince, undefined);
+});
+
 /**
  * The sidebar re-organizes on every applied feed frame, so its cost must stay
  * near-linear in the rows it shows. Work is counted, not timed: each read of a

@@ -1,4 +1,5 @@
 import { PeerTransportError } from "./peer-transport.js";
+import { clipPendingAttentionSummary } from "../../renderer/shared/chat-pending-attention.js";
 import type {
   PeerFeedRow,
   PeerHostFeedChange,
@@ -35,7 +36,7 @@ function rows(value: unknown): PeerFeedRow[] {
 
 function runState(value: unknown): PeerRunState {
   if (!value || typeof value !== "object" || Array.isArray(value)) malformed();
-  const { chatId, runId, state, unread } = value as Record<string, unknown>;
+  const { chatId, runId, state, unread, attentionSummary } = value as Record<string, unknown>;
   if (
     typeof chatId !== "string" ||
     !ROW_ID.test(chatId) ||
@@ -46,7 +47,9 @@ function runState(value: unknown): PeerRunState {
     typeof unread !== "boolean"
   )
     malformed();
-  return { chatId, runId, state, unread };
+  // Revision 48: a summary that is not bounded text is left out rather than refusing the frame.
+  const summary = typeof attentionSummary === "string" ? clipPendingAttentionSummary(attentionSummary) : "";
+  return { chatId, runId, state, unread, ...(summary ? { attentionSummary: summary } : {}) };
 }
 
 function updatedAt(item: PeerFeedRow): number {

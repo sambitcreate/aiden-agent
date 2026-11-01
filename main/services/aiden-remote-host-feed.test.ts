@@ -4,6 +4,7 @@ import type { ServerResponse } from "node:http";
 import test from "node:test";
 import {
   AidenRemoteHostFeedService,
+  hostFeedBotSignals,
   type AidenRemoteHostFeedState,
 } from "./aiden-remote-host-feed.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
@@ -11,6 +12,7 @@ import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import { PeerEventFrames } from "./peer-transport.js";
 import type { AidenRemoteChatSummaryProjection } from "./aiden-remote-chats.js";
 import type { HostRunSummary } from "./host-run-registry.js";
+import type { BotSessionState } from "../../renderer/shared/bot-live.js";
 
 /** In-memory SSE response: records frames and honours close/destroy. */
 class RecordingResponse extends EventEmitter {
@@ -119,6 +121,7 @@ function harness(options: {
   heartbeatMs?: number;
   debounceMs?: number;
   snapshotChunkBytes?: number;
+  attentionSummary?: (runId: string) => string | undefined;
 } = {}) {
   const state: { current: AidenRemoteHostFeedState; reads: number } = {
     current: {
@@ -608,4 +611,54 @@ test("a large host snapshot arrives as bounded frames that reassemble every row"
   } finally {
     feed.close();
   }
+});
+
+test("a waiting run's ask reaches only runs:observe desktops, clipped, and only while it waits", async () => {
+  const asks = new Map<string, string>([
+    ["run-ask", `Allow   writing\n${"x".repeat(400)}`],
+    ["run-busy", "Should not leak"],
+  ]);
+  const { feed } = harness({ attentionSummary: (runId) => asks.get(runId) });
+  const plain = await open(feed, desktop("device-plain"));
+  const observer = await open(feed, desktop("device-observer", ["runs:observe"]));
+  try {
+    feed.noteRun(run("run-ask", "chat-1", "needs_approval"), false);
+    feed.noteRun(run("run-busy", "chat-1", "working"), false);
+    await feed.refresh();
+
+    const runStates = (response: RecordingResponse) =>
+      response.frames().filter((frame) => frame.event === "run.state").map((frame) => frame.data.payload as Record<string, unknown>);
+    assert.deepEqual(runStates(plain).map((payload) => [payload.runId, "attentionSummary" in payload]), [["run-ask", false], ["run-busy", false]]);
+    const [ask, busy] = runStates(observer);
+    assert.equal(ask!.runId, "run-ask");
+    const summaryText = ask!.attentionSummary as string;
+    assert.ok(summaryText.length <= 200, `clipped to 200 characters, got ${summaryText.length}`);
+    assert.ok(summaryText.startsWith("Allow writing x"), "whitespace collapses onto one line");
+    assert.equal(busy!.runId, "run-busy");
+    assert.equal("attentionSummary" in busy!, false);
+
+    // A replay from the cursor before the ask keeps each device's own view.
+    const cursor = observer.frames()[0]!.id;
+    const replayPlain = await open(feed, desktop("device-plain"), cursor);
+    const replayObserver = await open(feed, desktop("device-observer", ["runs:observe"]), cursor);
+    assert.equal("attentionSummary" in runStates(replayPlain)[0]!, false);
+    assert.equal(runStates(replayObserver)[0]!.attentionSummary, summaryText);
+  } finally {
+    feed.close();
+  }
+});
+
+test("a Bot row's Inbox signals hold only what its live summary says", () => {
+  const idle = { state: { kind: "idle" } as BotSessionState, needsYou: false, lastReplyAt: null as number | null };
+  assert.deepEqual(hostFeedBotSignals(undefined), {});
+  assert.deepEqual(hostFeedBotSignals(idle), {});
+  assert.deepEqual(
+    hostFeedBotSignals({ ...idle, needsYou: true, lastReplyAt: 3_000 }),
+    { needsYou: true, lastReplyAt: new Date(3_000).toISOString() },
+  );
+  for (const kind of ["interrupted", "model_error"]) {
+    assert.deepEqual(hostFeedBotSignals({ ...idle, state: { kind } as BotSessionState }), { failed: true }, kind);
+  }
+  assert.deepEqual(hostFeedBotSignals({ ...idle, lastReplyAt: -1 }), {}, "a negative time is unknown");
+  assert.deepEqual(hostFeedBotSignals({ ...idle, lastReplyAt: 1.5 }), {}, "a fractional time is unknown");
 });

@@ -16,6 +16,7 @@ import {
   mergeInboxTriageUndo,
   newerTriage,
   predictTriage,
+  settledTriageOverlayKeys,
   triageSignals,
   type InboxTriageTarget,
   type InboxTriageUndoBatch,
@@ -182,4 +183,27 @@ test("the toast's titles and conflict notes read naturally", () => {
   assert.equal(inboxTriageUndoConflictText(1, 1), "That chat changed since, so Undo left it as it is.");
   assert.equal(inboxTriageUndoConflictText(3, 3), "Those chats changed since, so Undo left them as they are.");
   assert.equal(inboxTriageUndoConflictText(2, 3), "2 chats changed since, so Undo left them as they are.");
+});
+
+test("an overlay entry goes once its host reports that revision or a newer one, and stays while a host reports nothing", () => {
+  const entry = (revision: number): ChatTriageEntry => ({ revision, updatedAt: 1_000, pinnedAt: 1_000 });
+  const overlay = new Map([
+    [projectOrderKey("local", "a"), entry(3)],
+    [projectOrderKey("local", "b"), entry(3)],
+    [projectOrderKey("studio", "c"), entry(5)],
+    [projectOrderKey("studio", "d"), entry(5)],
+    [projectOrderKey("older", "e"), entry(2)],
+  ]);
+  const local = { a: entry(3), b: entry(2) };
+  const reported = new Map([
+    [projectOrderKey("studio", "c"), entry(6)],
+    [projectOrderKey("studio", "d"), entry(4)],
+    // The same chat id on this Mac is a different row.
+    [projectOrderKey("studio", "b"), entry(9)],
+  ]);
+  assert.deepEqual(
+    settledTriageOverlayKeys(overlay, local, reported).sort(),
+    [projectOrderKey("local", "a"), projectOrderKey("studio", "c")].sort(),
+  );
+  assert.deepEqual(settledTriageOverlayKeys(overlay, undefined, undefined), [], "nothing reported yet keeps every entry");
 });

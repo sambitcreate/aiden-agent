@@ -180,9 +180,12 @@ import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
 import {
   AidenRemoteHostFeedService,
+  hostFeedBotSignals,
   type AidenRemoteHostFeedBot,
+  type AidenRemoteHostFeedBotSignals,
 } from "./aiden-remote-host-feed.js";
 import { hostRunRegistry } from "./host-runs-main.js";
+import { liveRunAttention } from "./chat-pending-attention.js";
 import { gitCachedRepositoryIdentity } from "./git.js";
 import { projectAidenRemoteWorkspace } from "./aiden-remote-workspaces.js";
 import { aidenRemoteHostPlatform, type AidenRemotePendingQuestion } from "./aiden-remote-protocol.js";
@@ -665,6 +668,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               markRead: (chatId, throughMessageId) => markChatRead(chatId, throughMessageId),
             },
             triage: chatTriage,
+            // Revision 48: live-run times for the summaries' Inbox signals.
+            runTimes: (chatId) => liveRunAttention(chatId, hostRunRegistry),
             forks: {
               service: chatForkService,
               admitWorkspace: (workspaceId) => {
@@ -1025,6 +1030,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           activeHostFeed?.close();
           const hostFeed = new AidenRemoteHostFeedService({
             now: Date.now,
+            attentionSummary: (runId) => {
+              const run = hostRunRegistry.summary(runId);
+              return run ? liveRunAttention(run.chatId, hostRunRegistry)?.summary : undefined;
+            },
             source: {
               read: async () => {
                 const [{ summaries, botChatIds }, workspaceRows, botList] = await Promise.all([
@@ -1032,6 +1041,17 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   workspaceApplicationService.list(),
                   bots ? bots.list() : Promise.resolve(undefined),
                 ]);
+                // Revision 48: each Bot's Needs you, Failed and last reply, from the
+                // same live summaries this Mac's sidebar reads. A failed read leaves them out.
+                const botSignals = new Map<string, AidenRemoteHostFeedBotSignals>();
+                if (botList && botList.bots.length > 0) {
+                  const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
+                  const live = botLiveProjection();
+                  const rows = await mapWithConcurrency(botList.bots, 4, async (bot) =>
+                    [bot.id, hostFeedBotSignals(await live.summary(bot.id).catch(() => undefined))] as const,
+                  );
+                  for (const [id, signals] of rows) botSignals.set(id, signals);
+                }
                 return {
                   summaries,
                   botChatIds,
@@ -1048,18 +1068,20 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   // Bot reads as unavailable); a holder gets `paused` (revision 37).
                   // `issueCount` (revision 42) is a phone shape: the host feed keeps
                   // its revision-40 rows for every desktop.
-                  bots: (botList?.bots ?? []).map((bot) =>
-                    projectBotSummaryIssuesForAudience(
+                  bots: (botList?.bots ?? []).map((bot) => ({
+                    ...projectBotSummaryIssuesForAudience(
                       projectBotSummaryForAudience(bot, LEGACY_AUDIENCE),
                       { issues: false },
                     ),
-                  ) as unknown as AidenRemoteHostFeedBot[],
-                  handoffBots: (botList?.bots ?? []).map((bot) =>
-                    projectBotSummaryIssuesForAudience(
+                    ...botSignals.get(bot.id),
+                  })) as unknown as AidenRemoteHostFeedBot[],
+                  handoffBots: (botList?.bots ?? []).map((bot) => ({
+                    ...projectBotSummaryIssuesForAudience(
                       projectBotSummaryForAudience(bot, { handoffs: true }),
                       { issues: false },
                     ),
-                  ) as unknown as AidenRemoteHostFeedBot[],
+                    ...botSignals.get(bot.id),
+                  })) as unknown as AidenRemoteHostFeedBot[],
                 };
               },
             },
@@ -1074,6 +1096,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             "chats:fork-summary-changed",
             "workspaces:changed",
             "bots:changed",
+            // A Bot's wait began or ended: its row's `needsYou` changed (revision 48).
+            "bots:attention",
           ]);
           const detachers = [
             onBroadcast((channel) => {

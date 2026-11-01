@@ -1,6 +1,6 @@
 # Inbox Sidebar
 
-Status: In progress (2026-10-31). The owner picked Option D (Hybrid Inbox) and accepted every recommended decision. Two code-grounded edge-case reviews (local desktop; connected hosts, `aiden serve` and phones) are folded in. Phase 0 and all of Phase 1 (1a–1d) are built on the plan branch `claude/inbox-sidebar-plan`; Phases 2–3 are next. See "1b and 1c as built" and "1d as built" for where the build differs from the text below.
+Status: In progress (2026-11-01). The owner picked Option D (Hybrid Inbox) and accepted every recommended decision. Two code-grounded edge-case reviews (local desktop; connected hosts, `aiden serve` and phones) are folded in. Phase 0, all of Phase 1 (1a–1d), and Phases 2a and 2b are built on the plan branch `claude/inbox-sidebar-plan`; 2c, 2d and Phase 3 are next. See "1b and 1c as built", "1d as built", "2a as built" and "2b as built" for where the build differs from the text below.
 
 Interactive options page (private, shared by the owner): <https://claude.ai/artifact/2KX5jwZ68w9wsejKTAAqx8>
 
@@ -291,6 +291,17 @@ Claim the revision after the one on `main` at merge time. It is 47 today (`AIDEN
 - Run summaries gain `attentionSummary` (≤ 200 characters) for devices with `runs:observe`, so remote tooltips can show the request.
 - Remote Bots: the host feed's Bot rows gain `needsYou` and `failed`, and remote Bot rows join the Inbox. Don't depend on `bot:issues` (revision 42): desktops don't negotiate it (`peer-host-registry.ts:132`, `aiden-remote-service-main.ts:1047-1058`). Durable Bot turns aren't in `HostRunRegistry`, so Bot times come from the Bot projection.
 - iOS, Android and `protocol/aiden-remote/v1/fixtures/contract.json` are updated together, with parsers that ignore the fields on older hosts. The `HostRunSummary` fixture checks exact keys (`protocol.ts:8556`), so adding a field updates it in the same PR.
+
+**2b as built (2026-11-01).** Where it differs from, or settles, the text above:
+
+- *Revision and token.* Remote contract revision 48 (provisional: claim the next free revision at merge by changing only `AIDEN_REMOTE_INBOX_SIGNALS_CONTRACT_REVISION`). `inbox-signals-v1` is announced to paired desktops (`mac`, `linux`) only, while the host serves Chat Summaries. Phones spend no token: every field is optional and they decode as before (iOS and Android tests prove a phone's rows are unchanged, even by malformed values). 3a spends the reserved phone token when phones start reading the fields.
+- *Summary fields.* `attentionSince` and `runStartedAt` come from the live run (`liveRunAttention` in `main/services/chat-pending-attention.ts`), `lastAssistantAt` from the projection, and `pinnedAt`, `doneAt`, `snoozedUntil` with `triageRevision` from the 2a store. All are RFC 3339 and sent only when known; a triage time without `triageRevision` fails closed (`parseInboxSignalFields` in `aiden-remote-protocol.ts`).
+- *The ask.* `run.state` gains `attentionSummary` (whitespace collapsed, ≤ 200 characters with "…", `clipPendingAttentionSummary`) only while the run is `needs_approval` or `needs_input`, and only to `runs:observe` devices: the journal entry carries it as an alternate observer frame that `open()` picks per device, replay included. The peer feed cache clips it again and drops a malformed one; the sidebar shows it only while the row waits and the run is live.
+- *Remote rows.* `remoteInboxEntries` reads the revision-48 times, so a remote wait shows and sorts like a local one ("Approve: npm publish. On Studio, waiting 7m"). A host without the token keeps 1c's behaviour.
+- *Remote triage.* Each paired host's reported entry (from its summaries) feeds `useInboxTriage`, and `settledTriageOverlayKeys` drops an overlay entry once the host reports a `triageRevision` at least as new, closing 2a's "Not yet".
+- *Remote Bots.* The host feed's Bot rows gain `needsYou`, `failed` (the Bot's last state is `interrupted` or `model_error`) and `lastReplyAt` (`hostFeedBotSignals` in `aiden-remote-host-feed.ts`), and the feed pushes on `bots:attention`. A paired host's Bot is listed while it needs the person, has failed, or is open: Needs you shows Needs input, a failure shows Failed in Needs you. It opens with `useRemoteBots().open`, offers no row action and no triage, and reads "Waiting for you on Studio" or "The last run failed on Studio" (". Studio is offline" when offline).
+- *2a render loop fixed.* `useInboxTriage` returned a new object every render, and the Inbox's entry list depends on it, so opening the Inbox looped until React stopped it (error #185) and every Inbox E2E test crashed. The hook now returns a memoized `{ entryFor, act }`, and `useRemoteBots().open` keeps one identity.
+- *Gaps.* A remote Bot has no wait start, so it orders by `lastReplyAt` (or its definition's `updatedAt`). Its replies are never unread: the feed has no Bot read marker. No client tracks `GET /server` `serverTime` skew; snooze and wait times are compared on this Mac's clock, so a skewed host's rows wake or age early or late by the skew.
 
 **2c. Dock badge.**
 

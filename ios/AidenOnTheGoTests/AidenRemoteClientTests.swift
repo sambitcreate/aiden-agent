@@ -626,6 +626,36 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertFalse(failed.showsFailed)
     }
 
+    func testChatSummaryInboxSignalsAreDesktopOnlyAndNeverChangeThePhonesRows() throws {
+        // Revision 48 summaries carry the desktop Inbox's run times and triage.
+        // Phones neither request nor render them, so a row reads the same with
+        // them, without them, or with a malformed one from a buggy host.
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]
+        )
+        let withSignals = try XCTUnwrap(object["summaries"] as? [[String: Any]])
+        XCTAssertNotNil(withSignals[0]["attentionSince"])
+        XCTAssertNotNil(withSignals[1]["triageRevision"])
+        let signalKeys = [
+            "attentionSince", "runStartedAt", "lastAssistantAt",
+            "triageRevision", "pinnedAt", "doneAt", "snoozedUntil",
+        ]
+        let decode = { (summaries: [[String: Any]]) throws -> [AidenChatSummary] in
+            object["summaries"] = summaries
+            let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            return try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: data).summaries
+        }
+        let current = try decode(withSignals)
+        let older = try decode(withSignals.map { row in row.filter { !signalKeys.contains($0.key) } })
+        var malformed = withSignals
+        malformed[0]["attentionSince"] = 7
+        malformed[1]["triageRevision"] = "three"
+        malformed[1]["snoozedUntil"] = ["at": "tomorrow"]
+        XCTAssertEqual(current, older)
+        XCTAssertEqual(try decode(malformed), older)
+        XCTAssertEqual(current.map(\.displayRowState), [.needsApproval, .idle])
+    }
+
     func testChatSummaryRowStateIsAdditiveAndLocalActivityOutranksAStaleServerState() throws {
         var object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]

@@ -4,6 +4,7 @@ import type { ChatPendingAttention } from "../../renderer/shared/chat-pending-at
 import {
   createPendingAttentionRecorder,
   DetachedPromptLog,
+  liveRunAttention,
   readInterruptedRunWaits,
   type InterruptedRunWaits,
 } from "../services/chat-pending-attention.js";
@@ -370,4 +371,31 @@ test("a chat working again leaves the Interrupted shelf for Working", async () =
   assert.deepEqual(await pending(["chat-a"]), [
     { chatId: "chat-a", kind: "working", summary: "", runStartedAt: T0 + 90_000, count: 0 },
   ]);
+});
+
+test("a paired device reads a live run's start and oldest waiting ask, never this Mac's Unavailable rows", () => {
+  const { clock, registry, recorder } = harness({ chats: ["chat-a"] });
+  assert.equal(liveRunAttention("chat-a", registry), undefined, "no live run reads as nothing");
+
+  registry.begin({ runId: "run-a", chatId: "chat-a", origin: "renderer" });
+  assert.deepEqual(liveRunAttention("chat-a", registry), { runStartedAt: T0 });
+
+  clock.now = T0 + 2_000;
+  registry.publish("run-a", "chat:questionnaire", questionnaire("prompt-1"));
+  clock.now = T0 + 3_000;
+  registry.publish("run-a", "chat:approval", approval("approval-1", "Run   npm\ntest"));
+  assert.deepEqual(liveRunAttention("chat-a", registry), {
+    runStartedAt: T0,
+    attentionSince: T0 + 3_000,
+    summary: "Run npm test",
+  });
+
+  // The window leaves: this Mac keeps an Unavailable row, a paired device sees a working run.
+  recorder.runDetached("run-a");
+  registry.resolveAttention("prompt-1");
+  registry.resolveAttention("approval-1");
+  assert.deepEqual(liveRunAttention("chat-a", registry), { runStartedAt: T0 });
+
+  registry.publish("run-a", "chat:done", {});
+  assert.equal(liveRunAttention("chat-a", registry), undefined);
 });

@@ -4,7 +4,7 @@ import { chatsApi } from "./ipc";
 import { useChatTriage } from "./use-chat-activity";
 import { RemoteHostAdapter } from "./hosts/remote-host-adapter";
 import type { PeerHostView } from "../shared/peer-host";
-import { LOCAL_SIDEBAR_HOST_ID, parseProjectOrderKey } from "./sidebar-organization";
+import { LOCAL_SIDEBAR_HOST_ID } from "./sidebar-organization";
 import {
   formatSnoozeUntil,
   groupByHost,
@@ -17,6 +17,7 @@ import {
   mergeInboxTriageUndo,
   newerTriage,
   predictTriage,
+  settledTriageOverlayKeys,
   type InboxTriageKind,
   type InboxTriageTarget,
   type InboxTriageUndoBatch,
@@ -123,7 +124,17 @@ export interface InboxTriage {
  * own writes, and the merged 5-second Undo toast. Undo names the revision each
  * write left, so it changes nothing on a chat another device touched since.
  */
-export function useInboxTriage({ views }: { views: ReadonlyMap<string, PeerHostView> }): InboxTriage {
+export function useInboxTriage({
+  views,
+  reported,
+}: {
+  views: ReadonlyMap<string, PeerHostView>;
+  /**
+   * What each paired host last reported, by row key (Remote revision 48 summaries).
+   * An overlay entry its host has since reported, or passed, is dropped.
+   */
+  reported?: ReadonlyMap<string, ChatTriageEntry>;
+}): InboxTriage {
   const local = useChatTriage();
   const [overlay, setOverlay] = React.useState<ReadonlyMap<string, ChatTriageEntry>>(() => new Map());
   const overlayRef = React.useRef(overlay);
@@ -151,17 +162,12 @@ export function useInboxTriage({ views }: { views: ReadonlyMap<string, PeerHostV
     [reportedFor],
   );
 
-  // A local overlay entry the store has since reported (or passed) is dropped.
+  // An overlay entry its host has since reported (or passed) is dropped.
   React.useEffect(() => {
-    if (!local || overlayRef.current.size === 0) return;
-    const stale = [...overlayRef.current].filter(([key, entry]) => {
-      const parsed = parseProjectOrderKey(key);
-      if (parsed?.hostId !== LOCAL_SIDEBAR_HOST_ID) return false;
-      const reported = local.chats[parsed.projectId];
-      return reported !== undefined && reported.revision >= entry.revision;
-    });
-    if (stale.length > 0) write(stale.map(([key]) => [key, null] as const));
-  }, [local, write]);
+    if (overlayRef.current.size === 0) return;
+    const settled = settledTriageOverlayKeys(overlayRef.current, local?.chats, reported);
+    if (settled.length > 0) write(settled.map((key) => [key, null] as const));
+  }, [local, reported, write]);
 
   const undo = React.useCallback(async (batch: InboxTriageUndoBatch) => {
     if (undoRef.current === batch) undoRef.current = null;
@@ -232,5 +238,6 @@ export function useInboxTriage({ views }: { views: ReadonlyMap<string, PeerHostV
     [local, overlay],
   );
 
-  return { entryFor, act };
+  // One identity while nothing changes, so the Inbox's entries are not rebuilt every render.
+  return React.useMemo(() => ({ entryFor, act }), [entryFor, act]);
 }

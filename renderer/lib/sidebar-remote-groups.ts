@@ -17,6 +17,7 @@ import {
   type SidebarProjectSummary,
 } from "./sidebar-organization";
 import type { HostChatCapability } from "./hosts/host-chat-adapter";
+import type { ChatTriageEntry } from "../shared/chat-triage";
 
 /**
  * Remote adapter for the sidebar projection: maps each paired host's
@@ -61,6 +62,39 @@ export interface RemoteSidebarChat extends SidebarChatSummary {
   stale: boolean;
   /** The host's chat revision, which a rename must name. Absent from older hosts. */
   revision?: string;
+  /** Revision 48: when the live run's oldest waiting prompt was raised. */
+  attentionSince?: number;
+  /** Revision 48: when the live run started. */
+  runStartedAt?: number;
+  /** Revision 48: when the chat's newest assistant output arrived. */
+  lastAssistantAt?: number;
+  /**
+   * Revision 48: the triage entry the host reports. Absent when the chat is
+   * untriaged or the host is older (`inbox-signals-v1` tells the two apart).
+   */
+  triage?: ChatTriageEntry;
+  /** Revision 48: what a waiting run asks, one line, from the host feed's `run.state`. */
+  attentionSummary?: string;
+}
+
+/**
+ * The triage entry a summary row reports: its `triageRevision` with whichever
+ * of Pin, Done and Snooze it holds. `updatedAt` is not on the wire; the newest
+ * of the entry's times stands in, and nothing orders by it.
+ */
+export function reportedTriage(row: PeerFeedRow): ChatTriageEntry | undefined {
+  const revision = row.triageRevision;
+  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1) return undefined;
+  const pinnedAt = time(row, "pinnedAt");
+  const doneAt = time(row, "doneAt");
+  const snoozedUntil = time(row, "snoozedUntil");
+  return {
+    revision,
+    updatedAt: Math.max(0, pinnedAt ?? 0, doneAt ?? 0),
+    ...(pinnedAt !== undefined ? { pinnedAt } : {}),
+    ...(doneAt !== undefined ? { doneAt } : {}),
+    ...(snoozedUntil !== undefined ? { snoozedUntil } : {}),
+  };
 }
 
 /** One action a remote chat row offers, in menu order. */
@@ -228,6 +262,12 @@ export function remoteSidebarRows(
     const unread = !isOpen(host.id, row.id) && hostUnread;
     const lastRunFailed = row.lastRunFailed === true;
     const revision = text(row, "revision");
+    const attentionSince = time(row, "attentionSince");
+    const runStartedAt = time(row, "runStartedAt");
+    const lastAssistantAt = time(row, "lastAssistantAt");
+    const triage = reportedTriage(row);
+    const waiting = rowState === "needs_approval" || rowState === "needs_input";
+    const attentionSummary = waiting && run && LIVE_RUN_STATES.has(run.state) ? run.attentionSummary : undefined;
     return [
       {
         key: projectOrderKey(host.id, row.id),
@@ -245,6 +285,11 @@ export function remoteSidebarRows(
         lastRunFailed,
         stale,
         ...(revision ? { revision } : {}),
+        ...(attentionSince !== undefined ? { attentionSince } : {}),
+        ...(runStartedAt !== undefined ? { runStartedAt } : {}),
+        ...(lastAssistantAt !== undefined ? { lastAssistantAt } : {}),
+        ...(triage ? { triage } : {}),
+        ...(attentionSummary ? { attentionSummary } : {}),
       },
     ];
   });
