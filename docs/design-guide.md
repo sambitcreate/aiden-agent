@@ -177,6 +177,33 @@ read the pairing's saved `/server` features until the connection answers.
 
 Show agent activity with the shared activity marks (`AidenActivityMark` on desktop), never with new spinners, canvas loops or shimmering icons. Geometry, timing and the phase mapping live in [`activity-marks.md`](activity-marks.md), and iOS and Android draw the same marks natively. Chat marks use the text colour, and Live uses the accent. Pass `active={false}` for terminal states so the mark freezes on its still pose rather than disappearing.
 
+## Inbox rows
+
+The sidebar's Inbox view ([plan](plans/inbox-sidebar-plan.md)) uses a compact
+two-line row (`data-chat-row-layout="inbox"` in `renderer/components/sidebar/chat-row.tsx`)
+instead of the one-line chat row. Line 1 is quiet `text-small` meta (the
+workspace, plus the host for a paired Mac, or "Bot" led by a 14px copy of the
+Bot's face) with the status trailing it. Rows carry no leading avatar, so every
+title starts at the same edge; line 2 is the title, in medium weight while unread. In Needs you
+the status is a soft pill (`bg-status-warning-surface` or
+`bg-status-red-surface` with its matching text token, an icon and a short label
+such as "Needs you" or "Approval") followed by the wait; elsewhere it is plain
+tertiary text. Never mark a row with a coloured border, stripe or outline: the
+pill, the section and the medium title carry the state. Rows held in place
+after they leave, or on an offline host, step their text tokens down rather
+than fading the whole row.
+
+A row offers at most one quick action, shown as a single transparent icon
+button over the row's right edge on hover or focus (`data-inbox-action`:
+**Mark read** with `CheckCheck`, **Acknowledge** with `Check`), beside the
+overflow menu when the row has one. The row reserves right padding for the
+controls it shows, so the title truncates instead of sliding under them. The
+action's accessible name repeats the title ("Mark read: Fix the build"), and
+the same action sits in the row's context and overflow menus. The row's own
+accessible name leads with the title, then meta, status, wait and "Unread":
+"Fix the build, aiden, 2h, Unread". While ⌘ is held, the trailing status gives
+way to the row's shortcut hint.
+
 ## Verification
 
 Check shared and custom actions in onboarding, the chat toolbar and composer,

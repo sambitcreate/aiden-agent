@@ -3,6 +3,8 @@ import test from "node:test";
 import { ASSISTANT_WORKSPACE_ID } from "../shared/assistant";
 import type { ChatPendingAttention } from "../shared/chat-pending-attention";
 import {
+  botInboxEntries,
+  botInboxKey,
   debounceNeedsYouLeave,
   filterInboxEntries,
   inboxRowAction,
@@ -15,7 +17,9 @@ import {
   remoteInboxEntries,
   type InboxEntry,
 } from "./sidebar-inbox-view";
-import { releasedInboxOrder, type InboxDisplayOrder, type InboxSignals } from "./sidebar-inbox";
+import { inboxState, releasedInboxOrder, type InboxDisplayOrder, type InboxSignals } from "./sidebar-inbox";
+import type { BotDefinition } from "../shared/bots";
+import { botFixture } from "../main/bots/test-fixtures";
 import { projectOrderKey } from "./sidebar-organization";
 import type { RemoteSidebarRows, SidebarHost } from "./sidebar-remote-groups";
 import type { ChatMeta, Workspace } from "./types";
@@ -256,4 +260,64 @@ test("the pending attention key is short, follows the ids, and ignores the order
   assert.equal(pendingAttentionRequest([...many].reverse(), []).key, request.key);
   assert.notEqual(pendingAttentionRequest(many.slice(1), []).key, request.key);
   assert.notEqual(pendingAttentionRequest(many, [new Set(["chat-499"])]).key, request.key);
+});
+
+function bot(id: string): BotDefinition {
+  return botFixture({ id, name: `Bot ${id}`, createdAt: NOW - 9 * HOUR, updatedAt: NOW - 9 * HOUR });
+}
+
+function botEntries(
+  rows: { id: string; needsYou?: boolean; lastReplyAt?: number | null; running?: boolean; activityAt?: number }[],
+  options: { openBotId?: string | null; seen?: Record<string, number> } = {},
+): InboxEntry[] {
+  return botInboxEntries({
+    bots: rows.map((row) => ({
+      bot: bot(row.id),
+      ...(row.running ? { state: { kind: "running" } } : {}),
+      activityAt: row.activityAt ?? NOW - 5 * MINUTE,
+      needsYou: row.needsYou ?? false,
+      lastReplyAt: row.lastReplyAt ?? null,
+    })),
+    openBotId: options.openBotId ?? null,
+    // The Bot sidebar's rule: a reply newer than the last one seen.
+    unread: (botId, lastReplyAt) => lastReplyAt !== null && lastReplyAt > (options.seen?.[botId] ?? 0),
+  });
+}
+
+test("a Bot that needs the person is in Needs you, and its status says Needs you, never Approval or Question", () => {
+  const [waiting] = botEntries([{ id: "b1", needsYou: true, activityAt: NOW - 6 * MINUTE }]);
+  assert.ok(waiting);
+  assert.equal(inboxState(waiting.signals, NOW).shelf, "needs_you");
+  const status = inboxRowStatus(waiting, "needs_you", NOW);
+  assert.deepEqual([status.label, status.tone, status.wait, status.needsYou], ["Needs you", "warning", "6m", "needs_you"]);
+  assert.equal(inboxRowDescription(waiting, status), "Waiting for you");
+  // A Bot that needs the person offers no hover action: opening it is the answer.
+  assert.equal(inboxRowAction(waiting, "needs_you", status, false), null);
+  assert.equal(waiting.project, "Bot");
+  assert.equal(waiting.title, "Bot b1");
+});
+
+test("a Bot with an unread reply is in Updates and offers Mark read; a read or merely running Bot isn't listed", () => {
+  const entries = botEntries(
+    [
+      { id: "fresh", lastReplyAt: NOW - 2 * MINUTE },
+      { id: "seen", lastReplyAt: NOW - 2 * HOUR },
+      { id: "busy", running: true },
+    ],
+    { seen: { seen: NOW - 2 * HOUR } },
+  );
+  assert.deepEqual(entries.map((item) => item.key), [botInboxKey("fresh")]);
+  const [fresh] = entries;
+  assert.ok(fresh);
+  assert.equal(inboxState(fresh.signals, NOW).shelf, "updates");
+  assert.equal(inboxRowAction(fresh, "updates", inboxRowStatus(fresh, "updates", NOW), false), "mark_read");
+});
+
+test("the open Bot stays listed while it is open, never as unread, and its key can't collide with a chat's", () => {
+  const [open] = botEntries([{ id: "b1", lastReplyAt: NOW - MINUTE }], { openBotId: "b1" });
+  assert.ok(open);
+  assert.equal(open.signals.isOpen, true);
+  assert.equal(open.signals.unread, false);
+  assert.equal(inboxState(open.signals, NOW).shelf, "earlier");
+  assert.notEqual(botInboxKey("b1"), projectOrderKey("local", "b1"));
 });

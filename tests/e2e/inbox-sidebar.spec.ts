@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "@playwright/test";
+import { botFixture } from "../../renderer/main/bots/test-fixtures";
 import { E2E_ASSISTANT_RESPONSE, expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 type StoredChatMeta = { id: string; title: string; workspaceId?: string; botId?: string; createdAt: number };
@@ -172,4 +173,109 @@ test("a remote-origin approval opens from its row or ⌘1 with Deny focused, and
   await expect(sidebar.getByRole("group", { name: "Working" }).locator(`[data-inbox-row="local:${chatId}"]`))
     .toBeVisible({ timeout: 15_000 });
   await expect(needsYou).toHaveCount(0);
+});
+
+test("Settings → Appearance → Sidebar switches the view, and the Organize menu agrees", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Appearance", exact: true }).click();
+  const picker = page.getByRole("radiogroup", { name: "Sidebar" });
+  await expect(picker.getByRole("radio", { name: "By workspace" })).toHaveAttribute("aria-checked", "true");
+  await picker.getByRole("radio", { name: "Inbox (Beta)" }).click();
+  await expect(picker.getByRole("radio", { name: "Inbox (Beta)" })).toHaveAttribute("aria-checked", "true");
+  await expect(picker.getByRole("radio", { name: "By workspace" })).toHaveAttribute("aria-checked", "false");
+
+  await page.getByRole("button", { name: "Back to app", exact: true }).click();
+  await expect(page.locator("[data-sidebar] [data-inbox-view]")).toBeVisible();
+  await page.getByRole("button", { name: "Organize sidebar" }).click();
+  await expect(page.getByRole("menuitemradio", { name: "Inbox (Beta)" })).toHaveAttribute("aria-checked", "true");
+  // Switching back from the menu shows in Settings too.
+  await page.getByRole("menuitemradio", { name: "Recent", exact: true }).click();
+  await expect(page.locator("[data-sidebar] [data-inbox-view]")).toHaveCount(0);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Appearance", exact: true }).click();
+  await expect(picker.getByRole("radio", { name: "Recent only" })).toHaveAttribute("aria-checked", "true");
+});
+
+// The e2e profile cannot open the real Bot store, so only the Bot IPC is
+// substituted, as in bots-sidebar-panel.spec.ts.
+test("Bots that need you or have news sit in the Inbox, open there, and the Bots button still reaches the Bot list", async ({ aiden }) => {
+  test.setTimeout(90_000);
+  const { app, page } = aiden;
+  const asker = botFixture({ id: "bot-asker", name: "Trip Planner", description: "Plans trips" });
+  const writer = botFixture({ id: "bot-writer", name: "News Digest", description: "Morning news" });
+  await finishLmStudioOnboarding(page);
+  await app.evaluate(({ ipcMain }, bots) => {
+    const byId = new Map(bots.map((bot) => [bot.id, bot]));
+    const [askerBot] = bots;
+    const repliedAt = Date.now();
+    for (const channel of [
+      "bots:list",
+      "bots:get",
+      "bots:live:subscribe",
+      "bots:live:summary",
+      "bots:getCanonicalPhoto",
+      "bots:pendingApprovals",
+    ]) ipcMain.removeHandler(channel);
+    ipcMain.handle("bots:list", () => bots);
+    ipcMain.handle("bots:get", (_event, botId: string) => byId.get(botId) ?? null);
+    ipcMain.handle("bots:live:summary", (_event, botId: string) => ({
+      botId,
+      preview: botId === askerBot!.id ? "Which dates work?" : "Here’s today’s digest.",
+      updatedAt: repliedAt,
+      state: { kind: "idle" },
+      needsYou: botId === askerBot!.id,
+      lastReplyAt: botId === askerBot!.id ? null : repliedAt,
+    }));
+    ipcMain.handle("bots:live:subscribe", (_event, botId: string) => ({
+      botId,
+      epoch: "e1",
+      seq: 0,
+      partial: null,
+      state: { kind: "idle" },
+      question: null,
+      activity: null,
+      queued: [],
+      entries: [],
+    }));
+    ipcMain.handle("bots:getCanonicalPhoto", () => null);
+    ipcMain.handle("bots:pendingApprovals", () => []);
+  }, [asker, writer]);
+  // A reply counts as unread when it is newer than the Bot read record, which
+  // the sidebar writes at launch, so the stub's reply time is after it.
+  await switchToInbox(page);
+
+  const sidebar = page.locator("[data-sidebar]");
+  const botRow = (id: string) => sidebar.locator(`[data-inbox-row="local:${encodeURIComponent(`bot:${id}`)}"]`);
+  const needsYou = sidebar.getByRole("group", { name: "Needs you" });
+  const updates = sidebar.getByRole("group", { name: "Updates" });
+  await expect(needsYou.locator(`[data-inbox-row="local:${encodeURIComponent(`bot:${asker.id}`)}"]`)).toBeVisible();
+  await expect(botRow(asker.id).locator("[data-inbox-status]")).toHaveText(/^Needs you/u);
+  await expect(botRow(asker.id)).toContainText("Bot");
+  await expect(updates.locator(`[data-inbox-row="local:${encodeURIComponent(`bot:${writer.id}`)}"]`)).toBeVisible();
+
+  // Mark read clears the Bot's news, the way opening it would.
+  await botRow(writer.id).hover();
+  await page.getByRole("button", { name: "Mark read: News Digest" }).click();
+  await pointerToPane(page);
+  await expect(botRow(writer.id)).toHaveCount(0);
+  expect(await page.evaluate(() => {
+    const stored = JSON.parse(localStorage.getItem("aiden-agent.bots-sidebar.v1") ?? "{}") as { seenReplyAt?: Record<string, number> };
+    return Object.keys(stored.seenReplyAt ?? {});
+  })).toContain(writer.id);
+
+  // Opening a Bot from its row keeps the Inbox and marks the row as the open page.
+  await botRow(asker.id).locator("[data-roving-item]").click();
+  await expect(page.getByPlaceholder("Ask Trip Planner")).toBeVisible();
+  await expect(sidebar.locator("[data-inbox-view]")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Bots" })).toHaveCount(0);
+  await expect(botRow(asker.id).locator("[data-roving-item]")).toHaveAttribute("aria-current", "page");
+
+  // The Bots button still shows the Bot list.
+  await page.getByRole("button", { name: "Bots", exact: true }).click();
+  const botsNav = page.getByRole("navigation", { name: "Bots" });
+  await expect(botsNav.getByRole("button", { name: /^Trip Planner/u })).toBeVisible();
+  await expect(botsNav.getByRole("button", { name: /^News Digest/u })).toBeVisible();
 });

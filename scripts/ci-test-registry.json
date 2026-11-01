@@ -886,6 +886,7 @@
         "renderer/components/settings/memory-settings.test.tsx",
         "renderer/components/settings/remote-access-settings.test.tsx",
         "renderer/components/settings/settings-design.test.tsx",
+        "renderer/components/settings/sidebar-view-picker.test.tsx",
         "renderer/components/spending/spending-limit-notice.test.tsx",
         "renderer/components/settings/simulator-settings.test.tsx",
         "renderer/components/settings/simulator-ssh-hosts.test.tsx",

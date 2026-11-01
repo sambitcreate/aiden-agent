@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   botChatPath,
   botChatRouteBotId,
+  botListRequestedSinceEnteringBots,
   botRouteBotId,
   environmentToggleTarget,
   isBotsPath,
@@ -41,4 +42,22 @@ test("‹ goes back to the last page outside Bots, never to a Bots page", () => 
   assert.equal(lastNonBotRoute(), "/chat/c1?draft=1");
   rememberRoute("/scheduled#top");
   assert.equal(lastNonBotRoute(), "/scheduled#top");
+});
+
+test("asking for /bots shows the Bot list until the person leaves Bots; opening a Bot directly does not", () => {
+  rememberRoute("/chat/c1");
+  // A Bot opened from the Inbox or a notification keeps the Inbox.
+  rememberRoute("/bots/9f0c/chat");
+  assert.equal(botListRequestedSinceEnteringBots(), false);
+
+  // The Bots entry lands on /bots, which then opens the last Bot: the list stays.
+  rememberRoute("/bots");
+  rememberRoute("/bots/9f0c/chat");
+  rememberRoute("/bots/a71e");
+  assert.equal(botListRequestedSinceEnteringBots(), true);
+
+  // Leaving Bots ends the ask, so the next Bot opened directly keeps the Inbox again.
+  rememberRoute("/scheduled");
+  rememberRoute("/bots/9f0c/chat");
+  assert.equal(botListRequestedSinceEnteringBots(), false);
 });

@@ -319,10 +319,11 @@ export function useAllRegularChats(enabled = true) {
   });
 }
 
-export function useBots(includeArchived = false) {
+export function useBots(includeArchived = false, enabled = true) {
   return useQuery({
     queryKey: [...queryKeys.bots, includeArchived ? "all" : "active"],
     queryFn: () => botsApi.list(includeArchived),
+    enabled,
   });
 }
 

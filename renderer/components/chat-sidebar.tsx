@@ -80,6 +80,8 @@ import { isChatUnread } from "../shared/chat-row-state";
 import { CHAT_ROW_INBOX_ACTIONS, ChatRow, type ChatRowInbox, type ChatRowMenu } from "./sidebar/chat-row";
 import { InboxView, type InboxRowContext } from "./sidebar/inbox-view";
 import {
+  botInboxEntries,
+  botInboxKey,
   filterInboxEntries,
   inboxRowAction,
   localInboxEntries,
@@ -98,9 +100,13 @@ import { ChatRowContextGlyphs } from "./chat-row-context";
 import { sidebarPullRequestChatIds } from "../lib/chat-row-context";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
 import { useAppCapabilities } from "../lib/app-capabilities";
-import { isBotsPath } from "../lib/bot-routes";
+import { botChatPath, botRouteBotId, isBotsPath, useBotListRequested } from "../lib/bot-routes";
 import { useRovingRows } from "../lib/roving-rows";
 import { BotSidebar } from "../main/bots/bot-sidebar";
+import { useBotRows } from "../main/bots/bot-sidebar-rows";
+import { useBotSidebarPreferences } from "../main/bots/use-bot-sidebar-preferences";
+import { isBotUnread } from "../lib/bot-sidebar-preferences";
+import { AvatarFace } from "./bot-avatar";
 import {
   localSidebarChats,
   localSidebarProjects,
@@ -411,13 +417,20 @@ function GeneratedTitleReveal({ previousTitle, title }: { previousTitle: string;
   );
 }
 
-/** On any Bots page the sidebar lists only Bots (spec §9); everywhere else it is the workspace outline. */
+/**
+ * On any Bots page the sidebar lists only Bots (spec §9); everywhere else it is
+ * the workspace outline. With the Inbox as the view, a Bot opened from the
+ * Inbox keeps the Inbox (it owns ⌘1–9 there), and the Bot list shows once the
+ * person goes to `/bots` (the Bots nav entry, `bots.open`, All Bots), until
+ * they leave Bots. Only one of the two sidebars mounts, so only one registers
+ * the jump shortcuts.
+ */
 export function ChatSidebar(props: ChatSidebarProps) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const capabilities = useAppCapabilities();
-  // The Inbox stays on Bot routes and owns ⌘1–9 there.
   const { view } = useSidebarView();
-  return capabilities.bots && isBotsPath(pathname) && view !== "inbox"
+  const botListRequested = useBotListRequested(pathname);
+  return capabilities.bots && isBotsPath(pathname) && (view !== "inbox" || botListRequested)
     ? <BotSidebar />
     : <WorkspaceChatSidebar {...props} />;
 }
@@ -592,6 +605,12 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     enabled: inboxActive && pendingAttentionReq.ids.length > 0,
     placeholderData: keepPreviousData,
   });
+  // This Mac's Bots join the Inbox when they need the person or have an unread
+  // reply. Their unread comes from the Bots sidebar's own record, not chat read markers.
+  const inboxBotsShown = inboxActive && capabilities.bots;
+  const botRows = useBotRows({ enabled: inboxBotsShown });
+  const { preferences: botPreferences, markViewed: markBotViewed } = useBotSidebarPreferences();
+  const openBotId = capabilities.bots ? botRouteBotId(pathname) : null;
   const allInboxEntries = React.useMemo(() => {
     if (!inboxActive) return [];
     const pending = new Map((pendingAttention.data ?? []).map((item) => [item.chatId, item] as const));
@@ -612,10 +631,21 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         peerHosts.hosts,
         (hostId, chatId) => activeRemoteChat?.hostId === hostId && activeRemoteChat.chatId === chatId,
       ),
+      ...(inboxBotsShown
+        ? botInboxEntries({
+            bots: botRows.rows,
+            openBotId,
+            unread: (botId, lastReplyAt) => isBotUnread(botPreferences, botId, lastReplyAt),
+          })
+        : []),
     ];
   }, [
     activeChatId,
     activeRemoteChat,
+    botPreferences,
+    botRows.rows,
+    inboxBotsShown,
+    openBotId,
     chatActivity,
     chats.data,
     environmentPanel.agentBusy,
@@ -638,7 +668,9 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     () => new Map(inboxEntries.map((entry) => [entry.key, entry] as const)),
     [inboxEntries],
   );
-  const activeInboxKey = activeRemoteChat
+  const activeInboxKey = openBotId
+    ? botInboxKey(openBotId)
+    : activeRemoteChat
     ? projectOrderKey(activeRemoteChat.hostId, activeRemoteChat.chatId)
     : activeChatId
       ? projectOrderKey(LOCAL_SIDEBAR_HOST_ID, activeChatId)
@@ -971,9 +1003,10 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     (entry: InboxEntry | undefined) => {
       if (!entry) return;
       if (entry.source.kind === "remote") void openRemoteChat(entry.source.chat);
+      else if (entry.source.kind === "bot") void navigate(botChatPath(entry.source.bot.id));
       else void openChat(entry.source.chat);
     },
-    [openChat, openRemoteChat],
+    [navigate, openChat, openRemoteChat],
   );
 
   // In the Inbox, ⌘1–9 and previous/next follow its visible rows, remote ones included.
@@ -1484,6 +1517,47 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         onPointerEnter={() => prefetchChat(chat.id)}
         onFocus={() => prefetchChat(chat.id)}
         onOpen={() => void openChat(chat)}
+      />
+    );
+  };
+
+  // A Bot's Inbox row: its avatar and "Bot" in place of a project. Opening it
+  // opens the Bot's chat; Mark read records its newest reply as seen.
+  const renderBotInboxRow = (
+    entry: InboxEntry,
+    source: Extract<InboxEntry["source"], { kind: "bot" }>,
+    context: InboxRowContext,
+  ) => {
+    const { bot } = source;
+    const shortcutNumber = inboxShortcutNumbers.get(entry.key);
+    const shortcutBinding = shortcutNumber ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId) : null;
+    const inboxParts = inboxRowParts(entry, context, () => markBotViewed(bot.id, source.lastReplyAt));
+    const inboxAction = inboxParts.action;
+    const open = () => void navigate(botChatPath(bot.id));
+    return (
+      <ChatRow
+        key={entry.key}
+        title={bot.name}
+        status={{
+          state: entry.signals.rowState === "needs_input" ? "needs_input" : source.working ? "working" : "idle",
+          unread: entry.signals.unread,
+        }}
+        selected={entry.signals.isOpen}
+        layout="inbox"
+        inbox={{ ...inboxParts, metaIcon: <AvatarFace avatar={bot.avatar} /> }}
+        shortcutHint={shortcutBinding ? prettyAccelerator(shortcutBinding) : undefined}
+        shortcutsRevealed={chatShortcutsVisible}
+        ariaKeyShortcuts={ariaKeyShortcut(shortcutBinding)}
+        {...(inboxAction
+          ? {
+              menu: ((Item) => (
+                <Item icon={CHAT_ROW_INBOX_ACTIONS[inboxAction.kind].menuIcon} onSelect={inboxAction.onSelect}>
+                  {CHAT_ROW_INBOX_ACTIONS[inboxAction.kind].label}
+                </Item>
+              )) satisfies ChatRowMenu,
+            }
+          : {})}
+        onOpen={open}
       />
     );
   };
@@ -2099,7 +2173,9 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
               renderRow={(entry, context) =>
                 entry.source.kind === "remote"
                   ? renderRemoteChatRow(entry.source.chat, false, { entry, context })
-                  : renderChatRow(entry.source.chat, false, false, { entry, context })
+                  : entry.source.kind === "bot"
+                    ? renderBotInboxRow(entry, entry.source, context)
+                    : renderChatRow(entry.source.chat, false, false, { entry, context })
               }
             />
           ) : organized.chatSections.length === 0 ? (

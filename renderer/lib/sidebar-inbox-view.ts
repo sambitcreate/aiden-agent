@@ -20,6 +20,7 @@ import {
   type SidebarHost,
 } from "./sidebar-remote-groups";
 import type { ChatMeta, Workspace } from "./types";
+import type { BotDefinition } from "../shared/bots";
 
 /**
  * The Inbox view's pure parts (docs/plans/inbox-sidebar-plan.md, Phase 1b):
@@ -32,13 +33,23 @@ import type { ChatMeta, Workspace } from "./types";
 export const INBOX_UNNAMED_HOST_LABEL = "Paired Mac";
 export const INBOX_ASSISTANT_PROJECT_LABEL = "Assistant";
 export const INBOX_SCHEDULED_PROJECT_LABEL = "Scheduled";
+/** Line 1 of a Bot's row, in place of a project. */
+export const INBOX_BOT_PROJECT_LABEL = "Bot";
+export const INBOX_BOT_NEEDS_YOU_DESCRIPTION = "Waiting for you";
 export const INBOX_UNAVAILABLE_DESCRIPTION = "Approval unavailable — return to retry";
 /** Leaving Needs you waits this long, so a run that answers one prompt and raises the next doesn't bounce. */
 export const NEEDS_YOU_LEAVE_DEBOUNCE_MS = 400;
 
 export type InboxEntrySource =
   | { kind: "local"; chat: ChatMeta }
-  | { kind: "remote"; chat: RemoteSidebarChat };
+  | { kind: "remote"; chat: RemoteSidebarChat }
+  | {
+      kind: "bot";
+      bot: BotDefinition;
+      /** The newest reply the row rendered; Mark read records it as seen. */
+      lastReplyAt: number | null;
+      working: boolean;
+    };
 
 export interface InboxEntry extends InboxRow {
   title: string;
@@ -112,10 +123,76 @@ export function localInboxEntries(input: LocalInboxInput): InboxEntry[] {
   });
 }
 
+/** One local Bot, as the Bots sidebar reads it (`useBotRows`). */
+export interface InboxBotInput {
+  bot: BotDefinition;
+  state?: { kind: string };
+  /** When the Bot's chat last changed, or the Bot itself when it has no messages. */
+  activityAt: number;
+  needsYou: boolean;
+  lastReplyAt: number | null;
+}
+
+export interface BotInboxInput {
+  bots: readonly InboxBotInput[];
+  /** The Bot whose chat is open, if any. */
+  openBotId: string | null;
+  /** Unread from the Bot sidebar preferences (`isBotUnread`), not chat read markers. */
+  unread: (botId: string, lastReplyAt: number | null) => boolean;
+}
+
+/** A Bot's row key. Bot ids never collide with chat ids under it. */
+export function botInboxKey(botId: string): string {
+  return projectOrderKey(LOCAL_SIDEBAR_HOST_ID, `bot:${botId}`);
+}
+
 /**
- * Paired hosts' rows. A blocked host's rows are left out: the one Reconnect
- * notice above the list stands in for them. Rows of a host that isn't online
- * stay, marked offline (`hostOnline: false`), and drop out of the counts.
+ * This Mac's Bots, listed only while they need the person (`needsYou`, which
+ * covers pending prompts, issues and failed runs) or have an unread reply
+ * (plan D8). The open Bot also stays listed until the person leaves it, as an
+ * open chat does. Bot chats never show as chats; a Bot that is only running
+ * isn't listed, so Bots never join the Working shelf.
+ */
+export function botInboxEntries(input: BotInboxInput): InboxEntry[] {
+  return input.bots.flatMap((row): InboxEntry[] => {
+    const isOpen = row.bot.id === input.openBotId;
+    const unread = !isOpen && input.unread(row.bot.id, row.lastReplyAt);
+    if (!row.needsYou && !unread && !isOpen) return [];
+    return [
+      {
+        key: botInboxKey(row.bot.id),
+        title: row.bot.name,
+        project: INBOX_BOT_PROJECT_LABEL,
+        hostId: LOCAL_SIDEBAR_HOST_ID,
+        hostLabel: LOCAL_MACHINE_LABEL,
+        source: {
+          kind: "bot",
+          bot: row.bot,
+          lastReplyAt: row.lastReplyAt,
+          working: row.state?.kind === "running",
+        },
+        signals: {
+          // Placement needs only that the Bot waits; its status reads "Needs you" whatever the wait is.
+          rowState: row.needsYou ? "needs_input" : "idle",
+          unread,
+          failed: false,
+          isOpen,
+          hostOnline: true,
+          updatedAt: row.activityAt,
+          ...(row.lastReplyAt !== null ? { lastAssistantAt: row.lastReplyAt } : {}),
+          // The Bot's chat last changed when the wait began, near enough.
+          ...(row.needsYou ? { attentionSince: row.activityAt } : {}),
+        },
+      },
+    ];
+  });
+}
+
+/**
+ * Paired hosts' rows. A blocked host's rows are left out: its "Needs
+ * re-pairing" notice above the list (`RemoteHostStatusList`) stands in for
+ * them. Rows of a host that isn't online stay, marked offline
+ * (`hostOnline: false`), and drop out of the counts.
  */
 export function remoteInboxEntries(
   rows: readonly RemoteSidebarRows[],
@@ -180,7 +257,8 @@ export function formatInboxDuration(now: number, since: number): string {
 
 export type InboxStatusTone = "warning" | "danger" | "working" | "quiet";
 
-export type InboxNeedsYouKind = "approval" | "question" | "failed" | "interrupted" | "unavailable";
+/** Why a row is in Needs you. A Bot is only ever `needs_you`: its row doesn't say which wait it is. */
+export type InboxNeedsYouKind = "approval" | "question" | "failed" | "interrupted" | "unavailable" | "needs_you";
 
 export interface InboxRowStatus {
   /** "Approval", "Working 4m", or a bare age such as "2h". */
@@ -197,12 +275,14 @@ const NEEDS_YOU_LABELS: Readonly<Record<InboxNeedsYouKind, string>> = {
   failed: "Failed",
   interrupted: "Interrupted",
   unavailable: "Unavailable",
+  needs_you: "Needs you",
 };
 
 /** Why a Needs you row is there, from the same rules that placed it. */
 export function inboxNeedsYouKind(entry: InboxEntry, now: number): InboxNeedsYouKind | null {
   const placement = inboxState(entry.signals, now);
   if (placement.shelf !== "needs_you") return null;
+  if (entry.source.kind === "bot") return "needs_you";
   switch (placement.tier) {
     case INBOX_TIERS.approval:
       return "approval";
@@ -255,6 +335,7 @@ export function inboxRowDescription(entry: InboxEntry, status: InboxRowStatus): 
   if (entry.source.kind === "remote") {
     return `${status.label} on ${entry.hostLabel}, waiting ${status.wait}${offline}`;
   }
+  if (entry.source.kind === "bot") return INBOX_BOT_NEEDS_YOU_DESCRIPTION;
   const summary = entry.pending?.summary.trim() ?? "";
   const more = entry.pending && entry.pending.count > 1 ? ` (+${entry.pending.count - 1} more)` : "";
   switch (status.needsYou) {

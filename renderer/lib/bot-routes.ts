@@ -1,5 +1,8 @@
 // Where the Bots surfaces live in the route tree, what the panel shortcut acts
-// on there, and where ‹ in the Bots sidebar goes back to (spec §8, §9).
+// on there, where ‹ in the Bots sidebar goes back to (spec §8, §9), and
+// whether the person asked for the Bot list while the Inbox is the sidebar view.
+
+import * as React from "react";
 
 const BOT_CHAT_ROUTE = /^\/bots\/([^/]+)\/chat\/?$/u;
 const BOT_ROUTE = /^\/bots\/([^/]+)(?:\/chat)?\/?$/u;
@@ -52,12 +55,61 @@ export function botChatPath(botId: string): { to: "/bots/$botId/chat"; params: {
   return { to: "/bots/$botId/chat", params: { botId } };
 }
 
-let lastNonBotHref = "/";
+/** `/bots` itself: the Bots nav entry, `bots.open` and "All Bots" all land here. */
+export function isBotListPath(pathname: string): boolean {
+  return pathname === "/bots" || pathname === "/bots/";
+}
 
-/** Called on every chat-shell navigation. Bots pages are never a back target. */
+let lastNonBotHref = "/";
+let botListRequested = false;
+const botListListeners = new Set<() => void>();
+
+function setBotListRequested(requested: boolean): void {
+  if (botListRequested === requested) return;
+  botListRequested = requested;
+  for (const listener of botListListeners) listener();
+}
+
+/**
+ * Called on every chat-shell navigation. Bots pages are never a back target.
+ * Arriving at `/bots` asks for the Bot list, and the ask lasts through the
+ * Bots pages that follow (its redirect to a Bot, opening other Bots) until
+ * the person leaves Bots.
+ */
 export function rememberRoute(href: string): void {
   const pathname = href.split(/[?#]/u, 1)[0] ?? href;
-  if (!isBotsPath(pathname)) lastNonBotHref = href;
+  if (!isBotsPath(pathname)) {
+    lastNonBotHref = href;
+    setBotListRequested(false);
+  } else if (isBotListPath(pathname)) {
+    setBotListRequested(true);
+  }
+}
+
+/** Whether the person asked for the Bot list since they last entered Bots. */
+export function botListRequestedSinceEnteringBots(): boolean {
+  return botListRequested;
+}
+
+function subscribeBotListRequested(listener: () => void): () => void {
+  botListListeners.add(listener);
+  return () => botListListeners.delete(listener);
+}
+
+/**
+ * Whether the sidebar shows the Bot list on `pathname` while the Inbox is the
+ * stored view. A Bot opened from the Inbox keeps the Inbox (it owns ⌘1–9
+ * there); `/bots`, and every Bots page after it until the person leaves Bots,
+ * shows the list. The pathname check covers the frame before the navigation
+ * is remembered.
+ */
+export function useBotListRequested(pathname: string): boolean {
+  const requested = React.useSyncExternalStore(
+    subscribeBotListRequested,
+    botListRequestedSinceEnteringBots,
+    botListRequestedSinceEnteringBots,
+  );
+  return isBotListPath(pathname) || (isBotsPath(pathname) && requested);
 }
 
 /** Where ‹ in the Bots sidebar goes: the last page outside Bots this session, else the latest chat (`/`). */

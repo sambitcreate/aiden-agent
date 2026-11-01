@@ -263,18 +263,19 @@ function inboxRowButton(): HTMLElement {
   return button;
 }
 
-test("an unread Inbox row says Unread once, at the end of its name", () => {
+test("an Inbox row's name leads with its title and says Unread once, at the end", () => {
   inboxRow({ unread: true });
-  // The row's accessible name ends with the title, then ", Unread" exactly once.
-  assert.equal(
-    screen.getByRole("button", { name: /^(?:(?!Unread).)*\bFix the build\s*, Unread$/u }),
-    inboxRowButton(),
-  );
+  assert.equal(screen.getByRole("button", { name: "Fix the build, aiden, 2h, Unread" }), inboxRowButton());
   cleanup();
 
   inboxRow({ unread: false });
-  assert.ok(screen.getByRole("button", { name: /\bFix the build$/u }));
+  assert.equal(screen.getByRole("button", { name: "Fix the build, aiden, 2h" }), inboxRowButton());
   assert.equal(screen.queryByRole("button", { name: /Unread/u }), null);
+  cleanup();
+
+  // A Needs you row names its reason and how long it has waited, after the title.
+  inboxRow({ meta: "aiden · Studio", status: { label: "Approval", tone: "warning", wait: "4m", needsYou: "approval" } });
+  assert.equal(screen.getByRole("button", { name: "Fix the build, aiden · Studio, Approval, 4m" }), inboxRowButton());
 });
 
 test("an Inbox row's action runs without opening the chat, and a dimmed row offers none", () => {

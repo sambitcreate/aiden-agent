@@ -1,5 +1,16 @@
 import * as React from "react";
-import { Check, CheckCheck, CircleAlert, GitFork, Loader2, MessageCircleQuestion, ShieldAlert, Unplug, type LucideIcon } from "lucide-react";
+import {
+  BellDot,
+  Check,
+  CheckCheck,
+  CircleAlert,
+  GitFork,
+  Loader2,
+  MessageCircleQuestion,
+  ShieldAlert,
+  Unplug,
+  type LucideIcon,
+} from "lucide-react";
 import {
   Button,
   ContextMenu,
@@ -47,14 +58,19 @@ export interface ChatRowInboxAction {
 export interface ChatRowInbox {
   /** Line 1: `project`, or `project · host` when paired hosts exist. */
   meta: string;
+  /**
+   * A small mark before `meta`, such as a Bot's face. It sits in line 1 rather
+   * than leading the row, so every Inbox title starts at the same edge.
+   */
+  metaIcon?: React.ReactNode;
   status: {
     /** "Approval", "Working 4m", or an age such as "2h". */
     label: string;
     tone: ChatRowInboxTone;
     /** How long a Needs you row has waited. */
     wait?: string;
-    /** Which Needs you reason, for the status icon. */
-    needsYou?: "approval" | "question" | "failed" | "interrupted" | "unavailable";
+    /** Which Needs you reason, for the status icon. A Bot's is always `needs_you`. */
+    needsYou?: "approval" | "question" | "failed" | "interrupted" | "unavailable" | "needs_you";
   };
   /** The tooltip and `aria-description`: the request, question or failure. */
   description?: string;
@@ -273,6 +289,8 @@ function InboxStatusIcon({ status }: { status: ChatRowInbox["status"] }) {
     case "interrupted":
     case "unavailable":
       return <Unplug aria-hidden="true" className={className} />;
+    case "needs_you":
+      return <BellDot aria-hidden="true" className={className} />;
     default:
       return null;
   }
@@ -304,6 +322,16 @@ function InboxRowStatus({ status }: { status: ChatRowInbox["status"] }) {
       {status.label}
     </span>
   );
+}
+
+/**
+ * The row's accessible name, title first so a screen reader hears what the
+ * row is before where it lives: "Fix the build, aiden, 2h, Unread".
+ */
+function inboxAccessibleName(title: string, inbox: ChatRowInbox): string {
+  return [title, inbox.meta, inbox.status.label, inbox.status.wait, inbox.unread ? "Unread" : undefined]
+    .filter((part): part is string => Boolean(part?.trim()))
+    .join(", ");
 }
 
 function InboxChatRow({
@@ -355,6 +383,7 @@ function InboxChatRow({
       )}
       icon={icon}
       aria-busy={busy}
+      aria-label={inboxAccessibleName(title, inbox)}
       aria-description={inbox.description}
       aria-keyshortcuts={ariaKeyShortcuts}
       selected={selected}
@@ -364,7 +393,16 @@ function InboxChatRow({
       title={
         <span className="flex min-w-0 flex-col gap-0.5">
           <span className="flex min-h-(--text-small--line-height) min-w-0 items-center gap-1.5 text-small text-quaternary">
-            <span className="min-w-0 flex-1 truncate">{inbox.meta}</span>
+            {inbox.metaIcon ? (
+              <span className="flex min-w-0 flex-1 items-center gap-1">
+                <span aria-hidden="true" className="grid size-3.5 shrink-0 place-items-center [&>svg]:size-full" data-inbox-meta-icon="">
+                  {inbox.metaIcon}
+                </span>
+                <span className="min-w-0 truncate">{inbox.meta}</span>
+              </span>
+            ) : (
+              <span className="min-w-0 flex-1 truncate">{inbox.meta}</span>
+            )}
             {shortcutsRevealed && shortcutHint ? (
               <kbd
                 aria-hidden="true"
@@ -389,7 +427,6 @@ function InboxChatRow({
           >
             {titleContent}
           </span>
-          {inbox.unread ? <span className="sr-only">{", Unread"}</span> : null}
         </span>
       }
     />

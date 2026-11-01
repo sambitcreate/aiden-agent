@@ -1,6 +1,6 @@
 # Inbox Sidebar
 
-Status: In progress (2026-10-31). The owner picked Option D (Hybrid Inbox) and accepted every recommended decision. Two code-grounded edge-case reviews (local desktop; connected hosts, `aiden serve` and phones) are folded in. Phase 0 and Phase 1a–1c are built on the plan branch `claude/inbox-sidebar-plan`; 1d (Bots, the Appearance setting and the user docs) and Phases 2–3 are next. See "1b and 1c as built" for where the build differs from the text below.
+Status: In progress (2026-10-31). The owner picked Option D (Hybrid Inbox) and accepted every recommended decision. Two code-grounded edge-case reviews (local desktop; connected hosts, `aiden serve` and phones) are folded in. Phase 0 and all of Phase 1 (1a–1d) are built on the plan branch `claude/inbox-sidebar-plan`; Phases 2–3 are next. See "1b and 1c as built" and "1d as built" for where the build differs from the text below.
 
 Interactive options page (private, shared by the owner): <https://claude.ai/artifact/2KX5jwZ68w9wsejKTAAqx8>
 
@@ -190,7 +190,7 @@ New desktop-only IPC, `chats:pendingAttention`, returns for each chat `{ kind, s
 **1b and 1c as built (2026-10-31).** The view lives in `renderer/components/sidebar/inbox-view.tsx`, with its pure helpers (status label, description, row action, freeze bookkeeping) in `renderer/lib/sidebar-inbox-view.ts`. Where it differs from the text above:
 
 - Remote **Mark read** goes through the existing `markRemoteChatRead` path rather than reading a one-message window; local Mark read passes the newest message no newer than the row's `lastAssistantAt`.
-- A blocked host's rows are left out of the Inbox. The single **Reconnect** notice that replaces them is not built yet.
+- A blocked host's rows are left out of the Inbox. 1d settled the notice that replaces them; see "1d as built".
 - The Working shelf's 40% cap is measured from the sidebar's height with a `ResizeObserver`.
 - Changing the search text or the machine filter resets the frozen order at once, so results never wait for the pointer to leave.
 - "Nothing needs you" shows only when Needs you, Updates and Earlier are all empty; a running Working shelf doesn't hide it.
@@ -205,7 +205,7 @@ New desktop-only IPC, `chats:pendingAttention`, returns for each chat `{ kind, s
 - The Working shelf is its own region under the scrolling list (the sidebar's `belowList` slot), not a sticky part of it: rows never show through it, a short list leaves it pinned to the bottom, it scrolls inside its 40% cap, and its rows line up with the list's. The roving-rows container spans both.
 - The freeze reads the pointer and keyboard focus from the DOM, not React's synthetic events, so a portalled menu or tooltip never holds it; an open menu or dialog holds it on its own. A focused row that goes releases it unless focus moves to the row in its place.
 - Row actions match their menu items: both come from `inboxRowAction`, so a Failed row reads Acknowledge in both, and held-over or offline rows offer neither.
-- **Known gap, for 1d:** while the Inbox is the stored view it stays on Bot routes in place of `BotSidebar`, so the Bot list can't be reached there and Bots don't show in the Inbox yet. 1d brings Bots into the Inbox.
+- **Known gap, closed in 1d:** while the Inbox was the stored view it stayed on Bot routes in place of `BotSidebar`, so the Bot list couldn't be reached there and Bots didn't show in the Inbox. See "1d as built".
 
 **1d. Bots, Settings and docs.**
 
@@ -217,9 +217,19 @@ New desktop-only IPC, `chats:pendingAttention`, returns for each chat `{ kind, s
   - `docs/plans/README.md`: the status row.
   - `docs/design-guide.md`: the compact Inbox row and its hover-icon overlay.
 
+**1d as built (2026-10-31).** Where it differs from, or settles, the text above:
+
+- **Bot rows.** `botInboxEntries` (`renderer/lib/sidebar-inbox-view.ts`) turns each local Bot into one entry, keyed `local:bot:<id>` so it can never collide with a chat. A Bot that needs you sits in Needs you with the "Needs you" status and the description "Waiting for you"; a Bot with an unread reply (`isBotUnread` against the Bot sidebar preferences) sits in Updates; the open Bot sits in Earlier. Bots that are only running or are read are not listed: their activity lives in the Bot list, and the Working shelf stays for chats. The row's meta reads "Bot", led by a 14px copy of the Bot's face (`ChatRowInbox.metaIcon`, the avatar shape and colour without its photo) in line 1 rather than a leading avatar, so Bot and chat titles start at the same edge. Mark read calls the Bot preferences' `markViewed`, the same write opening a Bot makes. Bot chats still show only through their Bot row, and remote Bots wait for Phase 2. The Bot list is fetched only while the Inbox is showing (`useBotRows({ enabled })`); `useBotNotificationsSync` keeps the summaries current.
+- **The open Bot stays listed.** Unlike an open chat that has gone quiet, the open Bot keeps a row in Earlier so the sidebar shows where the person is; it drops off when they leave it, unless it still needs them or has news.
+- **Bot-list reachability.** The Bots button (and `/bots`, the All Bots link and Back) asks for the Bot list: from that point `BotSidebar` shows until the person leaves the Bots pages (`useBotListRequested` in `renderer/lib/bot-routes.ts`; the chat shell remembers each navigation as it starts, because `/bots` redirects to a Bot before its own load resolves). A Bot opened from an Inbox row, ⌘1–9 or a notification keeps the Inbox, with the open Bot's row selected. Only one of the two sidebars is mounted at a time, so ⌘1–9 is registered once: by the Inbox on an Inbox Bot route, by `BotSidebar` on the Bot list.
+- **Reconnect notice.** The existing `RemoteHostStatusList` (`renderer/components/sidebar-remote.tsx`) already sits above the list in every view, the Inbox included. It reads "{Host} · Needs re-pairing" with a **Connections** button for a blocked host, and "{Host} · Offline" with **Reconnect** for an offline one, so it is the one notice that stands in for a blocked host's rows. No Inbox-specific notice was added.
+- **Settings → Appearance → Sidebar.** `SidebarViewPicker` (`renderer/components/settings/sidebar-view-picker.tsx`) reads and writes the same `useSidebarView()` store as the Organize menu, so either one updates the other at once, across windows too. The Inbox card's accessible name is "Inbox (Beta)". The cards share the Chat width cards' radio-card styles and arrow-key handling (`radio-navigation.ts`).
+- **Accessible names.** An Inbox row's name leads with its title, then the project, status, wait and "Unread", joined by commas: "Fix the build, aiden, 2h, Unread".
+- **Known gap.** `markViewed` also records the Bot as the last one viewed, so marking a Bot read from the Inbox changes which Bot the Bots button opens.
+
 **Phase 1 edge cases.**
 
-- *Offline, blocked and stale hosts.* A stale host keeps reporting `needs_approval` (`sidebar-remote-groups.ts:197`). Rows from a host that isn't online dim, show an offline marker, freeze their wait time, and drop out of Needs you counts and the badge. A blocked host's rows leave Needs you, replaced by one notice with **Reconnect**. The peer feed cache is memory-only, so after a restart an unreachable host shows "{Host} offline · its chats are hidden".
+- *Offline, blocked and stale hosts.* A stale host keeps reporting `needs_approval` (`sidebar-remote-groups.ts:197`). Rows from a host that isn't online dim, show an offline marker, freeze their wait time, and drop out of Needs you counts and the badge. A blocked host's rows leave Needs you, replaced by one notice (as built, the existing host status row: **Connections** to re-pair, **Reconnect** when offline). The peer feed cache is memory-only, so after a restart an unreachable host shows "{Host} offline · its chats are hidden".
 - *Answered elsewhere.* If a prompt was answered on another device before the chat opens, the chat lands on the newest turn with the existing "elsewhere" outcome (`host-chat-adapter.ts:175`). An offline host opens to its offline state. A host that doesn't grant `respondApproval` shows "Approve on {Host}" instead of the buttons.
 - *Mark read bounds.* `markChatRead` without `throughMessageId` marks the newest message (`chat-read-markers-main.ts:13-28`), so the row passes the last assistant message id it rendered; a reply that lands mid-click stays unread. Remote Mark read reads a one-message window to get that id, and is hidden when the host has no messages window. Mark read is hidden on Approval, Question, Interrupted and Unavailable rows. On a Failed row it reads **Acknowledge** and moves the chat to Earlier. Opening a chat marks it read only while the chat is visible (`use-mark-chat-read.ts`).
 - *Lifecycle placements.* `localSidebarChats` drops chats with no registered workspace (`sidebar-workspace-groups.ts:54-78`). The Inbox decides each case:
@@ -342,7 +352,7 @@ Whether Inbox becomes the default is a separate owner decision, made afterwards.
 | Needs you looks empty because local prompts detach | D12: detached prompts show as Unavailable and interrupted waits as Interrupted. The Playwright spec raises approvals from a second window or a Remote-origin run, so it tests a prompt that is really live. |
 | Rows moving under the pointer | Freeze-while-in-use (pointer, focus-visible, open menus and dialogs), held slots for leaving rows, capped animation, and a Playwright check that moves are held back. |
 | Remote rows lack times and request text in Phase 1 | Local times come from `HostRunRegistry` through `chats:pendingAttention`. Remote rows order by `updatedAt` and show status, host and wait only until 2b. Never a wrong section. |
-| A stale or offline host keeps a chat in Needs you | Non-online hosts' rows dim, freeze, and leave the counts and the badge. A blocked host collapses to one Reconnect notice. |
+| A stale or offline host keeps a chat in Needs you | Non-online hosts' rows dim, freeze, and leave the counts and the badge. A blocked host collapses to one host status notice (re-pair through Connections). |
 | ⌘1–9 now reaches remote rows | Called out in the PR. Keys are host-qualified and follow the frozen on-screen order. A Playwright step covers it. |
 | Large hosts (up to 2,000 chats each) | `organizeInbox` is linear plus one sort per section, memoized on the inputs. Earlier is capped at 20 with Show more. |
 | Bots leak into workspace views | The D8 amendment is limited to the Inbox view. The workspace and recent projections keep excluding Bot homes, and existing tests stay. |
@@ -352,4 +362,4 @@ Whether Inbox becomes the default is a separate owner decision, made afterwards.
 
 ## Amendment to the Unified Workspace Sidebar plan
 
-The Inbox view may list Bots, but only while they need the person (including an issue or a failed run) or have an unread reply. Bot rows open the Bot, never a workspace chat. The By workspace and Recent only views are unchanged.
+The Inbox view may list Bots, but only while they need the person (including an issue or a failed run) or have an unread reply, and (as built in 1d) the Bot that is open, the way an open chat stays listed. Bot rows open the Bot, never a workspace chat. The By workspace and Recent only views are unchanged.
