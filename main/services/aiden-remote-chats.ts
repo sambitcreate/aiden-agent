@@ -1230,12 +1230,12 @@ export class AidenRemoteChatService {
       workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
       /**
        * No workspace chats keep a hidden folder each: `target` gives the
-       * workspace a new or moved chat goes to, and `release` lets go of a
-       * hidden folder a moved chat left empty. Absent: workspaces are used as
-       * requested.
+       * workspace a new chat that asked for `noWorkspace` goes to, and
+       * `release` lets go of a hidden folder a moved chat left empty. Absent:
+       * workspaces are used as requested.
        */
       noWorkspace?: {
-        target(workspaceId: string, chatId?: string): Promise<string>;
+        target(workspaceId: string): Promise<string>;
         release(workspaceId: string): Promise<void>;
       };
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */

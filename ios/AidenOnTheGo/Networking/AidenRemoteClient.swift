@@ -530,9 +530,10 @@ enum AidenNoWorkspace {
         }
     }
 
-    /// Workspaces a person picks, opens or manages: everything but the hidden records.
-    static func choices(_ workspaces: [AidenWorkspace]) -> [AidenWorkspace] {
-        workspaces.filter { !$0.noWorkspace }
+    /// Workspaces a person picks, opens or manages: everything but the hidden records, except
+    /// `keeping`, a hidden record something already uses (a scheduled task being edited).
+    static func choices(_ workspaces: [AidenWorkspace], keeping workspaceID: String? = nil) -> [AidenWorkspace] {
+        workspaces.filter { !$0.noWorkspace || $0.id == workspaceID }
     }
 
     /// Workspaces that are not archived. A hidden record never counts as archived: an older

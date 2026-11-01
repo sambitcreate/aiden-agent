@@ -220,9 +220,10 @@ export const AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION = 49 as const;
  * chats without a workspace on phones. A workspace may carry `noWorkspace:
  * true`: a hidden folder Aiden made for one such chat. Phones list those chats
  * under one Chats group and start new ones in its home (the `default` record,
- * else the oldest); `POST /chats` or a move into a hidden workspace that
- * already holds another chat saves the chat in a fresh one. Older phones see
- * each hidden workspace as a workspace named "No workspace", as before.
+ * else the oldest). `POST /chats` with `noWorkspace: true` aimed at a hidden
+ * workspace that already holds another chat saves the chat in a fresh one;
+ * without the flag, and for moves, the named workspace is kept. Older phones
+ * see each hidden workspace as a workspace named "No workspace", as before.
  */
 export const AIDEN_REMOTE_NO_WORKSPACE_CONTRACT_REVISION = 50 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_NO_WORKSPACE_CONTRACT_REVISION;

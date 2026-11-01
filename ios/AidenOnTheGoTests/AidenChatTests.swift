@@ -7454,6 +7454,11 @@ final class AidenChatTests: XCTestCase {
             "the long-lived default home wins"
         )
         XCTAssertEqual(AidenNoWorkspace.choices(workspaces).map(\.id), ["project"])
+        // A scheduled task that already runs in a hidden folder keeps it as a choice while edited.
+        XCTAssertEqual(
+            AidenNoWorkspace.choices(workspaces, keeping: "hidden-later").map(\.id),
+            ["project", "hidden-later"]
+        )
 
         let projection = AidenWorkspaceSidebarProjection.make(
             workspaces: workspaces,

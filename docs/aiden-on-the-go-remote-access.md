@@ -131,7 +131,7 @@ When the agent leaves something running for a workspace chat on the Mac (a dev s
 
 ## Chats without a workspace
 
-When the paired desktop has No workspace chats (contract revision 50), Aiden On The Go for iPhone and Android lists them in one **Chats** group, as the desktop does, and **New Chat** offers **No Workspace** first. That chat runs on the desktop with its global settings in a private folder of its own; the private folders never show up in the phone's workspace list, pickers or Scheduled Tasks. The CLI has no No workspace chats, so a phone paired to it offers nothing new. See [chats without a workspace](no-workspace-chats.md).
+When the paired desktop has No workspace chats (contract revision 50), Aiden On The Go for iPhone and Android lists them in one **Chats** group, as the desktop does, and **New Chat** offers **No Workspace** first. That chat runs on the desktop with its global settings in a private folder of its own; the private folders never show up in the phone's workspace list or pickers (an iPhone scheduled task that already runs in one keeps showing it while you edit the task). The CLI has no No workspace chats, so a phone paired to it offers nothing new. See [chats without a workspace](no-workspace-chats.md).
 
 ## Pictures in a reply
 

@@ -143,9 +143,12 @@ final class AidenScheduledTasksModel {
     var canManageSchedules: Bool { canReadSchedules && canWriteSchedules }
     var tasks: [AidenScheduledTask] { canReadSchedules ? taskStorage : [] }
     var settings: AidenScheduledSettings? { canReadSchedules ? settingsStorage : nil }
-    var workspaces: [AidenWorkspace] {
+    /// Workspaces a task can run in. Hidden No workspace records are left out, except the one a
+    /// task already uses, so editing it still shows (and keeps) where it runs, as on the desktop.
+    func workspaceChoices(keeping workspaceID: String?) -> [AidenWorkspace] {
         guard canManageSchedules else { return [] }
-        return AidenNoWorkspace.choices(coordinator.workspaces).filter { $0.permission != .none }
+        return AidenNoWorkspace.choices(coordinator.workspaces, keeping: workspaceID)
+            .filter { $0.permission != .none }
     }
 
     private var currentAccess: AidenScheduledTaskAccess {
@@ -994,7 +997,7 @@ private struct AidenScheduledTaskEditor: View {
     }
     private var selectedWorkspaceName: String {
         guard let workspaceId = draft.workspaceId else { return String(localized: "No workspace") }
-        return model.workspaces.first { $0.id == workspaceId }?.name
+        return model.workspaceChoices(keeping: workspaceId).first { $0.id == workspaceId }?.name
             ?? String(localized: "Unavailable workspace")
     }
     private var selectedScriptName: String {
@@ -1037,7 +1040,7 @@ private struct AidenScheduledTaskEditor: View {
                     }
                     Picker("Workspace", selection: $draft.workspaceId) {
                         Text("No workspace").tag(String?.none)
-                        ForEach(model.workspaces) { Text($0.name).tag(Optional($0.id)) }
+                        ForEach(model.workspaceChoices(keeping: draft.workspaceId)) { Text($0.name).tag(Optional($0.id)) }
                     }
                 }
                 Section("Schedule") {

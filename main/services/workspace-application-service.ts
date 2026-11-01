@@ -294,16 +294,15 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
     },
 
     /**
-     * A paired device's new or moved chat aimed at a hidden No workspace that
-     * already holds another chat gets a fresh one, so each chat keeps its own
-     * folder. Returns the workspace to use; any other workspace is unchanged.
+     * A paired device's new chat aimed at a hidden No workspace that already
+     * holds another chat gets a fresh one, so each chat keeps its own folder.
+     * Returns the workspace to use; any other workspace is unchanged.
      */
-    async workspaceForNoWorkspaceChat(workspaceId: string, chatId?: string) {
+    async workspaceForNoWorkspaceChat(workspaceId: string) {
       if (!deps.noWorkspace) return workspaceId;
       const workspace = await deps.configStore.getWorkspace(workspaceId);
       if (!workspace?.noWorkspace) return workspaceId;
-      const others = (await deps.noWorkspace.chatIdsIn(workspaceId)).filter((id) => id !== chatId);
-      if (others.length === 0) return workspaceId;
+      if ((await deps.noWorkspace.chatIdsIn(workspaceId)).length === 0) return workspaceId;
       return (await service.createNoWorkspace()).id;
     },
 

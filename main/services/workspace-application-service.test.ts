@@ -432,11 +432,6 @@ test("a paired device's chat in a No workspace folder that holds another chat ge
   const fresh = await app.service.workspaceForNoWorkspaceChat("default");
   assert.notEqual(fresh, "default");
   assert.equal(app.registry.get(fresh)?.noWorkspace, true);
-  assert.equal(
-    await app.service.workspaceForNoWorkspaceChat("default", "older"),
-    "default",
-    "the chat already in the folder keeps it",
-  );
 
   app.chatsIn.set("project", ["a", "b"]);
   assert.equal(await app.service.workspaceForNoWorkspaceChat("project"), "project", "a real workspace is shared");
