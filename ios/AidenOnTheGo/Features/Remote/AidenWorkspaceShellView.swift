@@ -29,7 +29,7 @@ struct AidenRelativeTimestampView: View {
 }
 
 /// Trailing chat-row status. Attention states use soft semantic fills with no
-/// borders; Working keeps the compact spinner; the unread dot is independent
+/// borders; Working shows the desktop's turning ring; the unread dot is independent
 /// because a chat can be both working and holding unseen earlier output.
 /// Unseen output from a failed turn says Failed in place of the dot.
 struct AidenChatRowStatusView: View {
@@ -47,9 +47,9 @@ struct AidenChatRowStatusView: View {
             case .needsInput:
                 pill("Reply", systemImage: "questionmark.bubble", tint: palette.accent, label: state.accessibilityLabel)
             case .working:
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(palette.accent)
+                AidenWorkingIndicator(size: 16, tint: palette.accent)
+                    .accessibilityHidden(false)
+                    .accessibilityElement()
                     .accessibilityLabel(state.accessibilityLabel)
             case .idle:
                 EmptyView()
@@ -214,6 +214,9 @@ final class AidenHomeModel {
         chats.removeAll { $0.id == chat.id }
         var summary = AidenChatSummary(chat: chat, preservingActivity: existing?.activity ?? .idle)
         summary.rowState = existing?.rowState
+        summary.unread = false
+        summary.lastRunFailed = existing?.lastRunFailed ?? false
+        if let existing { summary.inbox = existing.inbox }
         chats.append(summary)
         chats.sort(by: AidenChatSummaryPage.areInCanonicalOrder)
         persistCurrentSummaries(changedID: chat.id)
@@ -232,6 +235,92 @@ final class AidenHomeModel {
               chats[index].unread else { return }
         chats[index].unread = false
         persistCurrentSummaries(changedID: chatID)
+    }
+
+    /// The Inbox banner after a swipe action: a rollback explanation, or
+    /// a confirmation that can undo the change.
+    var inboxNotice: AidenInboxNotice?
+
+    /// Mark read from a swipe. The dot clears at once and comes back with a
+    /// banner if the Mac refuses.
+    func markRead(chatID: String, coordinator: AidenRemoteCoordinator) async {
+        guard let index = chats.firstIndex(where: { $0.id == chatID }), chats[index].unread,
+              let context = try? coordinator.requestContext() else { return }
+        chats[index].unread = false
+        chats[index].inbox.invalidateHostPlacement()
+        persistCurrentSummaries(changedID: chatID)
+        do {
+            try await coordinator.remoteClient(for: context).markChatRead(id: chatID)
+        } catch {
+            guard coordinator.isCurrent(context),
+                  let index = chats.firstIndex(where: { $0.id == chatID }) else { return }
+            chats[index].unread = true
+            persistCurrentSummaries(changedID: chatID)
+            inboxNotice = AidenInboxNotice(message: String(localized: "Couldn’t mark that chat read. Try again once your Mac is reachable."))
+        }
+    }
+
+    /// Done, Snooze or their undo. The row moves at once; a refusal puts it
+    /// back with a banner, and a stale revision also refreshes the list.
+    @discardableResult
+    func setTriage(
+        _ change: AidenChatTriageChange,
+        chatID: String,
+        coordinator: AidenRemoteCoordinator,
+        now: Date = Date(),
+        offersUndo: Bool = true
+    ) async -> Bool {
+        guard let index = chats.firstIndex(where: { $0.id == chatID }),
+              let context = try? coordinator.requestContext() else { return false }
+        let before = chats[index]
+        // Done on unseen failed output also reads it, as on the desktop.
+        let alsoMarkRead = change.done == true && before.showsFailed
+            && coordinator.server?.supportsChatReadState == true
+        chats[index] = AidenInbox.applyingOptimisticTriage(change, to: before, now: now, alsoMarkRead: alsoMarkRead)
+        persistCurrentSummaries(changedID: chatID)
+        inboxNotice = nil
+        do {
+            let client = try coordinator.remoteClient(for: context)
+            let result = try await client.setChatTriage(
+                chatId: chatID,
+                change: change,
+                ifRevision: before.inbox.triageRevision ?? 0
+            )
+            guard coordinator.isCurrent(context),
+                  let index = chats.firstIndex(where: { $0.id == chatID }) else { return true }
+            chats[index].inbox.pinnedAt = result.pinnedAt
+            chats[index].inbox.doneAt = result.doneAt
+            chats[index].inbox.snoozedUntil = result.snoozedUntil
+            chats[index].inbox.triageRevision = result.revision > 0 ? result.revision : nil
+            persistCurrentSummaries(changedID: chatID)
+            if offersUndo, let undo = change.undo {
+                inboxNotice = AidenInboxNotice(message: change.confirmation, undo: undo, chatID: chatID)
+            }
+            if alsoMarkRead {
+                do {
+                    try await client.markChatRead(id: chatID)
+                } catch {
+                    if coordinator.isCurrent(context), let index = chats.firstIndex(where: { $0.id == chatID }) {
+                        chats[index].unread = before.unread
+                        persistCurrentSummaries(changedID: chatID)
+                    }
+                }
+            }
+            return true
+        } catch {
+            guard coordinator.isCurrent(context) else { return false }
+            if let index = chats.firstIndex(where: { $0.id == chatID }) {
+                chats[index].inbox = before.inbox
+                chats[index].unread = before.unread
+                persistCurrentSummaries(changedID: chatID)
+            }
+            let conflict = (error as? AidenRemoteClientError)?.isRevisionConflict == true
+            inboxNotice = AidenInboxNotice(message: conflict
+                ? String(localized: "That chat changed on another device. The Inbox is up to date now.")
+                : String(localized: "Couldn’t update that chat. It’s back where it was."))
+            if conflict { await load(coordinator: coordinator) }
+            return false
+        }
     }
 
     func removeChat(id: String) {
@@ -792,6 +881,8 @@ enum AidenWorkspaceNavigation {
 enum AidenWorkspaceSidebarOrganization: String, Codable, Equatable {
     case workspace
     case recent
+    /// Beta: Needs you, Pinned, Updates and Earlier, with the Working shelf.
+    case inbox
 }
 
 struct AidenWorkspaceSidebarSection: Identifiable, Equatable {
@@ -818,8 +909,9 @@ struct AidenWorkspaceSidebarProjection: Equatable {
             .sorted { left, right in
                 left.updatedAt == right.updatedAt ? left.id < right.id : left.updatedAt > right.updatedAt
             }
-        let triagedChats = aidenNeedsAttentionFirst(regularChats)
-        let chatsByWorkspace = Dictionary(grouping: triagedChats, by: \AidenChatSummary.workspaceId)
+        // By workspace and Recent sort plainly by recency, as on the desktop;
+        // attention ordering belongs to the Inbox organization.
+        let chatsByWorkspace = Dictionary(grouping: regularChats, by: \AidenChatSummary.workspaceId)
         let sections = workspaces.compactMap { workspace -> AidenWorkspaceSidebarSection? in
             let allChats = chatsByWorkspace[workspace.id] ?? []
             let workspaceMatches = !query.isEmpty && workspace.name.localizedCaseInsensitiveContains(query)
@@ -842,7 +934,7 @@ struct AidenWorkspaceSidebarProjection: Equatable {
             }
             return left.workspace.id < right.workspace.id
         }
-        let recents = triagedChats.filter { chat in
+        let recents = regularChats.filter { chat in
             guard !query.isEmpty else { return true }
             return chat.title.localizedCaseInsensitiveContains(query)
                 || workspaceByID[chat.workspaceId]?.name.localizedCaseInsensitiveContains(query) == true
@@ -983,6 +1075,9 @@ struct AidenWorkspaceShellView: View {
     @State private var sidebarChatNavigationRequestID: UUID?
     @State private var homeModel = AidenHomeModel()
     @State private var fullyRevealedSidebarWorkspaceIDs: Set<String> = []
+    @State private var showsAllInboxEarlier = false
+    @State private var inboxClock = Date()
+    @State private var snoozeCandidate: AidenChatSummary?
     @State private var searchText = ""
     @State private var isSearching = false
     @State private var isShowingNewAgentChoices = false
@@ -995,6 +1090,7 @@ struct AidenWorkspaceShellView: View {
     @State private var hapticScope = UUID()
     @FocusState private var searchFieldIsFocused: Bool
     @Namespace private var newAgentTransition
+    @Environment(\.aidenReduceMotion) private var reduceMotion
     @AppStorage("aiden.defaults.workspacePermission") private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
 
     init(
@@ -1065,6 +1161,51 @@ struct AidenWorkspaceShellView: View {
             chats: homeModel.chats,
             searchText: searchText
         )
+    }
+
+    private var inboxProjection: AidenInboxProjection {
+        AidenInboxProjection.make(
+            chats: homeModel.chats,
+            workspaceNames: Dictionary(activeWorkspaces.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first }),
+            openChatID: selectedSidebarChat?.id,
+            now: inboxClock,
+            searchText: searchText,
+            showAllEarlier: showsAllInboxEarlier
+        )
+    }
+
+    private var sidebarOrganizationTitle: String {
+        switch sidebarOrganization {
+        case .workspace: String(localized: "Workspaces")
+        case .recent: String(localized: "Recents")
+        case .inbox: String(localized: "Inbox")
+        }
+    }
+
+    /// Mark read is offered only on unread rows of a Mac that takes read
+    /// markers (`chat-read-state-v1`).
+    private func offersMarkRead(_ chat: AidenChatSummary) -> Bool {
+        chat.unread && coordinator.server?.supportsChatReadState == true
+    }
+
+    /// Done and Snooze need `chat-triage-v1`, chat:write, and a row that is
+    /// not waiting on the person or still running.
+    private func offersTriage(_ chat: AidenChatSummary) -> Bool {
+        coordinator.server?.supportsChatTriage == true
+            && coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .chatWrite) == true
+            && AidenInbox.offersDoneAndSnooze(chat)
+    }
+
+    private func markDone(_ chat: AidenChatSummary) {
+        Task { await homeModel.setTriage(.done(true), chatID: chat.id, coordinator: coordinator) }
+    }
+
+    private func snooze(_ chat: AidenChatSummary, until date: Date) {
+        Task { await homeModel.setTriage(.snooze(until: date), chatID: chat.id, coordinator: coordinator) }
+    }
+
+    private func markRead(_ chat: AidenChatSummary) {
+        Task { await homeModel.markRead(chatID: chat.id, coordinator: coordinator) }
     }
 
     private var recentsPresentation: AidenReadPresentation {
@@ -1509,9 +1650,12 @@ struct AidenWorkspaceShellView: View {
             }
 
             HStack(spacing: 12) {
-                Text(sidebarOrganization == .workspace ? "Workspaces" : "Recents")
+                Text(sidebarOrganizationTitle)
                     .font(.title3.bold())
                     .foregroundStyle(palette.foreground)
+                if sidebarOrganization == .inbox {
+                    AidenBetaBadge()
+                }
 
                 Spacer(minLength: 8)
 
@@ -1524,7 +1668,9 @@ struct AidenWorkspaceShellView: View {
             .listRowSeparator(.hidden)
             .listRowBackground(palette.canvas)
 
-            if sidebarOrganization == .workspace {
+            if sidebarOrganization == .inbox {
+                inboxListContent
+            } else if sidebarOrganization == .workspace {
                 if chatListUnavailable, workspaceListPresentation == .content {
                     chatRefreshErrorRow
                 }
@@ -1705,6 +1851,150 @@ struct AidenWorkspaceShellView: View {
             await coordinator.refreshWorkspaces()
             await homeModel.load(coordinator: coordinator)
         }
+        .task(id: sidebarOrganization) {
+            // Snoozes wake and Earlier ages out on this phone's clock.
+            guard sidebarOrganization == .inbox else { return }
+            while !Task.isCancelled {
+                inboxClock = Date()
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
+        .onChange(of: sidebarOrganization) { _, _ in
+            showsAllInboxEarlier = false
+            homeModel.inboxNotice = nil
+        }
+        .confirmationDialog(
+            "Snooze until",
+            isPresented: Binding(
+                get: { snoozeCandidate != nil },
+                set: { if !$0 { snoozeCandidate = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: snoozeCandidate
+        ) { chat in
+            ForEach(AidenSnoozeOption.options(now: Date())) { option in
+                Button(option.label) { snooze(chat, until: option.until) }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .overlay(alignment: .top) {
+            if sidebarOrganization == .inbox, let notice = homeModel.inboxNotice {
+                AidenInboxNoticeBanner(
+                    notice: notice,
+                    palette: palette,
+                    onUndo: notice.undo.flatMap { undo in
+                        notice.chatID.map { chatID in
+                            {
+                                homeModel.inboxNotice = nil
+                                Task {
+                                    await homeModel.setTriage(undo, chatID: chatID, coordinator: coordinator, offersUndo: false)
+                                }
+                            }
+                        }
+                    },
+                    onDismiss: { homeModel.inboxNotice = nil }
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+                .task(id: notice.id) {
+                    try? await Task.sleep(for: .seconds(5))
+                    if homeModel.inboxNotice?.id == notice.id { homeModel.inboxNotice = nil }
+                }
+            }
+        }
+        .animation(reduceMotion ? nil : .smooth(duration: 0.24, extraBounce: 0), value: homeModel.inboxNotice)
+    }
+
+    @ViewBuilder
+    private var inboxListContent: some View {
+        switch recentsPresentation {
+        case .content:
+            if chatListUnavailable { chatRefreshErrorRow }
+            let projection = inboxProjection
+            if projection.isEmpty {
+                Group {
+                    if searchText.isEmpty {
+                        ContentUnavailableView(
+                            "All Caught Up",
+                            systemImage: "tray",
+                            description: Text("Chats that need you or have news show up here.")
+                        )
+                    } else {
+                        ContentUnavailableView.search(text: searchText)
+                    }
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(palette.canvas)
+            } else {
+                ForEach(AidenInboxSection.allCases, id: \.self) { section in
+                    let rows = projection.rows(in: section)
+                    if !rows.isEmpty {
+                        inboxSectionHeader(section, count: rows.count)
+                        ForEach(rows) { row in
+                            inboxRow(row, section: section)
+                        }
+                        if section == .earlier, projection.earlierOverflow > 0 {
+                            Button {
+                                showsAllInboxEarlier = true
+                            } label: {
+                                Text("Show \(projection.earlierOverflow) more")
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(palette.secondary)
+                                    .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+                                    .padding(.leading, 29)
+                            }
+                            .buttonStyle(.plain)
+                            .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(palette.canvas)
+                        }
+                    }
+                }
+            }
+        case .skeleton:
+            AidenChatListSkeleton(rowCount: 6, accessibilityText: "Loading Inbox")
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(palette.canvas)
+        case .empty:
+            ContentUnavailableView(
+                "No Chats Yet",
+                systemImage: "tray",
+                description: Text("Start a new Workspace chat to begin.")
+            )
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .listRowBackground(palette.canvas)
+        case .failed:
+            unreachableListState
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(palette.canvas)
+        }
+    }
+
+    private func inboxSectionHeader(_ section: AidenInboxSection, count: Int) -> some View {
+        AidenInboxSectionHeader(section: section, count: count, palette: palette)
+    }
+
+    private func inboxRow(_ row: AidenInboxProjection.Row, section: AidenInboxSection) -> some View {
+        let chat = row.summary
+        let canTriage = offersTriage(chat)
+        return AidenInboxListRow(
+            row: row,
+            section: section,
+            workspaceName: activeWorkspaces.first(where: { $0.id == chat.workspaceId })?.name,
+            palette: palette,
+            actions: AidenInboxRowActions(
+                markRead: offersMarkRead(chat) ? { markRead(chat) } : nil,
+                done: canTriage && chat.inbox.doneAt == nil ? { markDone(chat) } : nil,
+                snooze: canTriage && chat.inbox.snoozedUntil.map { $0 > inboxClock } != true
+                    ? { snoozeCandidate = chat } : nil
+            ),
+            open: { openChat(chat) }
+        )
     }
 
     private var nextPageAvailableOrFailed: Bool {
@@ -1760,6 +2050,9 @@ struct AidenWorkspaceShellView: View {
                 )
                 Label("Recent only", systemImage: "clock").tag(
                     AidenWorkspaceSidebarOrganization.recent
+                )
+                Label("Inbox (Beta)", systemImage: "tray").tag(
+                    AidenWorkspaceSidebarOrganization.inbox
                 )
             }
         } label: {

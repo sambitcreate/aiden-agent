@@ -626,38 +626,89 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertFalse(failed.showsFailed)
     }
 
-    func testChatSummaryInboxSignalsAreDesktopOnlyAndNeverChangeThePhonesRows() throws {
-        // Revision 48 summaries carry the desktop Inbox's run times and triage.
-        // Phones neither request nor render them, so a row reads the same with
-        // them, without them, or with a malformed one from a buggy host.
+    func testChatSummaryInboxSignalsDecodeAndAMalformedOrUnknownBucketFallsBackToLocalPlacement() throws {
+        // Revision 48 summaries carry the host's Inbox placement and triage.
         var object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]
         )
         let withSignals = try XCTUnwrap(object["summaries"] as? [[String: Any]])
-        XCTAssertNotNil(withSignals[0]["attentionSince"])
-        XCTAssertNotNil(withSignals[1]["triageRevision"])
-        XCTAssertNotNil(withSignals[0]["inboxBucket"])
-        let signalKeys = [
-            "attentionSince", "runStartedAt", "lastAssistantAt",
-            "triageRevision", "pinnedAt", "doneAt", "snoozedUntil",
-            "inboxBucket", "inboxSortAt",
-        ]
         let decode = { (summaries: [[String: Any]]) throws -> [AidenChatSummary] in
             object["summaries"] = summaries
             let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
             return try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: data).summaries
         }
+        func timestamp(_ value: Any?) throws -> Date {
+            try Self.remoteDate(XCTUnwrap(value as? String))
+        }
+
         let current = try decode(withSignals)
-        let older = try decode(withSignals.map { row in row.filter { !signalKeys.contains($0.key) } })
+        let approval = try XCTUnwrap(current.first { $0.id == "chat_fixture_summary_02" })
+        let failed = try XCTUnwrap(current.first { $0.id == "chat_fixture_summary_01" })
+        let approvalJSON = try XCTUnwrap(withSignals.first { $0["id"] as? String == "chat_fixture_summary_02" })
+        let failedJSON = try XCTUnwrap(withSignals.first { $0["id"] as? String == "chat_fixture_summary_01" })
+        XCTAssertEqual(approval.inbox.bucket, .needsYou)
+        XCTAssertEqual(approval.inbox.sortAt, try timestamp(approvalJSON["inboxSortAt"]))
+        XCTAssertEqual(approval.inbox.attentionSince, try timestamp(approvalJSON["attentionSince"]))
+        XCTAssertEqual(failed.inbox.bucket, .needsYou)
+        XCTAssertEqual(failed.inbox.pinnedAt, try timestamp(failedJSON["pinnedAt"]))
+        XCTAssertEqual(failed.inbox.snoozedUntil, try timestamp(failedJSON["snoozedUntil"]))
+        XCTAssertEqual(failed.inbox.triageRevision, failedJSON["triageRevision"] as? Int)
+
+        // A bucket this build does not know, or a broken field from a buggy
+        // host, leaves the row without host placement but still decodes.
         var malformed = withSignals
-        malformed[0]["attentionSince"] = 7
-        malformed[1]["triageRevision"] = "three"
-        malformed[1]["snoozedUntil"] = ["at": "tomorrow"]
-        malformed[0]["inboxBucket"] = 3
-        malformed[1]["inboxSortAt"] = false
-        XCTAssertEqual(current, older)
-        XCTAssertEqual(try decode(malformed), older)
-        XCTAssertEqual(current.map(\.displayRowState), [.needsApproval, .idle])
+        let approvalIndex = try XCTUnwrap(malformed.firstIndex { $0["id"] as? String == "chat_fixture_summary_02" })
+        let failedIndex = try XCTUnwrap(malformed.firstIndex { $0["id"] as? String == "chat_fixture_summary_01" })
+        malformed[approvalIndex]["inboxBucket"] = "later_maybe"
+        malformed[approvalIndex]["attentionSince"] = 7
+        malformed[failedIndex]["inboxSortAt"] = false
+        malformed[failedIndex]["triageRevision"] = "three"
+        let degraded = try decode(malformed)
+        let unknown = try XCTUnwrap(degraded.first { $0.id == "chat_fixture_summary_02" })
+        let unsorted = try XCTUnwrap(degraded.first { $0.id == "chat_fixture_summary_01" })
+        XCTAssertNil(unknown.inbox.bucket)
+        XCTAssertNil(unknown.inbox.sortAt)
+        XCTAssertNil(unknown.inbox.attentionSince)
+        XCTAssertNil(unsorted.inbox.bucket, "A bucket without its sort time is not used.")
+        XCTAssertNil(unsorted.inbox.triageRevision)
+        XCTAssertEqual(unsorted.inbox.pinnedAt, failed.inbox.pinnedAt)
+        XCTAssertEqual(degraded.map(\.displayRowState), current.map(\.displayRowState))
+
+        // With no host bucket the phone places the row itself; with one it
+        // agrees with the host for a closed chat.
+        let now = try timestamp(failedJSON["updatedAt"]).addingTimeInterval(60)
+        XCTAssertEqual(AidenInbox.placement(for: unknown, isOpen: false, now: now).section, .needsYou)
+        XCTAssertEqual(AidenInbox.placement(for: approval, isOpen: false, now: now).section, .needsYou)
+    }
+
+    func testChatSummaryInboxSignalsSurviveTheSummaryCacheAndADetailReconcile() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-inbox-cache-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let page = try AidenRemoteJSONDecoder.decode(
+            AidenChatSummaryPage.self,
+            from: botFixtureData(at: ["chatSummaries"])
+        )
+        try await cache.saveChatSummaries(
+            .init(summaries: page.summaries, nextCursor: nil),
+            instanceId: "inbox", writeToken: cache.reserveChatWrite()
+        )
+        let restored = await cache.loadChatSummaries(instanceId: "inbox")
+        XCTAssertEqual(restored?.summaries.map(\.inbox), page.summaries.map(\.inbox))
+
+        // A detail update rebuilds the row from the chat; its triage stays,
+        // and the host placement it no longer describes is dropped.
+        let failed = try XCTUnwrap(page.summaries.first { $0.id == "chat_fixture_summary_01" })
+        var detail = sampleChatForInbox(id: failed.id, workspaceId: failed.workspaceId)
+        detail.updatedAt = failed.updatedAt.addingTimeInterval(5)
+        try await cache.reconcileChatSummary(detail, instanceId: "inbox", writeToken: cache.reserveChatWrite())
+        let reloaded = await cache.loadChatSummaries(instanceId: "inbox")
+        let reconciled = try XCTUnwrap(reloaded?.summaries.first { $0.id == failed.id })
+        XCTAssertEqual(reconciled.inbox.pinnedAt, failed.inbox.pinnedAt)
+        XCTAssertEqual(reconciled.inbox.snoozedUntil, failed.inbox.snoozedUntil)
+        XCTAssertEqual(reconciled.inbox.triageRevision, 3)
+        XCTAssertNil(reconciled.inbox.bucket)
     }
 
     func testChatSummaryRowStateIsAdditiveAndLocalActivityOutranksAStaleServerState() throws {
@@ -717,6 +768,49 @@ final class AidenRemoteClientTests: XCTestCase {
         try await client.markChatRead(id: "chat_fixture_summary_01")
         try await client.markChatRead(id: "chat_fixture_summary_01", throughMessageId: "message-7")
         XCTAssertEqual(bodies, ["{}", #"{"throughMessageId":"message-7"}"#])
+    }
+
+    func testSetChatTriageSendsOnlyTheChangedFieldsWithAnIdempotencyKeyAndReadsAConflict() async throws {
+        let client = makeClient()
+        var bodies: [[String: Any]] = []
+        var keys: [String] = []
+        var conflict = false
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_summary_01/triage")
+            keys.append(request.value(forHTTPHeaderField: "Idempotency-Key") ?? "")
+            let body = (try? Self.bodyData(request)).flatMap { try? JSONSerialization.jsonObject(with: $0) }
+            bodies.append(body as? [String: Any] ?? [:])
+            if conflict {
+                return Self.response(for: request, status: 409, json: #"{"error":{"code":"revision_conflict","message":"Triage changed.","requestId":"r1","retryable":false,"details":{"currentRevision":"5"}}}"#)
+            }
+            return Self.response(for: request, status: 200, json: #"{"chatId":"chat_fixture_summary_01","revision":4,"updatedAt":"2026-08-18T19:05:00.000Z","doneAt":"2026-08-18T19:05:00.000Z","snoozedUntil":"2026-08-19T09:00:00.000Z"}"#)
+        }
+
+        let done = try await client.setChatTriage(chatId: "chat_fixture_summary_01", change: .done(true), ifRevision: 3)
+        XCTAssertEqual(done.revision, 4)
+        XCTAssertEqual(done.doneAt, try Self.remoteDate("2026-08-18T19:05:00.000Z"))
+        XCTAssertNil(done.pinnedAt)
+        let until = try Self.remoteDate("2026-08-19T09:00:00.000Z")
+        _ = try await client.setChatTriage(chatId: "chat_fixture_summary_01", change: .snooze(until: until), ifRevision: nil)
+        _ = try await client.setChatTriage(chatId: "chat_fixture_summary_01", change: .wake, ifRevision: 0)
+
+        XCTAssertEqual(bodies[0] as NSDictionary, ["done": true, "ifRevision": 3])
+        XCTAssertEqual(bodies[1] as NSDictionary, ["snoozeUntil": "2026-08-19T09:00:00.000Z"])
+        XCTAssertEqual(bodies[2] as NSDictionary, ["snoozeUntil": NSNull(), "ifRevision": 0])
+        // Each write is its own idempotent request, in the host's key alphabet.
+        XCTAssertEqual(Set(keys).count, 3)
+        for key in keys {
+            XCTAssertNotNil(key.range(of: #"^[\x21-\x7e]{16,128}$"#, options: .regularExpression))
+        }
+
+        conflict = true
+        do {
+            _ = try await client.setChatTriage(chatId: "chat_fixture_summary_01", change: .done(true), ifRevision: 3)
+            XCTFail("A stale revision must throw.")
+        } catch let error as AidenRemoteClientError {
+            XCTAssertTrue(error.isRevisionConflict)
+        }
     }
 
     func testChatSummaryDecoderToleratesAdditiveFieldsButRejectsMissingRequiredFields() throws {
@@ -5964,6 +6058,24 @@ final class AidenRemoteClientTests: XCTestCase {
         configuration.protocolClasses = [AidenRemoteMockURLProtocol.self]
         configuration.httpAdditionalHeaders = [AidenRemoteMockURLProtocol.epochHeader: AidenRemoteMockURLProtocol.epoch]
         return URLSession(configuration: configuration)
+    }
+
+    private static func remoteDate(_ text: String) throws -> Date {
+        try AidenRemoteJSONDecoder.decode(AidenRemoteTimestamp.self, from: Data("\"\(text)\"".utf8)).date
+    }
+
+    private func sampleChatForInbox(id: String, workspaceId: String) -> AidenChat {
+        AidenChat(
+            id: id,
+            workspaceId: workspaceId,
+            title: "Idle fixture chat",
+            providerId: "openai",
+            modelId: "gpt-5.6",
+            messages: [],
+            createdAt: Date(timeIntervalSince1970: 1_787_078_000),
+            updatedAt: Date(timeIntervalSince1970: 1_787_079_000),
+            revision: "revision-inbox"
+        )
     }
 
     private func botFixtureData(at keyPath: [String]) throws -> Data {

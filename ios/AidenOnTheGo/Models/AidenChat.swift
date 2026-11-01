@@ -2362,34 +2362,6 @@ enum AidenChatRowState: String, Codable, Equatable, Sendable {
         }
     }
 
-    /// Triage rank used to order chat lists, most urgent first. Mirrors the
-    /// desktop Inbox's Needs you tiers (`INBOX_TIERS`, with row status from
-    /// `inboxRowStatus`), which sit above its Updates and Earlier sections: a
-    /// chat blocked on the user outranks one that is merely working, and
-    /// everything else keeps its existing order.
-    var attentionRank: Int {
-        switch self {
-        case .needsApproval: 0
-        case .needsInput: 1
-        case .working: 2
-        case .idle: 3
-        }
-    }
-}
-
-/// Moves chats that need the user, then working chats, ahead of idle ones.
-/// Ties keep the incoming (recency) order, so rows do not jitter between
-/// refreshes.
-/// Unseen failures sit between chats blocked on the user and working chats,
-/// like the desktop Inbox's Needs you tiers (`INBOX_TIERS`).
-func aidenNeedsAttentionFirst(_ chats: [AidenChatSummary]) -> [AidenChatSummary] {
-    chats.enumerated()
-        .sorted { left, right in
-            let leftRank = left.element.attentionRank
-            let rightRank = right.element.attentionRank
-            return leftRank == rightRank ? left.offset < right.offset : leftRank < rightRank
-        }
-        .map(\.element)
 }
 
 struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
@@ -2411,6 +2383,10 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     /// Additive in contract revision 21: lineage for the fork glyph. Rows
     /// never carry the summary.
     var forkedFrom: AidenChatForkLineage?
+    /// Additive in contract revisions 47 and 48: the Inbox times, triage, and
+    /// the host's `inboxBucket` / `inboxSortAt`. The phone places rows with
+    /// `AidenInbox.placement`, which falls back to local rules without them.
+    var inbox: AidenChatInboxSignals
 
     init(
         id: String,
@@ -2424,7 +2400,8 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         rowState: AidenChatRowState? = nil,
         unread: Bool = false,
         lastRunFailed: Bool = false,
-        forkedFrom: AidenChatForkLineage? = nil
+        forkedFrom: AidenChatForkLineage? = nil,
+        inbox: AidenChatInboxSignals = AidenChatInboxSignals()
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -2438,25 +2415,12 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         self.unread = unread
         self.lastRunFailed = lastRunFailed
         self.forkedFrom = forkedFrom?.withoutSummary
+        self.inbox = inbox
     }
 
     /// Failed replaces the unread dot only while the failed output is unseen,
     /// so opening the chat clears it together with the dot.
     var showsFailed: Bool { unread && lastRunFailed }
-
-    /// Triage rank for the whole row: approval, input, an idle chat whose
-    /// unseen output is a failed turn, working, then everything else.
-    var attentionRank: Int {
-        let state = displayRowState
-        switch state {
-        case .needsApproval, .needsInput:
-            return state.attentionRank
-        case .idle where showsFailed:
-            return 2
-        default:
-            return state.attentionRank + 1
-        }
-    }
 
     /// The row state to render. The local activity signal is authoritative for
     /// idleness (a prompt can only wait while a turn runs), while the server
@@ -2503,6 +2467,24 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         lastRunFailed = try values.decodeIfPresent(Bool.self, forKey: .lastRunFailed) ?? false
         forkedFrom = (try? values.decodeIfPresent(AidenChatForkLineage.self, forKey: .forkedFrom))?
             .withoutSummary
+        // Inbox fields: each is dropped on its own when absent or malformed, and
+        // a bucket is kept only with its sort time, so a newer host's bucket
+        // (or a buggy one) falls back to local placement.
+        func timestamp(_ key: CodingKeys) -> Date? {
+            ((try? values.decodeIfPresent(AidenRemoteTimestamp.self, forKey: key)) ?? nil)?.date
+        }
+        inbox = AidenChatInboxSignals(
+            bucket: ((try? values.decodeIfPresent(String.self, forKey: .inboxBucket)) ?? nil)
+                .flatMap(AidenInboxBucket.init(rawValue:)),
+            sortAt: timestamp(.inboxSortAt),
+            lastAssistantAt: timestamp(.lastAssistantAt),
+            attentionSince: timestamp(.attentionSince),
+            runStartedAt: timestamp(.runStartedAt),
+            pinnedAt: timestamp(.pinnedAt),
+            doneAt: timestamp(.doneAt),
+            snoozedUntil: timestamp(.snoozedUntil),
+            triageRevision: (try? values.decodeIfPresent(Int.self, forKey: .triageRevision)) ?? nil
+        )
 
         try Self.requireIdentifier(id, forKey: .id, in: values)
         try Self.requireIdentifier(workspaceId, forKey: .workspaceId, in: values)
@@ -2530,6 +2512,31 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
                 debugDescription: "Chat summary updatedAt cannot precede createdAt."
             )
         }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(workspaceId, forKey: .workspaceId)
+        try values.encode(title, forKey: .title)
+        try values.encode(titlePending, forKey: .titlePending)
+        try values.encode(createdAt, forKey: .createdAt)
+        try values.encode(updatedAt, forKey: .updatedAt)
+        try values.encode(revision, forKey: .revision)
+        try values.encode(activity, forKey: .activity)
+        try values.encodeIfPresent(rowState, forKey: .rowState)
+        try values.encode(unread, forKey: .unread)
+        try values.encode(lastRunFailed, forKey: .lastRunFailed)
+        try values.encodeIfPresent(forkedFrom, forKey: .forkedFrom)
+        try values.encodeIfPresent(inbox.bucket, forKey: .inboxBucket)
+        try values.encodeIfPresent(inbox.sortAt, forKey: .inboxSortAt)
+        try values.encodeIfPresent(inbox.lastAssistantAt, forKey: .lastAssistantAt)
+        try values.encodeIfPresent(inbox.attentionSince, forKey: .attentionSince)
+        try values.encodeIfPresent(inbox.runStartedAt, forKey: .runStartedAt)
+        try values.encodeIfPresent(inbox.pinnedAt, forKey: .pinnedAt)
+        try values.encodeIfPresent(inbox.doneAt, forKey: .doneAt)
+        try values.encodeIfPresent(inbox.snoozedUntil, forKey: .snoozedUntil)
+        try values.encodeIfPresent(inbox.triageRevision, forKey: .triageRevision)
     }
 
     private static func requireIdentifier(
@@ -2591,6 +2598,8 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, workspaceId, title, titlePending, createdAt, updatedAt, revision, activity
         case rowState, unread, lastRunFailed, forkedFrom
+        case inboxBucket, inboxSortAt, lastAssistantAt, attentionSince, runStartedAt
+        case pinnedAt, doneAt, snoozedUntil, triageRevision
     }
 }
 

@@ -1,6 +1,6 @@
 # Inbox Sidebar
 
-Status: In progress (2026-11-01). The owner picked Option D (Hybrid Inbox) and accepted every recommended decision. Two code-grounded edge-case reviews (local desktop; connected hosts, `aiden serve` and phones) are folded in. Phase 0, all of Phase 1 (1a–1d), and all of Phase 2 (2a–2d) are built on the plan branch `claude/inbox-sidebar-plan`; Phase 3 is next. See "1b and 1c as built", "1d as built", "2a as built", "2b as built", "2c as built" and "2d as built" for where the build differs from the text below.
+Status: In progress (2026-11-01). The owner picked Option D (Hybrid Inbox) and accepted every recommended decision. Two code-grounded edge-case reviews (local desktop; connected hosts, `aiden serve` and phones) are folded in. Phase 0, all of Phase 1 (1a–1d), all of Phase 2 (2a–2d), Phase 3a, and the iOS half of 3b and 3c are built on the plan branch `claude/inbox-sidebar-plan`; Android 3b and 3c are next. See "1b and 1c as built", "1d as built", "2a as built", "2b as built", "2c as built", "2d as built", "3a as built" and "3b as built, iOS" for where the build differs from the text below.
 
 Interactive options page (private, shared by the owner): <https://claude.ai/artifact/2KX5jwZ68w9wsejKTAAqx8>
 
@@ -407,6 +407,20 @@ Claim the revision after the one on `main` at merge time. It is 47 today (`AIDEN
 - Swipe actions: leading Mark read, trailing Done and Snooze.
 - Optimistic, with skeletons, per the owner's phone rule.
 - Android uses the M3 Expressive layer and is checked on a headless AVD.
+
+*3b as built, iOS (2026-11-01).* Built on the plan branch; Android is still to do. No new token or revision.
+
+- `AidenWorkspaceSidebarOrganization.inbox` ("Inbox", Beta badge in the heading and the menu) is stored per device with the other views. Workspaces and Recents now sort plainly by recency, as on the desktop; `aidenNeedsAttentionFirst` is gone.
+- `ios/AidenOnTheGo/Models/AidenInbox.swift`: `AidenChatInboxSignals` decodes `inboxBucket` with `inboxSortAt` only as a pair, field by field, so an unknown bucket, a lone or malformed sort time, or a malformed sibling field drops the pair and keeps the row. The summary cache keeps the signals, and a detail reconcile keeps them but drops the host placement, since the row has changed under it.
+- `AidenInbox.placement` uses the host bucket, rechecked on the phone's clock: the open chat leaves Updates and the failed Needs you tier, a `snoozed` row past `snoozedUntil` falls back to local placement, a row state that disagrees with the bucket (a live approval, question or run the bucket doesn't show) wins, and Earlier ages out after seven days. With no usable pair it runs a local port of `inboxState` from the same signals. The Needs you tier (approval, question, failed) always comes from `rowState`. `AidenInboxProjection` orders sections Needs you, Pinned, Updates, Earlier (20, then **Show more**), Working last, and searches title and workspace.
+- Rows (`Features/Remote/AidenInboxViews.swift`): unread dot, title, workspace, a status (Approval or Question warning pill, Failed danger pill, "Working 6m", Done, "Until Mon 9:00 AM") and the wait. VoiceOver reads "title, workspace, status, wait, Unread" and gets the swipe actions as named actions, offered only when they apply.
+- Swipes: leading **Mark read** (`chat-read-state-v1`, unread rows); trailing **Done** and **Snooze** (`chat-triage-v1` and `chat:write`, never on a Needs you or Working row). Snooze offers 1 hour, this evening (18:00, only while more than an hour away), tomorrow 09:00 and next week (Monday 09:00, at least two days away). `AidenRemoteClient.setChatTriage` sends only the changed fields with an `Idempotency-Key` and `ifRevision` (the row's `triageRevision`, else 0). Each change applies at once with a top banner and Undo; a refusal puts the row back and says so, and `409 revision_conflict` also reloads. Done on an unseen failure also marks it read, as the desktop does.
+- Loading shows the shared skeleton rows; an empty Inbox reads "All Caught Up".
+- **Gap: hosts announce `chat-triage-v1` to paired desktops only**, so against today's Mac and `aiden serve` a phone shows Mark read but not Done or Snooze. Announcing it to phones (with `chat:write`) is a host change for a later PR; the phone already handles it.
+- **Gap: no UI test target.** The plan's swipe UI tests are covered by unit tests of the actions' gates, the optimistic change and its undo, and the triage request, plus simulator screenshots from a Debug-only `-AidenInboxFixture` launch argument that renders the same rows, headings and swipes from fixture chats.
+- Tests: `AidenInboxTests` (local placement table, open-chat recheck, host bucket used and rechecked, snooze waking on the phone's clock, Earlier ageing out, projection order and cap, search, optimistic Done and Snooze, snooze presets, row status and VoiceOver name) and `AidenRemoteClientTests` (bucket decode, unknown or malformed bucket falling back, cache and reconcile, the triage request and its conflict).
+
+*3c as built, iOS (2026-11-01).* `AidenWorkingIndicator` is the desktop's ring (three quarters of a circle at 60% opacity, one turn per 1.5 s) on chat rows and the Working shelf; under Reduce Motion it holds still and the row still says Working.
 
 **3c. One Working indicator.** iOS uses a spinner and Android a breathing dot. Both adopt the desktop's indicator so the three platforms match.
 

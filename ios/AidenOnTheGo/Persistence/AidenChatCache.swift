@@ -112,6 +112,8 @@ actor AidenChatCache {
         let lastRunFailed: Bool?
         // Optional so caches written before contract revision 21 still load.
         let forkedFrom: AidenChatForkLineage?
+        // Optional so caches written before the Inbox (revision 48) still load.
+        let inbox: AidenChatInboxSignals?
 
         init(_ summary: AidenChatSummary) {
             id = summary.id
@@ -126,6 +128,7 @@ actor AidenChatCache {
             unread = summary.unread
             lastRunFailed = summary.lastRunFailed
             forkedFrom = summary.forkedFrom
+            inbox = summary.inbox
         }
 
         var summary: AidenChatSummary {
@@ -141,7 +144,8 @@ actor AidenChatCache {
                 rowState: rowState,
                 unread: unread ?? false,
                 lastRunFailed: lastRunFailed ?? false,
-                forkedFrom: forkedFrom
+                forkedFrom: forkedFrom,
+                inbox: inbox ?? AidenChatInboxSignals()
             )
         }
     }
@@ -858,10 +862,17 @@ actor AidenChatCache {
               isChatWriteRetained(writeToken, instanceId: instanceId, chatId: chat.id), !chat.isBotChat,
               writeToken >= summaryRowAuthority(instanceId: instanceId, chatId: chat.id) else { return }
         let cached = loadChatSummaries(instanceId: instanceId)
-        let existingActivity = cached?.summaries.first(where: { $0.id == chat.id })?.activity ?? .idle
+        let existing = cached?.summaries.first(where: { $0.id == chat.id })
+        var reconciled = AidenChatSummary(chat: chat, preservingActivity: existing?.activity ?? .idle)
+        // A chat detail carries no triage; keep the row's, without the host
+        // placement that described the row before this update.
+        if let existing {
+            reconciled.inbox = existing.inbox
+            reconciled.inbox.invalidateHostPlacement()
+        }
         let summaries = AidenChatSummaryPage.merged(
             current: cached?.summaries ?? [],
-            appending: [AidenChatSummary(chat: chat, preservingActivity: existingActivity)]
+            appending: [reconciled]
         )
         try persistChatSummaries(
             SummarySnapshot(summaries: summaries, nextCursor: cached?.nextCursor),
