@@ -113,6 +113,34 @@ test("the jobs chip counts running jobs and its list shows output and stops a jo
   );
 });
 
+test("a running job lists the addresses it serves and opens one; a finished job lists none", async () => {
+  const state = {
+    ...emptyChatFollowThrough("chat-1"),
+    jobs: [
+      job({ ports: [5173, 24678] }),
+      job({ id: "job_00000002", description: "Old server", state: "stopped", endReason: "person", endedAt: NOW, ports: [3000] }),
+    ],
+  };
+  const { opened } = mount(state);
+  fireEvent.click(screen.getByRole("button", { name: "1 background job running" }));
+  const dialog = await screen.findByRole("dialog", { name: "Background jobs" });
+  assert.ok(within(dialog).getByRole("button", { name: "Open localhost:24678" }));
+  assert.equal(within(dialog).queryByRole("button", { name: "Open localhost:3000" }), null);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Open localhost:5173" }));
+  assert.deepEqual(opened, ["http://localhost:5173"]);
+});
+
+test("a server a command left running reads as ended, never as failed, once it stops", async () => {
+  mount({
+    ...emptyChatFollowThrough("chat-1"),
+    jobs: [job(), job({ id: "job_00000003", origin: "command", description: "Start the API", state: "exited", endedAt: NOW })],
+  });
+  fireEvent.click(screen.getByRole("button", { name: "1 background job running" }));
+  const dialog = await screen.findByRole("dialog", { name: "Background jobs" });
+  assert.ok(within(dialog).getByText("Ended"));
+  assert.equal(within(dialog).queryByText(/Failed/u), null);
+});
+
 test("a job's running time is current when its list opens, not when the chip appeared", async (t) => {
   let clock = NOW;
   t.mock.method(Date, "now", () => clock);

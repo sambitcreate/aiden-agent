@@ -125,6 +125,10 @@ When the agent reads a page in extract mode, the Mac (contract revision 38) send
 
 When the paired Mac has spending limits on (contract revision 47), Aiden On The Go for iPhone and Android shows a quiet line in a workspace chat or Bot chat once it has used 80% of its limit, and a card with **Allow $X more** once it reaches it. Allowing more from the phone and the Mac at the same moment adds the amount once. The limits themselves are set on the Mac in Settings → Limits & spending; see [usage limits and spending limits](usage-limits-and-spending.md). With an older phone, or from another paired Mac, a send over the limit is refused with the Mac's message, and you allow more on the Mac.
 
+## Background jobs
+
+When the agent leaves something running for a workspace chat on the Mac (a dev server, a watcher, a long test run, or a server a command started), Aiden On The Go for iPhone and Android shows **N in background** beside the composer (contract revision 49, `chat:jobs`, asked for in a call of its own). Its list says how long each job has run or how it ended and which addresses a server listens on ("localhost:5173 on your Mac"; open them in a browser on the Mac), and **Stop** ends a job and everything it started. The list refreshes after each reply and every few seconds while something runs. Linux desktops serve it too; the CLI does not run background jobs. Older phones and Macs show nothing new. See [coding follow-through](coding-follow-through.md).
+
 ## Pictures in a reply
 
 When the agent shows, shares or generates a picture, Aiden On The Go for iPhone and Android draws it right beneath the step that made it, in the order the reply happened (contract revision 44). Pictures still arrive when the reply is saved, not while it streams; a picture being generated shows its placeholder in that same spot. With an older Mac they stay at the end of the reply.

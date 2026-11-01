@@ -81,6 +81,7 @@
         "main/services/dictation-voice-check.test.ts",
         "main/services/follow-through/background-job-tool.test.ts",
         "main/services/follow-through/background-jobs.test.ts",
+        "main/services/follow-through/listening-ports.test.ts",
         "main/services/follow-through/done-when.test.ts",
         "main/services/follow-through/notice-delivery.test.ts",
         "main/services/follow-through/pull-request-follow-github.test.ts",

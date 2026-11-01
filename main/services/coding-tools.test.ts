@@ -3197,3 +3197,219 @@ test("foreground glob worker preserves Windows drive and UNC roots in expanded a
     assert.deepEqual(matches, [expected], pattern);
   }
 });
+
+test("run_command hands what a command leaves running to the chat, whether or not it kept the output open", async () => {
+  if (process.platform === "win32") return;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-leftovers-"));
+  const groups: number[] = [];
+  try {
+    await fs.writeFile(
+      path.join(root, "server.cjs"),
+      'let tick = 0; console.log("server up"); setInterval(() => console.log(`tick ${++tick}`), 40);',
+    );
+    const adoptions: Array<{ group: number; marker: string; hasOutput: boolean; laterOutput?: string }> = [];
+    let marker = "";
+    const runCommand = buildCodingTools(root, undefined, {
+      leftovers: {
+        begin() {
+          marker = `job_${Math.random().toString(16).slice(2, 10).padEnd(8, "0")}`;
+          const current = marker;
+          return {
+            env: { AIDEN_BACKGROUND_JOB: current },
+            adopt: async (group, _command, _description, output) => {
+              groups.push(group);
+              let laterOutput: string | undefined;
+              if (output) {
+                // Taking over takes a moment (a real adopter looks the processes up first).
+                await new Promise((resolve) => setTimeout(resolve, 400));
+                laterOutput = "";
+                output.stdout.on("data", (chunk: Buffer) => (laterOutput += String(chunk)));
+                output.stdout.resume();
+                output.stderr.resume();
+                await new Promise((resolve) => setTimeout(resolve, 300));
+              }
+              adoptions.push({ group, marker: current, hasOutput: Boolean(output), ...(laterOutput !== undefined ? { laterOutput } : {}) });
+              return { note: `adopted ${current}`, adopted: true };
+            },
+          };
+        },
+      },
+    }).find((tool) => tool.name === "run_command")!;
+    const text = (result: Awaited<ReturnType<typeof runCommand.execute>>) =>
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    // A plain command leaves nothing behind and is never handed over.
+    assert.equal(text(await runCommand.execute("plain", { command: "echo done" })), "done");
+    assert.equal(adoptions.length, 0);
+
+    // Output sent to a file: the shell returns at once.
+    const redirected = await runCommand.execute("redirected", { command: "node server.cjs > server.log 2>&1 &" });
+    assert.match(text(redirected), /adopted job_/u);
+    assert.equal(adoptions[0]?.hasOutput, false);
+
+    // Output left on the command's pipe: it returns soon after the shell exits instead of
+    // waiting out the 2-minute limit, and the server's output keeps flowing to the adopter.
+    const startedAt = Date.now();
+    const inherited = await runCommand.execute("inherited", { command: "node server.cjs &" });
+    assert.ok(Date.now() - startedAt < 10_000, "the command returned without waiting for its deadline");
+    assert.equal(inherited.isError, undefined);
+    assert.equal(adoptions[1]?.hasOutput, true);
+    assert.match(text(inherited), /server up/u, "what it printed before returning is in the result");
+    // Nothing it printed between the command returning and the adopter reading is lost.
+    const ticks = (value: string) => [...value.matchAll(/tick (\d+)/gu)].map((match) => Number(match[1]));
+    const beforeReturn = ticks(text(inherited));
+    const afterReturn = ticks(adoptions[1]?.laterOutput ?? "");
+    assert.ok(afterReturn.length > 0, "what it prints later reaches the adopter");
+    assert.equal(afterReturn[0], (beforeReturn[beforeReturn.length - 1] ?? 0) + 1, "the adopter reads on from the last line the result showed");
+    // Each command carried its own marker.
+    assert.notEqual(adoptions[0]?.marker, adoptions[1]?.marker);
+  } finally {
+    for (const group of groups) {
+      try {
+        process.kill(-group, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+/** Members of a process group that still run: an ended one nobody has reaped yet (a zombie) does not count. */
+function runningGroupMembers(group: number): Promise<number[]> {
+  return new Promise((resolve, reject) => {
+    execFile("ps", ["-A", "-o", "pid=,pgid=,stat="], (error, stdout) => {
+      if (error) return reject(error);
+      resolve(
+        String(stdout)
+          .split("\n")
+          .map((line) => line.trim().split(/\s+/u))
+          .filter(([, pgid, stat]) => Number(pgid) === group && stat !== undefined && !stat.startsWith("Z"))
+          .map(([pid]) => Number(pid)),
+      );
+    });
+  });
+}
+
+async function untilGroupStopsRunning(group: number): Promise<number[]> {
+  let running = await runningGroupMembers(group);
+  for (let tries = 0; tries < 100 && running.length > 0; tries += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    running = await runningGroupMembers(group);
+  }
+  return running;
+}
+
+test("run_command tells the agent how to stop leftovers no job could take over", async () => {
+  if (process.platform === "win32") return;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-untracked-"));
+  const groups: number[] = [];
+  try {
+    await fs.writeFile(path.join(root, "server.cjs"), 'console.log("server up"); setInterval(() => {}, 1000);');
+    // An adopter that cannot confirm the marker answers with nothing; a failed look throws.
+    for (const outcome of ["unverified", "lookup failed"] as const) {
+      const runCommand = buildCodingTools(root, undefined, {
+        leftovers: {
+          begin() {
+            return {
+              env: { AIDEN_BACKGROUND_JOB: "job_untrack0" },
+              adopt: async (group) => {
+                groups.push(group);
+                if (outcome === "lookup failed") throw new Error("ps timed out");
+                return undefined;
+              },
+            };
+          },
+        },
+      }).find((tool) => tool.name === "run_command")!;
+      const result = await runCommand.execute(outcome, { command: "node server.cjs > server.log 2>&1 &" });
+      const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+      const group = groups[groups.length - 1]!;
+      assert.equal(result.isError, undefined, outcome);
+      assert.ok((await runningGroupMembers(group)).length > 0, `${outcome}: the server is still running`);
+      assert.match(text, /not tracked/u, outcome);
+      const stop = text.match(/kill -- -(\d+)/u);
+      assert.equal(Number(stop?.[1]), group, `${outcome}: the note names the command's own group`);
+      // The command the note gives really does stop the server.
+      process.kill(-group, "SIGTERM");
+      assert.deepEqual(await untilGroupStopsRunning(group), [], outcome);
+    }
+
+    // Leftovers that have ended by the time the handoff answers need no note, even
+    // while nothing has reaped them yet.
+    const quick = buildCodingTools(root, undefined, {
+      leftovers: {
+        begin() {
+          return {
+            env: { AIDEN_BACKGROUND_JOB: "job_untrack1" },
+            adopt: async (group) => {
+              groups.push(group);
+              process.kill(-group, "SIGKILL");
+              assert.deepEqual(await untilGroupStopsRunning(group), []);
+              return undefined;
+            },
+          };
+        },
+      },
+    }).find((tool) => tool.name === "run_command")!;
+    const gone = await quick.execute("gone", { command: "node server.cjs > server.log 2>&1 &" });
+    const goneText = gone.content[0]?.type === "text" ? gone.content[0].text : "";
+    assert.doesNotMatch(goneText, /not tracked/u);
+  } finally {
+    for (const group of groups) {
+      try {
+        process.kill(-group, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("run_command keeps a refused handoff's output flowing and still shows the refusal", async () => {
+  if (process.platform === "win32") return;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-refused-"));
+  const groups: number[] = [];
+  let handed: { stdout: import("node:stream").Readable; stderr: import("node:stream").Readable } | undefined;
+  try {
+    await fs.writeFile(path.join(root, "server.cjs"), 'console.log("server up"); setInterval(() => console.log("tick"), 40);');
+    const runCommand = buildCodingTools(root, undefined, {
+      leftovers: {
+        begin() {
+          return {
+            env: { AIDEN_BACKGROUND_JOB: "job_refused0" },
+            // A chat at its job limit: nothing reads the output, only a note comes back.
+            adopt: async (group, _command, _description, output) => {
+              groups.push(group);
+              handed = output;
+              return { note: "[not tracked: the chat has too many jobs]", adopted: false };
+            },
+          };
+        },
+      },
+    }).find((tool) => tool.name === "run_command")!;
+    const result = await runCommand.execute("refused", { command: "node server.cjs &" });
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    assert.match(text, /not tracked: the chat has too many jobs/u);
+    // The refusal is followed by how to stop them, naming the command's own group.
+    const group = groups[groups.length - 1]!;
+    const stop = text.match(/kill -- -(\d+)/u);
+    assert.equal(Number(stop?.[1]), group);
+    assert.ok((await runningGroupMembers(group)).length > 0, "the server still runs");
+    process.kill(-group, "SIGTERM");
+    assert.deepEqual(await untilGroupStopsRunning(group), [], "the kill it names stops the server");
+    assert.ok(handed, "the server kept the command's output open");
+    assert.equal(handed.stdout.isPaused(), false, "nobody reads it, so it is drained rather than left to fill");
+    assert.equal(handed.stderr.isPaused(), false);
+  } finally {
+    for (const group of groups) {
+      try {
+        process.kill(-group, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
