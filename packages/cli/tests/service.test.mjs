@@ -144,7 +144,7 @@ test("an install that starts its server applies the chosen network and pairs ove
   const install = async (flags, { failNetwork, status, tty = true, interrupt, saved } = {}) => {
     const { host, local } = fakeHost(t, "linux", { "loginctl show-user": { stdout: "yes\n" } });
     if (saved) {
-      mkdirSync(local.agentDir, { recursive: true });
+      mkdirSync(local.agentDir, { recursive: true, mode: 0o700 });
       writeFileSync(join(local.agentDir, "remote.json"), JSON.stringify({ version: 1, connectionMode: saved }));
     }
     const sent = [];

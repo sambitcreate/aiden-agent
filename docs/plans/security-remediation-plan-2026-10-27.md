@@ -6,7 +6,7 @@ Owner decisions, October 29, 2026, after a review of the draft stack:
 
 - W1 Telegram pairing (#605) is closed without merging, because Telegram is being removed from Aiden. Its changes are taken back out of the later PRs in the stack.
 - W5 Remote admission (#607) ships as written: unknown computers can ask to pair only while Add device is open, and the request setting defaults to off.
-- W3a private configuration (#609) also accepts a symlinked configuration folder or file whose target is a private folder the person owns, instead of blocking dotfile-managed setups.
+- W3a private configuration (#609) also accepts a symlinked configuration folder when the link, the folder holding it and the folder it points to belong to the person, instead of blocking dotfile-managed setups. A symlinked config file stays refused, because an atomic save would replace the link with a plain file.
 - W12 (#614) ships the production renderer CSP change. The AppImage updater keeps today's feed checksum check and does not require the GitHub CLI; publisher verification in the updater stays an open design question.
 - The stack lands bottom-up, one PR at a time, each after main is merged in and CI is green on its exact head. UI changes (#608, #612) are shown as screenshots first.
 

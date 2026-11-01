@@ -23,10 +23,24 @@ test.describe("Settings → Connectors", () => {
     await dialog.getByRole("group", { name: "Name" }).getByRole("textbox").fill("E2E Tools");
     await dialog.getByRole("group", { name: "Command" }).getByRole("textbox").fill(process.execPath);
     await dialog.getByRole("textbox", { name: "Arguments" }).fill(FAKE_SERVER);
+    // A new local launch asks in a native review box first. Playwright can't click native
+    // boxes, so answer it in the main process and keep what it was asked to show.
+    await aiden.app.evaluate(({ dialog: nativeDialog }) => {
+      const asked: string[] = [];
+      (globalThis as { __aidenLaunchReviews?: string[] }).__aidenLaunchReviews = asked;
+      nativeDialog.showMessageBox = (async (...args: unknown[]) => {
+        const options = args.find((arg) => arg !== null && typeof arg === "object" && "buttons" in (arg as object)) as { detail?: string };
+        asked.push(options.detail ?? "");
+        return { response: 1, checkboxChecked: false };
+      }) as typeof nativeDialog.showMessageBox;
+    });
     await dialog.getByRole("button", { name: "Save" }).click();
     await expect(dialog).toBeHidden();
+    const reviews = await aiden.app.evaluate(() => (globalThis as { __aidenLaunchReviews?: string[] }).__aidenLaunchReviews ?? []);
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]).toContain(FAKE_SERVER);
 
-    // Saving from the editor approves the command it showed, and Aiden connects in the background.
+    // Approving that review approves the command it showed, and Aiden connects in the background.
     const status = page.getByLabel("E2E Tools status");
     await expect(status).toContainText("Connected", { timeout: 20_000 });
     await expect(status).toContainText("Tools 2");

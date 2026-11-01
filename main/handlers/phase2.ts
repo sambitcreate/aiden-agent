@@ -1,3 +1,5 @@
+import { approveReviewedMcpLaunch } from "../services/mcp-launch-review-core.js";
+import { confirmMcpLaunch } from "../services/mcp-launch-review.js";
 import { registerMcpProviderAuthHandler } from "./mcp-provider-auth.js";
 import { buildMcpPresetStates } from "./mcp-preset-states.js";
 import { hasMcpProviderAuthGrant, setMcpProviderAuthGrant } from "../services/mcp-provider-auth.js";
@@ -587,6 +589,7 @@ export function registerPhase2Handlers(): void {
     liveStatus: () => mcpLiveStatus.snapshot(),
     toolList: (serverId) => mcpLiveStatus.tools(serverId),
     pendingLaunchApprovals: async () => {
+      await sealPlaintextMcpServerFields();
       const pending = [];
       for (const server of await configStore.listMcpServers()) {
         if (server.transport !== "stdio" || (await mcpStdioApprovals.isApproved(server))) continue;
@@ -595,17 +598,23 @@ export function registerPhase2Handlers(): void {
           fingerprint: mcpStdioLaunchFingerprint(server),
           command: server.command ?? "",
           args: server.args ?? [],
-          // Unapproved servers keep env in config.json, so the person sees exactly
-          // what would run; a stored value referenced under another name is unusable.
+          // Generic cards show names only. The explicit foreground review
+          // resolves exact values in trusted main code before approval.
           env: await storedMcpEnvForApproval(server),
         });
       }
       return pending;
     },
-    approveLaunch: async (server, fingerprint) => {
-      if (!(await mcpStdioApprovals.approveShown(server, fingerprint))) return false;
-      // Approved: its env values can now move into the keychain (the approval follows them).
-      await sealPlaintextMcpServerFields([server.id]);
+    approveLaunch: async (server, fingerprint, isCurrent) => {
+      const approved = await approveReviewedMcpLaunch(server.id, fingerprint, {
+        seal: (id) => sealPlaintextMcpServerFields([id], { throwOnError: true }),
+        configured: async (id) => (await configStore.listMcpServers()).find((candidate) => candidate.id === id),
+        resolve: resolveStoredMcpFieldSecrets,
+        confirm: confirmMcpLaunch,
+        approve: (current, shown) => mcpStdioApprovals.approveShown(current, shown),
+        isCurrent,
+      });
+      if (!approved) return false;
       mcpManager.clearFailure(server.id);
       prewarmMcpServers();
       return true;
