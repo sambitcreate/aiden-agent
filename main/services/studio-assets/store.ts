@@ -219,14 +219,17 @@ export class StudioAssetStore {
     await fs.mkdir(path.join(root, "thumbs"), { recursive: true, mode: 0o700 });
     const file = path.join(root, DATABASE_FILE);
     let db: DatabaseSync;
+    // True when this open created the schema: the file was missing or was just
+    // quarantined, so every blob on disk lost its row and may be re-indexed.
+    let rebuilt: boolean;
     try {
-      db = openDatabase(file);
+      ({ db, created: rebuilt } = openDatabase(file));
     } catch (error) {
       if (!isUnusableDatabase(error)) throw error;
       // The database only indexes content-addressed blobs, so a fresh one can
       // be rebuilt from them by the sweep below. Keep the old file for diagnosis.
       const quarantined = await quarantineDatabase(file, this.now());
-      db = openDatabase(file);
+      ({ db, created: rebuilt } = openDatabase(file));
       this.options.onWarning?.(
         `The studio asset database could not be read and was moved aside as ${path.basename(quarantined)}; rebuilding it from stored images.`,
         error,
@@ -244,7 +247,7 @@ export class StudioAssetStore {
     // Housekeeping is best effort: a failed pass must not disable a store whose
     // database opened, and the next start (or an explicit collection) retries it.
     try {
-      await this.exclusive(() => this.sweepOrphanFiles());
+      await this.exclusive(() => this.sweepOrphanFiles(rebuilt));
       await this.collectGarbage();
     } catch (error) {
       this.options.onError?.(error);
@@ -626,14 +629,14 @@ export class StudioAssetStore {
   }
 
   /**
-   * Reconcile files with rows after a crash or a lost database. A blob without
-   * a row is re-indexed when its bytes still hash to its name and pass image
-   * validation (a rebuilt database, or a put that crashed before its insert);
-   * anything else, staging files and thumbnails without a row are removed.
-   * Re-indexed rows are unheld and touched now, so the grace period protects
-   * them until their features retain them again.
+   * Reconcile files with rows after a crash or a lost database. Only when the
+   * database was just rebuilt is a blob without a row re-indexed (its bytes must
+   * still hash to its name and pass image validation) and marked recovered. On an
+   * ordinary open a blob without a row is a put that crashed before its insert or
+   * a GC that deleted the row before the file, so it is removed, as are staging
+   * files and thumbnails without a row.
    */
-  private async sweepOrphanFiles(): Promise<void> {
+  private async sweepOrphanFiles(rebuilt: boolean): Promise<void> {
     const blobs = path.join(this.root, "blobs");
     const touched = new Set<string>();
     const recovered: Array<{
@@ -651,7 +654,7 @@ export class StudioAssetStore {
         const staged = entry.startsWith(".") && entry.endsWith(".tmp");
         if (!staged && (!isStudioAssetId(entry) || this.row(entry))) continue;
         const file = path.join(directory, entry);
-        if (!staged && shard.name === entry.slice(0, 2)) {
+        if (rebuilt && !staged && shard.name === entry.slice(0, 2)) {
           const record = await this.revalidateBlob(file, entry);
           if (record) {
             recovered.push(record);
@@ -726,8 +729,11 @@ export class StudioAssetStore {
   }
 }
 
-/** Open (creating as 0600 if missing) and check the schema; closes the handle on failure. */
-function openDatabase(file: string): DatabaseSync {
+/**
+ * Open (creating as 0600 if missing) and check the schema; closes the handle on failure.
+ * `created` is true when this call created the schema.
+ */
+function openDatabase(file: string): { db: DatabaseSync; created: boolean } {
   // Create the file private before SQLite does, so it never exists with the
   // default 0644 mode. SQLite gives -wal and -shm the main file's mode.
   closeSync(openSync(file, "a", 0o600));
@@ -739,17 +745,18 @@ function openDatabase(file: string): DatabaseSync {
     const { user_version: version } = db.prepare("PRAGMA user_version").get() as {
       user_version: number;
     };
-    if (Number(version) === 0) {
+    const created = Number(version) === 0;
+    if (created) {
       db.exec(`BEGIN IMMEDIATE; ${SCHEMA} COMMIT;`);
     } else if (Number(version) !== 1) {
       throw new UnsupportedSchemaError();
     }
     db.exec(RECOVERED_SCHEMA);
+    return { db, created };
   } catch (error) {
     db.close();
     throw error;
   }
-  return db;
 }
 
 /** Pin 0600 on the database and its sidecars, whatever mode an older build created them with. */

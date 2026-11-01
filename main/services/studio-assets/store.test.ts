@@ -532,6 +532,21 @@ test("a lost database is rebuilt from stored blobs, which stay readable and in g
   assert.deepEqual(await restarted.collectGarbage(), { deletedAssets: 1, freedBytes: fresh.bytes });
 });
 
+test("on an ordinary start a valid blob without a row is removed, never re-indexed", async (t) => {
+  // A put that crashed before its insert, or a GC that deleted the row before the
+  // file, leaves exactly this: the database is intact, so it must not be resurrected.
+  const f = await fixture(t);
+  const kept = await f.store.put({ bytes: pngBytes(10, 10, 5) });
+  const stray = pngBytes(11, 11, 6);
+  const strayId = createHash("sha256").update(stray).digest("hex");
+  await fs.mkdir(path.join(f.root, "blobs", strayId.slice(0, 2)), { recursive: true });
+  await fs.writeFile(path.join(f.root, "blobs", strayId.slice(0, 2), strayId), stray);
+  await f.store.close();
+  const reopened = await f.open();
+  assert.equal(reopened.get(strayId), undefined);
+  assert.deepEqual(await f.blobFiles(), [kept.assetId]);
+});
+
 test("an unindexed blob that is not an accepted image is removed even when its name matches", async (t) => {
   const f = await fixture(t);
   const kept = await f.store.put({ bytes: pngBytes(10, 10, 3) });
