@@ -7,6 +7,7 @@ import { ChatTriageStore } from "../../main/services/chat-triage";
 import { snoozeOptions, type ChatTriageEntry, type ChatTriagePatch } from "../shared/chat-triage";
 import {
   formatSnoozeMenuTime,
+  formatSnoozeStatus,
   formatSnoozeUntil,
   groupByHost,
   inboxTriageOffer,
@@ -141,6 +142,19 @@ test("a Done or snoozed row's menu reads Mark not done or Unsnooze", () => {
   assert.equal(inboxTriageOffer(signals(triageSignals(woke)), NOW + HOUR).snoozed, false, "a passed snooze no longer holds");
 });
 
+test("a row held by a wait or a run still offers Unsnooze, so it stays once the wait ends", () => {
+  const snoozed = predictTriage(null, { snoozeUntil: NOW + 3 * HOUR }, NOW - HOUR);
+  for (const held of [{ rowState: "needs_approval" }, { rowState: "working" }, { attention: "detached" }] as const) {
+    const offer = inboxTriageOffer(signals({ ...held, unread: true, ...triageSignals(snoozed) }), NOW);
+    assert.deepEqual([offer.doneAndSnooze, offer.snoozed], [false, true], JSON.stringify(held));
+  }
+  // The approval is answered and the run ends: kept snoozed, the row would drop out.
+  const later = (entry: ChatTriageEntry) =>
+    inboxState(signals({ unread: true, lastAssistantAt: NOW, ...triageSignals(entry) }), NOW + HOUR, 24 * HOUR).shelf;
+  assert.equal(later(snoozed), "hidden");
+  assert.equal(later(predictTriage(snoozed, inboxTriagePatch("unsnooze"), NOW)), "updates");
+});
+
 test("actions of one kind inside the Undo window merge into one batch", () => {
   const first: InboxTriageUndoBatch = {
     kind: "done",
@@ -239,14 +253,32 @@ test("the Snooze menu's trailing time never repeats the preset's day", () => {
   assert.match(formatSnoozeMenuTime(at(9, 9), NOW, "en-US"), /^Nov 9, 9:00\sAM$/u);
 });
 
+test("a snoozed row's status is short beside its workspace", () => {
+  const at = (days: number, hour: number, minute = 0) => new Date(2026, 9, 31 + days, hour, minute).getTime();
+  // Today: the time, without ":00" on the hour. Within the week: the short weekday too. Further: the date.
+  assert.match(formatSnoozeStatus(at(0, 13, 42), NOW, "en-US"), /^1:42\sPM$/u);
+  assert.match(formatSnoozeStatus(at(0, 18), NOW, "en-US"), /^6\sPM$/u);
+  assert.match(formatSnoozeStatus(at(2, 9), NOW, "en-US"), /^Mon 9\sAM$/u);
+  assert.match(formatSnoozeStatus(at(16, 9), NOW, "en-US"), /^Nov 16$/u);
+});
+
 test("no two Snooze presets read the same time, whatever the day", () => {
   // A whole week of mornings and evenings, Sunday included, where Tomorrow and
   // Next week both land on a Monday.
   for (let day = 0; day < 7; day += 1) {
-    for (const hour of [8, 16]) {
-      const now = new Date(2026, 10, 1 + day, hour, 0);
-      const times = snoozeOptions(now).map((option) => formatSnoozeMenuTime(option.until, now.getTime(), "en-US"));
-      assert.equal(new Set(times).size, times.length, `${now.toDateString()} ${hour}:00 reads ${times.join(" | ")}`);
+    for (const [hour, minute] of [[8, 0], [16, 0], [16, 59], [17, 0], [17, 30]] as const) {
+      const now = new Date(2026, 10, 1 + day, hour, minute);
+      const options = snoozeOptions(now);
+      const times = options.map((option) => formatSnoozeMenuTime(option.until, now.getTime(), "en-US"));
+      const label = `${now.toDateString()} ${hour}:${String(minute).padStart(2, "0")}`;
+      assert.equal(new Set(times).size, times.length, `${label} reads ${times.join(" | ")}`);
+      // This evening (18:00) shows only while it is more than an hour away.
+      const evening = new Date(2026, 10, 1 + day, 18, 0).getTime();
+      assert.equal(
+        options.some((option) => option.preset === "evening"),
+        evening - now.getTime() > HOUR,
+        `${label}: This evening ${evening - now.getTime() > HOUR ? "shows" : "drops out"}`,
+      );
     }
   }
 });

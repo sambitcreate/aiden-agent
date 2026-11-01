@@ -50,7 +50,7 @@ function SnoozeItems({
  * Pin (or Unpin), Mark done and Snooze for an Inbox row's ••• and context
  * menus. They never show as inline row buttons. A Done row offers Mark not
  * done and a snoozed one Unsnooze in their place; a row that waits on the
- * person or runs offers Pin alone.
+ * person or runs offers Pin alone, and Unsnooze too while a snooze holds.
  */
 export function inboxTriageMenuItems(
   [Item, , SubMenu]: MenuParts,
@@ -93,6 +93,10 @@ export function inboxTriageMenuItems(
             </SubMenu.Sub>
           )}
         </>
+      ) : offer.snoozed ? (
+        <Item icon="alarm-clock-off" disabled={disabled} onSelect={() => onAct("unsnooze")}>
+          Unsnooze
+        </Item>
       ) : null}
     </>
   );

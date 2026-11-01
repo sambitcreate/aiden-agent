@@ -150,4 +150,14 @@ Plan: `docs/plans/inbox-sidebar-plan.md`. Before/after page: https://claude.ai/a
 - Main (S1-S6, R1b): observer gets `run.state`+`attentionSummary` per already-waiting run after its snapshot (device-tagged sequences others skip); snooze timer capped at 60 s, re-arms in `finally`, `checkSnoozes` on powerMonitor resume/unlock, `stopChatTriage` in `cleanupApplication`; `wakeTriageOnAttention` wakes only on entering approval/input/failed or a new prompt id; `createChatApplicationService.remove` `inboxState` drops triage + read marker on every delete path; a sent user message (IPC append, Remote `startTurn`) calls `ChatTriageStore.wake`.
 - Hook tests `renderer/lib/use-inbox-triage.test.tsx`: sonner 2.0.7 `getToasts()` hides ids dismissed in earlier tests (`dismissedToasts` only clears on create), so the tests read `toast.getHistory()` sliced per test.
 
+### 2a/2b re-review fixes (2026-11-01)
+- Read-after-write: `useInboxTriage().act(kind, rows, until, {onWritten})` calls `onWritten(rowsTheHostTook)` before the toast; `chat-sidebar.tsx` marks read there. No markUnread API, so Undo does not reverse the read (documented in plan). Remote host without `markRead`: `alsoMarkRead` rows offer Pin only (`doneAndSnooze` forced false).
+- Held row still snoozed: menu shows Unsnooze even with `doneAndSnooze:false` (`inbox-triage-menu.tsx`).
+- Snoozed search status: `formatSnoozeStatus` compact ("1:42 PM", "6 PM", "Mon 9 AM", "Nov 16") behind "Until "; `InboxRowStatus.spoken` / `ChatRowInbox.status.spoken` = "Snoozed until <full time>" for the aria-label. Reason: row meta is `flex-1 truncate`, status `shrink-0`, long status ate the workspace.
+- Toast: selector `[data-sonner-toast][data-styled="true"] [data-button][data-action]`, `font-weight: inherit`; errors via `userFacingErrorMessage` (strips Electron's IPC prefix).
+- Main: `wakingClass(state)` waiting (needs_approval|needs_input) / failed; wake on class change or new prompt id. `ChatTriageStore.publishThenArm()` (try publish / finally arm). Local conflict returns `currentRevision`. `chat-run-input-admission.ts` `onPersonWrote(chatId)` (skips `input.notice`; wired in `llm-client.ts` to `chatTriage.wake`) so steer/queue wake a snooze. `forgetChatInboxState(stores, chatId, logError)` exported from `chat-application-service.ts`, used by live `remove` and `main/index.ts` `reconcilePendingChatDeletions`.
+- Host feed: `announceWaitingRuns` budget = maxEvents/2 AND maxBytes/2 (frame bytes pre-measured). Docs: API "Host feed." paragraph + OpenAPI `/host/events` description.
+- E2E: `inbox-sidebar.spec.ts` "after Mark done on the open chat, next and previous chat step from where it was" (R9 wiring).
+- Known limitation: child-run `attentionSummary` not carried to the parent row.
+
 Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control]].

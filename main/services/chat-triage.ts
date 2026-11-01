@@ -152,7 +152,12 @@ export class ChatTriageStore {
     await this.store.update((draft) => {
       const current = draft.chats[chatId];
       if (write.ifRevision !== undefined && write.ifRevision !== triageRevision(current)) {
-        result = { ok: false, code: "revision_conflict", entry: current ? copyEntry(current) : null };
+        result = {
+          ok: false,
+          code: "revision_conflict",
+          entry: current ? copyEntry(current) : null,
+          currentRevision: triageRevision(current),
+        };
         return false;
       }
       const next: ChatTriageEntry = {
@@ -170,10 +175,7 @@ export class ChatTriageStore {
       result = { ok: true, entry: copyEntry(next) };
       return true;
     });
-    if (result.ok) {
-      await this.publish();
-      this.arm();
-    }
+    if (result.ok) await this.publishThenArm();
     return result;
   }
 
@@ -192,10 +194,7 @@ export class ChatTriageStore {
       draft.chats[chatId] = { ...rest, revision: entry.revision + 1, updatedAt: now };
       return true;
     });
-    if (changed) {
-      await this.publish();
-      this.arm();
-    }
+    if (changed) await this.publishThenArm();
     return changed;
   }
 
@@ -204,8 +203,7 @@ export class ChatTriageStore {
     await this.store.update((draft) => {
       delete draft.chats[chatId];
     });
-    await this.publish();
-    this.arm();
+    await this.publishThenArm();
   }
 
   /** Start the wake timer for the next snooze. Safe to call more than once. */
@@ -294,6 +292,19 @@ export class ChatTriageStore {
     }, Math.min(delay, SNOOZE_WAKE_CHECK_MS));
   }
 
+  /**
+   * Tell listeners about a write, then re-arm the wake timer. The timer is
+   * re-armed even when a listener throws, as in `expire`, so the next snooze
+   * still wakes.
+   */
+  private async publishThenArm(): Promise<void> {
+    try {
+      await this.publish();
+    } finally {
+      this.arm();
+    }
+  }
+
   private async publish(): Promise<void> {
     this.revision += 1;
     if (!this.options.onChange) return;
@@ -301,17 +312,25 @@ export class ChatTriageStore {
   }
 }
 
-/** Run states that need the person, so they bring a snoozed chat back early. */
-const WAKING_RUN_STATES: ReadonlySet<string> = new Set(["needs_approval", "needs_input", "failed"]);
+/**
+ * Run states that need the person, so they bring a snoozed chat back early,
+ * by class: an approval and a question are both a wait on the person, so a
+ * run that moves from one to the other is still the same wait.
+ */
+function wakingClass(state: string): "waiting" | "failed" | null {
+  if (state === "needs_approval" || state === "needs_input") return "waiting";
+  if (state === "failed") return "failed";
+  return null;
+}
 
 type AttentionRun = Pick<HostRunSummary, "runId" | "chatId" | "state" | "pendingApprovalIds" | "pendingQuestionIds">;
 
 /**
- * Wake a snoozed chat as soon as one of its runs starts asking for an
- * approval or an answer, asks a new one, or fails. Any other notification
- * about a run that is already waiting (one of two approvals answered, a delta)
- * leaves a snooze the person set after the wait began. Returns the
- * unsubscribe function.
+ * Wake a snoozed chat as soon as one of its runs starts waiting on the person
+ * (an approval or an answer), asks a new one, or fails. Any other notification
+ * about a run that is already waiting (one of two approvals answered, an
+ * approval answered while its question still waits, a delta) leaves a snooze
+ * the person set after the wait began. Returns the unsubscribe function.
  */
 export function wakeTriageOnAttention(
   runs: { onChange(listener: (summary: AttentionRun, removed: boolean) => void): () => void },
@@ -327,8 +346,9 @@ export function wakeTriageOnAttention(
     const before = seen.get(summary.runId);
     const prompts = new Set([...summary.pendingApprovalIds, ...summary.pendingQuestionIds]);
     seen.set(summary.runId, { state: summary.state, prompts });
-    if (!WAKING_RUN_STATES.has(summary.state)) return;
-    const entered = before?.state !== summary.state;
+    const waking = wakingClass(summary.state);
+    if (!waking) return;
+    const entered = before === undefined || wakingClass(before.state) !== waking;
     const asked = [...prompts].some((id) => !before?.prompts.has(id));
     if (!entered && !asked) return;
     void triage.wake(summary.chatId).catch(() => undefined);

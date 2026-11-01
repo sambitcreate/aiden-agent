@@ -86,17 +86,38 @@ test("a row moves the moment it is marked done, and moves back when the write fa
   const { result } = await mount();
   assert.equal(result.current.entryFor(ROW), undefined);
 
+  const written: (readonly InboxTriageRow[])[] = [];
   let acting!: Promise<void>;
   act(() => {
-    acting = result.current.act("done", [ROW]);
+    acting = result.current.act("done", [ROW], undefined, { onWritten: (rows) => written.push(rows) });
   });
   assert.notEqual(result.current.entryFor(ROW)?.doneAt, undefined, "the row reads Done before the host answers");
+  assert.deepEqual(written, [], "nothing follows the write before the host takes it");
 
-  await settle(store.answers[0], new Error("The disk is full."));
+  // Electron wraps a handler's error in its remote-method prefix.
+  await settle(store.answers[0], new Error("Error invoking remote method 'chats:setTriage': Error: The disk is full."));
   await act(() => acting);
   assert.equal(result.current.entryFor(ROW), undefined, "the row shows what it showed before");
   assert.ok(shownToasts().some((item) => item.type === "error" && item.title === "The disk is full."));
   assert.equal(triageToast(), undefined, "nothing to undo");
+  assert.deepEqual(written, [], "a write that failed leaves the chat unread");
+});
+
+test("what follows a write runs once the host takes it, only for the rows it took", async () => {
+  const store = installStore();
+  const { result } = await mount();
+  const other: InboxTriageRow = { key: projectOrderKey(LOCAL_SIDEBAR_HOST_ID, "c2"), hostId: LOCAL_SIDEBAR_HOST_ID, chatId: "c2" };
+  const written: (readonly InboxTriageRow[])[] = [];
+  let acting!: Promise<void>;
+  act(() => {
+    acting = result.current.act("snooze", [ROW, other], Date.now() + 3_600_000, { onWritten: (rows) => written.push(rows) });
+  });
+  await settle(store.answers[0], { ok: true, entry: { revision: 2, updatedAt: 10, snoozedUntil: Date.now() + 3_600_000 } });
+  // The local store takes one write at a time; the second one fails.
+  await act(async () => {});
+  await settle(store.answers[1], new Error("The disk is full."));
+  await act(() => acting);
+  assert.deepEqual(written, [[ROW]], "only the chat whose snooze landed");
 });
 
 test("Undo reverses the action and names the revision the action left", async () => {

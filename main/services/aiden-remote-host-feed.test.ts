@@ -697,6 +697,29 @@ test("a run already waiting when an observer connects reaches it after the snaps
   }
 });
 
+test("an observer's waiting-run announcements never push a cursor taken at the snapshot out of the journal", async () => {
+  const live = Array.from({ length: 20 }, (_, index) => run(`run-ask-${index}`, "chat-1", "needs_approval"));
+  const ask = "Allow writing the release notes and the migration guide for this change. ".repeat(3);
+  const { feed } = harness({ maxBytes: 4_000, attentionSummary: () => ask, liveRuns: () => live });
+  const runStates = (response: RecordingResponse) => response.frames().filter((frame) => frame.event === "run.state");
+  try {
+    const plain = await open(feed, desktop("device-plain"));
+    const cursor = plain.frames()[0]!.id;
+    const observer = await open(feed, desktop("device-observer", ["runs:observe"]));
+
+    // The observer learns of some waiting runs, but not so many bytes that
+    // the shared journal has to drop anything.
+    const announced = runStates(observer).length;
+    assert.ok(announced > 0 && announced < live.length, `announced ${announced}`);
+
+    // The other device resumes where it was instead of starting over.
+    const resumed = await open(feed, desktop("device-plain"), cursor);
+    assert.deepEqual(resumed.frames().filter((frame) => frame.event === "snapshot"), []);
+  } finally {
+    feed.close();
+  }
+});
+
 test("a Bot row's Inbox signals hold only what its live summary says", () => {
   const idle = { state: { kind: "idle" } as BotSessionState, needsYou: false, lastReplyAt: null as number | null };
   assert.deepEqual(hostFeedBotSignals(undefined), {});

@@ -389,6 +389,13 @@ test("a Done or snoozed row's menu takes it back, and a row that waits on the pe
 
   const waiting = await items({ doneAndSnooze: false, done: false, snoozed: false });
   assert.deepEqual(waiting.map((item) => item.textContent), ["Pin"]);
+  cleanup();
+
+  // A waiting row with a snooze still to run can end it.
+  const waitingSnoozed = await items({ doneAndSnooze: false, done: false, snoozed: true });
+  assert.deepEqual(waitingSnoozed.map((item) => item.textContent), ["Pin", "Unsnooze"]);
+  fireEvent.click(waitingSnoozed[1]!);
+  assert.deepEqual(acts, [["undone", undefined], ["unsnooze", undefined], ["unsnooze", undefined]]);
 });
 
 test("an Inbox remote row's triage follows its one action, as on a local row", async () => {

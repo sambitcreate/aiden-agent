@@ -86,6 +86,8 @@ test("ifRevision only lands when nothing else changed the chat", async (t) => {
   assert.equal(undo.ok, false);
   assert.equal(!undo.ok && undo.code, "revision_conflict");
   assert.equal(!undo.ok && undo.code === "revision_conflict" && undo.entry?.revision, 2);
+  // The current revision comes back too, as a paired host's answer carries it, so a retry can name it.
+  assert.equal(!undo.ok && undo.code === "revision_conflict" && undo.currentRevision, 2);
   assert.equal((await store.get("chat-a"))?.doneAt, 50);
 
   const matched = await store.set("chat-a", { done: false }, { ifRevision: 2 });
@@ -344,6 +346,60 @@ test("answering one of two approvals keeps a snooze set while the run waits; a n
   assert.equal((await store.get("chat-a"))?.snoozedUntil, 60_000);
   emit("chat-a", "needs_input", { questions: ["question-1"] });
   await waitFor(async () => (await store.get("chat-a"))?.snoozedUntil === undefined);
+});
+
+test("answering an approval while the run's question still waits keeps a snooze set during the wait", async (t) => {
+  const root = await tmpDir(t);
+  let now = 1_000;
+  const store = new ChatTriageStore(() => root, { now: () => now, ...manualTimers() });
+  t.after(() => store.dispose());
+  await store.start();
+  const { emit, runs } = attentionRuns();
+  const stop = wakeTriageOnAttention(runs, store);
+  t.after(stop);
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  // The run waits on an approval and a question; the person snoozes the chat.
+  emit("chat-a", "needs_approval", { approvals: ["approval-1"], questions: ["question-1"] });
+  await settled();
+  now = 2_000;
+  await store.set("chat-a", { snoozeUntil: 60_000 });
+
+  // The approval is answered and the run reads as waiting on its answer: the same wait, nothing new asked.
+  emit("chat-a", "needs_input", { questions: ["question-1"] });
+  await settled();
+  assert.equal((await store.get("chat-a"))?.snoozedUntil, 60_000);
+
+  // The run fails: that wakes it.
+  emit("chat-a", "failed");
+  await waitFor(async () => (await store.get("chat-a"))?.snoozedUntil === undefined);
+});
+
+test("a listener that throws on a write never stops the next snooze from waking", async (t) => {
+  const root = await tmpDir(t);
+  let failPublish = false;
+  const timers = manualTimers();
+  const store = new ChatTriageStore(() => root, {
+    now: () => 1_000,
+    onChange: () => {
+      if (failPublish) throw new Error("broadcast failed");
+    },
+    ...timers,
+  });
+  t.after(() => store.dispose());
+  await store.start();
+  await store.set("later", { snoozeUntil: 9_000 });
+  await store.set("soon", { snoozeUntil: 5_000 });
+  await waitFor(() => timers.live().length === 1 && timers.live()[0]!.ms === 4_000);
+
+  // Waking the sooner chat, or forgetting it, leaves the later one armed even when the broadcast fails.
+  failPublish = true;
+  await assert.rejects(store.wake("soon"), /broadcast failed/u);
+  assert.deepEqual(timers.live().map((timer) => timer.ms), [8_000]);
+  await assert.rejects(store.set("other", { snoozeUntil: 3_000 }), /broadcast failed/u);
+  assert.deepEqual(timers.live().map((timer) => timer.ms), [2_000]);
+  await assert.rejects(store.remove("other"), /broadcast failed/u);
+  assert.deepEqual(timers.live().map((timer) => timer.ms), [8_000]);
 });
 
 test("a failed clear still re-arms, and a wake check after a clock jump clears a passed snooze", async (t) => {

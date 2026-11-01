@@ -3,6 +3,7 @@ import { toast } from "../components/ui";
 import { chatsApi } from "./ipc";
 import { useChatTriage } from "./use-chat-activity";
 import { RemoteHostAdapter } from "./hosts/remote-host-adapter";
+import { userFacingErrorMessage } from "./ipc-error";
 import type { PeerHostView } from "../shared/peer-host";
 import { LOCAL_SIDEBAR_HOST_ID } from "./sidebar-organization";
 import {
@@ -50,8 +51,9 @@ function outcomeOf(result: ChatTriageResult): WriteOutcome {
   return { ok: false, conflict: false, message: FAILED_MESSAGE };
 }
 
+/** A rejected write's message, without Electron's "Error invoking remote method" wrapper. */
 function messageOf(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : FAILED_MESSAGE;
+  return userFacingErrorMessage(error, FAILED_MESSAGE);
 }
 
 /**
@@ -112,11 +114,26 @@ async function sendWrites(
   return outcomes;
 }
 
+export interface InboxTriageActOptions {
+  /**
+   * Runs once the host has taken the write, with the rows it took, before the
+   * Undo toast shows. A row whose write failed or conflicted is left out, so a
+   * side effect such as marking the chat read never lands without the triage.
+   * Undo doesn't reverse it.
+   */
+  onWritten?: (rows: readonly InboxTriageRow[]) => void;
+}
+
 export interface InboxTriage {
   /** The entry a row shows: its host's, or this device's newer write. */
   entryFor: (row: InboxTriageRow) => ChatTriageEntry | undefined;
   /** Pin, unpin, mark done or snooze rows. The rows move at once; the Undo toast follows. */
-  act: (kind: InboxTriageKind, rows: readonly InboxTriageRow[], until?: number) => Promise<void>;
+  act: (
+    kind: InboxTriageKind,
+    rows: readonly InboxTriageRow[],
+    until?: number,
+    options?: InboxTriageActOptions,
+  ) => Promise<void>;
 }
 
 /**
@@ -207,7 +224,12 @@ export function useInboxTriage({
     }
   }, [currentFor, write]);
 
-  const act = React.useCallback(async (kind: InboxTriageKind, rows: readonly InboxTriageRow[], until?: number) => {
+  const act = React.useCallback(async (
+    kind: InboxTriageKind,
+    rows: readonly InboxTriageRow[],
+    until?: number,
+    options?: InboxTriageActOptions,
+  ) => {
     if (rows.length === 0) return;
     const patch = inboxTriagePatch(kind, until);
     const before = rows.map((row) => currentFor(row) ?? null);
@@ -215,10 +237,12 @@ export function useInboxTriage({
     write(rows.map((row, index) => [row.key, predictTriage(before[index], patch, now)] as const));
     const outcomes = await sendWrites(rows.map((row) => ({ target: row, patch })), viewsRef.current);
     const items: InboxTriageUndoItem[] = [];
+    const written: InboxTriageRow[] = [];
     let failure: string | null = null;
     write(outcomes.map((outcome, index) => {
       const row = rows[index]!;
       if (outcome.ok) {
+        written.push(row);
         items.push({ target: row, before: before[index] ?? null, patch, revision: outcome.entry.revision });
         return [row.key, outcome.entry] as const;
       }
@@ -227,6 +251,7 @@ export function useInboxTriage({
     }));
     if (failure) toast.error(failure);
     if (items.length === 0) return;
+    options?.onWritten?.(written);
     const batch = mergeInboxTriageUndo(undoRef.current, {
       kind,
       items,

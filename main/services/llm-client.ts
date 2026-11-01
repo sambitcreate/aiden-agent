@@ -111,6 +111,7 @@ import {
   recordRunNotification,
   recordRunSettled,
 } from "./host-runs-main.js";
+import { chatTriage } from "./chat-triage-main.js";
 import { pendingAttentionRecorder } from "./chat-pending-attention-main.js";
 import type { HostRunPendingPrompt } from "./host-run-registry.js";
 import {
@@ -655,6 +656,12 @@ const runInputAdmission = createChatRunInputAdmission({
   isChatDeleting: (chatId) => chatDeletionGate.isDeleting(chatId),
   appendMessage: (chatId, message, meta) => chatStore.appendMessage(chatId, message, meta),
   readChat: (chatId) => chatStore.get(chatId),
+  // A steer or follow-up is the person writing in the chat, so it ends a snooze.
+  onPersonWrote: (chatId) => {
+    void chatTriage.wake(chatId).catch((error: unknown) => {
+      logger.warn("inbox", "Could not end the chat's snooze after its steer or follow-up.", error);
+    });
+  },
 });
 const chatCopyGate = new ChatWorkspaceMutationGate();
 const chatTurnAdmission = new ChatTurnAdmission();

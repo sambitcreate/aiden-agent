@@ -91,6 +91,8 @@ export interface ChatRowInbox {
   status: {
     /** "Approval", "Working 4m", or an age such as "2h". */
     label: string;
+    /** The label in full for the accessible name, when the row shows a short form ("Until Mon 9 AM"). */
+    spoken?: string;
     tone: ChatRowInboxTone;
     /** How long a Needs you row has waited. */
     wait?: string;
@@ -354,7 +356,7 @@ function InboxRowStatus({ status }: { status: ChatRowInbox["status"] }) {
  * row is before where it lives: "Fix the build, aiden, 2h, Unread".
  */
 function inboxAccessibleName(title: string, inbox: ChatRowInbox): string {
-  return [title, inbox.meta, inbox.status.label, inbox.status.wait, inbox.unread ? "Unread" : undefined]
+  return [title, inbox.meta, inbox.status.spoken ?? inbox.status.label, inbox.status.wait, inbox.unread ? "Unread" : undefined]
     .filter((part): part is string => Boolean(part?.trim()))
     .join(", ");
 }

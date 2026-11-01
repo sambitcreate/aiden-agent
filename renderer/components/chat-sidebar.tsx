@@ -1454,8 +1454,10 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   };
 
   // Pin, Mark done and Snooze: in an Inbox row's ••• and context menus only.
-  // On unseen failed output, Mark done and Snooze also mark the chat read, or
-  // the row would stay in Needs you.
+  // On unseen failed output, Mark done and Snooze also mark the chat read once
+  // the host takes the write, or the row would stay in Needs you. A host that
+  // can't mark it read (a paired Mac without markRead) offers Pin alone there,
+  // since neither action would move the row.
   const inboxTriageItems = (
     parts: Parameters<ChatRowMenu>,
     entry: InboxEntry,
@@ -1464,15 +1466,16 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     disabled: boolean,
     markRead: (() => void) | null,
   ) => {
-    const offer = inboxTriageOffer(entry.signals, Date.now());
+    const offered = inboxTriageOffer(entry.signals, Date.now());
+    const offer = offered.alsoMarkRead && !markRead ? { ...offered, doneAndSnooze: false } : offered;
     return inboxTriageMenuItems(parts, {
       pinned: entry.signals.pinnedAt !== undefined,
       offer,
       disabled,
       onAct: (kind, until) => {
         context.touch();
-        if (offer.alsoMarkRead && markRead && (kind === "done" || kind === "snooze")) markRead();
-        void triage.act(kind, [row], until);
+        const readAfter = offer.alsoMarkRead && markRead && (kind === "done" || kind === "snooze") ? markRead : null;
+        void triage.act(kind, [row], until, readAfter ? { onWritten: () => readAfter() } : undefined);
       },
     });
   };

@@ -247,6 +247,49 @@ test("Snooze hides a chat, even the open one, and an approval in it brings it ba
     .toBeVisible({ timeout: 15_000 });
 });
 
+test("after Mark done on the open chat, next and previous chat step from where it was", async ({ aiden }) => {
+  test.setTimeout(120_000);
+  const { page, userDataDir } = aiden;
+  await finishLmStudioOnboarding(page);
+  await switchToInbox(page);
+
+  const composer = page.locator("textarea");
+  for (const [index, prompt] of ["Plan the alpha launch", "Draft the bravo notes", "Review the charlie tests"].entries()) {
+    if (index > 0) await page.getByRole("button", { name: "New Agent", exact: true }).click();
+    await composer.fill(prompt);
+    await composer.press("Enter");
+    await expect(page.getByText(E2E_ASSISTANT_RESPONSE).last()).toBeVisible({ timeout: 15_000 });
+    await expect.poll(async () => (await regularChatIds(userDataDir)).length).toBe(index + 1);
+  }
+
+  // The three chats in the order the Inbox shows them.
+  const earlier = page.locator("[data-sidebar]").getByRole("group", { name: "Earlier" });
+  await expect(earlier.locator("[data-inbox-row]")).toHaveCount(3);
+  const shown = await earlier.locator("[data-inbox-row]").evaluateAll((rows) =>
+    rows.map((row) => decodeURIComponent((row.getAttribute("data-inbox-row") ?? "").replace(/^local:/u, ""))),
+  );
+  const [first, middle, last] = shown;
+  const opened = (chatId: string) => inboxRow(page, chatId).locator("[data-roving-item]");
+
+  // Open the middle chat and mark it done from its row: it leaves the list.
+  await opened(middle!).click();
+  await expect(opened(middle!)).toHaveAttribute("aria-current", "page");
+  await inboxRow(page, middle!).hover();
+  await inboxRow(page, middle!).getByRole("button", { name: /^More for /u }).click();
+  await page.getByRole("menuitem", { name: "Mark done" }).click();
+  await pointerToPane(page);
+  await expect(inboxRow(page, middle!)).toHaveCount(0);
+
+  // Next opens the chat that was below it, not the top of the list.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("ControlOrMeta+Shift+BracketRight");
+  await expect(opened(last!)).toHaveAttribute("aria-current", "page");
+
+  // From a listed chat, previous steps up as usual.
+  await page.keyboard.press("ControlOrMeta+Shift+BracketLeft");
+  await expect(opened(first!)).toHaveAttribute("aria-current", "page");
+});
+
 test("Settings → Appearance → Sidebar switches the view, and the Organize menu agrees", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);

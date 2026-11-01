@@ -40,14 +40,25 @@ export interface ChatTriageWrite {
   ifRevision?: number;
 }
 
+/**
+ * The answer to a triage write.
+ *
+ * - `ok: true`: the write landed; `entry` is the chat's triage after it.
+ * - `revision_conflict`: `ifRevision` was stale and nothing changed. This
+ *   Mac's own store answers with the entry it holds and that entry's
+ *   revision (`null` and `0` for a chat with none). A paired host's `409` names only its
+ *   revision, so `entry` is `null` there and `currentRevision` is set when the
+ *   host's refusal includes it. A writer retries from `currentRevision`.
+ * - `invalid`: the patch was empty or out of range; nothing changed.
+ */
 export type ChatTriageResult =
   | { ok: true; entry: ChatTriageEntry }
   | {
       ok: false;
       code: "revision_conflict";
-      /** The entry the store holds; a paired host's refusal names only its revision, so it is `null` there. */
+      /** The entry this Mac's store holds; `null` for a chat with none and for a paired host's refusal. */
       entry: ChatTriageEntry | null;
-      /** The revision the host holds, when its refusal says. */
+      /** The revision the store or host holds; always set by this Mac's store. */
       currentRevision?: number;
     }
   | { ok: false; code: "invalid" };

@@ -2405,9 +2405,13 @@ textarea {
 }
 
 /* A toast's action (Undo, Open, Retry) is the shared small filled squircle
-   button, not Sonner's inverted pill. The neutral keyboard focus ring above
-   still applies. */
-:root [data-sonner-toast][data-styled="true"] [data-button] {
+   button, not Sonner's inverted pill. The source of truth is `Button` with
+   size="small" variant="filled" in renderer/components/ui.tsx: keep the
+   height, padding, fills, shadows and weight below in step with it. The weight
+   is the Button's inherited one, so Sonner's 500 is reset. The neutral
+   keyboard focus ring above still applies. Only the action button: Sonner's
+   cancel button keeps its own look. */
+:root [data-sonner-toast][data-styled="true"] [data-button][data-action] {
   height: 28px;
   padding-inline: 12px;
   border-radius: var(--radius-button);
@@ -2416,7 +2420,7 @@ textarea {
   color: var(--text-primary);
   box-shadow: var(--elevation-control);
   font-size: var(--ui-font-size);
-  font-weight: 500;
+  font-weight: inherit;
   cursor: default;
   transition:
     background-color var(--motion-duration) var(--motion-easing),
@@ -2424,17 +2428,17 @@ textarea {
     opacity var(--motion-duration) var(--motion-easing);
 }
 
-:root [data-sonner-toast][data-styled="true"] [data-button]:hover {
+:root [data-sonner-toast][data-styled="true"] [data-button][data-action]:hover {
   background: var(--surface-control-hover);
   box-shadow: var(--elevation-control-hover);
 }
 
-:root [data-sonner-toast][data-styled="true"] [data-button]:active {
+:root [data-sonner-toast][data-styled="true"] [data-button][data-action]:active {
   background: var(--surface-control-active);
   box-shadow: var(--elevation-control-pressed);
 }
 
-:root [data-sonner-toast][data-styled="true"] [data-button]:focus-visible {
+:root [data-sonner-toast][data-styled="true"] [data-button][data-action]:focus-visible {
   background: var(--surface-control-active);
   box-shadow: var(--elevation-control);
 }

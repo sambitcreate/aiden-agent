@@ -165,7 +165,9 @@ test("a search lists Done and snoozed matches, each saying so", () => {
     screen.getAllByRole("button").find((button) =>
       button.hasAttribute("data-roving-item") && button.querySelector("[data-inbox-title]")?.textContent === title)!;
   assert.equal(row("Chat done").querySelector("[data-inbox-status]")?.textContent, "Done");
-  assert.match(row("Chat snoozed").querySelector("[data-inbox-status]")?.textContent ?? "", /^Snoozed until \S/u);
+  // The row shows the short form, so the workspace keeps its room; its name says it in full.
+  assert.match(row("Chat snoozed").querySelector("[data-inbox-status]")?.textContent ?? "", /^Until \S/u);
+  assert.match(row("Chat snoozed").getAttribute("aria-label") ?? "", /, Snoozed until \S/u);
   assert.doesNotMatch(row("Chat quiet").querySelector("[data-inbox-status]")?.textContent ?? "", /Done|Snoozed/u);
 });
 

@@ -312,6 +312,19 @@ Claim the revision after the one on `main` at merge time. It is 47 today (`AIDEN
 - *Remote menu order.* A remote Inbox row's triage sits right after its one action, as on a local row.
 - *Host.* The snooze timer re-arms after a failed clear, re-checks at least once a minute, and checks again when the Mac wakes or unlocks. A snoozed chat wakes early only when a run starts needing approval or input, fails, or raises a new prompt, so answering one of two approvals doesn't wake it. A delete from any path (desktop, Remote, Bot) drops the chat's triage entry and read marker. A device that starts observing runs gets a `run.state` with its `attentionSummary` for each run already waiting, on sequences every other device skips.
 
+**2a/2b re-review fixes (2026-11-01).** A second pass on those fixes settled:
+
+- *Read after write.* On an unread failed run, Mark done and Snooze mark the chat read only once the host has taken the triage write (`act`'s `onWritten`), so a refused write leaves the chat unread. There is no way to mark a chat unread again, so **Undo reverses the triage but not the read**: the chat comes back read. A paired host that offers no mark-read offers Pin alone on such a row, since Mark done or Snooze could not move it.
+- *Held rows.* A row held by a wait or a run that is still snoozed offers **Unsnooze** next to Pin, so a snooze set before the wait can still be cleared.
+- *Snoozed status.* A snoozed match in search now reads "Until 1:42 PM" / "Until 6 PM" (today), "Until Mon 9 AM" (this week) or "Until Nov 16", short enough to keep the workspace beside it on a narrow sidebar. Its accessible name still says "Snoozed until" with the full time.
+- *Toasts.* An IPC failure's toast shows the host's own message without Electron's "Error invoking remote method" prefix (`userFacingErrorMessage`). The toast's action button follows the small filled `Button`.
+- *Snooze presets.* This evening's cutoff is covered at 4:59, 5:00 and 5:30 PM.
+- *Host wake.* Needs approval and needs input are one waiting class, so a run moving from one to the other (answering an approval while its question still waits) keeps a snooze set during the wait; a failure or a new prompt still wakes it. A steer or follow-up sent into a snoozed chat wakes it too, through the same admission every send takes (`onPersonWrote`); a host notice and a refused send do not. The snooze timer re-arms in `finally` after a listener throws.
+- *Deletes.* The startup roll-forward of a delete a crash cut short drops the chat's triage entry and read marker, through the same `forgetChatInboxState` the live delete uses.
+- *Conflicts.* This Mac's store answers a stale `ifRevision` with `currentRevision` as well as its entry, like a paired host's `409`; `ChatTriageResult` documents both shapes.
+- *Host feed cost.* A runs-observing device's waiting-run announcements are capped at half the journal by bytes as well as by count, so one resnapshot never expires another device's fresh cursor. A burst of reconnecting observers can still age a slow cursor out; that device resnapshots as usual.
+- *Known limitation.* `attentionSummary` is per run, and a parent chat's row shows its own run's ask. A child (subagent) run waiting on the person rolls up into its parent's Needs you state, but its ask is not carried to the parent row.
+
 **2c. Dock badge.**
 
 - A main-process count of Needs you: local signals from `HostRunRegistry`, Bot `needsYou`, and unseen failures, plus remote Needs you from the `PeerHostManager` feed caches in main.

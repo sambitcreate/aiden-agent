@@ -3,7 +3,7 @@ import { DEFAULT_CHAT_WORKSPACE_ID } from "../shared/chat-workspace";
 import type { ChatPendingAttention } from "../shared/chat-pending-attention";
 import type { ChatRowState } from "../shared/chat-row-state";
 import type { ChatTriageEntry } from "../shared/chat-triage";
-import { formatSnoozeStatus, triageSignals } from "./inbox-triage";
+import { formatSnoozeMenuTime, formatSnoozeStatus, triageSignals } from "./inbox-triage";
 import { isNoWorkspace, NO_WORKSPACE_GROUP_LABEL } from "./no-workspace";
 import {
   INBOX_SECTIONS,
@@ -373,6 +373,12 @@ export type InboxNeedsYouKind = "approval" | "question" | "failed" | "interrupte
 export interface InboxRowStatus {
   /** "Approval", "Working 4m", or a bare age such as "2h". */
   label: string;
+  /**
+   * The label in full, for the row's accessible name, where the row shows a
+   * short form so the workspace beside it keeps its room ("Until Mon 9 AM"
+   * reads "Snoozed until Mon 9:00 AM").
+   */
+  spoken?: string;
   tone: InboxStatusTone;
   /** How long a Needs you row has waited. */
   wait?: string;
@@ -431,7 +437,11 @@ export function inboxRowStatus(entry: InboxEntry, section: InboxSection, now: nu
   const hold = inboxTriageHold(signals, now);
   if (hold.done) return { label: "Done", tone: "quiet" };
   if (hold.snoozed && signals.snoozedUntil !== undefined) {
-    return { label: `Snoozed until ${formatSnoozeStatus(signals.snoozedUntil, now)}`, tone: "quiet" };
+    return {
+      label: `Until ${formatSnoozeStatus(signals.snoozedUntil, now)}`,
+      spoken: `Snoozed until ${formatSnoozeMenuTime(signals.snoozedUntil, now)}`,
+      tone: "quiet",
+    };
   }
   return {
     label: formatInboxDuration(now, section === "updates" ? signals.lastAssistantAt ?? signals.updatedAt : signals.updatedAt),

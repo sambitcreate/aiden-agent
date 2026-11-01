@@ -212,17 +212,21 @@ This evening, Tomorrow, Next week) with each one's time as trailing tertiary
 ("6:00 PM"), a short weekday and the time within the week ("Mon 9:00 AM"), else
 the date ("Nov 9, 9:00 AM"), since the label already names the day. This
 evening drops out once it is less than an hour away. A row that waits on the
-person or runs offers Pin alone, since Done or Snooze wouldn't move it. In
-search, a Done or snoozed match shows a quiet "Done" or "Snoozed until …"
-status, and its menu offers **Mark not done** or **Unsnooze** in place of Mark
-done and Snooze. A host that can't take writes shows the items disabled rather
+person or runs offers Pin alone, since Done or Snooze wouldn't move it, plus
+**Unsnooze** while a snooze set earlier is still running. On an unread failed
+run, Mark done and Snooze also mark the chat read; a paired host that can't
+mark it read offers Pin alone there. In search, a Done or snoozed match shows a
+quiet "Done" or a short "Until 6 PM" / "Until Mon 9 AM" / "Until Nov 16"
+status, short enough to keep the workspace beside it on a narrow sidebar (its
+accessible name still reads "Snoozed until" with the full time), and its menu
+offers **Mark not done** or **Unsnooze** in place of Mark done and Snooze. A host that can't take writes shows the items disabled rather
 than hiding them. Pinned chats get their own **Pinned** group between Needs you
 and Updates, and a pinned chat that needs the person still sits in Needs you.
 An action moves its row at once and then shows one Undo toast for five seconds;
 actions of the same kind inside that window merge into it ("3 chats marked
 done") instead of stacking toasts. The toast's action (Undo, Open, Retry) is
 the shared small filled squircle button, not Sonner's inverted pill. A failed
-write puts the row back with one error toast, and an Undo that finds the chat
+write puts the row back with one error toast in the host's own words, and an Undo that finds the chat
 changed elsewhere leaves it alone and says so in the toast.
 
 ## Verification

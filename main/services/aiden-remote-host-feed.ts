@@ -410,8 +410,14 @@ export class AidenRemoteHostFeedService {
   /**
    * Revision 48: a snapshot carries no runs, so right after one an observer
    * is sent a `run.state` for each run still waiting, as journal entries only
-   * that device reads. Other devices skip their sequences. At most half the
-   * journal, so the snapshot's own position is never trimmed for them.
+   * that device reads. Other devices skip their sequences.
+   *
+   * Cost: every observer (re)snapshot appends these entries to the one shared
+   * journal, so a burst of reconnecting observers with many waiting runs uses
+   * up retention that other devices' cursors rely on. Each pass is capped at
+   * half the journal by count and by bytes, so one pass alone never trims a
+   * cursor taken at the snapshot; repeated passes can still age a slow
+   * device's cursor out, and that device then resnapshots as usual.
    */
   private announceWaitingRuns(deviceId: string, botVisible: boolean): void {
     const live = this.options.liveRuns?.();
@@ -419,6 +425,7 @@ export class AidenRemoteHostFeedService {
     const state = this.state!;
     const summaries = new Map(state.summaries.map((summary) => [summary.id, summary]));
     let budget = Math.floor(this.maxEvents / 2);
+    let byteBudget = Math.floor(this.maxBytes / 2);
     for (const run of live) {
       if (budget <= 0) break;
       if (!isWaiting(run.state)) continue;
@@ -428,8 +435,12 @@ export class AidenRemoteHostFeedService {
         state.botChatIds,
       );
       if (!event || (event.botOnly && !botVisible)) continue;
-      this.append("run.state", event.observerPayload ?? event.payload, event.botOnly, "all", undefined, deviceId);
+      const payload = event.observerPayload ?? event.payload;
+      const bytes = Buffer.byteLength(this.frame(this.head + 1, "run.state", payload));
+      if (bytes > byteBudget) break;
+      this.append("run.state", payload, event.botOnly, "all", undefined, deviceId);
       budget -= 1;
+      byteBudget -= bytes;
     }
   }
 

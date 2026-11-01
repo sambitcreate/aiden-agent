@@ -15,7 +15,9 @@ import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
 import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
-import { startChatTriage, stopChatTriage } from "./services/chat-triage-main.js";
+import { chatTriage, startChatTriage, stopChatTriage } from "./services/chat-triage-main.js";
+import { chatReadMarkers } from "./services/chat-read-markers-main.js";
+import { forgetChatInboxState } from "./services/chat-application-service.js";
 import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
 import { externalUrl } from "./services/browser/core.js";
@@ -2353,6 +2355,11 @@ if (!ownsSingleInstanceLock) {
         await piRuntimeEffectStore.deleteChat(chatId);
         await piCompactionSessionStore.deleteChat(chatId);
         await chatStore.remove(chatId);
+        // The same Inbox cleanup the live delete runs: no snooze or pin is left
+        // behind for a chat whose delete a crash cut short.
+        await forgetChatInboxState({ readMarkers: chatReadMarkers, triage: chatTriage }, chatId, (area, message, error) =>
+          logger.warn(area, message, error),
+        );
       });
       // After deletions settle and before any renderer draft exists.
       await workspaceApplicationService.prepareNoWorkspaceChats().catch((error: unknown) => {

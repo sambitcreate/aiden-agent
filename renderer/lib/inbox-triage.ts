@@ -50,7 +50,9 @@ export function inboxTriagePatch(kind: InboxTriageKind, until?: number): ChatTri
 export interface InboxTriageOffer {
   /**
    * Mark done (or Mark not done) and Snooze (or Unsnooze). Left out while the
-   * row waits on the person or runs: neither would move it.
+   * row waits on the person or runs: neither would move it. Such a row with a
+   * snooze still to run offers Unsnooze alone (`snoozed`), so it doesn't drop
+   * back out of the list once the wait or the run ends.
    */
   doneAndSnooze: boolean;
   /**
@@ -60,7 +62,7 @@ export interface InboxTriageOffer {
   alsoMarkRead: boolean;
   /** Mark done holds now, so the item reads Mark not done. */
   done: boolean;
-  /** A snooze holds now, so the item reads Unsnooze. */
+  /** A snooze holds now, so the item reads Unsnooze (offered even when `doneAndSnooze` is not). */
   snoozed: boolean;
 }
 
@@ -239,14 +241,24 @@ export function formatSnoozeUntil(until: number, now: number, locale?: string): 
   return `${at.toLocaleDateString(locale, { weekday: "short", month: "short", day: "numeric" })}, ${time}`;
 }
 
+/** A time without ":00" on the hour ("9 AM", "5:42 PM"). */
+function compactSnoozeTime(at: Date, locale?: string): string {
+  return at.getMinutes() === 0 ? at.toLocaleTimeString(locale, { hour: "numeric" }) : snoozeTime(at, locale);
+}
+
 /**
- * A snoozed row's status, which search lists: the time for today, the short
- * weekday and time within the week, else the date ("Nov 16").
+ * A snoozed row's short status, which search lists after "Until" beside the
+ * workspace label, so the label keeps its room: the time for today ("5:42
+ * PM"), the short weekday and time within the week ("Mon 9 AM"), else the date
+ * ("Nov 16"). The row's accessible name says it in full (`formatSnoozeMenuTime`).
  */
 export function formatSnoozeStatus(until: number, now: number, locale?: string): string {
   const at = new Date(until);
-  if (calendarDaysAhead(at, now) >= 7) return at.toLocaleDateString(locale, { month: "short", day: "numeric" });
-  return formatSnoozeMenuTime(until, now, locale);
+  const days = calendarDaysAhead(at, now);
+  if (days >= 7) return at.toLocaleDateString(locale, { month: "short", day: "numeric" });
+  const time = compactSnoozeTime(at, locale);
+  if (days <= 0) return time;
+  return `${at.toLocaleDateString(locale, { weekday: "short" })} ${time}`;
 }
 
 /**
