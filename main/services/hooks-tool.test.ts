@@ -89,6 +89,7 @@ test("the tool is offered on attended workspace chats only", () => {
   assert.equal(offersHooksTool({ ...attended, usageSource: "chat" }), true);
   const withheld: Array<[string, HooksToolSurface]> = [
     ["an unattended follow-up", { ...attended, unattended: true }],
+    ["a turn a phone or paired Mac drives", { ...attended, remoteAudience: true }],
     ["a Bot chat", { ...attended, bot: true }],
     ["Design Studio", { ...attended, design: true }],
     ["the Assistant", { ...attended, assistant: true }],

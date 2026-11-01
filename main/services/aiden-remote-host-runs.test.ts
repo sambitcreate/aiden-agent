@@ -416,6 +416,33 @@ test("a phone may deny a host-only approval but allowing it is refused with no e
   assert.deepEqual(effects.approvals, ["approval-1:deny"]);
 });
 
+test("a hook the agent proposed can be denied from a paired Mac but allowed only on the host", async () => {
+  const { registry, service, access, effects } = harness();
+  registry.publish("run-1", "chat:approval", approval("approval-1", {
+    toolName: "hooks",
+    details: { kind: "hook-proposal" },
+  }));
+  const controlled = open(service, controller("device-mac"), "run-1");
+  const prompt = controlled.frames().find((frame) => frame.event === "approval_required")!.data.payload;
+  // The journal's details allowlist does not know the kind, so a paired
+  // controller sees the summary marked as withheld, never the hook itself.
+  assert.equal(prompt.detailsOmitted, true);
+  assert.equal("details" in prompt, false);
+
+  const refused = await rejection(
+    service.respondApproval("device-mac", "run-1", "approval-1", { decision: "allow" }, KEY_A, access),
+  );
+  assert.equal(refused.code, "capability_denied");
+  assert.equal(refused.status, 403);
+  assert.deepEqual(effects.approvals, []);
+
+  const denied = await service.respondApproval(
+    "device-mac", "run-1", "approval-1", { decision: "deny" }, KEY_B, access,
+  );
+  assert.equal(denied.decision, "deny");
+  assert.deepEqual(effects.approvals, ["approval-1:deny"]);
+});
+
 test("a phone losing an approval race to the Mac learns the Mac's decision and when it was made", async () => {
   const { registry, service, access } = harness();
   registry.publish("run-1", "chat:approval", approval("approval-1"));

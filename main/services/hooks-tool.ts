@@ -66,11 +66,18 @@ export interface HooksToolSurface {
   harnessProvider: boolean;
   /** A follow-up turn nobody watches: its approvals settle as unavailable. */
   unattended: boolean;
+  /**
+   * A turn a phone or paired Mac drives. Its approvals reach that device,
+   * which may only deny a hook proposal, so the tool is withheld.
+   */
+  remoteAudience?: boolean;
   excludedToolNames?: ReadonlySet<string>;
 }
 
 /** The same gate as workspace chat hooks: the surfaces that run them. */
-export function runsWorkspaceChatHooks(surface: Omit<HooksToolSurface, "unattended" | "excludedToolNames">): boolean {
+export function runsWorkspaceChatHooks(
+  surface: Omit<HooksToolSurface, "unattended" | "remoteAudience" | "excludedToolNames">,
+): boolean {
   return (
     (surface.usageSource ?? "chat") === "chat" &&
     surface.interactionSurface !== "telegram" &&
@@ -82,7 +89,12 @@ export function runsWorkspaceChatHooks(surface: Omit<HooksToolSurface, "unattend
 }
 
 export function offersHooksTool(surface: HooksToolSurface): boolean {
-  return runsWorkspaceChatHooks(surface) && !surface.unattended && surface.excludedToolNames?.has(HOOKS_TOOL_NAME) !== true;
+  return (
+    runsWorkspaceChatHooks(surface) &&
+    !surface.unattended &&
+    surface.remoteAudience !== true &&
+    surface.excludedToolNames?.has(HOOKS_TOOL_NAME) !== true
+  );
 }
 
 export interface HooksToolApprovalCard {

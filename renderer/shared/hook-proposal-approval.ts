@@ -3,9 +3,10 @@ import { safeApprovalText } from "./assistant.js";
 /**
  * The approval card for a hook the agent proposed through the `hooks` tool.
  *
- * It is host-only: the remote projections do not recognize this kind, so a
- * phone or a paired Mac sees the summary with `canAllow: false` and the owner
- * approves on the computer that runs the chat. The card offers "Allow once" only.
+ * It is host-only: the run journal's details allowlist (`projectApprovalDetails`)
+ * does not recognize this kind, so a phone or a paired Mac gets the summary
+ * marked `detailsOmitted`, may only deny it, and the owner approves on the
+ * computer that runs the chat. The card offers "Allow once" only.
  */
 export const HOOK_PROPOSAL_APPROVAL_KIND = "hook-proposal";
 

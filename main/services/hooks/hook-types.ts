@@ -53,6 +53,19 @@ export const HOOK_EVENT_SCOPE_KINDS: Readonly<Record<HookEvent, readonly HookSco
   RoutineFailed: ["global", "bot"],
 };
 
+/**
+ * What an event's matcher is checked against: the tool's name, or a value
+ * such as SessionStart's `source`. The other events ignore the matcher, as in
+ * Claude Code, so it filters nothing there.
+ */
+export const HOOK_EVENT_MATCH_TARGETS: Readonly<Partial<Record<HookEvent, "tool" | "value">>> = {
+  PreToolUse: "tool",
+  PostToolUse: "tool",
+  SessionStart: "value",
+  PreCompact: "value",
+  Notification: "value",
+};
+
 export interface HookCommandHandler {
   type: "command";
   command: string;

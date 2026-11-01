@@ -285,6 +285,8 @@ Wiring:
 
 A deferred tool (listed in `load_tools`, so it costs no tokens until it's used) available in attended desktop workspace chats and, as `propose_hook`, in attended Bot chats:
 
+> As built (2026-10-31): the `hooks` tool ships for attended desktop chats only. Bot chats have no `propose_hook` yet, and Settings saves only global and workspace hooks, so nothing creates a `bot:<id>` hook; the runtime still runs one if it exists.
+
 | Action | Card | Notes |
 | --- | --- | --- |
 | `list` | none | Shows the scope, event, matcher, command, status and last result. No secrets: `envAllow` lists names only. |

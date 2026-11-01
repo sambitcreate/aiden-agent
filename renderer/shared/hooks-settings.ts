@@ -2,7 +2,7 @@
 // group and label hooks. The hook contract itself lives in
 // main/services/hooks/hook-types.ts; this file only shapes it for display.
 
-import { HOOK_EVENT_SCOPE_KINDS, HOOK_EVENTS, type HookEvent, type HookListing, type HookRunRecord, type HookScope, type HookStatus } from "../../main/services/hooks/hook-types.js";
+import { HOOK_EVENT_MATCH_TARGETS, HOOK_EVENT_SCOPE_KINDS, HOOK_EVENTS, type HookEvent, type HookListing, type HookRunRecord, type HookScope, type HookStatus } from "../../main/services/hooks/hook-types.js";
 import type { HookProposal, HookTestResult, HookWorkspaceFileStatus } from "../../main/services/hooks/hook-service.js";
 
 export { HOOK_EVENT_SCOPE_KINDS, HOOK_EVENTS };
@@ -230,10 +230,22 @@ export function hookShortDigest(digest: string): string {
   return digest.slice(0, 12);
 }
 
+function matchTargetOf(event: string): "tool" | "value" | undefined {
+  return (HOOK_EVENTS as readonly string[]).includes(event) ? HOOK_EVENT_MATCH_TARGETS[event as HookEvent] : undefined;
+}
+
+/** True when the event's matcher filters anything; the others run whatever it says. */
+export function hookEventUsesMatcher(event: string): boolean {
+  return matchTargetOf(event) !== undefined;
+}
+
+/** The matcher as a hook row shows it, or nothing where it filters nothing. */
 export function hookMatcherLabel(listing: Pick<HookListing, "matcher" | "event">): string | undefined {
-  if (listing.event !== "PreToolUse" && listing.event !== "PostToolUse") return undefined;
+  const target = matchTargetOf(listing.event);
+  if (!target) return undefined;
   const matcher = listing.matcher.trim();
-  return matcher === "" || matcher === "*" ? "Every tool" : matcher;
+  if (matcher !== "" && matcher !== "*") return matcher;
+  return target === "tool" ? "Every tool" : undefined;
 }
 
 /** Plain parse of the Add hook sheet's timeout field: blank is the default, else a whole number of seconds 1–120. */

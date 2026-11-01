@@ -1623,7 +1623,8 @@ async function prepareGeneration(
     skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_ARTIFACT_SKILLS);
   }
   // The agent's hooks tool and its skill: where workspace chat hooks run, and
-  // only while someone can answer the owner's card. Design runs returned above.
+  // only while the owner can answer its card on this computer (not on an
+  // unattended or a phone- or paired-Mac-driven turn). Design runs returned above.
   const offerHooksTool = hostPlatformCapabilities().hooks && offersHooksTool({
     usageSource: options.usageSource,
     interactionSurface: options.interactionSurface,
@@ -1632,6 +1633,7 @@ async function prepareGeneration(
     assistant: assistantMode,
     harnessProvider: isAcpHarnessProvider(runtime.provider.id),
     unattended: options.unattended === true,
+    remoteAudience: options.visualAudience === "remote",
     excludedToolNames: options.excludeToolNames,
   });
   if (skillSnapshot && !offerHooksTool) {

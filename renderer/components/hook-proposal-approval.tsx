@@ -1,5 +1,6 @@
 import type * as React from "react";
 import type { HookProposalApprovalDetails, HookProposalApprovalHook } from "../shared/hook-proposal-approval";
+import { hookEventUsesMatcher } from "../shared/hooks-settings";
 import { ApprovalCodeWell } from "./approval-code-well";
 import { HookScriptCoverage } from "./hook-script-coverage";
 import { Text } from "./ui";
@@ -87,7 +88,15 @@ export function HookProposalApproval({
         <Row label="Name" value={details.name} />
         <Row label="Runs in" value={details.scopeLabel} />
         <Row label="Event" value={details.event} previous={previous?.event} mono />
-        <Row label="Matches" value={matcherLabel(details.matcher)} previous={previous ? matcherLabel(previous.matcher) : undefined} mono />
+        {/* Stop, UserPromptSubmit and the like run whatever the matcher says, so a narrow-looking one isn't shown. */}
+        {hookEventUsesMatcher(details.event) || (previous !== undefined && hookEventUsesMatcher(previous.event)) ? (
+          <Row
+            label="Matches"
+            value={hookEventUsesMatcher(details.event) ? matcherLabel(details.matcher) : "Everything"}
+            previous={previous ? (hookEventUsesMatcher(previous.event) ? matcherLabel(previous.matcher) : "Everything") : undefined}
+            mono
+          />
+        ) : null}
         <Row label="Time limit" value={timeoutLabel(details.timeoutSeconds)} previous={previous ? timeoutLabel(previous.timeoutSeconds) : undefined} />
         {details.async || previous?.async ? (
           <Row label="Runs" value={runsLabel(details.async)} previous={previous ? runsLabel(previous.async) : undefined} />

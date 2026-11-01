@@ -30,15 +30,16 @@ import { compileHookMatcher, matcherMatchesTool, matcherMatchesValue, type Compi
 import { mergeHookResults, type HookMergeEntry } from "./hook-merge.js";
 import { interpretHookRun, runHookCommand, type HookRawRun } from "./hook-runner.js";
 import { HOOK_FAILURE_LIMIT } from "./hook-trust-store.js";
-import type {
-  HookDefinition,
-  HookDispatchContext,
-  HookDispatcher,
-  HookEvent,
-  HookOutcome,
-  HookPayload,
-  HookRunRecord,
-  HookScope,
+import {
+  HOOK_EVENT_MATCH_TARGETS,
+  type HookDefinition,
+  type HookDispatchContext,
+  type HookDispatcher,
+  type HookEvent,
+  type HookOutcome,
+  type HookPayload,
+  type HookRunRecord,
+  type HookScope,
 } from "./hook-types.js";
 
 export const HOOK_RUN_CONCURRENCY = 4;
@@ -241,8 +242,9 @@ export function createHookDispatcher(options: HookDispatcherOptions): AidenHookD
     const matcher = compiled(hook.matcher);
     if (!matcher) return false;
     const target = matchTarget(event, payload);
-    if (TOOL_EVENTS.has(event)) return matcher.kind === "all" || (target.tool !== undefined && matcherMatchesTool(matcher, target.tool));
-    if (event === "SessionStart" || event === "PreCompact" || event === "Notification") return matcherMatchesValue(matcher, target.value);
+    const kind = HOOK_EVENT_MATCH_TARGETS[event];
+    if (kind === "tool") return matcher.kind === "all" || (target.tool !== undefined && matcherMatchesTool(matcher, target.tool));
+    if (kind === "value") return matcherMatchesValue(matcher, target.value);
     // Events without a match target ignore the matcher, as in Claude Code.
     return true;
   };

