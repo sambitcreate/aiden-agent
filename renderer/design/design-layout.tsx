@@ -20,22 +20,19 @@ export const DESIGN_CHAT_WIDTH_STORAGE_KEY = "aiden-agent.design.chat-width";
 /** Set while the sidebar is collapsed because design mode collapsed it, so exit reopens only that. */
 const SIDEBAR_COLLAPSED_BY_DESIGN_STORAGE_KEY = "aiden-agent.design.sidebar-collapsed-by-design";
 
+/** Design mode for the open chat, as the chat area and the sidebar both use it. */
+export interface DesignChatState {
+  state: WorkbenchDesignState;
+  /** The open chat's workspace while design mode is active, for the scoped sidebar. */
+  workspaceId: string | undefined;
+}
+
 /**
- * The chat area with design mode wired in. It reads the chat's design mode in
- * the same render that the route changes, so switching between a design chat
- * and a normal chat never shows one chat in the other's layout.
+ * Reads the open chat's design mode in the same render that the route
+ * changes, so switching between a design chat and a normal chat never shows
+ * one chat in the other's layout or sidebar scope.
  */
-export function DesignWorkbench({
-  chatId,
-  allowed,
-  suppressed,
-  children,
-}: React.PropsWithChildren<{
-  chatId: string | undefined;
-  /** False for surfaces design mode never applies to (a paired host, Bots, Studio pages). */
-  allowed: boolean;
-  suppressed: boolean;
-}>) {
+export function useDesignChatState(chatId: string | undefined, allowed: boolean): DesignChatState {
   const design = useDesignMode(allowed ? chatId : undefined);
   const state: WorkbenchDesignState = !allowed
     ? "inactive"
@@ -44,9 +41,24 @@ export function DesignWorkbench({
       : design.on
         ? "active"
         : "inactive";
+  return { state, workspaceId: state === "active" ? design.workspaceId : undefined };
+}
+
+/** The chat area with design mode wired in. */
+export function DesignWorkbench({
+  chatId,
+  design,
+  suppressed,
+  children,
+}: React.PropsWithChildren<{
+  chatId: string | undefined;
+  /** From `useDesignChatState`; "inactive" on surfaces design mode never applies to. */
+  design: WorkbenchDesignState;
+  suppressed: boolean;
+}>) {
   return (
-    <EnvironmentWorkbench suppressed={suppressed} design={state}>
-      <DesignLayout chatId={chatId} state={state}>
+    <EnvironmentWorkbench suppressed={suppressed} design={design}>
+      <DesignLayout chatId={chatId} state={design}>
         {children}
       </DesignLayout>
     </EnvironmentWorkbench>

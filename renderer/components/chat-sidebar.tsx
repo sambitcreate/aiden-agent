@@ -48,6 +48,7 @@ import {
 import { Progress } from "./ui-primitives";
 import {
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Folder,
   FolderPlus,
@@ -102,6 +103,7 @@ import { BotSidebar } from "../main/bots/bot-sidebar";
 import {
   localSidebarChats,
   localSidebarProjects,
+  scopedLocalSidebar,
   type LocalSidebarChat,
   type LocalSidebarProject,
 } from "../lib/sidebar-workspace-groups";
@@ -156,6 +158,14 @@ interface ChatSidebarProps {
   /** The open chat when it lives on a paired host; kept apart from local chat IDs. */
   activeRemoteChat?: { hostId: string; chatId: string } | null;
   titleReveal?: ChatTitleRevealEvent | null;
+  /**
+   * Shows only this workspace's chats, under a ‹ All projects row (design
+   * mode scopes the sidebar to the open chat's project). Null or left out
+   * shows every project.
+   */
+  scopeWorkspaceId?: string | null;
+  /** The person chose ‹ All projects, or the scoped project has no chats left. */
+  onClearScope?: () => void;
 }
 
 type SidebarEntry = SidebarProjectEntry<LocalSidebarProject>;
@@ -484,7 +494,13 @@ export function ChatSidebar(props: ChatSidebarProps) {
   return capabilities.bots && isBotsPath(pathname) ? <BotSidebar /> : <WorkspaceChatSidebar {...props} />;
 }
 
-function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReveal }: ChatSidebarProps) {
+function WorkspaceChatSidebar({
+  activeChatId,
+  activeRemoteChat = null,
+  titleReveal,
+  scopeWorkspaceId = null,
+  onClearScope,
+}: ChatSidebarProps) {
   const pathPreferences = useWorkspacePathPreferences();
   const navigate = useNavigate();
   const capabilities = useAppCapabilities();
@@ -585,6 +601,21 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       ),
     [activeChatId, busyChatId, chatActivity, chats.data, readMarkers, workspaces],
   );
+  const scope = React.useMemo(
+    () => scopedLocalSidebar(scopeWorkspaceId, workspaces, sidebarProjects, sidebarChats),
+    [scopeWorkspaceId, sidebarChats, sidebarProjects, workspaces],
+  );
+  // Once the registry and chats have loaded, a scope with nothing in it
+  // (its last chat deleted or archived, or the project removed) ends, so the
+  // sidebar never stays on an empty project.
+  const scopeEmpty = Boolean(scopeWorkspaceId) && !scope && workspaceRegistryReady && chats.isSuccess;
+  const clearScopeRef = React.useRef(onClearScope);
+  clearScopeRef.current = onClearScope;
+  React.useEffect(() => {
+    if (scopeEmpty) clearScopeRef.current?.();
+  }, [scopeEmpty]);
+  // A scoped sidebar is one project's chats, whatever view the person keeps.
+  const shownView: SidebarView = scope ? "projects" : view;
   const workspaceIds = React.useMemo(() => workspaces.map((workspace) => workspace.id), [workspaces]);
   const localRepositories = useLocalRepositoryIdentities(
     workspaceIds,
@@ -605,8 +636,11 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   const combined = React.useMemo(
     () =>
       combineSidebarRows({
-        local: { projects: sidebarProjects, chats: sidebarChats },
-        remote: remoteRows,
+        local: scope
+          ? { projects: [scope.project], chats: scope.chats }
+          : { projects: sidebarProjects, chats: sidebarChats },
+        // A scope is a project on this Mac, so paired hosts' rows stay out of it.
+        remote: scope ? [] : remoteRows,
         hosts: peerHosts.hosts,
         filter: shownMachines,
         grouping: projectGrouping,
@@ -617,6 +651,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       peerHosts.hosts,
       projectGrouping,
       remoteRows,
+      scope,
       shownMachines,
       sidebarChats,
       sidebarProjects,
@@ -628,30 +663,33 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         projects: combined.projects,
         chats: combined.chats,
         search,
-        view,
+        view: shownView,
         chatSort,
         projectSort,
         projectOrder,
         now: Date.now(),
       }),
-    [chatSort, combined, projectOrder, projectSort, search, view],
+    [chatSort, combined, projectOrder, projectSort, search, shownView],
   );
   const chatViewTitle = view === "attention" ? "Needs attention" : "Recents";
-  const manualReorderEnabled = view === "projects" && projectSort === "manual" && !searching;
+  const manualReorderEnabled = !scope && view === "projects" && projectSort === "manual" && !searching;
   const displayOptions = React.useMemo(
     () => ({
       search,
+      // The scoped project shows every chat, with no folder row to open.
       isExpanded: ({ key, primary }: SidebarEntry) =>
-        isRemoteSidebarProject(primary)
+        key === scope?.project.key ||
+        (isRemoteSidebarProject(primary)
           ? expandedRemoteKeys.has(key)
-          : expandedWorkspaceIds.has(primary.workspace.id),
+          : expandedWorkspaceIds.has(primary.workspace.id)),
       isFullyRevealed: ({ key, primary }: SidebarEntry) =>
-        isRemoteSidebarProject(primary)
+        key === scope?.project.key ||
+        (isRemoteSidebarProject(primary)
           ? revealedRemoteKeys.has(key)
-          : fullyRevealedWorkspaceIds.has(primary.workspace.id),
+          : fullyRevealedWorkspaceIds.has(primary.workspace.id)),
       collapsedChatLimit: COLLAPSED_WORKSPACE_CHAT_LIMIT,
     }),
-    [expandedRemoteKeys, expandedWorkspaceIds, fullyRevealedWorkspaceIds, revealedRemoteKeys, search],
+    [expandedRemoteKeys, expandedWorkspaceIds, fullyRevealedWorkspaceIds, revealedRemoteKeys, scope, search],
   );
   // The chat list takes one Tab stop; arrow keys move between its rows.
   const rovingRef = React.useRef<HTMLDivElement>(null);
@@ -659,10 +697,10 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   // Jump shortcuts and previous/next cover this Mac's chats only.
   const shortcutGroups = React.useMemo(
     () =>
-      displayedSidebarChats(organized, view, displayOptions).map((section) => ({
+      displayedSidebarChats(organized, shownView, displayOptions).map((section) => ({
         chats: section.chats.flatMap((summary) => (isRemoteSidebarChat(summary) ? [] : [summary.chat])),
       })),
-    [displayOptions, organized, view],
+    [displayOptions, organized, shownView],
   );
   const shortcutAssignments = React.useMemo(
     () => createSidebarChatShortcutAssignments(shortcutGroups),
@@ -1138,11 +1176,11 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     }
     return grouped;
   }, [chatDrafts, chats.data, searching, workspaces]);
-  const renderDraftRow = (draft: ChatMeta) => (
+  const renderDraftRow = (draft: ChatMeta, indented = true) => (
     <SidebarListItem
       key={`draft:${draft.id}`}
       data-roving-item
-      className="pl-8"
+      className={indented ? "pl-8" : undefined}
       data-draft-chat={draft.id}
       aria-description="Unsent draft"
       title={<span className="italic">New chat</span>}
@@ -1450,6 +1488,52 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         onClear={() => setMachineFilter("all")}
       />
     ) : null;
+  // Design mode's sidebar: ‹ All projects, then the one project's chats under
+  // its name and path, with every chat shown.
+  const renderScopedProject = (workspace: Workspace) => {
+    const chatsGroup = isNoWorkspace(workspace);
+    const name = chatsGroup ? NO_WORKSPACE_GROUP_LABEL : workspaceDisplayName(workspace, workspaces);
+    const group = organized.projectGroups[0];
+    const drafts = draftsByWorkspace.get(workspace.id) ?? [];
+    return (
+      <div data-sidebar-scope-list className="flex flex-col gap-3">
+        <SidebarListItem
+          data-roving-item
+          className="text-secondary"
+          icon={<ChevronLeft />}
+          title="All projects"
+          onClick={() => onClearScope?.()}
+        />
+        <div data-sidebar-scope>
+          <SidebarListGroup
+            title={
+              <span className="flex min-w-0 flex-col">
+                <h2 className="truncate text-small-strong font-medium text-secondary">{name}</h2>
+                {!chatsGroup && workspace.folderPath ? (
+                  <span className="flex min-w-0 items-center gap-1 font-normal">
+                    {workspace.managedWorktree?.branch ? (
+                      <span className="max-w-[45%] truncate text-small text-tertiary">
+                        {workspace.managedWorktree.branch} ·
+                      </span>
+                    ) : null}
+                    <WorkspacePathLabel path={workspace.folderPath} format={pathPreferences.workspacePathFormat} />
+                  </span>
+                ) : null}
+              </span>
+            }
+          >
+            {drafts.map((draft) => renderDraftRow(draft, false))}
+            {group ? (
+              group.chats.map((summary) => renderSidebarChat(summary))
+            ) : drafts.length === 0 ? (
+              <EmptyState placement="inline" title="No matches" description="Try a different search." />
+            ) : null}
+          </SidebarListGroup>
+        </div>
+      </div>
+    );
+  };
+
   const groupHeading = (label: string) =>
     machineFilterChip ? (
       <span className="flex min-w-0 items-center gap-1.5">
@@ -1571,7 +1655,9 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         ) : null}
 
         <SidebarList ref={rovingRef}>
-          {view === "projects" ? (
+          {scope ? (
+            renderScopedProject(scope.project.workspace)
+          ) : view === "projects" ? (
             <SidebarListGroup
               title={
                 <div className="flex items-center justify-between gap-2">
@@ -1830,7 +1916,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                       </div>
                       {expanded ? (
                         <div className="flex flex-col gap-0.5">
-                          {draftsByWorkspace.get(workspace.id)?.map(renderDraftRow)}
+                          {draftsByWorkspace.get(workspace.id)?.map((draft) => renderDraftRow(draft))}
                           {visibleChats.map((summary) => renderSidebarChat(summary, true, explicitlyExpanded))}
                           {group.chats.length === 0 &&
                           !draftsByWorkspace.has(workspace.id) ? (

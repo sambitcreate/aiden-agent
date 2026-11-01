@@ -147,5 +147,8 @@ export function useDesignMode(chatId: string | undefined) {
     [chatId, qc, set],
   );
 
-  return { available, on, settled, set, toggle };
+  // The workspace the chat lives in, so design mode can scope the sidebar to it.
+  const workspaceId = chat ? persistedChatWorkspaceId(chat.workspaceId) : undefined;
+
+  return { available, on, settled, workspaceId, set, toggle };
 }

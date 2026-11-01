@@ -19,7 +19,7 @@ import { applyDesignModeToCache } from "../lib/design-mode";
 import { queryKeys } from "../lib/queries";
 import type { Chat, ChatMeta, Workspace } from "../lib/types";
 import { WorkspaceProvider } from "../lib/workspace-context";
-import { DesignWorkbench } from "./design-layout";
+import { DesignWorkbench, useDesignChatState } from "./design-layout";
 
 // The lazy canvas imports React Flow's CSS, which Node cannot load; tests get an empty module.
 registerHooks({
@@ -93,6 +93,15 @@ function PanelProbe() {
   return null;
 }
 
+function DesignChat({ chatId }: { chatId: string }) {
+  const design = useDesignChatState(chatId, true);
+  return (
+    <DesignWorkbench chatId={chatId} design={design.state} suppressed={false}>
+      <main aria-label={`Chat ${chatId}`} />
+    </DesignWorkbench>
+  );
+}
+
 function Shell({ chatId }: { chatId: string }) {
   return (
     <QueryClientProvider client={queryClient}>
@@ -103,9 +112,7 @@ function Shell({ chatId }: { chatId: string }) {
             <EnvironmentPanelProvider>
               <PanelProbe />
               <SplitView storageKey="aiden-agent" sidebar={<nav aria-label="Chats" />}>
-                <DesignWorkbench chatId={chatId} allowed suppressed={false}>
-                  <main aria-label={`Chat ${chatId}`} />
-                </DesignWorkbench>
+                <DesignChat chatId={chatId} />
               </SplitView>
             </EnvironmentPanelProvider>
           </WorkspaceTerminalProvider>
