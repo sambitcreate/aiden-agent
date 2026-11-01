@@ -2272,7 +2272,7 @@ if (!ownsSingleInstanceLock) {
       } catch (error) {
         logger.warn(
           "hooks",
-          "Hook settings could not be loaded; no hooks will run until restart.",
+          "Hook settings could not be loaded; tool calls are blocked until they load, and each event tries again.",
           error,
         );
       }

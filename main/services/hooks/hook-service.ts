@@ -171,6 +171,11 @@ export interface HookChange {
 
 export interface HookService {
   readonly dispatcher: AidenHookDispatcher;
+  /**
+   * Read the profile's hook store. Throws when it exists but can't be read;
+   * until a later load succeeds, tool calls are denied, Settings changes are
+   * refused rather than overwriting it, and every use tries loading again.
+   */
   load(): Promise<void>;
   flush(): Promise<void>;
   /** Hooks in `scopes` (all known scopes when omitted), each with its current status and last run. */
@@ -376,6 +381,34 @@ export function createHookService(deps: HookServiceDeps): HookService {
   const disabledByEnvironment = () => env.AIDEN_HOOKS === "0";
   const hooksOff = () => disabledByEnvironment() || trust.paused;
 
+  /**
+   * Why the profile's hook store last failed to load, until a load succeeds.
+   * While it is set nothing can say which hooks are approved, so tool calls
+   * are denied (see the dispatcher), and every use tries loading again.
+   */
+  let loadError: Error | undefined;
+  let loading: Promise<void> | undefined;
+  const loadStores = (): Promise<void> => {
+    loading ??= Promise.all([entries.load(), trust.load()])
+      .then(
+        () => {
+          loadError = undefined;
+        },
+        (error: unknown) => {
+          loadError = error instanceof Error ? error : new Error(String(error));
+          throw loadError;
+        },
+      )
+      .finally(() => {
+        loading = undefined;
+      });
+    return loading;
+  };
+  /** Resolves once the store is loaded; retries a failed load and throws while it still fails. */
+  const ensureLoaded = async (): Promise<void> => {
+    if (loadError || loading) await loadStores();
+  };
+
   const emit = (change: HookChange) => {
     for (const listener of listeners) {
       try {
@@ -441,7 +474,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
     try {
       file = await readWorkspaceFile(workspaceRoot);
     } catch (error) {
-      file = { present: true, hooks: [], problems: [`The hooks file could not be read: ${(error as Error).message}`], warnings: [] };
+      file = { present: true, unreadable: true, hooks: [], problems: [`The hooks file could not be read: ${(error as Error).message}`], warnings: [] };
     }
     for (const hook of file.hooks) repoHookRoots.set(hook.id, workspaceRoot);
     const hooks = await Promise.all(file.hooks.map((hook) => (hook.status === "unsupported" || hook.event === "unknown" ? hook : withScripts(hook, cwd))));
@@ -463,6 +496,8 @@ export function createHookService(deps: HookServiceDeps): HookService {
     now,
     source: {
       async activeHooks(event, scopes, cwd) {
+        if (disabledByEnvironment()) return [];
+        await ensureLoaded();
         if (hooksOff()) return [];
         const active: HookDefinition[] = [];
         for (const rawScope of scopes) {
@@ -471,8 +506,14 @@ export function createHookService(deps: HookServiceDeps): HookService {
           // there (a swapped script in a new worktree) reads as changed.
           const listings = await storedListingsIn(scope, cwd);
           // The repo file is re-read on every fire once one of its hooks is approved,
-          // so an edit is caught as `changed` and stops running at once.
-          if (repoHasApprovals(scope)) listings.push(...(await readRepo(workspaceRootOf(scope) as string, cwd)).hooks.map(statusOf));
+          // so an edit is caught as `changed` and stops running at once. A file
+          // that can no longer be read may still hold an approved guard, so it
+          // fails like an unreadable store rather than reading as no hooks.
+          if (repoHasApprovals(scope)) {
+            const file = await readRepo(workspaceRootOf(scope) as string, cwd);
+            if (file.unreadable) throw new Error(`.aiden/hooks.json could not be loaded: ${file.problems.join(" ")}`);
+            listings.push(...file.hooks.map(statusOf));
+          }
           for (const listing of listings) {
             if (listing.status !== "active" || listing.event !== event) continue;
             const definition = listingDefinition(listing);
@@ -482,6 +523,9 @@ export function createHookService(deps: HookServiceDeps): HookService {
         return active;
       },
       mayHaveActiveHooks(event, scopes, toolName) {
+        if (disabledByEnvironment()) return false;
+        // Hooks that could not load can't be ruled out; dispatching retries the load.
+        if (loadError) return true;
         if (hooksOff()) return false;
         const matches = (matcher: string) => {
           if (!toolName || !TOOL_EVENTS.has(event)) return true;
@@ -692,15 +736,14 @@ export function createHookService(deps: HookServiceDeps): HookService {
   return {
     dispatcher,
 
-    async load() {
-      await Promise.all([entries.load(), trust.load()]);
-    },
+    load: loadStores,
 
     async flush() {
       await Promise.all([entries.flush(), trust.flush()]);
     },
 
     async listHooks(scopes) {
+      await ensureLoaded();
       const targets = (scopes ?? knownScopes()).map(normalizeHookScope);
       const seen = new Set<string>();
       const hooks: HookListing[] = [];
@@ -721,6 +764,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
     },
 
     async proposeHook(input) {
+      await ensureLoaded();
       pruneProposals();
       const built = buildProposal(input);
       if (!built.ok) return built;
@@ -745,6 +789,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
       pruneProposals();
       const proposal = proposals.get(proposalId);
       if (!proposal) return { ok: false, reason: "That proposal expired or was already answered." };
+      await ensureLoaded();
       proposals.delete(proposalId);
       emit({ reason: "proposals" });
       return applyProposal(proposal);
@@ -757,6 +802,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
     },
 
     async saveHook(input) {
+      await ensureLoaded();
       const built = buildProposal({ ...input, origin: "owner" });
       if (!built.ok) return built;
       const scripted = await withProposalScripts(built.value);
@@ -764,6 +810,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
     },
 
     async approveDigest(hookId, expectedDigest) {
+      await ensureLoaded();
       const found = await findListing(hookId);
       if (!found) return { ok: false, reason: `There is no hook with the id ${hookId}.` };
       const { listing } = found;
@@ -781,6 +828,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
     },
 
     async setEnabled(hookId, enabled) {
+      await ensureLoaded();
       const found = await findListing(hookId);
       if (!found) return false;
       await trust.setEnabled(found.listing, enabled);
@@ -789,6 +837,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
     },
 
     async deleteHook(hookId) {
+      await ensureLoaded();
       const entry = entries.get(hookId);
       if (entry) {
         await entries.remove(hookId);
@@ -805,6 +854,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
     },
 
     async setPaused(paused) {
+      await ensureLoaded();
       await trust.setPaused(paused);
       // Pausing also stops hooks still running in the background.
       if (paused) dispatcher.stopBackgroundHooks();
@@ -812,6 +862,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
     },
 
     async testHook(target, fixturePayload) {
+      await ensureLoaded();
       let definition: HookDefinition | undefined;
       const saved = "hookId" in target ? target : undefined;
       if (saved) {

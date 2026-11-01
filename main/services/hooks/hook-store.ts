@@ -149,6 +149,12 @@ export class HookEntryStore {
 export interface WorkspaceHooksFile extends ParsedHooksFile {
   /** False when the repo has no `.aiden/hooks.json`. */
   present: boolean;
+  /**
+   * The file exists but none of it could be loaded: unreadable, not a plain
+   * file, too large, not JSON or the wrong shape. Unlike an absent file, it
+   * may still hold hooks the owner approved.
+   */
+  unreadable?: true;
 }
 
 /** Id prefix for a repo's hooks; distinct from profile entries in the same workspace. */
@@ -165,6 +171,7 @@ export async function readWorkspaceHooksFile(workspaceRoot: string): Promise<Wor
   const root = (scope as { workspaceRoot: string }).workspaceRoot;
   const empty = (problem?: string, present = true): WorkspaceHooksFile => ({
     present,
+    ...(problem ? { unreadable: true as const } : {}),
     hooks: [],
     problems: problem ? [problem] : [],
     warnings: [],
@@ -196,7 +203,8 @@ export async function readWorkspaceHooksFile(workspaceRoot: string): Promise<Wor
       source: "workspace-file",
       idPrefix: workspaceFileIdPrefix(root),
     });
-    return { present: true, ...parsed };
+    // Problems with nothing loaded means the file as a whole could not be read.
+    return { present: true, ...(parsed.hooks.length === 0 && parsed.problems.length > 0 ? { unreadable: true as const } : {}), ...parsed };
   } finally {
     await handle.close();
   }

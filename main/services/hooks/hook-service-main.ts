@@ -13,10 +13,12 @@ export function getHookService(): HookService | undefined {
 }
 
 /**
- * Load hook state from `<userData>/hooks/` and install the real dispatcher.
- * Until this runs, and if it fails, `getHookDispatcher()` runs no hooks. On a
- * host that can't run hooks (not macOS or Linux) nothing is installed, so no
- * hook ever runs there.
+ * Install the real dispatcher and load hook state from `<userData>/hooks/`.
+ * Until this runs, `getHookDispatcher()` runs no hooks. If the store can't be
+ * read, the dispatcher is still installed and this rejects: tool calls are
+ * then denied and each event tries loading again, so a fixed store takes
+ * effect without a restart. On a host that can't run hooks (not macOS or
+ * Linux) nothing is installed, so no hook ever runs there.
  */
 export async function initializeHookService(supported: boolean = hostPlatformCapabilities().hooks): Promise<HookService | undefined> {
   if (!supported) return undefined;
@@ -27,10 +29,10 @@ export async function initializeHookService(supported: boolean = hostPlatformCap
     root: () => root,
     homeDir: () => app.getPath("home"),
   });
-  await created.load();
   service = created;
   setHookDispatcher(created.dispatcher);
   // Background (`async`) hooks don't outlive the app.
   app.once("before-quit", () => created.dispatcher.stopBackgroundHooks());
+  await created.load();
   return created;
 }

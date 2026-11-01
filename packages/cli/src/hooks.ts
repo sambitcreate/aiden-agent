@@ -32,19 +32,19 @@ export function createCliHookService(agentDir: string): HookService {
  * The daemon's hooks: loads the store and installs its dispatcher for every
  * surface (chats, Bots, routines, subagents, worktrees). The store is
  * protected from agent file tools first, whether or not hooks can run here.
- * Undefined when this computer can't run hooks or the store can't be read;
- * then no hook runs and the daemon carries on.
+ * Undefined when this computer can't run hooks. A store that can't be read
+ * still installs the dispatcher: tool calls are denied until it loads, and
+ * each event tries loading it again.
  */
 export async function startCliHooks(agentDir: string): Promise<HookService | undefined> {
   setProtectedAgentConfigRoots([cliHooksRoot(agentDir)]);
   if (!hostPlatformCapabilities().hooks) return undefined;
   const service = createCliHookService(agentDir);
+  setHookDispatcher(service.dispatcher);
   try { await service.load(); }
   catch (error) {
-    process.stderr.write(`aiden: Hooks are off because the hook store could not be read: ${error instanceof Error ? error.message : String(error)}\n`);
-    return undefined;
+    process.stderr.write(`aiden: The hook store could not be read, so tool calls are blocked until it loads: ${error instanceof Error ? error.message : String(error)}\n`);
   }
-  setHookDispatcher(service.dispatcher);
   return service;
 }
 

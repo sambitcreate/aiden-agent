@@ -163,7 +163,7 @@ Every hook gets JSON on stdin: `hook_event_name`, `session_id` and `cwd`, plus t
 | 2 | Block, with stderr as the reason. PreToolUse denies the tool; PostToolUse flags the result; UserPromptSubmit refuses the message; Stop keeps the agent working. For other events, stderr is shown to you only. |
 | Anything else | An error. So is a command that can't start, a timeout, or output over 64 KiB. Aiden shows a notice and continues without the hook, unless it is a `failClosed` PreToolUse hook, which blocks the tool. |
 
-If Aiden can't load your hooks at all (an unreadable store, say), it blocks every tool call with "Aiden could not load your hooks, so it blocked this tool call", and other events continue with a notice. It tries again on the next event.
+If Aiden can't load your hooks at all, it blocks every tool call with "Aiden could not load your hooks, so it blocked this tool call", and other events continue with a notice. That covers a hook store in `<userData>/hooks/` that can't be read or isn't valid JSON, and a workspace's `.aiden/hooks.json` that can't be read or parsed once you've approved one of its hooks (deleting the file just removes its hooks). Aiden leaves a damaged store where it is and won't save Settings changes over it; it tries loading again on every event, so fixing or removing the file takes effect without a restart.
 
 ### JSON fields
 

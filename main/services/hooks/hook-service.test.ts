@@ -461,6 +461,64 @@ test("removing the approval of a repo hook that moved stops it, and leaves the h
   assert.equal((await byCommand()).get("echo edited")?.status, "waiting-for-approval");
 });
 
+test("a hook store that can't be read blocks tool calls until it loads again, and is never overwritten meanwhile", async (t) => {
+  const f = await fixture(t);
+  const { run, commands } = recordingRun();
+  const first = await f.create({ run });
+  const saved = await first.saveHook({ scope: { kind: "chat", chatId: "chat-1" }, event: "PreToolUse", matcher: "Bash", handler: { type: "command", command: "./guard.sh", failClosed: true } });
+  assert.ok(saved.ok && saved.value);
+  await first.flush();
+
+  const trustFile = path.join(f.root, "hooks-trust.json");
+  const good = await fs.readFile(trustFile, "utf8");
+  await fs.writeFile(trustFile, "{ not json");
+  const service = createHookService({ root: () => f.root, env: { PATH: process.env.PATH }, homeDir: () => f.workspace, run });
+  await assert.rejects(service.load(), /not valid JSON/u);
+
+  assert.equal(service.dispatcher.hasHooks("PreToolUse", f.scopes, "run_command"), true, "hooks that could not load can't be ruled out");
+  const blocked = await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context);
+  assert.equal(blocked.decision, "deny");
+  assert.match(blocked.reason ?? "", /could not load your hooks/u);
+  const stop = await service.dispatcher.dispatch("Stop", stopPayload(), f.context);
+  assert.equal(stop.decision, undefined);
+  assert.match(stop.notices?.join("\n") ?? "", /continued without them/u);
+  await assert.rejects(service.setPaused(true));
+  await assert.rejects(service.listHooks(f.scopes), /not valid JSON/u);
+  assert.equal(await fs.readFile(trustFile, "utf8"), "{ not json", "the damaged store is left for the owner to fix");
+  assert.deepEqual(commands, []);
+
+  // Once the file is fixed, the next event loads it without a restart.
+  await fs.writeFile(trustFile, good);
+  await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context);
+  assert.deepEqual(commands, ["./guard.sh"]);
+  assert.equal((await service.listHooks(f.scopes)).hooks[0]?.status, "active");
+});
+
+test("an approved repo hooks file that becomes unreadable blocks tool calls instead of reading as no hooks", async (t) => {
+  const f = await fixture(t);
+  const { run, commands } = recordingRun();
+  await writeRepoHooks(f.workspace, { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "./guard.sh", failClosed: true }] }] } });
+  const service = await f.create({ run });
+  const hook = (await service.listHooks(f.scopes)).hooks[0];
+  assert.ok(hook && (await service.approveDigest(hook.id, hook.digest)).ok);
+
+  const file = path.join(f.workspace, ".aiden", "hooks.json");
+  await fs.rm(file);
+  await fs.mkdir(file);
+  const blocked = await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context);
+  assert.equal(blocked.decision, "deny");
+  assert.match(blocked.reason ?? "", /hooks\.json could not be loaded/u);
+
+  await fs.rm(file, { recursive: true });
+  await fs.writeFile(file, "{ not json");
+  assert.equal((await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context)).decision, "deny");
+
+  // Removing the file is a choice, not a failure: the hook is simply gone.
+  await fs.rm(file);
+  assert.equal((await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context)).decision, undefined);
+  assert.deepEqual(commands, []);
+});
+
 test("the same handler in several scopes runs once", async (t) => {
   const f = await fixture(t);
   const { run, commands } = recordingRun();
