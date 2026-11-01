@@ -137,6 +137,10 @@ const SCHEMA = `
   CREATE INDEX holds_by_asset ON holds(asset_id);
   PRAGMA user_version=1;
 `;
+// Assets re-indexed from blobs after the index was lost. Their holds could not be
+// recovered, so GC leaves them alone until a feature holds them again (any retain
+// clears the mark). Additive, so it is created on every open of a version-1 database.
+const RECOVERED_SCHEMA = "CREATE TABLE IF NOT EXISTS recovered (asset_id TEXT PRIMARY KEY REFERENCES assets(id));";
 const THUMBNAIL_EDGES: readonly StudioAssetThumbnailEdge[] = [256, 512];
 
 function toRecord(row: AssetRow): StudioAssetRecord {
@@ -447,9 +451,11 @@ export class StudioAssetStore {
     const key = holderKey(holder);
     this.transaction((db) => {
       const insert = db.prepare("INSERT OR IGNORE INTO holds (holder, asset_id) VALUES (?, ?)");
+      const unmark = db.prepare("DELETE FROM recovered WHERE asset_id = ?");
       for (const assetId of new Set(assetIds)) {
         this.requireRow(assetId);
         insert.run(key, assetId);
+        unmark.run(assetId);
       }
     });
   }
@@ -494,7 +500,11 @@ export class StudioAssetStore {
         touch.run(now, assetId);
       }
       const insert = db.prepare("INSERT OR IGNORE INTO holds (holder, asset_id) VALUES (?, ?)");
-      for (const assetId of next) insert.run(key, assetId);
+      const unmark = db.prepare("DELETE FROM recovered WHERE asset_id = ?");
+      for (const assetId of next) {
+        insert.run(key, assetId);
+        unmark.run(assetId);
+      }
     });
   }
 
@@ -528,7 +538,7 @@ export class StudioAssetStore {
     const doomed = this.transaction((db) => {
       const rows = db
         .prepare(
-          "SELECT id, bytes FROM assets WHERE touched_at < ? AND NOT EXISTS (SELECT 1 FROM holds WHERE holds.asset_id = assets.id)",
+          "SELECT id, bytes FROM assets WHERE touched_at < ? AND NOT EXISTS (SELECT 1 FROM holds WHERE holds.asset_id = assets.id) AND NOT EXISTS (SELECT 1 FROM recovered WHERE recovered.asset_id = assets.id)",
         )
         .all(cutoff) as { id: string; bytes: number }[];
       const remove = db.prepare("DELETE FROM assets WHERE id = ?");
@@ -663,8 +673,10 @@ export class StudioAssetStore {
         const insert = db.prepare(
           "INSERT OR IGNORE INTO assets (id, media_type, bytes, width, height, created_at, touched_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         );
+        const mark = db.prepare("INSERT OR IGNORE INTO recovered (asset_id) VALUES (?)");
         for (const asset of recovered) {
           insert.run(asset.id, asset.mediaType, asset.bytes, asset.width, asset.height, asset.createdAt, now);
+          mark.run(asset.id);
         }
       });
       this.options.onWarning?.(
@@ -737,6 +749,7 @@ function openDatabase(file: string): DatabaseSync {
     } else if (Number(version) !== 1) {
       throw new UnsupportedSchemaError();
     }
+    db.exec(RECOVERED_SCHEMA);
   } catch (error) {
     db.close();
     throw error;

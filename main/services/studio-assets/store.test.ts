@@ -504,14 +504,36 @@ test("a lost database is rebuilt from stored blobs, which stay readable and in g
   assert.equal(warnings.length, 1);
   assert.match(warnings[0]!, /Re-indexed 2 stored studio images/u);
 
-  // Rebuilt rows count as freshly touched: they outlive a GC inside the grace
-  // window so their features can retain them again, then are collectable.
-  f.advance(59 * 60 * 1000);
+  // Their holds are gone, so a feature that has not re-held them yet must not lose
+  // them: rebuilt rows outlive any number of GC passes, across restarts, until held.
+  f.advance(3 * HOUR);
   assert.deepEqual(await reopened.collectGarbage(), { deletedAssets: 0, freedBytes: 0 });
-  reopened.retain({ kind: "design", id: "project-1" }, [large.assetId]);
+  await reopened.close();
+  const restarted = await f.open();
+  f.advance(3 * HOUR);
+  assert.deepEqual(await restarted.collectGarbage(), { deletedAssets: 0, freedBytes: 0 });
+  assert.deepEqual((await f.blobFiles()).sort(), [large.assetId, small.assetId].sort());
+
+  // Once a feature holds one again it follows the normal lifecycle: released, it is
+  // collectable after the grace. The never-reclaimed one stays.
+  restarted.retain({ kind: "design", id: "project-1" }, [large.assetId]);
+  restarted.release({ kind: "design", id: "project-1" }, [large.assetId]);
   f.advance(2 * HOUR);
-  assert.deepEqual(await reopened.collectGarbage(), { deletedAssets: 1, freedBytes: small.bytes });
-  assert.deepEqual(await f.blobFiles(), [large.assetId]);
+  assert.deepEqual(await restarted.collectGarbage(), { deletedAssets: 1, freedBytes: large.bytes });
+  assert.deepEqual(await f.blobFiles(), [small.assetId]);
+});
+
+test("replaceHolder also returns a recovered asset to the normal lifecycle", async (t) => {
+  const f = await fixture(t);
+  const asset = await f.store.put({ bytes: pngBytes(10, 10, 4) });
+  await f.store.close();
+  await removeDatabase(f.root);
+  const reopened = await f.open();
+  const workflow = { kind: "images-workflow", id: "wf-1" } as const;
+  reopened.replaceHolder(workflow, [asset.assetId]);
+  reopened.replaceHolder(workflow, []);
+  f.advance(2 * HOUR);
+  assert.deepEqual(await reopened.collectGarbage(), { deletedAssets: 1, freedBytes: asset.bytes });
 });
 
 test("an unindexed blob that is not an accepted image is removed even when its name matches", async (t) => {
