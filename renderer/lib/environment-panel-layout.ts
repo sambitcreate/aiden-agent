@@ -176,3 +176,57 @@ export function storedWorkbenchWidth(
   const parsed = Number(stored);
   return Number.isFinite(parsed) && parsed >= bounds.min && parsed <= bounds.max ? parsed : bounds.default;
 }
+
+/** Design mode's chat column: renderer-local and shared by every design-mode chat. */
+export const DESIGN_CHAT_WIDTH_BOUNDS: PanelWidthBounds = { min: 360, max: 560, default: 420 };
+/** The design canvas never sits inline narrower than this. */
+export const DESIGN_CANVAS_MIN_WIDTH = 480;
+/** Entering design mode collapses the sidebar on windows narrower than this. */
+export const DESIGN_SIDEBAR_COLLAPSE_BELOW = 1100;
+/** Narrower windows cannot hold the chat and canvas minimums side by side. */
+export const DESIGN_WIDE_WINDOW_MIN = DESIGN_CHAT_WIDTH_BOUNDS.min + DESIGN_CANVAS_MIN_WIDTH;
+/** Entry on a too-narrow window first tries to widen it to this width. */
+export const DESIGN_WIDEN_TARGET = 1280;
+
+export interface DesignCanvasLayout {
+  chatWidth: number;
+  canvasWidth: number;
+  /** False when the canvas floats over a full-width chat instead of sitting beside it. */
+  inline: boolean;
+}
+
+/**
+ * Split the main content (after the sidebar) between the design chat column and
+ * the canvas. The chat keeps its preferred width within 360–560 and gives way to
+ * the canvas minimum first; once even 360 + 480 does not fit, the chat takes the
+ * whole width and the canvas overlays it, keeping the same thin uncovered strip
+ * as a floating Environment panel.
+ */
+export function resolveDesignCanvasLayout(
+  preferredChatWidth: number | undefined,
+  containerWidth: number,
+): DesignCanvasLayout {
+  const bounds = DESIGN_CHAT_WIDTH_BOUNDS;
+  const container = Math.max(0, Number.isFinite(containerWidth) ? containerWidth : 0);
+  const preferred =
+    typeof preferredChatWidth === "number" && Number.isFinite(preferredChatWidth)
+      ? preferredChatWidth
+      : bounds.default;
+  if (container < bounds.min + DESIGN_CANVAS_MIN_WIDTH) {
+    return { chatWidth: container, canvasWidth: Math.max(0, container - PANEL_EDGE_GUTTER), inline: false };
+  }
+  const clamped = Math.min(bounds.max, Math.max(bounds.min, preferred));
+  const chatWidth = Math.min(clamped, container - DESIGN_CANVAS_MIN_WIDTH);
+  return { chatWidth, canvasWidth: container - chatWidth, inline: true };
+}
+
+/** Window-level rules applied when design mode is entered, measured on the window width. */
+export function resolveDesignWindowPolicy(windowWidth: number): {
+  collapseSidebar: boolean;
+  needsWiderWindow: boolean;
+} {
+  return {
+    collapseSidebar: windowWidth < DESIGN_SIDEBAR_COLLAPSE_BELOW,
+    needsWiderWindow: windowWidth < DESIGN_WIDE_WINDOW_MIN,
+  };
+}

@@ -16,6 +16,10 @@ import {
   BOT_PANEL_WIDTH_BOUNDS,
   MIN_DOCKED_CHAT_COLUMN_WIDTH,
   SURFACE_GAP,
+  DESIGN_CANVAS_MIN_WIDTH,
+  DESIGN_CHAT_WIDTH_BOUNDS,
+  resolveDesignCanvasLayout,
+  resolveDesignWindowPolicy,
 } from "./environment-panel-layout.js";
 
 const COMPACT_TABS_BREAKPOINT = 620;
@@ -253,4 +257,50 @@ test("a saved Bot panel width narrower than the workspace's range survives, and 
     min: BOT_PANEL_WIDTH_BOUNDS.min,
     max: MAX_PANEL_WIDTH,
   });
+});
+
+test("design mode gives the chat its preferred width and the canvas the rest", () => {
+  assert.deepEqual(resolveDesignCanvasLayout(undefined, 1400), { chatWidth: 420, canvasWidth: 980, inline: true });
+  assert.equal(resolveDesignCanvasLayout(300, 1400).chatWidth, 360);
+  assert.deepEqual(resolveDesignCanvasLayout(900, 1400), { chatWidth: 560, canvasWidth: 840, inline: true });
+  assert.equal(resolveDesignCanvasLayout(Number.NaN, 1400).chatWidth, 420);
+  assert.equal(resolveDesignCanvasLayout(Number.POSITIVE_INFINITY, 1400).chatWidth, 420);
+});
+
+test("the design chat gives way to the canvas minimum before it stops sitting inline", () => {
+  assert.deepEqual(resolveDesignCanvasLayout(560, 900), { chatWidth: 420, canvasWidth: 480, inline: true });
+  assert.deepEqual(resolveDesignCanvasLayout(420, 840), { chatWidth: 360, canvasWidth: 480, inline: true });
+});
+
+test("below the chat and canvas minimums the canvas overlays a full-width chat", () => {
+  const layout = resolveDesignCanvasLayout(420, 839);
+  assert.equal(layout.inline, false);
+  assert.equal(layout.chatWidth, 839);
+  assert.ok(layout.canvasWidth > 0 && layout.canvasWidth <= 839);
+  const tiny = resolveDesignCanvasLayout(420, 300);
+  assert.equal(tiny.inline, false);
+  assert.equal(tiny.chatWidth, 300);
+  assert.ok(tiny.canvasWidth >= 0 && tiny.canvasWidth <= 300);
+});
+
+test("an inline design layout always fills the container and respects both minimums", () => {
+  for (let containerWidth = 840; containerWidth <= 2400; containerWidth += 37) {
+    for (const preferred of [360, 420, 560]) {
+      const layout = resolveDesignCanvasLayout(preferred, containerWidth);
+      assert.equal(layout.inline, true, `${preferred}@${containerWidth}`);
+      assert.equal(layout.chatWidth + layout.canvasWidth, containerWidth, `${preferred}@${containerWidth}`);
+      assert.ok(layout.chatWidth >= DESIGN_CHAT_WIDTH_BOUNDS.min, `${preferred}@${containerWidth}`);
+      assert.ok(layout.chatWidth <= DESIGN_CHAT_WIDTH_BOUNDS.max, `${preferred}@${containerWidth}`);
+      assert.ok(layout.canvasWidth >= DESIGN_CANVAS_MIN_WIDTH, `${preferred}@${containerWidth}`);
+      assert.ok(layout.chatWidth <= preferred, `${preferred}@${containerWidth}`);
+    }
+  }
+});
+
+test("design mode collapses the sidebar below 1100 px and asks for a wider window below 840 px", () => {
+  assert.deepEqual(resolveDesignWindowPolicy(1099), { collapseSidebar: true, needsWiderWindow: false });
+  assert.deepEqual(resolveDesignWindowPolicy(839), { collapseSidebar: true, needsWiderWindow: true });
+  assert.deepEqual(resolveDesignWindowPolicy(840), { collapseSidebar: true, needsWiderWindow: false });
+  assert.deepEqual(resolveDesignWindowPolicy(1100), { collapseSidebar: false, needsWiderWindow: false });
+  assert.deepEqual(resolveDesignWindowPolicy(2560), { collapseSidebar: false, needsWiderWindow: false });
 });
