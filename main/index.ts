@@ -86,6 +86,7 @@ import { registerAppPathOpener } from "./services/app-navigation.js";
 import {
   effectiveBindings,
   migrateLegacyKeybindings,
+  setUnavailableCommandCapabilities,
 } from "../renderer/shared/keybindings.js";
 import { applicationMenuTemplate, parseMenuCommandIds } from "./services/application-menu-core.js";
 import type { NotificationChannel } from "../renderer/preload-channels.js";
@@ -115,7 +116,7 @@ import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.
 import { createMainVisualSnapshotQueue } from "./services/visual-snapshot-main.js";
 import { disposeVisualSnapshots, installVisualSnapshotQueue } from "./services/visual-snapshot-service.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
-import { createImagesEnabled, studioAssetsEnabled } from "./services/studio/feature-flags.js";
+import { createImagesEnabled, studioAssetsEnabled, studioCapabilities } from "./services/studio/feature-flags.js";
 import { createImagesRuntime } from "./services/create-images/main.js";
 import { ImageQuitCoverage, imageRunsAllowQuit } from "./services/create-images/quit-confirm-core.js";
 import { registerStudioAssetProtocol } from "./services/studio-assets/protocol.js";
@@ -194,6 +195,14 @@ if (process.platform === "linux") {
 }
 
 registerCustomSchemes({ studioAssets: studioAssetsEnabled() });
+
+// Commands behind a flag that is off claim no shortcut, so they never block a
+// person's own binding or leave a saved `disabled` override behind.
+setUnavailableCommandCapabilities(
+  Object.entries(studioCapabilities())
+    .filter(([, enabled]) => !enabled)
+    .map(([capability]) => capability as keyof ReturnType<typeof studioCapabilities>),
+);
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 

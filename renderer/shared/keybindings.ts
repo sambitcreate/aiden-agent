@@ -1069,8 +1069,29 @@ export function shouldPersistCanonicalKeybindings(
   );
 }
 
+let unavailableCapabilities: ReadonlySet<CommandCapability> = new Set();
+
+/**
+ * Tell binding resolution which capabilities this process lacks. A command
+ * whose capability is unavailable has no effective binding: it never claims
+ * an accelerator, never conflicts with one the person saves, and repair never
+ * writes a `disabled` override for it. Call once at startup, before the first
+ * snapshot or repair; pass nothing to make every capability available again.
+ */
+export function setUnavailableCommandCapabilities(
+  capabilities: Iterable<CommandCapability> = [],
+): void {
+  unavailableCapabilities = new Set(capabilities);
+}
+
+function commandUnavailable(commandId: CommandId): boolean {
+  const capability = COMMAND_BY_ID[commandId].requiresCapability;
+  return capability !== undefined && unavailableCapabilities.has(capability);
+}
+
 function defaultBinding(commandId: CommandId): string | null {
   const definition = COMMAND_BY_ID[commandId];
+  if (commandUnavailable(commandId)) return null;
   return definition.defaultEnabled === false ? null : definition.defaultBinding;
 }
 
@@ -1079,6 +1100,7 @@ function effectiveBindingFromNormalized(
   overrides: KeybindingOverridesV1 | undefined,
   legacy?: LegacyGlobalKeybindings,
 ): string | null {
+  if (commandUnavailable(commandId)) return null;
   const override =
     overrides !== undefined ? overrides.commands[commandId] : legacyBinding(commandId, legacy);
   if (override?.disabled) return null;
