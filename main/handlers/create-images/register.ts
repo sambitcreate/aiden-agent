@@ -14,7 +14,7 @@ import {
 import { pickDefaultImageModel } from "../../../renderer/shared/images/port.js";
 import type { ImageMediaType, OutputRef } from "../../../renderer/shared/images/run-types.js";
 import { selectGalleryImages, toGalleryItems } from "../../services/create-images/gallery-core.js";
-import { CreateImagesExportUnavailableError, writeUniqueFile } from "../../services/create-images/image-export.js";
+import { CreateImagesExportUnavailableError, replaceFile, writeUniqueFile } from "../../services/create-images/image-export.js";
 import type { CreateImagesServices } from "../../services/create-images/runtime.js";
 import type { StudioAssetGrantOwner, StudioAssetGrants } from "../../services/studio-assets/delivery-core.js";
 import {
@@ -411,13 +411,8 @@ async function imageAction<Event>(
       });
       if (!chosen) return { ok: false, reason: "cancelled" };
       const { bytes } = await assets.read(image.ref.assetId);
-      // The dialog already confirmed any overwrite.
-      const handle = await fileSystem.open(chosen, "w", 0o644);
-      try {
-        await handle.writeFile(bytes);
-      } finally {
-        await handle.close();
-      }
+      // The dialog already confirmed any overwrite; a failed write keeps the file it would replace.
+      await replaceFile(fileSystem, chosen, bytes);
       return { ok: true, savedId: saved.remember("file", chosen) };
     }
   }

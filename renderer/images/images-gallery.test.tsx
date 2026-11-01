@@ -81,6 +81,26 @@ test("the viewer shows the thumbnail first, then the decoded original, and steps
   await waitFor(() => assert.ok(within(dialog).getByText("3 of 3")));
 });
 
+test("a filmstrip jump past the shown thumbnails keeps focus in the filmstrip, and never takes it from elsewhere", async () => {
+  const many = Array.from({ length: 30 }, (_, index) => item(String.fromCharCode(97 + (index % 26)) + String(index), "r1", { assetId: index.toString(16).padStart(64, "0") }));
+  render(<Host items={many} start={0} actions={fakeActions([])} />);
+  const dialog = await screen.findByRole("dialog");
+  const strip = within(dialog).getByRole("list", { name: "Images" });
+  within(strip).getByRole("button", { name: "Image 1 of 30" }).focus();
+  fireEvent.keyDown(document.activeElement!, { key: "End" });
+  await waitFor(() => assert.ok(within(dialog).getByText("30 of 30")));
+  assert.equal(document.activeElement?.getAttribute("aria-label"), "Image 30 of 30");
+  fireEvent.keyDown(document.activeElement!, { key: "Home" });
+  await waitFor(() => assert.ok(within(dialog).getByText("1 of 30")));
+  assert.equal(document.activeElement?.getAttribute("aria-label"), "Image 1 of 30");
+
+  const copy = within(dialog).getByRole("button", { name: "Copy Image" });
+  copy.focus();
+  fireEvent.keyDown(copy, { key: "End" });
+  await waitFor(() => assert.ok(within(dialog).getByText("30 of 30")));
+  assert.equal(document.activeElement, copy);
+});
+
 test("the viewer's actions act on the viewed image, a drag goes out natively, and Escape closes", async () => {
   const log: string[] = [];
   const used: string[] = [];

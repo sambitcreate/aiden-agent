@@ -266,7 +266,8 @@
 .image-viewer-filmstrip {
   display: flex;
   flex-shrink: 0;
-  justify-content: center;
+  /* safe: a strip wider than the window starts at its scroll origin, so every thumbnail can be reached. */
+  justify-content: safe center;
   gap: 6px;
   margin: 0;
   padding: 2px;

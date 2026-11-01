@@ -613,6 +613,7 @@ test("a gallery read right as a run ends waits for its auto-save, so the image i
       return real.open(target, flags, mode);
     },
     link: (existing, target) => real.link(existing, target),
+    rename: (from, to) => real.rename(from, to),
     rm: (target, options) => real.rm(target, options),
     stat: (target) => real.stat(target),
   };
@@ -643,6 +644,9 @@ test("an auto-save that fails never fails the run", async (t) => {
     link: async () => {
       throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
     },
+    rename: async () => {
+      throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    },
     rm: async () => undefined,
     stat: async () => {
       throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
@@ -660,6 +664,44 @@ test("an auto-save that fails never fails the run", async (t) => {
   assert.deepEqual(env.files.calls, []);
 });
 
+test("a Save As that fails while writing keeps the file it was replacing", async (t) => {
+  const real = await import("node:fs/promises");
+  // Writes into the chosen folder fail partway, as on a disk that fills up.
+  let failInto: string | null = null;
+  const filling: ExportFileSystem = {
+    mkdir: (target, options) => real.mkdir(target, options),
+    open: async (target, flags, mode) => {
+      const handle = await real.open(target, flags, mode);
+      if (failInto === null || !target.startsWith(failInto)) return handle;
+      return {
+        writeFile: async (data: Uint8Array) => {
+          await handle.writeFile(data.subarray(0, 4));
+          throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+        },
+        close: () => handle.close(),
+      };
+    },
+    link: (existing, target) => real.link(existing, target),
+    rename: (from, to) => real.rename(from, to),
+    rm: (target, options) => real.rm(target, options),
+    stat: (target) => real.stat(target),
+  };
+  const env = await harness(t, undefined, { exportFs: filling });
+  await generate(env, "One", "Replace");
+  const [item] = (await env.invoke<GalleryResponse>("imageWorkflows:gallery", {})).items;
+  const folder = path.join(env.root, "replace-folder");
+  await mkdir(folder);
+  const target = path.join(folder, "keep.png");
+  await writeFile(target, "the picture already here");
+  env.files.answers.savePath = target;
+  failInto = folder;
+
+  const result = await env.invoke<{ ok: boolean }>("imageWorkflows:image-action", { op: "save-as", assetId: item!.assetId });
+  assert.equal(result.ok, false);
+  assert.equal(await readFile(target, "utf8"), "the picture already here");
+  assert.deepEqual(await readdir(folder), ["keep.png"], "no staging file is left behind");
+});
+
 test("a Save All that writes only some images says how many, and can still show the folder", async (t) => {
   const real = await import("node:fs/promises");
   // Writes into the chosen folder fail after the first one, as on a disk that fills up.
@@ -674,6 +716,7 @@ test("a Save All that writes only some images says how many, and can still show 
       return real.open(target, flags, mode);
     },
     link: (existing, target) => real.link(existing, target),
+    rename: (from, to) => real.rename(from, to),
     rm: (target, options) => real.rm(target, options),
     stat: (target) => real.stat(target),
   };

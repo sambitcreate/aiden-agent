@@ -31,6 +31,8 @@ export interface ExportFileSystem {
   open(target: string, flags: "wx" | "w", mode: number): Promise<{ writeFile(data: Uint8Array): Promise<unknown>; close(): Promise<void> }>;
   /** Fails with EEXIST when `newPath` exists, which makes publishing a finished file exclusive. */
   link(existingPath: string, newPath: string): Promise<void>;
+  /** Replaces `newPath` in one step, so a reader never sees it half-written. */
+  rename(oldPath: string, newPath: string): Promise<void>;
   rm(target: string, options: { force: true }): Promise<void>;
   stat(target: string): Promise<{ isFile(): boolean }>;
 }
@@ -91,6 +93,22 @@ export async function writeUniqueFile(
     await fs.rm(staging, { force: true }).catch(() => undefined);
   }
   throw new Error("No free file name was found for the image.");
+}
+
+/**
+ * Writes `bytes` over `target`, which may exist (a Save dialog already confirmed replacing it).
+ * The bytes go to a hidden staging file beside it and are renamed into place, so a failed or
+ * interrupted write leaves the previous file whole.
+ */
+export async function replaceFile(fs: ExportFileSystem, target: string, bytes: Uint8Array): Promise<void> {
+  const staging = path.join(path.dirname(target), `.aiden-${randomUUID()}.tmp`);
+  await writeNewFile(fs, staging, bytes);
+  try {
+    await fs.rename(staging, target);
+  } catch (error) {
+    await fs.rm(staging, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 /** The fallback without hard links: exclusive create of each candidate name, written in place. */

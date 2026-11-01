@@ -133,10 +133,16 @@ export function ViewerFilmstrip({
 }) {
   const list = React.useRef<HTMLUListElement>(null);
   const { start, end } = filmstripWindow(index, items.length, FILMSTRIP_SIZE);
+  // Whether a thumbnail has focus, read before this render commits: a jump (Home, End) can
+  // slide the window past the focused thumbnail and remove it, which drops focus to the body.
+  const focusInStrip = React.useRef(false);
+  focusInStrip.current = typeof document !== "undefined" && Boolean(list.current?.contains(document.activeElement));
   React.useEffect(() => {
-    const element = list.current;
-    if (!element || typeof document === "undefined" || !element.contains(document.activeElement)) return;
-    element.querySelector<HTMLButtonElement>('[aria-current="true"]')?.focus();
+    const active = list.current?.querySelector<HTMLButtonElement>('[aria-current="true"]');
+    if (!active) return;
+    // A strip wider than the window scrolls; keep the active thumbnail in view.
+    active.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    if (focusInStrip.current) active.focus();
   }, [index]);
   if (items.length < 2) return null;
   return (
