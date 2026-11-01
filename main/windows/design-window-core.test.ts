@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { widenWindowForDesign, widenedBounds, type DesignWindow } from "./design-window-core.js";
+import { canWidenForDesign, widenWindowForDesign, widenedBounds, type DesignWindow } from "./design-window-core.js";
 
 const DISPLAY = { x: 0, y: 0, width: 1440, height: 900 };
 
@@ -29,18 +29,24 @@ test("a small display gives its whole width, and one that cannot hold 840 px giv
   );
 });
 
-function fakeWindow(bounds: { x: number; y: number; width: number; height: number }, options: { fullScreen?: boolean } = {}) {
+function fakeWindow(
+  bounds: { x: number; y: number; width: number; height: number },
+  options: { fullScreen?: boolean; maximized?: boolean } = {},
+) {
   const calls: Array<typeof bounds> = [];
+  const animated: Array<boolean | undefined> = [];
   const window: DesignWindow = {
     isDestroyed: () => false,
     isFullScreen: () => options.fullScreen === true,
+    isMaximized: () => options.maximized === true,
     getBounds: () => bounds,
-    setBounds: (next) => {
+    setBounds: (next, animate) => {
       calls.push(next);
+      animated.push(animate);
       bounds = next;
     },
   };
-  return { window, calls, current: () => bounds };
+  return { window, calls, animated, current: () => bounds };
 }
 
 test("widening resizes the window on its display and reports whether it now fits", () => {
@@ -57,4 +63,39 @@ test("widening resizes the window on its display and reports whether it now fits
   assert.equal(fullScreen.calls.length, 0, "a full-screen window keeps its size");
 
   assert.deepEqual(widenWindowForDesign(null, () => DISPLAY), { widened: false });
+});
+
+test("a maximized window keeps its size and reports that it was not widened", () => {
+  const maximized = fakeWindow({ x: 0, y: 0, width: 800, height: 600 }, { maximized: true });
+  assert.deepEqual(widenWindowForDesign(maximized.window, () => DISPLAY), { widened: false });
+  assert.equal(maximized.calls.length, 0);
+});
+
+test("widening animates unless the person asked the system to reduce motion", () => {
+  const animated = fakeWindow({ x: 100, y: 0, width: 800, height: 700 });
+  widenWindowForDesign(animated.window, () => DISPLAY);
+  assert.deepEqual(animated.animated, [true]);
+
+  const still = fakeWindow({ x: 100, y: 0, width: 800, height: 700 });
+  assert.deepEqual(widenWindowForDesign(still.window, () => DISPLAY, { reduceMotion: true }), { widened: true });
+  assert.deepEqual(still.animated, [false]);
+  assert.equal(still.current().width, 1280, "the window still widens, just without the animation");
+});
+
+test("widening can only work for a resizable window narrower than 1280 on a display at least that wide", () => {
+  const narrow = { x: 0, y: 0, width: 800, height: 600 };
+  assert.equal(canWidenForDesign(fakeWindow(narrow).window, () => DISPLAY), true);
+  assert.equal(canWidenForDesign(fakeWindow(narrow, { fullScreen: true }).window, () => DISPLAY), false);
+  assert.equal(canWidenForDesign(fakeWindow(narrow, { maximized: true }).window, () => DISPLAY), false);
+  assert.equal(
+    canWidenForDesign(fakeWindow(narrow).window, () => ({ x: 0, y: 0, width: 1200, height: 800 })),
+    false,
+    "a display narrower than 1280 cannot give design mode the room it asks for",
+  );
+  assert.equal(canWidenForDesign(fakeWindow({ ...narrow, width: 1280 }).window, () => DISPLAY), false);
+  assert.equal(canWidenForDesign(null, () => DISPLAY), false);
+  // Asking never resizes anything.
+  const probe = fakeWindow(narrow);
+  canWidenForDesign(probe.window, () => DISPLAY);
+  assert.equal(probe.calls.length, 0);
 });

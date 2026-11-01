@@ -67,12 +67,57 @@ function listedChat(qc: QueryClient, chatId: string): ChatMeta | undefined {
 // The latest change per chat in this window, shared by every hook instance so
 // an older answer or echo never replaces a newer change.
 const changesInFlight = new Map<string, number>();
+// The newest broadcast that arrived while one of our changes was in flight.
+// It is applied once that change settles, so another window's later change is
+// never lost; a newer change of ours clears it.
+const deferredBroadcasts = new Map<string, boolean>();
+// The chat the person just turned design mode on for, and how. The layout
+// consumes it once to decide whether it may make room (collapse the sidebar,
+// widen the window); a launch, reload, chat switch or broadcast never sets it.
+const pendingEntries = new Map<string, DesignModeSource>();
+
+/**
+ * The source of a design mode entry the person just started for this chat, or
+ * null. Reading it clears it, so only one layout pass acts on it.
+ */
+export function consumePendingDesignEntry(chatId: string): DesignModeSource | null {
+  const source = pendingEntries.get(chatId) ?? null;
+  pendingEntries.delete(chatId);
+  return source;
+}
+
+/** Apply another window's (or main's echo of our own) design mode change. */
+export function applyDesignModeBroadcast(qc: QueryClient, change: ChatDesignModeChanged | null | undefined): void {
+  if (typeof change?.chatId !== "string" || typeof change.designMode !== "boolean") return;
+  // A change of ours still in flight wins for now; the broadcast lands once it settles.
+  if (changesInFlight.has(change.chatId)) {
+    deferredBroadcasts.set(change.chatId, change.designMode);
+    return;
+  }
+  applyDesignModeToCache(qc, change.chatId, change.designMode);
+}
+
+/**
+ * Keep every cache that shows a chat's design mode current with
+ * `chats:design-mode-changed`. Mounted once for the app, so a sidebar row
+ * stays right even when no chat using design mode is open.
+ */
+export function useDesignModeBroadcasts(): void {
+  const qc = useQueryClient();
+  const { designMode } = useAppCapabilities();
+  React.useEffect(() => {
+    if (!designMode) return;
+    return onNotification<ChatDesignModeChanged>("chats:design-mode-changed", (change) =>
+      applyDesignModeBroadcast(qc, change),
+    );
+  }, [designMode, qc]);
+}
 
 /**
  * Design mode for one chat. `set` and `toggle` change the layout at once and
  * save in the background; a refused save puts the previous value back and
- * shows one toast. Another window's change arrives on
- * `chats:design-mode-changed`.
+ * shows one toast. Another window's change arrives through
+ * `useDesignModeBroadcasts`, mounted once for the app.
  *
  * `settled` is false only while the chat is still loading and has no sidebar
  * row, so callers can wait instead of flashing the wrong layout.
@@ -97,24 +142,18 @@ export function useDesignMode(chatId: string | undefined) {
   const settled =
     !capabilities.designMode || !chatId || chat !== undefined || chatQuery.isSuccess || chatQuery.isError;
 
-  React.useEffect(() => {
-    if (!capabilities.designMode) return;
-    return onNotification<ChatDesignModeChanged>("chats:design-mode-changed", (change) => {
-      if (typeof change?.chatId !== "string" || typeof change.designMode !== "boolean") return;
-      // A change of ours still in flight wins over an echo of an older one.
-      if (changesInFlight.has(change.chatId)) return;
-      applyDesignModeToCache(qc, change.chatId, change.designMode);
-    });
-  }, [capabilities.designMode, qc]);
-
   const set = React.useCallback(
-    (enabled: boolean, _source: DesignModeSource) => {
+    (enabled: boolean, source: DesignModeSource) => {
       if (!chatId || !available) return;
       const current = qc.getQueryData<Chat | null>(queryKeys.chat(chatId)) ?? listedChat(qc, chatId);
       const previous = current?.designMode === true;
       if (previous === enabled) return;
+      if (enabled) pendingEntries.set(chatId, source);
+      else pendingEntries.delete(chatId);
       const change = (changesInFlight.get(chatId) ?? 0) + 1;
       changesInFlight.set(chatId, change);
+      // This change is newer than anything another window said before it.
+      deferredBroadcasts.delete(chatId);
       const isLatest = () => changesInFlight.get(chatId) === change;
       applyDesignModeToCache(qc, chatId, enabled);
       void (async () => {
@@ -131,7 +170,12 @@ export function useDesignMode(chatId: string | undefined) {
             toast.error(error instanceof Error && error.message ? error.message : DESIGN_MODE_FAILED);
           }
         } finally {
-          if (isLatest()) changesInFlight.delete(chatId);
+          if (isLatest()) {
+            changesInFlight.delete(chatId);
+            const deferred = deferredBroadcasts.get(chatId);
+            deferredBroadcasts.delete(chatId);
+            if (deferred !== undefined) applyDesignModeToCache(qc, chatId, deferred);
+          }
         }
       })();
     },

@@ -404,6 +404,8 @@ export const appApi = {
   rendererReady: () => invoke<boolean>("app:renderer-ready"),
   /** Widen this window for design mode; `widened` is false when the display is too narrow. */
   widenForDesign: () => invoke<{ widened: boolean }>("app:widenForDesign"),
+  /** Whether widening could work: not full screen or maximized, on a display at least 1280 px wide. */
+  designWindowCanWiden: () => invoke<{ canWiden: boolean }>("app:designWindowCanWiden"),
   /** The commands that can run now, so the menu bar greys out the rest. */
   setMenuCommands: (commandIds: readonly string[]) =>
     invoke<boolean>("app:setMenuCommands", [...commandIds]),

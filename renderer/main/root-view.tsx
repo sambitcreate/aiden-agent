@@ -40,6 +40,7 @@ import { OnboardingFlow } from "../components/onboarding-flow";
 import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { useDesignModeBroadcasts } from "../lib/design-mode";
 import {
   captureDetachedLifecycleChat,
   clearInactiveDetachedLifecycleChat,
@@ -87,6 +88,7 @@ function RootContent() {
   const { activeId, select: selectWorkspace } = useActiveWorkspace();
   const { palette } = useCommandSystem();
   const appendReconciliationRequired = useAppendReconciliationRequired();
+  useDesignModeBroadcasts();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const workspaceCommands = workspaceCommandVisibility(pathname);
   const navigationBlockedReason = environmentPanel.gitOperationBusy
