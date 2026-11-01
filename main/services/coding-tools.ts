@@ -37,10 +37,12 @@ const MAX_READ_BYTES = 200_000;
 const MAX_OUTPUT_CHARS = 20_000;
 const MAX_COMMAND_OUTPUT_BYTES = 10 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 120_000;
-// run_command stops anything that still holds its output a second after the
-// shell exits; say so, so the model does not assume a server is running.
+// run_command stops the command's process group if anything still holds its
+// output a second after the shell exits; say so, so the model does not assume
+// a server is running. A job that left the group (setsid, a daemon) is not
+// reached, so the note does not promise it stopped.
 const BACKGROUND_STOPPED_NOTE =
-  "Note: background processes still holding the output were stopped 1 s after the command exited. Use background_job to keep something running, or redirect its output (`> file 2>&1 &`).";
+  "Note: background processes from this command that still held the output were stopped 1 s after the command exited. A job started with setsid or as a daemon leaves the command's process group and may still be running. Use background_job to keep something running, or redirect its output (`> file 2>&1 &`).";
 const MAX_LIST_ENTRIES = 500;
 const MAX_LIST_SCAN_ENTRIES = 10_000;
 const MAX_GLOB_MATCHES = 500;

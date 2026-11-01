@@ -1752,7 +1752,7 @@ test("run_command returns when a background job keeps the shell's output pipe op
     assert.notEqual(result.isError, true);
     const text = result.content[0].type === "text" ? result.content[0].text : "";
     assert.match(text, /done/u);
-    assert.match(text, /background processes still holding the output were stopped/u, "the model must learn the job was stopped");
+    assert.match(text, /background processes from this command that still held the output were stopped/u, "the model must learn the job was stopped");
     // A command with nothing left in the background gets no note.
     const detached = await runCommand.execute("detached", { command: "echo plain" });
     assert.doesNotMatch(detached.content[0].type === "text" ? detached.content[0].text : "", /were stopped/u);

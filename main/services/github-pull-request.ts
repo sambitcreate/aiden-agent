@@ -149,7 +149,10 @@ async function defaultRunner(cwd: string, args: string[], options: CommandOption
   });
   const terminator = createProcessGroupTerminator(child, { killGraceMs: KILL_GRACE_MS });
   const command = `Command failed: ${options.binary} ${args.join(" ")}`;
-  const output = { stdout: [] as Buffer[], stderr: [] as Buffer[], bytes: 0 };
+  // Each stream has its own budget, like execFile, so a large stdout cannot
+  // crowd out the stderr text that classifies a failure.
+  const output = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
+  const bytes = { stdout: 0, stderr: 0 };
   let stopped: Error | undefined;
   const stop = (error: Error) => {
     stopped ??= error;
@@ -157,8 +160,10 @@ async function defaultRunner(cwd: string, args: string[], options: CommandOption
   };
   const capture = (stream: "stdout" | "stderr") => (chunk: Buffer) => {
     if (stopped) return;
-    output.bytes += chunk.length;
-    if (output.bytes > options.maxBuffer) {
+    const remaining = options.maxBuffer - bytes[stream];
+    bytes[stream] += chunk.length;
+    if (bytes[stream] > options.maxBuffer) {
+      if (remaining > 0) output[stream].push(chunk.subarray(0, remaining));
       stop(Object.assign(new Error(`${stream} maxBuffer length exceeded`), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }));
       return;
     }

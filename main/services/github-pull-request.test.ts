@@ -316,6 +316,7 @@ function setup(options: {
   runner?: ConstructorParameters<typeof GitHubPullRequestService>[0]["runner"];
   binary?: string;
   createTimeoutMs?: number;
+  maxBufferBytes?: number;
 } = {}) {
   let now = T0;
   const github = new FakeGitHub({ repositories: ["acme/app", "me/app"], pullRequests: options.pullRequests ?? [], now: () => now });
@@ -348,6 +349,7 @@ function setup(options: {
     resolveBinary: async () => options.binary ?? "gh",
     ...(options.runner ? { runner: options.runner } : {}),
     ...(options.createTimeoutMs ? { createTimeoutMs: options.createTimeoutMs } : {}),
+    ...(options.maxBufferBytes ? { maxBufferBytes: options.maxBufferBytes } : {}),
   });
   return { service, github, requests: recorded.requests, advance: (ms: number) => (now += ms) };
 }
@@ -578,6 +580,16 @@ test("gh exit failures keep their stderr for classification", { skip: process.pl
 
   const missing = await setup({ binary: "/nonexistent/aiden-gh" }).service.createPullRequest("/tmp", { title: "T" });
   assert.equal(missing.kind === "failed" && missing.availability, "missing-tool");
+});
+
+test("a long stdout does not use up the budget for gh's stderr", { skip: process.platform === "win32" }, async (t) => {
+  // Each stream fits the cap on its own; together they would not.
+  const chatty = await fakeGitHubCli(
+    t,
+    `printf '%0900d' 0\nprintf 'please run:  gh auth login\\n%0200d' 0 >&2\nexit 4`,
+  );
+  const result = await setup({ binary: chatty.binary, maxBufferBytes: 1_000 }).service.createPullRequest("/tmp", { title: "T" });
+  assert.equal(result.kind === "failed" && result.availability, "unauthenticated");
 });
 
 test("create failures shown to the renderer drop credentials and workspace paths", async () => {
