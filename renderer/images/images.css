@@ -26,7 +26,8 @@
 }
 
 .image-gallery img,
-.image-gallery-placeholder {
+.image-gallery-placeholder,
+.image-history-grid img {
   display: block;
   width: 100%;
   height: auto;
@@ -53,7 +54,7 @@
   outline-offset: 2px;
 }
 
-.image-run-panel {
+.image-side-panel {
   width: 300px;
   flex-shrink: 0;
   overflow-y: auto;
@@ -62,7 +63,202 @@
 }
 
 @media (max-width: 720px) {
-  .image-run-panel {
+  .image-side-panel {
     width: 220px;
+  }
+}
+
+/* A thumbnail that opens the viewer: the image is the control; no outline at rest. */
+.image-thumb {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-control);
+  background: var(--color-control);
+  cursor: default;
+}
+
+.image-thumb:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.image-thumb-more {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--color-background) 55%, transparent);
+  color: var(--color-primary);
+  font: inherit;
+  font-weight: 600;
+}
+
+.image-history-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.image-history-footer {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  box-shadow: inset 0 1px 0 var(--color-separator);
+}
+
+/* Viewer: the stage and filmstrip on the left, the details panel on the right. */
+.image-viewer {
+  display: flex;
+  gap: 16px;
+  height: 100%;
+  min-height: 0;
+}
+
+.image-viewer-main {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.image-viewer-stage {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: var(--radius-card);
+  background: var(--color-well);
+  touch-action: none;
+  user-select: none;
+}
+
+.image-viewer-stage img {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  max-width: none;
+}
+
+.image-viewer-stage[data-zoom="fit"][data-zoomable="true"] img {
+  cursor: zoom-in;
+}
+
+.image-viewer-stage[data-zoom="actual"] {
+  cursor: grab;
+}
+
+.image-viewer-stage[data-zoom="actual"]:active {
+  cursor: grabbing;
+}
+
+.image-viewer-placeholder {
+  position: absolute;
+  inset: 0;
+}
+
+.image-viewer-filmstrip {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: center;
+  gap: 6px;
+  margin: 0;
+  padding: 2px;
+  list-style: none;
+  overflow-x: auto;
+}
+
+.image-viewer-filmstrip button {
+  display: block;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-control);
+  background: var(--color-control);
+  opacity: 0.5;
+  transition: opacity var(--motion-duration) var(--motion-easing);
+}
+
+.image-viewer-filmstrip button:hover,
+.image-viewer-filmstrip button[aria-current="true"] {
+  opacity: 1;
+}
+
+.image-viewer-filmstrip button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.image-viewer-filmstrip img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-control);
+}
+
+.image-viewer-panel {
+  width: 280px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.image-viewer-prompt {
+  margin: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  color: var(--color-primary);
+}
+
+.image-viewer-prompt[data-expanded="true"] {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+.image-viewer-details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.image-viewer-details dt {
+  color: var(--color-secondary);
+}
+
+.image-viewer-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .image-viewer-filmstrip button {
+    transition: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .image-viewer {
+    flex-direction: column;
+  }
+
+  .image-viewer-panel {
+    width: auto;
+    max-height: 40%;
   }
 }

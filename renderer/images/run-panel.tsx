@@ -23,7 +23,7 @@ export function RunPanel({
   const running = snapshot.run.state === "running";
   const requests = snapshot.attempts.filter((attempt) => attempt.provider !== undefined);
   return (
-    <section aria-label="Run" className="image-run-panel flex flex-col gap-3 p-3">
+    <section aria-label="Run" className="flex flex-col gap-3 p-3">
       <header className="flex items-center gap-2">
         <Text variant="strong" className="min-w-0 flex-1" role="status">
           {runHeadline(snapshot.run)}

@@ -131,3 +131,26 @@ chat, Bot row or message. Sidebar chats and Bots also have a `•••` button 
 appears on hover or focus and is reachable with `Tab`. A chat's menu has
 Rename, Rename with Apple (where available) and Delete; `/delete` and ⌘K →
 Delete chat… ask the same question for the open chat.
+
+## Create Images image viewer
+
+Create Images is experimental (`AIDEN_EXPERIMENTAL_CREATE_IMAGES=1`). In a
+workflow, a thumbnail on an Output node or in the **History** tab opens the
+image viewer; thumbnails are buttons, so `Tab` reaches them and `↩` or `Space`
+opens one. `⇧F10` (or the Menu key) on an Output thumbnail opens its menu:
+Save…, Copy Image and Show in Finder (Show in folder on Linux).
+
+| Key | Does |
+| --- | --- |
+| `←` / `→` | Previous / next image (stops at the first and last) |
+| `Home` / `End` | First / last image |
+| `Esc` | Close the viewer |
+
+These keys act only inside the viewer, can't be changed in Settings, and are
+not listed under **Built-in keys** while Create Images is experimental. They
+do nothing while focus is in a text field. The thumbnail strip under the image is one `Tab` stop that
+follows the arrow keys. Clicking the image switches between fitting the window
+and actual size (never larger than the image's own size), and an actual-size
+image pans by dragging; **Actual Size** / **Fit to Window** under the image
+does the same from the keyboard. At fit, dragging the image out of the window
+drops the image file wherever you release it.
