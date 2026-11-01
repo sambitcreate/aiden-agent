@@ -69,6 +69,13 @@ object AidenNoWorkspace {
     /** Workspaces a person picks, opens or manages: everything but the hidden records. */
     fun choices(workspaces: List<AidenWorkspace>): List<AidenWorkspace> = workspaces.filterNot { it.noWorkspace }
 
+    /**
+     * Workspaces that are not archived. A hidden record never counts as archived: an older build
+     * could archive one, and with no way to unarchive it its chats would stay hidden.
+     */
+    fun unarchived(workspaces: List<AidenWorkspace>, archivedIds: Set<String>): List<AidenWorkspace> =
+        workspaces.filter { it.noWorkspace || !archivedIds.contains(it.id) }
+
     /** Workspaces as the sidebar lists them: the hidden records become one Chats group on the home. */
     fun grouped(workspaces: List<AidenWorkspace>): List<AidenWorkspace> {
         val home = home(workspaces) ?: return workspaces

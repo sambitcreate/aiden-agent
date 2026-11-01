@@ -1503,6 +1503,28 @@ test("a phone's chat aimed at a used No workspace folder is saved in a fresh one
   assert.deepEqual(released, ["hidden-fresh", "project"]);
 });
 
+test("two phones starting No workspace chats at once never share a hidden folder (revision 50)", async () => {
+  let fresh = 0;
+  let app: ReturnType<typeof fixture> | undefined;
+  app = fixture(chat({ workspaceId: "project" }), {
+    noWorkspace: {
+      // Like the host: the folder is free only while no saved chat is in it.
+      target: async (workspaceId) => {
+        const used = (await app!.service.listSummaries()).summaries.some((entry) => entry.workspaceId === workspaceId);
+        await new Promise((resolve) => setImmediate(resolve));
+        return used ? `hidden-${++fresh}` : workspaceId;
+      },
+      release: async () => {},
+    },
+  });
+  const [first, second] = await Promise.all([
+    app.service.create("device-1", "chat-create-key-race1", { workspaceId: "default" }),
+    app.service.create("device-2", "chat-create-key-race2", { workspaceId: "default" }),
+  ]);
+  assert.notEqual(first.id, second.id);
+  assert.deepEqual([first.workspaceId, second.workspaceId].sort(), ["default", "hidden-1"]);
+});
+
 test("summary revisions are valid optimistic-concurrency tokens for chat mutations", async () => {
   const app = fixture(chat());
   const summary = (await app.service.listSummaries()).summaries[0]!;

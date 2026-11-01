@@ -7471,6 +7471,13 @@ final class AidenChatTests: XCTestCase {
 
         // A Mac before revision 50 marks nothing: every workspace stays its own section.
         XCTAssertNil(AidenNoWorkspace.home(in: [record("project", created: 0)]))
+
+        // An older build could archive a "No workspace" record; the Chats group has no Unarchive,
+        // so that flag is ignored and its chats stay listed. Archived projects stay archived.
+        XCTAssertEqual(
+            AidenNoWorkspace.unarchived(workspaces, archivedIDs: ["hidden-first", "project"]).map(\.id),
+            ["hidden-later", "hidden-first"]
+        )
     }
 
     func testProviderIconResolverMatchesDesktopAliasesAndFallbackRules() {

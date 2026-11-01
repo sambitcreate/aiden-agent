@@ -263,7 +263,7 @@ private fun AidenWorkspaceHome(
 
     val archivedIds = coordinator.activeInstanceId?.let { archivedByInstance[it] }.orEmpty()
     val activeWorkspaces = remember(workspaces, archivedIds) {
-        workspaces.filterNot { archivedIds.contains(it.id) }
+        AidenNoWorkspace.unarchived(workspaces, archivedIds.toSet())
     }
     val activeById = remember(activeWorkspaces) { activeWorkspaces.associateBy { it.id } }
     // Chats without a workspace are started from their own choice, not picked as a workspace.
@@ -339,6 +339,8 @@ private fun AidenWorkspaceHome(
             try {
                 val chat = activeClient.createChat(workspace.id)
                 viewModel.accept(chat)
+                // A No workspace chat can land in a fresh hidden workspace the phone hasn't listed yet.
+                if (workspaces.none { it.id == chat.workspaceId }) coordinator.refreshWorkspaces()
                 onNavigateToChat(chat.id)
             } catch (error: Exception) {
                 snackbarHostState.showSnackbar(error.message ?: resources.getString(R.string.workspace_home_create_chat_failed))

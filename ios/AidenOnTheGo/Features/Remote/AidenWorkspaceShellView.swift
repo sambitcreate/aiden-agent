@@ -1056,7 +1056,7 @@ struct AidenWorkspaceShellView: View {
     }
 
     private var activeWorkspaces: [AidenWorkspace] {
-        coordinator.workspaces.filter { !archivedWorkspaceIDs.contains($0.id) }
+        AidenNoWorkspace.unarchived(coordinator.workspaces, archivedIDs: archivedWorkspaceIDs)
     }
 
     private var activeWorkspaceIDs: [String] {
@@ -2128,6 +2128,11 @@ struct AidenWorkspaceShellView: View {
             guard !chat.isBotChat else {
                 coordinator.presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
                 return
+            }
+            // A No workspace chat can land in a fresh hidden workspace the phone hasn't listed yet.
+            if !coordinator.workspaces.contains(where: { $0.id == chat.workspaceId }) {
+                await coordinator.refreshWorkspaces()
+                guard coordinator.isCurrent(context) else { return }
             }
             // The chat opens from the create receipt; Home's full reload
             // (chats, tasks, catalog, usage) runs behind it.

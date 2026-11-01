@@ -1819,6 +1819,19 @@ export class AidenRemoteChatService {
     this.attachments.revokeDevice(deviceId);
   }
 
+  /**
+   * Runs one phone create or move at a time while No workspace folders are in play, so two
+   * requests aimed at the same empty hidden folder cannot both see it free and share it.
+   */
+  private assigningNoWorkspace<T>(assign: () => Promise<T>): Promise<T> {
+    if (!this.options.noWorkspace) return assign();
+    const run = this.noWorkspaceAssignments.then(assign, assign);
+    this.noWorkspaceAssignments = run.catch(() => undefined);
+    return run;
+  }
+
+  private noWorkspaceAssignments: Promise<unknown> = Promise.resolve();
+
   async create(deviceId: string, key: string, input: unknown): Promise<AidenRemoteChatProjection> {
     const parsed = parseCreate(input);
     try {
@@ -1830,16 +1843,18 @@ export class AidenRemoteChatService {
           const selection = parsed.providerId || parsed.model
             ? await this.options.models.resolve(parsed.providerId, parsed.model)
             : undefined;
-          const workspaceId = (await this.options.noWorkspace?.target(parsed.workspaceId)) ?? parsed.workspaceId;
-          const created = await this.options.application.create(
-            {
-              workspaceId,
-              ...(selection
-                ? { providerId: selection.providerId, model: selection.modelId }
-                : {}),
-            },
-            owner,
-          );
+          const created = await this.assigningNoWorkspace(async () => {
+            const workspaceId = (await this.options.noWorkspace?.target(parsed.workspaceId)) ?? parsed.workspaceId;
+            return this.options.application.create(
+              {
+                workspaceId,
+                ...(selection
+                  ? { providerId: selection.providerId, model: selection.modelId }
+                  : {}),
+              },
+              owner,
+            );
+          });
           if (!created) throw new AidenRemoteServiceError("internal_error", "Aiden could not create the chat.", 500);
           this.options.notifyChanged?.(created.id);
           return projectAidenRemoteChat(created);
@@ -1878,12 +1893,15 @@ export class AidenRemoteChatService {
         { deviceId, route: "POST /chats/{id}/move", resourceId: safeId(chatId, "chat"), key },
         { revision, ...parsed },
         async () => {
-          const previous = (await this.options.application.list()).find((entry) => entry.id === chatId);
-          const workspaceId = (await this.options.noWorkspace?.target(parsed.workspaceId, chatId)) ?? parsed.workspaceId;
-          const moved = await this.options.application.moveEmptyToWorkspace(chatId, workspaceId, {
-            assertCurrent: (chat) => requireRevision(revision, chat),
+          const { moved, workspaceId, left } = await this.assigningNoWorkspace(async () => {
+            const previous = (await this.options.application.list()).find((entry) => entry.id === chatId);
+            const workspaceId = (await this.options.noWorkspace?.target(parsed.workspaceId, chatId)) ?? parsed.workspaceId;
+            const moved = await this.options.application.moveEmptyToWorkspace(chatId, workspaceId, {
+              assertCurrent: (chat) => requireRevision(revision, chat),
+            });
+            const left = previous ? persistedChatWorkspaceId(previous.workspaceId) : undefined;
+            return { moved, workspaceId, left };
           });
-          const left = previous ? persistedChatWorkspaceId(previous.workspaceId) : undefined;
           if (left && left !== workspaceId) await this.options.noWorkspace?.release(left);
           this.options.notifyChanged?.(chatId);
           return projectAidenRemoteChat(moved!);

@@ -238,5 +238,12 @@ class AidenChatRowStatusTest {
         assertEquals("hidden-a", AidenNoWorkspace.home(withoutDefault)?.id)
         // A Mac that lists no hidden records has no home, so the phone hides "No Workspace".
         assertNull(AidenNoWorkspace.home(workspaces.filterNot { it.noWorkspace }))
+
+        // An older build could archive a "No workspace" record; the Chats group has no Unarchive,
+        // so that flag is ignored and its chats stay listed. Archived projects stay archived.
+        assertEquals(
+            listOf("hidden-b", "default", "hidden-a"),
+            AidenNoWorkspace.unarchived(workspaces, setOf("default", "alpha")).map { it.id }
+        )
     }
 }

@@ -535,6 +535,12 @@ enum AidenNoWorkspace {
         workspaces.filter { !$0.noWorkspace }
     }
 
+    /// Workspaces that are not archived. A hidden record never counts as archived: an older
+    /// build could archive one, and with no way to unarchive it its chats would stay hidden.
+    static func unarchived(_ workspaces: [AidenWorkspace], archivedIDs: Set<String>) -> [AidenWorkspace] {
+        workspaces.filter { $0.noWorkspace || !archivedIDs.contains($0.id) }
+    }
+
     /// Workspaces as the sidebar lists them: the hidden records become one Chats group on the home.
     static func grouped(_ workspaces: [AidenWorkspace]) -> [AidenWorkspace] {
         guard let home = home(in: workspaces) else { return workspaces }
