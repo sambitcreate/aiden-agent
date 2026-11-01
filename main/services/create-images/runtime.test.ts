@@ -6,6 +6,7 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { StudioAssetStore } from "../studio-assets/store.js";
 import { fakeThumbnailer, pngBytes } from "../studio-assets/test-fixture.js";
+import type { RunSnapshot } from "../../../renderer/shared/images/run-types.js";
 import type { ExportFileSystem } from "./image-export.js";
 import { createPiImageGenerationPort } from "./image-port.js";
 import { ImageRunLedger } from "./run-ledger.js";
@@ -28,6 +29,7 @@ async function environment(t: TestContext, options: Parameters<typeof fakeImageM
       assets?: CreateImagesAssets;
       saveRoot?: () => string;
       exportFs?: ExportFileSystem;
+      notify?: (snapshot: RunSnapshot) => void;
     } = {},
   ) => {
     const instance = new CreateImagesRuntime({
@@ -121,7 +123,12 @@ test("quit waits for an auto-save still writing, so the file is complete and rec
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  let writing = false;
+  // Signalled from the write itself: the run, its storage and the save folder touch the real
+  // disk first, which can outlast any fixed number of event-loop turns on a busy machine.
+  let writing!: () => void;
+  const writeStarted = new Promise<void>((resolve) => {
+    writing = resolve;
+  });
   const real = fs as unknown as ExportFileSystem;
   const held: ExportFileSystem = {
     ...real,
@@ -129,7 +136,7 @@ test("quit waits for an auto-save still writing, so the file is complete and rec
       const handle = await real.open(target, flags, mode);
       return {
         writeFile: async (data: Uint8Array) => {
-          writing = true;
+          writing();
           await gate;
           return handle.writeFile(data);
         },
@@ -137,15 +144,26 @@ test("quit waits for an auto-save still writing, so the file is complete and rec
       };
     },
   };
+  let ended!: () => void;
+  const runEnded = new Promise<void>((resolve) => {
+    ended = resolve;
+  });
   const saveRoot = path.join(env.root, "Pictures");
-  const runtime = env.runtime({ saveRoot: () => saveRoot, exportFs: held });
+  const runtime = env.runtime({
+    saveRoot: () => saveRoot,
+    exportFs: held,
+    notify: (snapshot) => {
+      if (snapshot.run.state === "succeeded") ended();
+    },
+  });
   await runtime.initialize({ enabled: true, onError: failOnError });
   const doc = await saveWorkflow(runtime.services().workflows, generateChains(1));
   const plan = await runtime.services().coordinator.prepare(OWNER, { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } });
   assert.ok("plan" in plan);
   const started = await runtime.services().coordinator.start(OWNER, plan.plan.consentId);
   assert.ok("runId" in started);
-  await until(() => writing && runtime.services().coordinator.getRun({ runId: started.runId })?.run.state === "succeeded", "the run to end with its auto-save mid-write");
+  // The image's auto-save starts as soon as it is stored; the run ends while the write is held.
+  await Promise.all([writeStarted, runEnded]);
 
   const quitting = runtime.shutdown("app-quit");
   setTimeout(release, 30);

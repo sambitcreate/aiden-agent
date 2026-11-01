@@ -29,6 +29,27 @@ const STAGED_FILE = /^\.aiden-[0-9a-f-]{36}\.tmp$/u;
 const DAY_FOLDER = /^\d{4}-\d{2}-\d{2}$/u;
 /** How many of the newest day folders the start-of-session sweep looks in. */
 const SWEPT_DAY_FOLDERS = 14;
+/**
+ * Staging files this process is writing now. The leftover sweep skips them: a Save As or Save All
+ * into a day folder stages there without waiting for the sweep.
+ */
+const activeStagingFiles = new Set<string>();
+
+/** Writes `bytes` to a fresh hidden staging file in `directory`, marked live until `use` settles. */
+async function withStagedFile<T>(fs: ExportFileSystem, directory: string, bytes: Uint8Array, use: (staging: string) => Promise<T>): Promise<T> {
+  const staging = path.join(directory, `.aiden-${randomUUID()}.tmp`);
+  activeStagingFiles.add(staging);
+  try {
+    await writeNewFile(fs, staging, bytes);
+    try {
+      return await use(staging);
+    } finally {
+      await fs.rm(staging, { force: true }).catch(() => undefined);
+    }
+  } finally {
+    activeStagingFiles.delete(staging);
+  }
+}
 
 /** The slice of `node:fs/promises` the exporter uses; tests inject failures through it. */
 export interface ExportFileSystem {
@@ -82,9 +103,7 @@ export async function writeUniqueFile(
   const extension = path.extname(fileName);
   const stem = fileName.slice(0, fileName.length - extension.length);
   const candidate = (attempt: number) => path.join(directory, attempt === 0 ? fileName : `${stem} (${attempt})${extension}`);
-  const staging = path.join(directory, `.aiden-${randomUUID()}.tmp`);
-  await writeNewFile(fs, staging, bytes);
-  try {
+  const linked = await withStagedFile(fs, directory, bytes, async (staging) => {
     for (let attempt = 0; attempt < MAX_UNIQUE_ATTEMPTS; attempt += 1) {
       const target = candidate(attempt);
       try {
@@ -95,9 +114,9 @@ export async function writeUniqueFile(
         return await writeUniqueDirectly(fs, candidate, attempt, bytes);
       }
     }
-  } finally {
-    await fs.rm(staging, { force: true }).catch(() => undefined);
-  }
+    return null;
+  });
+  if (linked !== null) return linked;
   throw new Error("No free file name was found for the image.");
 }
 
@@ -107,14 +126,7 @@ export async function writeUniqueFile(
  * interrupted write leaves the previous file whole.
  */
 export async function replaceFile(fs: ExportFileSystem, target: string, bytes: Uint8Array): Promise<void> {
-  const staging = path.join(path.dirname(target), `.aiden-${randomUUID()}.tmp`);
-  await writeNewFile(fs, staging, bytes);
-  try {
-    await fs.rename(staging, target);
-  } catch (error) {
-    await fs.rm(staging, { force: true }).catch(() => undefined);
-    throw error;
-  }
+  await withStagedFile(fs, path.dirname(target), bytes, (staging) => fs.rename(staging, target));
 }
 
 /** The fallback without hard links: exclusive create of each candidate name, written in place. */
@@ -310,7 +322,7 @@ export class CreateImagesExports {
       for (const day of days) {
         const directory = path.join(root, day);
         for (const name of await this.fs.readdir(directory).catch(() => [])) {
-          if (STAGED_FILE.test(name)) await this.fs.rm(path.join(directory, name), { force: true }).catch(() => undefined);
+          if (STAGED_FILE.test(name) && !activeStagingFiles.has(path.join(directory, name))) await this.fs.rm(path.join(directory, name), { force: true }).catch(() => undefined);
         }
       }
     } catch {

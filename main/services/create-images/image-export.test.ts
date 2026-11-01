@@ -8,6 +8,7 @@ import {
   CreateImagesExports,
   exportDayFolder,
   exportFileName,
+  replaceFile,
   writeUniqueFile,
   type CreateImagesExportsOptions,
   type ExportFileSystem,
@@ -73,6 +74,35 @@ test("the first save of a session removes staged files a cut-off write left in r
     "2026-10-31/070509 Bikes 12345678.png",
     "2026-10-31/070509 Image ab12cd34.png",
   ]);
+});
+
+test("the leftover sweep spares the staging file of a Save As still being written into a day folder", async (t) => {
+  const root = await directory(t);
+  const day = path.join(root, "2026-10-31");
+  await fs.mkdir(day, { recursive: true });
+  // Save As has staged its bytes and is about to rename them into place.
+  let staged!: () => void;
+  const reachedRename = new Promise<void>((resolve) => (staged = resolve));
+  let release!: () => void;
+  const renameGate = new Promise<void>((resolve) => (release = resolve));
+  const gated = {
+    ...(fs as unknown as ExportFileSystem),
+    rename: async (from: string, to: string) => {
+      staged();
+      await renameGate;
+      await fs.rename(from, to);
+    },
+  } satisfies ExportFileSystem;
+  const target = path.join(day, "mine.png");
+  const saving = replaceFile(gated, target, Buffer.from("saved by hand"));
+  await reachedRename;
+
+  const { exports } = exporter(root);
+  await exports.ensureExported(ref());
+  release();
+  await saving;
+  assert.equal(await fs.readFile(target, "utf8"), "saved by hand");
+  assert.deepEqual(await filesUnder(root), ["2026-10-31/070509 Image ab12cd34.png", "2026-10-31/mine.png"]);
 });
 
 test("names use the local day folder, local time, a safe workflow title and the hash prefix", () => {
