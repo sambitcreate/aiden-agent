@@ -159,13 +159,20 @@ interface ChatSidebarProps {
   activeRemoteChat?: { hostId: string; chatId: string } | null;
   titleReveal?: ChatTitleRevealEvent | null;
   /**
-   * Shows only this workspace's chats, under a ‹ All projects row (design
-   * mode scopes the sidebar to the open chat's project). Null or left out
-   * shows every project.
+   * Shows only this workspace's chats, under a ‹ All workspaces row (design
+   * mode scopes the sidebar to the open chat's workspace). Null or left out
+   * shows every workspace, as does a scope with no chats in it right now.
    */
   scopeWorkspaceId?: string | null;
-  /** The person chose ‹ All projects, or the scoped project has no chats left. */
+  /** The person chose ‹ All workspaces. */
   onClearScope?: () => void;
+  /**
+   * The workspace the person cleared the scope from, offered back as a
+   * "Show only <workspace>" row above the full list.
+   */
+  restorableScopeWorkspaceId?: string | null;
+  /** The person chose "Show only <workspace>". */
+  onRestoreScope?: () => void;
 }
 
 type SidebarEntry = SidebarProjectEntry<LocalSidebarProject>;
@@ -500,6 +507,8 @@ function WorkspaceChatSidebar({
   titleReveal,
   scopeWorkspaceId = null,
   onClearScope,
+  restorableScopeWorkspaceId = null,
+  onRestoreScope,
 }: ChatSidebarProps) {
   const pathPreferences = useWorkspacePathPreferences();
   const navigate = useNavigate();
@@ -605,15 +614,9 @@ function WorkspaceChatSidebar({
     () => scopedLocalSidebar(scopeWorkspaceId, workspaces, sidebarProjects, sidebarChats),
     [scopeWorkspaceId, sidebarChats, sidebarProjects, workspaces],
   );
-  // Once the registry and chats have loaded, a scope with nothing in it
-  // (its last chat deleted or archived, or the project removed) ends, so the
-  // sidebar never stays on an empty project.
-  const scopeEmpty = Boolean(scopeWorkspaceId) && !scope && workspaceRegistryReady && chats.isSuccess;
-  const clearScopeRef = React.useRef(onClearScope);
-  clearScopeRef.current = onClearScope;
-  React.useEffect(() => {
-    if (scopeEmpty) clearScopeRef.current?.();
-  }, [scopeEmpty]);
+  // A scope with nothing in it right now (still loading, its last chat
+  // archived, or the workspace removed) shows the full list without ending the
+  // scope, so it comes back as soon as the workspace has chats again.
   // A scoped sidebar is one project's chats, whatever view the person keeps.
   const shownView: SidebarView = scope ? "projects" : view;
   const workspaceIds = React.useMemo(() => workspaces.map((workspace) => workspace.id), [workspaces]);
@@ -1488,8 +1491,8 @@ function WorkspaceChatSidebar({
         onClear={() => setMachineFilter("all")}
       />
     ) : null;
-  // Design mode's sidebar: ‹ All projects, then the one project's chats under
-  // its name and path, with every chat shown.
+  // Design mode's sidebar: ‹ All workspaces, then the one workspace's heading,
+  // drawn like its row in the full list, and every chat in it.
   const renderScopedProject = (workspace: Workspace) => {
     const chatsGroup = isNoWorkspace(workspace);
     const name = chatsGroup ? NO_WORKSPACE_GROUP_LABEL : workspaceDisplayName(workspace, workspaces);
@@ -1501,38 +1504,59 @@ function WorkspaceChatSidebar({
           data-roving-item
           className="text-secondary"
           icon={<ChevronLeft />}
-          title="All projects"
+          title="All workspaces"
           onClick={() => onClearScope?.()}
         />
-        <div data-sidebar-scope>
-          <SidebarListGroup
-            title={
-              <span className="flex min-w-0 flex-col">
-                <h2 className="truncate text-small-strong font-medium text-secondary">{name}</h2>
-                {!chatsGroup && workspace.folderPath ? (
-                  <span className="flex min-w-0 items-center gap-1 font-normal">
-                    {workspace.managedWorktree?.branch ? (
-                      <span className="max-w-[45%] truncate text-small text-tertiary">
-                        {workspace.managedWorktree.branch} ·
-                      </span>
-                    ) : null}
-                    <WorkspacePathLabel path={workspace.folderPath} format={pathPreferences.workspacePathFormat} />
-                  </span>
-                ) : null}
-              </span>
-            }
+        <div data-sidebar-scope className="flex flex-col gap-0.5">
+          <div
+            data-sidebar-scope-heading
+            className="flex min-h-9 min-w-0 items-center gap-2.5 px-2.5 py-1.5 text-regular text-primary"
           >
-            {drafts.map((draft) => renderDraftRow(draft, false))}
-            {group ? (
-              group.chats.map((summary) => renderSidebarChat(summary))
-            ) : drafts.length === 0 ? (
-              <EmptyState placement="inline" title="No matches" description="Try a different search." />
-            ) : null}
-          </SidebarListGroup>
+            <span aria-hidden="true" className="flex shrink-0 text-secondary [&_svg]:size-4.5">
+              {chatsGroup ? <MessageCircle /> : <Folder />}
+            </span>
+            <span className="flex min-w-0 flex-1 flex-col">
+              <h2 className="truncate text-regular font-normal">{name}</h2>
+              {!chatsGroup && workspace.folderPath ? (
+                <span className="flex min-w-0 items-center gap-1 text-small text-tertiary">
+                  {workspace.managedWorktree?.branch ? (
+                    <span className="max-w-[45%] truncate">{workspace.managedWorktree.branch} ·</span>
+                  ) : null}
+                  <WorkspacePathLabel path={workspace.folderPath} format={pathPreferences.workspacePathFormat} />
+                </span>
+              ) : null}
+            </span>
+          </div>
+          {drafts.map((draft) => renderDraftRow(draft, false))}
+          {group ? (
+            group.chats.map((summary) => renderSidebarChat(summary))
+          ) : drafts.length === 0 ? (
+            <EmptyState placement="inline" title="No matches" description="Try a different search." />
+          ) : null}
         </div>
       </div>
     );
   };
+  // After ‹ All workspaces, one row offers the design chat's workspace back,
+  // while that workspace has chats to show.
+  const restorableScopeWorkspace =
+    !scope && scopedLocalSidebar(restorableScopeWorkspaceId, workspaces, sidebarProjects, sidebarChats)
+      ? workspaces.find((workspace) => workspace.id === restorableScopeWorkspaceId)
+      : undefined;
+  const restoreScopeRow = restorableScopeWorkspace ? (
+    <SidebarListItem
+      data-roving-item
+      data-sidebar-restore-scope
+      className="mb-3 text-secondary"
+      icon={<Folder />}
+      title={`Show only ${
+        isNoWorkspace(restorableScopeWorkspace)
+          ? NO_WORKSPACE_GROUP_LABEL
+          : workspaceDisplayName(restorableScopeWorkspace, workspaces)
+      }`}
+      onClick={() => onRestoreScope?.()}
+    />
+  ) : null;
 
   const groupHeading = (label: string) =>
     machineFilterChip ? (
@@ -1655,6 +1679,7 @@ function WorkspaceChatSidebar({
         ) : null}
 
         <SidebarList ref={rovingRef}>
+          {restoreScopeRow}
           {scope ? (
             renderScopedProject(scope.project.workspace)
           ) : view === "projects" ? (

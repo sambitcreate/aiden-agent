@@ -17,7 +17,7 @@ import {
 import { queryKeys, useChats } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { TerminalDrawer } from "../components/terminal-drawer";
-import { DesignWorkbench, useDesignChatState } from "../design/design-layout";
+import { DesignChatBody, DesignWorkbench, useDesignChatState } from "../design/design-layout";
 import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { withForkLineage } from "../lib/chat-copy-view";
@@ -49,14 +49,26 @@ export function ChatLayout() {
   const studioSurface = isStudioPath(pathname);
   const localChatId = activeRemoteChat ? undefined : params.chatId;
   const design = useDesignChatState(localChatId, !onRemoteHost && !studioSurface && !botsSurface);
-  // Design mode scopes the sidebar to the chat's project until the person
-  // chooses ‹ All projects for that chat, which holds for this window session.
+  // Design mode scopes the sidebar to the chat's workspace until the person
+  // chooses ‹ All workspaces for that chat, which holds for this window session
+  // or until they choose "Show only <workspace>". Only the person changes this;
+  // a scope with no chats in it right now falls back to the full list at render.
   const [scopeClearedChatIds, setScopeClearedChatIds] = React.useState<ReadonlySet<string>>(() => new Set());
-  const scopeWorkspaceId =
-    design.workspaceId && localChatId && !scopeClearedChatIds.has(localChatId) ? design.workspaceId : null;
+  const scopeCleared = Boolean(localChatId && scopeClearedChatIds.has(localChatId));
+  const scopeWorkspaceId = design.workspaceId && localChatId && !scopeCleared ? design.workspaceId : null;
+  const restorableScopeWorkspaceId = design.workspaceId && scopeCleared ? design.workspaceId : null;
   const clearScope = React.useCallback(() => {
     if (!localChatId) return;
     setScopeClearedChatIds((current) => new Set(current).add(localChatId));
+  }, [localChatId]);
+  const restoreScope = React.useCallback(() => {
+    if (!localChatId) return;
+    setScopeClearedChatIds((current) => {
+      if (!current.has(localChatId)) return current;
+      const next = new Set(current);
+      next.delete(localChatId);
+      return next;
+    });
   }, [localChatId]);
   // Leaving design mode forgets the choice, so entering again scopes again.
   React.useEffect(() => {
@@ -133,6 +145,8 @@ export function ChatLayout() {
           titleReveal={titleReveal}
           scopeWorkspaceId={scopeWorkspaceId}
           onClearScope={clearScope}
+          restorableScopeWorkspaceId={restorableScopeWorkspaceId}
+          onRestoreScope={restoreScope}
         />
       }
       sidebarSize={{ default: 272, min: 236, max: 340 }}
@@ -151,7 +165,11 @@ export function ChatLayout() {
           onRemoteHost ||
           studioSurface ||
           (pathname.startsWith("/bots") && !params.chatId) ? null : (
-            <TerminalDrawer />
+            // The terminal belongs to the chat column, so stacked design mode
+            // hides it with the chat body while the canvas shows.
+            <DesignChatBody>
+              <TerminalDrawer />
+            </DesignChatBody>
           )}
         </div>
       </DesignWorkbench>

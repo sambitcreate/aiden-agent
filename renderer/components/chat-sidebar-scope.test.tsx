@@ -51,9 +51,12 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
-/** The layout's side of the scope: a person's ‹ All projects clears it for good. */
+/**
+ * The layout's side of the scope: only the person's ‹ All workspaces clears it,
+ * and only their "Show only <workspace>" brings it back.
+ */
 function ScopedSidebar({ initialScope }: { initialScope: string | null }) {
-  const [scope, setScope] = React.useState(initialScope);
+  const [cleared, setCleared] = React.useState(false);
   return (
     <WorkspaceProvider>
       <WorkspaceTerminalProvider>
@@ -61,11 +64,13 @@ function ScopedSidebar({ initialScope }: { initialScope: string | null }) {
           <NewChatActionsProvider value={NEW_CHAT_ACTIONS}>
           <ChatSidebar
             activeChatId="hero"
-            scopeWorkspaceId={scope}
+            scopeWorkspaceId={cleared ? null : initialScope}
             onClearScope={() => {
               clears += 1;
-              setScope(null);
+              setCleared(true);
             }}
+            restorableScopeWorkspaceId={cleared ? initialScope : null}
+            onRestoreScope={() => setCleared(false)}
           />
           </NewChatActionsProvider>
         </EnvironmentPanelProvider>
@@ -89,9 +94,11 @@ const chatRows = () =>
     .map((button) => button.textContent ?? "")
     .filter((text) => text.startsWith("Chat "));
 
-const backRow = () => screen.getByRole("button", { name: "All projects" });
+const backRow = () => screen.getByRole("button", { name: "All workspaces" });
+const restoreRow = () => screen.queryByRole("button", { name: "Show only site" });
+const fullList = () => screen.getByRole("button", { name: /Expand docs/u });
 
-test("a scoped sidebar lists only the project's chats under its name and path, after ‹ All projects", async () => {
+test("a scoped sidebar lists only the workspace's chats under its name and path, after ‹ All workspaces", async () => {
   await mountScoped("site");
   await waitFor(() => assert.deepEqual(chatRows(), ["Chat hero", "Chat pricing"]));
 
@@ -99,25 +106,35 @@ test("a scoped sidebar lists only the project's chats under its name and path, a
   const group = heading.closest("[data-sidebar-scope]");
   assert.ok(group, "the heading leads the scoped group");
   assert.ok(within(group as HTMLElement).getByTitle("/Users/person/site"), "the path shows under the name");
-  assert.equal(screen.queryByRole("button", { name: /docs/u }), null, "other projects are hidden");
+  assert.equal(screen.queryByRole("button", { name: /docs/u }), null, "other workspaces are hidden");
 
   const list = backRow().closest("[data-sidebar-scope-list]");
   assert.ok(list);
   const firstRow = list.querySelector("[data-roving-item]");
-  assert.equal(firstRow, backRow(), "‹ All projects is the first row");
+  assert.equal(firstRow, backRow(), "‹ All workspaces is the first row");
 });
 
-test("‹ All projects clears the scope once and brings every project back", async () => {
+test("‹ All workspaces brings every workspace back, and Show only <workspace> scopes again", async () => {
   await mountScoped("site");
+  assert.equal(restoreRow(), null, "nothing to restore while scoped");
   await act(async () => {
     fireEvent.click(backRow());
   });
   assert.equal(clears, 1);
-  await waitFor(() => screen.getByRole("button", { name: /Expand docs/u }));
-  assert.equal(screen.queryByRole("button", { name: "All projects" }), null);
+  await waitFor(() => fullList());
+  assert.equal(screen.queryByRole("button", { name: "All workspaces" }), null);
+
+  const restore = restoreRow();
+  assert.ok(restore, "the cleared workspace is offered back");
+  await act(async () => {
+    fireEvent.click(restore);
+  });
+  await waitFor(() => assert.deepEqual(chatRows(), ["Chat hero", "Chat pricing"]));
+  backRow();
+  assert.equal(restoreRow(), null);
 });
 
-test("arrow keys in a scoped sidebar start from ‹ All projects", async () => {
+test("arrow keys in a scoped sidebar start from ‹ All workspaces", async () => {
   await mountScoped("site");
   const hero = screen.getByRole("button", { name: /^Chat hero/u });
   // The open chat holds the list's Tab stop, as in the unscoped sidebar.
@@ -133,36 +150,48 @@ test("arrow keys in a scoped sidebar start from ‹ All projects", async () => {
   assert.equal(document.activeElement, backRow(), "Home lands on the back row");
 });
 
-test("a scope whose project has no chats left falls back to every project and clears", async () => {
-  chats = chats.filter((entry) => entry.workspaceId !== "site");
-  await mountWithBotRouter(null, { initialPath: "/", sidebar: <ScopedSidebar initialScope="site" /> });
-  await screen.findByRole("button", { name: /^Chat guide|^Expand docs/u });
-  await waitFor(() => assert.equal(clears, 1));
-  assert.equal(screen.queryByRole("button", { name: "All projects" }), null, "no empty scoped list");
-});
-
-test("deleting the project's last chat or removing the project clears the scope", async () => {
+test("a scope with no chats right now shows every workspace and comes back with its chats", async () => {
   const { queryClient } = await mountScoped("site");
+  const siteChats = queryClient.getQueryData<ChatMeta[]>(queryKeys.chatsIn(undefined))?.filter(
+    (entry) => entry.workspaceId === "site",
+  );
+  assert.equal(siteChats?.length, 2);
+
+  // The list empties for a moment (a refetch, or the last chats archived elsewhere).
   await act(async () => {
     queryClient.setQueryData<ChatMeta[]>(queryKeys.chatsIn(undefined), (current) =>
-      current?.filter((entry) => entry.id !== "pricing"),
+      current?.filter((entry) => entry.workspaceId !== "site"),
     );
   });
-  assert.equal(clears, 0, "one chat left keeps the scope");
-  await waitFor(() => assert.deepEqual(chatRows(), ["Chat hero"]));
+  await waitFor(() => fullList());
+  assert.equal(screen.queryByRole("button", { name: "All workspaces" }), null, "no empty scoped list");
+  assert.equal(clears, 0, "the scope is not cleared for good");
 
+  await act(async () => {
+    queryClient.setQueryData<ChatMeta[]>(queryKeys.chatsIn(undefined), (current) => [
+      ...(siteChats ?? []),
+      ...(current ?? []),
+    ]);
+  });
+  await waitFor(() => assert.deepEqual(chatRows(), ["Chat hero", "Chat pricing"]));
+  backRow();
+});
+
+test("a removed workspace shows every workspace without clearing the scope", async () => {
+  const { queryClient } = await mountScoped("site");
   await act(async () => {
     queryClient.setQueryData<Workspace[]>(queryKeys.workspaces, (current) =>
       current?.filter((entry) => entry.id !== "site"),
     );
   });
-  await waitFor(() => assert.equal(clears, 1));
-  assert.equal(screen.queryByRole("button", { name: "All projects" }), null);
   await waitFor(() => screen.getByRole("button", { name: /^Chat guide|^Expand docs/u }));
+  assert.equal(screen.queryByRole("button", { name: "All workspaces" }), null);
+  assert.equal(clears, 0);
 });
 
-test("an unscoped sidebar shows no back row", async () => {
+test("an unscoped sidebar shows no back row and nothing to restore", async () => {
   await mountScoped(null);
-  assert.equal(screen.queryByRole("button", { name: "All projects" }), null);
+  assert.equal(screen.queryByRole("button", { name: "All workspaces" }), null);
+  assert.equal(restoreRow(), null);
   assert.equal(clears, 0);
 });
