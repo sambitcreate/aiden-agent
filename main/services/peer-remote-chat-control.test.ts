@@ -324,6 +324,35 @@ test("answers and steering from this Mac reach the run on the host", async () =>
   }
 });
 
+test("a host that takes no run input or questions (aiden serve) keeps Stop and approvals but offers no steer or answers", async () => {
+  const host = new FakeHost("host_b", numbered(2));
+  // run-control-v1 without chat-run-input-v1 / chat-question-prompts-v1, as `aiden serve` advertises.
+  host.features = FEATURES.filter((token) => token !== "chat-run-input-v1" && token !== "chat-question-prompts-v1");
+  const harness = await setup(host);
+  try {
+    await host.start("run-1");
+    host.runs.publish("run-1", "chat:approval", APPROVAL);
+    await harness.open();
+    const control = controlFor(harness);
+    const granted = harness.adapter.capabilities();
+    assert.equal(granted.has("cancel"), true);
+    assert.equal(granted.has("respondApproval"), true);
+    assert.equal(granted.has("steer"), false);
+    assert.equal(granted.has("answerQuestion"), false);
+    assert.notEqual(control.refusal("steer"), null, "the pane hides Steer");
+    assert.notEqual(control.refusal("answerQuestion"), null);
+
+    await assert.rejects(control.submitInput("run-1", "steer", "Use tables"), code("unsupported"));
+    assert.deepEqual(host.effects.inputs, [], "nothing was sent for the host to refuse");
+    const approved = await control.respondApproval({ runId: "run-1", approvalId: "ap-1", decision: "allow" });
+    assert.equal(approved?.resolution, "applied");
+    assert.equal(await control.cancel("run-1"), true);
+    assert.deepEqual(host.effects.cancels, ["run-1"]);
+  } finally {
+    harness.close();
+  }
+});
+
 test("a chat renamed from this Mac can be deleted from it next, and a stale delete rereads instead of overwriting", async () => {
   const host = new FakeHost("host_b", numbered(2));
   const harness = await setup(host);

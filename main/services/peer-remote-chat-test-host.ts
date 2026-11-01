@@ -36,6 +36,9 @@ export const FEATURES = [
   "host-events-v1",
   "run-streams-v1",
   "run-control-v1",
+  // A desktop host always wires run input and questions alongside run control.
+  "chat-run-input-v1",
+  "chat-question-prompts-v1",
   "chat-messages-window-v1",
   "chat-read-state-v1",
 ];

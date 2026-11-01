@@ -40,6 +40,7 @@ import { createCliRemoteWorktrees } from "./remote-worktrees.ts";
 import { AidenRemoteHostFeedService } from "../../../main/services/aiden-remote-host-feed.js";
 import { createAidenRemoteHostFeedSource } from "../../../main/services/aiden-remote-host-feed-source.js";
 import { AidenRemoteHostRunService } from "../../../main/services/aiden-remote-host-runs.js";
+import { AidenRemoteServiceError } from "../../../main/services/aiden-remote-errors.js";
 import { liveRunAttention } from "../../../main/services/chat-pending-attention.js";
 
 const BONJOUR_RETRY_MS = 30_000;
@@ -216,7 +217,11 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
       hostRuns = new AidenRemoteHostRunService({ registry: chats.runs, now: Date.now, controls: {
         cancel: (runId) => chats.llmClient.cancelRun(runId),
         // A phone-owned approval settles through the stream service so its device records stay consistent.
-        approve: ({ chatId, approvalId, decision, scope }) => api.streams.respondApprovalFromHost(chatId, approvalId, decision, scope) || chats.llmClient.approveAsHost(approvalId, decision),
+        approve: ({ chatId, approvalId, decision, scope }) => {
+          // This host keeps no remembered approvals, so only a one-time decision applies.
+          if (scope !== undefined && scope !== "once") throw new AidenRemoteServiceError("invalid_request", "This host only applies one-time approval decisions.", 400);
+          return api.streams.respondApprovalFromHost(chatId, approvalId, decision) || chats.llmClient.approveAsHost(approvalId, decision);
+        },
         // CLI runs ask no questions and take no input while running.
         answer: () => "rejected",
         admitInput: async () => ({ admitted: false, reason: "run_not_active", committed: false }),
@@ -264,7 +269,15 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
       switch (action) {
         case "status": return service.status();
         case "devices": return state.listDevices();
-        case "revoke": { if (!value) throw new Error("Provide a paired device id."); hostFeed?.revokeDevice(value); hostRuns?.revokeDevice(value); const revoked = await revokeAidenRemoteRuntimeDevice({ state, streams: chatApi?.streams, chats: chatApi?.chats, workspaceOwners: owners }, value); await bots.application.revokeNoticeAudience(value); return { revoked }; }
+        case "revoke": {
+          if (!value) throw new Error("Provide a paired device id.");
+          // As on the desktop: drain host-wide and Bot subscriptions before and after the revocation fence; no run is cancelled.
+          const drain = () => { hostFeed?.revokeDevice(value); hostRuns?.revokeDevice(value); botSessions?.revokeDevice(value); };
+          drain();
+          const revoked = await revokeAidenRemoteRuntimeDevice({ state, streams: chatApi?.streams, chats: chatApi?.chats, workspaceOwners: owners }, value);
+          drain();
+          await bots.application.revokeNoticeAudience(value); return { revoked };
+        }
         case "pair": { if (value !== "lan" && value !== "tailscale") throw new Error("Usage: remote pair lan|tailscale"); return value === "tailscale" ? beginTailscalePairing(service, tailscale) : service.beginPairing(value); }
         case "pair-status": return service.pairingStatus() ?? { state: "none" };
         case "pair-cancel": { if (!value) throw new Error("Provide a pairing session id."); return { closed: await service.closePairing(value) }; }

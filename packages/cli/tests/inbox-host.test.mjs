@@ -66,8 +66,10 @@ function client(dir, port, credential) {
     /** An open SSE stream: its parsed frames so far, and a wait for the first frame matching `predicate`. */
     events(path) {
       const frames = [], waiters = [];
-      let buffer = "";
+      let buffer = "", markEnded;
+      const ended = new Promise((done) => { markEnded = done; });
       const request = httpsRequest(options(path, "GET"), (response) => {
+        response.on("close", () => markEnded(response.statusCode));
         response.setEncoding("utf8");
         response.on("data", (chunk) => {
           buffer += chunk;
@@ -81,9 +83,11 @@ function client(dir, port, credential) {
           }
         });
       });
-      request.on("error", () => undefined); request.end();
+      request.on("error", () => markEnded(undefined)); request.end();
       return {
         frames,
+        /** Resolves once the server ends the stream. */
+        ended,
         close: () => request.destroy(),
         next(predicate, label) {
           return new Promise((done, reject) => {
@@ -111,7 +115,7 @@ async function until(read, accept, label) {
   throw new Error(`Timed out waiting for ${label}: ${JSON.stringify(last)}`);
 }
 
-test("a desktop paired to aiden serve reads its chats' Inbox state and steers its runs", async (t) => {
+test("a desktop paired to aiden serve reads its chats' Inbox state and answers its runs", async (t) => {
   const dir = temporary(t);
   await fakeProvider(t, dir);
   const workspace = await api.workspaceCommand(dir, ["add", dir]);
@@ -179,4 +183,84 @@ test("a desktop paired to aiden serve reads its chats' Inbox state and steers it
   await startServer(t, dir);
   const after = await summaryRow();
   assert.equal(after.unread, false); assert.equal(after.pinnedAt, pinned.data.pinnedAt); assert.equal(after.triageRevision, 1);
+});
+
+test("a desktop paired before host grants existed picks them up without pairing again; a phone controls foreign runs; revoke closes streams", async (t) => {
+  const dir = temporary(t);
+  await fakeProvider(t, dir);
+  const workspace = await api.workspaceCommand(dir, ["add", dir]);
+  const original = process.env.AIDEN_CLI_ENTRY; process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const { daemon, remote, status } = await startServer(t, dir);
+  const hostGrants = [...api.AIDEN_REMOTE_HOST_CAPABILITIES];
+
+  // A Mac paired with what it held before this host served host grants: legacy grants, progress opt-in.
+  const macIssued = await remote.state.issueDevice({ name: "Old Mac", type: "mac", clientVersion: "test",
+    capabilities: [...api.AIDEN_REMOTE_LEGACY_CAPABILITIES], acceptsProgressCapabilities: true });
+  const mac = client(dir, status.lanPort, macIssued.credential);
+  const macServer = (await mac.request("/server")).data;
+  for (const grant of hostGrants) {
+    assert.ok(macServer.serverCapabilities.includes(grant), `${grant} offered in ${macServer.serverCapabilities}`);
+    assert.equal(macServer.capabilities.includes(grant), false, `${grant} not yet held`);
+  }
+  // Steering and question answers are not advertised: this host's runs take neither.
+  assert.equal(macServer.features.includes("chat-run-input-v1"), false);
+  assert.equal(macServer.features.includes("chat-question-prompts-v1"), false);
+  const deniedFeed = await mac.request("/host/events");
+  assert.equal(deniedFeed.status, 403, JSON.stringify(deniedFeed));
+  assert.equal(deniedFeed.data.error.code, "capability_denied");
+  const deniedRun = await mac.request("/runs/run-unknown/events");
+  assert.equal(deniedRun.status, 403, JSON.stringify(deniedRun));
+  assert.equal(deniedRun.data.error.code, "capability_denied");
+  // What the desktop's peer registry asks for on its first connection after a relaunch.
+  const upgraded = await mac.request("/device/capabilities", "POST", { accepts: hostGrants });
+  assert.equal(upgraded.status, 200, JSON.stringify(upgraded));
+  for (const grant of hostGrants) assert.ok(upgraded.data.capabilities.includes(grant), JSON.stringify(upgraded.data));
+  const feed = mac.events("/host/events");
+  t.after(() => feed.close());
+  await feed.next((frame) => frame.type === "snapshot", "snapshot");
+
+  // A phone hears the phone run subset and read markers, never the host feed or steering.
+  const phoneIssued = await remote.state.issueDevice({ name: "Test phone", type: "iphone", clientVersion: "test", acceptsProgressCapabilities: true });
+  const phone = client(dir, status.lanPort, phoneIssued.credential);
+  const phoneServer = (await phone.request("/server")).data;
+  for (const token of ["phone-run-control-v1", "chat-read-state-v1"]) assert.ok(phoneServer.features.includes(token), `${token} in ${phoneServer.features}`);
+  for (const token of ["host-events-v1", "run-control-v1", "chat-run-input-v1", "chat-question-prompts-v1"]) assert.equal(phoneServer.features.includes(token), false, token);
+  assert.deepEqual(["runs:observe", "runs:control"].filter((grant) => phoneServer.serverCapabilities.includes(grant)), ["runs:observe", "runs:control"]);
+  const phoneUpgrade = await phone.request("/device/capabilities", "POST", { accepts: ["runs:observe", "runs:control"] });
+  assert.equal(phoneUpgrade.status, 200, JSON.stringify(phoneUpgrade));
+  assert.equal((await phone.request("/host/events")).status, 403);
+
+  // Another device starts a run (revoking a device denies its own runs' approvals); it waits on its approval.
+  const starter = client(dir, status.lanPort, (await remote.state.issueDevice({ name: "Starter", type: "mac", clientVersion: "test" })).credential);
+  const created = await starter.request("/chats", "POST", { workspaceId: workspace.id, providerId: "cli-test", modelId: "test" }, "create-grants-test-0001");
+  assert.equal(created.status, 201, JSON.stringify(created));
+  const chatId = created.data.id;
+  assert.equal((await starter.request(`/chats/${chatId}/turns`, "POST", { text: "List the files" }, "turn-grants-test-00001")).status, 202);
+  const run = await until(async () => daemon.runs.currentRunForChat(chatId), (value) => value?.pendingApprovalIds.length === 1, "a pending approval");
+  const approvalId = run.pendingApprovalIds[0];
+  const runStream = mac.events(`/runs/${run.runId}/events`);
+  t.after(() => runStream.close());
+  await runStream.next(() => true, "run");
+
+  // This host keeps no remembered approvals: a non-one-time scope is refused and the approval stays pending.
+  const always = await phone.request(`/runs/${run.runId}/approvals/${approvalId}/respond`, "POST", { decision: "deny", scope: "always" }, "approve-grants-test-01");
+  assert.equal(always.status, 400, JSON.stringify(always));
+  assert.equal(always.data.error.code, "invalid_request");
+  assert.deepEqual(daemon.runs.currentRunForChat(chatId)?.pendingApprovalIds, [approvalId]);
+
+  // Revoking the Mac ends its host feed and run stream; the run goes on.
+  const revoked = await remote.command(["revoke", macIssued.device.id]);
+  assert.equal(revoked.revoked, true, JSON.stringify(revoked));
+  await Promise.all([feed.ended, runStream.ended]);
+  const afterRevoke = await mac.request("/server");
+  assert.equal(afterRevoke.status, 403, JSON.stringify(afterRevoke));
+  assert.equal(afterRevoke.data.error.code, "credential_revoked");
+
+  // The phone allows the run once, though it did not start it.
+  const allowed = await phone.request(`/runs/${run.runId}/approvals/${approvalId}/respond`, "POST", { decision: "allow", scope: "once" }, "approve-grants-test-02");
+  assert.equal(allowed.status, 200, JSON.stringify(allowed));
+  await daemon.llmClient.waitForChatIdle(chatId);
+  const row = (await phone.request("/chat-summaries")).data.summaries.find((summary) => summary.id === chatId);
+  assert.equal(row?.unread, true, JSON.stringify(row));
 });

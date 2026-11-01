@@ -97,8 +97,10 @@ export function remoteHostCapabilities(host: Pick<PeerHostView, "features" | "ca
     if (features.has("run-control-v1") && grants.has("runs:control")) {
       capabilities.add("cancel");
       capabilities.add("respondApproval");
-      capabilities.add("answerQuestion");
-      capabilities.add("steer");
+      // Steering and answers also need the host to take run input and ask
+      // questions at all; an `aiden serve` host advertises neither token.
+      if (features.has("chat-question-prompts-v1")) capabilities.add("answerQuestion");
+      if (features.has("chat-run-input-v1")) capabilities.add("steer");
     }
   }
   return capabilities;

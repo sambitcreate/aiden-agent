@@ -180,5 +180,7 @@ Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control
 - `daemon-chats.ts` keeps a `HostRunRegistry` (begin at hand-off, record every event, approvals through `ChatActivityRegistry`, settle on release); `cancelRun` and `approveAsHost` back host run control.
 - `remote-chats.ts` keeps `chat-read-markers.json` and `chat-triage.json` in the data dir; the baseline is stamped at creation; the snooze timer and wake-on-attention stop in `stopInbox()`.
 - `remote.ts` builds the feed and the run service in `workspaceApi`, closes them on stop, and revokes them on device revoke.
-- Gaps: no Bot needsYou/failed/lastReplyAt, no Bot change hook, no run questions or input, re-pair needed for host grants, no wake/unlock snooze re-check. Revision stays 48.
-- Test: `packages/cli/tests/inbox-host.test.mjs` (in the CLI `test` script, port 49376).
+- Gaps: no Bot needsYou/failed/lastReplyAt, no Bot change hook, no run questions or input, no wake/unlock snooze re-check. Revision stays 48.
+- No re-pair: a pre-2d desktop gets host grants via automatic `POST /device/capabilities` on its next connection after Aiden starts (relaunch if already connected); proven in inbox-host test 2.
+- Review fixes: `remoteHostCapabilities` grants `steer` only with `chat-run-input-v1` and `answerQuestion` only with `chat-question-prompts-v1` (desktop host always advertises both; CLI neither). CLI approve refuses scope other than `once` (400 invalid_request). CLI revoke drains hostFeed/hostRuns/botSessions before and after the fence. Phones on CLI keep phone-run-control-v1 + read state; iOS/Android need no change (no foreign-run steer, run input gated on the token).
+- Test: `packages/cli/tests/inbox-host.test.mjs` (in the CLI `test` script, port 49376), plus `peer-remote-chat-control.test.ts` for the steer gate.
