@@ -1849,6 +1849,12 @@ export function createChatStore(
         isCurrent?: () => boolean;
         /** Renderer-authored appends refuse feature-owned (Design Studio) conversations. */
         rejectFeatureOwned?: boolean;
+        /**
+         * Host-only: a user message a UserPromptSubmit hook refused, saved
+         * with its blocked mark in this same write. Never read from the
+         * message itself, so a renderer append can't set it.
+         */
+        hookBlockedReason?: string;
       },
     ): Promise<Chat> {
       return shared([id], true, async () => {
@@ -1928,6 +1934,9 @@ export function createChatStore(
               ? parseSubagentMessageReferenceV1(message.subagents)
               : undefined,
           createdAt: message.createdAt ?? Date.now(),
+          ...(message.role === "user" && meta?.hookBlockedReason !== undefined
+            ? { hookBlocked: { reason: boundedHookBlockedReason(meta.hookBlockedReason) } }
+            : {}),
         };
         const isFirstUserMessage =
           full.role === "user" &&

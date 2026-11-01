@@ -135,7 +135,6 @@ import { DESKTOP_ARTIFACT_SKILLS } from "./workspace-artifacts/skill.js";
 import { DESKTOP_HOOK_SKILLS } from "./hooks-skill.js";
 import { HOOKS_TOOL_NAME, createHooksTool, offersHooksTool, runsWorkspaceChatHooks } from "./hooks-tool.js";
 import { getHookService } from "./hooks/hook-service-main.js";
-import { markPromptHookBlocked } from "./hook-blocked-prompt.js";
 import {
   assistantTurnTextSeparator,
   buildAgentRuntimeOptions,
@@ -192,6 +191,7 @@ import { compactionFailureLogMetadata } from "./provider-failure.js";
 import { MAX_CUT_OFF_CONTINUATIONS } from "./cut-off-reply.js";
 import {
   MAX_STOP_HOOK_CONTINUATIONS,
+  createRunInputContexts,
   createWorkspaceChatHooks,
   endWorkspaceChatSession,
   markWorkspaceChatCompacted,
@@ -2794,8 +2794,8 @@ export const llmClient = {
     const skillSnapshot =
       hooksTool || !setupSkillSnapshot ? setupSkillSnapshot : withoutSkills(setupSkillSnapshot, DESKTOP_HOOK_SKILLS);
     let hookTurnContext: string | undefined;
-    // Mid-flight input's UserPromptSubmit context, by the queued message's timestamp.
-    const hookInputContexts = new Map<number, string>();
+    // Mid-flight input's UserPromptSubmit context, on that input's message only.
+    const hookInputContexts = createRunInputContexts();
     // Each response's price counts toward the chat's limit (a Bot chat's, its
     // month). A sign-in or a model on this Mac counts as $0.
     const spendingOwner: SpendingOwner = authoritativeBot
@@ -3276,7 +3276,7 @@ export const llmClient = {
                         ? currentPromptMessage.timestamp
                         : undefined,
                     turnContext: () => hookTurnContext,
-                    inputContext: (timestamp) => hookInputContexts.get(timestamp),
+                    inputContext: hookInputContexts.lookup,
                   }),
                 ]
               : []),
@@ -4999,14 +4999,7 @@ export const llmClient = {
                   return {};
                 }
               },
-              markBlocked: (messageId, reason) =>
-                markPromptHookBlocked(chatStore, params.chatId, messageId, reason, (error) =>
-                  logger.error("hooks", "Could not mark a hook-blocked run input.", error),
-                ),
-              attachContext: (timestamp, context) => {
-                const earlier = hookInputContexts.get(timestamp);
-                hookInputContexts.set(timestamp, earlier ? `${earlier}\n\n${context}` : context);
-              },
+              attachContext: hookInputContexts.attach,
             },
           }
         : {}),

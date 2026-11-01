@@ -133,8 +133,8 @@ export interface WorkspaceChatHooks {
     /** The current prompt's timestamp; without one the last user message carries the context. */
     promptTimestamp(): number | undefined;
     turnContext(): string | undefined;
-    /** UserPromptSubmit context for the mid-flight input with this timestamp, on that message only. */
-    inputContext?(timestamp: number): string | undefined;
+    /** UserPromptSubmit context for the mid-flight input this user message is, on that message only. */
+    inputContext?(message: { timestamp: number; text: string }): string | undefined;
   }): PiAgentRuntimeExtension;
 }
 
@@ -196,6 +196,37 @@ function appendText(message: AgentMessage, text: string): AgentMessage {
       ? [{ type: "text" as const, text: message.content }]
       : [...message.content];
   return { ...message, content: [...content, { type: "text" as const, text }] };
+}
+
+/**
+ * One run's mid-flight UserPromptSubmit context. Each entry is keyed by its
+ * queued input's timestamp (admission keeps those unique within a run) and
+ * answers only a user message with that input's exact text, so another
+ * message that shares the millisecond never picks it up.
+ */
+export function createRunInputContexts(): {
+  attach(input: { timestamp: number; text: string }, context: string): void;
+  lookup(message: { timestamp: number; text: string }): string | undefined;
+} {
+  const entries = new Map<number, { text: string; context: string }>();
+  return {
+    attach: ({ timestamp, text }, context) => {
+      entries.set(timestamp, { text, context });
+    },
+    lookup: ({ timestamp, text }) => {
+      const entry = entries.get(timestamp);
+      return entry && entry.text === text ? entry.context : undefined;
+    },
+  };
+}
+
+/** A user message's text, joined the same way whether stored as a string or blocks. */
+function plainText(content: Extract<AgentMessage, { role: "user" }>["content"]): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((block): block is { type: "text"; text: string } => block.type === "text")
+    .map((block) => block.text)
+    .join("");
 }
 
 function textOf(result: AfterToolCallContext["result"]): string {
@@ -346,7 +377,7 @@ export function createWorkspaceChatHooks(
           if (inputContext) {
             messages = messages.map((message) => {
               if (message.role !== "user") return message;
-              const own = inputContext(message.timestamp);
+              const own = inputContext({ timestamp: message.timestamp, text: plainText(message.content) });
               return own ? appendText(message, own) : message;
             });
           }

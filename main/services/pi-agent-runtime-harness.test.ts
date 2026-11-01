@@ -13,6 +13,7 @@ import {
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
+  type FauxResponseFactory,
 } from "@earendil-works/pi-ai/providers/faux";
 import { type AfterToolCallResult, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { convertToLlm, createCompactionSummaryMessage } from "./pi-legacy-harness.js";
@@ -48,7 +49,9 @@ import { executeMcpAgentTool } from "./mcp-tool-result.js";
 import { chatContextPressureFromProjection, createGenerationContextTransform } from "./generation-context.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { flushDiagnosticJournal, initDiagnosticJournal } from "./diagnostic-journal.js";
-import { createChatRunInputAdmission } from "./chat-run-input-admission.js";
+import { createChatRunInputAdmission, type ChatRunInputGenerationRef } from "./chat-run-input-admission.js";
+import { createRunInputContexts, createWorkspaceChatHooks } from "./workspace-chat-hooks.js";
+import type { HookDispatcher } from "./hooks/hook-types.js";
 import type { Chat, ChatMessage } from "./types.js";
 
 function testHarness(
@@ -3169,6 +3172,79 @@ test("admitted steering appears once in the visible chat and journals its commit
     true,
   );
   assert.deepEqual(fixture.harness.takeUndeliveredQueuedMessages(), { messages: [] });
+});
+
+test("two inputs admitted in the same millisecond each reach the model with only their own hook context", async () => {
+  // The run's prompt shares that millisecond too, and an input the queue
+  // refuses leaves no context behind for a later message to pick up.
+  const contexts = createRunInputContexts();
+  const hooks = createWorkspaceChatHooks({ chatId: "chat-1" }, () => ({ hasHooks: () => false }) as unknown as HookDispatcher);
+  const userTexts: string[][] = [];
+  const recordUserTexts: FauxResponseFactory = (context) => {
+    userTexts.push(
+      context.messages
+        .filter((message) => message.role === "user")
+        .map((message) =>
+          typeof message.content === "string"
+            ? message.content
+            : message.content.map((block) => (block.type === "text" ? block.text : "")).join("\n"),
+        ),
+    );
+    return fauxAssistantMessage("done");
+  };
+  const { tool, atTool, release } = steerWaitTool();
+  // Pi hands over one steer per turn boundary, so each input gets a request.
+  const { harness } = await managedTestHarness(
+    [fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }), recordUserTexts, recordUserTexts],
+    {
+      tools: [tool],
+      extensions: [
+        hooks.extension({ promptTimestamp: () => 5, turnContext: () => undefined, inputContext: contexts.lookup }),
+      ],
+      beforeQueuedUser: async () => "visible",
+    },
+  );
+  let ids = 0;
+  const generation: ChatRunInputGenerationRef = {
+    chatId: "chat-1",
+    owner: { documentId: "doc-1" },
+    cancelRequested: false,
+    inputHooks: {
+      screen: async ({ text }) => ({ context: `context-for-${text}` }),
+      attachContext: contexts.attach,
+    },
+    agent: {
+      queueAdmissionBlocked: () => harness.queueAdmissionBlocked(),
+      queueSteer: (message, options) =>
+        message.role === "user" && message.content === "gamma"
+          ? { accepted: false, reason: "capacity" }
+          : harness.queueSteer(message, options),
+      queueFollowUp: (message, options) => harness.queueFollowUp(message, options),
+    },
+  };
+  const admission = createChatRunInputAdmission({
+    active: new Map([["stream-1", generation]]),
+    isChatDeleting: () => false,
+    appendMessage: async (chatId) => ({ id: chatId, messages: [] }) as unknown as Chat,
+    readChat: async () => null,
+    now: () => 5,
+    newMessageId: () => `committed-${(ids += 1)}`,
+  });
+  const running = harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "start", timestamp: 5 } });
+  await atTool;
+  assert.equal((await admission.admit({ streamId: "stream-1", mode: "steer", text: "alpha" })).admitted, true);
+  assert.equal((await admission.admit({ streamId: "stream-1", mode: "steer", text: "gamma" })).admitted, false);
+  assert.equal((await admission.admit({ streamId: "stream-1", mode: "steer", text: "beta" })).admitted, true);
+  release();
+  assert.equal((await running).kind, "completed");
+
+  const [start, alpha, beta, ...rest] = userTexts[userTexts.length - 1]!;
+  assert.deepEqual(rest, [], "the refused input never reached the model");
+  assert.equal(start, "start");
+  assert.match(alpha!, /^alpha\n.*context-for-alpha$/su);
+  assert.doesNotMatch(alpha!, /context-for-(beta|gamma)/u);
+  assert.match(beta!, /^beta\n.*context-for-beta$/su);
+  assert.doesNotMatch(beta!, /context-for-(alpha|gamma)/u);
 });
 
 test("Stop before Pi reads admitted steering keeps it as history, not undelivered guidance", async () => {

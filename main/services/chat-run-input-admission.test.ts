@@ -406,7 +406,6 @@ test("input whose run is stopped, ended or filled while its hooks run is not sav
         return {};
       },
       attachContext: () => assert.fail("nothing is queued"),
-      markBlocked: async () => assert.fail("nothing is refused"),
     };
     assert.deepEqual(
       await f.admission.admit({ streamId: "stream-1", mode: "steer", text: "use the staging db", ownerDocumentId: "doc-1" }),

@@ -20,12 +20,14 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { convertToLlm } from "./pi-legacy-harness.js";
 import { createChatStore } from "./chat-store-core.js";
-import { isHookBlockedPrompt, markPromptHookBlocked } from "./hook-blocked-prompt.js";
+import { isHookBlockedPrompt } from "./hook-blocked-prompt.js";
+import type { ChatMessage } from "./types.js";
 import { PiCompactionSessionStore, syncChatMessagesToPiSession } from "./pi-compaction-session-store.js";
 import { PiAgentRuntimeHarness } from "./pi-agent-runtime-harness.js";
 import {
   MAX_STOP_HOOK_CONTINUATIONS,
   MAX_TRACKED_HOOK_SESSIONS,
+  createRunInputContexts,
   createWorkspaceChatHooks,
   endWorkspaceChatSession,
   hookTurnContextText,
@@ -617,8 +619,9 @@ test("a steer or follow-up sent mid-run is screened by UserPromptSubmit: refused
         : { additionalContext: fenced("ticket: OPS-12"), ranHooks: ["scan"] },
   });
   const hooks = createWorkspaceChatHooks({ chatId: chat.id }, dispatcher);
-  const contexts = new Map<number, string>();
+  const contexts = createRunInputContexts();
   const queued: AgentMessage[] = [];
+  const savedOnDisk: ChatMessage[] = [];
   let clock = 1_000;
   let ids = 0;
   const generation: ChatRunInputGenerationRef = {
@@ -628,8 +631,7 @@ test("a steer or follow-up sent mid-run is screened by UserPromptSubmit: refused
     inputHooks: {
       screen: ({ text, messageId }) =>
         screenRunInputWithHooks({ dispatch: hooks.dispatch, text, idempotencyKey: `UserPromptSubmit:${messageId}` }),
-      attachContext: (timestamp, context) => contexts.set(timestamp, context),
-      markBlocked: (messageId, reason) => markPromptHookBlocked(store, chat.id, messageId, reason, assert.ifError),
+      attachContext: contexts.attach,
     },
     agent: {
       queueAdmissionBlocked: () => undefined,
@@ -640,7 +642,13 @@ test("a steer or follow-up sent mid-run is screened by UserPromptSubmit: refused
   const admission = createChatRunInputAdmission({
     active: new Map([["stream", generation]]),
     isChatDeleting: () => false,
-    appendMessage: (chatId, message, meta) => store.appendMessage(chatId, message, meta),
+    appendMessage: async (chatId, message, meta) => {
+      const saved = await store.appendMessage(chatId, message, meta);
+      // What a fresh process would read if Aiden quit right after this write.
+      const reopened = await createChatStore(async () => chatsRoot).get(chatId);
+      savedOnDisk.push(reopened!.messages.find((entry) => entry.id === message.id)!);
+      return saved;
+    },
     readChat: (chatId) => store.get(chatId),
     now: () => (clock += 1),
     newMessageId: () => `message_run_input_${(ids += 1)}`,
@@ -664,6 +672,11 @@ test("a steer or follow-up sent mid-run is screened by UserPromptSubmit: refused
   });
   assert.equal(calls.length, 2);
 
+  // The refused steer is saved already marked, in the one write that saves
+  // it, so quitting after that write can never leave an unmarked copy.
+  assert.equal(savedOnDisk[0]?.content, "use key sk-live-STEERED");
+  assert.equal(savedOnDisk[0]?.hookBlocked?.reason, "Blocked by hook scan: secret in prompt");
+  assert.equal(savedOnDisk[1]?.hookBlocked, undefined, "accepted input is not marked");
   // The refused steer is kept, marked, and never queued.
   const stored = (await store.get(chat.id))!.messages;
   const blocked = stored.find((message) => message.content === "use key sk-live-STEERED")!;
@@ -682,7 +695,7 @@ test("a steer or follow-up sent mid-run is screened by UserPromptSubmit: refused
   const extension = hooks.extension({
     promptTimestamp: () => 1,
     turnContext: () => undefined,
-    inputContext: (timestamp) => contexts.get(timestamp),
+    inputContext: contexts.lookup,
   });
   const prompt: AgentMessage = { role: "user", content: "Start the migration", timestamp: 1 };
   const transformed = await extension.transformContext!([prompt, ...queued], undefined);
