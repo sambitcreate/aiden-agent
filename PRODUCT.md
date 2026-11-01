@@ -57,3 +57,5 @@ Avoid a generic web dashboard inside a desktop shell, ornamental cards, feature-
 ## Accessibility & Inclusion
 
 Target WCAG 2.2 AA for text and controls. Preserve keyboard access, visible focus, semantic labels, sufficient contrast, reduced-motion behavior, and non-color-only communication. Keep dense desktop UI readable at the app's supported window sizes and system appearance settings.
+
+Paired desktops can clone a local repository-root project into an approved folder on another computer. Environment-file copying requires an explicit file selection, with no files selected by default. Repository authentication stays on the destination computer. Phones and CLI daemons retain their existing project setup surfaces.

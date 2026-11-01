@@ -194,7 +194,15 @@ export const AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION = 46 as const;
  * older phones show that line and need nothing new.
  */
 export const AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION = 47 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION;
+/**
+ * Contract revision 48 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_WORKSPACE_CLONE_CONTRACT_REVISION`):
+ * paired desktops can clone a repository into a selected approved folder with
+ * optional bounded environment files. `workspace-clone-v1` is never
+ * advertised to phones.
+ */
+export const AIDEN_REMOTE_WORKSPACE_CLONE_CONTRACT_REVISION = 48 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_WORKSPACE_CLONE_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;

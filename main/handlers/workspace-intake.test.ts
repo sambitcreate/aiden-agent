@@ -94,7 +94,7 @@ async function setup(t: test.TestContext) {
     removeTree: (target) => fs.rm(target, { recursive: true, force: true }),
     listWorkspaces: async () => [...workspaces],
     getWorkspace: async (id) => workspaces.find((workspace) => workspace.id === id) ?? null,
-    createFromFolder: (folderPath) => application.createFromFolder(folderPath),
+    createFromFolder: (folderPath, options) => application.createFromFolder(folderPath, undefined, options),
     runClone: clone.runClone,
   });
   const handlers = new Map<string, (event: FakeEvent, ...args: unknown[]) => unknown>();

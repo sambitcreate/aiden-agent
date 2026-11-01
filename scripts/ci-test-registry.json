@@ -313,6 +313,7 @@
         "main/shared/guards.test.ts",
         "main/shared/path-containment.test.ts",
         "main/shared/redaction.test.ts",
+        "main/shared/process-group.test.ts",
         "main/windows/pill-window-security.test.ts",
         "main/native-ipc-core.test.ts",
         "renderer/shared/images/ports.test.ts",
@@ -370,7 +371,12 @@
         "main/services/web-extract-core.test.ts",
         "main/services/web-fetch-transport.test.ts",
         "main/services/web-page-text.test.ts",
-        "main/handlers/web-fetch.test.ts"
+        "main/handlers/web-fetch.test.ts",
+        "main/services/peer-project-source.test.ts",
+        "main/services/peer-project-file-io.test.ts",
+        "main/handlers/peer-project-clone.test.ts",
+        "renderer/shared/peer-project-clone.test.ts",
+        "renderer/main/peer-project-clone-dialog.test.tsx"
       ],
       "preserved": [
         "browser",

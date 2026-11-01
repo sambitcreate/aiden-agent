@@ -1,3 +1,4 @@
+import type { PeerProjectSource } from "../shared/peer-project-clone";
 import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
 import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
 import type { SavedChatIntent } from "../shared/chat-intent";
@@ -1011,6 +1012,9 @@ export const modelsApi = {
 
 // ── Workspaces ────────────────────────────────────────────────────────
 export const workspacesApi = {
+  peerClonePreview: (workspaceId: string) => invoke<PeerProjectSource>("workspaces:peerClonePreview", workspaceId),
+  peerClone: (input: { cloneId: string; hostId: string; workspaceId: string; selection: string; files: string[] }) => invoke<PeerOperationOutcome>("workspaces:peerClone", input),
+  cancelPeerClone: (cloneId: string) => invoke<boolean>("workspaces:peerCloneCancel", cloneId),
   list: () => invoke<Workspace[]>("workspaces:list"),
   memoryFacts: (workspaceId: string) =>
     invoke<import("../../main/services/workspace-memory-facts").WorkspaceMemoryFactView[]>(
