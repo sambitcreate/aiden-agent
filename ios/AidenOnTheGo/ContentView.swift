@@ -321,6 +321,10 @@ struct ContentView: View {
                 if !coordinator.workspaces.contains(where: { $0.id == chat.workspaceId }) {
                     await coordinator.refreshWorkspaces()
                     guard coordinator.isCurrent(context) else { return nil }
+                    guard coordinator.workspaces.contains(where: { $0.id == chat.workspaceId }) else {
+                        coordinator.presentedError = AidenNoWorkspace.startedButUnlistedMessage
+                        return nil
+                    }
                 }
                 return AidenNavigationRequest(destination: .chat(chat.id), instanceId: target.instanceID,
                     workspaceId: nil, startsVoice: target.startsVoice)

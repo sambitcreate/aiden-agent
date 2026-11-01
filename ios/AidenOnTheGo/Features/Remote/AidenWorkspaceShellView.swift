@@ -2134,6 +2134,11 @@ struct AidenWorkspaceShellView: View {
             if !coordinator.workspaces.contains(where: { $0.id == chat.workspaceId }) {
                 await coordinator.refreshWorkspaces()
                 guard coordinator.isCurrent(context) else { return }
+                guard coordinator.workspaces.contains(where: { $0.id == chat.workspaceId }) else {
+                    homeModel.accept(chat)
+                    coordinator.presentedError = AidenNoWorkspace.startedButUnlistedMessage
+                    return
+                }
             }
             // The chat opens from the create receipt; Home's full reload
             // (chats, tasks, catalog, usage) runs behind it.

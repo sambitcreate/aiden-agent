@@ -530,6 +530,12 @@ enum AidenNoWorkspace {
         }
     }
 
+    /// Shown when a new chat landed in a hidden folder the phone couldn't list yet (the workspace
+    /// re-read failed), so the chat exists on the Mac but can't open until the list refreshes.
+    static var startedButUnlistedMessage: String {
+        String(localized: "Your new chat was started on your Mac but couldn't open yet. It will appear under Chats once Aiden On The Go reconnects.")
+    }
+
     /// Workspaces a person picks, opens or manages: everything but the hidden records, except
     /// `keeping`, a hidden record something already uses (a scheduled task being edited).
     static func choices(_ workspaces: [AidenWorkspace], keeping workspaceID: String? = nil) -> [AidenWorkspace] {
