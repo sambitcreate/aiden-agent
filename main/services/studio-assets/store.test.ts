@@ -619,7 +619,7 @@ test("a corrupt database is quarantined and rebuilt, keeping every image", async
   await f.store.close();
   const garbage = Buffer.alloc(8_192, 0x5a);
   await removeDatabase(f.root);
-  await fs.writeFile(path.join(f.root, DATABASE), garbage);
+  await fs.writeFile(path.join(f.root, DATABASE), garbage, { mode: 0o644 });
 
   const reopened = await f.open();
   assert.equal(reopened.status(), "open");
@@ -629,24 +629,48 @@ test("a corrupt database is quarantined and rebuilt, keeping every image", async
   );
   assert.equal(quarantined.length, 1);
   assert.deepEqual(await fs.readFile(path.join(f.root, quarantined[0]!)), garbage);
+  if (process.platform !== "win32") {
+    // The kept copy may be 0644 from an older build; it is made private like the live database.
+    assert.equal(((await fs.stat(path.join(f.root, quarantined[0]!))).mode & 0o777).toString(8), "600");
+  }
   assert.ok(warnings.some((message) => message.includes(quarantined[0]!)));
   // The rebuilt store accepts new work.
   const next = await reopened.put({ bytes: pngBytes(10, 10, 5) });
   assert.equal(reopened.get(next.assetId)?.assetId, next.assetId);
 });
 
-test("a database with an unsupported schema version is quarantined and rebuilt", async (t) => {
+test("a database with an invalid schema version is quarantined and rebuilt", async (t) => {
   const f = await fixture(t);
   const asset = await f.store.put({ bytes: pngBytes(40, 30, 6) });
   await f.store.close();
   const raw = new DatabaseSync(path.join(f.root, DATABASE));
-  raw.exec("PRAGMA user_version=99;");
+  raw.exec("PRAGMA user_version=-1;");
   raw.close();
 
   const reopened = await f.open();
   assert.equal(reopened.get(asset.assetId)?.width, 40);
   const names = await fs.readdir(f.root);
   assert.equal(names.filter((name) => /\.corrupt-[^-]/u.test(name) && !/-(wal|shm)$/u.test(name)).length, 1);
+});
+
+test("a database from a newer build is left untouched and the store stays unavailable", async (t) => {
+  const f = await fixture(t);
+  const asset = await f.store.put({ bytes: pngBytes(40, 30, 6) });
+  f.store.retain({ kind: "design", id: "project-1" }, [asset.assetId]);
+  await f.store.close();
+  const file = path.join(f.root, DATABASE);
+  const raw = new DatabaseSync(file);
+  raw.exec("PRAGMA user_version=2;");
+  raw.close();
+
+  await assert.rejects(f.open(), code("unavailable"));
+  assert.deepEqual((await fs.readdir(f.root)).filter((name) => name.includes(".corrupt-")), []);
+  assert.deepEqual(await f.blobFiles(), [asset.assetId]);
+  // The newer build's database, holds included, is still there for that build.
+  const check = new DatabaseSync(file);
+  assert.equal((check.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 2);
+  assert.deepEqual(check.prepare("SELECT holder FROM holds").all().map((row) => (row as { holder: string }).holder), ["design:project-1"]);
+  check.close();
 });
 
 test("database files are private (0600)", { skip: process.platform === "win32" }, async (t) => {

@@ -81,6 +81,16 @@ class UnsupportedSchemaError extends StudioAssetError {
 }
 
 /**
+ * The database was written by a newer build. It is valid there, so it is never quarantined:
+ * the store stays unavailable and the file is left untouched for that build to open again.
+ */
+class NewerSchemaError extends StudioAssetError {
+  constructor() {
+    super("unavailable", "The studio asset database was created by a newer version of Aiden.");
+  }
+}
+
+/**
  * True for a database file that is damaged or unreadable as this schema, which
  * quarantine can fix. Permission, missing-directory and other I/O failures are
  * not: moving the file aside would not help and could hide the real problem.
@@ -781,6 +791,8 @@ function openDatabase(file: string): { db: DatabaseSync; recovering: boolean } {
     };
     if (Number(version) === 0) {
       db.exec(`BEGIN IMMEDIATE; ${SCHEMA} ${RECOVERY_SCHEMA} INSERT INTO recovery_pending (id) VALUES (1); COMMIT;`);
+    } else if (Number(version) > 1) {
+      throw new NewerSchemaError();
     } else if (Number(version) !== 1) {
       throw new UnsupportedSchemaError();
     }
@@ -816,7 +828,11 @@ async function quarantineDatabase(file: string, now: number): Promise<string> {
       await fs.rename(`${file}${suffix}`, `${target}${suffix}`);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      continue;
     }
+    // rename keeps the mode, and an older build may have created the file 0644; the kept copy
+    // holds the same data as the live database, so it is private too. Best effort.
+    await fs.chmod(`${target}${suffix}`, 0o600).catch(() => undefined);
   }
   await syncDirectory(path.dirname(file)).catch(() => undefined);
   return target;
