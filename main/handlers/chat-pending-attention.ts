@@ -18,6 +18,11 @@ export interface ChatPendingAttentionHandlerDependencies<Event> {
   knownChatIds(ids: readonly string[]): Promise<ReadonlySet<string>>;
   /** Saved waits from each chat's interrupted run; chats with none are absent. Never throws. */
   interruptedWaits(chatIds: readonly string[]): Promise<ReadonlyMap<string, InterruptedRunWaits>>;
+  /**
+   * A dismissal removed a wait. Nothing else reports it, so this tells the
+   * Dock badge and the renderer's Inbox to recount.
+   */
+  onChange?: () => void;
 }
 
 function chatIds(value: unknown): string[] {
@@ -33,7 +38,7 @@ function chatIds(value: unknown): string[] {
  * `chats:pendingAttention(ids)`: what each listed local chat is waiting on.
  * Chats this host does not have, and chats waiting on nothing, are left out.
  * `chats:dismissDetachedAttention(id)`: the person dismissed the chat's
- * Unavailable prompts.
+ * Unavailable prompts; when any were dropped, `onChange` reports it.
  */
 export function registerChatPendingAttentionHandlers<Event>(
   dependencies: ChatPendingAttentionHandlerDependencies<Event>,
@@ -58,6 +63,6 @@ export function registerChatPendingAttentionHandlers<Event>(
 
   handle("chats:dismissDetachedAttention", (_event, id) => {
     if (!isSafeSubagentIdentifier(id)) throw new Error("Invalid chat identifier.");
-    dependencies.detached.clearChat(id);
+    if (dependencies.detached.clearChat(id)) dependencies.onChange?.();
   });
 }

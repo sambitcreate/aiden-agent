@@ -343,6 +343,9 @@ class AidenInboxTest {
         val today = AidenInboxNoticeText.confirmation(
             AidenChatTriageChange.snooze(Instant.parse("2026-09-09T18:00:00Z")), now, zone, locale)
         assertEquals("6:00 PM", plain((today as AidenInboxNoticeText.Confirmation.SnoozedToday).time))
+        val tomorrow = AidenInboxNoticeText.confirmation(
+            AidenChatTriageChange.snooze(Instant.parse("2026-09-10T09:00:00Z")), now, zone, locale)
+        assertEquals("9:00 AM", plain((tomorrow as AidenInboxNoticeText.Confirmation.SnoozedTomorrow).time))
         val monday = AidenInboxNoticeText.confirmation(
             AidenChatTriageChange.snooze(Instant.parse("2026-09-14T09:00:00Z")), now, zone, locale)
         monday as AidenInboxNoticeText.Confirmation.SnoozedOn

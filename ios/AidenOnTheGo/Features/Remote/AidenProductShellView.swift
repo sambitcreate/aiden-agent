@@ -286,6 +286,25 @@ final class AidenProductNavigationStore {
         var botCoachmarkVersionsByScope: [String: Int]?
         var workspaceSidebarOrganizationsByInstance: [String: AidenWorkspaceSidebarOrganization]?
         var expandedSidebarWorkspaceIDsByInstance: [String: [String]]?
+
+        init() {}
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            areasByInstance = try container.decodeIfPresent([String: AidenProductArea].self, forKey: .areasByInstance) ?? [:]
+            selectedWorkspaceByInstance = try container.decodeIfPresent([String: String].self, forKey: .selectedWorkspaceByInstance) ?? [:]
+            compactWorkspacePathByInstance = try container.decodeIfPresent([String: [String]].self, forKey: .compactWorkspacePathByInstance) ?? [:]
+            compactBotPathByInstance = try container.decodeIfPresent([String: [String]].self, forKey: .compactBotPathByInstance) ?? [:]
+            selectedBotByScope = try container.decodeIfPresent([String: String].self, forKey: .selectedBotByScope)
+            botCoachmarkVersionsByScope = try container.decodeIfPresent([String: Int].self, forKey: .botCoachmarkVersionsByScope)
+            // Read per entry: a view a newer build saved (Inbox, on a
+            // downgrade) drops only that Mac's choice, not the whole snapshot.
+            workspaceSidebarOrganizationsByInstance = (try? container.decodeIfPresent(
+                [String: String].self,
+                forKey: .workspaceSidebarOrganizationsByInstance
+            ))?.flatMap { raw in raw.compactMapValues(AidenWorkspaceSidebarOrganization.init(rawValue:)) }
+            expandedSidebarWorkspaceIDsByInstance = try container.decodeIfPresent([String: [String]].self, forKey: .expandedSidebarWorkspaceIDsByInstance)
+        }
     }
 
     private static let snapshotKey = "aiden.product-navigation.v1"

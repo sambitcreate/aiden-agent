@@ -134,9 +134,12 @@ export function createInterruptedWaitStore(
       });
     },
     /** The card was answered, dismissed or withdrawn: nothing to offer again. */
-    forget(waitId: string, chatId?: string): Promise<void> {
+    /** True when a saved wait was removed. */
+    forget(waitId: string, chatId?: string): Promise<boolean> {
       return persistence.update((draft) => {
+        const before = draft.waits.length;
         draft.waits = draft.waits.filter((item) => item.waitId !== waitId || (chatId !== undefined && item.chatId !== chatId));
+        return draft.waits.length < before;
       });
     },
     /** The chat was deleted. */

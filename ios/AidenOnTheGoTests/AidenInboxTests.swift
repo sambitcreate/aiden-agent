@@ -414,6 +414,26 @@ final class AidenInboxTests: XCTestCase {
         let late = AidenSnoozeOption.options(now: wednesday, calendar: calendar)
         XCTAssertEqual(late.map(\.preset), [.hour, .tomorrow, .nextWeek])
         XCTAssertEqual(late[2].until, try date("2026-11-09T09:00:00"))
+
+        // The banner names the day as the desktop's toast does.
+        func confirmation(_ option: AidenSnoozeOption, now: Date) -> String {
+            AidenChatTriageChange.snooze(until: option.until).confirmation(now: now, calendar: calendar)
+        }
+        XCTAssertTrue(confirmation(options[1], now: saturday).hasPrefix("Snoozed until today at "))
+        XCTAssertTrue(confirmation(options[2], now: saturday).hasPrefix("Snoozed until tomorrow at "))
+        XCTAssertTrue(confirmation(options[3], now: saturday).hasPrefix("Snoozed until Monday at "))
+        // Late in the evening "tomorrow" is still the next calendar day.
+        let lateEvening = try date("2026-10-31T23:30:00")
+        XCTAssertTrue(confirmation(options[2], now: lateEvening).hasPrefix("Snoozed until tomorrow at "))
+    }
+
+    func testTheBannerStaysUnderVoiceOverAndOtherwiseGoesAsOnAndroid() {
+        let undo = AidenInboxNotice(message: "Marked done", undo: .done(false), chatID: "c")
+        let refusal = AidenInboxNotice(message: "Couldn’t update that chat. It’s back where it was.")
+        XCTAssertEqual(undo.autoDismissDelay(voiceOverRunning: false), .seconds(5), "Undo lasts its window.")
+        XCTAssertEqual(refusal.autoDismissDelay(voiceOverRunning: false), .seconds(10))
+        XCTAssertNil(undo.autoDismissDelay(voiceOverRunning: true))
+        XCTAssertNil(refusal.autoDismissDelay(voiceOverRunning: true))
     }
 
     // MARK: Row text

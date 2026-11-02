@@ -211,6 +211,7 @@ export interface InboxTriageUndoBatch {
  * Join a new action to the open Undo batch when it is the same kind and lands
  * within the Undo window; otherwise it starts a new batch. A chat acted on
  * twice keeps its first `before`, so Undo puts it back as it was before both.
+ * A merged snooze keeps `until` only while every chat in it wakes then.
  */
 export function mergeInboxTriageUndo(
   current: InboxTriageUndoBatch | null,
@@ -227,7 +228,10 @@ export function mergeInboxTriageUndo(
       items.push(item);
     }
   }
-  return { kind: next.kind, items, at: next.at, ...(next.until !== undefined ? { until: next.until } : {}) };
+  // Chats snoozed to different times share one toast that names no time.
+  const wakes = new Set(items.map((item) => item.patch.snoozeUntil));
+  const until = next.until !== undefined && wakes.size === 1 && wakes.has(next.until) ? next.until : undefined;
+  return { kind: next.kind, items, at: next.at, ...(until !== undefined ? { until } : {}) };
 }
 
 /** Undo's writes: the inverse of each chat's patch, guarded by the revision its last write left. */

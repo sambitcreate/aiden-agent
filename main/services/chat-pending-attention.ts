@@ -49,8 +49,9 @@ export class DetachedPromptLog {
     }
   }
 
-  clearChat(chatId: string): void {
-    this.chats.delete(chatId);
+  /** True when the chat had prompts to drop. */
+  clearChat(chatId: string): boolean {
+    return this.chats.delete(chatId);
   }
 
   forChat(chatId: string): readonly DetachedPrompt[] {

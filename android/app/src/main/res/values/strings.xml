@@ -357,8 +357,10 @@
     <string name="inbox_status_unread">Unread</string>
     <string name="inbox_notice_done">Marked done</string>
     <string name="inbox_notice_snoozed_today">Snoozed until today at %1$s</string>
+    <string name="inbox_notice_snoozed_tomorrow">Snoozed until tomorrow at %1$s</string>
     <string name="inbox_notice_snoozed_day">Snoozed until %1$s at %2$s</string>
     <string name="inbox_notice_updated">Updated</string>
+    <string name="inbox_notice_undo_conflict">That chat changed since, so Undo left it as it is.</string>
     <string name="inbox_notice_conflict">That chat changed on another device. The Inbox is up to date now.</string>
     <string name="inbox_notice_triage_failed">Couldn’t update that chat. It’s back where it was.</string>
     <string name="inbox_notice_mark_read_failed">Couldn’t mark that chat read. Try again once your Mac is reachable.</string>

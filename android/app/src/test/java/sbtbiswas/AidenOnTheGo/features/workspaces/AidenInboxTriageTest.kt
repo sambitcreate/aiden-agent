@@ -163,15 +163,38 @@ class AidenInboxTriageTest {
     @Test
     fun markReadClearsTheDotAndRestoresItWhenRefused() = runBlocking {
         val host = Host(row(unread = true))
-        assertNull(host.triage(now).markRead("chat-1"))
+        assertNull(host.triage(now).markRead("chat-1", readsState = true))
         assertFalse(host.rows.getValue("chat-1").unread)
-        assertNull(host.triage(now).markRead("chat-1")) // already read: no write
+        assertNull(host.triage(now).markRead("chat-1", readsState = true)) // already read: no write
         assertEquals(1, host.readWrites.size)
 
         val refused = Host(row(unread = true))
         refused.readAnswer = { throw IOException("offline") }
-        assertTrue(refused.triage(now).markRead("chat-1") is AidenInboxNotice.MarkReadFailed)
+        assertTrue(refused.triage(now).markRead("chat-1", readsState = true) is AidenInboxNotice.MarkReadFailed)
         assertTrue(refused.rows.getValue("chat-1").unread)
+    }
+
+    @Test
+    fun markReadWritesNothingToAHostWithoutReadMarkers() = runBlocking {
+        val host = Host(row(unread = true))
+        assertNull(host.triage(now).markRead("chat-1", readsState = false))
+        assertTrue(host.rows.getValue("chat-1").unread)
+        assertTrue(host.readWrites.isEmpty())
+        assertTrue(host.published.isEmpty())
+    }
+
+    @Test
+    fun anUndoThatConflictsIsNeverRetriedAndLeavesTheChatAsItIs() = runBlocking {
+        // The swipe left revision 4 and Done; another device has written since.
+        val host = Host(row(revision = 4).copy(doneAt = now))
+        host.triageAnswer = { throw conflict(currentRevision = "5") }
+        val notice = host.triage(now).setTriage(
+            "chat-1", AidenChatTriageChange.done(false), readsFailures = true, offersUndo = false
+        )
+        assertTrue(notice is AidenInboxNotice.UndoConflict)
+        assertEquals(listOf(4), host.triageWrites.map { it.third })
+        assertEquals(now, host.rows.getValue("chat-1").doneAt)
+        assertEquals(1, host.reloads)
     }
 
     @Test
@@ -259,7 +282,7 @@ class AidenInboxTriageTest {
         // Mark read refused after the chat was opened: the dot stays off.
         val read = Host(row(unread = true))
         read.readAnswer = { read.viewStamp += 1; throw IOException("offline") }
-        assertTrue(read.triage(now).markRead("chat-1") is AidenInboxNotice.MarkReadFailed)
+        assertTrue(read.triage(now).markRead("chat-1", readsState = true) is AidenInboxNotice.MarkReadFailed)
         assertFalse(read.rows.getValue("chat-1").unread)
 
         // Done on an unseen failure refused after the chat was opened: Done

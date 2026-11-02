@@ -121,7 +121,8 @@ struct AidenChatTriageResult: Decodable, Equatable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         chatId = try values.decode(String.self, forKey: .chatId)
         revision = try values.decode(Int.self, forKey: .revision)
-        guard revision >= 0 else {
+        // A write always leaves the chat at revision 1 or later.
+        guard revision >= 1 else {
             throw DecodingError.dataCorruptedError(forKey: .revision, in: values, debugDescription: "Expected a triage revision.")
         }
         updatedAt = try values.decode(AidenRemoteTimestamp.self, forKey: .updatedAt).date

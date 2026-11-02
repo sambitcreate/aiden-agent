@@ -424,7 +424,9 @@ class AidenWorkspaceHomeViewModel(
     fun markInboxRead(chatId: String) {
         val triage = inboxTriage() ?: return
         viewModelScope.launch {
-            trackingTriageWrite(chatId) { triage.markRead(chatId) }?.let { _inboxNotice.value = it }
+            trackingTriageWrite(chatId) {
+                triage.markRead(chatId, readsState = coordinator.serverInfo.value?.supportsChatReadState == true)
+            }?.let { _inboxNotice.value = it }
         }
     }
 

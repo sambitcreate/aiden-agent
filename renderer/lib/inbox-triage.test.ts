@@ -202,6 +202,24 @@ test("Undo restores a chat acted on twice to how it was before both", () => {
   assert.equal(write?.ifRevision, 4);
 });
 
+test("the Undo toast names a snooze time only when every merged chat wakes then", () => {
+  const snooze = (chatId: string, until: number, at: number): InboxTriageUndoBatch => ({
+    kind: "snooze",
+    items: [{ target: target(chatId), before: null, patch: { snoozeUntil: until }, revision: 1 }],
+    at,
+    until,
+  });
+  const label = (at: number) => (at === NOW + HOUR ? "1 PM" : "4 PM");
+  const same = mergeInboxTriageUndo(snooze("a", NOW + HOUR, NOW), snooze("b", NOW + HOUR, NOW + 1_000));
+  assert.equal(inboxTriageToastTitle(same, label), "2 chats snoozed");
+  assert.equal(same.until, NOW + HOUR);
+  const mixed = mergeInboxTriageUndo(snooze("a", NOW + HOUR, NOW), snooze("b", NOW + 4 * HOUR, NOW + 1_000));
+  assert.equal(mixed.until, undefined);
+  // Moving the first chat to the second's time makes them agree again.
+  const aligned = mergeInboxTriageUndo(mixed, snooze("a", NOW + 4 * HOUR, NOW + 2_000));
+  assert.equal(aligned.until, NOW + 4 * HOUR);
+});
+
 test("Undo lands only where nothing changed since, by the store's ifRevision", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-inbox-undo-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

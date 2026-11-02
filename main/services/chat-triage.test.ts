@@ -5,7 +5,7 @@ import * as path from "node:path";
 import test from "node:test";
 import { ChatTriageStore, SNOOZE_WAKE_CHECK_MS, wakeTriageOnAttention } from "./chat-triage.js";
 import type { HostRunSummary } from "./host-run-registry.js";
-import { parseChatTriageRequest } from "../handlers/chat-triage-params.js";
+import { parseChatTriageRequest, setChatTriageFromRenderer } from "../handlers/chat-triage-params.js";
 import {
   MAX_CHAT_TRIAGE_ENTRIES,
   inverseTriagePatch,
@@ -148,6 +148,31 @@ test("the map stays bounded and drops empty entries before set ones", async (t) 
   assert.equal(after["newcomer"]?.pinnedAt, 100);
   assert.equal(after["chat-0"], undefined);
   assert.equal(after["chat-1"]?.doneAt, 1);
+});
+
+test("a full map drops Done marks and passed snoozes before pins and live snoozes", async (t) => {
+  const root = await tmpDir(t);
+  const chats: Record<string, unknown> = {};
+  // Pins and live snoozes are the oldest entries, so recency alone would drop them first.
+  chats["pinned-old"] = { revision: 1, updatedAt: 1, pinnedAt: 1 };
+  chats["snoozed-old"] = { revision: 1, updatedAt: 1, snoozedUntil: 10_000 };
+  chats["woke-old"] = { revision: 1, updatedAt: 2, snoozedUntil: 50 };
+  for (let index = 3; index < MAX_CHAT_TRIAGE_ENTRIES; index += 1) {
+    chats[`done-${index}`] = { revision: 1, updatedAt: 10 + index, doneAt: 10 + index };
+  }
+  await fs.writeFile(path.join(root, "chat-triage.json"), JSON.stringify({ version: 1, chats }));
+  const store = new ChatTriageStore(() => root, { now: () => 100 });
+  await store.set("newcomer", { done: true });
+  await store.set("another", { done: true });
+  const after = (await store.snapshot()).chats;
+  assert.equal(Object.keys(after).length, MAX_CHAT_TRIAGE_ENTRIES);
+  assert.equal(after["pinned-old"]?.pinnedAt, 1);
+  assert.equal(after["snoozed-old"]?.snoozedUntil, 10_000);
+  // The passed snooze and then the oldest Done mark made room.
+  assert.equal(after["woke-old"], undefined);
+  assert.equal(after["done-3"], undefined);
+  assert.equal(after["done-4"]?.doneAt, 14);
+  assert.ok(after["newcomer"] && after["another"]);
 });
 
 test("one timer wakes the next snooze and wake() brings a chat back early", async (t) => {
@@ -464,4 +489,22 @@ test("the desktop IPC parser copies only known fields and refuses bad input", ()
   assert.throws(() => parseChatTriageRequest("chat-a", { done: true, extra: 1 }));
   assert.throws(() => parseChatTriageRequest("chat-a", { done: true }, -1));
   assert.throws(() => parseChatTriageRequest("chat-a", { done: true }, "2"));
+});
+
+test("the desktop IPC refuses chats this host doesn't list and Bot chats, as the Remote route does", async (t) => {
+  const root = await tmpDir(t);
+  const store = new ChatTriageStore(() => root, { now: () => 100 });
+  const dependencies = {
+    chats: async () => [
+      { id: "chat-a" },
+      { id: "assistant-chat", workspaceId: "assistant" },
+      { id: "bot-chat", botId: "bot-1" },
+    ],
+    triage: store,
+  };
+  assert.equal((await setChatTriageFromRenderer(dependencies, "chat-a", { pinned: true })).ok, true);
+  assert.equal((await setChatTriageFromRenderer(dependencies, "assistant-chat", { done: true })).ok, true);
+  await assert.rejects(setChatTriageFromRenderer(dependencies, "gone", { pinned: true }), /no longer exists/u);
+  await assert.rejects(setChatTriageFromRenderer(dependencies, "bot-chat", { done: true }), /no longer exists/u);
+  assert.deepEqual(Object.keys((await store.snapshot()).chats).sort(), ["assistant-chat", "chat-a"]);
 });

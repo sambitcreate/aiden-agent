@@ -11917,6 +11917,28 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-two"), ["beta"])
     }
 
+    @MainActor
+    func testASidebarViewThisBuildDoesNotKnowDropsOnlyThatMacsChoice() throws {
+        let suiteName = "AidenWorkspaceSidebarTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        // As a newer build might save it: one Mac on a view this build lacks.
+        let saved = #"""
+        {"areasByInstance":{"mac-one":"workspaces"},"selectedWorkspaceByInstance":{"mac-one":"alpha"},
+         "compactWorkspacePathByInstance":{},"compactBotPathByInstance":{},
+         "workspaceSidebarOrganizationsByInstance":{"mac-one":"recent","mac-two":"kanban"},
+         "expandedSidebarWorkspaceIDsByInstance":{"mac-one":["alpha"]}}
+        """#
+        defaults.set(Data(saved.utf8), forKey: "aiden.product-navigation.v1")
+
+        let store = AidenProductNavigationStore(defaults: defaults)
+
+        XCTAssertEqual(store.workspaceSidebarOrganization(for: "mac-one"), .recent)
+        XCTAssertEqual(store.workspaceSidebarOrganization(for: "mac-two"), .workspace)
+        XCTAssertEqual(store.expandedSidebarWorkspaceIDs(for: "mac-one"), ["alpha"])
+        XCTAssertEqual(store.selectedWorkspace(for: "mac-one"), "alpha", "The rest of the snapshot survives.")
+    }
+
     func testWorkspaceSelectionSurvivesAdaptiveLayoutChangesAndReconcilesCRUD() {
         let ids = ["workspace-a", "workspace-b", "workspace-c"]
         var selected = AidenWorkspaceNavigation.reconciledSelection(current: nil, workspaceIDs: ids)

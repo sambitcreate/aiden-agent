@@ -836,7 +836,7 @@ actor AidenChatCache {
         }
         let envelope = ChatSummaryEnvelope(instanceId: instanceId, snapshot: CachedSummarySnapshot(snapshot))
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = AidenChatCacheDates.encoding
         guard try encoder.encode(envelope).count <= maxSummaryCacheFileBytes else {
             throw CocoaError(.fileWriteOutOfSpace)
         }
@@ -1212,7 +1212,7 @@ actor AidenChatCache {
             return nil
         }
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = AidenChatCacheDates.decoding
         do {
             return try decoder.decode(type, from: data)
         } catch {
@@ -1288,7 +1288,7 @@ actor AidenChatCache {
         maximumBytes: Int? = nil
     ) throws {
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = AidenChatCacheDates.encoding
         let data = try encoder.encode(value)
         guard data.count <= (maximumBytes ?? maxCacheFileBytes) else {
             throw CocoaError(.fileWriteOutOfSpace)
@@ -1299,5 +1299,26 @@ actor AidenChatCache {
             attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
         )
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+}
+
+/// Cached dates keep their milliseconds, so a cached inbox orders and wakes
+/// rows exactly as the Mac does. Files written before this kept whole seconds
+/// and still decode.
+enum AidenChatCacheDates {
+    private static let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+    private static let whole = Date.ISO8601FormatStyle()
+
+    static let encoding = JSONEncoder.DateEncodingStrategy.custom { date, encoder in
+        var container = encoder.singleValueContainer()
+        try container.encode(date.formatted(fractional))
+    }
+
+    static let decoding = JSONDecoder.DateDecodingStrategy.custom { decoder in
+        let container = try decoder.singleValueContainer()
+        let text = try container.decode(String.self)
+        if let date = try? fractional.parse(text) { return date }
+        if let date = try? whole.parse(text) { return date }
+        throw DecodingError.dataCorruptedError(in: container, debugDescription: "Expected an ISO 8601 date.")
     }
 }

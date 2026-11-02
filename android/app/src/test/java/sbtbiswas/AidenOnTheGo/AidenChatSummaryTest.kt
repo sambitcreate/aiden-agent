@@ -308,6 +308,13 @@ class AidenChatSummaryTest {
         assertTrue(runCatching { client.setChatTriage("chat-1", AidenChatTriageChange.done(false), ifRevision = 6) }
             .exceptionOrNull() is AidenRemoteContractException)
         server.takeRequest()
+        // A write always leaves revision 1 or later, so an answer at 0 is refused.
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"chatId":"chat-1","revision":0,"updatedAt":"2026-09-01T12:08:00Z"}"""
+        ))
+        assertTrue(runCatching { client.setChatTriage("chat-1", AidenChatTriageChange.done(false), ifRevision = 6) }
+            .exceptionOrNull() is AidenRemoteContractException)
+        server.takeRequest()
         server.enqueue(MockResponse().setResponseCode(409).setBody(
             """{"error":{"code":"revision_conflict","message":"The chat changed.","requestId":"triage","retryable":false}}"""
         ))

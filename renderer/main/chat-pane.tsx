@@ -323,19 +323,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useEffect(() => retainChatDraft(chatId), [chatId]);
   useMarkChatRead(draft ? undefined : chatId, draft ? undefined : persistedChat.data?.messages);
   // Opening a chat clears its Unavailable prompts (the run that raised them is
-  // gone); the Inbox rereads its waits, since the dismissal broadcasts nothing.
+  // gone). A dismissal that drops any broadcasts a new activity revision, which
+  // the Inbox's waits query keys on.
   const openedDraft = Boolean(draft);
   React.useEffect(() => {
     if (openedDraft) return;
     void Promise.resolve()
       .then(() => chatsApi.dismissDetachedAttention(chatId))
-      .then(
-        () => qc.invalidateQueries({ queryKey: queryKeys.pendingAttention }),
-        () => {
-          // The row keeps reading Unavailable until the next change event.
-        },
-      );
-  }, [chatId, openedDraft, qc]);
+      .catch(() => {
+        // The row keeps reading Unavailable until the next change event.
+      });
+  }, [chatId, openedDraft]);
   // A Bot's conversation lives at its own route, rendered from the live projection.
   const botChatId = chat.data?.botId;
   React.useEffect(() => {

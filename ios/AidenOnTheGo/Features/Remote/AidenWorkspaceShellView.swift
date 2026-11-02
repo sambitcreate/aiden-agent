@@ -276,7 +276,10 @@ final class AidenHomeModel {
     /// what the write changed with a banner, and a stale revision is sent
     /// once more from the host's revision before it counts as a refusal. A
     /// write that landed on that retry offers no Undo, since `before` may no
-    /// longer be what the host held (the desktop never retries). Done or
+    /// longer be what the host held (the desktop never retries). Undo itself
+    /// (`offersUndo: false`) is never retried: its `ifRevision` is the one its
+    /// own write left, so a conflict means another device changed the chat
+    /// since, and Undo leaves it as it is, as on the desktop. Done or
     /// Snooze on unseen failed output also reads it, as on the desktop, so a
     /// Mac without read markers is sent neither; the read marker is sent even
     /// when the answer arrives after a switch to another Mac.
@@ -308,6 +311,7 @@ final class AidenHomeModel {
                 change,
                 chatID: chatID,
                 ifRevision: before.inbox.triageRevision ?? 0,
+                retriesConflict: offersUndo,
                 client: client,
                 context: context,
                 coordinator: coordinator
@@ -316,9 +320,11 @@ final class AidenHomeModel {
             await rollBack(chatID: chatID, optimistic: optimistic, before: before, viewed: viewed, context: context, coordinator: coordinator)
             guard coordinator.isCurrent(context) else { return false }
             let conflict = (error as? AidenRemoteClientError)?.isRevisionConflict == true
-            inboxNotice = AidenInboxNotice(message: conflict
+            inboxNotice = AidenInboxNotice(message: !conflict
+                ? String(localized: "Couldn’t update that chat. It’s back where it was.")
+                : offersUndo
                 ? String(localized: "That chat changed on another device. The Inbox is up to date now.")
-                : String(localized: "Couldn’t update that chat. It’s back where it was."))
+                : String(localized: "That chat changed since, so Undo left it as it is."))
             if conflict { await load(coordinator: coordinator) }
             return false
         }
@@ -371,11 +377,13 @@ final class AidenHomeModel {
     }
 
     /// One triage write, sent once more from the host's revision when another
-    /// device changed the chat's triage first, as the desktop's rename does.
+    /// device changed the chat's triage first (unless `retriesConflict` is
+    /// false, as for Undo), as the desktop's rename does.
     private func sendTriage(
         _ change: AidenChatTriageChange,
         chatID: String,
         ifRevision: Int,
+        retriesConflict: Bool,
         client: AidenRemoteClient,
         context: AidenRemoteRequestContext,
         coordinator: AidenRemoteCoordinator
@@ -383,7 +391,7 @@ final class AidenHomeModel {
         do {
             return (try await client.setChatTriage(chatId: chatID, change: change, ifRevision: ifRevision), false)
         } catch let error as AidenRemoteClientError {
-            guard let current = error.conflictingRevision, coordinator.isCurrent(context) else { throw error }
+            guard retriesConflict, let current = error.conflictingRevision, coordinator.isCurrent(context) else { throw error }
             return (try await client.setChatTriage(chatId: chatID, change: change, ifRevision: current, idempotencyKey: UUID()), true)
         }
     }
@@ -2002,7 +2010,10 @@ struct AidenWorkspaceShellView: View {
                 .padding(.top, 8)
                 .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
                 .task(id: notice.id) {
-                    try? await Task.sleep(for: .seconds(5))
+                    // The banner can't take focus, so VoiceOver hears it here.
+                    AccessibilityNotification.Announcement(notice.message).post()
+                    guard let delay = notice.autoDismissDelay(voiceOverRunning: UIAccessibility.isVoiceOverRunning) else { return }
+                    try? await Task.sleep(for: delay)
                     if homeModel.inboxNotice?.id == notice.id { homeModel.inboxNotice = nil }
                 }
             }

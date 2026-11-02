@@ -971,7 +971,7 @@ class AidenRemoteClient(
         bodyJson = chatTriageRequestBody(change, ifRevision).toString()
     ) { bytes ->
         val result = json.decodeFromString<ChatTriageResponse>(String(bytes, Charsets.UTF_8))
-        if (result.chatId != id || result.revision < 0) {
+        if (result.chatId != id || result.revision < 1) {
             throw AidenRemoteContractException.InvalidJson("Invalid chat triage response")
         }
         AidenChatTriageResult(

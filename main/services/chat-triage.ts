@@ -50,7 +50,7 @@ function normalizeEntry(value: unknown): ChatTriageEntry | null {
   return entry;
 }
 
-function normalizeFile(value: unknown): ChatTriageFile {
+function normalizeFile(value: unknown, now: number): ChatTriageFile {
   const empty: ChatTriageFile = { version: 1, chats: {} };
   if (typeof value !== "object" || value === null || Array.isArray(value)) return empty;
   const record = value as Record<string, unknown>;
@@ -63,7 +63,7 @@ function normalizeFile(value: unknown): ChatTriageFile {
     const normalized = normalizeEntry(entry);
     if (normalized) chats[chatId] = normalized;
   }
-  return { version: 1, chats: pruned(chats) };
+  return { version: 1, chats: pruned(chats, now) };
 }
 
 function isEmpty(entry: ChatTriageEntry): boolean {
@@ -71,18 +71,27 @@ function isEmpty(entry: ChatTriageEntry): boolean {
 }
 
 /**
- * Keep the map bounded. Entries with nothing set go first (they only hold a
- * revision), then the least recently changed.
+ * How readily an entry is dropped when the map is full: 0 holds something the
+ * person still sees (a pin or a snooze yet to wake), 1 only a Done mark or a
+ * snooze that has passed, 2 nothing at all (just a revision).
  */
-function pruned(chats: Record<string, ChatTriageEntry>, keep?: string): Record<string, ChatTriageEntry> {
+function pruneTier(entry: ChatTriageEntry, now: number): number {
+  if (isEmpty(entry)) return 2;
+  if (entry.pinnedAt !== undefined || (entry.snoozedUntil !== undefined && entry.snoozedUntil > now)) return 0;
+  return 1;
+}
+
+/**
+ * Keep the map bounded. Empty entries go first, then Done marks and passed
+ * snoozes, then pins and live snoozes; within each, the least recently changed.
+ */
+function pruned(chats: Record<string, ChatTriageEntry>, now: number, keep?: string): Record<string, ChatTriageEntry> {
   const entries = Object.entries(chats);
   if (entries.length <= MAX_CHAT_TRIAGE_ENTRIES) return chats;
   entries.sort(([idA, a], [idB, b]) => {
     if (idA === keep) return -1;
     if (idB === keep) return 1;
-    const emptyA = isEmpty(a) ? 1 : 0;
-    const emptyB = isEmpty(b) ? 1 : 0;
-    return emptyA - emptyB || b.updatedAt - a.updatedAt;
+    return pruneTier(a, now) - pruneTier(b, now) || b.updatedAt - a.updatedAt;
   });
   return Object.fromEntries(entries.slice(0, MAX_CHAT_TRIAGE_ENTRIES));
 }
@@ -114,7 +123,7 @@ export class ChatTriageStore {
       "chat-triage.json",
       { version: 1, chats: {} },
       root,
-      { normalize: normalizeFile, fileMode: 0o600, maxBytes: 2 * 1_024 * 1_024 },
+      { normalize: (value) => normalizeFile(value, this.now()), fileMode: 0o600, maxBytes: 2 * 1_024 * 1_024 },
     );
   }
 
@@ -173,7 +182,7 @@ export class ChatTriageStore {
       else if (patch.done === false) delete next.doneAt;
       if (typeof patch.snoozeUntil === "number" && patch.snoozeUntil > now) next.snoozedUntil = patch.snoozeUntil;
       else if (patch.snoozeUntil !== undefined) delete next.snoozedUntil;
-      draft.chats = pruned({ ...draft.chats, [chatId]: next }, chatId);
+      draft.chats = pruned({ ...draft.chats, [chatId]: next }, now, chatId);
       result = { ok: true, entry: copyEntry(next) };
       return true;
     });

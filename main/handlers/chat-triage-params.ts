@@ -1,4 +1,5 @@
-import { isChatTriagePatch, type ChatTriagePatch } from "../../renderer/shared/chat-triage.js";
+import { isChatTriagePatch, type ChatTriagePatch, type ChatTriageResult } from "../../renderer/shared/chat-triage.js";
+import { chatSurface, type ChatSurfaceInput } from "../../renderer/shared/chat-visibility.js";
 
 export interface ChatTriageRequest {
   chatId: string;
@@ -27,4 +28,25 @@ export function parseChatTriageRequest(id: unknown, patch: unknown, ifRevision?:
   };
   if (ifRevision !== undefined) request.ifRevision = ifRevision as number;
   return request;
+}
+
+/**
+ * `chats:setTriage`: refuse a chat this host doesn't have, a Bot's chat and a
+ * feature-owned chat, as the Remote route does, before the store keeps an
+ * entry nothing lists.
+ */
+export async function setChatTriageFromRenderer(
+  dependencies: {
+    chats(): Promise<readonly (ChatSurfaceInput & { id: string })[]>;
+    triage: { set(chatId: string, patch: ChatTriagePatch, options: { ifRevision?: number }): Promise<ChatTriageResult> };
+  },
+  id: unknown,
+  patch: unknown,
+  ifRevision?: unknown,
+): Promise<ChatTriageResult> {
+  const request = parseChatTriageRequest(id, patch, ifRevision);
+  const chat = (await dependencies.chats()).find((entry) => entry.id === request.chatId);
+  const surface = chat ? chatSurface(chat) : undefined;
+  if (surface !== "regular" && surface !== "assistant") throw new Error("This chat no longer exists.");
+  return dependencies.triage.set(request.chatId, request.patch, { ifRevision: request.ifRevision });
 }

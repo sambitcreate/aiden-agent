@@ -211,6 +211,7 @@ object AidenInboxNoticeText {
     sealed interface Confirmation {
         data object Done : Confirmation
         data class SnoozedToday(val time: String) : Confirmation
+        data class SnoozedTomorrow(val time: String) : Confirmation
         data class SnoozedOn(val day: String, val time: String) : Confirmation
         data object Updated : Confirmation
     }
@@ -225,10 +226,12 @@ object AidenInboxNoticeText {
         is AidenInboxNotice.Changed -> when (val confirmation = confirmation(notice.change, now, zone, locale)) {
             Confirmation.Done -> res.getString(R.string.inbox_notice_done)
             is Confirmation.SnoozedToday -> res.getString(R.string.inbox_notice_snoozed_today, confirmation.time)
+            is Confirmation.SnoozedTomorrow -> res.getString(R.string.inbox_notice_snoozed_tomorrow, confirmation.time)
             is Confirmation.SnoozedOn -> res.getString(R.string.inbox_notice_snoozed_day, confirmation.day, confirmation.time)
             Confirmation.Updated -> res.getString(R.string.inbox_notice_updated)
         }
         is AidenInboxNotice.Conflict -> res.getString(R.string.inbox_notice_conflict)
+        is AidenInboxNotice.UndoConflict -> res.getString(R.string.inbox_notice_undo_conflict)
         is AidenInboxNotice.TriageFailed -> res.getString(R.string.inbox_notice_triage_failed)
         is AidenInboxNotice.MarkReadFailed -> res.getString(R.string.inbox_notice_mark_read_failed)
     }
@@ -239,8 +242,12 @@ object AidenInboxNoticeText {
         if (snooze is AidenChatTriageChange.Snooze.Until) {
             val date = snooze.at.atZone(zone)
             val time = AidenInboxTimeText.time(snooze.at, zone, locale)
-            return if (date.toLocalDate() == LocalDate.ofInstant(now, zone)) Confirmation.SnoozedToday(time)
-            else Confirmation.SnoozedOn(date.dayOfWeek.getDisplayName(TextStyle.FULL, locale), time)
+            val today = LocalDate.ofInstant(now, zone)
+            return when (date.toLocalDate()) {
+                today -> Confirmation.SnoozedToday(time)
+                today.plusDays(1) -> Confirmation.SnoozedTomorrow(time)
+                else -> Confirmation.SnoozedOn(date.dayOfWeek.getDisplayName(TextStyle.FULL, locale), time)
+            }
         }
         return Confirmation.Updated
     }

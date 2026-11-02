@@ -47,6 +47,7 @@ function harness(options: {
   const registry = new HostRunRegistry({ now: () => clock.now });
   const log = new DetachedPromptLog();
   const changes = { count: 0 };
+  const dismissals = { count: 0 };
   const recorder = createPendingAttentionRecorder({
     runs: registry,
     log,
@@ -65,6 +66,9 @@ function harness(options: {
     detached: log,
     knownChatIds: async (ids) => new Set(ids.filter((id) => options.chats.includes(id))),
     interruptedWaits: options.interrupted ?? (async () => new Map()),
+    onChange: () => {
+      dismissals.count += 1;
+    },
   });
   const invoke = async (channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
@@ -72,7 +76,7 @@ function harness(options: {
     return handler({}, ...args);
   };
   const pending = async (ids: unknown) => (await invoke("chats:pendingAttention", ids)) as ChatPendingAttention[];
-  return { clock, registry, recorder, invoke, pending, changes };
+  return { clock, registry, recorder, invoke, pending, changes, dismissals };
 }
 
 test("a live approval reports its summary, when it was raised, and when its run started", async () => {
@@ -143,7 +147,7 @@ test("a run with nothing to answer reports when it started; a finished one repor
 });
 
 test("prompts a window left behind stay as Unavailable until the chat runs again", async () => {
-  const { clock, registry, recorder, invoke, pending } = harness({ chats: ["chat-a"] });
+  const { clock, registry, recorder, invoke, pending, dismissals } = harness({ chats: ["chat-a"] });
   registry.begin({ runId: "run-a", chatId: "chat-a", origin: "renderer" });
   clock.now = T0 + 4_000;
   registry.publish("run-a", "chat:questionnaire", questionnaire("prompt-1"));
@@ -181,8 +185,13 @@ test("prompts a window left behind stay as Unavailable until the chat runs again
   registry.resolveAttention("approval-2");
   registry.publish("run-b", "chat:done", {});
   assert.equal((await pending(["chat-a"]))[0]?.kind, "detached");
+  // Nothing else reports a dismissal, so it announces the change once; a
+  // dismissal with nothing left to drop announces nothing.
   await invoke("chats:dismissDetachedAttention", "chat-a");
   assert.deepEqual(await pending(["chat-a"]), []);
+  assert.equal(dismissals.count, 1);
+  await invoke("chats:dismissDetachedAttention", "chat-a");
+  assert.equal(dismissals.count, 1);
 });
 
 test("a prompt the run raises after its window left shows as Unavailable from when it was refused", async () => {

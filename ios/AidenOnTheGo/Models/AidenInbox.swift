@@ -586,13 +586,30 @@ extension AidenChatTriageChange {
         return false
     }
 
-    var confirmation: String {
+    var confirmation: String { confirmation(now: Date()) }
+
+    /// The banner's line: "today" or "tomorrow" for a snooze that wakes then,
+    /// else the weekday, as the desktop's toast and Android say it.
+    func confirmation(now: Date, calendar: Calendar = .current) -> String {
         if done == true { return String(localized: "Marked done") }
         if case .until(let date) = snooze {
-            let time = date.formatted(date: .omitted, time: .shortened)
-            let day = Calendar.current.isDateInToday(date)
-                ? String(localized: "today")
-                : date.formatted(.dateTime.weekday(.wide))
+            var style = Date.FormatStyle(date: .omitted, time: .shortened)
+            style.timeZone = calendar.timeZone
+            let time = date.formatted(style)
+            let days = calendar.dateComponents(
+                [.day],
+                from: calendar.startOfDay(for: now),
+                to: calendar.startOfDay(for: date)
+            ).day ?? 0
+            let day: String
+            switch days {
+            case ...0: day = String(localized: "today")
+            case 1: day = String(localized: "tomorrow")
+            default:
+                var weekday = Date.FormatStyle().weekday(.wide)
+                weekday.timeZone = calendar.timeZone
+                day = date.formatted(weekday)
+            }
             return String(localized: "Snoozed until \(day) at \(time)")
         }
         return String(localized: "Updated")
@@ -605,4 +622,13 @@ struct AidenInboxNotice: Identifiable, Equatable {
     let message: String
     var undo: AidenChatTriageChange?
     var chatID: String?
+
+    /// How long the banner stays before it goes by itself, as on Android: an
+    /// Undo lasts its 5-second window, any other notice (a refusal, a
+    /// conflict) 10 seconds. With VoiceOver on it stays until dismissed, so it
+    /// can be reached after it is announced.
+    func autoDismissDelay(voiceOverRunning: Bool) -> Duration? {
+        if voiceOverRunning { return nil }
+        return undo == nil ? .seconds(10) : .seconds(5)
+    }
 }

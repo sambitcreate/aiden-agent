@@ -120,7 +120,7 @@ export function createDaemonChats(agentDir: string) {
     cancelRun(streamId: string) {
       const pair = [...active.entries()].find(([, entry]) => entry.streamId === streamId);
       if (!pair) return false;
-      void llmClient.cancelChat(pair[0], "user_stop"); return true;
+      void llmClient.cancelChat(pair[0], "user_stop").catch(() => {}); return true;
     },
     async start(streamId: string, params: ChatStartParams, owner: ChatGenerationOwner, options: { usageSource: UsageRequestSource; turnId?: string; botAudienceId?: string; onTurnAccepted?(): void }) {
       if (closed || owner.isDestroyed() || !admission.owns(params.chatId, options.turnId ?? streamId, owner.documentId)) return false;

@@ -39,6 +39,12 @@ sealed interface AidenInboxNotice {
     /** The row's triage changed elsewhere; the list was reloaded. */
     data class Conflict(override val id: UUID = UUID.randomUUID()) : AidenInboxNotice
 
+    /**
+     * An Undo met a newer write from another device, so it was not sent
+     * again: the row was left as that write made it and the list reloaded.
+     */
+    data class UndoConflict(override val id: UUID = UUID.randomUUID()) : AidenInboxNotice
+
     /** Mark read failed; the unread dot is back. */
     data class MarkReadFailed(override val id: UUID = UUID.randomUUID()) : AidenInboxNotice
 
@@ -70,8 +76,13 @@ class AidenInboxTriage(
     private val viewStamp: (String) -> Long = { 0L },
     private val now: () -> Instant = Instant::now
 ) {
-    /** Mark read from a swipe. The dot clears at once and comes back if the host refuses. */
-    suspend fun markRead(chatId: String): AidenInboxNotice? {
+    /**
+     * Mark read from a swipe. The dot clears at once and comes back if the
+     * host refuses. A host without read markers ([readsState] false) is not
+     * written to and the dot stays.
+     */
+    suspend fun markRead(chatId: String, readsState: Boolean): AidenInboxNotice? {
+        if (!readsState) return null
         val before = row(chatId)?.takeIf { it.unread } ?: return null
         val viewed = viewStamp(chatId)
         val optimistic = before.copy(unread = false).withoutHostPlacement()
@@ -91,10 +102,13 @@ class AidenInboxTriage(
      * Done, Snooze or their undo. Done or Snooze on unseen failed output
      * (not the open chat) also reads it, as on the desktop, so when the host
      * takes no read markers ([readsFailures] false) nothing is written.
-     * A stale revision is sent once more from the host's revision with a new
-     * idempotency key before it counts as a refusal; a write that landed that
-     * way offers no Undo, since [before] may no longer be what the host held
-     * (the desktop never retries). Returns the snackbar.
+     * A swipe's stale revision is sent once more from the host's revision
+     * with a new idempotency key before it counts as a refusal; a write that
+     * landed that way offers no Undo, since [before] may no longer be what
+     * the host held (the desktop never retries). An Undo ([offersUndo]
+     * false) is never retried: its revision is the one its own write left,
+     * so a conflict means another device changed the chat since, and the
+     * Undo leaves it as that device made it. Returns the snackbar.
      */
     suspend fun setTriage(
         chatId: String,
@@ -111,7 +125,7 @@ class AidenInboxTriage(
         val optimistic = AidenInbox.applyingOptimisticTriage(change, before, at, alsoMarkRead)
         publish(optimistic)
         val (result, retried) = try {
-            sendTriage(chatId, change, before.triageRevision ?: 0)
+            sendTriage(chatId, change, before.triageRevision ?: 0, retriesConflict = offersUndo)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
@@ -119,7 +133,7 @@ class AidenInboxTriage(
             if (!isCurrent()) return null
             if (AidenChatForkErrors.isRevisionConflict(error)) {
                 reload()
-                return AidenInboxNotice.Conflict()
+                return if (offersUndo) AidenInboxNotice.Conflict() else AidenInboxNotice.UndoConflict()
             }
             return AidenInboxNotice.TriageFailed()
         }
@@ -141,13 +155,13 @@ class AidenInboxTriage(
 
     /** The host's answer, and whether it came from the one retry. */
     private suspend fun sendTriage(
-        chatId: String, change: AidenChatTriageChange, ifRevision: Int
+        chatId: String, change: AidenChatTriageChange, ifRevision: Int, retriesConflict: Boolean
     ): Pair<AidenChatTriageResult, Boolean> =
         try {
             writeTriage(chatId, change, ifRevision, UUID.randomUUID()) to false
         } catch (error: AidenRemoteClientException.Server) {
             val current = error.body.details?.currentRevision?.toIntOrNull()?.takeIf { it >= 0 }
-            if (!AidenChatForkErrors.isRevisionConflict(error) || current == null || !isCurrent()) throw error
+            if (!retriesConflict || !AidenChatForkErrors.isRevisionConflict(error) || current == null || !isCurrent()) throw error
             writeTriage(chatId, change, current, UUID.randomUUID()) to true
         }
 
