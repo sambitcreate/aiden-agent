@@ -1450,6 +1450,7 @@
       ],
       "post": {
         "operationId": "uploadChatAttachment",
+      "description": "Stages one image or text file for this device's next turn in the chat. Since contract revision 50, a device holding attachments:raw may instead send one picture as its raw image/png or image/jpeg bytes, with an exact Content-Length (at most 8 MiB) and the file name, percent-encoded UTF-8, in Aiden-Attachment-Name. Both return the same single-use reference; without attachments:raw a raw upload is 403 capability_denied.",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "chat:write",
         "parameters": [
@@ -1463,6 +1464,16 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AttachmentUpload"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "$ref": "#/components/schemas/RawAttachmentUpload"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "$ref": "#/components/schemas/RawAttachmentUpload"
               }
             }
           }
@@ -2185,7 +2196,7 @@
       ],
       "post": {
         "operationId": "uploadBotAttachment",
-        "description": "Contract revision 33, only on hosts announcing bot-attachments-v1. Stages one image or text file for this device's next message to the Bot. The reference is single-use, expires after ten minutes and is spent only by POST /bots/{botId}/messages for the same Bot and device.",
+        "description": "Contract revision 33, only on hosts announcing bot-attachments-v1. Stages one image or text file for this device's next message to the Bot. Since contract revision 50, a device holding attachments:raw may send one picture as its raw bytes instead, as on POST /chats/{chatId}/attachments. The reference is single-use, expires after ten minutes and is spent only by POST /bots/{botId}/messages for the same Bot and device.",
         "x-aiden-capability": "bot:write",
         "x-aiden-capabilities": [
           "bot:read",
@@ -2198,6 +2209,16 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AttachmentUpload"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "$ref": "#/components/schemas/RawAttachmentUpload"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "$ref": "#/components/schemas/RawAttachmentUpload"
               }
             }
           }
@@ -7767,7 +7788,8 @@
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
-                "chat:jobs"
+                "chat:jobs",
+                "attachments:raw"
               ]
             },
             "uniqueItems": true
@@ -7811,7 +7833,8 @@
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
-                "chat:jobs"
+                "chat:jobs",
+                "attachments:raw"
               ]
             },
             "uniqueItems": true
@@ -7958,7 +7981,8 @@
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
-                "chat:jobs"
+                "chat:jobs",
+                "attachments:raw"
               ]
             },
             "uniqueItems": true
@@ -8011,7 +8035,8 @@
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
-                "chat:jobs"
+                "chat:jobs",
+                "attachments:raw"
               ]
             },
             "uniqueItems": true
@@ -9067,6 +9092,12 @@
           }
         },
         "additionalProperties": false
+      },
+      "RawAttachmentUpload": {
+        "description": "Contract revision 50 (attachments:raw): one picture's raw bytes, at most 8 MiB, with an exact Content-Length and the file name, percent-encoded UTF-8, in the Aiden-Attachment-Name header. The host checks the bytes, type and dimensions exactly as for the JSON upload.",
+        "type": "string",
+        "format": "binary",
+        "maxLength": 8388608
       },
       "AttachmentUpload": {
         "oneOf": [
