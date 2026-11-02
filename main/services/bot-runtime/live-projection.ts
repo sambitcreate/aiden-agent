@@ -1046,6 +1046,33 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   /** Bots whose next run is a Resume. */
   const resumingBots = new Set<string>();
   const feeds = new Map<string, Feed>();
+  // A closed Bot's preview and last reply, kept with the newest entry they were
+  // read through. Every transcript change (a turn, a reset, a compaction, an
+  // edit) appends an entry, so one newest-entry read tells a list refresh (the
+  // Remote host feed asks on every chat or Bot change) whether the transcript
+  // needs reading again.
+  type BotTranscriptSummary = Pick<BotLiveSummary, "preview" | "updatedAt" | "lastReplyAt">;
+  const transcriptSummaries = new Map<string, { key: string } & BotTranscriptSummary>();
+
+  async function transcriptSummary(botId: string, conversation: Conversation): Promise<BotTranscriptSummary> {
+    const newest = await conversation.entries({ order: "descending" }, 1, undefined, BACKGROUND_CONTEXT);
+    const key = `${conversation.id}:${newest.items[0]?.id ?? ""}`;
+    const cached = transcriptSummaries.get(botId);
+    if (cached?.key === key) {
+      const { key: _key, ...summary } = cached;
+      return summary;
+    }
+    const view = await conversation.context(BACKGROUND_CONTEXT);
+    const entries = projectBotTranscript(view.entries);
+    const preview = botTranscriptPreview(entries);
+    const summary: BotTranscriptSummary = {
+      preview: preview?.text ?? null,
+      updatedAt: preview?.at ?? null,
+      lastReplyAt: botLastReplyAt(entries),
+    };
+    transcriptSummaries.set(botId, { key, ...summary });
+    return summary;
+  }
   const opening = new Map<string, Promise<Feed>>();
   const subscribers = new Map<string, Set<Subscriber>>();
   /** Where each Bot's last feed stopped, so `seq` keeps rising across epochs. */
@@ -1513,16 +1540,13 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       if (state.kind === "unavailable") {
         return { botId, preview: null, updatedAt: null, state, needsYou: false, lastReplyAt: null };
       }
-      const view = await (await deps.conversation(botId)).context(BACKGROUND_CONTEXT);
-      const entries = projectBotTranscript(view.entries);
-      const preview = botTranscriptPreview(entries);
+      const conversation = await deps.conversation(botId);
+      const transcript = await transcriptSummary(botId, conversation);
       return {
         botId,
-        preview: preview?.text ?? null,
-        updatedAt: preview?.at ?? null,
+        ...transcript,
         state,
         needsYou: await needsYouNow(botId),
-        lastReplyAt: botLastReplyAt(entries),
       };
     },
 

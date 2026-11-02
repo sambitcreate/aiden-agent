@@ -2066,6 +2066,51 @@ test("a message the person sent after the last reply does not move the last repl
   }
 });
 
+test("list summaries of a closed Bot read its transcript again only once it has changed", async () => {
+  const live = await start(createFauxModels([fauxAssistantMessage("First answer."), fauxAssistantMessage("Second answer.")]));
+  let contextReads = 0;
+  const projection = createBotLiveProjection({
+    conversation: async (botId) => {
+      const conversation = await live.service.conversation(botId);
+      return new Proxy(conversation, {
+        get(target, key, receiver) {
+          if (key === "context") {
+            return (...args: Parameters<typeof target.context>) => {
+              contextReads += 1;
+              return target.context(...args);
+            };
+          }
+          const value = Reflect.get(target, key, receiver);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    },
+    state: (botId) => live.service.state(botId),
+    quietInputs: (botId, ids) => live.service.quietInputs(botId, ids),
+  });
+  try {
+    const first = await live.service.send("bot:a", { text: "One", requestId: "desk-1" });
+    await live.service.awaitReply("bot:a", first.submissionId, new AbortController().signal);
+    const answered = await projection.summary("bot:a");
+    assert.equal(answered.preview, "First answer.");
+    const reads = contextReads;
+    for (let refresh = 0; refresh < 5; refresh += 1) {
+      assert.deepEqual(await projection.summary("bot:a"), answered, "an unrelated refresh answers the same");
+    }
+    assert.equal(contextReads, reads, "an unchanged transcript is not read again");
+
+    const second = await live.service.send("bot:a", { text: "Two", requestId: "desk-2" });
+    await live.service.awaitReply("bot:a", second.submissionId, new AbortController().signal);
+    const next = await projection.summary("bot:a");
+    assert.equal(next.preview, "Second answer.", "a new turn is read");
+    assert.ok((next.lastReplyAt ?? 0) >= (answered.lastReplyAt ?? 0));
+    assert.equal(contextReads, reads + 1);
+  } finally {
+    await projection.close();
+    await live.close();
+  }
+});
+
 test("a list summary says when the last reply arrived and whether the Bot is waiting on the person", async () => {
   let waiting = false;
   const live = await start(createFauxModels([fauxAssistantMessage("Here is your meal plan.")]), {
