@@ -1086,13 +1086,17 @@ private final class AidenBotRequestRace<T: Sendable>: @unchecked Sendable {
     }
 
     func cancel() {
-        let tasks = lock.withLock { () -> (Task<Void, Never>?, Task<Void, Never>?) in
+        let (waiting, work, timer) = lock.withLock { () -> (CheckedContinuation<T, Error>?, Task<Void, Never>?, Task<Void, Never>?) in
             cancelled = true
-            return (work, timer)
+            let waiting = continuation
+            continuation = nil
+            return (waiting, self.work, self.timer)
         }
-        tasks.0?.cancel()
-        tasks.1?.cancel()
-        finish(.failure(CancellationError()))
+        // Claim the result before cancelling work, which may return a receipt
+        // as it handles cancellation.
+        waiting?.resume(throwing: CancellationError())
+        work?.cancel()
+        timer?.cancel()
     }
 
     private func finish(_ result: Result<T, Error>) {

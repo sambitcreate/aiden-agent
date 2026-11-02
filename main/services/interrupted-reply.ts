@@ -98,6 +98,24 @@ export interface InterruptedWaitPersistence {
   update<R>(mutation: (draft: InterruptedWaitDatabase) => R): Promise<R>;
 }
 
+/** Fresh saved waits, read once: which chats hold any, and each run's waits. */
+export interface InterruptedWaitSnapshot {
+  chatIds: ReadonlySet<string>;
+  forRun(chatId: string, runStartedAt: number): InterruptedWaitV1[];
+}
+
+/** The chat's waits asked during the run that began at `runStartedAt`, questions first. */
+function waitsForRun(
+  waits: readonly InterruptedWaitRecord[],
+  chatId: string,
+  runStartedAt: number,
+): InterruptedWaitV1[] {
+  return waits
+    .filter((item) => item.chatId === chatId && item.askedAt >= runStartedAt)
+    .sort((left, right) => (left.kind === right.kind ? left.askedAt - right.askedAt : left.kind === "question" ? -1 : 1))
+    .map(({ chatId: _chatId, ...view }) => view);
+}
+
 export function createInterruptedWaitStore(
   persistence: InterruptedWaitPersistence,
   now: () => number = Date.now,
@@ -115,10 +133,12 @@ export function createInterruptedWaitStore(
         draft.waits = [...kept.filter((item) => !dropped.has(item)), record].slice(-MAX_INTERRUPTED_WAITS);
       });
     },
-    /** The card was answered, dismissed or withdrawn: nothing to offer again. */
-    forget(waitId: string, chatId?: string): Promise<void> {
+    /** The card was answered, dismissed or withdrawn: nothing to offer again. Resolves true when a saved wait was removed. */
+    forget(waitId: string, chatId?: string): Promise<boolean> {
       return persistence.update((draft) => {
+        const before = draft.waits.length;
         draft.waits = draft.waits.filter((item) => item.waitId !== waitId || (chatId !== undefined && item.chatId !== chatId));
+        return draft.waits.length < before;
       });
     },
     /** The chat was deleted. */
@@ -126,6 +146,14 @@ export function createInterruptedWaitStore(
       return persistence.update((draft) => {
         draft.waits = draft.waits.filter((item) => item.chatId !== chatId);
       });
+    },
+    /** One read of the saved waits, for asking about many chats at once. */
+    async snapshot(): Promise<InterruptedWaitSnapshot> {
+      const waits = (await persistence.load()).waits.filter(fresh);
+      return {
+        chatIds: new Set(waits.map((item) => item.chatId)),
+        forRun: (chatId, runStartedAt) => waitsForRun(waits, chatId, runStartedAt),
+      };
     },
     /** Drop waits too old to offer, so their text does not stay on disk. */
     prune(): Promise<void> {
@@ -135,10 +163,7 @@ export function createInterruptedWaitStore(
     },
     /** The chat's saved waits asked during the run that was cut short, questions first. */
     async forRun(chatId: string, runStartedAt: number): Promise<InterruptedWaitV1[]> {
-      return (await persistence.load()).waits
-        .filter((item) => item.chatId === chatId && item.askedAt >= runStartedAt && fresh(item))
-        .sort((left, right) => (left.kind === right.kind ? left.askedAt - right.askedAt : left.kind === "question" ? -1 : 1))
-        .map(({ chatId: _chatId, ...view }) => view);
+      return waitsForRun((await persistence.load()).waits.filter(fresh), chatId, runStartedAt);
     },
   };
 }

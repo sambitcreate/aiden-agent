@@ -267,7 +267,7 @@ fun AidenChatDetailScreen(
             backgroundJobs.refresh(chatId, backgroundJobsTransport)
         }
     }
-    // Revision 52: New worktree beside the composer until the chat's first message.
+    // Revision 53: New worktree beside the composer until the chat's first message.
     val startsInNewWorktree by viewModel.startsInNewWorktree.collectAsStateWithLifecycle()
     val isSettingUpWorktree by viewModel.isSettingUpWorktree.collectAsStateWithLifecycle()
     val workspaceHasCommits by viewModel.workspaceHasCommits.collectAsStateWithLifecycle()

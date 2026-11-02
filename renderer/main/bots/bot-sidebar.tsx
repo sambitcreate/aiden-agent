@@ -19,7 +19,7 @@ import {
   SplitView,
   Text,
 } from "../../components/ui";
-import { botChatPath, botRouteBotId, hostBotChatRouteKey, lastNonBotRoute } from "../../lib/bot-routes";
+import { botChatPath, botChatRouteBotId, botRouteBotId, hostBotChatRouteKey, lastNonBotRoute } from "../../lib/bot-routes";
 import { isBotUnread } from "../../lib/bot-sidebar-preferences";
 import { useProfile } from "../../lib/queries";
 import { cn } from "../../lib/ui-utils";
@@ -347,7 +347,13 @@ export function BotSidebar() {
   const visible = rows.filter((row) => row !== pinnedRow && matchesBotSearch(row, query));
   visibleIdsRef.current = [...(pinnedRow ? [pinnedRow.bot.id] : []), ...visible.map((row) => row.bot.id)];
   const remoteShown = remoteBotGroupsMatching(remote.groups, query);
-  const openChat = React.useCallback((bot: BotDefinition) => void navigate(botChatPath(bot.id)), [navigate]);
+  // Opening the Bot whose chat is already open is a no-op, as in the Bot menu.
+  const openChat = React.useCallback(
+    (bot: BotDefinition) => {
+      if (botChatRouteBotId(router.state.location.pathname) !== bot.id) void navigate(botChatPath(bot.id));
+    },
+    [navigate, router],
+  );
   // ⌘1–9 and ⇧⌘[ / ⇧⌘] follow the rows on screen, as in the chat sidebar;
   // Bots on a paired Mac have no number, like chats there.
   const orderedBots = [...(pinnedRow ? [pinnedRow] : []), ...visible].map((row) => row.bot);

@@ -24,6 +24,7 @@
 // - Replay: a tool's own declaration (`declarePiRuntimeReplay`) unless the
 //   candidate overrides it; MCP tools and subagents are always `unsafe`.
 
+import type { BrowserApprovalTarget } from "../browser/approval.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   BOT_HANDOFF_ACTION_MAX_CHARS,
@@ -94,6 +95,7 @@ export interface BotLiveApproval {
    * (the Bot browser's page): the card's Open. An https page only.
    */
   open?: { url: string };
+  browserTarget?: Readonly<BrowserApprovalTarget>;
   /**
    * What a rule-made card says the call does when there is no baseline
    * approval to quote (the Bot computer's stated intent).
@@ -310,6 +312,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
             summary: callSummary,
             action: ruleActionText(rule),
             why: ruleWhyText(label, botName, callSummary),
+            ...(live?.browserTarget && { browserTarget: live.browserTarget }),
             ...(open === undefined ? {} : { open }),
           },
         };

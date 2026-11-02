@@ -61,7 +61,8 @@ export interface RendererChatMutationDeps {
   botApplicationService: { deleteChat(input: { botId: string; chatId: string }): Promise<unknown> };
   hostPlatformCapabilities(): { bots: boolean };
   closeDeviceSessionsForChat(chatId: string): void;
-  chatReadMarkers: { remove(chatId: string): Promise<unknown> };
+  /** Sending in a snoozed chat brings it back: `wake` clears only a snooze. */
+  chatTriage?: { wake(chatId: string): Promise<unknown> };
   rendererDocumentOwner(event: IpcMainInvokeEvent, invalidRequest: () => Error): RendererDocumentOwner;
   llmClient: {
     requiresAppendReconciliation(ownerId: string): boolean;
@@ -83,7 +84,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
     botApplicationService,
     hostPlatformCapabilities,
     closeDeviceSessionsForChat,
-    chatReadMarkers,
+    chatTriage,
     rendererDocumentOwner,
     llmClient,
     unresolvedGuiArtifactMessage,
@@ -120,8 +121,9 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
       const result = chat?.botId && hostPlatformCapabilities().bots
         ? await botApplicationService.deleteChat({ botId: chat.botId, chatId })
         : await chatApplicationService.remove(chatId, { rejectFeatureOwned: true });
+      // The chat's read marker and triage entry go in the deletion itself
+      // (chatApplicationService.remove), shared with Remote and Bot deletes.
       closeDeviceSessionsForChat(chatId);
-      void chatReadMarkers.remove(chatId).catch(() => undefined);
       return result;
     },
 
@@ -271,6 +273,9 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
               )
             : await append();
           appended = true;
+          // The person wrote in it, so a snoozed chat is back. Never blocks
+          // or fails the send; Pin and Done are left alone.
+          if (role === "user") void chatTriage?.wake(chatId).catch(() => undefined);
           return chatForRenderer(chat);
         } catch (error) {
           if (isAppendReconciliationRequiredError(error)) {

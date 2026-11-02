@@ -36,6 +36,7 @@ const operationIds: Record<PeerOperation["operation"], string> = {
   botConversations: "listBotConversations",
   botCapabilities: "getBotCapabilityCatalog",
   markRead: "markChatRead",
+  setTriage: "setChatTriage",
   interruptAgent: "interruptChatAgent",
   respondQuestion: "respondQuestion",
   inputs: "submitStreamInput",
@@ -87,9 +88,16 @@ function peerContract(): Promise<PeerContract> {
         validateFormats: true,
       });
       addFormats(ajv);
+      // A newer host may add a bucket. The summary parser checks the optional
+      // bucket/time pair together and discards it when either field is unusable.
+      const summary = protocol.components.schemas.ChatSummary;
+      const schemas = {
+        ...protocol.components.schemas,
+        ChatSummary: { ...summary, properties: { ...summary.properties, inboxBucket: {}, inboxSortAt: {} } },
+      };
       ajv.addSchema({
         $id: "urn:aiden:peer",
-        components: protocol.components,
+        components: { ...protocol.components, schemas },
         paths: protocol.paths,
       });
       return { ajv, protocol };

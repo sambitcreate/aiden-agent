@@ -24,6 +24,7 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   };
   let managed: Workspace | undefined;
   let releaseTerminals: () => void = () => undefined;
+  let jobsStillRunning = false;
   let terminalDrain: Promise<void> = Promise.resolve();
   let failGitDeletion = false;
   const signal = new AbortController().signal;
@@ -124,6 +125,10 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     },
     closeWorkspaceGitWatcher: (id) => { events.push(`close-git-watcher:${id}`); },
     cancelWorkspaceGeneration: async () => { events.push("cancel-generation"); },
+    closeWorkspaceFollowThrough: async () => {
+      events.push("stop-jobs");
+      if (jobsStillRunning) throw new Error("A job is still running");
+    },
     cancelWorkspaceSchedules: async () => { events.push("cancel-schedules"); },
     resumeWorkspaceSchedules: async () => { events.push("resume-schedules"); },
     createWorkspaceId: () => "workspace-managed",
@@ -163,6 +168,7 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     "cancel-operations",
     "close-terminals",
     "cancel-generation",
+    "stop-jobs",
     "cancel-schedules",
     "delete-git",
     "remove:workspace-managed",
@@ -177,6 +183,10 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   // A deletion that fails still closes the watcher; the next read re-observes.
   const again = await service.create(owner, source.id, "feature/retry", "Retry Workspace");
   events.length = 0;
+  jobsStillRunning = true;
+  await assert.rejects(service.remove(owner, again.id), /job is still running/u);
+  assert.equal(events.includes("delete-git"), false, "a live job keeps its checkout");
+  jobsStillRunning = false;
   failGitDeletion = true;
   await assert.rejects(service.remove(owner, again.id), /git worktree remove failed/u);
   assert.equal(events.includes(`remove:${again.id}`), false, "the record stays when Git deletion fails");

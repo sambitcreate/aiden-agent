@@ -11,6 +11,7 @@ import {
 import { isPathSafeBotCapabilityId } from "../../renderer/shared/bot-capabilities.js";
 import { BOT_LIMITS } from "../../renderer/shared/bots.js";
 import { redactCredentialTokens } from "../shared/redaction.js";
+import { botRoutineRetryRequestId } from "./schedule-store-core.js";
 import { BOT_ROUTINE_NOTES_HEADER } from "./bot-routine-notes.js";
 import type { BotDeliveryFunnel } from "./bot-delivery/funnel.js";
 import type { BotRoutinePorts } from "./bot-routines-port.js";
@@ -125,6 +126,7 @@ export const BOT_ROUTINE_FAILED_PREVIEW = "I couldn't finish this routine.";
  * production wiring (`scheduled-bot-routines-main.ts`) adds.
  */
 export interface BotRoutineExecutorPorts extends BotRoutinePorts {
+  canRetryRoutineRequest?(botId: string, requestId: string): Promise<boolean>;
   /** The notes this routine kept from earlier runs, rendered; "" when none. */
   routineNotes?(botId: string, taskId: string): Promise<string>;
   /** True once when the stuck-run watchdog stopped this Bot's current run. */
@@ -306,6 +308,18 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     if (existingSubmissionId !== undefined) {
       submission = { submissionId: existingSubmissionId, deduped: true };
     } else {
+      // Older pending retries carry no proof. Check every preceding attempt
+      // before submitting a fresh prompt, while still observing any admission above.
+      if (trigger.kind === "retry" && !trigger.verifiedToolFree) {
+        const prior = [trigger.failedRunId];
+        if (trigger.attempt === 2) prior.push(botRoutineRetryRequestId(trigger.failedRunId, 1));
+        for (const id of prior) {
+          if (!await ports.canRetryRoutineRequest?.(task.botId, id).catch(() => false)) {
+            throw new RoutineFailure("This routine may already have taken action. Check its chat before running it again.",
+              { kind: "other", code: "retry_effect_unknown" });
+          }
+        }
+      }
       const notes = ports.routineNotes ? await abortable(ports.routineNotes(task.botId, task.id), signal) : "";
       const label = routineLabel(task, trigger);
       try {

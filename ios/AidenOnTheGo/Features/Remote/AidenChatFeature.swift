@@ -1455,7 +1455,7 @@ final class AidenChatViewModel {
     /// later refresh keeps earlier pages the reader loaded.
     @ObservationIgnored private var hasSettledTranscriptWindow = false
     private(set) var isStarting = false
-    /// Revision 52: the first message starts this chat in a new worktree on
+    /// Revision 53: the first message starts this chat in a new worktree on
     /// the Mac. Shown only while `offersNewWorktree`.
     var startsInNewWorktree = false
     /// The Mac is making the worktree; the message waits above a Cancel.
@@ -3194,7 +3194,7 @@ final class AidenChatViewModel {
         let idempotencyKey = attempt.key
         do {
             if makesWorktree {
-                // Revision 52: the Mac makes the worktree and moves this empty
+                // Revision 53: the Mac makes the worktree and moves this empty
                 // chat into it before the message is sent there.
                 let key = worktreeAttempt?.text == text ? worktreeAttempt!.key : UUID()
                 worktreeAttempt = (text, key)
@@ -6199,7 +6199,7 @@ struct AidenChatDetailView: View {
         ].joined(separator: "|")
     }
 
-    /// Revision 52: New worktree sits beside the composer's chips until the
+    /// Revision 53: New worktree sits beside the composer's chips until the
     /// chat's first message, and stays hidden while that message is on its way.
     private var showsNewWorktreeChip: Bool {
         allowsMutations && model.offersNewWorktree && !model.isSettingUpWorktree

@@ -15,6 +15,14 @@ import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
 import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
+import { chatTriage, startChatTriage, stopChatTriage } from "./services/chat-triage-main.js";
+import {
+  registerInboxDockBadgeIpc,
+  startInboxDockBadge,
+  stopInboxDockBadge,
+} from "./services/inbox-dock-badge-main.js";
+import { chatReadMarkers } from "./services/chat-read-markers-main.js";
+import { forgetChatInboxState } from "./services/chat-application-service.js";
 import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
 import { externalUrl } from "./services/browser/core.js";
@@ -188,7 +196,7 @@ import {
 import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { destroyPill } from "./windows/pill-window.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
-import { shutdownFollowThrough, startFollowThrough } from "./services/follow-through/follow-through-main.js";
+import { backgroundJobs, reapFollowThroughProcesses, shutdownFollowThrough, startFollowThrough } from "./services/follow-through/follow-through-main.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 import { removeWorkspaceArtifacts } from "./services/workspace-artifacts/main.js";
 
@@ -387,6 +395,8 @@ function cleanupApplication(): void {
   formFillRuntime.dispose();
   computerUseStatus.invalidate();
   scheduleService.stop();
+  stopChatTriage();
+  stopInboxDockBadge();
   llmClient.abortAll();
   void geminiLiveService.shutdown();
   telegramService.stop();
@@ -1494,6 +1504,14 @@ ipcMain.handle("app:setDockIcon", async (event, value: unknown) => {
   return applyDockIconPreference(value);
 });
 
+// The Inbox switch and view, reported by the main window only.
+registerInboxDockBadgeIpc({
+  isMainWindow: (event) =>
+    !!mainWindow &&
+    !mainWindow.isDestroyed() &&
+    event.sender.id === mainWindow.webContents.id,
+});
+
 function openExternalUrl(value: string): void {
   try {
     void shell.openExternal(externalUrl(value));
@@ -2294,6 +2312,12 @@ if (!ownsSingleInstanceLock) {
       ) {
         app.dock?.setBadge("DEV");
       }
+      // Inbox snoozes: one timer for the next wake, plus the early wake when
+      // a run needs an approval, an answer, or fails. Local only.
+      startChatTriage();
+      // The Inbox's Needs you count on the Dock tile (or Linux launcher), from
+      // local state and paired hosts' cached feeds. No polling, no network.
+      startInboxDockBadge({ packaged: isPackagedRuntime() });
       // Local-only housekeeping for on-device speech storage; no network.
       void prepareLocalSpeechStorage().catch((error: unknown) => {
         logger.warn("local-speech", `Speech storage cleanup failed: ${String(error)}`);
@@ -2431,6 +2455,11 @@ if (!ownsSingleInstanceLock) {
         });
       }, 60 * 60 * 1_000);
       toolOutputCleanup.unref();
+      // Stop prior-session shells before startup removes chats or worktrees.
+      const processRecoveryReady = await reapFollowThroughProcesses().then(() => true, (error: unknown) => {
+        logger.warn("background-jobs", "Could not finish recovery of prior-session processes.", error);
+        return false;
+      });
       await reconcilePendingChatDeletions(subagentRunStore, async (chatId) => {
         await toolOutputStore.deleteByChat(chatId);
         if (displayImageArtifactAvailability.available) {
@@ -2442,6 +2471,11 @@ if (!ownsSingleInstanceLock) {
         await piRuntimeEffectStore.deleteChat(chatId);
         await piCompactionSessionStore.deleteChat(chatId);
         await chatStore.remove(chatId);
+        // The same Inbox cleanup the live delete runs: no snooze or pin is left
+        // behind for a chat whose delete a crash cut short.
+        await forgetChatInboxState({ readMarkers: chatReadMarkers, triage: chatTriage }, chatId, (area, message, error) =>
+          logger.warn(area, message, error),
+        );
       });
       // After deletions settle and before any renderer draft exists.
       await workspaceApplicationService.prepareNoWorkspaceChats().catch((error: unknown) => {
@@ -2566,8 +2600,11 @@ if (!ownsSingleInstanceLock) {
             managed.ownershipToken,
           );
         },
-        blockWorkspace: (workspaceId) =>
-          scheduleService.cancelWorkspace(workspaceId),
+        blockWorkspace: async (workspaceId) => {
+          await scheduleService.cancelWorkspace(workspaceId);
+          if (!processRecoveryReady) throw new Error("Background process recovery did not finish.");
+          await backgroundJobs.stopWorkspace(workspaceId, "access-changed");
+        },
         deleteWorktree: async (workspace) => {
           const managed = workspace.managedWorktree!;
           await gitDeleteManagedWorktree(
@@ -2709,6 +2746,12 @@ if (!ownsSingleInstanceLock) {
       app.on("browser-window-focus", () => focusConfigRefresh.trigger());
       powerMonitor.on("resume", () => void portableConfigWatcher.refresh());
 
+      // Restore follows and checks before any local or
+      // remote caller can start work and write this launch’s records.
+      if (shutdownHasBegun()) return;
+      await startFollowThrough().catch((error: unknown) => {
+        logger.warn("follow-through", "Could not finish restoring checks and pull request follows.", error);
+      });
       try {
         if (!shutdownHasBegun()) await initializeAidenRemoteService();
       } catch (error) {
@@ -2753,10 +2796,6 @@ if (!ownsSingleInstanceLock) {
         );
       }
       if (shutdownHasBegun()) return;
-      // Followed pull requests and done-when checks resume; jobs a crash left behind stop.
-      await startFollowThrough().catch((error: unknown) =>
-        logger.error("follow-through", "Follow-through state could not be restored.", error),
-      );
       // Telegram restoration is optional to desktop availability. Bot-bound
       // routes independently revalidate their exact managed home and access
       // policy before queue admission whenever the binding store is healthy.

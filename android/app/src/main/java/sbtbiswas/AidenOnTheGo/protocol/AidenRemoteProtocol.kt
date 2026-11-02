@@ -46,6 +46,8 @@ object AidenRemoteProtocol {
     const val CHAT_SKILLS_FEATURE = "chat-skills-v1"
     const val CHAT_AGENT_INTERRUPT_FEATURE = "chat-agent-interrupt-v1"
     const val CHAT_READ_STATE_FEATURE = "chat-read-state-v1"
+    /** Phones since revision 50: `POST /chats/{chatId}/triage` (Pin, Done, Snooze). */
+    const val CHAT_TRIAGE_FEATURE = "chat-triage-v1"
     const val CHAT_MESSAGES_WINDOW_FEATURE = "chat-messages-window-v1"
     const val CHAT_MESSAGES_WINDOW_METADATA_FEATURE = "chat-messages-window-metadata-v1"
     const val CHAT_FORK_FEATURE = "chat-fork-v1"
@@ -615,7 +617,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         val ATTACHMENTS_RAW = AidenRemoteCapability("attachments:raw")
 
         /**
-         * Contract revision 52: with `git:write`, this phone may move an empty Workspace chat into
+         * Contract revision 53: with `git:write`, this phone may move an empty Workspace chat into
          * a new worktree made from its first message (`POST /chats/{chatId}/worktree`, with
          * `chat:write`). The Mac offers it only in `serverCapabilities`, and it is asked for in a
          * call of its own.
@@ -660,10 +662,10 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 49: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_CHAT_JOBS = listOf(CHAT_JOBS)
 
-        /** Revision 52: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        /** Revision 53: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_ATTACHMENTS_RAW = listOf(ATTACHMENTS_RAW)
 
-        /** Revision 52: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        /** Revision 53: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_CHAT_NEW_WORKTREE = listOf(CHAT_NEW_WORKTREE)
 
         /** Every grant `POST /device/capabilities` may add. */

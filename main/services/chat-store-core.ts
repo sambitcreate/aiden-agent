@@ -436,6 +436,7 @@ export function createChatStore(
           Buffer.byteLength(meta.preview, "utf8") <= MAX_CHAT_META_PREVIEW_BYTES)) &&
       (meta.summaryRevision === undefined ||
         isChatSummaryRevision(meta.summaryRevision)) &&
+      (meta.lastAssistantMessageId === undefined || typeof meta.lastAssistantMessageId === "string") &&
       (meta.lastAssistantSequence === undefined ||
         (typeof meta.lastAssistantSequence === "number" &&
           Number.isSafeInteger(meta.lastAssistantSequence) && meta.lastAssistantSequence >= 0)) &&
@@ -1231,7 +1232,7 @@ export function createChatStore(
       model: chat.model,
       ...(boundedPreview ? { preview: boundedPreview } : {}),
       summaryRevision: chatSummaryRevision(chat),
-      ...(lastAssistantAt !== undefined ? { lastAssistantAt, lastAssistantSequence } : {}),
+      ...(lastAssistantAt !== undefined ? { lastAssistantAt, lastAssistantSequence, lastAssistantMessageId: lastAssistant.id } : {}),
       ...(lastAssistant && isFailedAssistantTurn(lastAssistant) ? { lastAssistantFailed: true } : {}),
       ...(chat.forkedFrom ? { forkedFrom: indexedForkLineage(chat.forkedFrom) } : {}),
       createdAt: chat.createdAt,

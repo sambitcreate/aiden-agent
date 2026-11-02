@@ -286,6 +286,27 @@ final class AidenProductNavigationStore {
         var botCoachmarkVersionsByScope: [String: Int]?
         var workspaceSidebarOrganizationsByInstance: [String: AidenWorkspaceSidebarOrganization]?
         var expandedSidebarWorkspaceIDsByInstance: [String: [String]]?
+
+        init() {}
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            areasByInstance = try container.decodeIfPresent([String: AidenProductArea].self, forKey: .areasByInstance) ?? [:]
+            selectedWorkspaceByInstance = try container.decodeIfPresent([String: String].self, forKey: .selectedWorkspaceByInstance) ?? [:]
+            compactWorkspacePathByInstance = try container.decodeIfPresent([String: [String]].self, forKey: .compactWorkspacePathByInstance) ?? [:]
+            compactBotPathByInstance = try container.decodeIfPresent([String: [String]].self, forKey: .compactBotPathByInstance) ?? [:]
+            selectedBotByScope = try container.decodeIfPresent([String: String].self, forKey: .selectedBotByScope)
+            botCoachmarkVersionsByScope = try container.decodeIfPresent([String: Int].self, forKey: .botCoachmarkVersionsByScope)
+            // Read per entry: a sidebar view this build doesn't know (one a
+            // later build adds) drops only that Mac's choice, not the whole
+            // snapshot. This guards builds that have this decoder; an older
+            // build without it still fails on such a value.
+            workspaceSidebarOrganizationsByInstance = (try? container.decodeIfPresent(
+                [String: String].self,
+                forKey: .workspaceSidebarOrganizationsByInstance
+            ))?.flatMap { raw in raw.compactMapValues(AidenWorkspaceSidebarOrganization.init(rawValue:)) }
+            expandedSidebarWorkspaceIDsByInstance = try container.decodeIfPresent([String: [String]].self, forKey: .expandedSidebarWorkspaceIDsByInstance)
+        }
     }
 
     private static let snapshotKey = "aiden.product-navigation.v1"

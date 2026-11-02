@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Revision 52 (`chat:new-worktree`): the first message of an empty Workspace
+/// Revision 53 (`chat:new-worktree`): the first message of an empty Workspace
 /// chat can start it in a new worktree on the Mac. The Mac picks the base the
 /// way a desktop draft does and names the branch from the message. The words
 /// match the Mac and Android.

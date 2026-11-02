@@ -145,7 +145,7 @@ internal fun aidenShouldRequestRawUploads(server: AidenServer, installation: Aid
     aidenShouldRequestSoloCapability(AidenRemoteCapability.ATTACHMENTS_RAW, server, installation)
 
 /**
- * Revision 52: a Mac that offers `chat:new-worktree` in `serverCapabilities` is asked for it, in a
+ * Revision 53: a Mac that offers `chat:new-worktree` in `serverCapabilities` is asked for it, in a
  * call of its own after `attachments:raw`, unless [installation] already holds it.
  */
 internal fun aidenShouldRequestChatNewWorktree(server: AidenServer, installation: AidenInstallation): Boolean =
@@ -263,7 +263,7 @@ internal suspend fun aidenRequestRawUploads(
     )
 
 /**
- * Revision 52: asks [server] for `chat:new-worktree` alone, exactly as [aidenRequestScheduleCards]
+ * Revision 53: asks [server] for `chat:new-worktree` alone, exactly as [aidenRequestScheduleCards]
  * asks for `schedule:cards`. A Mac that refuses it (400 or 404) leaves the pairing as it was; its
  * new chats then show no New worktree chip on this phone.
  */
@@ -641,7 +641,7 @@ class AidenRemoteCoordinator(
                     server = jobsServer,
                     request = ::aidenRequestRawUploads
                 )
-                // Revision 52: `chat:new-worktree` goes alone too, last.
+                // Revision 53: `chat:new-worktree` goes alone too, last.
                 val negotiatedServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,

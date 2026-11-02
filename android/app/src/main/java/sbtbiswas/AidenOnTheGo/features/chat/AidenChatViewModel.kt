@@ -181,7 +181,7 @@ class AidenChatViewModel(
     private val _presentedError = MutableStateFlow<String?>(null)
     val presentedError: StateFlow<String?> = _presentedError.asStateFlow()
 
-    // --- New worktree (contract revision 52) ---
+    // --- New worktree (contract revision 53) ---
 
     /** The first message starts this chat in a new worktree on the Mac. */
     private val _startsInNewWorktree = MutableStateFlow(false)
@@ -1682,7 +1682,7 @@ class AidenChatViewModel(
         viewModelScope.launch {
             try {
                 if (makesWorktree) {
-                    // Revision 52: the Mac makes the worktree and moves this empty chat into it
+                    // Revision 53: the Mac makes the worktree and moves this empty chat into it
                     // before the message is sent there.
                     val key = worktreeAttempt?.takeIf { it.first == text }?.second ?: UUID.randomUUID()
                     worktreeAttempt = text to key

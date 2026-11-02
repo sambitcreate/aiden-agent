@@ -14,6 +14,9 @@ import type { createCliBots } from "./bots.ts";
 import { listCliProviders } from "./providers.ts";
 import { JsonStore, readJson } from "./state.ts";
 import { createCliChatForks } from "./daemon-forks.ts";
+import { ChatReadMarkerStore, markChatReadThrough } from "../../../main/services/chat-read-markers.js";
+import { ChatTriageStore, wakeTriageOnAttention } from "../../../main/services/chat-triage.js";
+import { liveRunAttention } from "../../../main/services/chat-pending-attention.js";
 
 export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<typeof createDaemonChats>, workspace: ReturnType<typeof createCliWorkspaceApplication>, state: AidenRemoteStateRegistry,
   idempotency: AidenIdempotencyLedger, persistIdempotency: (value: AidenIdempotencySnapshot) => Promise<void>, bots: Awaited<ReturnType<typeof createCliBots>>) {
@@ -30,6 +33,17 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
     async completeChatDeletion(id: string) { await deleting.update((values) => { const index = values.indexOf(id); if (index >= 0) values.splice(index, 1); }); },
     pendingChatDeletions: () => deleting.load(),
   };
+  // The desktop's own Inbox stores, kept in this data dir: read markers and triage (Pin, Done, Snooze).
+  const inboxListeners = new Set<() => void>();
+  const inboxChanged = () => { for (const listener of inboxListeners) listener(); };
+  const readMarkers = new ChatReadMarkerStore(() => agentDir, { onChange: inboxChanged });
+  // Stamp the unread baseline now, so only replies after this daemon first served the Inbox read as new.
+  await readMarkers.snapshot().catch(() => undefined);
+  const triage = new ChatTriageStore(() => agentDir, { onChange: inboxChanged,
+    logError: (message, error) => process.stderr.write(`aiden: ${message} ${error instanceof Error ? error.message : String(error)}\n`) });
+  // The snooze timer and the early wake (a run that starts waiting on the person) run with the daemon.
+  const stopWaking = wakeTriageOnAttention(daemon.runs, triage);
+  await triage.start().catch(() => undefined);
   // This daemon's current tool profile cannot create staged image or HTML artifacts.
   const artifacts = { availability: () => ({ available: true as const }), hasPending: async () => false, deleteChat: async () => {} };
   const application = createChatApplicationService({ chatStore: daemon.chatStore, configStore: workspace.configStore,
@@ -47,6 +61,8 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
     piCompactionSessionStore: { deleteChat: async () => {} }, // Compaction checkpoints are in that same pi journal.
     workspaceMutationGate: workspace.mutationGate, workspaceOperationRegistry: workspace.operationRegistry,
     logError: (area, message) => process.stderr.write(`aiden: ${area}: ${message}\n`),
+    // A deleted chat's read marker and triage go with it.
+    inboxState: { readMarkers, triage },
   });
   const modelService = new AidenRemoteModelService({
     listProviders: () => listCliProviders(agentDir),
@@ -71,8 +87,17 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
     // Refused before the ledger records anything, so the same key runs after `aiden bots unpause`.
     botPaused: (botId) => bots.isPaused(botId),
     idempotency, persistIdempotency, activeChatIds: () => daemon.activity.snapshot().activeChatIds,
+    // Row state, unread, triage and live-run times: the summaries' `inbox-signals-v1` fields, as on the desktop.
+    activitySnapshot: () => daemon.activity.snapshot(),
+    readMarkers: { snapshot: () => readMarkers.snapshot(), markRead: async (chatId, throughMessageId) => markChatReadThrough(readMarkers, await daemon.chatStore.get(chatId), throughMessageId) },
+    triage,
+    runTimes: (chatId) => liveRunAttention(chatId, daemon.runs),
     // Plain forks only: the daemon has no summarizer, so it never advertises chat-fork-summary-v1.
     forks: createCliChatForks(daemon, workspace),
   });
-  return { chats, streams, models: modelService, application };
+  return { chats, streams, models: modelService, application, readMarkers, triage,
+    /** A read marker or a triage entry changed. */
+    onInboxChanged(listener: () => void) { inboxListeners.add(listener); return () => { inboxListeners.delete(listener); }; },
+    stopInbox() { stopWaking(); triage.dispose(); },
+  };
 }

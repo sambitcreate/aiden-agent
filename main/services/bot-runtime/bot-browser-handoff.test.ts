@@ -15,7 +15,7 @@ function owner(id: number): RendererDocumentOwner {
 
 /** The Bot's browser: tabs, the holds on them, and the window that shows it. */
 function fakeBrowser(options: { owner?: RendererDocumentOwner } = {}) {
-  const tabs = new Map<string, { url: string; hold?: { holdId: string; reason: BrowserHoldReason } }>();
+  const tabs = new Map<string, { url: string; documentRevision?: string; hold?: { holdId: string; reason: BrowserHoldReason } }>();
   const created: Array<{ command: BrowserCommand; context: BrowserCommandContext }> = [];
   let opened = 0;
   let shownIn = options.owner;
@@ -42,6 +42,11 @@ function fakeBrowser(options: { owner?: RendererDocumentOwner } = {}) {
       const tabId = `tab-${(opened += 1)}`;
       tabs.set(tabId, { url });
       return { state: {} as never, tabId };
+    },
+    getApprovalTarget(workspaceId, tabId) {
+      const tab = tabs.get(tabId);
+      if (!tab) throw new Error("Tab closed.");
+      return { workspaceId, tabId, url: tab.url, documentRevision: tab.documentRevision ?? "1", controlRevision: 0 };
     },
     hold(workspaceId, tabId, hold) {
       assert.equal(workspaceId, WORKSPACE);
@@ -264,4 +269,32 @@ test("a tab two cards opened stays held until neither waits, whichever settles f
     await settled();
     assert.equal(browser.heldBy("tab-1"), undefined);
   }
+});
+
+test("a rule holds the probed document even when another tab has the same URL", async () => {
+  const { browser, handoffs, open } = setup({ owner: owner(1) });
+  const url = "https://shop.example/cart";
+  browser.tabs.set("first", { url });
+  browser.tabs.set("second", { url });
+  const target = browser.service.getApprovalTarget(WORKSPACE, "second");
+  const ask = (waitId: string) => handoffs.request({
+    botId: BOT, waitId, toolCallId: waitId, kind: "action", source: "rule", target: "browser",
+    action: "Finish checkout", open: { url }, browserTarget: target, signal: undefined,
+  });
+  const first = ask("purchase");
+  assert.equal(await open(BOT, "purchase", url, "handoff"), true);
+  assert.equal(browser.heldBy("first"), undefined);
+  assert.equal(browser.heldBy("second")?.holdId, "purchase");
+  browser.tabs.delete("second");
+  assert.equal(await open(BOT, "purchase", url, "handoff"), false);
+  assert.equal(browser.heldBy("first"), undefined);
+  handoffs.answer(BOT, "purchase", { outcome: "skipped" });
+  await first;
+
+  browser.tabs.set("second", { url, documentRevision: "2" });
+  const stale = ask("stale");
+  assert.equal(await open(BOT, "stale", url, "handoff"), false, "a same-URL navigation replaced the document");
+  assert.equal(browser.heldBy("second"), undefined);
+  handoffs.answer(BOT, "stale", { outcome: "skipped" });
+  await stale;
 });

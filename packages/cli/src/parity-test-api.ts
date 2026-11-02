@@ -60,3 +60,4 @@ export { capturePersistedSubagentContext } from "../../../main/services/subagent
 export { createAdvisorInlineExtension } from "./extensions/advisor.ts";
 export { chooseNetwork, installService, launchdPlist, parseInstallFlags, reachableNetwork, releaseTailscaleRoute, restoreService, savedNetwork, serviceCommand, serviceFile, serviceStatus, systemdUnit, uninstallService } from "./service.ts";
 export { formatChecklist, looksLikeCloudServer, networkQuestion, probeAidenHealth, readSystemTailscaleFacts, readTailscaleFacts, recommendNetwork, remoteCheckCommand, serverChecklist, tailscaleChecklist, tailscaleReady, waitForTailscaleAddress } from "./reachability.ts";
+export { AIDEN_REMOTE_LEGACY_CAPABILITIES, AIDEN_REMOTE_HOST_CAPABILITIES } from "../../../main/services/aiden-remote-protocol.js";

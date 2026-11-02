@@ -157,6 +157,7 @@ export async function botBrowserApproval(
   // A rule that hands this to the person opens the same page for them, in this tab.
   const page = approval.target.url;
   return {
+    browserTarget: approval.target,
     ...(isBotHandoffOpenUrl(page) ? { open: { url: page } } : {}),
     approval: {
       summary: botBrowserApprovalSummary(tool, args, approval.target.url, { hideText: secret }),
