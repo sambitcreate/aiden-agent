@@ -61,6 +61,7 @@ function harness(): Harness {
       };
     },
     callTool: async (_params, options) => {
+      options.beforeSend();
       events.push("call");
       requestSignals.push(options.signal);
       assert.equal(options.timeoutMs, SUBAGENT_MCP_REQUEST_TIMEOUT_MS);
@@ -146,6 +147,7 @@ test("mutation raw boundary fences and invokes the client exactly once without a
     },
     listTools: async () => ({ tools: [] }),
     callTool: (_params, options) => {
+      options.beforeSend();
       rawCalls += 1;
       h.events.push("raw-client-call");
       assert.equal(options.signal, signal);
@@ -177,7 +179,7 @@ test("mutation raw boundary fences and invokes the client exactly once without a
   );
   assert.equal(
     h.events.indexOf("raw-client-call"),
-    h.events.indexOf("final-authority-ledger-budget-fence") + 1,
+    h.events.lastIndexOf("config-fence") + 1,
   );
 });
 
@@ -267,7 +269,8 @@ test("configuration drift at the immediate raw-call fence prevents dispatch", as
     connect: async () => undefined,
     close: async () => undefined,
     listTools: async () => ({ tools: [] }),
-    callTool: async () => {
+    callTool: async (_params, options) => {
+      options.beforeSend();
       rawCallStarted = true;
       return { content: [] };
     },
@@ -552,7 +555,7 @@ test("child reads and mutations stop before spending authority on a withdrawn to
       revision++;
       const spend = () => h.events.push("spend");
       await assert.rejects(client.callTool("lookup", {}, signal, spend), /inventory changed/u);
-      assert.throws(() => client.callToolRaw!("lookup", {}, signal, spend), /inventory changed/u);
+      await assert.rejects(client.callToolRaw!("lookup", {}, signal, spend), /inventory changed/u);
       assert.ok(!h.events.includes("spend"));
       assert.ok(!h.events.includes("call"));
     },

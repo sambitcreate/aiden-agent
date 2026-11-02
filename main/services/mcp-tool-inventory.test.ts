@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
+import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage, readGuardedMcpInventory } from "./mcp-tool-inventory.js";
 import { executeMcpAgentTool } from "./mcp-tool-result.js";
 import { LATEST_PROTOCOL_VERSION, McpClient, McpTimeoutError, type JsonRpcMessage } from "@earendil-works/pi-mcp";
 import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
@@ -548,4 +548,21 @@ test("tools whose input schema root is unusable are left out and reported, the r
   assert.deepEqual(skipped.map((entry) => entry.split(":")[0]), ["array-root", "untyped-root", "bad-properties", "bad-required"]);
   await assert.rejects(listMcpToolPage({ request: async () => ({ tools: [{ inputSchema: { type: "object" } }] }) } as never, undefined),
     /Invalid entry/u, "a tool without a name still invalidates the page");
+});
+
+test("identical re-listings preserve active guards and conflicting concurrent listings require a fresh read", async () => {
+  const client = {};
+  const list = (names: string[]) => readGuardedMcpInventory(client, async () => names.map(name => ({ name })), () => {});
+  const initial = await list(["one", "two"]);
+  await list(["two", "one"]);
+  initial.guard.assertCallable("one");
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const slow = readGuardedMcpInventory(client, async () => { await gate; return [{ name: "old" }]; }, () => {});
+  const removed = await list(["two"]);
+  release();
+  await assert.rejects(slow, /inventory changed/u);
+  assert.throws(() => initial.guard.assertCallable("one"), /inventory changed/u);
+  assert.throws(() => removed.guard.assertCallable("two"), /inventory changed/u);
+  (await list(["two"])).guard.assertCallable("two");
 });

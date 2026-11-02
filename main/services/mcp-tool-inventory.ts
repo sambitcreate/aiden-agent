@@ -197,6 +197,7 @@ export function createMcpToolCallGuard(
     operation: (name: string) => operations.get(name),
     assertCallable(name: string): void {
       assertCurrent?.();
+      if (!operations.has(name)) throw new Error("This MCP tool is no longer offered by its server.");
       if (requiredTasks.has(name)) throw new Error("This MCP tool requires unsupported task-based execution.");
       // Compile before dispatch so an unusable schema cannot follow a side effect.
       validatorFor(name);
@@ -216,6 +217,36 @@ export function createMcpToolCallGuard(
 
 export type McpToolCallGuard = ReturnType<typeof createMcpToolCallGuard>;
 
+type ListedTool = Parameters<typeof createMcpToolCallGuard>[0][number];
+type ToolListing = { tools?: ReadonlyMap<string, ListedTool> };
+const latestToolListings = new WeakMap<object, ToolListing>();
+
+/** Bind each execution guard to the last complete listing observed on this client. */
+export async function readGuardedMcpInventory<T extends ListedTool>(
+  client: object, read: () => Promise<T[]>, assertCurrent: () => void,
+) {
+  const startedWith = latestToolListings.get(client);
+  const tools = await read();
+  assertCurrent();
+  const latest = latestToolListings.get(client);
+  const byName = new Map(tools.map(tool => [tool.name, tool]));
+  let listing = latest;
+  if (!latest?.tools || !isDeepStrictEqual(latest.tools, byName)) {
+    if (latest !== startedWith) {
+      // Conflicting overlapping listings cannot establish their order on the server.
+      latestToolListings.set(client, {});
+      throw new Error("MCP tool inventory changed during discovery.");
+    }
+    listing = { tools: byName };
+    latestToolListings.set(client, listing);
+  }
+  const guard = createMcpToolCallGuard(tools, () => {
+    assertCurrent();
+    if (latestToolListings.get(client) !== listing) throw new Error("MCP tool inventory changed.");
+  });
+  return { tools, guard };
+}
+
 /** Guarded dispatch: the call must belong to the inventory of the client carrying it. */
 export async function guardedMcpToolCall(
   guard: McpToolCallGuard,
@@ -223,9 +254,8 @@ export async function guardedMcpToolCall(
   params: McpToolCallParams,
   options?: McpCallOptions,
 ) {
-  if (!guard.has(params.name)) throw new Error("This MCP tool is no longer offered by its server.");
   guard.assertCallable(params.name);
-  const result = await callMcpTool(client, params, options);
+  const result = await callMcpTool(client, params, { ...options, beforeSend: () => guard.assertCallable(params.name) });
   guard.validateResult(params.name, result);
   return result;
 }

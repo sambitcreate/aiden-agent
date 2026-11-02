@@ -2,7 +2,7 @@ import { mcpProviderAuthenticatedFetch } from "./mcp-provider-auth.js";
 import { admitMcpProviderAuthServers, withMcpProviderOperation, type McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
 import { inspectInitializedMcpStatus } from "./mcp-status.js";
 import { mcpLiveStatus, recordMcpConnectionLifecycle } from "./mcp-status-events.js";
-import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage, MCP_TOOL_LIST_CHANGED, MCP_TOOL_INVENTORY_TTL_MS } from "./mcp-tool-inventory.js";
+import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage, readGuardedMcpInventory, MCP_TOOL_INVENTORY_TTL_MS } from "./mcp-tool-inventory.js";
 import { createHash } from "node:crypto";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 import { snapshotMcpServerInstructions } from "./mcp-server-instructions.js";
@@ -47,7 +47,7 @@ import {
 import { markMcpAgentTool, mcpAgentToolNames, mcpServerToolPrefix, type McpToolNamingServer } from "./mcp-tool-identity.js";
 import {
   withIsolatedSubagentMcpClientCore,
-  type IsolatedSubagentMcpClient,
+  isolatedSubagentMcpClient,
 } from "./subagents/subagent-mcp-client-core.js";
 import { createBoundedSubagentMcpFetch } from "./subagents/subagent-mcp-bounded-fetch.js";
 import { resolveProductionSubagentMcpCredentialBoundary } from "./subagents/subagent-mcp-credential-production.js";
@@ -136,9 +136,7 @@ function makeTransport(
   if (!server.url) throw new Error("This MCP server needs a URL.");
   assertMcpPresetServer(server);
   if (server.authProvider && options.forceNoRedirect) throw new Error("Provider-authenticated MCP is unavailable to child agents.");
-  const guardedFetch = options.forceNoRedirect
-    ? createBoundedSubagentMcpFetch()
-    : undefined;
+
   // OAuth-authenticated servers attach a (non-interactive) provider that supplies
   // stored tokens; if none/expired, the connection fails rather than opening a browser.
   const observeOAuthTokens = options.registerCredentialRedactor
@@ -157,7 +155,9 @@ function makeTransport(
     serviceHeaders: server.headers,
     isCurrent,
     authProvider,
-    fetch: server.authProvider ? mcpProviderAuthenticatedFetch(server, isCurrent) : guardedFetch,
+    wrapFetch: server.authProvider
+      ? (send) => mcpProviderAuthenticatedFetch(server, isCurrent, send)
+      : options.forceNoRedirect ? (send) => createBoundedSubagentMcpFetch(send) : undefined,
     onTerminalFailure: options.onTerminalFailure,
   });
 }
@@ -196,18 +196,7 @@ export async function withIsolatedSubagentMcpClient<T>(
     configurationLease,
     operation,
     dependencies: {
-      createClient: () => {
-        const client = createMcpClient(AIDEN_MCP_CLIENT_NAME);
-        let inventoryRevision = 0;
-        client.onNotification(MCP_TOOL_LIST_CHANGED, () => { inventoryRevision++; });
-        return {
-          get inventoryRevision() { return inventoryRevision; },
-          connect: (transport, options) => connectMcpClient(client, transport as McpTransport, options),
-          close: () => client.close(),
-          listTools: (cursor, options) => listMcpToolPage(client, cursor, options, reportSkippedMcpTool),
-          callTool: (params, options) => callMcpTool(client, params, options),
-        } satisfies IsolatedSubagentMcpClient;
-      },
+      createClient: () => isolatedSubagentMcpClient(createMcpClient(AIDEN_MCP_CLIENT_NAME), reportSkippedMcpTool),
       resolveAuth,
       resolveCredentialBoundary: resolveProductionSubagentMcpCredentialBoundary,
       makeTransport,
@@ -410,12 +399,11 @@ class McpManager {
   }
 
   private async readInventory(client: McpClient, assertCurrent: () => void, signal?: AbortSignal): Promise<McpInventory> {
-    const tools = client.serverCapabilities?.tools ? await listMcpToolInventory({
+    return readGuardedMcpInventory(client, async () => client.serverCapabilities?.tools ? await listMcpToolInventory({
       signal,
       assertCurrent,
       listPage: boundedMcpToolPageReader(client, MCP_DISCOVERY_DEADLINES.listMs, reportSkippedMcpTool),
-    }) as McpToolInfo[] : [];
-    return { tools, guard: createMcpToolCallGuard(tools, assertCurrent) };
+    }) as McpToolInfo[] : [], assertCurrent);
   }
 
   /**
