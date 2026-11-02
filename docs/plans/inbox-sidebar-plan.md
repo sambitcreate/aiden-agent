@@ -473,6 +473,12 @@ Claim the revision after the one on `main` at merge time. It is 49 today (`AIDEN
 - Android: the snooze confirmation's day no longer uses `LocalDate.ofInstant` (API 34) on a minSdk 26 app; lint reports no `NewApi` in the branch.
 - Desktop: `chats:setTriage` classifies the chat from the same reconciled chat list the Remote triage route uses (`ChatApplicationService.list`), not the transcript-free summary index; a feature-owned chat is refused as well as a Bot chat.
 
+*PR review fixes (2026-11-01).* No new token or revision.
+
+- iOS and Android: a Mark read that the host took is recorded again as a new local edit when its answer arrives (iOS `settleRead`, Android a fresh write token on the settled overlay), so a list page requested while the read was out, which still says unread, no longer brings the dot back. Done or Snooze's read marker on an unseen failure settles the same way. A row whose page shows output newer than the swiped row keeps its dot, since the read did not cover it.
+- Desktop and CLI hosts: a closed Bot's list summary (preview, last reply) is kept with the newest entry it was read through, and the transcript is read again only when a newer entry exists. The host feed asks for every Bot's signals on each chat or Bot change, so unrelated refreshes no longer reread inactive Bots' transcripts. State, Needs you and Failed are still read on every call.
+- iOS: the sidebar header's title and Beta badge come from `AidenWorkspaceSidebarOrganization.title` and `isBeta`, covered by the sidebar preferences test.
+
 *3d deferred (2026-11-01).* Onboarding stays as it is while Inbox is Beta: the gallery tile below waits until Inbox leaves Beta or becomes a headline feature.
 
 **3c. One Working indicator.** iOS uses a spinner and Android a breathing dot. Both adopt the desktop's indicator so the three platforms match.

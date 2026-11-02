@@ -11904,6 +11904,15 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-one"), .recent)
         XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-two"), .workspace)
         XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-three"), .inbox)
+        // Each Mac's sidebar header names the organization it restored; only Inbox is Beta.
+        XCTAssertEqual(
+            ["mac-one", "mac-two", "mac-three"].map { restored.workspaceSidebarOrganization(for: $0).title },
+            ["Recents", "Workspaces", "Inbox"]
+        )
+        XCTAssertEqual(
+            ["mac-one", "mac-two", "mac-three"].map { restored.workspaceSidebarOrganization(for: $0).isBeta },
+            [false, false, true]
+        )
         XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-one"), ["alpha"])
         XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-two"), ["beta"])
 

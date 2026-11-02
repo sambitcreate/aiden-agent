@@ -256,3 +256,10 @@ Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control
 - Android: `AidenInboxTriage.markRead(chatId, readsState:)` returns null without writing when the host lacks read state.
 - Android home auto-load waits for `coordinator.serverInfo` as well as CONNECTED (`HomeLoadInputs` combine). The coordinator publishes CONNECTED before the capability negotiation; a list read in that window used the legacy `/chats` list (no Inbox signals), and a workspaces emission during it did not reload. Found as the CI flake in `AidenInboxHomeTriageTest.aMarkReadMadeAsAPageSaveReturnsStaysRead` (fails every time run alone). The test's fake desk now holds every `/chat-summaries` read while a hold is armed.
 - Desktop/CLI background jobs: a forgotten job's log is deleted only after its write stream closes (`openLog`/`removeLog`), since the async open could recreate a just-removed file.
+
+## Pullfrog review fixes (2026-11-01)
+- Failed local Bots (`isFailedBotSession`: interrupted/model_error) list as Failed in Needs you, no row action; Dock badge counts them (57331cef8).
+- Desktop Undo of Done restores Done only if it still held (`lastAssistantAt <= doneAt`), via `inverseTriagePatch(before, patch, lastAssistantAt)` (ad86c518b).
+- Phones: a successful Mark read re-records itself as a new edit (iOS `settleRead` after `markChatRead`, also on `setTriage` alsoMarkRead; Android settle reserves a fresh `reserveChatWrite()` token) so a page requested during the read can't restore unread. Android UNREAD overlay lets a page's unread through only when its `lastAssistantAt` is newer than the swiped row (`hasNewerOutput`).
+- `BotLiveProjection.summary` without an open feed caches preview/updatedAt/lastReplyAt keyed by `conversationId:newestEntryId` (`conversation.entries({order:"descending"},1,...)`); state/needsYou read fresh. Test counts `context()` reads in live-projection.test.ts.
+- iOS `AidenWorkspaceSidebarOrganization.title`/`isBeta` back the sidebar header.
