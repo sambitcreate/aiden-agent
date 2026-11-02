@@ -7399,20 +7399,90 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenRelativeTimestamp.text(for: now.addingTimeInterval(30), now: now), "just now")
     }
 
-    func testNewAgentPopoverKeepsTheThreeReviewedWorkspaceChoices() {
+    func testNewAgentPopoverOffersNoWorkspaceOnlyWhenTheMacHasAChatsHome() {
         XCTAssertEqual(
-            AidenNewAgentChoice.allCases,
+            AidenNewAgentChoice.available(noWorkspace: false),
             [.existingWorkspace, .newWorkspace, .scratchWorkspace]
         )
         XCTAssertEqual(
-            AidenNewAgentChoice.allCases.map(\.title),
-            ["Existing Workspace", "New Workspace", "Managed Scratch Workspace"]
-        )
-        XCTAssertEqual(
-            AidenNewAgentChoice.allCases.map(\.symbol),
-            ["folder", "folder.badge.plus", "hammer.fill"]
+            AidenNewAgentChoice.available(noWorkspace: true),
+            [.noWorkspace, .existingWorkspace, .newWorkspace, .scratchWorkspace]
         )
         XCTAssertTrue(AidenNewAgentChoice.allCases.allSatisfy { !$0.detail.isEmpty })
+    }
+
+    func testChatsWithoutAWorkspaceShareOneChatsSectionOnTheirHome() {
+        let base = Date(timeIntervalSince1970: 1_000)
+        func record(_ id: String, created: TimeInterval, noWorkspace: Bool = false) -> AidenWorkspace {
+            AidenWorkspace(
+                id: id,
+                name: noWorkspace ? "No workspace" : id.capitalized,
+                permission: .ask,
+                hasFolder: true,
+                isManagedWorktree: false,
+                noWorkspace: noWorkspace,
+                branchName: nil,
+                repositoryName: nil,
+                git: nil,
+                createdAt: base.addingTimeInterval(created),
+                updatedAt: base.addingTimeInterval(created),
+                revision: "\(id)-r1"
+            )
+        }
+        func chat(_ id: String, in workspaceId: String, updated: TimeInterval) -> AidenChat {
+            AidenChat(
+                id: id,
+                workspaceId: workspaceId,
+                title: id,
+                providerId: nil,
+                modelId: nil,
+                messages: [],
+                createdAt: base,
+                updatedAt: base.addingTimeInterval(updated),
+                revision: "\(id)-r1"
+            )
+        }
+        let workspaces = [
+            record("project", created: 0),
+            record("hidden-later", created: 30, noWorkspace: true),
+            record("hidden-first", created: 10, noWorkspace: true),
+        ]
+        XCTAssertEqual(AidenNoWorkspace.home(in: workspaces)?.id, "hidden-first", "the oldest stands for the group")
+        XCTAssertEqual(
+            AidenNoWorkspace.home(in: workspaces + [record("default", created: 50, noWorkspace: true)])?.id,
+            "default",
+            "the long-lived default home wins"
+        )
+        XCTAssertEqual(AidenNoWorkspace.choices(workspaces).map(\.id), ["project"])
+        // A scheduled task that already runs in a hidden folder keeps it as a choice while edited.
+        XCTAssertEqual(
+            AidenNoWorkspace.choices(workspaces, keeping: "hidden-later").map(\.id),
+            ["project", "hidden-later"]
+        )
+
+        let projection = AidenWorkspaceSidebarProjection.make(
+            workspaces: workspaces,
+            chats: [
+                chat("soup", in: "hidden-later", updated: 40),
+                chat("trip", in: "hidden-first", updated: 20),
+                chat("fix", in: "project", updated: 5),
+            ],
+            searchText: ""
+        )
+        XCTAssertEqual(projection.sections.map(\.workspace.id), ["hidden-first", "project"])
+        XCTAssertEqual(projection.sections[0].workspace.name, "Chats")
+        XCTAssertEqual(projection.sections[0].chats.map(\.id), ["soup", "trip"])
+        XCTAssertEqual(projection.sections[1].chats.map(\.id), ["fix"])
+
+        // A Mac before revision 50 marks nothing: every workspace stays its own section.
+        XCTAssertNil(AidenNoWorkspace.home(in: [record("project", created: 0)]))
+
+        // An older build could archive a "No workspace" record; the Chats group has no Unarchive,
+        // so that flag is ignored and its chats stay listed. Archived projects stay archived.
+        XCTAssertEqual(
+            AidenNoWorkspace.unarchived(workspaces, archivedIDs: ["hidden-first", "project"]).map(\.id),
+            ["hidden-later", "hidden-first"]
+        )
     }
 
     func testProviderIconResolverMatchesDesktopAliasesAndFallbackRules() {
@@ -11994,6 +12064,40 @@ final class AidenAppearanceTests: XCTestCase {
             "Removing the selected workspace should converge on an available detail"
         )
         XCTAssertNil(AidenWorkspaceNavigation.reconciledSelection(current: selected, workspaceIDs: []))
+    }
+
+    func testSplitViewSelectsTheChatsHomeOnlyWhileOneOfItsChatsIsOpen() {
+        let base = Date(timeIntervalSince1970: 1_000)
+        func workspace(_ id: String, noWorkspace: Bool = false) -> AidenWorkspace {
+            AidenWorkspace(
+                id: id,
+                name: noWorkspace ? "No workspace" : id.capitalized,
+                permission: .ask,
+                hasFolder: true,
+                isManagedWorktree: false,
+                noWorkspace: noWorkspace,
+                branchName: nil,
+                repositoryName: nil,
+                git: nil,
+                createdAt: base,
+                updatedAt: base,
+                revision: "\(id)-r1"
+            )
+        }
+        // The Mac lists its seeded hidden home first.
+        let workspaces = [workspace("default", noWorkspace: true), workspace("hidden-2", noWorkspace: true), workspace("project")]
+
+        let idle = AidenWorkspaceNavigation.selectableIDs(workspaces, openChatWorkspaceID: nil)
+        XCTAssertEqual(idle, ["project"])
+        XCTAssertEqual(
+            AidenWorkspaceNavigation.reconciledSelection(current: "default", workspaceIDs: idle),
+            "project",
+            "with no Chats chat open, a hidden selection falls to a workspace that has a page"
+        )
+
+        let chatOpen = AidenWorkspaceNavigation.selectableIDs(workspaces, openChatWorkspaceID: "hidden-2")
+        XCTAssertEqual(chatOpen, ["default", "project"], "an open chat in any hidden folder keeps the Chats home")
+        XCTAssertEqual(AidenWorkspaceNavigation.reconciledSelection(current: "default", workspaceIDs: chatOpen), "default")
     }
 
     func testCompactWorkspacePathPreservesOnlyAnAvailableDestination() {

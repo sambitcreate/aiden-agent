@@ -313,6 +313,8 @@ async function noWorkspaceFixture(t: { after(fn: () => Promise<void>): void }, i
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const registry = new Map(initial.map((entry) => [entry.id, entry]));
   const chatOwners = new Set<string>();
+  /** Chat ids per workspace, for the paired-device checks. */
+  const chatsIn = new Map<string, string[]>();
   const trashed: string[] = [];
   let nextId = 0;
   const deps = {
@@ -338,6 +340,7 @@ async function noWorkspaceFixture(t: { after(fn: () => Promise<void>): void }, i
     noWorkspace: {
       createDirectory: () => createScratchWorkspaceDirectory(path.join(root, "chat-folders")),
       workspaceIdsWithChats: async () => new Set(chatOwners),
+      chatIdsIn: async (workspaceId: string) => chatsIn.get(workspaceId) ?? [],
       trash: async (folderPath: string) => {
         trashed.push(folderPath);
         await fs.rm(folderPath, { recursive: true });
@@ -347,7 +350,7 @@ async function noWorkspaceFixture(t: { after(fn: () => Promise<void>): void }, i
     now: () => 500,
     logError: () => undefined,
   } as unknown as WorkspaceApplicationDependencies;
-  return { service: createWorkspaceApplicationService(deps), registry, chatOwners, trashed, root };
+  return { service: createWorkspaceApplicationService(deps), registry, chatOwners, chatsIn, trashed, root };
 }
 
 const exists = (target: string) => fs.stat(target).then(() => true, () => false);
@@ -415,4 +418,21 @@ test("deleting the last chat of a No workspace folder moves the folder's files t
 
   await app.service.releaseNoWorkspaceAfterChat("project");
   assert.equal(app.registry.has("project"), true, "a real workspace is never released with a chat");
+});
+
+test("a paired device's chat in a No workspace folder that holds another chat gets a folder of its own", async (t) => {
+  const app = await noWorkspaceFixture(t, [
+    workspace({ id: "default", name: "No workspace", folderPath: "/data/chat-folders/home", noWorkspace: true }),
+    workspace({ id: "project", folderPath: "/code/project" }),
+  ]);
+  assert.equal(await app.service.workspaceForNoWorkspaceChat("default"), "default", "an unused hidden folder is used");
+  assert.equal(app.registry.size, 2);
+
+  app.chatsIn.set("default", ["older"]);
+  const fresh = await app.service.workspaceForNoWorkspaceChat("default");
+  assert.notEqual(fresh, "default");
+  assert.equal(app.registry.get(fresh)?.noWorkspace, true);
+
+  app.chatsIn.set("project", ["a", "b"]);
+  assert.equal(await app.service.workspaceForNoWorkspaceChat("project"), "project", "a real workspace is shared");
 });

@@ -124,10 +124,17 @@ class MainActivity : ComponentActivity() {
                 // This scope is independent of list refreshes. perform consumes approval before I/O.
                 foregroundScope.launch {
                     try {
+                        // A chat started under Chats can land in a fresh hidden workspace of its own.
+                        val startsUnderChats = coordinator.workspaces.value.any { it.id == target.workspaceId && it.noWorkspace }
                         val chat = newChatConsent.perform(target, ::valid) {
-                            requireNotNull(client).createChat(target.workspaceId)
+                            requireNotNull(client).createChat(target.workspaceId, noWorkspace = startsUnderChats)
                         } ?: return@launch
-                        if (chat.isBotChat || chat.workspaceId != target.workspaceId) return@launch
+                        if (chat.isBotChat || (chat.workspaceId != target.workspaceId && !startsUnderChats)) return@launch
+                        if (coordinator.workspaces.value.none { it.id == chat.workspaceId }) {
+                            coordinator.refreshWorkspaces()?.join()
+                            // The wait can outlive the pairing that made the chat; don't open it under another.
+                            if (!valid()) return@launch
+                        }
                         navigationStore.setSelectedArea(target.pairing.instanceId, AidenProductArea.WORKSPACES)
                         navigator.navigate(navigator.stack.resetTo(AidenScreen.ChatDetail(chat.id)))
                     } catch (cancelled: CancellationException) { throw cancelled }
@@ -182,10 +189,13 @@ class MainActivity : ComponentActivity() {
                     val installation = installations.firstOrNull { it.pairing == entry.target }
                     val catalog = container.intentCatalogStore.load()
                     val candidates = if (coordinator.activeInstanceId == instanceId) {
-                        workspaces.map { sbtbiswas.AidenOnTheGo.intents.AidenIntentWorkspaceRecord(it.id, instanceId.orEmpty(), it.name) }
+                        sbtbiswas.AidenOnTheGo.models.AidenNoWorkspace.grouped(workspaces)
+                            .map { sbtbiswas.AidenOnTheGo.intents.AidenIntentWorkspaceRecord(it.id, instanceId.orEmpty(), it.name) }
                     } else catalog.workspaces.filter { it.instanceId == instanceId }
                     val available = candidates.filterNot { coordinator.archiveStore.isArchived(it.id, instanceId) }
-                    val selected = request.workspaceId ?: instanceId?.let(navigationStore::selectedWorkspaceId)
+                    // A chat's own hidden folder is listed under the Chats home, so match against that.
+                    val selected = (request.workspaceId ?: instanceId?.let(navigationStore::selectedWorkspaceId))
+                        ?.let { sbtbiswas.AidenOnTheGo.models.AidenNoWorkspace.groupId(it, workspaces) }
                     val workspace = available.firstOrNull { it.id == selected }
                         ?: if (request.workspaceId == null) available.firstOrNull() else null
                     clearPendingNavigation()

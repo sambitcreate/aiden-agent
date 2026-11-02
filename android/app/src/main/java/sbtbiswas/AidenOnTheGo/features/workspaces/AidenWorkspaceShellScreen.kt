@@ -127,8 +127,9 @@ fun AidenWorkspaceDirectoryScreen(
     var showNewAgentChoices by remember { mutableStateOf(false) }
 
     val instanceArchivedSet = activeInstanceId?.let { archivedIDs[it] } ?: emptySet()
+    // Private folders behind chats without a workspace are not workspaces to manage.
     val displayedWorkspaces = remember(allWorkspaces, pendingNames) {
-        aidenWorkspacesWithPendingNames(allWorkspaces, pendingNames)
+        AidenNoWorkspace.choices(aidenWorkspacesWithPendingNames(allWorkspaces, pendingNames))
     }
 
     val activeWorkspaces = remember(displayedWorkspaces, instanceArchivedSet, searchQuery) {

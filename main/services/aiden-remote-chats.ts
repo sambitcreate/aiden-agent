@@ -875,12 +875,15 @@ export function projectAidenRemoteChat(
   }
 }
 
-function parseCreate(input: unknown): { workspaceId: string; providerId?: string; model?: string } {
+function parseCreate(
+  input: unknown,
+): { workspaceId: string; providerId?: string; model?: string; noWorkspace?: true } {
   const record = ownRecord(input);
   if (
     !record ||
-    !exactKeys(record, ["workspaceId"], ["providerId", "modelId"]) ||
+    !exactKeys(record, ["workspaceId"], ["providerId", "modelId", "noWorkspace"]) ||
     !boundedString(record.workspaceId, 128) ||
+    (record.noWorkspace !== undefined && record.noWorkspace !== true) ||
     (record.providerId !== undefined && !boundedString(record.providerId, 256)) ||
     (record.modelId !== undefined && !boundedString(record.modelId, 256))
   ) {
@@ -890,6 +893,7 @@ function parseCreate(input: unknown): { workspaceId: string; providerId?: string
     workspaceId: safeId(record.workspaceId, "workspace"),
     ...(typeof record.providerId === "string" ? { providerId: record.providerId } : {}),
     ...(typeof record.modelId === "string" ? { model: record.modelId } : {}),
+    ...(record.noWorkspace === true ? { noWorkspace: true as const } : {}),
   };
 }
 
@@ -1228,6 +1232,16 @@ export class AidenRemoteChatService {
        * why before its message is stored. Undefined, or absent: not refused.
        */
       workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
+      /**
+       * No workspace chats keep a hidden folder each: `target` gives the
+       * workspace a new chat that asked for `noWorkspace` goes to, and
+       * `release` lets go of a hidden folder a moved chat left empty. Absent:
+       * workspaces are used as requested.
+       */
+      noWorkspace?: {
+        target(workspaceId: string): Promise<string>;
+        release(workspaceId: string): Promise<void>;
+      };
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
@@ -1834,6 +1848,19 @@ export class AidenRemoteChatService {
     this.attachments.revokeDevice(deviceId);
   }
 
+  /**
+   * Runs one phone create or move at a time while No workspace folders are in play, so two
+   * requests aimed at the same empty hidden folder cannot both see it free and share it.
+   */
+  private assigningNoWorkspace<T>(assign: () => Promise<T>): Promise<T> {
+    if (!this.options.noWorkspace) return assign();
+    const run = this.noWorkspaceAssignments.then(assign, assign);
+    this.noWorkspaceAssignments = run.catch(() => undefined);
+    return run;
+  }
+
+  private noWorkspaceAssignments: Promise<unknown> = Promise.resolve();
+
   async create(deviceId: string, key: string, input: unknown): Promise<AidenRemoteChatProjection> {
     const parsed = parseCreate(input);
     try {
@@ -1845,15 +1872,22 @@ export class AidenRemoteChatService {
           const selection = parsed.providerId || parsed.model
             ? await this.options.models.resolve(parsed.providerId, parsed.model)
             : undefined;
-          const created = await this.options.application.create(
-            {
-              workspaceId: parsed.workspaceId,
-              ...(selection
-                ? { providerId: selection.providerId, model: selection.modelId }
-                : {}),
-            },
-            owner,
-          );
+          const created = await this.assigningNoWorkspace(async () => {
+            // Only a phone that knows the Chats group (revision 50) asks for a folder of its own;
+            // an older phone keeps the workspace it named, as it always has.
+            const workspaceId = parsed.noWorkspace
+              ? ((await this.options.noWorkspace?.target(parsed.workspaceId)) ?? parsed.workspaceId)
+              : parsed.workspaceId;
+            return this.options.application.create(
+              {
+                workspaceId,
+                ...(selection
+                  ? { providerId: selection.providerId, model: selection.modelId }
+                  : {}),
+              },
+              owner,
+            );
+          });
           if (!created) throw new AidenRemoteServiceError("internal_error", "Aiden could not create the chat.", 500);
           this.options.notifyChanged?.(created.id);
           return projectAidenRemoteChat(created);
@@ -1892,8 +1926,19 @@ export class AidenRemoteChatService {
         { deviceId, route: "POST /chats/{id}/move", resourceId: safeId(chatId, "chat"), key },
         { revision, ...parsed },
         async () => {
-          const moved = await this.options.application.moveEmptyToWorkspace(chatId, parsed.workspaceId, {
-            assertCurrent: (chat) => requireRevision(revision, chat),
+          // The release runs inside the same turn, so no other assignment can claim the folder
+          // between the emptiness check and its removal.
+          const moved = await this.assigningNoWorkspace(async () => {
+            const previous = (await this.options.application.list()).find((entry) => entry.id === chatId);
+            const workspaceId = parsed.workspaceId;
+            const moved = await this.options.application.moveEmptyToWorkspace(chatId, workspaceId, {
+              assertCurrent: (chat) => requireRevision(revision, chat),
+            });
+            const left = previous ? persistedChatWorkspaceId(previous.workspaceId) : undefined;
+            // Best effort: the move is already saved, so a failed release must not turn it into an
+            // error (startup clears hidden folders left without a chat).
+            if (left && left !== workspaceId) await this.options.noWorkspace?.release(left).catch(() => undefined);
+            return moved;
           });
           this.options.notifyChanged?.(chatId);
           return projectAidenRemoteChat(moved!);

@@ -27,6 +27,8 @@ export interface AidenRemoteWorkspaceProjection {
   memoryEnabled: boolean;
   hasFolder: boolean;
   isManagedWorktree: boolean;
+  /** Revision 50: a hidden folder Aiden made for one chat without a workspace. */
+  noWorkspace?: true;
   branchName?: string;
   repositoryName?: string;
   createdAt: string;
@@ -99,6 +101,7 @@ export function projectAidenRemoteWorkspace(
     memoryEnabled: workspace.memoryEnabled !== false,
     hasFolder: Boolean(workspace.folderPath),
     isManagedWorktree: Boolean(workspace.managedWorktree),
+    ...(workspace.noWorkspace ? { noWorkspace: true as const } : {}),
     ...(workspace.managedWorktree?.branch
       ? { branchName: workspace.managedWorktree.branch.slice(0, 255) }
       : {}),

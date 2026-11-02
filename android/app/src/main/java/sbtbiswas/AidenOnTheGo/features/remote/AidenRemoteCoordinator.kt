@@ -694,17 +694,20 @@ class AidenRemoteCoordinator(
         return refreshed
     }
 
-    fun refreshWorkspaces(expectedGeneration: Long = activationGeneration) {
-        val currentClient = _client.value ?: return
+    /** Re-reads the Mac's workspaces; callers that must see the result can join the returned job. */
+    fun refreshWorkspaces(expectedGeneration: Long = activationGeneration): Job? {
+        val currentClient = _client.value ?: return null
         val instanceId = activeInstanceId
-        val installationId = installationStore.activeInstallation?.id ?: return
-        scope.launch {
+        val installationId = installationStore.activeInstallation?.id ?: return null
+        return scope.launch {
             try {
                 val list = currentClient.workspaces()
                 if (!isCurrent(expectedGeneration, installationId, currentClient)) return@launch
                 _workspaces.value = list
                 if (instanceId != null) {
-                    archiveStore.prune(instanceId, list.map { it.id }.toSet())
+                    // A hidden No workspace record can't be archived (the Chats group has no
+                    // Unarchive), so a flag an older build left on one is dropped here.
+                    archiveStore.prune(instanceId, AidenNoWorkspace.choices(list).map { it.id }.toSet())
                     readSnapshotCache.store(instanceId, AidenReadSnapshotKeys.WORKSPACES, list, workspaceListSerializer)
                 }
                 refreshIntentCatalog()
@@ -768,7 +771,8 @@ class AidenRemoteCoordinator(
         val workspaceRecords = if (activeInstanceId == null) {
             emptyList()
         } else {
-            _workspaces.value.map { workspace ->
+            // Shortcuts see chats without a workspace as one Chats entry, as the sidebar does.
+            AidenNoWorkspace.grouped(_workspaces.value).map { workspace ->
                 AidenIntentWorkspaceRecord(
                     id = workspace.id,
                     instanceId = activeInstanceId,

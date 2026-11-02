@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Contract revision 50: chats without a workspace match the Mac. The sidebar shows them in one **Chats** group instead of a "No workspace" section per chat, and **New Chat** offers **No Workspace** first ("Use your global settings. Aiden keeps a private folder for this chat."), which starts a chat that runs on the Mac with its global settings in a private folder of its own. The private folders no longer appear in the workspace list, the Existing Workspace picker or Scheduled Tasks, and a "No workspace" section archived on an older build comes back under Chats. Older Macs, and the CLI, offer nothing new.
 - Contract revision 49 (`chat:jobs`): when the paired Mac offers it, the iPhone asks for it in a call of its own, and a workspace chat shows "2 in background" beside the composer while the agent has something running for it on the Mac (a dev server, a watcher, a long test run, or a server a command left running). The list says how long each has run or how it ended, the addresses a server listens on ("localhost:5173 on your Mac"), and offers **Stop**, which ends the job and everything it started. The list refreshes after each reply and every few seconds while something runs. Older Macs show nothing new.
 - The disconnected recovery panel now offers **Switch connection**, so an unavailable computer no longer leaves you with only Retry. Open the saved-computer list or pair another Aiden Agent directly, including when a secure-identity failure prevents retrying.
 

@@ -223,6 +223,20 @@ class AidenRemoteClientTest {
     }
 
     @Test
+    fun aChatStartedUnderChatsAsksTheMacForAFolderOfItsOwn() = runBlocking {
+        val chat = """{"id":"chat-1","workspaceId":"hidden-1","title":"New Chat","messages":[],"createdAt":"2026-08-19T07:00:00.000Z","updatedAt":"2026-08-19T07:00:01.000Z","revision":"revision-1"}"""
+        server.enqueue(MockResponse().setResponseCode(201).setBody(chat))
+        server.enqueue(MockResponse().setResponseCode(201).setBody(chat))
+        client.createChat("default", noWorkspace = true)
+        val asked = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertEquals("default", asked.getValue("workspaceId").jsonPrimitive.content)
+        assertEquals("true", asked.getValue("noWorkspace").jsonPrimitive.content)
+        // An ordinary create never asks (revision 50).
+        client.createChat("workspace-1")
+        assertFalse(Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject.containsKey("noWorkspace"))
+    }
+
+    @Test
     fun providerCreationSendsExplicitVisionAndWriteOnlyKey() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(201).setBody("""{"id":"custom:remote-fixture","label":"Private","models":["vision"]}"""))
         val key = UUID.fromString("10000000-0000-4000-8000-000000000001")

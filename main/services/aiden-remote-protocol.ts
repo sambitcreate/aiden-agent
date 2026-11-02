@@ -214,7 +214,19 @@ export const AIDEN_REMOTE_WORKSPACE_CLONE_CONTRACT_REVISION = 48 as const;
  * list. Older phones see nothing new.
  */
 export const AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION = 49 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION;
+/**
+ * Contract revision 50 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_NO_WORKSPACE_CONTRACT_REVISION`):
+ * chats without a workspace on phones. A workspace may carry `noWorkspace:
+ * true`: a hidden folder Aiden made for one such chat. Phones list those chats
+ * under one Chats group and start new ones in its home (the `default` record,
+ * else the oldest). `POST /chats` with `noWorkspace: true` aimed at a hidden
+ * workspace that already holds another chat saves the chat in a fresh one;
+ * without the flag, and for moves, the named workspace is kept. Older phones
+ * see each hidden workspace as a workspace named "No workspace", as before.
+ */
+export const AIDEN_REMOTE_NO_WORKSPACE_CONTRACT_REVISION = 50 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_NO_WORKSPACE_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;

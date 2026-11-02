@@ -26,6 +26,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenScheduledTask
 import sbtbiswas.AidenOnTheGo.models.AidenModelCatalog
 import sbtbiswas.AidenOnTheGo.models.AidenUsageSummary
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
+import sbtbiswas.AidenOnTheGo.models.AidenNoWorkspace
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenUsageCache
@@ -466,8 +467,9 @@ fun projectAidenWorkspaceSidebar(
     val regularChats = aidenNeedsAttentionFirst(
         regularNewestFirst(chats).filter { workspacesById.containsKey(it.workspaceId) }
     )
-    val chatsByWorkspace = regularChats.groupBy { it.workspaceId }
-    val sections = workspaces.mapNotNull { workspace ->
+    // Chats without a workspace each have a hidden record; they share one Chats section.
+    val chatsByWorkspace = regularChats.groupBy { AidenNoWorkspace.groupId(it.workspaceId, workspaces) }
+    val sections = AidenNoWorkspace.grouped(workspaces).mapNotNull { workspace ->
         val allChats = chatsByWorkspace[workspace.id].orEmpty()
         val workspaceMatches = query.isNotEmpty() && workspace.name.contains(query, ignoreCase = true)
         val visibleChats = when {

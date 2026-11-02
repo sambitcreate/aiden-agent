@@ -41,4 +41,6 @@ Every install used to have a folderless workspace called "Workspace" whose chats
 
 ## Platforms
 
-Desktop (macOS and Linux). Paired phones and the CLI do not offer No workspace yet: a phone lists each hidden workspace by its name, **No workspace**, and can open and continue those chats.
+Desktop (macOS and Linux), and Aiden On The Go for iPhone and Android paired to a desktop on contract revision 50.
+
+On a phone, the sidebar shows the same one **Chats** group, and **New Chat** offers **No Workspace** first, above New Workspace and Existing Workspace. A chat started there runs on the desktop in a hidden folder of its own: the phone aims it at the home folder, and the desktop gives it a fresh folder when the home already holds a chat. Hidden folders never appear in a phone's workspace list or pickers; on iPhone, a scheduled task that already runs in one still shows it while you edit the task, as on the desktop. A phone paired to an older desktop, or to the CLI (which has no No workspace chats), offers nothing new; an older phone keeps listing each hidden workspace by its name, **No workspace**.

@@ -8,6 +8,7 @@ import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.AidenChatRowState
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummaryActivity
+import sbtbiswas.AidenOnTheGo.models.AidenNoWorkspace
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspacePermission
 import java.time.Instant
@@ -194,6 +195,55 @@ class AidenChatRowStatusTest {
         assertEquals(
             listOf("alpha-approval", "beta-working", "alpha-newest", "beta-idle"),
             projection.recents.map { it.id }
+        )
+    }
+
+    @Test
+    fun chatsWithoutAWorkspaceShareOneChatsSectionOnTheirHome() {
+        fun hidden(id: String, createdSeconds: Long) = AidenWorkspace(
+            id = id,
+            name = "No workspace",
+            permission = AidenWorkspacePermission.ASK,
+            hasFolder = true,
+            noWorkspace = true,
+            createdAt = base.plusSeconds(createdSeconds),
+            updatedAt = base,
+            revision = "$id-r1"
+        )
+        val workspaces = listOf(
+            hidden("hidden-b", 2),
+            AidenWorkspace(id = "alpha", name = "Alpha", permission = AidenWorkspacePermission.ASK, updatedAt = base, revision = "alpha-r1"),
+            hidden("default", 9),
+            hidden("hidden-a", 1)
+        )
+        val chats = listOf(
+            summary("soup", 30, workspaceId = "hidden-a"),
+            summary("trip", 20, workspaceId = "hidden-b"),
+            summary("first", 10, workspaceId = "default"),
+            summary("alpha-chat", 5, workspaceId = "alpha")
+        )
+
+        val projection = projectAidenWorkspaceSidebar(workspaces, chats, "")
+
+        // The default record is the home even though others are older; every hidden chat sits under it.
+        assertEquals(listOf("default", "alpha"), projection.sections.map { it.workspace.id })
+        assertEquals("Chats", projection.sections.first().workspace.name)
+        assertEquals(listOf("soup", "trip", "first"), projection.sections.first().chats.map { it.id })
+        assertEquals(4, projection.recents.size)
+        // Pickers and the workspace list never offer a hidden record.
+        assertEquals(listOf("alpha"), AidenNoWorkspace.choices(workspaces).map { it.id })
+
+        // Without a default record, the oldest hidden record is the home.
+        val withoutDefault = workspaces.filterNot { it.id == "default" }
+        assertEquals("hidden-a", AidenNoWorkspace.home(withoutDefault)?.id)
+        // A Mac that lists no hidden records has no home, so the phone hides "No Workspace".
+        assertNull(AidenNoWorkspace.home(workspaces.filterNot { it.noWorkspace }))
+
+        // An older build could archive a "No workspace" record; the Chats group has no Unarchive,
+        // so that flag is ignored and its chats stay listed. Archived projects stay archived.
+        assertEquals(
+            listOf("hidden-b", "default", "hidden-a"),
+            AidenNoWorkspace.unarchived(workspaces, setOf("default", "alpha")).map { it.id }
         )
     }
 }

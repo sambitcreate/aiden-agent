@@ -126,14 +126,21 @@ private extension View {
 }
 
 enum AidenNewAgentChoice: String, CaseIterable, Identifiable {
+    case noWorkspace
     case existingWorkspace
     case newWorkspace
     case scratchWorkspace
 
     var id: String { rawValue }
 
+    /// The choices to offer: No Workspace only when the Mac lists a Chats home (revision 50).
+    static func available(noWorkspace: Bool) -> [AidenNewAgentChoice] {
+        allCases.filter { noWorkspace || $0 != .noWorkspace }
+    }
+
     var title: String {
         switch self {
+        case .noWorkspace: "No Workspace"
         case .existingWorkspace: "Existing Workspace"
         case .newWorkspace: "New Workspace"
         case .scratchWorkspace: "Managed Scratch Workspace"
@@ -142,6 +149,7 @@ enum AidenNewAgentChoice: String, CaseIterable, Identifiable {
 
     var detail: String {
         switch self {
+        case .noWorkspace: "Use your global settings. Aiden keeps a private folder for this chat."
         case .existingWorkspace: "Start another chat without creating a folder."
         case .newWorkspace: "Create a reusable workspace for ongoing work."
         case .scratchWorkspace: "Use an isolated workspace Aiden can clean up later."
@@ -150,6 +158,7 @@ enum AidenNewAgentChoice: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
+        case .noWorkspace: "bubble.left.and.bubble.right"
         case .existingWorkspace: "folder"
         case .newWorkspace: "folder.badge.plus"
         case .scratchWorkspace: "hammer.fill"
@@ -761,6 +770,13 @@ private struct AidenHomeLoadID: Equatable {
 }
 
 enum AidenWorkspaceNavigation {
+    /// Workspaces split view can select. A hidden No workspace record has no page of its own, so
+    /// only the Chats group's home is selectable, and only while one of its chats is open.
+    static func selectableIDs(_ workspaces: [AidenWorkspace], openChatWorkspaceID: String?) -> [String] {
+        let openGroupID = openChatWorkspaceID.map { AidenNoWorkspace.groupID(for: $0, in: workspaces) }
+        return workspaces.filter { !$0.noWorkspace || $0.id == openGroupID }.map(\.id)
+    }
+
     static func reconciledSelection(current: String?, workspaceIDs: [String]) -> String? {
         guard !workspaceIDs.isEmpty else { return nil }
         if let current, workspaceIDs.contains(current) { return current }
@@ -819,8 +835,11 @@ struct AidenWorkspaceSidebarProjection: Equatable {
                 left.updatedAt == right.updatedAt ? left.id < right.id : left.updatedAt > right.updatedAt
             }
         let triagedChats = aidenNeedsAttentionFirst(regularChats)
-        let chatsByWorkspace = Dictionary(grouping: triagedChats, by: \AidenChatSummary.workspaceId)
-        let sections = workspaces.compactMap { workspace -> AidenWorkspaceSidebarSection? in
+        // Chats without a workspace each have a hidden record; they share one Chats section.
+        let chatsByWorkspace = Dictionary(grouping: triagedChats) { chat in
+            AidenNoWorkspace.groupID(for: chat.workspaceId, in: workspaces)
+        }
+        let sections = AidenNoWorkspace.grouped(workspaces).compactMap { workspace -> AidenWorkspaceSidebarSection? in
             let allChats = chatsByWorkspace[workspace.id] ?? []
             let workspaceMatches = !query.isEmpty && workspace.name.localizedCaseInsensitiveContains(query)
             let visibleChats = query.isEmpty || workspaceMatches
@@ -1044,7 +1063,7 @@ struct AidenWorkspaceShellView: View {
     }
 
     private var activeWorkspaces: [AidenWorkspace] {
-        coordinator.workspaces.filter { !archivedWorkspaceIDs.contains($0.id) }
+        AidenNoWorkspace.unarchived(coordinator.workspaces, archivedIDs: archivedWorkspaceIDs)
     }
 
     private var activeWorkspaceIDs: [String] {
@@ -1303,7 +1322,7 @@ struct AidenWorkspaceShellView: View {
         }
         .sheet(isPresented: $isShowingExistingWorkspacePicker) {
             NavigationStack {
-                List(activeWorkspaces) { workspace in
+                List(AidenNoWorkspace.choices(activeWorkspaces)) { workspace in
                     Button {
                         isShowingExistingWorkspacePicker = false
                         Task { await createNewAgent(in: workspace) }
@@ -1557,7 +1576,9 @@ struct AidenWorkspaceShellView: View {
                                                 .font(.caption.weight(.semibold))
                                                 .foregroundStyle(palette.secondary)
                                                 .frame(width: 12)
-                                            Image(systemName: section.workspace.hasFolder ? "folder" : "tray")
+                                            Image(systemName: section.workspace.noWorkspace
+                                                ? "bubble.left.and.bubble.right"
+                                                : section.workspace.hasFolder ? "folder" : "tray")
                                                 .font(.body.weight(.medium))
                                                 .foregroundStyle(palette.accent)
                                                 .frame(width: 22)
@@ -1574,7 +1595,9 @@ struct AidenWorkspaceShellView: View {
                                         "\(expanded ? "Collapse" : "Expand") \(section.workspace.name)"
                                     )
 
-                                    workspaceDestination(section.workspace)
+                                    if !section.workspace.noWorkspace {
+                                        workspaceDestination(section.workspace)
+                                    }
                                 }
 
                                 if expanded {
@@ -1990,7 +2013,10 @@ struct AidenWorkspaceShellView: View {
         .matchedTransitionSource(id: "AidenNewAgentOptions", in: newAgentTransition)
         .popover(isPresented: $isShowingNewAgentChoices, arrowEdge: .bottom) {
             AidenNewAgentPopover(
-                canUseExistingWorkspace: !activeWorkspaces.isEmpty,
+                choices: AidenNewAgentChoice.available(
+                    noWorkspace: AidenNoWorkspace.home(in: coordinator.workspaces) != nil
+                ),
+                canUseExistingWorkspace: !AidenNoWorkspace.choices(activeWorkspaces).isEmpty,
                 onSelect: presentNewAgentChoice
             )
             .frame(width: 320)
@@ -2005,6 +2031,11 @@ struct AidenWorkspaceShellView: View {
         Task { @MainActor in
             await Task.yield()
             switch choice {
+            case .noWorkspace:
+                // The Mac gives the chat a folder of its own if the home already holds one.
+                if let home = AidenNoWorkspace.home(in: coordinator.workspaces) {
+                    await createNewAgent(in: home)
+                }
             case .existingWorkspace:
                 isShowingExistingWorkspacePicker = true
             case .newWorkspace:
@@ -2099,11 +2130,22 @@ struct AidenWorkspaceShellView: View {
         }
 
         do {
-            let chat = try await coordinator.remoteClient(for: context).createChat(workspaceId: workspace.id)
+            let chat = try await coordinator.remoteClient(for: context)
+                .createChat(workspaceId: workspace.id, noWorkspace: workspace.noWorkspace)
             guard coordinator.isCurrent(context) else { return }
             guard !chat.isBotChat else {
                 coordinator.presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
                 return
+            }
+            // A No workspace chat can land in a fresh hidden workspace the phone hasn't listed yet.
+            if !coordinator.workspaces.contains(where: { $0.id == chat.workspaceId }) {
+                await coordinator.refreshWorkspaces()
+                guard coordinator.isCurrent(context) else { return }
+                guard coordinator.workspaces.contains(where: { $0.id == chat.workspaceId }) else {
+                    homeModel.accept(chat)
+                    coordinator.presentedError = AidenNoWorkspace.startedButUnlistedMessage
+                    return
+                }
             }
             // The chat opens from the create receipt; Home's full reload
             // (chats, tasks, catalog, usage) runs behind it.
@@ -2146,9 +2188,11 @@ struct AidenWorkspaceShellView: View {
 
     @ViewBuilder
     private func workspaceDetail(workspaceID: String?) -> some View {
+        // A hidden No workspace record has no page of its own (no chat list, settings or Remove).
         if let workspaceID,
            !archivedWorkspaceIDs.contains(workspaceID),
-           let workspace = coordinator.workspaces.first(where: { $0.id == workspaceID }) {
+           let workspace = coordinator.workspaces.first(where: { $0.id == workspaceID }),
+           !workspace.noWorkspace {
             AidenWorkspaceDetailView(
                 coordinator: coordinator,
                 workspace: workspace,
@@ -2194,9 +2238,11 @@ struct AidenWorkspaceShellView: View {
 
     private func commitOpenChat(_ chat: AidenChat, startsVoice: Bool = false) {
         guard activeWorkspaceIDs.contains(chat.workspaceId) else { return }
-        selectedWorkspaceId = chat.workspaceId
+        // A chat without a workspace is listed under the Chats group, which stands on the home.
+        let sectionID = AidenNoWorkspace.groupID(for: chat.workspaceId, in: coordinator.workspaces)
+        selectedWorkspaceId = sectionID
         navigationStore.ensureExpandedSidebarWorkspace(
-            chat.workspaceId,
+            sectionID,
             for: coordinator.activeInstanceId
         )
         if !usesSplitNavigation { compactWorkspacePath = [] }
@@ -2286,7 +2332,10 @@ struct AidenWorkspaceShellView: View {
         fullyRevealedSidebarWorkspaceIDs.formIntersection(workspaceIDs)
         selectedWorkspaceId = AidenWorkspaceNavigation.reconciledSelection(
             current: selectedWorkspaceId,
-            workspaceIDs: workspaceIDs
+            workspaceIDs: AidenWorkspaceNavigation.selectableIDs(
+                activeWorkspaces.filter { workspaceIDs.contains($0.id) },
+                openChatWorkspaceID: selectedSidebarChat?.workspaceId
+            )
         )
         compactWorkspacePath = AidenWorkspaceNavigation.reconciledCompactPath(
             current: compactWorkspacePath,
@@ -2338,7 +2387,9 @@ struct AidenWorkspaceShellView: View {
                     coordinator.presentedError = String(localized: "The requested workspace is unavailable. Choose or add a workspace first.")
                     return
                 }
-                chat = try await coordinator.remoteClient(for: context).createChat(workspaceId: workspaceId)
+                let underChats = coordinator.workspaces.contains { $0.id == workspaceId && $0.noWorkspace }
+                chat = try await coordinator.remoteClient(for: context)
+                    .createChat(workspaceId: workspaceId, noWorkspace: underChats)
                 guard coordinator.isCurrent(context) else { return }
                 guard !chat.isBotChat else {
                     coordinator.presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
@@ -2352,6 +2403,12 @@ struct AidenWorkspaceShellView: View {
                     coordinator.presentedError = String(localized: "This conversation belongs in Bots and cannot be opened from Workspaces yet.")
                     return
                 }
+                // A chat started without a workspace can sit in a hidden folder made after the
+                // phone last read the Mac's workspaces.
+                if !coordinator.workspaces.contains(where: { $0.id == chat.workspaceId }) {
+                    await coordinator.refreshWorkspaces()
+                    guard coordinator.isCurrent(context) else { return }
+                }
                 guard activeWorkspaceIDs.contains(chat.workspaceId) else {
                     if archivedWorkspaceIDs.contains(chat.workspaceId) {
                         coordinator.presentedError = String(localized: "That chat belongs to a workspace archived on this device. Unarchive it from Workspaces to open the chat.")
@@ -2360,7 +2417,7 @@ struct AidenWorkspaceShellView: View {
                     coordinator.presentedError = String(localized: "The chat's workspace is no longer available.")
                     return
                 }
-                navigate(to: chat.workspaceId)
+                navigate(to: AidenNoWorkspace.groupID(for: chat.workspaceId, in: coordinator.workspaces))
             case .botChat:
                 // The product shell resolves Bot links before Workspaces sees
                 // them; never reinterpret a Bot ID as a Workspace destination.
@@ -2379,17 +2436,18 @@ struct AidenWorkspaceShellView: View {
 private struct AidenNewAgentPopover: View {
     @Environment(\.aidenPalette) private var palette
 
+    let choices: [AidenNewAgentChoice]
     let canUseExistingWorkspace: Bool
     let onSelect: (AidenNewAgentChoice) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("New Workspace Chat")
+                Text("New Chat")
                     .font(.title3.bold())
                     .foregroundStyle(palette.foreground)
 
-                Text("Choose the workspace for this chat.")
+                Text("Choose where this chat runs.")
                     .font(.subheadline)
                     .foregroundStyle(palette.secondary)
             }
@@ -2397,7 +2455,7 @@ private struct AidenNewAgentPopover: View {
             .padding(.top, 18)
             .padding(.bottom, 10)
 
-            ForEach(Array(AidenNewAgentChoice.allCases.enumerated()), id: \.element.id) { index, choice in
+            ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
                 Button {
                     onSelect(choice)
                 } label: {
@@ -2435,7 +2493,7 @@ private struct AidenNewAgentPopover: View {
                 .opacity(choice == .existingWorkspace && !canUseExistingWorkspace ? 0.45 : 1)
                 .accessibilityHint(detail(for: choice))
 
-                if index < AidenNewAgentChoice.allCases.count - 1 {
+                if index < choices.count - 1 {
                     Divider()
                         .overlay(palette.secondary.opacity(0.18))
                         .padding(.leading, 69)
@@ -2475,12 +2533,13 @@ private struct AidenWorkspacesDirectoryView: View {
         archiveStore.archivedWorkspaceIDs(for: coordinator.activeInstanceId)
     }
 
+    // Chats without a workspace live under Chats in the sidebar, not here.
     private var activeWorkspaces: [AidenWorkspace] {
-        coordinator.workspaces.filter { !archivedWorkspaceIDs.contains($0.id) }
+        AidenNoWorkspace.choices(coordinator.workspaces).filter { !archivedWorkspaceIDs.contains($0.id) }
     }
 
     private var archivedWorkspaces: [AidenWorkspace] {
-        coordinator.workspaces.filter { archivedWorkspaceIDs.contains($0.id) }
+        AidenNoWorkspace.choices(coordinator.workspaces).filter { archivedWorkspaceIDs.contains($0.id) }
     }
 
     private var filteredWorkspaces: [AidenWorkspace] {

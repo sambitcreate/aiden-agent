@@ -1044,9 +1044,11 @@ final class AidenRemoteCoordinator {
     private func applyWorkspaceSnapshot(_ workspaces: [AidenWorkspace], instanceId: String) {
         guard activeInstanceId == instanceId else { return }
         self.workspaces = workspaces
+        // A hidden No workspace record can't be archived (the Chats group has no Unarchive), so
+        // a flag an older build left on one is dropped here and every archive check agrees.
         workspaceArchiveStore.prune(
             instanceID: instanceId,
-            validWorkspaceIDs: Set(workspaces.map(\.id))
+            validWorkspaceIDs: Set(AidenNoWorkspace.choices(workspaces).map(\.id))
         )
         workspaceSnapshotRevision &+= 1
         updateIntentCatalog(for: instanceId)
@@ -1165,7 +1167,10 @@ final class AidenRemoteCoordinator {
         let cachedWorkspaces: [AidenIntentWorkspaceRecord]
         if let instanceId, instanceId == activeInstanceId {
             let archivedWorkspaceIDs = workspaceArchiveStore.archivedWorkspaceIDs(for: instanceId)
-            cachedWorkspaces = workspaces.filter { !archivedWorkspaceIDs.contains($0.id) }.map {
+            // Shortcuts see chats without a workspace as one Chats entry, as the sidebar does.
+            cachedWorkspaces = AidenNoWorkspace.grouped(
+                AidenNoWorkspace.unarchived(workspaces, archivedIDs: archivedWorkspaceIDs)
+            ).map {
                 AidenIntentWorkspaceRecord(id: $0.id, instanceId: instanceId, name: $0.name)
             }
         } else {

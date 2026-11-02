@@ -308,6 +308,8 @@
     <string name="workspace_home_empty_chats_body">Start a new Workspace chat to begin.</string>
     <string name="workspace_home_loading_more">Loading more chats</string>
     <string name="workspace_home_load_more">Load more chats</string>
+    <string name="workspace_home_choice_no_workspace">No Workspace</string>
+    <string name="workspace_home_choice_no_workspace_detail">Use your global settings. Aiden keeps a private folder for this chat</string>
     <string name="workspace_home_choice_existing">Existing Workspace</string>
     <string name="workspace_home_choice_existing_detail">Choose a workspace and open a new chat</string>
     <string name="workspace_home_choice_new_detail">Create a reusable workspace and its first chat</string>

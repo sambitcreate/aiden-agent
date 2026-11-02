@@ -71,6 +71,7 @@ function fixture(
     botPaused?: (botId: string) => Promise<boolean>;
     spendingRefusal?: (chat: { id: string; botId?: string }) => Promise<string | undefined>;
     workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
+    noWorkspace?: ConstructorParameters<typeof AidenRemoteChatService>[0]["noWorkspace"];
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
@@ -291,6 +292,7 @@ function fixture(
       fixtureOptions.botTurnAuthorityPreflight ?? (async () => undefined),
     ...(fixtureOptions.botPaused ? { botPaused: fixtureOptions.botPaused } : {}),
     ...(fixtureOptions.spendingRefusal ? { spendingRefusal: fixtureOptions.spendingRefusal } : {}),
+    ...(fixtureOptions.noWorkspace ? { noWorkspace: fixtureOptions.noWorkspace } : {}),
     ...(fixtureOptions.workspaceFolderRefusal
       ? { workspaceFolderRefusal: fixtureOptions.workspaceFolderRefusal }
       : {}),
@@ -1490,6 +1492,80 @@ test("chat create is device-scoped idempotent and CRUD checks exact revisions", 
   assert.equal(renamed.title, "Changed");
   await app.service.remove(created.id, renamed.revision);
   assert.equal(app.notifications(), 3);
+});
+
+test("a phone's chat aimed at a used No workspace folder is saved in a fresh one (revision 50)", async () => {
+  const released: string[] = [];
+  const app = fixture(chat({ workspaceId: "project" }), {
+    noWorkspace: {
+      // The home already holds a chat; any other workspace is used as asked.
+      target: async (workspaceId) => (workspaceId === "default" ? "hidden-fresh" : workspaceId),
+      release: async (workspaceId) => { released.push(workspaceId); },
+    },
+  });
+  const request = { workspaceId: "default", noWorkspace: true };
+  const created = await app.service.create("device-1", "chat-create-key-nows1", request);
+  assert.equal(created.workspaceId, "hidden-fresh");
+  assert.equal(
+    (await app.service.create("device-1", "chat-create-key-nows1", request)).workspaceId,
+    "hidden-fresh",
+    "a retried create keeps the folder it was given",
+  );
+
+  // A phone from before revision 50 doesn't ask, so its chat stays in the workspace it named.
+  const older = await app.service.create("device-2", "chat-create-key-nows2", { workspaceId: "default" });
+  assert.equal(older.workspaceId, "default");
+  await assert.rejects(
+    app.service.create("device-1", "chat-create-key-nows3", { workspaceId: "default", noWorkspace: false }),
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "invalid_request",
+  );
+
+  // Moving the empty chat to a project lets go of the hidden folder it left.
+  const moved = await app.service.move("device-2", older.id, older.revision, "chat-move-key-nows01", {
+    workspaceId: "project",
+    confirmedForeground: true,
+  });
+  assert.equal(moved.workspaceId, "project");
+  assert.deepEqual(released, ["default"]);
+});
+
+test("a phone's move out of a No workspace folder still answers when the folder can't be released", async () => {
+  const app = fixture(chat({ workspaceId: "project" }), {
+    noWorkspace: {
+      target: async () => "hidden-fresh",
+      release: async () => { throw new Error("The folder couldn't be read."); },
+    },
+  });
+  const created = await app.service.create("device-1", "chat-create-key-nows4", { workspaceId: "default", noWorkspace: true });
+  assert.equal(created.workspaceId, "hidden-fresh");
+  // The move is saved before the release, so a failed release must not turn it into an error.
+  const moved = await app.service.move("device-1", created.id, created.revision, "chat-move-key-nows03", {
+    workspaceId: "project",
+    confirmedForeground: true,
+  });
+  assert.equal(moved.workspaceId, "project");
+});
+
+test("two phones starting No workspace chats at once never share a hidden folder (revision 50)", async () => {
+  let fresh = 0;
+  let app: ReturnType<typeof fixture> | undefined;
+  app = fixture(chat({ workspaceId: "project" }), {
+    noWorkspace: {
+      // Like the host: the folder is free only while no saved chat is in it.
+      target: async (workspaceId) => {
+        const used = (await app!.service.listSummaries()).summaries.some((entry) => entry.workspaceId === workspaceId);
+        await new Promise((resolve) => setImmediate(resolve));
+        return used ? `hidden-${++fresh}` : workspaceId;
+      },
+      release: async () => {},
+    },
+  });
+  const [first, second] = await Promise.all([
+    app.service.create("device-1", "chat-create-key-race1", { workspaceId: "default", noWorkspace: true }),
+    app.service.create("device-2", "chat-create-key-race2", { workspaceId: "default", noWorkspace: true }),
+  ]);
+  assert.notEqual(first.id, second.id);
+  assert.deepEqual([first.workspaceId, second.workspaceId].sort(), ["default", "hidden-1"]);
 });
 
 test("summary revisions are valid optimistic-concurrency tokens for chat mutations", async () => {

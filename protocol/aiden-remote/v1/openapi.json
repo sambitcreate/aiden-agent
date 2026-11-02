@@ -781,6 +781,11 @@
                   },
                   "modelId": {
                     "type": "string"
+                  },
+                  "noWorkspace": {
+                    "type": "boolean",
+                    "const": true,
+                    "description": "Contract revision 50. Sent by a phone starting a chat under Chats (workspaceId names a hidden No workspace record): the host saves the chat in a hidden folder of its own, a fresh one when the named record already holds a chat. Without it the chat stays in the workspace named."
                   }
                 },
                 "additionalProperties": false
@@ -8671,6 +8676,11 @@
           "isManagedWorktree": {
             "type": "boolean"
           },
+          "noWorkspace": {
+            "type": "boolean",
+            "const": true,
+            "description": "Contract revision 50. Present only on a hidden folder Aiden made for one chat without a workspace. Clients list those chats under one Chats group instead of a workspace each."
+          },
           "branchName": {
             "type": "string"
           },
@@ -15514,6 +15524,11 @@
           },
           "isManagedWorktree": {
             "type": "boolean"
+          },
+          "noWorkspace": {
+            "type": "boolean",
+            "const": true,
+            "description": "Contract revision 50. Present only on a hidden folder Aiden made for one chat without a workspace. Clients list those chats under one Chats group instead of a workspace each."
           },
           "branchName": {
             "type": "string"
