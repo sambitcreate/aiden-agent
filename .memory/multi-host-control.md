@@ -131,4 +131,4 @@ Plan: `docs/plans/completed/desktop-multi-host-control-plan.md` (with its PR 1â€
 
 ## Remote project environment admission
 
-The receiving clone checks each selected environment filename against case-sensitive repository ignore rules before writing. It ignores user-level excludes for this check, so a source-only or machine-local ignore cannot leave a secret stageable on the destination. A clone with an unprotected selected name fails before publication. Explicit forced Git adds can still override ignore rules.
+The receiving clone checks each selected environment filename against repository ignore rules in both case-matching modes before writing. It ignores user-level excludes for this check, so a source-only or machine-local ignore cannot leave a secret stageable on the destination. A clone with an unprotected selected name fails before publication. Explicit forced Git adds can still override ignore rules.

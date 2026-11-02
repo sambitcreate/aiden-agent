@@ -755,6 +755,8 @@ test("remote clone publishes optional environment files privately before registr
   const destination = path.join(fixture_.home, "widget");
   assert.equal(await fs.readFile(path.join(destination, ".env.local"), "utf8"), "KEY=synthetic-private");
   assert.equal((await fs.stat(path.join(destination, ".env.local"))).mode & 0o777, 0o600);
+  git(destination, "add", "-A", "--", ".");
+  assert.equal(git(destination, "diff", "--cached", "--name-only").includes(".env.local"), false);
   assert.equal(fixture_.workspaces.length, 1);
   assert.equal(JSON.stringify(result).includes(fixture_.home), false);
   assert.equal(JSON.stringify(result).includes("synthetic-private"), false);
@@ -797,6 +799,43 @@ test("destination ignore admission does not depend on case-insensitive Git confi
   const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
   const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, browser: { consumeSelection: async () => claim, revalidateConsumedSelection: async () => claim } });
   await assert.rejects(remote.create("device", "clone-ignore-case-key", { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files: [{ name: ".env.local", content: "SECRET=synthetic" }] }), /destination repository must ignore/);
+  assert.deepEqual(await fs.readdir(fixture_.home), []);
+  assert.equal(fixture_.workspaces.length, 0);
+});
+
+test("destination rejects mixed-case negation under normal Git staging", async t => {
+  const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-clone-negation-"));
+  t.after(() => fs.rm(repositoryRoot, { recursive: true, force: true }));
+  const bare = await bareRepository(repositoryRoot, ".env*\n!.ENV.local");
+  const clone = createGitCloneRunner({ extraConfig: [["protocol.file.allow", "always"], [`url.file://${bare}.insteadOf`, FIXTURE_URL]] });
+  const fixture_ = await fixture(t, { runClone: async request => {
+    const result = await clone(request);
+    if (result.ok) git(request.destination, "config", "core.ignorecase", "true");
+    return result;
+  } });
+  const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
+  const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, browser: { consumeSelection: async () => claim, revalidateConsumedSelection: async () => claim } });
+  await assert.rejects(remote.create("device", "clone-ignore-negation", { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files: [{ name: ".env.local", content: "SECRET=synthetic" }] }), /destination repository must ignore/);
+  assert.deepEqual(await fs.readdir(fixture_.home), []);
+  assert.equal(fixture_.workspaces.length, 0);
+});
+
+test("destination cannot rely on a user-level Git exclude", async t => {
+  const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-clone-global-ignore-"));
+  t.after(() => fs.rm(repositoryRoot, { recursive: true, force: true }));
+  const bare = await bareRepository(repositoryRoot);
+  const excludes = path.join(repositoryRoot, "global-excludes");
+  const config = path.join(repositoryRoot, "gitconfig");
+  await fs.writeFile(excludes, ".env*\n");
+  await fs.writeFile(config, `[core]\n  excludesFile = ${excludes}\n`);
+  const previous = process.env.GIT_CONFIG_GLOBAL;
+  process.env.GIT_CONFIG_GLOBAL = config;
+  t.after(() => { if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = previous; });
+  const clone = createGitCloneRunner({ extraConfig: [["protocol.file.allow", "always"], [`url.file://${bare}.insteadOf`, FIXTURE_URL]] });
+  const fixture_ = await fixture(t, { runClone: clone });
+  const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
+  const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, browser: { consumeSelection: async () => claim, revalidateConsumedSelection: async () => claim } });
+  await assert.rejects(remote.create("device", "clone-global-ignore-key", { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files: [{ name: ".env.local", content: "SECRET=synthetic" }] }), /destination repository must ignore/);
   assert.deepEqual(await fs.readdir(fixture_.home), []);
   assert.equal(fixture_.workspaces.length, 0);
 });

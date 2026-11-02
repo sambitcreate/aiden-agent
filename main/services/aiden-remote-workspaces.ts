@@ -354,7 +354,11 @@ export class AidenRemoteWorkspaceService {
                   for (const file of parsed.files) {
                     controller.signal.throwIfAborted();
                     try {
-                      await peerProjectGit(root.path, ["-c", "core.excludesFile=/dev/null", "-c", "core.ignoreCase=false", "check-ignore", "-q", "--", file.name]);
+                      // A staging-path Git config can differ after the clone is moved.
+                      // Require protection under both case-matching modes.
+                      for (const ignoreCase of ["false", "true"]) {
+                        await peerProjectGit(root.path, ["-c", "core.excludesFile=/dev/null", "-c", `core.ignoreCase=${ignoreCase}`, "check-ignore", "-q", "--", file.name]);
+                      }
                     } catch {
                       throw new AidenRemoteServiceError("invalid_request", "The destination repository must ignore each selected environment file.", 400);
                     }
