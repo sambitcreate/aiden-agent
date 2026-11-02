@@ -7484,6 +7484,17 @@ final class AidenChatTests: XCTestCase {
             ["hidden-later", "hidden-first"]
         )
 
+        // Recents search matches the label a hidden chat shows ("Chats"), not the record's name.
+        let hiddenChats = [chat("soup", in: "hidden-later", updated: 40), chat("fix", in: "project", updated: 5)]
+        XCTAssertEqual(
+            AidenWorkspaceSidebarProjection.make(workspaces: workspaces, chats: hiddenChats, searchText: "chats").recents.map(\.id),
+            ["soup"]
+        )
+        XCTAssertEqual(
+            AidenWorkspaceSidebarProjection.make(workspaces: workspaces, chats: hiddenChats, searchText: "No workspace").recents.map(\.id),
+            []
+        )
+
         // A chat another device started in a fresh hidden record is left out until the phone
         // re-reads its workspaces, and it asks once per such record.
         let elsewhere = chat("elsewhere", in: "hidden-new", updated: 60)

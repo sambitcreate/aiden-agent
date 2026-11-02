@@ -508,7 +508,7 @@ fun projectAidenWorkspaceSidebar(
     val recents = regularChats.filter { chat ->
         query.isEmpty() ||
             chat.title.contains(query, ignoreCase = true) ||
-            workspacesById[chat.workspaceId]?.name?.contains(query, ignoreCase = true) == true
+            workspacesById[chat.workspaceId]?.let(AidenNoWorkspace::label)?.contains(query, ignoreCase = true) == true
     }
     return AidenWorkspaceSidebarProjection(sections, recents)
 }

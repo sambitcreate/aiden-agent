@@ -609,10 +609,7 @@ private fun AidenWorkspaceHome(
                         items(sidebarProjection.recents, key = AidenChatSummary::id) { chat ->
                             AidenWorkspaceChatRow(
                                 chat = chat,
-                                // A chat without a workspace is labelled with its group, as the sidebar lists it.
-                                workspaceName = activeById[chat.workspaceId]
-                                    ?.let { if (it.noWorkspace) AidenNoWorkspace.GROUP_NAME else it.name }
-                                    .orEmpty(),
+                                workspaceName = activeById[chat.workspaceId]?.let(AidenNoWorkspace::label).orEmpty(),
                                 showsWorkspaceName = true,
                                 indented = false,
                                 onClick = { onNavigateToChat(chat.id) }

@@ -560,6 +560,11 @@ enum AidenNoWorkspace {
         }
     }
 
+    /// The name a chat's workspace is shown and searched by: hidden records read as Chats.
+    static func label(for workspace: AidenWorkspace) -> String {
+        workspace.noWorkspace ? groupName : workspace.name
+    }
+
     /// The id a chat in `workspaceID` is listed under: chats in a hidden record go to the home.
     static func groupID(for workspaceID: String, in workspaces: [AidenWorkspace]) -> String {
         guard workspaces.contains(where: { $0.id == workspaceID && $0.noWorkspace }),

@@ -870,7 +870,8 @@ struct AidenWorkspaceSidebarProjection: Equatable {
         let recents = triagedChats.filter { chat in
             guard !query.isEmpty else { return true }
             return chat.title.localizedCaseInsensitiveContains(query)
-                || workspaceByID[chat.workspaceId]?.name.localizedCaseInsensitiveContains(query) == true
+                || workspaceByID[chat.workspaceId].map { AidenNoWorkspace.label(for: $0) }?
+                    .localizedCaseInsensitiveContains(query) == true
         }
         return Self(sections: sections, recents: recents)
     }
@@ -1982,8 +1983,7 @@ struct AidenWorkspaceShellView: View {
 
                 if showsWorkspace,
                    let workspace = coordinator.workspaces.first(where: { $0.id == chat.workspaceId }) {
-                    // A chat without a workspace is labelled with its group, as the sidebar lists it.
-                    Text(workspace.noWorkspace ? AidenNoWorkspace.groupName : workspace.name)
+                    Text(AidenNoWorkspace.label(for: workspace))
                         .font(.caption)
                         .foregroundStyle(palette.secondary)
                         .lineLimit(1)

@@ -88,6 +88,9 @@ object AidenNoWorkspace {
         }
     }
 
+    /** The name a chat's workspace is shown and searched by: hidden records read as Chats. */
+    fun label(workspace: AidenWorkspace): String = if (workspace.noWorkspace) GROUP_NAME else workspace.name
+
     /** The id a chat in [workspaceId] is listed under: chats in a hidden record go to the home. */
     fun groupId(workspaceId: String, workspaces: List<AidenWorkspace>): String {
         if (workspaces.none { it.id == workspaceId && it.noWorkspace }) return workspaceId

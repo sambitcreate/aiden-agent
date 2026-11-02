@@ -246,6 +246,13 @@ class AidenChatRowStatusTest {
             AidenNoWorkspace.unarchived(workspaces, setOf("default", "alpha")).map { it.id }
         )
 
+        // Recents search matches the label a hidden chat shows ("Chats"), not the record's name.
+        assertEquals(
+            listOf("soup", "trip", "first"),
+            projectAidenWorkspaceSidebar(workspaces, chats, "chats").recents.map { it.id }
+        )
+        assertEquals(emptyList<String>(), projectAidenWorkspaceSidebar(workspaces, chats, "No workspace").recents.map { it.id })
+
         // A chat another device started in a fresh hidden record is left out until the phone
         // re-reads its workspaces, and it asks once per such record.
         val fromAnotherPhone = summary("elsewhere", 40, workspaceId = "hidden-new")
