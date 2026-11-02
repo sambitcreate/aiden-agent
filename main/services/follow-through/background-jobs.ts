@@ -128,6 +128,8 @@ interface JobRecord {
   cwd: string;
   child?: ChildProcess;
   log?: fs.WriteStream;
+  /** Settles once the log file is closed: the stream opens it asynchronously, so removing it earlier lets the open recreate it. */
+  logClosed?: Promise<void>;
   logPath: string;
   tail: string;
   decoder: StringDecoder;
@@ -323,8 +325,7 @@ export class BackgroundJobs {
     fs.mkdirSync(this.options.logDir, { recursive: true, mode: 0o700 });
     const id = newBackgroundJobId();
     const logPath = path.join(this.options.logDir, `${id}.log`);
-    const log = fs.createWriteStream(logPath, { flags: "w", mode: 0o600 });
-    log.on("error", (error) => this.options.log?.("A background job log could not be written.", error));
+    const { log, logClosed } = this.openLog(logPath);
     const description = input.description ? oneLine(input.description, MAX_JOB_DESCRIPTION_CHARS) : "";
     const view: BackgroundJobView = {
       id,
@@ -344,6 +345,7 @@ export class BackgroundJobs {
       view,
       cwd: input.cwd,
       log,
+      logClosed,
       logPath,
       tail: "",
       decoder: new StringDecoder("utf8"),
@@ -458,8 +460,7 @@ export class BackgroundJobs {
     };
     if (input.output) {
       fs.mkdirSync(this.options.logDir, { recursive: true, mode: 0o700 });
-      record.log = fs.createWriteStream(logPath, { flags: "w", mode: 0o600 });
-      record.log.on("error", (error) => this.options.log?.("A background job log could not be written.", error));
+      ({ log: record.log, logClosed: record.logClosed } = this.openLog(logPath));
       record.adoptedOutput = input.output;
       const capture = (chunk: Buffer) => this.capture(record, chunk);
       input.output.stdout.on("data", capture);
@@ -552,6 +553,21 @@ export class BackgroundJobs {
     return { ...job.view };
   }
 
+  private openLog(logPath: string): { log: fs.WriteStream; logClosed: Promise<void> } {
+    const log = fs.createWriteStream(logPath, { flags: "w", mode: 0o600 });
+    log.on("error", (error) => this.options.log?.("A background job log could not be written.", error));
+    const logClosed = new Promise<void>((resolve) => log.once("close", () => resolve()));
+    return { log, logClosed };
+  }
+
+  /** Delete a job's log once its stream has closed, so a late open cannot bring it back. */
+  private async removeLog(job: JobRecord): Promise<void> {
+    job.log?.end();
+    job.log = undefined;
+    await job.logClosed;
+    await fsp.rm(job.logPath, { force: true }).catch(() => undefined);
+  }
+
   async stopChat(chatId: string, reason: BackgroundJobEndReason, forget = false): Promise<void> {
     const jobs = [...this.jobs.values()].filter((job) => job.view.chatId === chatId);
     await Promise.all(jobs.map((job) => this.stopRecord(job, reason)));
@@ -561,7 +577,7 @@ export class BackgroundJobs {
         // the next launch still stop what may be running.
         if (job.view.state === "running") continue;
         this.jobs.delete(job.view.id);
-        await fsp.rm(job.logPath, { force: true }).catch(() => undefined);
+        await this.removeLog(job);
       }
       this.options.onChange?.(chatId);
     }
@@ -901,7 +917,7 @@ export class BackgroundJobs {
     const otherChats = new Set<string>();
     for (const job of forget) {
       this.jobs.delete(job.view.id);
-      void fsp.rm(job.logPath, { force: true }).catch(() => undefined);
+      void this.removeLog(job);
       if (job.view.chatId !== chatId) otherChats.add(job.view.chatId);
     }
     for (const other of otherChats) this.options.onChange?.(other);
