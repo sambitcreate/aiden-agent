@@ -7483,6 +7483,33 @@ final class AidenChatTests: XCTestCase {
             AidenNoWorkspace.unarchived(workspaces, archivedIDs: ["hidden-first", "project"]).map(\.id),
             ["hidden-later", "hidden-first"]
         )
+
+        // A chat another device started in a fresh hidden record is left out until the phone
+        // re-reads its workspaces, and it asks once per such record.
+        let elsewhere = chat("elsewhere", in: "hidden-new", updated: 60)
+        XCTAssertFalse(
+            AidenWorkspaceSidebarProjection.make(workspaces: workspaces, chats: [elsewhere], searchText: "")
+                .recents.contains { $0.id == "elsewhere" }
+        )
+        let chatWorkspaceIDs = ["hidden-later", "project", "hidden-new"]
+        XCTAssertEqual(
+            AidenNoWorkspace.unlistedWorkspaceIDs(chatWorkspaceIDs: chatWorkspaceIDs, in: workspaces, alreadyReRead: []),
+            ["hidden-new"]
+        )
+        XCTAssertEqual(
+            AidenNoWorkspace.unlistedWorkspaceIDs(chatWorkspaceIDs: chatWorkspaceIDs, in: workspaces, alreadyReRead: ["hidden-new"]),
+            []
+        )
+        let reRead = workspaces + [record("hidden-new", created: 60, noWorkspace: true)]
+        XCTAssertEqual(
+            AidenNoWorkspace.unlistedWorkspaceIDs(chatWorkspaceIDs: chatWorkspaceIDs, in: reRead, alreadyReRead: []),
+            []
+        )
+        XCTAssertEqual(
+            AidenWorkspaceSidebarProjection.make(workspaces: reRead, chats: [elsewhere], searchText: "")
+                .sections.first?.chats.map(\.id),
+            ["elsewhere"]
+        )
     }
 
     func testProviderIconResolverMatchesDesktopAliasesAndFallbackRules() {

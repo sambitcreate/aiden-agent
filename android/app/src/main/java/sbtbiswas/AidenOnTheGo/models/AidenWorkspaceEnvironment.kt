@@ -93,6 +93,17 @@ object AidenNoWorkspace {
         if (workspaces.none { it.id == workspaceId && it.noWorkspace }) return workspaceId
         return home(workspaces)?.id ?: workspaceId
     }
+
+    /**
+     * Workspace ids that chats name but the phone hasn't listed and hasn't re-read for yet. Another
+     * device's No workspace chat gets a fresh hidden record, and phones hear of it only by
+     * re-reading the workspace list.
+     */
+    fun unlistedWorkspaceIds(
+        chatWorkspaceIds: Collection<String>,
+        workspaces: List<AidenWorkspace>,
+        alreadyReRead: Set<String>
+    ): Set<String> = chatWorkspaceIds.toSet() - workspaces.map { it.id }.toSet() - alreadyReRead
 }
 
 @Serializable

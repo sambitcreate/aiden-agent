@@ -96,6 +96,7 @@ class AidenWorkspaceHomeViewModel(
     private var paginationBoundary: AidenChatSummary? = null
     private var lastLoadedAtMillis: Long? = null
     private val pendingRunKeysByInstance = mutableMapOf<String, AidenScheduledRunIdempotencyKeys>()
+    private val workspaceReReadsByInstance = mutableMapOf<String, MutableSet<String>>()
 
     fun pendingScheduledRunKeys(instanceId: String): AidenScheduledRunIdempotencyKeys =
         pendingRunKeysByInstance.getOrPut(instanceId) { AidenScheduledRunIdempotencyKeys() }
@@ -105,12 +106,9 @@ class AidenWorkspaceHomeViewModel(
             chatCache.summaries.collect { cachedByInstance ->
                 val instanceId = hydratedInstanceId ?: return@collect
                 if (instanceId != coordinator.activeInstanceId) return@collect
-                _chats.value = regularNewestFirst(
-                    cachedByInstance[instanceId]
-                        ?.values
-                        ?.filter { it.workspaceId in hydratedWorkspaceIds }
-                        .orEmpty()
-                )
+                val cached = cachedByInstance[instanceId]?.values.orEmpty()
+                _chats.value = regularNewestFirst(cached.filter { it.workspaceId in hydratedWorkspaceIds })
+                reReadWorkspacesForUnlistedChats(instanceId, cached)
             }
         }
         viewModelScope.launch {
@@ -397,8 +395,25 @@ class AidenWorkspaceHomeViewModel(
             throw IllegalStateException("Chats changed while loading. Refresh and try again.")
         }
         paginationBoundary = summaries.lastOrNull() ?: boundary
-        _chats.value = regularNewestFirst(chatCache.summaries.value[instanceId]?.values.orEmpty().toList())
+        val cached = chatCache.summaries.value[instanceId]?.values.orEmpty()
+        _chats.value = regularNewestFirst(cached.toList())
             .filter { it.workspaceId in coordinator.workspaces.value.map(AidenWorkspace::id).toSet() }
+        reReadWorkspacesForUnlistedChats(instanceId, cached)
+    }
+
+    /**
+     * A chat another device started without a workspace sits in a hidden record this phone hasn't
+     * listed, so the sidebar would leave it out. Re-read the workspace list once for each such id.
+     */
+    private fun reReadWorkspacesForUnlistedChats(instanceId: String, chats: Collection<AidenChatSummary>) {
+        if (coordinator.activeInstanceId != instanceId) return
+        if (!coordinator.hasCompletedWorkspaceRefresh.value) return
+        if (coordinator.connectionState.value != AidenConnectionState.CONNECTED) return
+        val reRead = workspaceReReadsByInstance.getOrPut(instanceId) { mutableSetOf() }
+        val unlisted = AidenNoWorkspace.unlistedWorkspaceIds(chats.map { it.workspaceId }, coordinator.workspaces.value, reRead)
+        if (unlisted.isEmpty()) return
+        reRead += unlisted
+        coordinator.refreshWorkspaces()
     }
 
     private suspend fun <T> request(block: suspend () -> T): Result<T> = try {

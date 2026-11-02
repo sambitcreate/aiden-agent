@@ -769,6 +769,12 @@ private struct AidenHomeLoadID: Equatable {
     let connectionState: AidenRemoteConnectionState
 }
 
+private struct AidenUnlistedChatWorkspacesID: Equatable {
+    let instanceID: String?
+    let connectionState: AidenRemoteConnectionState
+    let workspaceIDs: Set<String>
+}
+
 enum AidenWorkspaceNavigation {
     /// Workspaces split view can select. A hidden No workspace record has no page of its own, so
     /// only the Chats group's home is selectable, and only while one of its chats is open.
@@ -993,6 +999,8 @@ struct AidenWorkspaceShellView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var isShowingPairing = false
+    /// Hidden workspace ids this phone already re-read the workspace list for, per Mac.
+    @State private var workspaceReReads: [String: Set<String>] = [:]
     @State private var isShowingAppSettings = false
     @State private var isShowingScheduledTasks = false
     @State private var isShowingUsage = false
@@ -1076,6 +1084,28 @@ struct AidenWorkspaceShellView: View {
 
     private var expandedSidebarWorkspaceIDs: Set<String> {
         navigationStore.expandedSidebarWorkspaceIDs(for: coordinator.activeInstanceId)
+    }
+
+    private var unlistedChatWorkspacesID: AidenUnlistedChatWorkspacesID {
+        let instanceID = coordinator.activeInstanceId
+        return AidenUnlistedChatWorkspacesID(
+            instanceID: instanceID,
+            connectionState: coordinator.connectionState,
+            workspaceIDs: AidenNoWorkspace.unlistedWorkspaceIDs(
+                chatWorkspaceIDs: homeModel.chats.map(\.workspaceId),
+                in: coordinator.workspaces,
+                alreadyReRead: instanceID.flatMap { workspaceReReads[$0] } ?? []
+            )
+        )
+    }
+
+    /// A chat another device started without a workspace sits in a hidden record this phone
+    /// hasn't listed, so the sidebar would leave it out. Re-read the workspace list once for it.
+    private func reReadWorkspacesForUnlistedChats() async {
+        let id = unlistedChatWorkspacesID
+        guard let instanceID = id.instanceID, id.connectionState == .connected, !id.workspaceIDs.isEmpty else { return }
+        workspaceReReads[instanceID, default: []].formUnion(id.workspaceIDs)
+        await coordinator.refreshWorkspaces()
     }
 
     private var sidebarProjection: AidenWorkspaceSidebarProjection {
@@ -1440,6 +1470,9 @@ struct AidenWorkspaceShellView: View {
             connectionState: coordinator.connectionState
         )) {
             await homeModel.load(coordinator: coordinator)
+        }
+        .task(id: unlistedChatWorkspacesID) {
+            await reReadWorkspacesForUnlistedChats()
         }
         .onAppear { coordinator.haptics.activate(scope: hapticScope) }
         .onDisappear {

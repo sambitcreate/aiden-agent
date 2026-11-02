@@ -566,6 +566,17 @@ enum AidenNoWorkspace {
               let home = home(in: workspaces) else { return workspaceID }
         return home.id
     }
+
+    /// Workspace ids that chats name but the phone hasn't listed and hasn't re-read for yet.
+    /// Another device's No workspace chat gets a fresh hidden record, and phones hear of it only
+    /// by re-reading the workspace list.
+    static func unlistedWorkspaceIDs(
+        chatWorkspaceIDs: some Sequence<String>,
+        in workspaces: [AidenWorkspace],
+        alreadyReRead: Set<String>
+    ) -> Set<String> {
+        Set(chatWorkspaceIDs).subtracting(workspaces.map(\.id)).subtracting(alreadyReRead)
+    }
 }
 
 enum AidenWorkspaceCreate: Encodable, Equatable, Sendable {

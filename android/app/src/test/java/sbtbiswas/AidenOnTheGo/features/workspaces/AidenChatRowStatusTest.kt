@@ -245,5 +245,23 @@ class AidenChatRowStatusTest {
             listOf("hidden-b", "default", "hidden-a"),
             AidenNoWorkspace.unarchived(workspaces, setOf("default", "alpha")).map { it.id }
         )
+
+        // A chat another device started in a fresh hidden record is left out until the phone
+        // re-reads its workspaces, and it asks once per such record.
+        val fromAnotherPhone = summary("elsewhere", 40, workspaceId = "hidden-new")
+        assertEquals(
+            emptyList<String>(),
+            projectAidenWorkspaceSidebar(workspaces, chats + fromAnotherPhone, "").recents
+                .filter { it.id == "elsewhere" }.map { it.id }
+        )
+        val chatWorkspaceIds = (chats + fromAnotherPhone).map { it.workspaceId }
+        assertEquals(setOf("hidden-new"), AidenNoWorkspace.unlistedWorkspaceIds(chatWorkspaceIds, workspaces, emptySet()))
+        assertEquals(emptySet<String>(), AidenNoWorkspace.unlistedWorkspaceIds(chatWorkspaceIds, workspaces, setOf("hidden-new")))
+        val reRead = workspaces + hidden("hidden-new", 12)
+        assertEquals(emptySet<String>(), AidenNoWorkspace.unlistedWorkspaceIds(chatWorkspaceIds, reRead, emptySet()))
+        assertEquals(
+            listOf("elsewhere", "soup", "trip", "first"),
+            projectAidenWorkspaceSidebar(reRead, chats + fromAnotherPhone, "").sections.first().chats.map { it.id }
+        )
     }
 }
