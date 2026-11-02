@@ -161,6 +161,12 @@ class AidenInboxTest {
         assertEquals(3, inbox.earlierOverflow)
         assertFalse(AidenInboxSection.entries.any { s -> inbox.rows(s).any { it.id == "hidden" || it.id == "elsewhere" } })
 
+        val open = AidenInboxProjection.make(chats, names, "earlier-23", now)
+        assertEquals(AidenInbox.EARLIER_LIMIT, open.earlier.size)
+        assertEquals("earlier-23", open.earlier.last().id)
+        assertFalse(open.earlier.any { it.id == "earlier-20" })
+        assertEquals(3, open.earlierOverflow)
+
         val all = AidenInboxProjection.make(chats, names, null, now, showAllEarlier = true)
         assertEquals(23, all.earlier.size)
         assertEquals(0, all.earlierOverflow)

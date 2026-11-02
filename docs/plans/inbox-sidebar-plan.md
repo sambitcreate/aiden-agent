@@ -531,3 +531,4 @@ Inbox reads carry the displayed reply ID, including reads sent after Done and Sn
 - The subsequent merge with main retained raw picture uploads at Remote revision 50 and moved Inbox signals to revision 51.
 
 - After the merge with main added workspace-free chats in Remote revision 51, Inbox signals use revision 52.
+- On both phones, Earlier reserves one of its 20 visible slots for the open chat when it falls beyond the cap.

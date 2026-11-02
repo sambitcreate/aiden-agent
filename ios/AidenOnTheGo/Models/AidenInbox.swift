@@ -483,8 +483,12 @@ struct AidenInboxProjection: Equatable {
         projection.earlier.sort(by: Self.newestFirst)
         projection.working.sort(by: Self.oldestFirst)
         if !searching, !showAllEarlier, projection.earlier.count > earlierLimit {
-            projection.earlierOverflow = projection.earlier.count - earlierLimit
-            projection.earlier = Array(projection.earlier.prefix(earlierLimit))
+            let limit = max(0, earlierLimit)
+            let openPastCap = limit > 0 ? projection.earlier.dropFirst(limit).first { $0.id == openChatID } : nil
+            var shown = Array(projection.earlier.prefix(openPastCap == nil ? limit : limit - 1))
+            if let openPastCap { shown.append(openPastCap) }
+            projection.earlierOverflow = projection.earlier.count - shown.count
+            projection.earlier = shown
         }
         return projection
     }

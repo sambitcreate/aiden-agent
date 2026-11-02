@@ -182,6 +182,14 @@ final class AidenInboxTests: XCTestCase {
         XCTAssertEqual(projection.earlierOverflow, 3)
         XCTAssertFalse(projection.rows(in: .updates).contains { $0.id == "other-workspace" })
 
+        let open = AidenInboxProjection.make(
+            chats: chats, workspaceNames: ["alpha": "Alpha"], openChatID: "earlier-22", now: now
+        )
+        XCTAssertEqual(open.earlier.count, AidenInbox.earlierLimit)
+        XCTAssertEqual(open.earlier.last?.id, "earlier-22")
+        XCTAssertFalse(open.earlier.contains { $0.id == "earlier-19" })
+        XCTAssertEqual(open.earlierOverflow, 3)
+
         let all = AidenInboxProjection.make(
             chats: chats, workspaceNames: ["alpha": "Alpha"], openChatID: nil, now: now, showAllEarlier: true
         )

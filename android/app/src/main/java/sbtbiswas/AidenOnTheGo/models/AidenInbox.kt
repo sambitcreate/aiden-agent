@@ -391,15 +391,18 @@ data class AidenInboxProjection(
                 bySection.getValue(section).add(AidenInboxRow(chat, placement))
             }
             val earlier = bySection.getValue(AidenInboxSection.EARLIER).sortedWith(newestFirst)
-            val capped = !searching && !showAllEarlier && earlier.size > earlierLimit
+            val limit = earlierLimit.coerceAtLeast(0)
+            val capped = !searching && !showAllEarlier && earlier.size > limit
+            val openPastCap = if (capped && limit > 0) earlier.drop(limit).firstOrNull { it.id == openChatId } else null
+            val shownEarlier = if (!capped) earlier else earlier.take(if (openPastCap == null) limit else limit - 1) + listOfNotNull(openPastCap)
             return AidenInboxProjection(
                 needsYou = bySection.getValue(AidenInboxSection.NEEDS_YOU)
                     .sortedWith(compareBy<AidenInboxRow> { it.placement.tier }.then(oldestFirst)),
                 pinned = bySection.getValue(AidenInboxSection.PINNED).sortedWith(newestFirst),
                 updates = bySection.getValue(AidenInboxSection.UPDATES).sortedWith(newestFirst),
-                earlier = if (capped) earlier.take(earlierLimit) else earlier,
+                earlier = shownEarlier,
                 working = bySection.getValue(AidenInboxSection.WORKING).sortedWith(oldestFirst),
-                earlierOverflow = if (capped) earlier.size - earlierLimit else 0
+                earlierOverflow = if (capped) earlier.size - shownEarlier.size else 0
             )
         }
     }
