@@ -386,11 +386,13 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
     },
 
     async shutdown(timeoutMs = 1_500) {
-      if (timer !== undefined) stopTimer(timer);
-      timer = undefined;
-      // An accepted consent change owns the queue until it has persisted the
-      // choice and disposed of its final request. Keep the quit deadline.
-      await within(consentQueue.then(() => transport?.shutdown(timeoutMs)), timeoutMs + 250);
+      // A queued opt-in can create a fresh transport and activity timer.
+      // Finish the accepted consent changes before shutting down either one.
+      await within(consentQueue.then(() => {
+        if (timer !== undefined) stopTimer(timer);
+        timer = undefined;
+        return transport?.shutdown(timeoutMs);
+      }), timeoutMs + 250);
     },
 
     markCleanExit() {

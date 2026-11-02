@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { EventEmitter, once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -149,9 +150,9 @@ test("quitting while the opt-out response is pending never sends the old lifecyc
   const runDirectory = mkdtempSync(join(tmpdir(), "analytics-quit-"));
   t.after(() => rmSync(runDirectory, { recursive: true, force: true }));
   let received!: () => void;
-  let release!: () => void;
   const started = new Promise<void>(resolve => { received = resolve; });
-  const responseGate = new Promise<void>(resolve => { release = resolve; });
+  const responseGate = new EventEmitter();
+  let optOutResponses = 0;
   const { fetch: record, requests } = fakeFetch(200);
   const transport = createPostHogTransport({
     apiKey: "phc_test",
@@ -159,7 +160,9 @@ test("quitting while the opt-out response is pending never sends the old lifecyc
       const response = await record(url, init);
       if (requests[requests.length - 1]?.events.some(({ event }) => event === "analytics_disabled")) {
         received();
-        await responseGate;
+        assert.ok(init.signal);
+        await once(responseGate, "release", { signal: init.signal });
+        optOutResponses++;
       }
       return response;
     },
@@ -175,16 +178,17 @@ test("quitting while the opt-out response is pending never sends the old lifecyc
   const previousId = state.installId;
   assert.ok(previousId);
   const off = service.setEnabled(false);
-  await started;
+  await Promise.race([started, off.then(() => assert.fail("Opt-out ended before the request reached fetch."))]);
   const quit = service.shutdown();
   const consentWhilePending = { enabled: state.enabled, installId: state.installId };
   try {
     await transport.flush(); // Exercise the SDK queue while the final request is held.
   } finally {
-    release();
+    responseGate.emit("release");
     await Promise.all([off, quit]);
   }
   assert.deepEqual(requests.flatMap(r => r.events.map(e => [e.event, e.distinct_id])),
     [["analytics_disabled", previousId]]);
+  assert.equal(optOutResponses, 1, "Opt-out was aborted before its response could complete.");
   assert.deepEqual(consentWhilePending, { enabled: false, installId: undefined });
 });
