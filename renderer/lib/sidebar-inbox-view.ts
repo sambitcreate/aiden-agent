@@ -559,9 +559,8 @@ function fnv1a32(text: string): string {
 }
 
 /**
- * Mark read names the newest message the row rendered, so a reply that lands
- * mid-click stays unread: the newest user or assistant message no newer than
- * the row's `lastAssistantAt`.
+ * Recover the displayed assistant reply for older local index rows that
+ * predate lastAssistantMessageId. A missing match leaves the marker alone.
  */
 export function markReadThroughMessageId(
   messages: readonly { id: string; role: string; createdAt: number }[],

@@ -367,6 +367,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
       if (!tail) return changed;
       let cursor: string | undefined;
       const seen = new Set<string>();
+      // A host snapshot holds at most 10,000 rows (100 default-sized pages).
       do {
         const page = await this.transport.call(this.hostId, { operation: "summaries", ...(cursor ? { cursor } : {}) });
         if (!page.ok) return page;
@@ -376,7 +377,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
         cursor = typeof data.nextCursor === "string" ? data.nextCursor : undefined;
         if (!cursor || seen.has(cursor)) break;
         seen.add(cursor);
-      } while (true);
+      } while (seen.size < 100);
       return changed;
     });
   }

@@ -959,6 +959,7 @@ class AidenRemoteClient(
                     if (current.revision != row.revision) throw AidenRemoteClientException.InvalidResponse("Chat has changed.")
                     break
                 }
+                if (seen.size >= 99) throw AidenRemoteClientException.InvalidResponse("Chat list exceeded its limit.")
                 cursor = page.nextCursor?.takeIf(seen::add) ?: throw AidenRemoteClientException.InvalidResponse("Chat is no longer listed.")
             }
         }

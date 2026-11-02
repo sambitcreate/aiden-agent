@@ -1875,7 +1875,7 @@ final class AidenRemoteClient: @unchecked Sendable {
                     guard current.revision == row.revision else { throw AidenRemoteClientError.invalidResponse }
                     break
                 }
-                guard let next = page.nextCursor, seen.insert(next).inserted else { throw AidenRemoteClientError.invalidResponse }
+                guard seen.count < 99, let next = page.nextCursor, seen.insert(next).inserted else { throw AidenRemoteClientError.invalidResponse }
                 cursor = next
             }
         }
