@@ -17,7 +17,7 @@ import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
 import { toolOutputStore } from "./tool-output-store.js";
 import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
 import { cancelVisualSnapshots } from "./visual-snapshot-service.js";
-import { deleteChatFollowThrough, restoreChatFollowThrough } from "./follow-through/follow-through-main.js";
+import { beginFollowThroughMove, deleteChatFollowThrough, restoreChatFollowThrough } from "./follow-through/follow-through-main.js";
 import { interruptedWaits } from "./interrupted-waits-main.js";
 import { detachedPromptLog } from "./chat-pending-attention-main.js";
 import { workspaceApplicationService } from "./workspace-application-service-main.js";
@@ -37,7 +37,7 @@ export const chatApplicationService = createChatApplicationService({
   piCompactionSessionStore,
   chatPullRequestStore,
   visualSnapshots: { cancelChat: cancelVisualSnapshots },
-  followThrough: { deleteChat: deleteChatFollowThrough, restoreChat: restoreChatFollowThrough },
+  followThrough: { beginMove: beginFollowThroughMove, deleteChat: deleteChatFollowThrough, restoreChat: restoreChatFollowThrough },
   memoryStore,
   releaseChatContext: (chatId) => {
     forgetChatContextProfile(chatId);

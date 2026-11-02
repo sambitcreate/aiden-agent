@@ -10,8 +10,8 @@ export const ANALYTICS_HOST = "https://us.i.posthog.com";
 export const ANALYTICS_SHUTDOWN_TIMEOUT_MS = 1_500;
 
 export interface PostHogTransport extends AnalyticsTransport {
-  // Sends one message now, outside the batch (used for analytics_disabled).
-  captureNow(message: AnalyticsMessage): Promise<void>;
+  // Revokes the normal queue and sends only the final opt-out on a separate client.
+  captureOptOut(message: AnalyticsMessage): Promise<void>;
   flush(): Promise<void>;
   // Flushes what is queued within the timeout, then stops.
   shutdown(timeoutMs?: number): Promise<void>;
@@ -76,10 +76,14 @@ export function postHogClientOptions(fetchImpl?: PostHogOptions["fetch"], retryD
 }
 
 export function createPostHogTransport(options: PostHogTransportOptions): PostHogTransport {
-  const client = new AidenPostHog(options.apiKey, postHogClientOptions(options.fetch, options.retryDelayMs));
+  const createClient = () => {
+    const client = new AidenPostHog(options.apiKey, postHogClientOptions(options.fetch, options.retryDelayMs));
+    client.on("error", (error: unknown) => options.onError?.(error));
+    return client;
+  };
+  const client = createClient();
+  let optOut: AidenPostHog | undefined;
   let stopped = false;
-  // The SDK reports every failed send here, including background flushes.
-  client.on("error", (error: unknown) => options.onError?.(error));
 
   const toEvent = (message: AnalyticsMessage) => ({
     distinctId: message.distinctId,
@@ -103,8 +107,16 @@ export function createPostHogTransport(options: PostHogTransportOptions): PostHo
     capture(message) {
       if (!stopped) client.capture(toEvent(message));
     },
-    async captureNow(message) {
-      if (!stopped) await quietly(() => client.captureImmediate(toEvent(message)));
+    async captureOptOut(message) {
+      if (message.event !== "analytics_disabled") return;
+      // A flush or shutdown already in flight must lose its right to dispatch
+      // before the final request starts. The final client never owns a batch.
+      client.stopWithoutFlushing();
+      if (stopped) return;
+      stopped = true;
+      const final = createClient();
+      optOut = final;
+      await quietly(() => final.captureImmediate(toEvent(message)));
     },
     async flush() {
       if (!stopped) await quietly(() => client.flush());
@@ -115,7 +127,7 @@ export function createPostHogTransport(options: PostHogTransportOptions): PostHo
       await quietly(() => client.shutdown(timeoutMs));
     },
     async discard() {
-      if (stopped) return;
+      optOut?.stopWithoutFlushing();
       stopped = true;
       client.stopWithoutFlushing();
       await quietly(() => client.shutdown(0));

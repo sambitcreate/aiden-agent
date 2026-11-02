@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { BackgroundJobs, defaultProcessGroupMembers, newBackgroundJobId } from "./follow-through/background-jobs.js";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -118,6 +120,43 @@ test("shared workspace permission updates preserve cancellation and schedule res
   // The mutation lease must have released after the first update.
   await application.service.update("workspace-1", { name: "Again" });
   assert.equal(application.saved[application.saved.length - 1]?.name, "Again");
+});
+
+test("revoking access stops a server still being adopted when its generation is cancelled", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const application = fixture();
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-revoke-"));
+  let finishHandoff!: () => void;
+  const generationSettling = new Promise<void>((resolve) => { finishHandoff = resolve; });
+  const jobs = new BackgroundJobs({
+    logDir: dir, adoptSettleMs: 0, listeningPorts: null,
+    processGroupMembers: async (group) => {
+      await generationSettling;
+      return defaultProcessGroupMembers(group);
+    },
+  });
+  const id = newBackgroundJobId();
+  const server = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
+    detached: true, stdio: "ignore", env: { ...process.env, AIDEN_BACKGROUND_JOB: id },
+  });
+  t.after(async () => {
+    server.kill("SIGKILL");
+    await jobs.shutdown();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+  const adoption = jobs.adopt({
+    id, chatId: "chat", workspaceId: "workspace-1", cwd: dir, command: "server &", processGroup: server.pid!,
+  });
+  application.deps.llmClient.cancelWorkspaceAndSettle = async () => {
+    finishHandoff();
+    assert.ok(await adoption);
+  };
+  application.deps.followThrough = { closeForWorkspace: (workspaceId) => jobs.stopWorkspace(workspaceId, "access-changed") };
+  const saved = await application.service.update("workspace-1", { permission: "none" });
+  assert.equal(saved.permission, "none");
+  assert.equal(jobs.get("chat", id)?.endReason, "access-changed");
+  assert.throws(() => process.kill(server.pid!, 0), { code: "ESRCH" });
 });
 
 test("switching skills and connectors off for a workspace applies from the next message", async () => {

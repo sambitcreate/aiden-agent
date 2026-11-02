@@ -5,7 +5,7 @@ import type { scheduleService } from "./schedule-service.js";
 import type { createScratchWorkspaceDirectory } from "./scratch-workspace.js";
 import type { terminalService } from "./terminal.js";
 import type { Workspace, WorkspacePermission } from "./types.js";
-import type { workspaceMutationGate } from "./workspace-mutation-gate.js";
+import type { FinishWorkspaceFollowThrough, workspaceMutationGate } from "./workspace-mutation-gate.js";
 import type { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 import { assertWorkspaceRecordRemovalAllowed } from "./workspace-record-removal.js";
 import { withWorkspaceScheduleRestoration } from "./workspace-schedule-restoration.js";
@@ -44,7 +44,7 @@ export interface WorkspaceApplicationDependencies {
   /** Closes the workspace's Git metadata watcher; a later display read re-observes. */
   gitWatcher?: { close(workspaceId: string): void };
   /** Stops background jobs and done-when checks that run in the workspace folder. */
-  followThrough?: { closeForWorkspace(workspaceId: string): Promise<void> };
+  followThrough?: { closeForWorkspace(workspaceId: string): Promise<FinishWorkspaceFollowThrough | void> };
   /** Drops the workspace's artifacts once its record is gone. */
   workspaceArtifacts?: { removeWorkspace(workspaceId: string): Promise<void> };
   workspaceMutationGate: Pick<typeof workspaceMutationGate, "begin">;
@@ -87,10 +87,6 @@ export interface WorkspaceFolderCreationOptions {
 }
 
 export function createWorkspaceApplicationService(deps: WorkspaceApplicationDependencies) {
-  const closeFollowThrough = (workspaceId: string) =>
-    deps.followThrough?.closeForWorkspace(workspaceId).catch((error: unknown) => {
-      deps.logError("follow-through", "Could not stop the workspace's background jobs.", error);
-    });
   let folderCreationTail: Promise<void> = Promise.resolve();
 
   const serializeFolderCreation = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -326,6 +322,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
     ) {
       const id = nonEmptyString(workspaceId, "id");
       const finishMutation = deps.workspaceMutationGate.begin(id);
+      const followThroughChange: { finish?: FinishWorkspaceFollowThrough | void; committed: boolean } = { committed: false };
       try {
         await deps.workspaceOperationRegistry.cancelAndSettle(id);
         const existing = await deps.configStore.getWorkspace(id);
@@ -385,11 +382,12 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           async ({ ensureResumedOnExit, keepPaused }) => {
             deps.terminalService.closeForWorkspace(existing.id);
             deps.browserService?.closeForWorkspace(existing.id);
-            if (next.permission !== existing.permission) await closeFollowThrough(existing.id);
             await deps.llmClient.cancelWorkspaceAndSettle(existing.id);
+            if (next.permission !== existing.permission) followThroughChange.finish = await deps.followThrough?.closeForWorkspace(existing.id);
             await deps.scheduleService.cancelWorkspace(existing.id);
             options.assertCurrent?.(await deps.configStore.getWorkspace(id) ?? existing);
             const saved = await deps.configStore.saveWorkspace(next, options.beforeSave);
+            followThroughChange.committed = true;
             deps.onChanged?.();
             if (saved.permission !== "none") {
               ensureResumedOnExit();
@@ -400,7 +398,11 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           },
         );
       } finally {
-        finishMutation();
+        try {
+          await followThroughChange.finish?.(followThroughChange.committed);
+        } finally {
+          finishMutation();
+        }
       }
     },
 
@@ -410,6 +412,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
     ): Promise<void> {
       const id = nonEmptyString(workspaceId, "id");
       const finishMutation = deps.workspaceMutationGate.begin(id);
+      const followThroughChange: { finish?: FinishWorkspaceFollowThrough | void; committed: boolean } = { committed: false };
       try {
         await deps.workspaceOperationRegistry.cancelAndSettle(id);
         const existing = await deps.configStore.getWorkspace(id);
@@ -417,7 +420,6 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         deps.terminalService.closeForWorkspace(id);
         deps.browserService?.closeForWorkspace(id);
         assertWorkspaceRecordRemovalAllowed(existing);
-        await closeFollowThrough(id);
         await withWorkspaceScheduleRestoration(
           {
             restoreOnExit: existing?.permission !== "none",
@@ -432,8 +434,10 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           },
           async ({ keepPaused }) => {
             await deps.llmClient.cancelWorkspaceAndSettle(id);
+            followThroughChange.finish = await deps.followThrough?.closeForWorkspace(id);
             await deps.scheduleService.cancelWorkspace(id);
             await deps.configStore.removeWorkspace(id);
+            followThroughChange.committed = true;
             await deps.workspaceArtifacts?.removeWorkspace(id).catch((error: unknown) => {
               deps.logError("workspace", "Could not remove the workspace's artifacts.", error);
             });
@@ -442,7 +446,11 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           },
         );
       } finally {
-        finishMutation();
+        try {
+          await followThroughChange.finish?.(followThroughChange.committed);
+        } finally {
+          finishMutation();
+        }
         // Every client's removal (this Mac's IPC, a paired device's Remote
         // request) lands here. Closing after a failed remove is harmless.
         deps.gitWatcher?.close(id);
