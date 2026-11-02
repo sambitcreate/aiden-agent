@@ -2009,21 +2009,24 @@ struct AidenWorkspaceShellView: View {
                 AidenInboxNoticeBanner(
                     notice: notice,
                     palette: palette,
-                    onUndo: notice.undo.flatMap { undo in
-                        notice.chatID.map { chatID in
-                            {
-                                homeModel.inboxNotice = nil
-                                Task {
-                                    await homeModel.setTriage(
-                                        undo,
-                                        chatID: chatID,
-                                        coordinator: coordinator,
-                                        undoRevision: notice.revision ?? 0
-                                    )
-                                }
+                    onUndo: { () -> (() -> Void)? in
+                        // Undo is sent against the swipe's own revision, so a
+                        // notice without one offers none rather than writing
+                        // unconditionally.
+                        guard let undo = notice.undo, let chatID = notice.chatID,
+                              let revision = notice.revision else { return nil }
+                        return {
+                            homeModel.inboxNotice = nil
+                            Task {
+                                await homeModel.setTriage(
+                                    undo,
+                                    chatID: chatID,
+                                    coordinator: coordinator,
+                                    undoRevision: revision
+                                )
                             }
                         }
-                    },
+                    }(),
                     onDismiss: { homeModel.inboxNotice = nil }
                 )
                 .padding(.horizontal, 16)
@@ -2031,8 +2034,10 @@ struct AidenWorkspaceShellView: View {
                 .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
                 .task(id: InboxNoticeTiming(id: notice.id, voiceOver: voiceOverEnabled)) {
                     // The banner can't take focus, so VoiceOver hears it here,
-                    // once: not again when the overlay is rebuilt.
-                    if homeModel.announcedInboxNoticeID != notice.id {
+                    // once: not again when the overlay is rebuilt. Marked only
+                    // while VoiceOver is on, so turning it on mid-banner still
+                    // reads the banner out.
+                    if voiceOverEnabled, homeModel.announcedInboxNoticeID != notice.id {
                         homeModel.announcedInboxNoticeID = notice.id
                         AccessibilityNotification.Announcement(notice.message).post()
                     }

@@ -698,8 +698,8 @@ final class AidenRemoteClientTests: XCTestCase {
         // snooze wakes and a cached pin orders exactly as the Mac's do.
         // `.002` is stored as a double just under it, which a truncating
         // formatter would write back as `.001`.
-        let snoozed = Date(timeIntervalSince1970: 1_789_030_800 + 0.002)
-        let pinned = Date(timeIntervalSince1970: 1_789_030_800 + 0.123)
+        let snoozed = try Self.remoteDate("2026-09-10T09:00:00.002Z")
+        let pinned = try Self.remoteDate("2026-09-10T09:00:00.123Z")
         summaries[0].inbox.snoozedUntil = snoozed
         summaries[0].inbox.pinnedAt = pinned
         try await cache.saveChatSummaries(

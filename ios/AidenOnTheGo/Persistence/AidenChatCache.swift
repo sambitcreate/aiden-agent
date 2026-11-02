@@ -1332,7 +1332,9 @@ enum AidenChatCacheDates {
         guard !digits.isEmpty, let fraction = Double("0." + digits),
               let base = try? whole.parse(String(text[..<dot]) + afterDot.dropFirst(digits.count)) else { return nil }
         let milliseconds = (fraction * 1000).rounded()
-        return Date(timeIntervalSince1970: base.timeIntervalSince1970 + milliseconds / 1000)
+        // The same arithmetic as AidenStrictRFC3339Date, so a cached date
+        // equals the one the host's answer decodes to.
+        return base.addingTimeInterval(milliseconds / 1000)
     }
 
     static let encoding = JSONEncoder.DateEncodingStrategy.custom { date, encoder in
