@@ -58,6 +58,7 @@ Impact is user-visible long-thread cost (bytes, copies, wakeups). Effort is inva
 - **Effort:** Medium–high. Atomic compact JSON is a small format change. Content-addressed attachment files (store refs in chat JSON) is the real win and needs renderer/main/migration tests.
 - **Files:** `main/services/chat-store-core.ts`, `main/services/types.ts` (`Attachment.data`), `main/services/attachments.ts`, `main/handlers/chats.ts`.
 - **Do not start** until the existing performance-plan Phase 1 durability writer is the same change, not a parallel store.
+- **Images done (2026-10-31, cross-machine images phase 2):** each image is stored once at `chats/images/<sha[0:2]>/<sha256>` (`main/services/chat-image-store.ts`), the chat JSON keeps its hash and pixel size, older chats move their images out the next time they are saved, `chats:get` sends the window an `aiden-attachment:` link instead of the bytes, and unused files are swept after a chat is deleted or cleared. With ten 3 MB images in one chat, a save went from 783 ms to 25–45 ms and the chat file from 41.9 MB to under 1 KB. Compact JSON and text attachments are still open.
 
 ### 3. Defer Remote stream-journal disk writes until quiet/terminal
 

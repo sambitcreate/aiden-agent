@@ -2,22 +2,31 @@ import * as React from "react";
 import { Copy, Download, Expand, FileImage, FileText, Maximize2 } from "lucide-react";
 import type { Attachment } from "../lib/types";
 import { cn } from "../lib/ui-utils";
-import { imagePixelSize } from "../lib/image-dimensions";
+import { imagePixelSize } from "../shared/image-dimensions";
 import { isCanonicalRasterImageMimeType } from "../shared/attachment-contract";
 import { chatsApi } from "../lib/ipc";
 import { Button, ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, Dialog, toast } from "./ui";
 
 const EMPTY_FAILED_IMAGE_IDS: ReadonlySet<string> = new Set();
 
+/**
+ * What an `<img>` loads for an image attachment: its inline bytes, or the
+ * private `aiden-attachment:` link of an image stored beside the chat.
+ */
 export function inlineImageSource(attachment: Attachment): string | undefined {
-  if (
-    attachment.kind !== "image" ||
-    !attachment.data ||
-    !isCanonicalRasterImageMimeType(attachment.mimeType)
-  ) {
+  if (attachment.kind !== "image" || !isCanonicalRasterImageMimeType(attachment.mimeType)) {
     return undefined;
   }
-  return `data:${attachment.mimeType};base64,${attachment.data}`;
+  if (attachment.data) return `data:${attachment.mimeType};base64,${attachment.data}`;
+  return attachment.url?.startsWith("aiden-attachment:") ? attachment.url : undefined;
+}
+
+/** Pixel size from the image's header bytes, or the size recorded when it was stored. */
+function attachmentPixelSize(attachment: Attachment): { width: number; height: number } | undefined {
+  if (attachment.data) return imagePixelSize(attachment.mimeType, attachment.data);
+  return attachment.width && attachment.height
+    ? { width: attachment.width, height: attachment.height }
+    : undefined;
 }
 
 function fileSize(size: number): string {
@@ -247,10 +256,7 @@ function AssistantImage({
   // Reserve the box from the header so a long history never shifts as images
   // decode lazily: natural size, at most the column width, 22.5rem wide and
   // 20rem tall.
-  const size = React.useMemo(
-    () => (attachment.data ? imagePixelSize(attachment.mimeType, attachment.data) : undefined),
-    [attachment.data, attachment.mimeType],
-  );
+  const size = React.useMemo(() => attachmentPixelSize(attachment), [attachment]);
   const box: React.CSSProperties | undefined = size
     ? {
         width: `min(100%, ${size.width}px, 22.5rem, calc(20rem * ${size.width / size.height}))`,
