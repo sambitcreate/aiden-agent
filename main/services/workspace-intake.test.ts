@@ -23,6 +23,7 @@ import {
   type WorkspaceIntakeDependencies,
 } from "./workspace-intake.js";
 import { processRunning } from "../shared/process-liveness-test-support.js";
+import { createPeerProjectSource } from "./peer-project-source.js";
 
 const FIXTURE_URL = "https://example.invalid/acme/widget.git";
 
@@ -110,12 +111,13 @@ async function fixture(
 }
 
 /** A bare repository with one commit, reachable only through file://. */
-async function bareRepository(root: string): Promise<string> {
+async function bareRepository(root: string, ignorePattern?: string): Promise<string> {
   const source = path.join(root, "source");
   await fs.mkdir(source);
   git(source, "init", "-q", "-b", "main");
   await fs.writeFile(path.join(source, "README.md"), "# Widget\n");
-  git(source, "add", "README.md");
+  if (ignorePattern) await fs.writeFile(path.join(source, ".gitignore"), `${ignorePattern}\n`);
+  git(source, "add", "README.md", ...(ignorePattern ? [".gitignore"] : []));
   git(source, "commit", "-q", "-m", "Initial");
   const bare = path.join(root, "widget.git");
   git(root, "clone", "-q", "--bare", source, bare);
@@ -739,7 +741,7 @@ test("clone progress lines and failures are parsed into short user-facing result
 test("remote clone publishes optional environment files privately before registration and replays without another clone", async t => {
   const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-clone-bare-"));
   t.after(() => fs.rm(repositoryRoot, { recursive: true, force: true }));
-  const bare = await bareRepository(repositoryRoot);
+  const bare = await bareRepository(repositoryRoot, ".env*");
   const fixture_ = await fixture(t, { runClone: createGitCloneRunner({ extraConfig: [["protocol.file.allow", "always"], [`url.file://${bare}.insteadOf`, FIXTURE_URL]] }) });
   let consumed = 0;
   let revalidated = 0;
@@ -763,9 +765,47 @@ test("remote clone publishes optional environment files privately before registr
   assert.ok(revalidated >= 3);
 });
 
+test("remote clone refuses environment files that the destination does not ignore", async t => {
+  const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-clone-ignore-"));
+  t.after(() => fs.rm(repositoryRoot, { recursive: true, force: true }));
+  const bare = await bareRepository(repositoryRoot);
+  const sourcePath = path.join(repositoryRoot, "source");
+  await fs.appendFile(path.join(sourcePath, ".git", "info", "exclude"), "\n.env.local\n");
+  await fs.writeFile(path.join(sourcePath, ".env.local"), "SECRET=synthetic");
+  git(sourcePath, "remote", "add", "origin", FIXTURE_URL);
+  const source = createPeerProjectSource({ getWorkspace: async () => ({ id: "source", name: "Source", folderPath: sourcePath, permission: "ask", createdAt: 0, updatedAt: 0 }) });
+  const files = (await source.read("source", [".env.local"])).files;
+  assert.equal(files[0]?.content, "SECRET=synthetic");
+  const fixture_ = await fixture(t, { runClone: createGitCloneRunner({ extraConfig: [["protocol.file.allow", "always"], [`url.file://${bare}.insteadOf`, FIXTURE_URL]] }) });
+  const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
+  const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, browser: { consumeSelection: async () => claim, revalidateConsumedSelection: async () => claim } });
+  await assert.rejects(remote.create("device", "clone-unignored-file", { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files }), /destination repository must ignore/);
+  assert.deepEqual(await fs.readdir(fixture_.home), []);
+  assert.equal(fixture_.workspaces.length, 0);
+});
+
+test("destination ignore admission does not depend on case-insensitive Git configuration", async t => {
+  const repositoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-clone-ignore-case-"));
+  t.after(() => fs.rm(repositoryRoot, { recursive: true, force: true }));
+  const bare = await bareRepository(repositoryRoot, ".ENV*");
+  const clone = createGitCloneRunner({ extraConfig: [["protocol.file.allow", "always"], [`url.file://${bare}.insteadOf`, FIXTURE_URL]] });
+  const fixture_ = await fixture(t, { runClone: async request => {
+    const result = await clone(request);
+    if (result.ok) git(request.destination, "config", "core.ignorecase", "true");
+    return result;
+  } });
+  const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };
+  const remote = new AidenRemoteWorkspaceService({ application: fixture_.application, clone: fixture_.service.clone, browser: { consumeSelection: async () => claim, revalidateConsumedSelection: async () => claim } });
+  await assert.rejects(remote.create("device", "clone-ignore-case-key", { mode: "clone", selection: `sel_${"a".repeat(43)}`, url: FIXTURE_URL, files: [{ name: ".env.local", content: "SECRET=synthetic" }] }), /destination repository must ignore/);
+  assert.deepEqual(await fs.readdir(fixture_.home), []);
+  assert.equal(fixture_.workspaces.length, 0);
+});
+
 test("a cloned symlink cannot receive transferred environment secrets and failure removes only private staging", async t => {
   const fixture_ = await fixture(t, { runClone: async request => {
     await fs.mkdir(request.destination);
+    git(request.destination, "init", "-q");
+    await fs.writeFile(path.join(request.destination, ".gitignore"), ".env\n");
     await fs.symlink("/tmp/never-write-environment", path.join(request.destination, ".env"));
     return { ok: true };
   } });
@@ -809,7 +849,12 @@ for (const replacement of ["symlink", "directory"] as const) {
     const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-clone-outside-")));
     t.after(() => fs.rm(outside, { recursive: true, force: true }));
     await fs.writeFile(path.join(outside, "kept.txt"), "unrelated data");
-    const fixture_ = await fixture(t, { runClone: async request => { await fs.mkdir(request.destination); return { ok: true }; } });
+    const fixture_ = await fixture(t, { runClone: async request => {
+      await fs.mkdir(request.destination);
+      git(request.destination, "init", "-q");
+      await fs.writeFile(path.join(request.destination, ".gitignore"), ".env\n");
+      return { ok: true };
+    } });
     const destination = path.join(fixture_.home, "widget");
     let checks = 0;
     const claim = { instanceId: "instance", deviceId: "device", rootId: "root", policyRevision: "policy", canonicalRootPath: fixture_.home, canonicalPath: fixture_.home, filesystemDevice: "1", filesystemInode: "2", expiresAt: Date.now() + 120_000 };

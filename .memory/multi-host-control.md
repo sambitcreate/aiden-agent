@@ -128,3 +128,7 @@ Plan: `docs/plans/completed/desktop-multi-host-control-plan.md` (with its PR 1â€
 - PeerTransport keeps fixed DNS, refused, network, TLS and timeout categories; raw OS errors never enter renderer status. Actual request deadlines now report timeout rather than generic unavailability. Cancellation keeps its old unavailable result.
 - PeerHostManager preserves the category through retry backoff. Connections uses the last known route for actionable Tailscale or LAN recovery copy; alternate routes may have been tried. No network probes, grants, or shared Remote HTTP protocol changed. iOS and Android use their existing native connection diagnostics and do not consume this desktop IPC status.
 - Focused tests exercise a real request deadline, DNS lookup failure, supervisor recovery and route-specific presentation. Physical paired-machine acceptance remains separate.
+
+## Remote project environment admission
+
+The receiving clone checks each selected environment filename against case-sensitive repository ignore rules before writing. It ignores user-level excludes for this check, so a source-only or machine-local ignore cannot leave a secret stageable on the destination. A clone with an unprotected selected name fails before publication. Explicit forced Git adds can still override ignore rules.

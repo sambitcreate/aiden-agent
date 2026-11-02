@@ -93,7 +93,7 @@ outside a Git repository.
 Environment files may contain secrets. All choices start unchecked. Select only
 files you want on that computer. Aiden offers ignored root-level `.env*` and
 `.dev.vars*` text files, skips symlinks, hard links and files over 128 KiB, and caps
-the transfer at 16 files and 512 KiB. Nothing existing is overwritten. The cloned
+the transfer at 16 files and 512 KiB. Each selected file must also be ignored by a case-sensitive rule in the cloned repository or the clone is discarded. User-level Git excludes do not satisfy this check. Nothing existing is overwritten. The cloned
 project becomes available after the selected files arrive. The new chat opens on
 the destination; a typed prompt and attachments carry over when that computer has
 no saved draft. An existing remote draft is retained, with the local prompt still
