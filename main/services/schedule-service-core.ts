@@ -839,7 +839,7 @@ export function createScheduleServiceCore(
         if (options.signal?.aborted) {
           if (current) {
             await store.restoreIfRevision(id, task.updatedAt, current);
-            if (current.enabled) await rearmCurrentTask(await store.get(id));
+            if (current.enabled) await rearmCurrentTask(current);
             else stopJob(id);
           }
           throwIfAborted(options.signal, "pause");

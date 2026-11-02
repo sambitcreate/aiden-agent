@@ -746,7 +746,7 @@ export function createScheduleStore(
         const task: ScheduledTask = {
           ...existing,
           enabled,
-          ...(!enabled && !options && { pendingRoutineFires: observeQueuedRetries(existing.pendingRoutineFires) }),
+          ...(!enabled && !options && existing.pendingRoutineFires?.length && { pendingRoutineFires: observeQueuedRetries(existing.pendingRoutineFires) }),
           ...(options && {
             pendingRoutineFires: existing.pendingRoutineFires?.filter((fire) =>
               !fire.retry || fire.requestId === options.clearRoutineRetriesExcept),
