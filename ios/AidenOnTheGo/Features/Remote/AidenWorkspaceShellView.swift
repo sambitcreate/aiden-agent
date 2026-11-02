@@ -1101,11 +1101,13 @@ struct AidenWorkspaceShellView: View {
 
     /// A chat another device started without a workspace sits in a hidden record this phone
     /// hasn't listed, so the sidebar would leave it out. Re-read the workspace list once for it.
-    private func reReadWorkspacesForUnlistedChats() async {
+    private func reReadWorkspacesForUnlistedChats() {
         let id = unlistedChatWorkspacesID
         guard let instanceID = id.instanceID, id.connectionState == .connected, !id.workspaceIDs.isEmpty else { return }
         workspaceReReads[instanceID, default: []].formUnion(id.workspaceIDs)
-        await coordinator.refreshWorkspaces()
+        // Marking the ids changes this view's task identity, which cancels the `.task(id:)` that
+        // called us. The read runs in its own task so that cancellation never drops it.
+        Task { await coordinator.refreshWorkspaces() }
     }
 
     private var sidebarProjection: AidenWorkspaceSidebarProjection {
@@ -1472,7 +1474,7 @@ struct AidenWorkspaceShellView: View {
             await homeModel.load(coordinator: coordinator)
         }
         .task(id: unlistedChatWorkspacesID) {
-            await reReadWorkspacesForUnlistedChats()
+            reReadWorkspacesForUnlistedChats()
         }
         .onAppear { coordinator.haptics.activate(scope: hapticScope) }
         .onDisappear {
