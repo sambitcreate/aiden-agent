@@ -465,6 +465,9 @@ final class AidenRemoteCoordinator {
             applyWorkspaceSnapshot(refreshed, instanceId: installationId)
             connectionIssue = nil
         connectionState = .connected
+        } catch let error where aidenIsCancellation(error) {
+            // A cancelled read (a view that went away) says nothing about the connection.
+            return
         } catch {
             guard isCurrentContext(installationId: installationId, generation: generation) else { return }
             await handleConnectionError(error, installationId: installationId)
