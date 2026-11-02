@@ -2811,10 +2811,13 @@ final class AidenRemoteClientTests: XCTestCase {
     /// The upload delegate reports the share of the body sent, and nothing
     /// while the size is unknown.
     func testUploadProgressDelegateReportsTheShareOfTheBodySent() {
-        let lock = NSLock()
-        var heard: [Double] = []
+        final class Heard: @unchecked Sendable {
+            let lock = NSLock()
+            var values: [Double] = []
+        }
+        let heard = Heard()
         let delegate = AidenUploadProgressDelegate { fraction in
-            lock.lock(); heard.append(fraction); lock.unlock()
+            heard.lock.lock(); heard.values.append(fraction); heard.lock.unlock()
         }
         let session = URLSession(configuration: .ephemeral)
         defer { session.invalidateAndCancel() }
@@ -2822,7 +2825,7 @@ final class AidenRemoteClientTests: XCTestCase {
         delegate.urlSession(session, task: task, didSendBodyData: 64, totalBytesSent: 64, totalBytesExpectedToSend: 256)
         delegate.urlSession(session, task: task, didSendBodyData: 192, totalBytesSent: 256, totalBytesExpectedToSend: 256)
         delegate.urlSession(session, task: task, didSendBodyData: 10, totalBytesSent: 10, totalBytesExpectedToSend: NSURLSessionTransferSizeUnknown)
-        XCTAssertEqual(heard, [0.25, 1])
+        XCTAssertEqual(heard.values, [0.25, 1])
     }
 
     /// The bar covers the whole batch and moves only forward, a whole percent at a time.
