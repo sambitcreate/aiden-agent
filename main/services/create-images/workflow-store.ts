@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { validateWorkflowGraph } from "../../../renderer/shared/images/ports.js";
+import { IMAGE_NODE_DEFINITIONS, validateWorkflowGraph } from "../../../renderer/shared/images/ports.js";
 import {
   IMAGE_WORKFLOW_ID_PATTERN,
   IMAGE_WORKFLOW_LIMITS,
@@ -61,10 +61,16 @@ function imageInputAssets(doc: WorkflowDocV1): string[] {
 interface DocumentFacts {
   nodeIds: ReadonlySet<string>;
   imageInputs: readonly string[];
+  /** Generate node id -> its title as the editor shows it (the node type's name when untitled). */
+  generateTitles: ReadonlyMap<string, string>;
 }
 
 function factsOf(doc: WorkflowDocV1): DocumentFacts {
-  return { nodeIds: new Set(doc.nodes.map((node) => node.id)), imageInputs: [...new Set(imageInputAssets(doc))].sort() };
+  const generateTitles = new Map<string, string>();
+  for (const node of doc.nodes) {
+    if (node.type === "generate-image") generateTitles.set(node.id, node.title?.trim() || IMAGE_NODE_DEFINITIONS["generate-image"].title);
+  }
+  return { nodeIds: new Set(doc.nodes.map((node) => node.id)), imageInputs: [...new Set(imageInputAssets(doc))].sort(), generateTitles };
 }
 
 /** At most `max` UTF-16 units, never splitting a surrogate pair. */
@@ -188,6 +194,11 @@ export class ImageWorkflowStore {
   nodeIds(workflowId: string): ReadonlySet<string> | "all" | undefined {
     if (this.unreadable.has(workflowId)) return "all";
     return this.facts.get(workflowId)?.nodeIds;
+  }
+
+  /** A Generate node's current title, or undefined when the workflow or node no longer exists. From memory. */
+  generateNodeTitle(workflowId: string, nodeId: string): string | undefined {
+    return this.facts.get(workflowId)?.generateTitles.get(nodeId);
   }
 
   /** Ids whose file exists but cannot be parsed. Their holds are kept, in case the file is repaired. */
