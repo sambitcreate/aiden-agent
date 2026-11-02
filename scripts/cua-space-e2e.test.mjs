@@ -8,6 +8,7 @@ import process from "node:process";
 import { fileURLToPath, URL } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 const execFileAsync = promisify(execFile);
 const runner = fileURLToPath(new URL("./cua-space-e2e.sh", import.meta.url));
@@ -328,7 +329,7 @@ test("--reset in the Space stops only processes in the checkout or holding the r
   assertStatus(await runReset(), 0, "leftover processes were found");
   for (const stopped of [inCheckout, fromCheckout, lockHolder]) {
     // The reset has already sent TERM and then KILL by the time it returns, so only the exit event is outstanding.
-    const signal = await Promise.race([stopped.exited, new Promise((resolve) => setTimeout(resolve, 1000, "still running"))]);
+    const signal = await Promise.race([stopped.exited, delay(1000, "still running")]);
     assert.equal(signal, "SIGTERM", `${stopped.name} is stopped`);
     await rm(stopped.entry, { recursive: true });
   }
