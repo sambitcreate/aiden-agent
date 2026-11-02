@@ -531,7 +531,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           const botsSupported = hostPlatformCapabilities().bots;
           const chats = new AidenRemoteChatService({
             attachments: remoteAttachmentStore,
-            // Revision 50: a phone's New worktree, through the desktop's first-message coordinator.
+            // Revision 52: a phone's New worktree, through the desktop's first-message coordinator.
             newWorktrees: createAidenRemoteNewWorktrees({
               getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
               branches: (folderPath) => gitBranches(folderPath),
@@ -621,6 +621,24 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             workspaceFolderRefusal: async (workspaceId) => {
               const workspace = await configStore.getWorkspace(workspaceId);
               return workspace ? workspaceFolderRemoteRefusal(workspace) : undefined;
+            },
+            noWorkspace: {
+              // The desktop's sidebar lists a chat only once it knows the chat's workspace, so a
+              // hidden record made or removed here is announced like any other workspace change.
+              target: async (workspaceId) => {
+                const target = await workspaceApplicationService.workspaceForNoWorkspaceChat(workspaceId);
+                if (target !== workspaceId) ipcMain.broadcast("workspaces:changed", {});
+                return target;
+              },
+              release: async (workspaceId) => {
+                try {
+                  await workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId);
+                } catch {
+                  logger.warn("aiden-remote", "Could not release a moved chat's hidden folder.");
+                  return;
+                }
+                ipcMain.broadcast("workspaces:changed", {});
+              },
             },
             deviceSupportsSkillInvocation: async (deviceId) => {
               const device = (await state.snapshot()).devices.find(

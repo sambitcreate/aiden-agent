@@ -194,6 +194,7 @@ fun AidenChatDetailScreen(
     val pendingAttachments by viewModel.pendingAttachments.collectAsStateWithLifecycle()
     val preparingAttachmentBatches by viewModel.preparingAttachmentBatches.collectAsStateWithLifecycle()
     val isUploadingAttachment by viewModel.isUploadingAttachment.collectAsStateWithLifecycle()
+    val uploadProgress by viewModel.uploadProgress.collectAsStateWithLifecycle()
     val draft by viewModel.draft.collectAsStateWithLifecycle()
     val selectedSkill by viewModel.selectedSkill.collectAsStateWithLifecycle()
     val modelCatalog by viewModel.catalog.collectAsStateWithLifecycle()
@@ -266,7 +267,7 @@ fun AidenChatDetailScreen(
             backgroundJobs.refresh(chatId, backgroundJobsTransport)
         }
     }
-    // Revision 50: New worktree beside the composer until the chat's first message.
+    // Revision 52: New worktree beside the composer until the chat's first message.
     val startsInNewWorktree by viewModel.startsInNewWorktree.collectAsStateWithLifecycle()
     val isSettingUpWorktree by viewModel.isSettingUpWorktree.collectAsStateWithLifecycle()
     val workspaceHasCommits by viewModel.workspaceHasCommits.collectAsStateWithLifecycle()
@@ -870,6 +871,8 @@ fun AidenChatDetailScreen(
                         )
                     },
                     onRemoveAttachment = { att -> viewModel.removePendingAttachment(att.id) },
+                    uploadProgress = uploadProgress,
+                    onCancelUpload = { viewModel.cancelUploads() },
                     onAddImage = {
                         dismissComposerKeyboard()
                         imagePickerLauncher.launch(

@@ -215,7 +215,51 @@ export const AIDEN_REMOTE_WORKSPACE_CLONE_CONTRACT_REVISION = 48 as const;
  */
 export const AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION = 49 as const;
 /**
- * Contract revision 50 (provisional; re-claim the next revision after `main`'s
+ * Contract revision 52 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION`):
+ * picture uploads as raw bytes (`attachments:raw`, an opt-in capability like
+ * `chat:jobs`, since phones already hear the most feature tokens shipped
+ * clients accept). `POST /chats/{chatId}/attachments` and
+ * `POST /bots/{botId}/attachments` also take an `image/png` or `image/jpeg`
+ * body with an exact `Content-Length` and the file name in
+ * `Aiden-Attachment-Name`, and return the same single-use reference as the
+ * JSON upload, which stays for older clients. No base64, so uploads are about
+ * a quarter smaller and clients can show byte progress.
+ */
+export const AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION = 50 as const;
+
+/** Revision 50: the header that carries a raw picture upload's file name. */
+export const AIDEN_REMOTE_ATTACHMENT_NAME_HEADER = "Aiden-Attachment-Name" as const;
+/** Revision 50: the longest percent-encoded name the upload routes take. */
+export const AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME = 2_048 as const;
+/** Revision 50: the picture types the upload routes take as raw bytes. */
+export const AIDEN_REMOTE_RAW_UPLOAD_MIME_TYPES: ReadonlySet<string> = new Set(["image/png", "image/jpeg"]);
+
+/**
+ * Revision 50: a file name as `Aiden-Attachment-Name` carries it, the UTF-8
+ * bytes percent-encoded with only RFC 3986 unreserved characters left as they
+ * are, so every client spells a name the same way.
+ */
+export function encodeAidenRemoteAttachmentName(name: string): string {
+  return encodeURIComponent(name).replace(
+    /[!'()*]/gu,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+/**
+ * Contract revision 51 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_NO_WORKSPACE_CONTRACT_REVISION`):
+ * chats without a workspace on phones. A workspace may carry `noWorkspace:
+ * true`: a hidden folder Aiden made for one such chat. Phones list those chats
+ * under one Chats group and start new ones in its home (the `default` record,
+ * else the oldest). `POST /chats` with `noWorkspace: true` aimed at a hidden
+ * workspace that already holds another chat saves the chat in a fresh one;
+ * without the flag, and for moves, the named workspace is kept. Older phones
+ * see each hidden workspace as a workspace named "No workspace", as before.
+ */
+export const AIDEN_REMOTE_NO_WORKSPACE_CONTRACT_REVISION = 51 as const;
+/**
+ * Contract revision 52 (provisional; re-claim the next revision after `main`'s
  * at merge by changing only `AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION`):
  * New worktree on phones (`chat:new-worktree`, an opt-in capability rather
  * than a feature token, because phones already hear the most feature tokens
@@ -225,7 +269,7 @@ export const AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION = 49 as const;
  * moves the still-empty chat into it, so the first message runs there. Older
  * phones see nothing new.
  */
-export const AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION = 50 as const;
+export const AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION = 52 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -461,7 +505,15 @@ export const AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES = ["schedule:cards"] as con
 export const AIDEN_REMOTE_CHAT_JOB_CAPABILITIES = ["chat:jobs"] as const;
 
 /**
- * Contract revision 50: a device holding `chat:new-worktree` may put an empty
+ * Contract revision 50: a device holding `attachments:raw` may upload a
+ * picture as its raw bytes to the chat and Bot attachment routes. Those
+ * uploads still need the route's own grant (`chat:write`, or `bot:write` with
+ * `bot:attachments`), so it widens nothing those grants allow.
+ */
+export const AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES = ["attachments:raw"] as const;
+
+/**
+ * Contract revision 52: a device holding `chat:new-worktree` may put an empty
  * chat in a new managed worktree (`POST /chats/{chatId}/worktree`, which also
  * needs `chat:write` and `git:write`). It is offered only while the host can
  * create worktrees, and widens nothing those grants do not already allow.
@@ -470,15 +522,17 @@ export const AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES = ["chat:new-worktree"]
 
 /**
  * Every opt-in a paired device may persist. Each changes what a device is
- * shown; `chat:jobs` opens its two routes, which still need the chat grant
- * (`chat:read`, `chat:write`), and `chat:new-worktree` opens its route, which
- * still needs the device's chat and Git write grants, so neither widens what
- * those grants allow.
+ * shown; `chat:jobs` also opens its two routes, which still need the chat
+ * grant (`chat:read`, `chat:write`); `attachments:raw` opens a second body
+ * type on the upload routes, which still need their own grants; and
+ * `chat:new-worktree` opens its route, which still needs the device's chat
+ * and Git write grants. None widens anything those grants allow.
  */
 export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
+  ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
 ] as const;
 
@@ -495,6 +549,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
+  ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
 ] as const;
 
@@ -515,6 +570,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
+  ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
 ] as const;
 
@@ -2066,7 +2122,9 @@ export interface AidenRemoteContractFixture {
   spending?: AidenRemoteSpendingFixture;
   /** Revision 49 (`chat:jobs`): a chat's jobs, a stop, and an unknown job. */
   backgroundJobs?: AidenRemoteBackgroundJobsFixture;
-  /** Revision 50 (`chat:new-worktree`): an empty chat moved into a new worktree, and a chat with messages refused. */
+  /** Revision 50 (`attachments:raw`): one picture sent as its own bytes, and the refusal without the grant. */
+  rawUploads?: AidenRemoteRawUploadsFixture;
+  /** Revision 52 (`chat:new-worktree`): an empty chat moved into a new worktree, and a chat with messages refused. */
   chatNewWorktree?: AidenRemoteChatNewWorktreeFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
@@ -7823,6 +7881,13 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     backgroundJobs = parseBackgroundJobsFixture(value.backgroundJobs);
   }
+  let rawUploads: AidenRemoteRawUploadsFixture | undefined;
+  if (value.rawUploads !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION) {
+      throw new Error(`Raw upload fixtures require contract revision ${AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION}.`);
+    }
+    rawUploads = parseRawUploadsFixture(value.rawUploads);
+  }
   let chatNewWorktree: AidenRemoteChatNewWorktreeFixture | undefined;
   if (value.chatNewWorktree !== undefined) {
     if (contractRevision < AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION) {
@@ -7930,6 +7995,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(browserRecordings ? { browserRecordings } : {}),
     ...(spending ? { spending } : {}),
     ...(backgroundJobs ? { backgroundJobs } : {}),
+    ...(rawUploads ? { rawUploads } : {}),
     ...(chatNewWorktree ? { chatNewWorktree } : {}),
   };
 }
@@ -8169,10 +8235,85 @@ function parseBackgroundJobsFixture(value: unknown): AidenRemoteBackgroundJobsFi
   return fixture;
 }
 
+export interface AidenRemoteRawUploadsFixture {
+  capability: "attachments:raw";
+  request: {
+    method: "POST";
+    path: string;
+    contentType: string;
+    contentLength: number;
+    nameHeader: typeof AIDEN_REMOTE_ATTACHMENT_NAME_HEADER;
+    name: string;
+    encodedName: string;
+    bodyBase64: string;
+  };
+  /** The staged reference, the same as for the JSON envelope. */
+  response: { id: string; name: string; mimeType: string; kind: "image"; size: number; expiresAt: string };
+  /** Raw bytes from a device without the grant. */
+  withoutGrant: AidenRemoteErrorEnvelope;
+}
+
+function parseRawUploadsFixture(value: unknown): AidenRemoteRawUploadsFixture {
+  if (!isRecord(value)) throw new Error("Raw uploads fixture must be an object.");
+  assertExactKeys(value, ["capability", "request", "response", "withoutGrant"], "Raw uploads fixture");
+  if (value.capability !== "attachments:raw") throw new Error("Raw uploads need attachments:raw.");
+  const request = value.request;
+  if (!isRecord(request)) throw new Error("Raw upload request must be an object.");
+  assertExactKeys(
+    request,
+    ["method", "path", "contentType", "contentLength", "nameHeader", "name", "encodedName", "bodyBase64"],
+    "Raw upload request",
+  );
+  const contentType = requiredString(request, "contentType");
+  const name = requiredString(request, "name");
+  const encodedName = requiredString(request, "encodedName");
+  const bodyBase64 = requiredString(request, "bodyBase64");
+  const path = requiredString(request, "path");
+  const body = Buffer.from(bodyBase64, "base64");
+  if (request.method !== "POST" || !/^\/(?:chats|bots)\/[A-Za-z0-9._:-]+\/attachments$/u.test(path)) {
+    throw new Error("A raw upload posts to a chat or Bot upload route.");
+  }
+  if (!AIDEN_REMOTE_RAW_UPLOAD_MIME_TYPES.has(contentType)) throw new Error("A raw upload is a PNG or JPEG.");
+  if (request.contentLength !== body.length || body.toString("base64") !== bodyBase64) {
+    throw new Error("A raw upload declares its exact length.");
+  }
+  if (request.nameHeader !== AIDEN_REMOTE_ATTACHMENT_NAME_HEADER) throw new Error("A raw upload names its header.");
+  if (encodeAidenRemoteAttachmentName(name) !== encodedName || decodeURIComponent(encodedName) !== name) {
+    throw new Error("The encoded name is the name, percent-encoded.");
+  }
+  const response = value.response;
+  if (!isRecord(response)) throw new Error("Raw upload response must be an object.");
+  assertExactKeys(response, ["id", "name", "mimeType", "kind", "size", "expiresAt"], "Raw upload response");
+  const id = requiredString(response, "id");
+  if (!/^att_[A-Za-z0-9_-]{43}$/u.test(id)) throw new Error("A staged upload has an att_ id.");
+  if (response.name !== name || response.mimeType !== contentType || response.kind !== "image" || response.size !== body.length) {
+    throw new Error("The staged reference describes the picture sent.");
+  }
+  const expiresAt = requiredString(response, "expiresAt");
+  if (!Number.isFinite(Date.parse(expiresAt))) throw new Error("A staged upload expires.");
+  const withoutGrant = parseErrorEnvelopeFixture(value.withoutGrant, "Raw upload without the grant");
+  if (withoutGrant.error.code !== "capability_denied") throw new Error("Raw bytes without the grant are capability_denied.");
+  return {
+    capability: "attachments:raw",
+    request: {
+      method: "POST",
+      path,
+      contentType,
+      contentLength: body.length,
+      nameHeader: AIDEN_REMOTE_ATTACHMENT_NAME_HEADER,
+      name,
+      encodedName,
+      bodyBase64,
+    },
+    response: { id, name, mimeType: contentType, kind: "image", size: body.length, expiresAt },
+    withoutGrant,
+  };
+}
+
 /** Longest message text `POST /chats/{chatId}/worktree` takes; only its first words name the branch. */
 export const AIDEN_REMOTE_MAX_NEW_WORKTREE_TEXT = 4_000;
 
-/** Revision 50: the body of `POST /chats/{chatId}/worktree`. */
+/** Revision 52: the body of `POST /chats/{chatId}/worktree`. */
 export interface AidenRemoteChatNewWorktreeRequest {
   /** The first message, about to be sent; the branch is named from it (`aiden/<words>`). */
   text: string;
@@ -8188,7 +8329,7 @@ export function parseAidenRemoteChatNewWorktreeRequest(value: unknown): AidenRem
   return { text };
 }
 
-/** Revision 50: the response of `POST /chats/{chatId}/worktree`. */
+/** Revision 52: the response of `POST /chats/{chatId}/worktree`. */
 export interface AidenRemoteChatNewWorktreeResponse {
   /** The chat, now in the worktree's workspace and still without messages. */
   chat: AidenRemoteChatProjection;

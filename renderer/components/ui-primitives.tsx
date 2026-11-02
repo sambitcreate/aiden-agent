@@ -64,18 +64,29 @@ export function Segmented<T extends string>({
   );
 }
 
-/** A tab strip. Callers render the selected panel themselves. */
+/**
+ * The ids that tie a tab to the panel a caller renders for it. Pass the same `idBase` (for
+ * example from `React.useId()`) to `Tabs` and give the panel `id={panel}` and
+ * `aria-labelledby={tab}`, so the tab controls the panel and names it.
+ */
+export function tabIds(idBase: string, value: string): { tab: string; panel: string } {
+  return { tab: `${idBase}-tab-${value}`, panel: `${idBase}-panel-${value}` };
+}
+
+/** A tab strip. Callers render the selected panel themselves, linked through `idBase` and `tabIds`. */
 export function Tabs<T extends string>({
   value,
   onValueChange,
   items,
   className,
+  idBase,
   ...aria
 }: {
   value: T;
   onValueChange: (value: T) => void;
   items: readonly ChoiceOption<T>[];
   className?: string;
+  idBase?: string;
   "aria-label"?: string;
 }) {
   return (
@@ -85,6 +96,7 @@ export function Tabs<T extends string>({
           <TabsPrimitive.Trigger
             key={item.value}
             value={item.value}
+            {...(idBase !== undefined ? { id: tabIds(idBase, item.value).tab, "aria-controls": tabIds(idBase, item.value).panel } : {})}
             className="h-7 rounded-menu px-3 text-small text-secondary outline-none transition-[background-color,color] duration-(--motion-duration) ease-standard hover:bg-control hover:text-primary data-[state=active]:bg-control data-[state=active]:text-primary"
           >
             {item.label}

@@ -1,7 +1,7 @@
 import XCTest
 @testable import AidenOnTheGo
 
-/// Revision 50 (`chat:new-worktree`): when the phone offers New worktree.
+/// Revision 52 (`chat:new-worktree`): when the phone offers New worktree.
 final class AidenNewWorktreeTests: XCTestCase {
     private let site = AidenWorkspace(
         id: "workspace_site",

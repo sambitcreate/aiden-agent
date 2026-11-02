@@ -882,9 +882,13 @@ struct AidenBotSessionChatView: View {
     /// full-width field.
     private func composer(_ model: AidenBotSessionModel) -> some View {
         let actionSize = max(44, controlSize)
-        let isExpanded = composerFocused || !model.pendingAttachments.isEmpty || draft.contains("\n")
+        let isExpanded = composerFocused || !model.pendingAttachments.isEmpty || model.uploadProgress != nil || draft.contains("\n")
         return AidenBotComposerGlassContainer {
             VStack(alignment: .leading, spacing: 8) {
+                if let progress = model.uploadProgress {
+                    AidenUploadProgressRow(progress: progress, onCancel: model.cancelUploads)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
                 if !model.pendingAttachments.isEmpty {
                     pendingAttachments(model)
                 }
@@ -961,7 +965,8 @@ struct AidenBotSessionChatView: View {
                 .rotationEffect(.degrees(attachmentPicker.isPresented ? 45 : 0))
                 .opacity(model.isAttaching ? 0.48 : 1)
                 .overlay(alignment: .bottomTrailing) {
-                    if model.isAttaching {
+                    // While the upload bar shows progress, it is the only spinner.
+                    if model.isAttaching, model.uploadProgress == nil {
                         ProgressView()
                             .controlSize(.mini)
                             .padding(3)
@@ -1033,6 +1038,11 @@ struct AidenBotSessionChatView: View {
         attachmentPicker.openMenu()
     }
 
+    /// Revision 50: this phone holds `attachments:raw` on the connected Mac.
+    private var rawImageUploadsGranted: Bool {
+        coordinator.server?.supportsRawUploads == true
+    }
+
     private func attachSelectedPhotos(_ model: AidenBotSessionModel) {
         guard !model.isAttaching,
               let commit = attachmentPicker.beginCommit(pendingCount: model.pendingAttachments.count) else { return }
@@ -1043,6 +1053,7 @@ struct AidenBotSessionChatView: View {
             }
         }
         Task { @MainActor in
+            model.rawImageUploads = rawImageUploadsGranted
             await model.attach(items)
             attachmentPicker.finishCommit(commit.id)
         }
@@ -1051,6 +1062,7 @@ struct AidenBotSessionChatView: View {
     private func attachCapturedPhoto(_ data: Data, model: AidenBotSessionModel) {
         attachmentPicker.dismiss()
         Task { @MainActor in
+            model.rawImageUploads = rawImageUploadsGranted
             await model.attach([{
                 try await AidenAttachmentPreparation.imageUploadAsync(data: data, name: "Camera Photo.jpg")
             }])
@@ -1063,6 +1075,7 @@ struct AidenBotSessionChatView: View {
             { try await AidenAttachmentPreparation.fileUploadAsync(url: url) }
         }
         Task { @MainActor in
+            model.rawImageUploads = rawImageUploadsGranted
             await model.attach(items)
         }
     }

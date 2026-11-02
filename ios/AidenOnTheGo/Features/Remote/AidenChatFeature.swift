@@ -1455,7 +1455,7 @@ final class AidenChatViewModel {
     /// later refresh keeps earlier pages the reader loaded.
     @ObservationIgnored private var hasSettledTranscriptWindow = false
     private(set) var isStarting = false
-    /// Revision 50: the first message starts this chat in a new worktree on
+    /// Revision 52: the first message starts this chat in a new worktree on
     /// the Mac. Shown only while `offersNewWorktree`.
     var startsInNewWorktree = false
     /// The Mac is making the worktree; the message waits above a Cancel.
@@ -1557,6 +1557,11 @@ final class AidenChatViewModel {
         }
     }
     private(set) var isUploadingAttachment = false
+    /// How far the attachments being uploaded have got; nil while none are.
+    private(set) var uploadProgress: AidenUploadProgress?
+    @ObservationIgnored private var uploadProgressID: UUID?
+    /// Stop on the progress bar keeps the pictures that already reached the Mac.
+    @ObservationIgnored private var stopKeepsStagedUploads = false
     let appControlsCache = AidenAppControlCache()
     private(set) var taskProgress: AidenRemoteChatTaskProgress?
     private(set) var agentRoster: AidenRemoteChatAgentRoster?
@@ -3189,7 +3194,7 @@ final class AidenChatViewModel {
         let idempotencyKey = attempt.key
         do {
             if makesWorktree {
-                // Revision 50: the Mac makes the worktree and moves this empty
+                // Revision 52: the Mac makes the worktree and moves this empty
                 // chat into it before the message is sent there.
                 let key = worktreeAttempt?.text == text ? worktreeAttempt!.key : UUID()
                 worktreeAttempt = (text, key)
@@ -3521,18 +3526,37 @@ final class AidenChatViewModel {
         composerGeneration &+= 1
         isUploadingAttachment = true
         presentedError = nil
-        defer { isUploadingAttachment = false }
+        let progressID = UUID()
+        uploadProgressID = progressID
+        stopKeepsStagedUploads = false
+        defer {
+            isUploadingAttachment = false
+            if uploadProgressID == progressID {
+                uploadProgressID = nil
+                uploadProgress = nil
+            }
+        }
+        // Revision 50: a Mac that granted `attachments:raw` takes a picture as its own bytes.
+        let rawImages = coordinator.server?.supportsRawUploads == true
+        let batch = Array(uploads.prefix(10 - pendingAttachments.count))
         var failedCount = 0
         var acceptedReferences: [AidenAttachmentReference] = []
-        for upload in uploads.prefix(10 - pendingAttachments.count) {
+        for (index, upload) in batch.enumerated() {
             if isRemoved || Task.isCancelled {
                 await cleanupCancelledUpload(acceptedReferences)
                 return uploads.count
             }
+            uploadProgress = AidenUploadProgress(index: index, count: batch.count, fraction: 0)
             do {
                 let reference = try await uploadClient.uploadAttachment(
                     chatId: chat.id,
-                    upload: upload
+                    upload: upload,
+                    rawImages: rawImages,
+                    progress: { [weak self] fraction in
+                        Task { @MainActor in
+                            self?.recordUploadProgress(fraction, index: index, id: progressID)
+                        }
+                    }
                 )
                 guard reference.isValid() else { throw AidenRemoteClientError.invalidResponse }
                 ownedUploadReferences[reference.id] = (reference, context, uploadClient)
@@ -3593,10 +3617,30 @@ final class AidenChatViewModel {
         return failedCount
     }
 
+    /// A late report from an earlier upload or batch never moves the bar back.
+    private func recordUploadProgress(_ fraction: Double, index: Int, id: UUID) {
+        guard uploadProgressID == id, let current = uploadProgress, current.index == index,
+              let next = current.advanced(to: fraction) else { return }
+        uploadProgress = next
+    }
+
+    /// Stop on the progress bar: the upload in flight is dropped; what already
+    /// reached the Mac stays ready to send, as on Android.
+    func cancelUploads() {
+        guard isUploadingAttachment else { return }
+        stopKeepsStagedUploads = true
+        cancelAttachmentPreparation()
+        uploadTask?.cancel()
+    }
+
     private func cleanupCancelledUpload(
         _ references: [AidenAttachmentReference]
     ) async {
-        for reference in references { await cleanupOwnedAttachment(reference.id) }
+        // A closed chat drops everything; Stop keeps the attachments already shown.
+        let kept = stopKeepsStagedUploads && !isRemoved ? Set(pendingAttachments.map(\.id)) : []
+        for reference in references where !kept.contains(reference.id) {
+            await cleanupOwnedAttachment(reference.id)
+        }
     }
 
     private func cleanupOwnedAttachment(_ id: String) async {
@@ -6155,7 +6199,7 @@ struct AidenChatDetailView: View {
         ].joined(separator: "|")
     }
 
-    /// Revision 50: New worktree sits beside the composer's chips until the
+    /// Revision 52: New worktree sits beside the composer's chips until the
     /// chat's first message, and stays hidden while that message is on its way.
     private var showsNewWorktreeChip: Bool {
         allowsMutations && model.offersNewWorktree && !model.isSettingUpWorktree
@@ -10057,6 +10101,11 @@ private struct AidenComposerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if let progress = model.uploadProgress {
+                AidenUploadProgressRow(progress: progress, onCancel: model.cancelUploads)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+
             if !visiblePendingAttachments.isEmpty || !attachmentPicker.committingAssets.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -10146,7 +10195,8 @@ private struct AidenComposerView: View {
                         .rotationEffect(.degrees(attachmentPicker.isPresented ? 45 : 0))
                         .opacity(model.isUploadingAttachment || model.isPreparingAttachments ? 0.48 : 1)
                         .overlay(alignment: .bottomTrailing) {
-                            if model.isUploadingAttachment || model.isPreparingAttachments {
+                            // While the upload bar shows progress, it is the only spinner.
+                            if model.uploadProgress == nil, model.isUploadingAttachment || model.isPreparingAttachments {
                                 ProgressView()
                                     .controlSize(.mini)
                                     .padding(3)

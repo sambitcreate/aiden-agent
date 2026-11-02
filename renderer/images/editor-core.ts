@@ -4,6 +4,7 @@ import {
   type WorkflowDocV1,
   type WorkflowEdge,
   type WorkflowPosition,
+  type WorkflowViewport,
 } from "../shared/images/schema";
 
 export interface CanvasConnectionIntent {
@@ -39,6 +40,14 @@ export function boundedCanvasPosition(position: WorkflowPosition): WorkflowPosit
   const limit = IMAGE_WORKFLOW_LIMITS.positionLimit;
   const coordinate = (value: number) => (Number.isFinite(value) ? Math.max(-limit, Math.min(limit, value)) : 0);
   return { x: coordinate(position.x), y: coordinate(position.y) };
+}
+
+/** The saved viewport stays inside the schema's bounds, so a far pan or zoom never makes saving fail. */
+export function boundedViewport(viewport: WorkflowViewport): WorkflowViewport {
+  const { positionLimit: limit, minZoom, maxZoom } = IMAGE_WORKFLOW_LIMITS;
+  const clamp = (value: number, min: number, max: number, fallback: number) =>
+    Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
+  return { x: clamp(viewport.x, -limit, limit, 0), y: clamp(viewport.y, -limit, limit, 0), zoom: clamp(viewport.zoom, minZoom, maxZoom, 1) };
 }
 
 export function decideCanvasConnection(

@@ -607,7 +607,15 @@ data class AidenRemoteCapability(val rawValue: String) {
         val CHAT_JOBS = AidenRemoteCapability("chat:jobs")
 
         /**
-         * Contract revision 50: with `git:write`, this phone may move an empty Workspace chat into
+         * Contract revision 50: this phone may send a PNG or JPEG picture to the chat and Bot
+         * upload routes as its own bytes instead of base64 inside JSON. It widens nothing an
+         * upload grant does not already allow. The Mac offers it only in `serverCapabilities`,
+         * and it is asked for in a call of its own.
+         */
+        val ATTACHMENTS_RAW = AidenRemoteCapability("attachments:raw")
+
+        /**
+         * Contract revision 52: with `git:write`, this phone may move an empty Workspace chat into
          * a new worktree made from its first message (`POST /chats/{chatId}/worktree`, with
          * `chat:write`). The Mac offers it only in `serverCapabilities`, and it is asked for in a
          * call of its own.
@@ -652,16 +660,21 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 49: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_CHAT_JOBS = listOf(CHAT_JOBS)
 
-        /** Revision 50: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        /** Revision 52: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        val PHONE_ATTACHMENTS_RAW = listOf(ATTACHMENTS_RAW)
+
+        /** Revision 52: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_CHAT_NEW_WORKTREE = listOf(CHAT_NEW_WORKTREE)
 
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
-            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS + PHONE_CHAT_NEW_WORKTREE
+            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
         val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
-            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS + PHONE_CHAT_NEW_WORKTREE
+            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE
     }
 }
 

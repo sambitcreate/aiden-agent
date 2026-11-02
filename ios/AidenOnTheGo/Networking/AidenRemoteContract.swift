@@ -674,7 +674,8 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 43 adds `bot:handoff-on-mac`, asked for the same way.
     /// Contract revision 45 adds `bot:images`, asked for alone.
     /// Contract revision 49 adds `chat:jobs`, asked for alone.
-    /// Contract revision 50 adds `chat:new-worktree`, asked for alone.
+    /// Contract revision 50 adds `attachments:raw`, asked for alone.
+    /// Contract revision 52 adds `chat:new-worktree`, asked for alone.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
@@ -684,6 +685,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "bot:handoff-on-mac"),
         Self(rawValue: "bot:images"),
         Self(rawValue: "chat:jobs"),
+        Self(rawValue: "attachments:raw"),
         Self(rawValue: "chat:new-worktree"),
     ]
 
@@ -731,7 +733,14 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// the name, so the device asks for it alone.
     static let chatJobs = Self(rawValue: "chat:jobs")
 
-    /// Revision 50: with `git:write`, the device may move an empty Workspace
+    /// Revision 50: the device may send a PNG or JPEG picture to the chat and
+    /// Bot upload routes as its own bytes instead of base64 inside JSON, about
+    /// a quarter fewer bytes. It widens nothing an upload grant does not
+    /// already allow. A Mac on an earlier revision refuses the name, so the
+    /// device asks for it alone.
+    static let attachmentsRaw = Self(rawValue: "attachments:raw")
+
+    /// Revision 52: with `git:write`, the device may move an empty Workspace
     /// chat into a new worktree made from its first message
     /// (`POST /chats/{chatId}/worktree`). A Mac on an earlier revision refuses
     /// the name, so the device asks for it alone.

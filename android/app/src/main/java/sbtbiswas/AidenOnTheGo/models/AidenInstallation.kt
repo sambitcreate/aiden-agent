@@ -216,8 +216,13 @@ data class AidenServer(
         get() = serverCapabilities?.contains(AidenRemoteCapability.CHAT_JOBS) == true &&
             capabilities.contains(AidenRemoteCapability.CHAT_JOBS)
 
+    /** Offered and held (revision 50): pictures go to the upload routes as their own bytes. */
+    val supportsRawUploads: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.ATTACHMENTS_RAW) == true &&
+            capabilities.contains(AidenRemoteCapability.ATTACHMENTS_RAW)
+
     /**
-     * Offered and held (revision 50), with `git:write` and `chat:write`: an empty Workspace chat
+     * Offered and held (revision 52), with `git:write` and `chat:write`: an empty Workspace chat
      * may start in a new worktree on the Mac.
      */
     val supportsNewWorktrees: Boolean

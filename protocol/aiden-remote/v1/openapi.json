@@ -781,6 +781,11 @@
                   },
                   "modelId": {
                     "type": "string"
+                  },
+                  "noWorkspace": {
+                    "type": "boolean",
+                    "const": true,
+                    "description": "Contract revision 51. Sent by a phone starting a chat under Chats (workspaceId names a hidden No workspace record): the host saves the chat in a hidden folder of its own, a fresh one when the named record already holds a chat. Without it the chat stays in the workspace named."
                   }
                 },
                 "additionalProperties": false
@@ -1022,7 +1027,7 @@
           "git:write",
           "chat:new-worktree"
         ],
-        "description": "Contract revision 50. New worktree for a phone's first message: the Mac makes a managed worktree from the chat's workspace (from the repository's default branch, fetched from its remote when there is one) on a branch named from text (aiden/<first words>), then moves the still-empty chat into the worktree's workspace and returns it. Send the turn afterwards as usual. One worktree per chat. For 24 hours the same Idempotency-Key and body replay a 200 answer as it was; after a refusal the key is settled and a same-key retry answers 409 internal_error, not the first refusal, so a client mints a new key after any answer. An empty chat already in the worktree this route made for it answers 200 with it whatever the revision or key. 409 revision_conflict for a stale If-Match, checked again at the move; 409 operation_stale when the chat already has messages; 409 git_capability_denied when Git could not make it (the message says why, without a path); 409 workspace_unavailable when the workspace has no folder or no access. It can take a while when the base is fetched.",
+        "description": "Contract revision 52. New worktree for a phone's first message: the Mac makes a managed worktree from the chat's workspace (from the repository's default branch, fetched from its remote when there is one) on a branch named from text (aiden/<first words>), then moves the still-empty chat into the worktree's workspace and returns it. Send the turn afterwards as usual. One worktree per chat. For 24 hours the same Idempotency-Key and body replay a 200 answer as it was; after a refusal the key is settled and a same-key retry answers 409 internal_error, not the first refusal, so a client mints a new key after any answer. An empty chat already in the worktree this route made for it answers 200 with it whatever the revision or key. 409 revision_conflict for a stale If-Match, checked again at the move; 409 operation_stale when the chat already has messages; 409 git_capability_denied when Git could not make it (the message says why, without a path); 409 workspace_unavailable when the workspace has no folder or no access. It can take a while when the base is fetched.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ChatId"
@@ -1530,6 +1535,7 @@
       ],
       "post": {
         "operationId": "uploadChatAttachment",
+      "description": "Stages one image or text file for this device's next turn in the chat. Since contract revision 50, a device holding attachments:raw may instead send one picture as its raw image/png or image/jpeg bytes, with an exact Content-Length (at most 8 MiB) and the file name, percent-encoded UTF-8, in Aiden-Attachment-Name. Both return the same single-use reference; without attachments:raw a raw upload is 403 capability_denied.",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "chat:write",
         "parameters": [
@@ -1543,6 +1549,16 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AttachmentUpload"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "$ref": "#/components/schemas/RawAttachmentUpload"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "$ref": "#/components/schemas/RawAttachmentUpload"
               }
             }
           }
@@ -2265,7 +2281,7 @@
       ],
       "post": {
         "operationId": "uploadBotAttachment",
-        "description": "Contract revision 33, only on hosts announcing bot-attachments-v1. Stages one image or text file for this device's next message to the Bot. The reference is single-use, expires after ten minutes and is spent only by POST /bots/{botId}/messages for the same Bot and device.",
+        "description": "Contract revision 33, only on hosts announcing bot-attachments-v1. Stages one image or text file for this device's next message to the Bot. Since contract revision 50, a device holding attachments:raw may send one picture as its raw bytes instead, as on POST /chats/{chatId}/attachments. The reference is single-use, expires after ten minutes and is spent only by POST /bots/{botId}/messages for the same Bot and device.",
         "x-aiden-capability": "bot:write",
         "x-aiden-capabilities": [
           "bot:read",
@@ -2278,6 +2294,16 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AttachmentUpload"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "$ref": "#/components/schemas/RawAttachmentUpload"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "$ref": "#/components/schemas/RawAttachmentUpload"
               }
             }
           }
@@ -7848,6 +7874,7 @@
                 "bot:issues",
                 "schedule:cards",
                 "chat:jobs",
+                "attachments:raw",
                 "chat:new-worktree"
               ]
             },
@@ -7893,6 +7920,7 @@
                 "bot:issues",
                 "schedule:cards",
                 "chat:jobs",
+                "attachments:raw",
                 "chat:new-worktree"
               ]
             },
@@ -8041,6 +8069,7 @@
                 "bot:issues",
                 "schedule:cards",
                 "chat:jobs",
+                "attachments:raw",
                 "chat:new-worktree"
               ]
             },
@@ -8095,6 +8124,7 @@
                 "bot:issues",
                 "schedule:cards",
                 "chat:jobs",
+                "attachments:raw",
                 "chat:new-worktree"
               ]
             },
@@ -8755,6 +8785,11 @@
           "isManagedWorktree": {
             "type": "boolean"
           },
+          "noWorkspace": {
+            "type": "boolean",
+            "const": true,
+            "description": "Contract revision 51. Present only on a hidden folder Aiden made for one chat without a workspace. Clients list those chats under one Chats group instead of a workspace each."
+          },
           "branchName": {
             "type": "string"
           },
@@ -9151,6 +9186,12 @@
           }
         },
         "additionalProperties": false
+      },
+      "RawAttachmentUpload": {
+        "description": "Contract revision 50 (attachments:raw): one picture's raw bytes, at most 8 MiB, with an exact Content-Length and the file name, percent-encoded UTF-8, in the Aiden-Attachment-Name header. The host checks the bytes, type and dimensions exactly as for the JSON upload.",
+        "type": "string",
+        "format": "binary",
+        "maxLength": 8388608
       },
       "AttachmentUpload": {
         "oneOf": [
@@ -15602,6 +15643,11 @@
           },
           "isManagedWorktree": {
             "type": "boolean"
+          },
+          "noWorkspace": {
+            "type": "boolean",
+            "const": true,
+            "description": "Contract revision 51. Present only on a hidden folder Aiden made for one chat without a workspace. Clients list those chats under one Chats group instead of a workspace each."
           },
           "branchName": {
             "type": "string"

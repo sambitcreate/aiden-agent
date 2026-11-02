@@ -11,9 +11,10 @@ export const studioAssetStore = new StudioAssetStore({
   onError: (error) =>
     logger.warn(
       "studio",
-      "Studio asset housekeeping failed; the store stays available and will retry on the next start.",
+      "Studio asset housekeeping failed; the store stays available and retries on its next collection.",
       error,
     ),
+  onWarning: (message, error) => logger.warn("studio", message, error),
 });
 
 export const studioAssetGrants = new StudioAssetGrants();

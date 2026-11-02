@@ -138,8 +138,15 @@ internal fun aidenShouldRequestChatJobs(server: AidenServer, installation: Aiden
     aidenShouldRequestSoloCapability(AidenRemoteCapability.CHAT_JOBS, server, installation)
 
 /**
- * Revision 50: a Mac that offers `chat:new-worktree` in `serverCapabilities` is asked for it, in a
- * call of its own after `bot:issues`, unless [installation] already holds it.
+ * Revision 50: a Mac that offers `attachments:raw` in `serverCapabilities` is asked for it, in a
+ * call of its own after `chat:jobs`, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestRawUploads(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.ATTACHMENTS_RAW, server, installation)
+
+/**
+ * Revision 52: a Mac that offers `chat:new-worktree` in `serverCapabilities` is asked for it, in a
+ * call of its own after `attachments:raw`, unless [installation] already holds it.
  */
 internal fun aidenShouldRequestChatNewWorktree(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.CHAT_NEW_WORKTREE, server, installation)
@@ -240,7 +247,23 @@ internal suspend fun aidenRequestChatJobs(
     )
 
 /**
- * Revision 50: asks [server] for `chat:new-worktree` alone, exactly as [aidenRequestScheduleCards]
+ * Revision 50: asks [server] for `attachments:raw` alone. A Mac that refuses it (400 or 404)
+ * leaves the pairing as it was; pictures then go as base64 inside JSON, as before.
+ */
+internal suspend fun aidenRequestRawUploads(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestRawUploads(server, installation)) listOf(AidenRemoteCapability.ATTACHMENTS_RAW) else emptyList(),
+        client,
+        stillCurrent
+    )
+
+/**
+ * Revision 52: asks [server] for `chat:new-worktree` alone, exactly as [aidenRequestScheduleCards]
  * asks for `schedule:cards`. A Mac that refuses it (400 or 404) leaves the pairing as it was; its
  * new chats then show no New worktree chip on this phone.
  */
@@ -610,12 +633,20 @@ class AidenRemoteCoordinator(
                     server = issuesServer,
                     request = ::aidenRequestChatJobs
                 )
-                // Revision 50: `chat:new-worktree` goes alone too, last.
-                val negotiatedServer = negotiateSoloCapability(
+                // Revision 50: `attachments:raw` goes alone too.
+                val rawUploadsServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
                     server = jobsServer,
+                    request = ::aidenRequestRawUploads
+                )
+                // Revision 52: `chat:new-worktree` goes alone too, last.
+                val negotiatedServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = rawUploadsServer,
                     request = ::aidenRequestChatNewWorktree
                 )
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
@@ -726,17 +757,20 @@ class AidenRemoteCoordinator(
         return refreshed
     }
 
-    fun refreshWorkspaces(expectedGeneration: Long = activationGeneration) {
-        val currentClient = _client.value ?: return
+    /** Re-reads the Mac's workspaces; callers that must see the result can join the returned job. */
+    fun refreshWorkspaces(expectedGeneration: Long = activationGeneration): Job? {
+        val currentClient = _client.value ?: return null
         val instanceId = activeInstanceId
-        val installationId = installationStore.activeInstallation?.id ?: return
-        scope.launch {
+        val installationId = installationStore.activeInstallation?.id ?: return null
+        return scope.launch {
             try {
                 val list = currentClient.workspaces()
                 if (!isCurrent(expectedGeneration, installationId, currentClient)) return@launch
                 _workspaces.value = list
                 if (instanceId != null) {
-                    archiveStore.prune(instanceId, list.map { it.id }.toSet())
+                    // A hidden No workspace record can't be archived (the Chats group has no
+                    // Unarchive), so a flag an older build left on one is dropped here.
+                    archiveStore.prune(instanceId, AidenNoWorkspace.choices(list).map { it.id }.toSet())
                     readSnapshotCache.store(instanceId, AidenReadSnapshotKeys.WORKSPACES, list, workspaceListSerializer)
                 }
                 refreshIntentCatalog()
@@ -800,7 +834,8 @@ class AidenRemoteCoordinator(
         val workspaceRecords = if (activeInstanceId == null) {
             emptyList()
         } else {
-            _workspaces.value.map { workspace ->
+            // Shortcuts see chats without a workspace as one Chats entry, as the sidebar does.
+            AidenNoWorkspace.grouped(_workspaces.value).map { workspace ->
                 AidenIntentWorkspaceRecord(
                     id = workspace.id,
                     instanceId = activeInstanceId,

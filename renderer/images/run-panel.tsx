@@ -8,10 +8,13 @@ const RETRYABLE = new Set(["failed", "cancelled", "interrupted"]);
 export function RunPanel({
   snapshot,
   nodeTitles,
+  busy = false,
   onStop,
   onRetry,
 }: {
   snapshot: RunSnapshot | null;
+  /** A run is being prepared or started; retrying again now would open a second consent. */
+  busy?: boolean;
   nodeTitles: ReadonlyMap<string, string>;
   onStop(): void;
   onRetry(nodeId: string, kind: RetryScopeKind): void;
@@ -20,7 +23,7 @@ export function RunPanel({
   const running = snapshot.run.state === "running";
   const requests = snapshot.attempts.filter((attempt) => attempt.provider !== undefined);
   return (
-    <section aria-label="Run" className="image-run-panel flex flex-col gap-3 p-3">
+    <section aria-label="Run" className="flex flex-col gap-3 p-3">
       <header className="flex items-center gap-2">
         <Text variant="strong" className="min-w-0 flex-1" role="status">
           {runHeadline(snapshot.run)}
@@ -42,7 +45,7 @@ export function RunPanel({
               {!running && RETRYABLE.has(attempt.state) ? (
                 <div className="flex flex-wrap gap-1">
                   {RETRY_OPTIONS.map((option) => (
-                    <Button key={option.kind} size="small" variant="transparent" title={option.hint} onClick={() => onRetry(attempt.nodeId, option.kind)}>
+                    <Button key={option.kind} size="small" variant="transparent" title={option.hint} disabled={busy} onClick={() => onRetry(attempt.nodeId, option.kind)}>
                       {option.label}
                     </Button>
                   ))}

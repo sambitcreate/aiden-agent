@@ -7,6 +7,7 @@
 import * as React from "react";
 import { ChevronRight } from "lucide-react";
 import type { BotChatActivityLevel } from "../../shared/bots";
+import type { WorkDetailsMode } from "../../shared/appearance";
 import {
   botRecapHeader,
   botRecapIssues,
@@ -49,21 +50,28 @@ export function BotActivityRecap({
   durationMs,
   live,
   level,
+  mode = "standard",
+  retainDetails = false,
 }: {
   steps: readonly BotRecapStep[];
   durationMs: number;
   live: boolean;
   level: BotChatActivityLevel;
+  mode?: WorkDetailsMode;
+  retainDetails?: boolean;
 }) {
   const [choice, setChoice] = React.useState<boolean | null>(null);
   const regionId = React.useId();
-  const open = choice ?? (live && level === "detailed");
+  const automaticOpen = level === "detailed" && mode !== "compact" && (live || retainDetails || mode === "verbose");
+  const open = choice ?? automaticOpen;
   const issues = botRecapIssues(steps);
   const header = botRecapHeader(steps, durationMs, live);
   const issueText = issues.failed ? (issues.failed === 1 ? "1 issue" : `${issues.failed} issues`) : "";
   const blockedText = issues.blocked ? `${issues.blocked} blocked` : "";
   const name = [header, issueText, blockedText].filter(Boolean).join(" · ");
-  const shown = live ? steps.slice(-LIVE_ROWS) : mergeBotSteps(steps);
+  const shown = choice === true || mode === "verbose" || mode === "detailed"
+    ? mergeBotSteps(steps)
+    : live || retainDetails ? steps.slice(-LIVE_ROWS) : mergeBotSteps(steps);
   return (
     <div className="min-w-0" data-bot-recap={live ? "live" : "done"}>
       <button

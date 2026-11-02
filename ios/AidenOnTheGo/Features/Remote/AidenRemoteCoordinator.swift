@@ -465,6 +465,9 @@ final class AidenRemoteCoordinator {
             applyWorkspaceSnapshot(refreshed, instanceId: installationId)
             connectionIssue = nil
         connectionState = .connected
+        } catch let error where aidenIsCancellation(error) {
+            // A cancelled read (a view that went away) says nothing about the connection.
+            return
         } catch {
             guard isCurrentContext(installationId: installationId, generation: generation) else { return }
             await handleConnectionError(error, installationId: installationId)
@@ -843,13 +846,14 @@ final class AidenRemoteCoordinator {
     /// (revision 43) in the same call when the Mac offers them, then
     /// `schedule:cards` (revision 39), then `bot:images` (revision 45), then
     /// `bot:issues` (revision 42), then `chat:jobs` (revision 49), then
-    /// `chat:new-worktree` (revision 50).
+    /// `attachments:raw` (revision 50), then `chat:new-worktree` (revision 52).
     static let capabilitiesAskedForAlone: [[AidenRemoteCapability]] = [
         [.botHandoffs, .botHandoffNotes, .botHandoffOnMac],
         [.scheduleCards],
         [.botImages],
         [.botIssues],
         [.chatJobs],
+        [.attachmentsRaw],
         [.chatNewWorktree],
     ]
 
@@ -1046,9 +1050,11 @@ final class AidenRemoteCoordinator {
     private func applyWorkspaceSnapshot(_ workspaces: [AidenWorkspace], instanceId: String) {
         guard activeInstanceId == instanceId else { return }
         self.workspaces = workspaces
+        // A hidden No workspace record can't be archived (the Chats group has no Unarchive), so
+        // a flag an older build left on one is dropped here and every archive check agrees.
         workspaceArchiveStore.prune(
             instanceID: instanceId,
-            validWorkspaceIDs: Set(workspaces.map(\.id))
+            validWorkspaceIDs: Set(AidenNoWorkspace.choices(workspaces).map(\.id))
         )
         workspaceSnapshotRevision &+= 1
         updateIntentCatalog(for: instanceId)
@@ -1167,8 +1173,15 @@ final class AidenRemoteCoordinator {
         let cachedWorkspaces: [AidenIntentWorkspaceRecord]
         if let instanceId, instanceId == activeInstanceId {
             let archivedWorkspaceIDs = workspaceArchiveStore.archivedWorkspaceIDs(for: instanceId)
-            cachedWorkspaces = workspaces.filter { !archivedWorkspaceIDs.contains($0.id) }.map {
-                AidenIntentWorkspaceRecord(id: $0.id, instanceId: instanceId, name: $0.name)
+            // Shortcuts see chats without a workspace as one Chats entry, as the sidebar does.
+            let hiddenIDs = workspaces.filter(\.noWorkspace).map(\.id)
+            cachedWorkspaces = AidenNoWorkspace.grouped(
+                AidenNoWorkspace.unarchived(workspaces, archivedIDs: archivedWorkspaceIDs)
+            ).map {
+                AidenIntentWorkspaceRecord(
+                    id: $0.id, instanceId: instanceId, name: $0.name,
+                    groupedIDs: $0.noWorkspace ? hiddenIDs : nil
+                )
             }
         } else {
             cachedWorkspaces = []
