@@ -81,7 +81,7 @@ export interface PrepareRunRequest {
 
 export type PrepareRunResponse = { plan: ImageRunConsentPlan } | { issues: GraphIssue[] };
 
-export type StartRunResponse = { runId: string } | { error: "expired" | "stale" | "model-unavailable" };
+export type StartRunResponse = { runId: string } | { error: "expired" | "stale" | "model-unavailable" | "too-many-runs" };
 
 export type GetRunRequest = { runId: string } | { workflowId: string };
 

@@ -23,7 +23,9 @@ function refuses(parse: (value: unknown) => unknown, cases: readonly unknown[]):
 
 test("ids refuse Object.prototype names, blanks and whitespace, and accept generated ids", () => {
   const reserved = Object.getOwnPropertyNames(Object.prototype);
-  refuses((value) => parseWorkflowRequest({ workflowId: value }), [...reserved, "", " ", " \t ", ` ${ID}`, "../wf", "a".repeat(129), 7]);
+  // Uppercase is refused: on a case-insensitive volume it would name the same file as the lowercase id.
+  refuses((value) => parseWorkflowRequest({ workflowId: value }), [...reserved, "", " ", " \t ", ` ${ID}`, "../wf", "a".repeat(129), 7, ID.toUpperCase()]);
+  refuses((value) => parseRunRequest({ runId: value }), [ID.toUpperCase()]);
   refuses((value) => parseRunRequest({ runId: value }), reserved);
   refuses((nodeId) => parsePrepareRequest({ workflowId: ID, revision: 1, scope: { kind: "node-only", nodeId } }), reserved);
   assert.deepEqual(parseWorkflowRequest({ workflowId: ID }), { workflowId: ID });

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { type TestContext } from "node:test";
 import type { OutputRef } from "../../../renderer/shared/images/run-types.js";
-import { ImageRunLedger, type CreateRunInput } from "./run-ledger.js";
+import { ImageRunLedger, type CreateRunInput, type ImageRunLedgerOptions } from "./run-ledger.js";
 
 async function directory(t: TestContext): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-image-ledger-"));
@@ -13,9 +13,9 @@ async function directory(t: TestContext): Promise<string> {
   return root;
 }
 
-function open(root: string, t: TestContext): ImageRunLedger {
+function open(root: string, t: TestContext, options: Partial<ImageRunLedgerOptions> = {}): ImageRunLedger {
   let clock = 1_000;
-  const ledger = ImageRunLedger.open({ directory: root, now: () => (clock += 1) });
+  const ledger = ImageRunLedger.open({ directory: root, now: () => (clock += 1), ...options });
   const raw = new DatabaseSync(path.join(root, "runs-v1.sqlite"));
   assert.equal(raw.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum, 2);
   raw.close();
@@ -190,6 +190,12 @@ test("output sequence orders nodes by their newest output, and image counts de-d
   assert.equal(second.g2, first.g2);
   assert.deepEqual(ledger.latestOutputSequence("other"), {});
 
+  // A local node's output (no provider) forwards an image some other holder keeps; deleting the
+  // workflow's runs does not release it, so it is not counted.
+  ledger.createRun(run({ runId: "r3", attempts: [{ nodeId: "o1", variant: 0 }] }));
+  ledger.finishAttempts([{ runId: "r3", nodeId: "o1", variant: 0, state: "succeeded", output: [out("d")] }]);
+  ledger.finishRun("r3", "succeeded");
+
   // Images a, b (shared with g2) and c: three distinct images, however many attempts hold them.
   assert.deepEqual(ledger.imageAssetIds(), { wf: ["a", "b", "c"].map((seed) => seed.repeat(64)) });
   ledger.deleteWorkflowRuns("wf");
@@ -237,7 +243,7 @@ test("the ledger refuses a symlinked file, an unversioned database and an unknow
   const foreign = new DatabaseSync(path.join(unversioned, "runs-v1.sqlite"));
   foreign.exec("CREATE TABLE something (id INTEGER)");
   foreign.close();
-  assert.throws(() => ImageRunLedger.open({ directory: unversioned }), { code: "unsafe" });
+  assert.throws(() => ImageRunLedger.open({ directory: unversioned }), { code: "corrupt" });
 
   const future = await directory(t);
   ImageRunLedger.open({ directory: future }).close();
@@ -245,4 +251,148 @@ test("the ledger refuses a symlinked file, an unversioned database and an unknow
   raw.exec("PRAGMA user_version=2");
   raw.close();
   assert.throws(() => ImageRunLedger.open({ directory: future }), { code: "unsupported" });
+});
+
+test("retention stays bounded when every run uses fresh node ids, keeping latest outputs only for live nodes", async (t) => {
+  const live = new Map<string, Set<string>>([["wf", new Set()]]);
+  const ledger = open(await directory(t), t, { liveNodeIds: (workflowId) => live.get(workflowId) });
+  for (let index = 0; index < 300; index += 1) {
+    const runId = `r${index}`;
+    const nodeId = `g-${index}`;
+    ledger.createRun(run({ runId, attempts: [{ nodeId, variant: 0, provider: "openrouter", model: "m" }] }));
+    ledger.finishAttempts([{ runId, nodeId, variant: 0, state: "succeeded", output: [out((index % 10).toString())] }]);
+    ledger.finishRun(runId, "succeeded");
+  }
+  // The document now holds one node from an old run: only that run is kept beyond the newest 100.
+  live.set("wf", new Set(["g-5"]));
+  assert.equal(ledger.pruneRuns(100).length, 199);
+  assert.ok(ledger.snapshot("r5"), "the run holding a live node's latest output is kept");
+  assert.ok(ledger.snapshot("r299"));
+  assert.equal(ledger.snapshot("r6"), null);
+  assert.equal(ledger.listRuns("wf", 500).length, 101);
+
+  // Once the workflow's document is gone, nothing is exempt.
+  live.delete("wf");
+  assert.deepEqual(ledger.pruneRuns(100), ["r5"]);
+});
+
+test("retention keeps every latest output of a workflow whose file is unreadable but kept for repair", async (t) => {
+  let state: ReadonlySet<string> | "all" | undefined = "all";
+  const ledger = open(await directory(t), t, { liveNodeIds: (workflowId) => (workflowId === "wf" ? state : new Set()) });
+  ledger.createRun(run({ runId: "kept", attempts: [{ nodeId: "g1", variant: 0, provider: "openrouter", model: "m" }] }));
+  ledger.finishAttempts([{ runId: "kept", nodeId: "g1", variant: 0, state: "succeeded", output: [out("a")] }]);
+  ledger.finishRun("kept", "succeeded");
+  for (let index = 0; index < 3; index += 1) {
+    const runId = `other${index}`;
+    ledger.createRun(run({ runId, workflowId: "other", attempts: [{ nodeId: `n${index}`, variant: 0, provider: "openrouter", model: "m" }] }));
+    ledger.finishRun(runId, "succeeded");
+  }
+  // The unreadable workflow's last output survives even outside the newest runs.
+  assert.ok(!ledger.pruneRuns(1).includes("kept"));
+  assert.ok(ledger.snapshot("kept"));
+  // Deleted for real, it is pruned like any other.
+  state = undefined;
+  assert.deepEqual(ledger.pruneRuns(1), ["kept"]);
+});
+
+test("a node's latest output follows insertion order, not a wall clock that steps backwards", async (t) => {
+  const times = [5_000, 6_000, 7_000, 1_000, 1_100];
+  let call = 0;
+  const ledger = open(await directory(t), t, { now: () => times[Math.min(call++, times.length - 1)]! });
+  ledger.createRun(run({ runId: "early", attempts: [{ nodeId: "g1", variant: 0, provider: "openrouter", model: "m" }] }));
+  ledger.finishAttempts([{ runId: "early", nodeId: "g1", variant: 0, state: "succeeded", output: [out("a")] }]);
+  ledger.finishRun("early", "succeeded");
+  // The clock jumps back before the second run finishes: it is still the newer output.
+  ledger.createRun(run({ runId: "later", attempts: [{ nodeId: "g1", variant: 0, provider: "openrouter", model: "m" }] }));
+  ledger.finishAttempts([{ runId: "later", nodeId: "g1", variant: 0, state: "succeeded", output: [out("b")] }]);
+  ledger.finishRun("later", "succeeded");
+  assert.deepEqual(ledger.latestOutputs("wf"), { g1: [out("b")] });
+  // Retention agrees with the display: with room for one recent run, the newest output's run is the one kept.
+  const kept = new Set(["g1"]);
+  const pruning = open(await directory(t), t, { liveNodeIds: () => kept });
+  pruning.createRun(run({ runId: "x1", attempts: [{ nodeId: "g1", variant: 0, provider: "openrouter", model: "m" }] }));
+  pruning.finishAttempts([{ runId: "x1", nodeId: "g1", variant: 0, state: "succeeded", output: [out("c")] }]);
+  pruning.finishRun("x1", "succeeded");
+  pruning.createRun(run({ runId: "x2", attempts: [{ nodeId: "g1", variant: 0, provider: "openrouter", model: "m" }] }));
+  pruning.finishAttempts([{ runId: "x2", nodeId: "g1", variant: 0, state: "succeeded", output: [out("d")] }]);
+  pruning.finishRun("x2", "succeeded");
+  assert.deepEqual(pruning.pruneRuns(0), ["x1"]);
+  assert.deepEqual(pruning.latestOutputs("wf"), { g1: [out("d")] });
+});
+
+test("runAssetIds lists every run with the generated assets its holder keeps", async (t) => {
+  const ledger = open(await directory(t), t);
+  ledger.createRun(run({ runId: "with-output" }));
+  ledger.finishAttempts([
+    { runId: "with-output", nodeId: "g1", variant: 0, state: "succeeded", output: [out("a"), out("b")] },
+    { runId: "with-output", nodeId: "p", variant: 0, state: "succeeded", output: [out("c")] },
+  ]);
+  ledger.createRun(run({ runId: "empty" }));
+  assert.deepEqual(
+    [...ledger.runAssetIds()].sort(([left], [right]) => left.localeCompare(right)),
+    [["empty", []], ["with-output", [out("a").assetId, out("b").assetId]]],
+  );
+});
+
+test("a damaged ledger is moved aside and replaced by an empty one when quarantine is enabled", async (t) => {
+  const tablesIn = (file: string) => {
+    const raw = new DatabaseSync(file);
+    try {
+      return (raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as { name: string }[]).map((row) => row.name);
+    } finally {
+      raw.close();
+    }
+  };
+  const cases: Array<[string, (file: string) => Promise<void>, (moved: string) => Promise<void>]> = [
+    [
+      "not a database",
+      (file) => writeFile(file, "x".repeat(4096)),
+      async (moved) => assert.equal(await readFile(moved, "utf8"), "x".repeat(4096)),
+    ],
+    [
+      "no schema version",
+      async (file) => {
+        const raw = new DatabaseSync(file);
+        raw.exec("CREATE TABLE something (id INTEGER)");
+        raw.close();
+      },
+      async (moved) => assert.deepEqual(tablesIn(moved), ["something"]),
+    ],
+    [
+      "an unsupported schema",
+      async (file) => {
+        const raw = new DatabaseSync(file);
+        raw.exec("CREATE TABLE runs (id TEXT); PRAGMA user_version=9");
+        raw.close();
+      },
+      async (moved) => assert.deepEqual(tablesIn(moved), ["runs"]),
+    ],
+  ];
+  for (const [label, damage, verify] of cases) {
+    const root = await directory(t);
+    await damage(path.join(root, "runs-v1.sqlite"));
+    const moved: string[] = [];
+    const ledger = open(root, t, { quarantineDamaged: (target) => void moved.push(target) });
+    assert.equal(moved.length, 1, label);
+    assert.match(path.basename(moved[0]!), /^runs-v1\.sqlite\.corrupt-\d+$/u, label);
+    await verify(moved[0]!);
+    ledger.createRun(run());
+    assert.equal(ledger.snapshot("run-1")?.attempts.length, 3, `${label}: the fresh ledger works`);
+    // Without quarantine the same damage is refused, as before.
+    const strict = await directory(t);
+    await damage(path.join(strict, "runs-v1.sqlite"));
+    assert.throws(() => ImageRunLedger.open({ directory: strict }), label);
+  }
+});
+
+test("a file-safety refusal is never quarantined", async (t) => {
+  const root = await directory(t);
+  const target = path.join(root, "elsewhere.sqlite");
+  await writeFile(target, "");
+  await symlink(target, path.join(root, "runs-v1.sqlite"));
+  const moved: string[] = [];
+  assert.throws(() => ImageRunLedger.open({ directory: root, quarantineDamaged: (file) => void moved.push(file) }), { code: "unsafe" });
+  assert.deepEqual(moved, []);
+  assert.ok((await lstat(path.join(root, "runs-v1.sqlite"))).isSymbolicLink());
+  assert.deepEqual((await readdir(root)).sort(), ["elsewhere.sqlite", "runs-v1.sqlite"]);
 });

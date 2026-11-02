@@ -1,20 +1,26 @@
 // Runs one approved plan. Provider-agnostic: it sees only ImageGenerationPort.
-// Every paid request is claimed through the ledger counter before it is sent,
-// and reference bytes are read only at the Generate boundary. The executor
+// Every local check (references, model, storage room) runs before the ledger
+// claim, so a local refusal is never recorded as sent; every paid request is
+// claimed through the ledger counter before it is sent, and reference bytes
+// are read only at the Generate boundary. The executor
 // never retries a provider request: a failed attempt stays failed until the
 // user starts a new, separately consented run.
 import type { Usage } from "@earendil-works/pi-ai";
 import type { ImageGenerationPort, ImageGenerationResult } from "../../../renderer/shared/images/port.js";
 import type { OutputRef, RunState } from "../../../renderer/shared/images/run-types.js";
 import { IMAGE_WORKFLOW_LIMITS } from "../../../renderer/shared/images/schema.js";
+import { STUDIO_ASSET_LIMITS, StudioAssetError, type StudioAssetLimits } from "../studio-assets/contract.js";
 import type { StudioAssetStore } from "../studio-assets/store.js";
 import { ImageRunLedgerError, type AttemptFinish, type ImageRunLedger } from "./run-ledger.js";
 import { runPlan, summarizeRunState, type PlannedStep, type RunPlan, type StepInputs, type StepOutcome } from "./scheduler-core.js";
 
 export interface RunExecutorDependencies {
   ledger: Pick<ImageRunLedger, "claimProviderRequest" | "finishAttempts" | "finishRun" | "terminateRun" | "snapshot">;
-  port: Pick<ImageGenerationPort, "generate">;
-  assets: Pick<StudioAssetStore, "read" | "put" | "retain">;
+  port: Pick<ImageGenerationPort, "preflight">;
+  /** Without `usage` the storage headroom check is skipped; without `release` a fault after retain leaves the hold for pruning. */
+  assets: Pick<StudioAssetStore, "read" | "put" | "retain"> & Partial<Pick<StudioAssetStore, "usage" | "release" | "collectGarbage">>;
+  /** The asset store's capacity, for the headroom check. Defaults to STUDIO_ASSET_LIMITS. */
+  storageLimits?: Pick<StudioAssetLimits, "maxAssets" | "maxTotalBytes">;
   onChange(): void;
   onRequestStart?(): void;
   onRequestEnd?(): void;
@@ -62,6 +68,29 @@ function observer(callback: (() => void) | undefined): () => void {
 const DEFAULT_FAULT_WAIT_MS = 10_000;
 const FAULT_MESSAGE = "Aiden hit an internal error while running this step.";
 
+/** The most one request can add to the asset store: the port keeps at most 4 images and 8 MiB in all. */
+const WORST_CASE_OUTPUT = { assets: 4, bytes: 8 * 1024 * 1024 } as const;
+
+export const STORAGE_FULL_UNSENT =
+  "Aiden's image storage is full, so this request was not sent. Delete unused workflows or Design Studio projects to free space.";
+export const STORAGE_FAILED_UNSENT = "Aiden's image storage is unavailable, so this request was not sent.";
+export const STORAGE_FULL_AFTER_SEND =
+  "The image was generated and may have been billed, but Aiden's image storage is full, so it could not be kept. Delete unused workflows or Design Studio projects to free space.";
+export const STORAGE_FAILED_AFTER_SEND =
+  "The image was generated and may have been billed, but Aiden could not save it to image storage.";
+
+type PutFailure = "invalid" | "storage-full" | "storage-failed";
+
+/** Only image bytes the store rejects as an image are invalid output; anything else is the store failing. */
+function classifyPutFailure(error: unknown): PutFailure {
+  if (error instanceof StudioAssetError) {
+    if (error.code === "invalid_image" || error.code === "too_large") return "invalid";
+    if (error.code === "quota") return "storage-full";
+  }
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === "ENOSPC" || code === "EDQUOT" ? "storage-full" : "storage-failed";
+}
+
 /** Waits for the tasks, but not past `ms`: a provider that ignores the abort must not hold the run open. */
 async function settleOrGiveUp(tasks: Promise<unknown>[], ms: number): Promise<void> {
   let timer: NodeJS.Timeout | undefined;
@@ -103,6 +132,49 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
     return task;
   }
 
+  const report = (error: unknown) => {
+    try {
+      deps.reportIssue?.(error);
+    } catch {
+      // Reporting is best effort.
+    }
+  };
+  /** Assets this run already holds, so a fault on one attempt never releases another's hold. */
+  const held = new Set<string>();
+  const attemptLive = (step: PlannedStep) =>
+    guarded(() => deps.ledger.snapshot(run.runId), null)?.attempts.some(
+      (attempt) => attempt.nodeId === step.nodeId && attempt.variant === step.variant && attempt.state === "running",
+    ) ?? false;
+
+  /**
+   * Refuses locally when the store cannot keep one more request's worst-case output. Usage counts
+   * unheld assets past their grace until they are collected, so collect once before refusing.
+   */
+  async function storageRefusal(): Promise<Pick<AttemptFinish, "errorCode" | "errorMessage"> | undefined> {
+    const refusal = storageRefusalNow();
+    if (refusal?.errorCode !== "storage-full" || !deps.assets.collectGarbage) return refusal;
+    try {
+      await deps.assets.collectGarbage();
+    } catch {
+      return refusal;
+    }
+    return storageRefusalNow();
+  }
+
+  function storageRefusalNow(): Pick<AttemptFinish, "errorCode" | "errorMessage"> | undefined {
+    if (!deps.assets.usage) return undefined;
+    const limits = deps.storageLimits ?? STUDIO_ASSET_LIMITS;
+    let usage: { assets: number; bytes: number };
+    try {
+      usage = deps.assets.usage();
+    } catch {
+      return { errorCode: "storage-failed", errorMessage: STORAGE_FAILED_UNSENT };
+    }
+    return usage.assets + WORST_CASE_OUTPUT.assets > limits.maxAssets || usage.bytes + WORST_CASE_OUTPUT.bytes > limits.maxTotalBytes
+      ? { errorCode: "storage-full", errorMessage: STORAGE_FULL_UNSENT }
+      : undefined;
+  }
+
   async function generateStep(step: PlannedStep, inputs: StepInputs, signal: AbortSignal): Promise<StepOutcome> {
     if (inputs.references.length > IMAGE_WORKFLOW_LIMITS.maxReferences) {
       finish(step, {
@@ -129,6 +201,30 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
       finish(step, update);
       return { ok: false, state: update.state };
     }
+    const noRoom = await storageRefusal();
+    if (signal.aborted) {
+      const update = stopped();
+      finish(step, update);
+      return { ok: false, state: update.state };
+    }
+    if (noRoom) {
+      finish(step, { state: "failed", ...noRoom });
+      return { ok: false, state: "failed" };
+    }
+    // Every check the port can make without the network, before anything is claimed.
+    const checked = await deps.port.preflight({
+      provider: step.provider!.provider,
+      model: step.provider!.model,
+      prompt: inputs.prompt,
+      references,
+      signal,
+    });
+    references = [];
+    if (checked.kind === "failed") {
+      const update = checked.code === "aborted" || signal.aborted ? stopped() : undefined;
+      finish(step, update ?? { state: "failed", errorCode: checked.code, errorMessage: checked.message });
+      return { ok: false, state: update?.state ?? "failed" };
+    }
     if (!guarded(() => deps.ledger.claimProviderRequest(run.runId, step.nodeId, step.variant), false)) {
       // The ledger also refuses a claim once a cancel was requested; that is a cancel, not a spent budget.
       if (signal.aborted) {
@@ -149,7 +245,7 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
     // against this attempt, with whatever cost the provider reported, instead of escaping the step.
     let reported: Usage | undefined;
     try {
-      return await sendAndStore(step, inputs, references, signal, (usage) => (reported = usage));
+      return await sendAndStore(step, checked.send, (usage) => (reported = usage));
     } catch {
       finish(step, { state: "failed", errorCode: "executor-fault", errorMessage: FAULT_MESSAGE, ...cost(reported) });
       return { ok: false, state: "failed" };
@@ -158,24 +254,14 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
 
   async function sendAndStore(
     step: PlannedStep,
-    inputs: StepInputs,
-    sentReferences: { mimeType: string; bytes: Uint8Array }[],
-    signal: AbortSignal,
+    send: () => Promise<ImageGenerationResult>,
     reportUsage: (usage: Usage | undefined) => void,
   ): Promise<StepOutcome> {
-    let references = sentReferences;
     let result: ImageGenerationResult;
     try {
-      result = await deps.port.generate({
-        provider: step.provider!.provider,
-        model: step.provider!.model,
-        prompt: inputs.prompt,
-        references,
-        signal,
-      });
+      result = await send();
     } finally {
       requestEnded();
-      references = [];
     }
     reportUsage(result.usage);
     if (result.kind === "failed") {
@@ -189,30 +275,58 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
       return { ok: false, state: "failed" };
     }
     const output: OutputRef[] = [];
+    let storageFailure: Exclude<PutFailure, "invalid"> | undefined;
     for (const image of result.images) {
       try {
         const record = await deps.assets.put({ bytes: image.bytes, declaredMimeType: image.mimeType });
         output.push({ assetId: record.assetId, width: record.width, height: record.height, mediaType: record.mediaType });
-      } catch {
-        // An image the store rejects is dropped; the attempt fails below only if none survive.
+      } catch (error) {
+        // An image the store rejects as invalid is dropped. A full or failing store is not the
+        // provider's fault: the paid image is reported, never silently relabelled as bad output.
+        const failure = classifyPutFailure(error);
+        if (failure === "invalid") continue;
+        if (storageFailure !== "storage-full") storageFailure = failure;
+        report(error);
       }
     }
     if (output.length === 0) {
       finish(step, {
         state: "failed",
-        errorCode: "output-invalid",
-        errorMessage: "The provider returned images Aiden could not store.",
+        ...(storageFailure === "storage-full"
+          ? { errorCode: "storage-full", errorMessage: STORAGE_FULL_AFTER_SEND }
+          : storageFailure === "storage-failed"
+            ? { errorCode: "storage-failed", errorMessage: STORAGE_FAILED_AFTER_SEND }
+            : { errorCode: "output-invalid", errorMessage: "The provider returned images Aiden could not store." }),
         ...cost(result.usage),
       });
       return { ok: false, state: "failed" };
     }
-    deps.assets.retain({ kind: "images-run", id: run.runId }, output.map((ref) => ref.assetId));
-    finish(step, {
-      state: "succeeded",
-      output,
-      truncated: result.truncated || output.length < result.images.length,
-      ...cost(result.usage),
-    });
+    // A result that arrives after the run already ended (an executor fault gave up waiting, or quit)
+    // cannot be recorded; holding its images would pin them to a run that never names them.
+    if (!attemptLive(step)) {
+      report(new Error(`An image for run ${run.runId} arrived after the run ended and was not kept.`));
+      return { ok: false, state: "failed" };
+    }
+    const holder = { kind: "images-run" as const, id: run.runId };
+    const added = [...new Set(output.map((ref) => ref.assetId))].filter((assetId) => !held.has(assetId));
+    deps.assets.retain(holder, added);
+    try {
+      finish(step, {
+        state: "succeeded",
+        output,
+        truncated: result.truncated || output.length < result.images.length,
+        ...cost(result.usage),
+      });
+    } catch (error) {
+      // The attempt could not record these images, so this attempt must not keep them held.
+      try {
+        deps.assets.release?.(holder, added);
+      } catch (secondary) {
+        report(secondary);
+      }
+      throw error;
+    }
+    for (const assetId of added) held.add(assetId);
     return { ok: true, value: { kind: "images", images: output } };
   }
 

@@ -11,7 +11,7 @@ import {
   redoEditorHistory,
   undoEditorHistory,
 } from "./editor-core";
-import { fitNodeToMediaAspect } from "./node-dimensions-core";
+import { IMAGE_NODE_WIDTH, MEDIA_NODE_FRAME, fitNodeToMediaAspect } from "./node-dimensions-core";
 
 const node = (id: string, type: WorkflowNode["type"]): WorkflowNode =>
   ({ id, type, position: { x: 0, y: 0 }, data: type === "prompt" ? { text: "x" } : type === "generate-image" ? { count: 1 } : {} }) as WorkflowNode;
@@ -55,10 +55,25 @@ test("capacity, prompt and position bounds keep edits inside the schema", () => 
   assert.deepEqual(boundedCanvasPosition({ x: Number.NaN, y: 2_000_000 }), { x: 0, y: 1_000_000 });
 });
 
-test("media fitting keeps the aspect inside node bounds and rejects bad metadata", () => {
-  assert.deepEqual(fitNodeToMediaAspect({ width: 320, height: 200 }, 1024, 512), { width: 320, height: 160 });
-  // A 1:100 portrait clamps the height to the maximum and the width to the minimum.
-  assert.deepEqual(fitNodeToMediaAspect(undefined, 100, 10_000), { width: 180, height: 1_600 });
+test("an image node is sized so the rendered frame holds its image at the image's aspect", () => {
+  // The image box is the node minus its title row, padding and button; it must keep the aspect.
+  const imageBox = (size: { width: number; height: number }) => ({
+    width: size.width - MEDIA_NODE_FRAME.horizontal,
+    height: size.height - MEDIA_NODE_FRAME.vertical,
+  });
+  for (const [mediaWidth, mediaHeight] of [[1024, 1024], [1920, 1080], [768, 1024], [1080, 1920]] as const) {
+    const size = fitNodeToMediaAspect(undefined, mediaWidth, mediaHeight)!;
+    assert.equal(size.width, IMAGE_NODE_WIDTH, "a new node takes the width every image node renders at");
+    const box = imageBox(size);
+    assert.ok(Math.abs(box.width / box.height - mediaWidth / mediaHeight) < 0.01, `${mediaWidth}×${mediaHeight}`);
+  }
+  // A square image in a default node: a 256px image under a 36px title, above the 48px controls.
+  assert.deepEqual(fitNodeToMediaAspect(undefined, 512, 512), { width: 280, height: 340 });
+  // A stored width is kept, so the node never jumps sideways under its edges.
+  assert.equal(fitNodeToMediaAspect({ width: 320, height: 200 }, 1024, 512)?.width, 320);
+  // Extreme aspects stay inside the schema's node bounds; the image letterboxes inside the frame.
+  assert.deepEqual(fitNodeToMediaAspect(undefined, 100, 10_000), { width: 280, height: 1_600 });
+  assert.deepEqual(fitNodeToMediaAspect(undefined, 10_000, 100), { width: 280, height: 120 });
   assert.equal(fitNodeToMediaAspect(undefined, 0, 10), undefined);
   assert.equal(fitNodeToMediaAspect(undefined, Number.NaN, 10), undefined);
 });

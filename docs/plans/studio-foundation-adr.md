@@ -1,6 +1,6 @@
 # ADR-F: Studio Foundation
 
-Status: Proposed (Phase 0 deliverable; needs owner approval)
+Status: Accepted. Track F merged in [#375](https://github.com/sambitcreate/aiden-agent/pull/375) and [#376](https://github.com/sambitcreate/aiden-agent/pull/376).
 Date: 2026-10-07
 Baseline: `main` @ `bd232b85` (line numbers below are from this commit)
 Parent plan: [Design Studio + Create Images rebuild](design-studio-create-images-rebuild-plan.md) §6 ADR-F and §7 Track F
@@ -147,13 +147,14 @@ A holder is `{ kind: "design" | "images-workflow" | "images-run"; id }`. Its key
 
 Over-limit puts fail with `quota` or `too_large`.
 
-**GC model: holders, not counters.** `collectGarbage()` deletes rows with no holds whose `touched_at` is older than a **1 h grace**, inside one synchronous transaction, then unlinks the blob and thumbnails. `touched_at` is refreshed by `put` (dedup hit) and by any release, so an asset that was just imported, just released or is still on screen survives. GC runs from `initialize()` (startup) and whenever a feature calls it, for example after pruning runs. Crash windows:
-- **Blob written, row not inserted:** the orphan blob is swept by `initialize()`, together with `.*.tmp` staging files.
+**GC model: holders, not counters.** `collectGarbage()` deletes rows with no holds whose `touched_at` is older than a **1 h grace**, inside one synchronous transaction, then unlinks the blob and thumbnails. `touched_at` is refreshed by `put` (dedup hit) and by any release, so an asset that was just imported, just released or is still on screen survives. GC runs from `initialize()` (startup), on a 20-minute timer while the store is open, before a put is refused for `quota`, and whenever a feature calls it. Crash windows:
+- **Blob written, row not inserted:** on an ordinary `initialize()` the orphan blob is swept, together with `.*.tmp` staging files (it is a put that crashed before its insert, or a GC that deleted the row before the file).
+- **Database lost or corrupt:** only while a rebuild is pending is a blob with no row re-indexed. A fresh schema (the file was missing or was just quarantined) is written with a `recovery_pending` row, which is cleared in the same transaction that inserts the re-indexed rows, so a rebuild cut short by an error or exit resumes on the next open instead of treating the blobs as orphans. A re-indexed blob must sit in its shard, hash to its name and pass validation. Its holds can't be recovered, and one feature holding it again says nothing about its other owners, so it is marked in a `recovered` table and GC never collects it (a deliberate disk-for-safety trade after a rare index loss). A `quota` refusal says how many recovered images there are and how much space they hold, since deleting items cannot free it. A database SQLite reports as corrupt or not a database, or one with an invalid `user_version`, is renamed to `assets-v1.sqlite.corrupt-<timestamp>` (with its `-wal`/`-shm`, made 0600) and rebuilt. Opening reads only the header and schema, so the same applies once when the startup sweep or collection first meets a damaged table page. A database from a newer build (`user_version` above 1) is never moved: `initialize()` fails as `unavailable` and the file stays for that build. Permission and other I/O errors still fail `initialize()`. The database files are kept at 0600.
 - **Row deleted, files remain:** swept the same way.
 
 Because `node:sqlite` is synchronous, a GC transaction can never interleave with a `retain`.
 
-**Thumbnails.** These go through the `StudioAssetThumbnailer` port. Production uses `nativeImage` (`studio-assets/thumbnailer-main.ts`, following `bot-avatar-image-main.ts:24-53`): decode, `isEmpty()` check, resize the longest edge, `toPNG()`. When the source's longest edge is ≤ the requested edge, or decoding fails, the original is served. `nativeImage` only promises PNG/JPEG, so WebP falls back to the original. Successful thumbnails are cached.
+**Thumbnails.** These go through the `StudioAssetThumbnailer` port. Production uses `nativeImage` (`studio-assets/thumbnailer-main.ts`, following `bot-avatar-image-main.ts:24-53`): decode, `isEmpty()` check, resize the longest edge, `toPNG()`. When the source's longest edge is ≤ the requested edge, or decoding fails, the original is served. `nativeImage` only promises PNG/JPEG, so WebP falls back to the original. Successful thumbnails are cached. Concurrent requests for the same rendition share one render, and decode failures are remembered in memory (up to 512) so a failing asset is not decoded again.
 
 **Grants** (`StudioAssetGrants`).
 - `issue(owner: RendererDocumentOwner, assetId, rendition: "original" | "thumb-256" | "thumb-512") → "aiden-asset://grant/<43-char base64url token>"`.
