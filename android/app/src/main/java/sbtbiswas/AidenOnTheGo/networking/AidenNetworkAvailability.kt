@@ -1,16 +1,19 @@
 package sbtbiswas.AidenOnTheGo.networking
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.Network
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
+import android.os.SystemClock
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withTimeoutOrNull
 import sbtbiswas.AidenOnTheGo.models.AidenTerminalReconciliation
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
@@ -24,8 +27,10 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
  */
 interface AidenNetworkAvailability {
     val isAvailable: StateFlow<Boolean>
+    val rechecks: StateFlow<Long> get() = NoRechecks
 
     companion object {
+        private val NoRechecks = MutableStateFlow(0L).asStateFlow()
         val AlwaysAvailable: AidenNetworkAvailability = object : AidenNetworkAvailability {
             override val isAvailable: StateFlow<Boolean> = MutableStateFlow(true).asStateFlow()
         }
@@ -37,12 +42,17 @@ class AidenConnectivityNetworkAvailability(context: Context) : AidenNetworkAvail
     private val manager = context.applicationContext.getSystemService(ConnectivityManager::class.java)
     private val state = MutableStateFlow(manager?.let { runCatching { it.activeNetwork != null }.getOrDefault(true) } ?: true)
     override val isAvailable: StateFlow<Boolean> = state.asStateFlow()
+    private val recheckState = MutableStateFlow(0L)
+    override val rechecks: StateFlow<Long> = recheckState.asStateFlow()
+
+    fun recheck() { recheckState.update { it + 1 } }
 
     private val tracker = AidenDefaultNetworkTracker<Network>()
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             state.value = tracker.onAvailable(network)
+            recheck()
         }
 
         override fun onLost(network: Network) {
@@ -51,6 +61,14 @@ class AidenConnectivityNetworkAvailability(context: Context) : AidenNetworkAvail
     }
 
     init {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) { recheck() }
+        }
+        try {
+            ContextCompat.registerReceiver(context.applicationContext, receiver, IntentFilter(Intent.ACTION_SCREEN_ON), ContextCompat.RECEIVER_NOT_EXPORTED)
+        } catch (_: RuntimeException) {
+            // Activity resume still rechecks deadlines if this broadcast is unavailable.
+        }
         try {
             manager?.registerDefaultNetworkCallback(callback)
         } catch (_: RuntimeException) {
@@ -140,6 +158,7 @@ class AidenStreamRecoveryPolicy {
  */
 class AidenStreamNetworkRecovery(
     private val availability: AidenNetworkAvailability,
+    private val nowMilliseconds: () -> Long = SystemClock::elapsedRealtime,
     private val delayMilliseconds: (Int) -> Long = { AidenTerminalReconciliation.retryDelayMilliseconds(it) }
 ) {
     enum class ProbeFailureOutcome { NETWORK_RETURNED, BACKOFF_ELAPSED }
@@ -178,40 +197,43 @@ class AidenStreamNetworkRecovery(
         onBackoff: () -> Unit,
         onWaiting: (Boolean) -> Unit
     ): ProbeFailureOutcome {
-        return coroutineScope {
-            val serverDelay = async { delay(minimumDelayMilliseconds.coerceAtLeast(0)) }
-            val outcome = when (val decision = policy.afterProbeFailure(availability.isAvailable.value)) {
-                is AidenStreamRecoveryDecision.Backoff -> {
-                    onBackoff()
-                    val delay = maxOf(delayMilliseconds(decision.attempt), minimumDelayMilliseconds)
-                    val lost = withTimeoutOrNull(delay) {
-                        availability.isAvailable.first { !it }
-                    }
-                    if (lost == null) {
-                        ProbeFailureOutcome.BACKOFF_ELAPSED
-                    } else {
-                        policy.backoffInterruptedByNetworkLoss()
-                        park(onWaiting)
-                        ProbeFailureOutcome.NETWORK_RETURNED
-                    }
-                }
-                else -> {
+        val started = nowMilliseconds()
+        val serverDeadline = started + minimumDelayMilliseconds.coerceAtLeast(0)
+        val outcome = when (val decision = policy.afterProbeFailure(availability.isAvailable.value)) {
+            is AidenStreamRecoveryDecision.Backoff -> {
+                onBackoff()
+                val deadline = started + maxOf(delayMilliseconds(decision.attempt), minimumDelayMilliseconds)
+                if (waitWhileOnline(deadline)) {
+                    ProbeFailureOutcome.BACKOFF_ELAPSED
+                } else {
+                    policy.backoffInterruptedByNetworkLoss()
                     park(onWaiting)
                     ProbeFailureOutcome.NETWORK_RETURNED
                 }
             }
-            while (!serverDelay.isCompleted) {
-                val networkLoss = async { availability.isAvailable.first { !it } }
-                val lost = select {
-                    serverDelay.onAwait { false }
-                    networkLoss.onAwait { true }
-                }
-                networkLoss.cancel()
-                if (lost) park(onWaiting)
+            else -> {
+                park(onWaiting)
+                ProbeFailureOutcome.NETWORK_RETURNED
             }
-            if (!availability.isAvailable.value) park(onWaiting)
-            outcome
         }
+        while (!waitWhileOnline(serverDeadline)) park(onWaiting)
+        return outcome
+    }
+
+    /** Recheck an elapsed-time deadline after network or device wake signals. */
+    private suspend fun waitWhileOnline(deadline: Long): Boolean {
+        while (availability.isAvailable.value) {
+            // Capture the signal first so a wake racing the clock read is not lost.
+            val generation = availability.rechecks.value
+            val remaining = deadline - nowMilliseconds()
+            if (remaining <= 0) return true
+            val changed = withTimeoutOrNull(remaining) {
+                combine(availability.isAvailable, availability.rechecks) { online, recheck -> online to recheck }
+                    .first { (online, recheck) -> !online || recheck != generation }
+            }
+            if (changed == null && nowMilliseconds() >= deadline) return true
+        }
+        return false
     }
 
     private suspend fun park(onWaiting: (Boolean) -> Unit) {

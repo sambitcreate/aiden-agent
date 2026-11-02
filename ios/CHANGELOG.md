@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Stream recovery keeps a host-requested retry delay across a temporary network loss.
+- Stream recovery keeps a host-requested retry delay across a temporary network loss, counting time asleep toward the wait.
 
 - Leaving a Bot chat while a send is being cancelled keeps the message available to retry with its original key, even if the connection returns a receipt during cancellation.
 

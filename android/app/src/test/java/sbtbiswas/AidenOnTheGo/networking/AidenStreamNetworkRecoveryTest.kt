@@ -21,6 +21,8 @@ class AidenStreamNetworkRecoveryTest {
     private class FakeNetwork(initial: Boolean) : AidenNetworkAvailability {
         val state = MutableStateFlow(initial)
         override val isAvailable: StateFlow<Boolean> = state
+        val recheckState = MutableStateFlow(0L)
+        override val rechecks: StateFlow<Long> = recheckState
     }
 
     @Test
@@ -56,7 +58,7 @@ class AidenStreamNetworkRecoveryTest {
     @Test
     fun offlineStreamFailureParksWithoutProbingThenReconnectsWhenOnline() = runTest {
         val network = FakeNetwork(initial = false)
-        val recovery = AidenStreamNetworkRecovery(network) { error("no backoff while offline") }
+        val recovery = AidenStreamNetworkRecovery(network, nowMilliseconds = { testScheduler.currentTime }) { error("no backoff while offline") }
         val waiting = mutableListOf<Boolean>()
 
         val parked = async { recovery.shouldProbeAfterStreamFailure { waiting += it } }
@@ -77,7 +79,7 @@ class AidenStreamNetworkRecoveryTest {
     @Test
     fun flappingNetworkWakesTheParkedConsumerOnceAndNeverSpendsBackoff() = runTest {
         val network = FakeNetwork(initial = false)
-        val recovery = AidenStreamNetworkRecovery(network) { error("no backoff while offline") }
+        val recovery = AidenStreamNetworkRecovery(network, nowMilliseconds = { testScheduler.currentTime }) { error("no backoff while offline") }
         val waiting = mutableListOf<Boolean>()
         var wakes = 0
 
@@ -112,7 +114,7 @@ class AidenStreamNetworkRecoveryTest {
     @Test
     fun networkDropDuringBackoffRefundsTheAttemptAndWaitsForNetwork() = runTest {
         val network = FakeNetwork(initial = true)
-        val recovery = AidenStreamNetworkRecovery(network) { 1_000L * (it + 1) }
+        val recovery = AidenStreamNetworkRecovery(network, nowMilliseconds = { testScheduler.currentTime }) { 1_000L * (it + 1) }
         val waiting = mutableListOf<Boolean>()
         var backoffs = 0
 
@@ -149,7 +151,7 @@ class AidenStreamNetworkRecoveryTest {
     @Test
     fun onlineProbeFailuresKeepGrowingTheBackoff() = runTest {
         val network = FakeNetwork(initial = true)
-        val recovery = AidenStreamNetworkRecovery(network) { 1_000L * (it + 1) }
+        val recovery = AidenStreamNetworkRecovery(network, nowMilliseconds = { testScheduler.currentTime }) { 1_000L * (it + 1) }
         val elapsed = mutableListOf<Long>()
         repeat(3) {
             val start = testScheduler.currentTime
@@ -169,7 +171,7 @@ class AidenStreamNetworkRecoveryTest {
     @Test
     fun aServerRequestedDelayIsAFloorUnderTheBackoff() = runTest {
         val network = FakeNetwork(initial = true)
-        val recovery = AidenStreamNetworkRecovery(network) { 1_000L * (it + 1) }
+        val recovery = AidenStreamNetworkRecovery(network, nowMilliseconds = { testScheduler.currentTime }) { 1_000L * (it + 1) }
         val elapsed = mutableListOf<Long>()
         for (minimum in listOf(5_000L, 0L, 0L)) {
             val start = testScheduler.currentTime
@@ -182,7 +184,7 @@ class AidenStreamNetworkRecoveryTest {
     @Test
     fun networkFlapDoesNotShortenServerRequestedDelay() = runTest {
         val network = FakeNetwork(initial = true)
-        val recovery = AidenStreamNetworkRecovery(network) { 1_000L }
+        val recovery = AidenStreamNetworkRecovery(network, nowMilliseconds = { testScheduler.currentTime }) { 1_000L }
         val result = async {
             recovery.recoverAfterProbeFailure(minimumDelayMilliseconds = 5_000, onBackoff = {}, onWaiting = {})
         }
@@ -201,7 +203,7 @@ class AidenStreamNetworkRecoveryTest {
     @Test
     fun offlineProbeHonorsServerDelayAndLongOfflineTimeCountsTowardIt() = runTest {
         val network = FakeNetwork(initial = false)
-        val recovery = AidenStreamNetworkRecovery(network) { 1_000L }
+        val recovery = AidenStreamNetworkRecovery(network, nowMilliseconds = { testScheduler.currentTime }) { 1_000L }
         val first = async { recovery.recoverAfterProbeFailure(5_000, {}, {}) }
         runCurrent()
         advanceTimeBy(1_000)
@@ -224,7 +226,7 @@ class AidenStreamNetworkRecoveryTest {
     @Test
     fun repeatedLossDuringServerDelayWaitsForNetworkAndCancellationStopsIt() = runTest {
         val network = FakeNetwork(initial = true)
-        val recovery = AidenStreamNetworkRecovery(network) { 1_000L }
+        val recovery = AidenStreamNetworkRecovery(network, nowMilliseconds = { testScheduler.currentTime }) { 1_000L }
         val waiting = mutableListOf<Boolean>()
         val first = async { recovery.recoverAfterProbeFailure(5_000, {}, { waiting += it }) }
         advanceTimeBy(400)
@@ -255,6 +257,58 @@ class AidenStreamNetworkRecoveryTest {
     }
 
     @Test
+    fun wakeAfterSleepRechecksDeadlineWithoutNetworkChange() = runTest {
+        val network = FakeNetwork(initial = true)
+        var elapsed = 0L
+        val recovery = AidenStreamNetworkRecovery(network, nowMilliseconds = { elapsed }) { 1_000L }
+        val result = async { recovery.recoverAfterProbeFailure(5_000, {}, {}) }
+        runCurrent()
+        elapsed = 1_000
+        network.recheckState.value += 1
+        runCurrent()
+        assertFalse("an early wake cannot shorten the minimum delay", result.isCompleted)
+        elapsed = 60_000
+        network.recheckState.value += 1
+        runCurrent()
+        assertTrue("wake rechecks the elapsed deadline even when network stays online", result.isCompleted)
+        assertEquals(AidenStreamNetworkRecovery.ProbeFailureOutcome.BACKOFF_ELAPSED, result.await())
+    }
+
+    @Test
+    fun wakeRacingTheClockReadIsNotLost() = runTest {
+        val network = FakeNetwork(initial = true)
+        var reads = 0
+        val recovery = AidenStreamNetworkRecovery(network, nowMilliseconds = {
+            reads += 1
+            when (reads) {
+                1 -> 0L
+                2 -> { network.recheckState.value += 1; 0L }
+                else -> 60_000L
+            }
+        }) { 1_000L }
+        val result = async { recovery.recoverAfterProbeFailure(5_000, {}, {}) }
+        runCurrent()
+        assertTrue("the wake signal must not be lost between deadline and subscription", result.isCompleted)
+        assertEquals(AidenStreamNetworkRecovery.ProbeFailureOutcome.BACKOFF_ELAPSED, result.await())
+    }
+
+    @Test
+    fun networkReturnAfterSleepUsesElapsedDeadline() = runTest {
+        val network = FakeNetwork(initial = true)
+        var elapsed = 0L
+        val recovery = AidenStreamNetworkRecovery(network, nowMilliseconds = { elapsed }) { 1_000L }
+        val result = async { recovery.recoverAfterProbeFailure(5_000, {}, {}) }
+        runCurrent()
+        network.state.value = false
+        runCurrent()
+        elapsed = 60_000
+        network.state.value = true
+        runCurrent()
+        assertTrue(result.isCompleted)
+        assertEquals(AidenStreamNetworkRecovery.ProbeFailureOutcome.NETWORK_RETURNED, result.await())
+    }
+
+    @Test
     fun onlyARateLimitAsksForAServerDelay() {
         fun server(status: Int, retryAfter: Int?, header: Int? = null) = AidenRemoteClientException.Server(
             status,
@@ -274,7 +328,7 @@ class AidenStreamNetworkRecoveryTest {
     @Test
     fun cancellingAParkedConsumerClearsTheWaitingState() = runTest {
         val network = FakeNetwork(initial = false)
-        val recovery = AidenStreamNetworkRecovery(network)
+        val recovery = AidenStreamNetworkRecovery(network, nowMilliseconds = { testScheduler.currentTime })
         val waiting = mutableListOf<Boolean>()
         val parked = async { recovery.shouldProbeAfterStreamFailure { waiting += it } }
         runCurrent()

@@ -56,6 +56,11 @@ class MainActivity : ComponentActivity() {
     private val externalNewChats = AidenExternalNewChatQueue()
     private var lastExternalNewChat: AidenNavigationRequest? = null
 
+    override fun onResume() {
+        super.onResume()
+        (application as AidenOnTheGoApp).container.networkAvailability.recheck()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

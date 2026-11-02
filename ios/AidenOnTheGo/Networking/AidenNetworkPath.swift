@@ -155,12 +155,16 @@ struct AidenStreamNetworkRecovery {
     private let sleep: @MainActor (Int) async throws -> Void
     private let delayMilliseconds: (Int) -> Int
     private let nowMilliseconds: @MainActor () -> Double
+    private static let clockOrigin = ContinuousClock.now
 
     init(
         path: AidenNetworkPathSource,
         sleep: @escaping @MainActor (Int) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
         delayMilliseconds: @escaping (Int) -> Int = { AidenTerminalReconciliation.retryDelayMilliseconds(attempt: $0) },
-        nowMilliseconds: @escaping @MainActor () -> Double = { ProcessInfo.processInfo.systemUptime * 1_000 }
+        nowMilliseconds: @escaping @MainActor () -> Double = {
+            let elapsed = clockOrigin.duration(to: .now).components
+            return Double(elapsed.seconds) * 1_000 + Double(elapsed.attoseconds) / 1e15
+        }
     ) {
         self.path = path
         self.sleep = sleep
