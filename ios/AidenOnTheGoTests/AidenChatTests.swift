@@ -6379,6 +6379,34 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(committed.map(describe), ["text:Before.", "tool:call-1", "images:generated", "tool:call-2", "text:Here it is."])
     }
 
+    func testAdjacentRecordingAndImageKeepCallOrder() throws {
+        for imageFirst in [false, true] {
+            let imageCall = imageFirst ? 1 : 2
+            let recordingCall = imageFirst ? 2 : 1
+            let imageStep = """
+            {"id":"tool-\(imageCall)","order":\(imageCall - 1),"kind":"tool","toolCallId":"call-\(imageCall)","toolName":"display_image","label":"Display image","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000,"contentOffset":0}
+            """
+            let recordingStep = """
+            {"id":"tool-\(recordingCall)","order":\(recordingCall - 1),"kind":"tool","toolCallId":"call-\(recordingCall)","toolName":"browser_recording_stop","label":"Stop recording","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000,"contentOffset":0,"recording":{"id":"recording-0f1e2d3c-4b5a-4678-9abc-def012345678","mimeType":"video/mp4","sizeBytes":100,"durationMs":2000}}
+            """
+            let steps = imageFirst ? [imageStep, recordingStep] : [recordingStep, imageStep]
+            let timeline = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data("""
+            {"version":3,"generationId":"g","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[\(steps.joined(separator: ","))]}
+            """.utf8))
+            let photo = AidenMessageAttachment(id: "photo", name: "Photo.png", mimeType: "image/png", kind: .image, size: 10, toolCallId: "call-\(imageCall)")
+            let rows = try XCTUnwrap(AidenChronologicalProjection.rows(text: "After.", reasoning: "", timeline: timeline, images: [photo]))
+            let media = rows.compactMap { row -> String? in
+                switch row.kind {
+                case .images: return "photo"
+                case .recording: return "recording"
+                default: return nil
+                }
+            }
+            XCTAssertEqual(media, imageFirst ? ["photo", "recording"] : ["recording", "photo"])
+            XCTAssertEqual(AidenChronologicalProjection.placedImageIDs(in: rows), ["photo"])
+        }
+    }
+
     func testMalformedVisualIsDroppedWhileItsMessageAndChatSurvive() throws {
         func editVisual(at index: Int, _ edit: @escaping (inout [String: Any]) -> Void) -> (inout [String: Any]) -> Void {
             { message in
