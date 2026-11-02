@@ -1,6 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.workspaces
 
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -10,6 +11,8 @@ import kotlinx.coroutines.MainCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -180,12 +183,14 @@ class AidenInboxHomeTriageTest {
         val owners = ViewModelStore()
         lateinit var coordinator: AidenRemoteCoordinator
         lateinit var home: AidenWorkspaceHomeViewModel
+        private lateinit var homeJob: Job
 
         init {
             for (desk in desks.reversed()) store.addInstallation(desk.pairing(), null)
             coordinator = AidenRemoteCoordinator(store, root, cache, scope = scope)
             home = AidenWorkspaceHomeViewModel(coordinator, cache, cacheWriteDispatcher = cacheWriteDispatcher)
             owners.put("home", home)
+            homeJob = home.viewModelScope.coroutineContext.job
         }
 
         fun row(id: String) = home.chats.value.first { it.id == id }
@@ -229,11 +234,18 @@ class AidenInboxHomeTriageTest {
         fun saved(id: String) = AidenChatCache(root = File(root, "cache"))
             .loadSummaries(coordinator.activeInstanceId!!)?.first { it.id == id }
 
-        fun close() {
+        /**
+         * Cancels the home screen and coordinator, then waits for every coroutine
+         * they started. Work still in flight (a cache read on IO, a request) would
+         * otherwise resume onto Main after the test shut it down, and the rejected
+         * dispatch is reported as an uncaught exception in whichever test runs next.
+         */
+        suspend fun close() {
             desks.forEach { it.heldPage?.countDown(); it.heldRead?.countDown(); it.heldNegotiation?.countDown(); it.heldTriage.values.forEach(CountDownLatch::countDown) }
             owners.clear()
             scope.cancel()
             desks.forEach { it.server.shutdown() }
+            joinAll(homeJob, scope.coroutineContext.job)
         }
     }
 
