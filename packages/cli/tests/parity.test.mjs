@@ -411,14 +411,16 @@ async function stuckServe(t, { detached }) {
   // The lease directory exists before the daemon records its MCP groups in it, as acquireLease leaves it.
   mkdirSync(join(dir, "serve.lock"), { recursive: true });
   const stubborn = "process.on('SIGTERM', () => {}); process.stdin.resume(); process.stdin.on('end', () => {}); setInterval(() => {}, 1e9);";
-  writeFileSync(fixture, `import { spawn } from "node:child_process"; import { writeFileSync } from "node:fs";
+  writeFileSync(fixture, `import { spawn } from "node:child_process"; import { renameSync, writeFileSync } from "node:fs";
 import * as api from ${JSON.stringify(join(pkg, "dist/parity-test-api.js"))};
 process.on("SIGTERM", () => {});
 const helper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9)"], { stdio: "ignore" });
 api.recordServeMcpGroups(${JSON.stringify(dir)});
 const transport = api.createMcpStdioTransport({ command: process.execPath, args: ["-e", ${JSON.stringify(stubborn)}], stderr: "pipe" });
 await transport.start();
-writeFileSync(${JSON.stringify(pids)}, JSON.stringify({ helper: helper.pid, mcp: transport.pid }));
+// Written aside and renamed in, so the test never reads a half-written file.
+writeFileSync(${JSON.stringify(pids + ".tmp")}, JSON.stringify({ helper: helper.pid, mcp: transport.pid }));
+renameSync(${JSON.stringify(pids + ".tmp")}, ${JSON.stringify(pids)});
 setInterval(() => {}, 1e9);`);
   // Its own group either way, so the test can clean up; only owner.json says whether startDaemon spawned it.
   const child = spawn(process.execPath, [fixture, "serve"], { stdio: "ignore", detached: true });
