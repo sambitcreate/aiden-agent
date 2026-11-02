@@ -731,7 +731,7 @@ export function createScheduleStore(
 
     restoreIfRevision,
 
-    async setEnabled(id: string, enabled: boolean, options?: { clearRoutineRetries: true }): Promise<ScheduledTask> {
+    async setEnabled(id: string, enabled: boolean, options?: { clearRoutineRetriesExcept: string }): Promise<ScheduledTask> {
       return tasks.update((draft) => {
         const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
         const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
@@ -741,7 +741,10 @@ export function createScheduleStore(
         const task: ScheduledTask = {
           ...existing,
           enabled,
-          ...(options?.clearRoutineRetries ? { pendingRoutineFires: existing.pendingRoutineFires?.filter((fire) => !fire.retry) } : {}),
+          ...(options && {
+            pendingRoutineFires: existing.pendingRoutineFires?.filter((fire) =>
+              !fire.retry || fire.requestId === options.clearRoutineRetriesExcept),
+          }),
           nextRunAt: enabled
             ? nextScheduledRun(existing.cron, existing.timezone, new Date(timestamp))
             : undefined,

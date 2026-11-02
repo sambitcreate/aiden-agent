@@ -20,7 +20,7 @@ export function botRoutineRecovery(): BotRoutineRecovery {
       const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
       return (await botSessionRuntime()).canRetryRoutineRequest(botId, requestId);
     },
-    pauseAfterFailedRun: async (id) => (await import("./schedule-service.js")).scheduleService.pauseAfterFailedRun(id),
+    pauseAfterFailedRun: async (id, activeRunId) => (await import("./schedule-service.js")).scheduleService.pauseAfterFailedRun(id, activeRunId),
     issues: {
       raise: async (input) => (await import("./bot-issues/service-main.js")).botIssues.raise(input),
       resolve: async (botId, key, resolution) =>

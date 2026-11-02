@@ -140,15 +140,17 @@ function harness(checkRetrySafety?: (requestId: string) => Promise<boolean>) {
   const recovery = createBotRoutineRecovery({
     store,
     canRetryRoutineRequest: session.canRetryRoutineRequest,
-    pauseAfterFailedRun: (id) => scheduler.pauseAfterFailedRun(id),
+    pauseAfterFailedRun: (id, activeRunId) => scheduler.pauseAfterFailedRun(id, activeRunId),
     issues,
     now: () => Date.now(),
   });
   const deliveries: string[] = [];
+  const failDelivery = new Set<string>();
   const executor = createBotRoutineExecutor({
     store,
     ports: () => session,
     deliver: async (input) => {
+      if (failDelivery.has(input.dedupeKey)) throw new Error("Delivery unavailable.");
       deliveries.push(input.dedupeKey);
       return "sent";
     },
@@ -178,7 +180,7 @@ function harness(checkRetrySafety?: (requestId: string) => Promise<boolean>) {
     defaultTimezone: () => "UTC",
     notifyChanged: () => undefined,
   });
-  return { store, scheduler, routines, executor, replies, sends, open, resolved, stalled, claims, deliveries, recovery };
+  return { store, scheduler, routines, executor, replies, sends, open, resolved, stalled, claims, deliveries, failDelivery, recovery };
 }
 
 const TIMEOUT: BotRoutineSubmissionOutcome = { kind: "failed", error: "model_error", reason: "model_error", detail: "503 Service Unavailable" };
@@ -251,6 +253,43 @@ test("pauses after three failed fires of the same kind and raises one issue", as
   assert.equal(h.open.has(`routine_failed:${routine.id}`), false, "the pause card replaces the earlier card");
   await h.routines.update({ botId: "bot-1", id: routine.id, expectedUpdatedAt: task!.updatedAt, enabled: true });
   assert.equal((await h.scheduler.runNow(routine.id)).result, "success");
+});
+
+test("auto-pause preserves a failed retry's receipt until startup delivers its result", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({ botId: "bot-1", name: "Mail", schedule: { kind: "daily", time: "09:00" }, prompt: "Send the update." });
+  const base = Date.now() - 4 * 86_400_000;
+  for (const day of [0, 1]) {
+    h.replies.push(SIGNED_OUT);
+    await fire(h, routine.id, base + day * 86_400_000);
+  }
+  h.replies.push(TIMEOUT);
+  const third = await fire(h, routine.id, base + 2 * 86_400_000);
+  const requestId = `${third.id}:retry-1`;
+  await h.store.clearRoutineRetries(routine.id);
+  await h.store.addRoutineRetry(routine.id, { failedRunId: third.id, attempt: 1, at: Date.now() - 1 });
+  await h.store.addRoutineRetry(routine.id, { failedRunId: `routine:${routine.id}:${base}`, attempt: 1, at: Date.now() + 300_000 });
+  const task = (await h.store.get(routine.id))!;
+  h.replies.push(SIGNED_OUT);
+  h.failDelivery.add(requestId);
+  await h.executor.run(task, {
+    runId: requestId, trigger: { kind: "retry", requestId, failedRunId: third.id, attempt: 1 },
+    signal: new AbortController().signal,
+  });
+  const paused = (await h.store.get(routine.id))!;
+  assert.equal(paused.enabled, false);
+  assert.deepEqual(paused.pendingRoutineFires?.map((entry) => entry.requestId), [requestId]);
+  assert.equal(h.deliveries.includes(requestId), false);
+
+  h.failDelivery.delete(requestId);
+  await h.scheduler.start();
+  for (let i = 0; i < 100 && (await h.store.get(routine.id))?.pendingRoutineFires?.length; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.deepEqual(h.sends.filter((key) => key === requestId), [requestId], "startup must only deliver the saved failure");
+  assert.deepEqual(h.deliveries.filter((key) => key === requestId), [requestId]);
+  assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.length ?? 0, 0);
 });
 
 test("different kinds do not pause", async () => {

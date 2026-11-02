@@ -106,7 +106,7 @@ export interface BotRoutineRecoveryDependencies {
     addRoutineRetry(id: string, retry: { failedRunId: string; attempt: 1 | 2; at: number; verifiedToolFree: true }): Promise<boolean>;
   };
   canRetryRoutineRequest(botId: string, requestId: string): Promise<boolean>;
-  pauseAfterFailedRun(id: string): Promise<void>;
+  pauseAfterFailedRun(id: string, activeRunId: string): Promise<void>;
   issues: Pick<BotIssueService, "raise" | "resolve">;
   /** Runs the Bot's health checks after a failure only the person can fix. */
   afterPersonFailure?(botId: string, routineId: string): void;
@@ -192,7 +192,7 @@ export function createBotRoutineRecovery(dependencies: BotRoutineRecoveryDepende
       const since = task.enabledAt ?? 0;
       const streak = failureStreak(fireOutcomes((await dependencies.store.runs(task.id)).filter((entry) => entry.finishedAt > since)));
       if (streak.count < BOT_ROUTINE_FAILURE_PAUSE_THRESHOLD || !streak.kind) return { retrying: false };
-      await dependencies.pauseAfterFailedRun(task.id);
+      await dependencies.pauseAfterFailedRun(task.id, run.id);
       await dependencies.issues.resolve(botId, routineFailedKey(task.id), "superseded");
       await dependencies.issues.raise({
         botId,

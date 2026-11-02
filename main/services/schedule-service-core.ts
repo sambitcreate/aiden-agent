@@ -359,10 +359,12 @@ export function createScheduleServiceCore(
         if (options.automatic && options.recovery && !pendingFire)
           throw new UnclaimableScheduledFire(`Routine ${taskId} has no pending fire to recover.`);
         // A retry replayed after the routine's next regular fire came due (the
-        // Mac slept, Aiden was closed) is stale: that fire replaces it.
+        // Mac slept, Aiden was closed) is stale. A recorded retry still needs
+        // its delivery reconciled; the executor reads its result without a send.
         if (
           pendingFire?.retry &&
-          ((task.nextRunAt !== undefined && task.nextRunAt <= Date.now()) || (task.lastRunAt ?? 0) > pendingFire.fireTime)
+          ((task.nextRunAt !== undefined && task.nextRunAt <= Date.now()) || (task.lastRunAt ?? 0) > pendingFire.fireTime) &&
+          !(await store.runById(task.id, pendingFire.requestId))
         ) {
           await store.settleRoutineFire(task.id, pendingFire.requestId);
           throw new UnclaimableScheduledFire(`Routine ${taskId}'s retry was replaced by its next fire.`);
@@ -809,8 +811,8 @@ export function createScheduleServiceCore(
     },
 
     // Called by the active run itself. User-facing edits wait for that run to settle.
-    async pauseAfterFailedRun(id: string): Promise<void> {
-      await store.setEnabled(id, false, { clearRoutineRetries: true });
+    async pauseAfterFailedRun(id: string, activeRunId: string): Promise<void> {
+      await store.setEnabled(id, false, { clearRoutineRetriesExcept: activeRunId });
       stopJob(id);
       dependencies.broadcast({ taskId: id });
     },
