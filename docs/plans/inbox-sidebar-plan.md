@@ -526,4 +526,4 @@ The Inbox view may list Bots, but only while they need the person (including an 
 
 ### Review fixes for shared Inbox state
 
-Inbox reads carry the displayed reply ID, including reads sent after Done and Snooze. A client reading an older summary checks its revision before acknowledging a captured message. Desktop triage and Undo both use revision preconditions. Undo restores the original Done time so intervening replies remain visible. Both phones reconcile read and triage fields against refreshed rows. A failed snooze expiry retries after a minute.
+Inbox reads carry the displayed reply ID, including reads sent after Done and Snooze. A client reading an older summary captures a one-message window when supported, otherwise reads the whole chat, and checks its revision before acknowledging the captured message. Desktop triage and Undo both use revision preconditions. Undo restores the original Done time so intervening replies remain visible. Both phones reconcile read and triage fields against refreshed rows. A failed snooze expiry retries after a minute.

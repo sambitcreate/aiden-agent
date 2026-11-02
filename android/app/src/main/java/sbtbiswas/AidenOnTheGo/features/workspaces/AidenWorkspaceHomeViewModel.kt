@@ -31,6 +31,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenUsageCache
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 import java.time.Duration
@@ -385,6 +386,7 @@ class AidenWorkspaceHomeViewModel(
         val instanceId = coordinator.activeInstanceId ?: return null
         val isCurrent = { coordinator.activeInstanceId == instanceId && coordinator.client.value === client }
         val generation = triageGeneration
+        val supportsMessagesWindow = coordinator.serverInfo.value?.features?.contains(AidenRemoteProtocol.CHAT_MESSAGES_WINDOW_FEATURE) == true
         return AidenInboxTriage(
             // After a switch the write still settles on the host it was sent
             // to, from that host's saved row: even back on the same host, the
@@ -416,7 +418,7 @@ class AidenWorkspaceHomeViewModel(
             },
             isCurrent = isCurrent,
             writeTriage = { id, change, ifRevision, key -> client.setChatTriage(id, change, ifRevision, key) },
-            writeRead = client::markInboxRead,
+            writeRead = { row -> client.markInboxRead(row, supportsMessagesWindow) },
             reload = { load(force = true) },
             viewStamp = { id -> viewStamps[id] ?: 0L }
         )

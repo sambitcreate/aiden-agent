@@ -945,11 +945,16 @@ class AidenRemoteClient(
      * Report that the user viewed a chat, clearing its unread marker on every
      * surface. With a message id the marker lands exactly on what was shown.
      */
-    suspend fun markInboxRead(row: AidenChatSummary) {
+    suspend fun markInboxRead(row: AidenChatSummary, supportsMessagesWindow: Boolean) {
         row.lastAssistantMessageId?.takeIf(AidenChatForkLineageRow.IDENTIFIER::matches)?.let { markChatRead(row.id, it); return }
-        val detail = chat(row.id)
-        val tail = detail.messages.lastOrNull()?.id ?: throw AidenRemoteClientException.InvalidResponse("Chat has no messages.")
-        if (detail.revision != row.revision) {
+        val (tail, transcriptRevision) = if (supportsMessagesWindow) {
+            val window = messagesWindow(row.id, limit = 1)
+            (window.messages.lastOrNull()?.id ?: throw AidenRemoteClientException.InvalidResponse("Chat has no messages.")) to window.revision
+        } else {
+            val detail = chat(row.id)
+            (detail.messages.lastOrNull()?.id ?: throw AidenRemoteClientException.InvalidResponse("Chat has no messages.")) to detail.revision
+        }
+        if (transcriptRevision != row.revision) {
             var cursor: String? = null
             val seen = mutableSetOf<String>()
             while (true) {

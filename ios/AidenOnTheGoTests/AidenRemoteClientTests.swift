@@ -796,6 +796,47 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(bodies, ["{}", #"{"throughMessageId":"message-7"}"#])
     }
 
+    func testLegacyInboxReadUsesBoundedWindowAndRejectsChangedSummary() async throws {
+        let client = makeClient()
+        let page = try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: botFixtureData(at: ["chatSummaries"]))
+        var row = try XCTUnwrap(page.summaries.first)
+        row.inbox.lastAssistantMessageId = nil
+        var changed = false
+        var reads: [String] = []
+        AidenRemoteMockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/messages") {
+                XCTAssertEqual(request.url?.query, "limit=1")
+                let json = """
+                {"chatId":"\(row.id)","revision":"rev_ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+                "messages":[{"id":"last-shown","role":"assistant","text":"reply","createdAt":"2026-08-18T19:01:00.000Z"}],"hasOlder":true}
+                """
+                return Self.response(for: request, status: 200, json: json)
+            }
+            if path.hasSuffix("/chat-summaries") {
+                var object = try! JSONSerialization.jsonObject(with: self.botFixtureData(at: ["chatSummaries"])) as! [String: Any]
+                var rows = object["summaries"] as! [[String: Any]]
+                if changed { rows[0]["revision"] = "rev_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" }
+                object["summaries"] = rows
+                return Self.response(for: request, status: 200, data: try! JSONSerialization.data(withJSONObject: object))
+            }
+            if path.hasSuffix("/read") {
+                reads.append((try? Self.jsonBody(request))?["throughMessageId"] as? String ?? "")
+                return Self.response(for: request, status: 204, data: Data())
+            }
+            XCTFail("A full transcript was requested: \(path)")
+            return Self.response(for: request, status: 413, data: Data())
+        }
+        try await client.markInboxRead(through: row, supportsMessagesWindow: true)
+        XCTAssertEqual(reads, ["last-shown"])
+        changed = true
+        do {
+            try await client.markInboxRead(through: row, supportsMessagesWindow: true)
+            XCTFail("A changed row must not be marked read")
+        } catch { }
+        XCTAssertEqual(reads, ["last-shown"])
+    }
+
     func testSetChatTriageSendsOnlyTheChangedFieldsWithAnIdempotencyKeyAndReadsAConflict() async throws {
         let client = makeClient()
         var bodies: [[String: Any]] = []

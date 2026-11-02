@@ -265,13 +265,14 @@ final class AidenHomeModel {
               let index = chats.firstIndex(where: { $0.id == chatID }), chats[index].unread,
               let context = try? coordinator.requestContext() else { return }
         let before = chats[index]
+        let supportsMessagesWindow = coordinator.server?.features.contains(AidenServer.chatMessagesWindowFeature) == true
         let viewed = viewStamp(chatID)
         chats[index].unread = false
         chats[index].inbox.invalidateHostPlacement()
         let optimistic = chats[index]
         persistCurrentSummaries(changedID: chatID, readThrough: optimistic.inbox)
         do {
-            try await coordinator.remoteClient(for: context).markInboxRead(through: before)
+            try await coordinator.remoteClient(for: context).markInboxRead(through: before, supportsMessagesWindow: supportsMessagesWindow)
         } catch {
             await rollBack(chatID: chatID, optimistic: optimistic, before: before, viewed: viewed, context: context, coordinator: coordinator)
             guard coordinator.isCurrent(context) else { return }
@@ -337,6 +338,7 @@ final class AidenHomeModel {
         guard let index = chats.firstIndex(where: { $0.id == chatID }),
               let context = try? coordinator.requestContext() else { return false }
         let before = chats[index]
+        let supportsMessagesWindow = coordinator.server?.features.contains(AidenServer.chatMessagesWindowFeature) == true
         let viewed = viewStamp(chatID)
         let alsoMarkRead = change.hidesRow && AidenInbox.alsoMarksRead(before, isOpen: isOpen)
         if alsoMarkRead, coordinator.server?.supportsChatReadState != true { return false }
@@ -399,7 +401,7 @@ final class AidenHomeModel {
             // Sent with the write's own client: the Mac took Done, so it
             // should also take the read, whichever Mac is shown now.
             do {
-                try await client.markInboxRead(through: before)
+                try await client.markInboxRead(through: before, supportsMessagesWindow: supportsMessagesWindow)
                 settleRead(chatID: chatID, readThrough: optimistic, settledTriage: settled, context: context, coordinator: coordinator)
             } catch {
                 if viewStamp(chatID) == viewed {
