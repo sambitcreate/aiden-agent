@@ -19,6 +19,7 @@ import {
   type BackgroundJobState,
   type BackgroundJobView,
 } from "../../../renderer/shared/background-jobs.js";
+import { processGroupStillRuns } from "../../shared/process-group.js";
 import { tailText } from "../../../renderer/shared/agent-notices.js";
 import { defaultListeningPortsByProcess } from "./listening-ports.js";
 
@@ -151,7 +152,7 @@ interface JobRecord {
 /** Durable note of running jobs, so a launch after a crash can stop what was left. */
 interface RunningRecordFile {
   version: 1;
-  jobs: Array<{ id: string; pid: number; processStart?: string }>;
+  jobs: Array<{ id: string; pid: number; processStart?: string; check?: { workspaceId: string; chatId: string } }>;
 }
 
 const RECORD_FILE = "running.json";
@@ -571,6 +572,9 @@ export class BackgroundJobs {
   async stopWorkspace(workspaceId: string, reason: BackgroundJobEndReason): Promise<void> {
     const jobs = [...this.jobs.values()].filter((job) => job.view.workspaceId === workspaceId);
     await Promise.all(jobs.map((job) => this.stopRecord(job, reason)));
+    for (const entry of this.checkGroups.values()) {
+      if (entry.check?.workspaceId === workspaceId) await this.releaseCheckGroup(entry);
+    }
     if (jobs.some((job) => job.view.state === "running")) {
       throw new Error("Could not confirm the workspace’s background jobs stopped. Try again.");
     }
@@ -612,7 +616,8 @@ export class BackgroundJobs {
         signalGroup(entry.pid, "SIGTERM");
         await this.waitUntil(() => !groupExists(entry.pid));
         if (groupExists(entry.pid)) signalGroup(entry.pid, "SIGKILL");
-        stopped += 1;
+        if (entry.check && await processGroupStillRuns(entry.pid)) survivors.push(entry);
+        else stopped += 1;
         continue;
       }
       if (typeof entry.id !== "string" || !/^job_[0-9a-f]{8}$/u.test(entry.id)) continue;
@@ -622,11 +627,20 @@ export class BackgroundJobs {
         survivors.push(entry);
         continue;
       }
+      // Without the original leader, an unobservable marker cannot prove a
+      // surviving check group is safe to release. Never signal by group here.
+      if (entry.check && !current && await processGroupStillRuns(entry.pid)) {
+        survivors.push(entry);
+        continue;
+      }
       if (left.signalled === 0) continue;
       if (left.remaining) survivors.push(entry);
       else stopped += 1;
     }
-    this.carriedOver = survivors;
+    this.carriedOver = survivors.filter((entry) => !entry.check);
+    for (const entry of survivors) {
+      if (entry.check) this.checkGroups.set(entry.id, entry);
+    }
     try {
       for (const name of await fsp.readdir(this.options.logDir)) {
         if (/^job_[0-9a-f]{8}\.log$/u.test(name) || (name === RECORD_FILE && !survivors.length)) {
@@ -912,20 +926,40 @@ export class BackgroundJobs {
   }
 
   /** The caller holds the shell behind a pipe until this write commits. */
-  async recordCheckGroup(id: string, pid: number): Promise<() => Promise<void>> {
+  async recordCheckGroup(id: string, pid: number, workspaceId: string, chatId: string): Promise<() => Promise<void>> {
     const processStart = await this.processStartTime(pid);
     if (!processStart) throw new Error("Could not verify the check process.");
-    this.checkGroups.set(id, { id, pid, processStart });
+    await this.confirmChatChecksStopped(chatId);
+    const entry = { id, pid, processStart, check: { workspaceId, chatId } };
+    this.checkGroups.set(id, entry);
     try {
       await this.writeRecord();
     } catch (error) {
       this.checkGroups.delete(id);
       throw error;
     }
-    return async () => {
-      this.checkGroups.delete(id);
-      await this.writeRecord();
-    };
+    return () => this.releaseCheckGroup(entry);
+  }
+
+  hasCheckGroup(chatId: string): boolean {
+    return [...this.checkGroups.values()].some((entry) => entry.check?.chatId === chatId);
+  }
+
+  async confirmChatChecksStopped(chatId: string): Promise<void> {
+    for (const entry of this.checkGroups.values()) {
+      if (entry.check?.chatId === chatId) await this.releaseCheckGroup(entry);
+    }
+  }
+
+  private async releaseCheckGroup(entry: RunningRecordFile["jobs"][number]): Promise<void> {
+    // SIGKILL is asynchronous and can be denied. Keep the durable record and
+    // workspace guard until exit is observable, including zombie-only groups.
+    await this.waitUntil(() => !groupExists(entry.pid), 250);
+    if (await processGroupStillRuns(entry.pid)) {
+      throw new Error("Could not confirm the workspace’s check stopped. Try again once its processes have ended.");
+    }
+    this.checkGroups.delete(entry.id);
+    await this.writeRecord();
   }
 
   private writeRecord(): Promise<void> {

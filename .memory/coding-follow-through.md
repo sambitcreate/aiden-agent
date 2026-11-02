@@ -37,3 +37,5 @@ CI on the countdown PR exposed that Apple platform executables such as `/bin/sh`
 Workspace access changes and managed-worktree removal cancel generations, drain command handoffs and checks, and confirm tracked jobs stopped. Active checks, follows and pending notices hold an empty chat in its workspace. Check commands start behind a pipe until the shared process ledger records the group identity. Recovery runs before startup deletes worktrees or admits new processes. PR polls carry an abort signal through the GitHub read and each failed-job log, and legacy follow records resolve ownership from the chat.
 
 The macOS Electron regression suite is `test:e2e:follow-through`. It kills Electron during a real check, verifies recovery in the same profile, exercises a replaced then removed Git worktree, and revokes a restored follow without contacting GitHub.
+
+Check recovery records carry chat and workspace ownership. A failed signal leaves the record in place and workspace revocation or removal fails until Aiden verifies that no live process remains in the group.

@@ -209,7 +209,7 @@ export const doneWhen: DoneWhenChecks = new DoneWhenChecks({
       timeoutMs: DONE_WHEN_TIMEOUT_MS,
       maxOutputBytes: MAX_CHECK_OUTPUT_BYTES,
       signal,
-      recordGroup: (pid) => backgroundJobs.recordCheckGroup(id, pid),
+      recordGroup: (pid) => backgroundJobs.recordCheckGroup(id, pid, workspace.id, record.chatId),
     });
     return {
       exitCode: result.outputLimitExceeded ? null : result.exitCode,
@@ -420,7 +420,7 @@ async function configureFollowThrough(
  * still belongs to the old workspace, so the person must stop it first. */
 export function beginFollowThroughMove(chatId: string): () => void {
   if (noticeDelivery.hasPending(chatId)) throw new Error("Wait for this chat’s follow-up message before changing workspaces.");
-  if (doneWhen.isActive(chatId) || pullRequestFollows.list(chatId).some((follow) => follow.state === "following")) {
+  if (doneWhen.isActive(chatId) || backgroundJobs.hasCheckGroup(chatId) || pullRequestFollows.list(chatId).some((follow) => follow.state === "following")) {
     throw new Error("Stop this chat’s check or pull request follow before changing workspaces.");
   }
   return chatConfiguration.begin(chatId);
@@ -439,8 +439,9 @@ export function followChatPullRequest(chatId: string, resolve: () => Promise<Pul
   });
 }
 
-export function clearDoneWhenCheck(chatId: string): Promise<void> {
-  return doneWhen.clearAndSettle(chatId);
+export async function clearDoneWhenCheck(chatId: string): Promise<void> {
+  await doneWhen.clearAndSettle(chatId);
+  await backgroundJobs.confirmChatChecksStopped(chatId);
 }
 
 export interface PullRequestTarget {

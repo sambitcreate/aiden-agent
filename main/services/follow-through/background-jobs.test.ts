@@ -726,7 +726,50 @@ test("a check whose recovery record cannot be saved never evaluates its command"
   const id = newBackgroundJobId();
   await assert.rejects(runBoundedShellCommand({
     command: "touch unexpected", cwd: dir, env: { ...process.env, AIDEN_BACKGROUND_JOB: id },
-    timeoutMs: 10_000, maxOutputBytes: 1024, recordGroup: (pid) => jobs.recordCheckGroup(id, pid),
+    timeoutMs: 10_000, maxOutputBytes: 1024, recordGroup: (pid) => jobs.recordCheckGroup(id, pid, "ws-1", "chat-1"),
   }), { code: "EEXIST" });
   await assert.rejects(fs.access(path.join(dir, "unexpected")), { code: "ENOENT" });
+});
+
+test("a denied check-group stop retains recovery ownership and blocks only its workspace", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs } = harness(dir);
+  const id = newBackgroundJobId();
+  const kill = process.kill.bind(process);
+  let group = 0;
+  t.mock.method(process, "kill", (pid: number, signal: NodeJS.Signals | number) => {
+    if (group && pid === -group && (signal === "SIGTERM" || signal === "SIGKILL")) {
+      throw Object.assign(new Error("signal denied"), { code: "EPERM" });
+    }
+    return kill(pid, signal);
+  });
+  t.after(async () => {
+    try { if (group) kill(-group, "SIGKILL"); } catch { /* Already gone. */ }
+    await cleanUp(jobs, dir);
+  });
+  await assert.rejects(runBoundedShellCommand({
+    command: "sleep 60 </dev/null >/dev/null 2>&1 & echo $! > child",
+    cwd: dir, env: { ...process.env, AIDEN_BACKGROUND_JOB: id }, timeoutMs: 10_000, maxOutputBytes: 1024,
+    recordGroup: (pid) => {
+      group = pid;
+      return jobs.recordCheckGroup(id, pid, "ws-1", "chat-1");
+    },
+  }), /confirm.*check stopped/u);
+  const child = Number(await fs.readFile(path.join(dir, "child"), "utf8"));
+  assert.ok(alive(child));
+  const ledger = async () => JSON.parse(await fs.readFile(path.join(dir, "logs", "running.json"), "utf8")).jobs;
+  await jobs.stopWorkspace("ws-other", "access-changed");
+  await assert.rejects(jobs.stopWorkspace("ws-1", "access-changed"), /confirm.*check stopped/u);
+  assert.equal((await ledger())[0]?.pid, group);
+  // Simulate a relaunch where the original leader is gone and the live
+  // descendant's marker is hidden. Recovery cannot safely signal it.
+  const restored = harness(dir, { processHasEnvironment: async () => false }).jobs;
+  t.after(() => restored.shutdown());
+  assert.equal(await restored.reapPreviousLaunch(), 0);
+  await assert.rejects(restored.stopWorkspace("ws-1", "access-changed"), /confirm.*check stopped/u);
+  assert.equal((await ledger())[0]?.pid, group);
+  kill(-group, "SIGKILL");
+  await eventually(() => !alive(child), "the surviving descendant to exit");
+  await restored.stopWorkspace("ws-1", "access-changed");
+  assert.deepEqual(await ledger(), []);
 });
