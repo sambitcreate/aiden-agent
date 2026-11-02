@@ -57,6 +57,7 @@ test("the feed serves the shared fixture's notification for a routine's visible 
   t.after(h.cleanup);
   await h.log.append(delivery());
 
+  h.advanceTo(NOW + 1); // The fixture cursor is the last completed millisecond.
   assert.deepEqual(await h.feed.list(undefined), fixture.botRoutineNotifications);
 });
 
@@ -95,9 +96,14 @@ test("lists due rows newest first, at most 100, after since", async (t) => {
   const funnel = createBotDeliveryFunnel({
     log: h.log, gate: ALWAYS_NOW_GATE, mac: async () => {}, telegram: async () => {}, now: () => NOW + HOUR,
   });
+  const beforeRelease = await h.feed.list(NOW);
+  assert.deepEqual(beforeRelease.notifications, []);
   await funnel.flush(NOW + HOUR);
-  const due = await h.feed.list(undefined);
-  assert.deepEqual(due.notifications[0]?.id, "held", "the held row joins once it is due");
+  h.advanceTo(NOW + HOUR + 1);
+  const afterRelease = await h.feed.list(Date.parse(beforeRelease.now));
+  assert.deepEqual(afterRelease.notifications.map((row) => row.id), ["held"],
+    "a release in the same millisecond as the preceding poll reaches the next poll");
+  assert.deepEqual((await h.feed.list(Date.parse(afterRelease.now))).notifications, []);
 });
 
 test("never lists silent, skipped or blocked runs", async (t) => {
@@ -194,6 +200,7 @@ test("never lists silent, skipped or blocked runs", async (t) => {
     signal: new AbortController().signal,
     trigger: { kind: "manual", key: "loud" },
   });
+  h.advanceTo(NOW + 1);
   assert.equal((await h.feed.list(undefined)).notifications.length, 1, "a routine with notifications on still alerts");
 });
 
