@@ -21,7 +21,7 @@ import {
 } from "../../../renderer/shared/background-jobs.js";
 import { processGroupStillRuns } from "../../shared/process-group.js";
 import { tailText } from "../../../renderer/shared/agent-notices.js";
-import { CheckProcessStillRunningError } from "./done-when.js";
+import { CheckInterruptedError } from "./done-when.js";
 import { defaultListeningPortsByProcess } from "./listening-ports.js";
 
 export const MAX_RUNNING_JOBS_PER_CHAT = 10;
@@ -929,15 +929,15 @@ export class BackgroundJobs {
   /** The caller holds the shell behind a pipe until this write commits. */
   async recordCheckGroup(id: string, pid: number, workspaceId: string, chatId: string): Promise<() => Promise<void>> {
     const processStart = await this.processStartTime(pid);
-    if (!processStart) throw new Error("Could not verify the check process.");
+    if (!processStart) throw new CheckInterruptedError("Could not verify the check process. The command was not started.");
     await this.confirmChatChecksStopped(chatId);
     const entry = { id, pid, processStart, check: { workspaceId, chatId } };
     this.checkGroups.set(id, entry);
     try {
       await this.writeRecord();
-    } catch (error) {
+    } catch {
       this.checkGroups.delete(id);
-      throw error;
+      throw new CheckInterruptedError("Could not save the check’s recovery record. The command was not started.");
     }
     return () => this.releaseCheckGroup(entry);
   }
@@ -953,10 +953,13 @@ export class BackgroundJobs {
     // workspace guard until exit is observable, including zombie-only groups.
     await this.waitUntil(() => !groupExists(entry.pid), 250);
     if (await processGroupStillRuns(entry.pid)) {
-      throw new CheckProcessStillRunningError();
+      throw new CheckInterruptedError("Could not confirm the workspace’s check stopped. Try again once its processes have ended.");
     }
     this.checkGroups.delete(entry.id);
-    await this.writeRecord();
+    // Exit is confirmed. A failed ledger update is logged by the write queue.
+    // The previous on-disk entry is safe for crash recovery to inspect again.
+    this.writeRecord();
+    await this.recordWrite;
   }
 
   private writeRecord(): Promise<void> {

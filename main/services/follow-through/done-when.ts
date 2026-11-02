@@ -28,11 +28,11 @@ export interface DoneWhenRecord {
   lastTimedOut?: boolean;
 }
 
-/** The check cannot finish or start another attempt until cleanup is verified. */
-export class CheckProcessStillRunningError extends Error {
-  constructor() {
-    super("Could not confirm the workspace’s check stopped. Try again once its processes have ended.");
-    this.name = "CheckProcessStillRunningError";
+/** A process ownership or recovery issue interrupted the check, independently of its command. */
+export class CheckInterruptedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CheckInterruptedError";
   }
 }
 
@@ -203,15 +203,15 @@ export class DoneWhenChecks {
     this.records.set(chatId, started);
     this.changed(chatId);
     let result: DoneWhenRunResult;
-    let cleanupIssue: CheckProcessStillRunningError | undefined;
+    let interruption: CheckInterruptedError | undefined;
     try {
       result = await this.deps.run(started, controller.signal);
     } catch (error) {
-      if (error instanceof CheckProcessStillRunningError) cleanupIssue = error;
+      if (error instanceof CheckInterruptedError) interruption = error;
       result = {
         exitCode: null,
         timedOut: false,
-        aborted: controller.signal.aborted || cleanupIssue !== undefined,
+        aborted: controller.signal.aborted || interruption !== undefined,
         output: error instanceof Error ? error.message : String(error),
       };
     } finally {
@@ -224,11 +224,11 @@ export class DoneWhenChecks {
     if (result.aborted || controller.signal.aborted) {
       this.records.set(chatId, { ...started, state: "waiting", checksRun: record.checksRun });
       this.changed(chatId);
-      if (cleanupIssue && !controller.signal.aborted) {
+      if (interruption && !controller.signal.aborted) {
         this.deps.post({
           chatId,
-          notice: agentNotice({ source: "check", tone: "info", title: "Check waiting", summary: cleanupIssue.message }),
-          text: cleanupIssue.message,
+          notice: agentNotice({ source: "check", tone: "info", title: "Check waiting", summary: interruption.message }),
+          text: interruption.message,
           wake: false,
         });
       }

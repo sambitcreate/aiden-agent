@@ -43,3 +43,5 @@ Check recovery records carry chat and workspace ownership. A failed signal leave
 Workspace changes suspend polling and interrupt check attempts before draining jobs. They end the follows and clear the checks only after the permission save, workspace removal, or managed Git destructive boundary. Rejected operations resume polling and keep waiting checks. Chat moves verify retained process liveness while configuration admission is held.
 
 A check whose process cleanup cannot be confirmed returns to waiting with its prior attempt count and posts an informational notice without waking the agent. Workspace cleanup still fails until the group exits.
+
+A failed check-ledger admission keeps the shell gated and leaves the check waiting without a wake or a spent attempt. After verified exit, a failed ledger release is logged and the command keeps its actual result. The stale durable entry is rechecked during recovery.
