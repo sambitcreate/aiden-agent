@@ -332,6 +332,12 @@ struct AidenServer: Codable, Equatable, Sendable {
     var supportsChatBrowserRecordings: Bool {
         features.contains(Self.chatBrowserRecordingsFeature)
     }
+    /// Revision 50: the Mac offers `attachments:raw` and this phone holds it, so
+    /// pictures go to the upload routes as their own bytes (Android parity).
+    var supportsRawUploads: Bool {
+        serverCapabilities?.contains(.attachmentsRaw) == true && capabilities.contains(.attachmentsRaw)
+    }
+
     /// The chat and Bot screens show the spending notice with Allow more (revision 47).
     var supportsSpendingLimits: Bool {
         features.contains(Self.spendingLimitsFeature)

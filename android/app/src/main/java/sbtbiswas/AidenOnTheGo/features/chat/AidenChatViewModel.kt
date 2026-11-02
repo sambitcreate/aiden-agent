@@ -164,8 +164,9 @@ class AidenChatViewModel(
     /** How far the attachments being uploaded have got; null while none are. */
     private val _uploadProgress = MutableStateFlow<AidenUploadProgress?>(null)
     val uploadProgress: StateFlow<AidenUploadProgress?> = _uploadProgress.asStateFlow()
-    /** The batch [prepareAndUpload] is sending: its job (for Stop) and size. */
-    private var attachmentBatchJob: Job? = null
+    /** Every picked batch sending or waiting its turn, so Stop ends them all. */
+    private val attachmentBatchJobs = mutableSetOf<Job>()
+    /** The position of the picture [prepareAndUpload] is sending in its batch, and the batch size. */
     private var attachmentBatch: Pair<Int, Int>? = null
 
     private val _isLoading = MutableStateFlow(false)
@@ -1693,12 +1694,13 @@ class AidenChatViewModel(
     suspend fun <T> prepareAndUpload(items: List<T>, prepare: suspend (T) -> AidenAttachmentUpload?) {
         val client = activeClient() ?: return
         _preparingAttachmentBatches.value++
+        val batchJob = coroutineContext[Job]
+        batchJob?.let { attachmentBatchJobs += it }
         var ran = false
         try {
             preparationMutex.withLock {
                 ran = true
                 val batch = items.take((10 - _pendingAttachments.value.size).coerceAtLeast(0))
-                attachmentBatchJob = coroutineContext[Job]
                 for ((index, item) in batch.withIndex()) {
                     coroutineContext.ensureActive()
                     if (activeClient() !== client) return
@@ -1720,16 +1722,19 @@ class AidenChatViewModel(
                 }
             }
         } finally {
-            if (attachmentBatchJob === coroutineContext[Job]) attachmentBatchJob = null
+            batchJob?.let { attachmentBatchJobs -= it }
             // A batch still waiting its turn leaves the running batch's bar alone.
             if (ran) _uploadProgress.value = null
             _preparingAttachmentBatches.value--
         }
     }
 
-    /** Stop on the progress bar: the upload in flight is dropped; what already reached the Mac stays. */
+    /**
+     * Stop on the progress bar: the upload in flight and any batch waiting its turn are dropped;
+     * what already reached the Mac stays.
+     */
     fun cancelUploads() {
-        attachmentBatchJob?.cancel()
+        attachmentBatchJobs.toList().forEach { it.cancel() }
     }
 
     suspend fun upload(uploads: List<AidenAttachmentUpload>): Int {
@@ -1764,7 +1769,16 @@ class AidenChatViewModel(
                             if (current?.index == index && current.count == count) current.advancedTo(fraction) ?: current else current
                         }
                     }
-                    coroutineContext.ensureActive()
+                    if (!coroutineContext.isActive) {
+                        // Stopped after the Mac staged it: take it off the Mac again, so it does
+                        // not count against the chat's upload limit until it expires.
+                        if (reference.isValid()) {
+                            viewModelScope.launch {
+                                try { client.removeAttachment(chatId, reference.id) } catch (_: Exception) {}
+                            }
+                        }
+                        coroutineContext.ensureActive()
+                    }
                     if (activeClient() !== client) return uploads.size
                     if (!reference.isValid()) {
                         failedCount++

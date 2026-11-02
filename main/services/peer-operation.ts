@@ -212,7 +212,6 @@ function query(entries: [string, string | undefined][]): string {
     : `?${present.map(([key, value]) => `${key}=${hostQueryValue(value)}`).join("&")}`;
 }
 
-/** Renderer selects a closed operation, never an arbitrary URL, header or credential. */
 /**
  * Revision 50 (`attachments:raw`): a chat or Bot picture upload sent to a host
  * that granted this Mac raw uploads goes as the picture's own bytes, about a
@@ -233,12 +232,19 @@ export function peerRawUploadRequest(
   const bytes = Buffer.from(data, "base64");
   // A body that is not exact base64 keeps the envelope, so the host refuses it as before.
   if (bytes.length === 0 || bytes.length > MAX_INLINE_IMAGE_BYTES || bytes.toString("base64") !== data) return request;
-  const encodedName = encodeAidenRemoteAttachmentName(name);
+  let encodedName: string;
+  try {
+    encodedName = encodeAidenRemoteAttachmentName(name);
+  } catch {
+    // A lone surrogate cannot be percent-encoded; the envelope lets the host refuse it as before.
+    return request;
+  }
   if (encodedName.length === 0 || encodedName.length > AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME) return request;
   const { body: _json, ...rest } = request;
   return { ...rest, rawBody: { contentType: mimeType, encodedName, data: bytes } };
 }
 
+/** Renderer selects a closed operation, never an arbitrary URL, header or credential. */
 export function peerOperationRequest(
   value: unknown,
 ): Omit<PeerRequest, "credential"> {

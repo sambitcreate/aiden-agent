@@ -1353,6 +1353,7 @@ final class AidenBotSessionModel {
     /// the latest outbox.
     func release() {
         released = true
+        attachTask?.cancel()
         backoffTask?.cancel()
         flushTask?.cancel()
         sharedImages.removeAll()

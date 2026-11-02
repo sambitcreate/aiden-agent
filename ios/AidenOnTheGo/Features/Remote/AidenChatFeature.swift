@@ -3439,7 +3439,7 @@ final class AidenChatViewModel {
             }
         }
         // Revision 50: a Mac that granted `attachments:raw` takes a picture as its own bytes.
-        let rawImages = coordinator.server?.capabilities.contains(.attachmentsRaw) == true
+        let rawImages = coordinator.server?.supportsRawUploads == true
         let batch = Array(uploads.prefix(10 - pendingAttachments.count))
         var failedCount = 0
         var acceptedReferences: [AidenAttachmentReference] = []

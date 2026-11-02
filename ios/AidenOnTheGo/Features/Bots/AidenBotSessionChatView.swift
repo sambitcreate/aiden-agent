@@ -1039,7 +1039,7 @@ struct AidenBotSessionChatView: View {
 
     /// Revision 50: this phone holds `attachments:raw` on the connected Mac.
     private var rawImageUploadsGranted: Bool {
-        coordinator.server?.capabilities.contains(.attachmentsRaw) == true
+        coordinator.server?.supportsRawUploads == true
     }
 
     private func attachSelectedPhotos(_ model: AidenBotSessionModel) {

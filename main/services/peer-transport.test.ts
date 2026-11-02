@@ -587,6 +587,9 @@ test("a Mac holding attachments:raw sends a picture to a real host as its own by
     assert.equal(peerRawUploadRequest(text, peerOperationRequest(text)).rawBody, undefined);
     const gif = { ...picture, body: { ...picture.body, mimeType: "image/gif" } };
     assert.equal(peerRawUploadRequest(gif, peerOperationRequest(gif)).rawBody, undefined);
+    // A name that cannot be percent-encoded (a lone surrogate) keeps the envelope instead of failing the call.
+    const unpaired = { ...picture, body: { ...picture.body, name: "\uD800.png" } };
+    assert.equal(peerRawUploadRequest(unpaired, peerOperationRequest(unpaired)).rawBody, undefined);
     const send2 = { operation: "send", resourceId: "chat_1", idempotencyKey: "k".repeat(16), body: { text: "hi" } };
     assert.deepEqual(peerRawUploadRequest(send2, peerOperationRequest(send2)), peerOperationRequest(send2));
   } finally {

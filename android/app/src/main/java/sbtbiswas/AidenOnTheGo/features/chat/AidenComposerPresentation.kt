@@ -43,7 +43,6 @@ fun aidenComposerSelectedThinkingLevel(model: AidenModel, selected: String?): St
     return selected?.takeIf { it in levels } ?: model.effectiveThinkingLevel
 }
 
-/** A pending composer attachment, identified by its durable reference id (names may repeat). */
 /**
  * How far the attachments being sent to the Mac have got: which one of the batch is going
  * ([index] of [count], from 0) and the share of its bytes already sent.
@@ -66,4 +65,5 @@ data class AidenUploadProgress(val index: Int, val count: Int, val fraction: Flo
     }
 }
 
+/** A pending composer attachment, identified by its durable reference id (names may repeat). */
 data class AidenComposerPendingAttachment(val id: String, val name: String, val isImage: Boolean)

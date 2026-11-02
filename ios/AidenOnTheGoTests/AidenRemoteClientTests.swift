@@ -2808,6 +2808,23 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(quoted.encodedName, "it%27s%20%281%29%2A%21.png")
     }
 
+    /// The upload delegate reports the share of the body sent, and nothing
+    /// while the size is unknown.
+    func testUploadProgressDelegateReportsTheShareOfTheBodySent() {
+        let lock = NSLock()
+        var heard: [Double] = []
+        let delegate = AidenUploadProgressDelegate { fraction in
+            lock.lock(); heard.append(fraction); lock.unlock()
+        }
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let task = session.dataTask(with: URL(string: "https://aiden.test/")!)
+        delegate.urlSession(session, task: task, didSendBodyData: 64, totalBytesSent: 64, totalBytesExpectedToSend: 256)
+        delegate.urlSession(session, task: task, didSendBodyData: 192, totalBytesSent: 256, totalBytesExpectedToSend: 256)
+        delegate.urlSession(session, task: task, didSendBodyData: 10, totalBytesSent: 10, totalBytesExpectedToSend: NSURLSessionTransferSizeUnknown)
+        XCTAssertEqual(heard, [0.25, 1])
+    }
+
     /// The bar covers the whole batch and moves only forward, a whole percent at a time.
     func testUploadProgressCoversTheBatch() throws {
         let start = AidenUploadProgress(index: 1, count: 4, fraction: 0)

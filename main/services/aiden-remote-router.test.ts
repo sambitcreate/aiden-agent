@@ -5778,6 +5778,16 @@ test("attachments:raw is offered with uploads, and a holder uploads a picture as
     assert.equal(server.features.some((feature: string) => feature.includes("raw")), false, "no feature token is spent on it");
     const refused = await raw(before.base, "/bots/bot-1/attachments", png);
     assert.equal(refused.status, 403, "raw bytes need the opt-in");
+    // The refusal every client reads from the shared revision 50 fixture.
+    const sharedFixture = JSON.parse(
+      readFileSync(new URL("../../protocol/aiden-remote/v1/fixtures/contract.json", import.meta.url), "utf8"),
+    ) as { rawUploads: { withoutGrant: { error: { code: string; message: string; retryable: boolean } } } };
+    const refusal = (await refused.json()) as { error: { code: string; message: string; retryable: boolean } };
+    const expected = sharedFixture.rawUploads.withoutGrant.error;
+    assert.deepEqual(
+      { code: refusal.error.code, message: refusal.error.message, retryable: refusal.error.retryable },
+      { code: expected.code, message: expected.message, retryable: expected.retryable },
+    );
     assert.equal((await raw(before.base, "/chats/chat-1/attachments", png)).status, 403);
     const negotiated = await fetch(`${before.base}/device/capabilities`, {
       method: "POST",
