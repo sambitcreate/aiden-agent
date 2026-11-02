@@ -29,6 +29,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
+import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummaryActivity
@@ -93,6 +94,15 @@ class AidenInboxHomeTriageTest {
         @Volatile var heldRead: CountDownLatch? = null
         val readArrived = CountDownLatch(1)
         val readsAnswered = AtomicInteger()
+        /**
+         * When set, the desktop offers `chat:jobs` and answers the phone's request for
+         * it only once this opens, so the phone sits CONNECTED with no negotiated
+         * server info. [negotiationArrived] opens when that request arrives.
+         */
+        @Volatile var heldNegotiation: CountDownLatch? = null
+        val negotiationArrived = CountDownLatch(1)
+        /** Reads of the legacy full-chat list, which carries no Inbox signals. */
+        val legacyListReads = AtomicInteger()
 
         init {
             server.dispatcher = object : Dispatcher() {
@@ -102,7 +112,20 @@ class AidenInboxHomeTriageTest {
                         path.endsWith("/server") -> MockResponse().setBody(json.encodeToString(AidenServer(
                             instanceId = instanceId, name = instanceId,
                             capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE),
+                            serverCapabilities = heldNegotiation?.let {
+                                listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE, AidenRemoteCapability.CHAT_JOBS)
+                            },
                             features = listOf("chat-summaries-v1", "chat-read-state-v1", "chat-triage-v1"))))
+                        path.endsWith("/device/capabilities") -> {
+                            negotiationArrived.countDown()
+                            heldNegotiation?.let { check(it.await(8, TimeUnit.SECONDS)) }
+                            // Refused: the phone keeps the /server it already read.
+                            MockResponse().setResponseCode(400)
+                        }
+                        path.endsWith("/chats") -> {
+                            legacyListReads.incrementAndGet()
+                            MockResponse().setResponseCode(503)
+                        }
                         path.endsWith("/workspaces") -> MockResponse().setBody(
                             """{"workspaces":[{"id":"workspace-1","name":"Workspace","permission":"ask","revision":"rev-1"}]}""")
                         path.endsWith("/chat-summaries") -> {
@@ -207,7 +230,7 @@ class AidenInboxHomeTriageTest {
             .loadSummaries(coordinator.activeInstanceId!!)?.first { it.id == id }
 
         fun close() {
-            desks.forEach { it.heldPage?.countDown(); it.heldRead?.countDown(); it.heldTriage.values.forEach(CountDownLatch::countDown) }
+            desks.forEach { it.heldPage?.countDown(); it.heldRead?.countDown(); it.heldNegotiation?.countDown(); it.heldTriage.values.forEach(CountDownLatch::countDown) }
             owners.clear()
             scope.cancel()
             desks.forEach { it.server.shutdown() }
@@ -490,6 +513,30 @@ class AidenInboxHomeTriageTest {
             desk.page = listOf(summary("chat-1", unread = true, lastAssistantAt = reply.plusSeconds(60)))
             reload()
             assertTrue("A read of the older reply doesn't cover the new one", row("chat-1").unread)
+        }
+    }
+
+    @Test
+    fun theHomeScreensConnectedLoadWaitsForNegotiationAndReadsTheInboxList() {
+        val desk = Desk("home-a")
+        desk.page = listOf(summary("chat-1", unread = true, lastAssistantAt = reply))
+        val releaseNegotiation = CountDownLatch(1).also { desk.heldNegotiation = it }
+        scenario(listOf(desk)) {
+            withContext(Dispatchers.IO) { check(desk.negotiationArrived.await(5, TimeUnit.SECONDS)) }
+            waitFor("connected before negotiation finished") {
+                coordinator.connectionState.value == AidenConnectionState.CONNECTED &&
+                    coordinator.serverInfo.value == null
+            }
+            // What the home screen does once CONNECTED, and coming back to the foreground.
+            home.hydrate(coordinator.workspaces.value)
+            home.load()
+            home.revalidate()
+            delay(200)
+            assertEquals("No list read before /server is negotiated", 0, desk.legacyListReads.get() + desk.pagesServed.get())
+            releaseNegotiation.countDown()
+            connectedTo(desk)
+            assertEquals("The legacy list carries no Inbox signals", 0, desk.legacyListReads.get())
+            assertTrue("The Inbox signal reaches the row", row("chat-1").unread)
         }
     }
 

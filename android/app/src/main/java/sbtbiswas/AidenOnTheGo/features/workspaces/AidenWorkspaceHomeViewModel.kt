@@ -218,6 +218,14 @@ class AidenWorkspaceHomeViewModel(
     fun load(force: Boolean = false) {
         val client = coordinator.client.value ?: return
         val instanceId = coordinator.activeInstanceId ?: return
+        // CONNECTED is published before the capability negotiation finishes.
+        // A list read in that window would take the legacy full-chat list with
+        // no Inbox signals, so every caller waits: the serverInfo collector in
+        // init loads once /server is known. A host whose known info lacks
+        // summaries still falls back to the legacy list below.
+        if (coordinator.connectionState.value == AidenConnectionState.CONNECTED &&
+            coordinator.serverInfo.value == null
+        ) return
         if (loadingClient === client && !force) return
         if (!force && loadedClient === client && loadedInstanceId == instanceId) return
         loadingJob?.cancel()
