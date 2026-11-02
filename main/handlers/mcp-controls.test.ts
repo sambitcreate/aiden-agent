@@ -28,7 +28,7 @@ function macWithImcp(opened: string[]): McpMacAppProbe {
   return {
     platform: "darwin",
     homedir: "/Users/me",
-    isExecutable: async (file) => file === "/Applications/iMCP.app/Contents/MacOS/imcp-server",
+    isTrustedServer: async (file) => file === "/Applications/iMCP.app/Contents/MacOS/imcp-server",
     bundleInfo: async (bundle, key) => (bundle === "/Applications/iMCP.app" && key === "CFBundleIdentifier" ? "co.dododo.iMCP" : undefined),
     isRunning: async () => false,
     open: async (bundle) => { opened.push(bundle); },
