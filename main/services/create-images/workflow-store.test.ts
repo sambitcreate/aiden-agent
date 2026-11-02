@@ -199,7 +199,7 @@ test("an index that disagrees with the directory is rebuilt", async (t) => {
 });
 
 test("a hand-edited cycle or dangling edge refuses to open, and the other workflows still list and open", async (t) => {
-  const { store, open, documentFile, root } = await fixture(t);
+  const { store, open, documentFile, root, issues } = await fixture(t);
   const good = await store.create("starter", { title: "Good" });
   const cyclic = await store.create("starter", { title: "Cyclic" });
   const dangling = await store.create("starter", { title: "Dangling" });
@@ -225,7 +225,12 @@ test("a hand-edited cycle or dangling edge refuses to open, and the other workfl
 
   // The cached index is only a cache: with it gone, every well-formed document is re-read.
   await rm(path.join(root, "create-images", "index.json"));
+  const before = issues.length;
   const reopened = await open();
+  // The unreadable file is reported by count, never by its contents.
+  assert.deepEqual(issues.slice(before), ["1 image workflow file could not be read and was left in place."]);
+  assert.deepEqual([...reopened.unreadableIds()], [unreadable.id]);
+  assert.equal(reopened.nodeIds(unreadable.id), "all", "retention must keep everything of a file kept for repair");
   const listed = reopened.list().map((entry) => entry.id);
   assert.ok(listed.includes(good.id));
   assert.ok(!listed.includes(unreadable.id), "an unparseable file is left on disk but not indexed");
@@ -329,7 +334,7 @@ test("a document published before its directory flush fails counts as written: t
   assert.deepEqual((await reopened.get(copy.id))?.nodes, withImage.nodes);
 });
 
-test("delete releases the workflow's holds even if the index cannot be rewritten, and removes unindexed files", async (t) => {
+test("delete releases the workflow's holds even if the index cannot be rewritten, and leaves unindexed files alone", async (t) => {
   const { store, open, assets, faults, documentFile, root } = await fixture(t);
   const asset = await assets.put({ bytes: pngBytes(4, 4, 1) });
   const created = await store.create("blank");
@@ -348,10 +353,59 @@ test("delete releases the workflow's holds even if the index cannot be rewritten
   await rm(path.join(root, "create-images", "index.json"));
   const reopened = await open();
   assert.deepEqual(reopened.list(), [], "the unparseable file is not indexed");
-  assert.equal(await reopened.delete(unreadable.id), true);
-  await assert.rejects(readFile(documentFile(unreadable.id)), { code: "ENOENT" });
+  // Delete acts only on indexed workflows; the unparseable file stays for a person to repair.
   assert.equal(await reopened.delete(unreadable.id), false);
+  assert.equal(await readFile(documentFile(unreadable.id), "utf8"), "{ not json");
   assert.equal(await reopened.delete("../escape"), false);
+});
+
+test("an id differing only in case never deletes another workflow's file", async (t) => {
+  const { store, documentFile } = await fixture(t);
+  const created = await store.create("blank", { title: "Keep me" });
+  assert.equal(await store.delete(created.id.toUpperCase()), false);
+  assert.equal(JSON.parse(await readFile(documentFile(created.id), "utf8")).title, "Keep me");
+  assert.deepEqual(store.list().map((entry) => entry.id), [created.id]);
+});
+
+test("a duplicate's title is cut on a character boundary, never inside an emoji", async (t) => {
+  const { store } = await fixture(t);
+  // 114 letters then a two-unit emoji: a plain 115-unit slice would keep half of the emoji.
+  const created = await store.create("blank", { title: `${"a".repeat(114)}\u{1F600}` });
+  const copy = await store.duplicate(created.id);
+  assert.equal(copy?.title, `${"a".repeat(114)} copy`);
+  assert.doesNotMatch(copy!.title, /\p{Surrogate}/u);
+  assert.equal((await store.get(copy!.id))?.title, copy?.title);
+});
+
+test("staging files left by a crash are swept on open; other files are left alone", async (t) => {
+  const { store, open, root, documentFile } = await fixture(t);
+  const created = await store.create("blank");
+  const uuid = "0f8e2c1a-7d5b-4c9e-8a3f-2b6d1e4c7a90";
+  const workflows = path.join(root, "create-images", "workflows");
+  const stagedDocument = path.join(workflows, `.${created.id}.json.${uuid}.tmp`);
+  const stagedIndex = path.join(root, "create-images", `.index.json.${uuid}.tmp`);
+  const unrelated = path.join(workflows, ".notes.txt");
+  for (const file of [stagedDocument, stagedIndex, unrelated]) await writeFile(file, "partial");
+  const reopened = await open();
+  await assert.rejects(readFile(stagedDocument), { code: "ENOENT" });
+  await assert.rejects(readFile(stagedIndex), { code: "ENOENT" });
+  assert.equal(await readFile(unrelated, "utf8"), "partial");
+  assert.ok(await readFile(documentFile(created.id), "utf8"));
+  assert.deepEqual(reopened.list().map((entry) => entry.id), [created.id]);
+});
+
+test("node ids follow the stored document through save, reopen and delete", async (t) => {
+  const { store, open } = await fixture(t);
+  const created = await store.create("blank");
+  assert.deepEqual([...(store.nodeIds(created.id) ?? [])], []);
+  const at = { x: 0, y: 0 };
+  const edited = { ...created, nodes: [{ id: "p1", type: "prompt", position: at, data: { text: "" } }], edges: [] };
+  assert.equal((await store.save(created.id, 1, edited)).ok, true);
+  assert.deepEqual([...(store.nodeIds(created.id) ?? [])], ["p1"]);
+  const reopened = await open();
+  assert.deepEqual([...(reopened.nodeIds(created.id) ?? [])], ["p1"]);
+  assert.equal(await reopened.delete(created.id), true);
+  assert.equal(reopened.nodeIds(created.id), undefined);
 });
 
 test("imageInputAssets lists each workflow's distinct Image Input assets and skips workflows without any", async (t) => {
@@ -374,4 +428,15 @@ test("imageInputAssets lists each workflow's distinct Image Input assets and ski
   );
   await store.create("blank");
   assert.deepEqual(await store.imageInputAssets(), { [withImages.id]: [first.assetId, second.assetId].sort() });
+});
+
+test("imageInputAssets answers from what the store wrote, without re-reading every file", async (t) => {
+  const { store, assets, documentFile } = await fixture(t);
+  const asset = await assets.put({ bytes: pngBytes(4, 4, 13) });
+  const created = await store.create("blank");
+  const nodes = [{ id: "a", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: asset.assetId } }];
+  assert.equal((await store.save(created.id, 1, { ...created, nodes, edges: [] })).ok, true);
+  // A file damaged behind the store's back is not re-parsed by a list.
+  await writeFile(documentFile(created.id), "{ damaged");
+  assert.deepEqual(await store.imageInputAssets(), { [created.id]: [asset.assetId] });
 });

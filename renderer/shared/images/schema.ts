@@ -35,10 +35,11 @@ export type ImageNodeType = (typeof IMAGE_NODE_TYPES)[number];
  * Workflow, node, edge and run IDs. `crypto.randomUUID()` values match. IDs key plain objects
  * (latest outputs, output sequences, image counts), so the names `Object.prototype` already
  * carries are refused; the leading-character rule already refuses `__proto__` and the other
- * underscore names.
+ * underscore names. Lowercase only: a workflow ID is a file name, and on a case-insensitive
+ * volume (APFS) `ABC` and `abc` would name the same file while comparing as different IDs.
  */
 export const IMAGE_WORKFLOW_ID_PATTERN =
-  /^(?!(?:constructor|hasOwnProperty|isPrototypeOf|propertyIsEnumerable|toLocaleString|toString|valueOf)$)[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
+  /^(?!(?:constructor|hasOwnProperty|isPrototypeOf|propertyIsEnumerable|toLocaleString|toString|valueOf)$)[a-z0-9][a-z0-9_-]{0,127}$/u;
 /** Image Input assets are studio asset store content addresses (sha256 hex). */
 export const IMAGE_ASSET_ID_PATTERN = /^[0-9a-f]{64}$/u;
 

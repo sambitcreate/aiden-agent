@@ -13,7 +13,7 @@ import { deletionOp, interpretEdgeChanges, interpretNodeChanges, toFlowEdges, to
 import { LeaveGuard } from "./leave-guard";
 import { ADDABLE_NODES, NODE_COMPONENTS } from "./nodes/registry";
 import { RunPanel } from "./run-panel";
-import { outputsForNode } from "./run-view-core";
+import { issueNotices, outputsForNode } from "./run-view-core";
 import { useImageRun } from "./use-image-run";
 import { useWorkflowController, type SaveState } from "./use-workflow-controller";
 
@@ -22,6 +22,7 @@ const SAVE_LABELS: Record<SaveState, string> = {
   saving: "Saving…",
   unsaved: "Unsaved changes",
   conflict: "Changed elsewhere",
+  deleted: "Deleted",
   error: "Not saved",
 };
 
@@ -55,19 +56,16 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
     () => new Map((run.snapshot?.attempts ?? []).map((attempt) => [attempt.nodeId, attempt])),
     [run.snapshot],
   );
+  // Every node reads this context, so it changes only when what nodes show changes: typing in
+  // one prompt or dragging a node re-renders that node, not all of them.
+  const { apply, models, assetUrls, latestOutputs, staleNodeIds, importImage } = controller;
+  const { snapshot, prepare } = run;
+  const running = run.running || run.busy;
+  const outputsFor = React.useCallback((nodeId: string) => outputsForNode(snapshot, latestOutputs, nodeId), [snapshot, latestOutputs]);
+  const runFromHere = React.useCallback((nodeId: string) => prepare({ kind: "from-node", nodeId }), [prepare]);
   const context = React.useMemo<WorkflowEditorContextValue>(
-    () => ({
-      apply: controller.apply,
-      models: controller.models,
-      assetUrls: controller.assetUrls,
-      attempts,
-      outputsFor: (nodeId) => outputsForNode(run.snapshot, controller.latestOutputs, nodeId),
-      running: run.running || run.busy,
-      stale: controller.staleNodeIds,
-      importImage: controller.importImage,
-      runFromHere: (nodeId) => run.prepare({ kind: "from-node", nodeId }),
-    }),
-    [controller, attempts, run],
+    () => ({ apply, models, assetUrls, attempts, outputsFor, running, stale: staleNodeIds, importImage, runFromHere }),
+    [apply, models, assetUrls, attempts, outputsFor, running, staleNodeIds, importImage, runFromHere],
   );
 
   if (controller.status !== "ready" || !doc) {
@@ -89,10 +87,17 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
 
   const nodeTitles = new Map(doc.nodes.map((node) => [node.id, node.title ?? IMAGE_NODE_DEFINITIONS[node.type].title]));
   const notices = [
-    ...(controller.message ? [controller.message] : []),
-    ...(controller.saveState === "error" ? ["Aiden could not save your latest changes."] : []),
-    ...run.issues.map((issue) => issue.message),
+    ...(controller.message ? [{ key: "message", text: controller.message }] : []),
+    ...issueNotices(run.issues, nodeTitles),
   ];
+  const saveError = controller.saveState === "error" ? controller.saveError : null;
+  const conflict = controller.saveState === "conflict";
+  const deleted = controller.saveState === "deleted";
+  const dismissNotices = () => {
+    controller.dismissMessage();
+    controller.dismissSaveError();
+    run.clearIssues();
+  };
 
   return (
     <WorkflowEditorContext.Provider value={context}>
@@ -156,24 +161,46 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
                 </Button>
               ))}
             </div>
-            {notices.length > 0 || controller.saveState === "conflict" ? (
+            {notices.length > 0 || saveError !== null || conflict || deleted ? (
               <Callout role="alert" color="red" className="absolute bottom-3 left-14 max-w-md">
-                {notices.map((notice) => <Text key={notice}>{notice}</Text>)}
-                {controller.saveState === "conflict" ? (
+                {notices.map((notice) => <Text key={notice.key}>{notice.text}</Text>)}
+                {saveError !== null ? <Text>Aiden could not save your latest changes. {saveError}</Text> : null}
+                {notices.length > 0 || saveError !== null ? (
+                  <div className="flex flex-wrap gap-1">
+                    {saveError !== null ? <Button size="small" variant="muted" onClick={controller.retrySave}>Retry</Button> : null}
+                    <Button size="small" variant="transparent" onClick={dismissNotices}>Dismiss</Button>
+                  </div>
+                ) : null}
+                {conflict ? (
                   <>
                     <Text>This workflow changed somewhere else. Keep your version, or discard your changes and reload.</Text>
                     <div className="flex flex-wrap gap-1">
-                      <Button size="small" variant="muted" onClick={controller.keepMine}>Keep My Version</Button>
-                      <Button size="small" variant="transparent" onClick={() => setConfirmReload(true)}>Discard and Reload…</Button>
+                      <Button size="small" variant="muted" disabled={controller.resolving} onClick={controller.keepMine}>Keep My Version</Button>
+                      <Button size="small" variant="transparent" disabled={controller.resolving} onClick={() => setConfirmReload(true)}>Discard and Reload…</Button>
                     </div>
                   </>
-                ) : (
-                  <Button size="small" variant="transparent" className="self-start" onClick={() => { controller.dismissMessage(); run.clearIssues(); }}>Dismiss</Button>
-                )}
+                ) : null}
+                {deleted ? (
+                  <>
+                    <Text>This workflow was deleted, so your changes cannot be saved.</Text>
+                    <Button
+                      size="small"
+                      variant="muted"
+                      className="self-start"
+                      onClick={() => {
+                        // Nothing is left to save to; leaving drops the edits instead of asking.
+                        controller.discard();
+                        void navigate({ to: "/images" });
+                      }}
+                    >
+                      Back to Images
+                    </Button>
+                  </>
+                ) : null}
               </Callout>
             ) : null}
           </div>
-          <RunPanel snapshot={run.snapshot} nodeTitles={nodeTitles} onStop={run.stop} onRetry={(nodeId, kind) => run.prepare({ kind, nodeId })} />
+          <RunPanel snapshot={run.snapshot} nodeTitles={nodeTitles} busy={run.busy} onStop={run.stop} onRetry={(nodeId, kind) => run.prepare({ kind, nodeId })} />
         </div>
         <ConsentSheet plan={run.plan} busy={run.busy} onCancel={run.dismiss} onConfirm={run.confirm} returnFocus={() => runAction.current} />
         <AlertDialog

@@ -11,6 +11,7 @@ import type {
 import {
   boundedCanvasPosition,
   boundedPromptText,
+  boundedViewport,
   commitEditorHistory,
   createEditorHistory,
   decideCanvasConnection,
@@ -121,7 +122,7 @@ export function sessionReducer(state: EditorSession, action: SessionAction): Edi
     case "redo":
       return { ...state, history: redoEditorHistory(state.history), message: null, lastEdit: null };
     case "viewport":
-      return { ...state, viewport: action.viewport };
+      return { ...state, viewport: boundedViewport(action.viewport) };
     case "dismiss":
       return { ...state, message: null };
   }
@@ -139,6 +140,8 @@ export interface AutosaveState {
   dirty: boolean;
   saving: boolean;
   conflict: boolean;
+  /** The workflow no longer exists; nothing more can be saved to it. */
+  deleted: boolean;
   error: string | null;
 }
 
@@ -163,7 +166,7 @@ export function createAutosave(options: {
   let timer: unknown = null;
   let inFlight: Promise<void> | null = null;
   let disposed = false;
-  let state: AutosaveState = { dirty: false, saving: false, conflict: false, error: null };
+  let state: AutosaveState = { dirty: false, saving: false, conflict: false, deleted: false, error: null };
   const publish = (patch: Partial<AutosaveState>) => {
     state = { ...state, ...patch };
     options.onState(state);
@@ -176,37 +179,41 @@ export function createAutosave(options: {
 
   const saveOnce = async (): Promise<void> => {
     while (inFlight) await inFlight;
-    if (!pending || state.conflict || disposed) return;
+    if (!pending || state.conflict || state.deleted || disposed) return;
     const document = pending;
     pending = null;
-    publish({ saving: true });
-    const attempt = (async () => {
-      try {
-        const result = await options.save({ ...document, revision: base }, base);
-        if (result.ok) {
-          base = result.revision;
-          publish({ error: null });
-        } else {
-          // Keep the edit: closing now must still warn that it is unsaved.
-          pending ??= document;
-          if (result.reason === "invalid") publish({ error: result.issues?.[0] ?? "This workflow could not be saved." });
-          else publish({ conflict: true });
-        }
-      } catch (error) {
-        pending ??= document;
-        publish({ error: error instanceof Error ? error.message : "Saving failed." });
-      } finally {
-        inFlight = null;
-        publish({ saving: false, dirty: pending !== null });
-      }
-    })();
+    // Claim the in-flight slot before calling save: a save that throws synchronously still
+    // releases it, so later flushes never wait on a slot nobody will clear.
+    let release!: () => void;
+    const attempt = new Promise<void>((resolve) => (release = resolve));
     inFlight = attempt;
-    await attempt;
+    // A retry starts clean; a failure publishes its reason again when it ends.
+    publish({ saving: true, error: null });
+    try {
+      const result = await options.save({ ...document, revision: base }, base);
+      if (result.ok) {
+        base = result.revision;
+        publish({ error: null });
+      } else {
+        // Keep the edit: closing now must still warn that it is unsaved.
+        pending ??= document;
+        if (result.reason === "invalid") publish({ error: result.issues?.[0] ?? "This workflow could not be saved." });
+        else if (result.reason === "not-found") publish({ deleted: true });
+        else publish({ conflict: true });
+      }
+    } catch (error) {
+      pending ??= document;
+      publish({ error: error instanceof Error && error.message ? error.message : "Saving failed." });
+    } finally {
+      if (inFlight === attempt) inFlight = null;
+      publish({ saving: false, dirty: pending !== null });
+      release();
+    }
   };
 
   return {
     schedule(document) {
-      if (state.conflict || disposed) return;
+      if (state.conflict || state.deleted || disposed) return;
       pending = document;
       publish({ dirty: true });
       cancelTimer();
@@ -217,12 +224,12 @@ export function createAutosave(options: {
     },
     async flush() {
       cancelTimer();
-      while (pending && !state.conflict && !disposed) {
+      while (pending && !state.conflict && !state.deleted && !disposed) {
         await saveOnce();
         if (state.error !== null && pending) break; // a failing transport must not spin
       }
       while (inFlight) await inFlight;
-      return { ok: !state.conflict && !state.dirty && state.error === null, revision: base };
+      return { ok: !state.conflict && !state.deleted && !state.dirty && state.error === null, revision: base };
     },
     dispose() {
       disposed = true;

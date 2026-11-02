@@ -41,8 +41,40 @@ test("listModels lists configured image models and hides auto routers", async ()
   ]);
   assert.deepEqual(await images.listModels(), [
     { provider: "openrouter", providerLabel: "OpenRouter", model: "black-forest-labs/flux.2-pro", label: "FLUX.2 Pro", acceptsReferences: false, textOutput: true },
-    { provider: "openrouter", providerLabel: "OpenRouter", model: NANO, label: "Google: Nano Banana 2 (Gemini 3.1 Flash Image)", acceptsReferences: true, textOutput: true },
+    { provider: "openrouter", providerLabel: "OpenRouter", model: NANO, label: "Google: Nano Banana 2 (Gemini 3.1 Flash Image)", acceptsReferences: true, maxReferences: 4, textOutput: true },
   ]);
+});
+
+test("a model's own reference limit is listed and enforced before anything is sent", async () => {
+  const fake = port(undefined, [{ id: "editor", maxReferences: 1 }, { id: NANO, maxReferences: 9 }]);
+  assert.deepEqual(
+    (await fake.port.listModels()).map(({ model, maxReferences }) => [model, maxReferences]),
+    [["editor", 1], [NANO, 4]],
+    "never above Aiden's four",
+  );
+  const reference = { mimeType: "image/png", bytes: pngBytes(8, 8, 1) };
+  const refused = await fake.port.preflight(request({ model: "editor", references: [reference, reference] }));
+  assert.deepEqual(
+    refused.kind === "failed" ? [refused.code, refused.message] : refused.kind,
+    ["references-unsupported", "This image request has 2 reference images. This model accepts at most 1."],
+  );
+  const ready = await fake.port.preflight(request({ model: "editor", references: [reference] }));
+  assert.equal(ready.kind, "ready");
+  assert.equal(fake.calls.length, 0, "a passed preflight still sends nothing");
+  assert.equal(ready.kind === "ready" ? (await ready.send()).kind : "", "images");
+  assert.equal(fake.calls.length, 1);
+});
+
+test("listModels lists nothing, rather than failing, when the image registry cannot load", async () => {
+  const fake = fakeImageModels();
+  const images = createPiImageGenerationPort({
+    models: fake.models,
+    providerLabel: (id) => id,
+    prepare: async () => {
+      throw new Error("image settings unreadable");
+    },
+  });
+  assert.deepEqual(await images.listModels(), []);
 });
 
 test("listModels marks the Settings default and names each model's maker", async () => {
@@ -127,6 +159,31 @@ test("more than four images are truncated, not failed; undecodable output is out
   const broken = await fake.port.generate(request());
   assert.equal(broken.kind === "failed" ? broken.code : broken.kind, "output-invalid");
   assert.deepEqual(fake.usage.map((record) => record.status), ["completed", "completed"]);
+});
+
+test("unsupported image types are dropped before the four-image cap, so valid images are kept", async () => {
+  const fake = port(() => ({ kind: "images", count: 5, mimeTypes: ["image/gif", "image/gif", "image/gif", "image/gif", "image/png"] }));
+  const result = await fake.port.generate(request());
+  assert.deepEqual(
+    result.kind === "images" ? [result.images.map((image) => image.mimeType), result.truncated] : result,
+    [["image/png"], true],
+  );
+});
+
+test("a reply with text and no images surfaces the model's words on one bounded line", async () => {
+  const fake = port((index) =>
+    index === 0
+      ? { kind: "images", count: 0, text: "I can't create that image.\n\nIt depicts a real person." }
+      : { kind: "images", count: 0, text: "x".repeat(1_000) },
+  );
+  const refused = await fake.port.generate(request());
+  assert.deepEqual(
+    refused.kind === "failed" ? [refused.code, refused.message] : refused,
+    ["output-invalid", "The model returned no images. It said: “I can't create that image. It depicts a real person.”"],
+  );
+  const long = await fake.port.generate(request());
+  assert.ok(long.kind === "failed" && long.message.length < 340 && long.message.endsWith("…”"));
+  assert.deepEqual(fake.usage.map((record) => record.status), ["completed", "completed"], "the paid call is still accounted");
 });
 
 test("unknown and auto-router models are refused without a request", async () => {

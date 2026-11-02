@@ -29,6 +29,7 @@ interface Setup {
   openRouterModels?: () => ImageModel<ImageApi>[];
   wrapSettings?: (store: ImageGenerationSettingsStore) => ImageGenerationSettingsStore;
   catalogFetchTimeoutMs?: number;
+  catalogFetchCooldownMs?: number;
 }
 
 async function setup(t: test.TestContext, options: Setup = {}) {
@@ -46,6 +47,7 @@ async function setup(t: test.TestContext, options: Setup = {}) {
     ...(options.fetch ? { fetch: options.fetch } : {}),
     ...(options.onWarning ? { onWarning: options.onWarning } : {}),
     ...(options.catalogFetchTimeoutMs ? { catalogFetchTimeoutMs: options.catalogFetchTimeoutMs } : {}),
+    ...(options.catalogFetchCooldownMs !== undefined ? { catalogFetchCooldownMs: options.catalogFetchCooldownMs } : {}),
   });
   return { runtime, credentials, root };
 }
@@ -336,6 +338,45 @@ test("Fetch latest models gives up with a timed-out error when the provider neve
     clearTimeout(keepAlive);
   }
   assert.equal((await runtime.getState()).providers.find((provider) => provider.id === "openrouter")?.fetchedAt, null);
+});
+
+const OPENROUTER_CATALOG = {
+  data: [{ id: "acme/painter-2", name: "Acme: Painter 2", architecture: { input_modalities: ["text"], output_modalities: ["image"] } }],
+};
+
+test("Fetch latest models is single-flight per provider: concurrent presses make one request", async (t) => {
+  let answer: (() => void) | undefined;
+  const { fetch, requests } = fakeFetch(
+    () => new Promise<Response>((resolve) => (answer = () => resolve(json(OPENROUTER_CATALOG)))),
+  );
+  const { runtime } = await setup(t, { fetch, catalogFetchCooldownMs: 0 });
+  const presses = [runtime.fetchModels("openrouter"), runtime.fetchModels("openrouter"), runtime.fetchModels("openrouter")];
+  for (let turn = 0; turn < 100 && !answer; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  answer!();
+  const states = await Promise.all(presses);
+  assert.equal(requests.length, 1);
+  for (const state of states) assert.ok(state.models.some((model) => model.id === "acme/painter-2"));
+  // Once it has settled, a new press (cooldown off) goes to the network again.
+  const again = runtime.fetchModels("openrouter");
+  for (let turn = 0; turn < 100 && requests.length < 2; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  answer!();
+  await again;
+  assert.equal(requests.length, 2);
+});
+
+test("a repeat Fetch latest models right after a success is answered without the network", async (t) => {
+  const { fetch, requests } = fakeFetch(() => json(OPENROUTER_CATALOG));
+  const { runtime } = await setup(t, { fetch, catalogFetchCooldownMs: 60_000 });
+  await runtime.fetchModels("openrouter");
+  const repeat = await runtime.fetchModels("openrouter");
+  assert.equal(requests.length, 1);
+  assert.ok(repeat.models.some((model) => model.id === "acme/painter-2"));
+  // The cooldown is per provider and only follows a success.
+  const failing = fakeFetch(() => json({ error: "nope" }, 500));
+  const other = await setup(t, { fetch: failing.fetch, catalogFetchCooldownMs: 60_000 });
+  await assert.rejects(other.runtime.fetchModels("openrouter"));
+  await assert.rejects(other.runtime.fetchModels("openrouter"));
+  assert.equal(failing.requests.length, 2);
 });
 
 test("changing one provider's models leaves the other providers' registrations untouched", async (t) => {

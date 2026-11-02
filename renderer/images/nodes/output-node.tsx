@@ -5,6 +5,7 @@ import type { OutputRef } from "../../shared/images/run-types";
 import { useWorkflowEditor } from "../editor-context";
 import type { WorkflowFlowNode } from "../flow-adapter-core";
 import { STALE_LABEL, ownValue } from "../run-view-core";
+import { ImageNodeFrame } from "./node-frame";
 import { NodePorts } from "./node-ports";
 
 const GALLERY_LIMIT = 4;
@@ -40,11 +41,11 @@ export function OutputNode({ id, data, selected }: NodeProps<WorkflowFlowNode>) 
   const node = data.node;
   if (node.type !== "output") return null;
   return (
-    <div className="image-node">
+    <ImageNodeFrame>
       <CanvasNodeChrome title={node.title ?? node.data.label ?? "Output"} selected={selected}>
         <OutputNodeBody images={editor.outputsFor(id)} urls={editor.assetUrls} stale={editor.stale.has(id)} />
       </CanvasNodeChrome>
       <NodePorts type="output" />
-    </div>
+    </ImageNodeFrame>
   );
 }

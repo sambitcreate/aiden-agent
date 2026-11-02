@@ -54,6 +54,9 @@ import {
   type ImageGenerationSettingsStore,
 } from "./settings-store.js";
 
+/** A repeat Fetch latest models for the same provider within this window reuses the last result. */
+const IMAGE_CATALOG_FETCH_COOLDOWN_MS = 5_000;
+
 type Fetch = typeof fetch;
 
 /** The only ambient fallback for each image provider. Never the chat env vars. */
@@ -95,6 +98,8 @@ export interface ImageGenerationRuntimeDeps {
   pollIntervalMs?: number;
   /** Overall limit for one Fetch latest models. Default IMAGE_CATALOG_FETCH_TIMEOUT_MS. */
   catalogFetchTimeoutMs?: number;
+  /** After a successful Fetch latest models, a repeat for that provider within this window is answered from the result. Default 5 s. */
+  catalogFetchCooldownMs?: number;
   onWarning?(message: string): void;
 }
 
@@ -333,6 +338,9 @@ export class ImageGenerationRuntime {
   /** Per-provider key presence, computed lazily and dropped on every key change. */
   private keyCache: Promise<KeyStatuses> | undefined;
   private registration: Promise<void> = Promise.resolve();
+  /** One Fetch latest models per provider at a time; a concurrent press joins it. */
+  private readonly catalogFetches = new Map<ImageGenerationProviderId, Promise<ImageGenerationState>>();
+  private readonly catalogFetchedAt = new Map<ImageGenerationProviderId, number>();
   readonly models: ImageGenerationModels;
 
   constructor(private readonly deps: ImageGenerationRuntimeDeps) {
@@ -568,6 +576,8 @@ export class ImageGenerationRuntime {
 
   private invalidateKeys(): void {
     this.keyCache = undefined;
+    // A new key may see a different catalog: the next Fetch latest models goes to the network.
+    this.catalogFetchedAt.clear();
   }
 
   private async resolvedKey(provider: ImageGenerationProviderId): Promise<string | undefined> {
@@ -728,8 +738,39 @@ export class ImageGenerationRuntime {
     });
   }
 
-  /** The user-pressed Fetch latest models. The only network path in this runtime besides generation. */
+  /**
+   * The user-pressed Fetch latest models. The only network path in this runtime besides generation.
+   * Single-flight per provider: a press while one is running joins it (the first press's signal
+   * governs the request; a joiner's own signal only stops its wait). A repeat shortly after a
+   * success is answered from that result without contacting the provider again.
+   */
   async fetchModels(provider: ImageGenerationProviderId, signal?: AbortSignal): Promise<ImageGenerationState> {
+    let pending = this.catalogFetches.get(provider);
+    if (!pending) {
+      const fetchedAt = this.catalogFetchedAt.get(provider);
+      const cooldown = this.deps.catalogFetchCooldownMs ?? IMAGE_CATALOG_FETCH_COOLDOWN_MS;
+      if (fetchedAt !== undefined && Date.now() - fetchedAt < cooldown) return this.getState();
+      pending = this.fetchModelsOnce(provider, signal).then((state) => {
+        this.catalogFetchedAt.set(provider, Date.now());
+        return state;
+      });
+      const settled = pending.finally(() => {
+        if (this.catalogFetches.get(provider) === settled) this.catalogFetches.delete(provider);
+      });
+      this.catalogFetches.set(provider, settled);
+      settled.catch(() => undefined);
+      return settled;
+    }
+    if (!signal) return pending;
+    signal.throwIfAborted();
+    return new Promise<ImageGenerationState>((resolve, reject) => {
+      const stop = () => reject(signal.reason);
+      signal.addEventListener("abort", stop, { once: true });
+      pending.then(resolve, reject).finally(() => signal.removeEventListener("abort", stop));
+    });
+  }
+
+  private async fetchModelsOnce(provider: ImageGenerationProviderId, signal?: AbortSignal): Promise<ImageGenerationState> {
     await this.ready();
     const key = provider === "openrouter" ? undefined : await this.resolvedKey(provider);
     // The whole fetch, every page included, has one deadline.

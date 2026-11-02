@@ -2,7 +2,7 @@
 
 > **Reconciled with ADR-F (2026-10-07):** the shared studio asset store's record field is `mediaType` and `put` takes `{ bytes, declaredMimeType? }`; holder keys are `images-workflow:<id>` and `images-run:<id>`; grants come from `studioAssetGrants.issue(owner, assetId, rendition)` → `aiden-asset://grant/<token>`. The provider port keeps Pi's `mimeType` naming; the coordinator maps `mimeType` → `declaredMimeType` at `put`. Validation accepts PNG/JPEG/WebP.
 
-Status: Proposed. Needs owner approval (Phase 0 gate).
+Status: Accepted. CI-1 merged in [#382](https://github.com/sambitcreate/aiden-agent/pull/382) and [#383](https://github.com/sambitcreate/aiden-agent/pull/383) (2026-10-08).
 Date: 2026-10-07
 Baseline: `main` @ `bd232b85` (Pi 1.0.3)
 Parent plan: [design-studio-create-images-rebuild-plan.md](design-studio-create-images-rebuild-plan.md), §6 ADR-CI and §9 Track CI
@@ -49,10 +49,12 @@ interface ImageGenerationPort {
 }
 ```
 
+*Amended 2026-10-31:* `ImageModelOption` also carries `maxReferences` (the model's `inputLimits.images.maxPerRequest`, capped at 4), and the port gains `preflight(request)`, which runs every local check (registry load, unknown/disabled model, auto router, reference support and limits, 8 MiB / 40 MP) and returns either a failure or `send()`. The executor runs `preflight` before claiming the ledger request, so a refusal that never left the machine is not counted or shown as "may have been billed". `listModels` returns `[]` when the registry fails to load. Output items that are not PNG/JPEG/WebP are dropped before the 4-image cap, and a reply with no usable images shows the model's text (one line, at most 280 characters).
+
 - **Implementation.** `createPiImageGenerationPort({ models, providerLabel, onUsage })` takes `models: Pick<Models, "getAvailableOfType" | "getModelOfType" | "generateImages">`, the same `Pick` that `PiModelToolsHost` uses. Production passes `providerRegistry.models`.
 - **Shared validation.** Extract `validImages` from `pi-model-tools.ts` into an exported `parseGeneratedImages()` in `main/services/pi-model-image-output.ts`. This is a behavior-preserving move, and `generate_image` keeps using it. References reuse `resolvePiModelImageInputs` bounds through an `ImageContent` adapter.
 - **Usage.** Each provider call records exactly one usage entry through `modelOperationUsageRecord(..., "create-images")`. This adds `"create-images"` to `UsageRequestSource` / `REQUEST_SOURCES`. Status is `completed`, `failed` or `cancelled`, and the record carries no prompts or paths.
-- **Picker source.** `getAvailableOfType("image")` returns only providers with complete auth, from last-known lists. The port **never** calls `models.refresh()`, so it adds no catalog network (AGENTS.md posture). It drops `openrouter/auto*`, because consent must name the real model. Without a configured provider, the picker shows "Add an OpenRouter key in Settings → Providers".
+- **Picker source.** *Reconciled 2026-10-13 ([#443](https://github.com/sambitcreate/aiden-agent/pull/443)): production now passes the dedicated image-generation registry (`imageGeneration.models`, `main/services/create-images/main.ts`) instead of `providerRegistry.models`, and the empty state points to Settings → Image Generation.* `getAvailableOfType("image")` returns only providers with complete auth, from last-known lists. The port **never** calls `models.refresh()`, so it adds no catalog network (AGENTS.md posture). It drops `openrouter/auto*`, because consent must name the real model. Without a configured provider, the picker shows "Add an OpenRouter key in Settings → Providers".
 - **Direct Google: defer to CI-2, conditional.** It needs a wrapped `google` provider with hand-maintained image models plus an `@google/genai` image implementation. `@google/genai` 2.24.0 is already a dependency. Credentials would follow the `tts/credentials.ts` explicit-source pattern: a saved Google key reused only after the user opts in, or `aiden-internal:images-api-key`, failing closed. That edits `provider-registry.ts`, a shared core, and would add a second unvalidated provider before the first real image exists, which is the old branch's failure mode. Include it in CI-1 only if the owner has no OpenRouter key (Q2).
 - **Test seam: no product mock.**
   - *Unit and integration:* `createModels()` + `setProvider(createProvider({ id: "test-images", auth, models: [imageModel], images: { "test-images": { generateImages } } }))`. The fake counts calls, records signals and can return images, errors, 429s, late results and over-limit outputs. This exercises the real `Models` auth and dispatch path.
@@ -71,6 +73,8 @@ interface ImageRunConsentPlan { consentId: string; workflowId: string; workflowR
   totalRequests: number; estimate: { kind: "unknown" };   // see Q4
   createdAt: number; expiresAt: number }                  // expiresAt = createdAt + 5 min
 ```
+
+*Amended 2026-10-31:* `prepare` and the start re-check refuse, with node-attributed issues and no consent, a plan whose references the model cannot accept (`references_unsupported`), whose worst-case reference count exceeds the model's or Aiden's limit (`too_many_references`; each earlier Generate in the run counts as up to 4 images, reported as `pendingReferenceCount` with `pendingReferenceSteps`), or whose known references exceed 8 MiB or 40 MP (`reference_bytes`, `reference_pixels`). At most 4 runs may be active across all workflows (`too_many_runs` / `too-many-runs`). Before a paid request the executor checks the asset store has room for a worst-case output, running one garbage collection before it refuses; a storage failure after a paid request is reported as `storage-full` or `storage-failed` (never `output-invalid`), and quit waits up to 1.5 s for provider cancels.
 
 - **`prepare-run`** loads the **saved** document at `workflowRevision` and rejects a stale revision, so the renderer flushes autosave first. It builds the plan with the scheduler's planner. It stores the plan in an in-memory, single-use map keyed by a random `consentId` and bound to the requesting `rendererDocumentOwner`. It sends nothing to a provider.
 - **`start-run`** consumes the consent. It re-checks expiry, document owner, document revision, plan digest and model availability, then creates the run with `request_limit = totalRequests`.
@@ -121,7 +125,7 @@ CREATE INDEX live_attempts ON attempts(state) WHERE state IN ('queued','running'
 - **Restart.** In the reconcile chain:
   - Run `UPDATE attempts SET state='interrupted' WHERE state IN ('queued','running')`, plus the matching `runs` update.
   - Attempts with `submitted_at` show "may have been billed". There is no resubmit.
-- **Retention.** Keep the 100 newest runs **plus**, for each workflow, the run holding each node's latest succeeded output. Pruning runs after each run finishes and once at startup.
+- **Retention.** Keep the 100 newest runs **plus**, for each workflow, the run holding each node's latest succeeded output. Pruning runs after each run finishes and once at startup. *Amended 2026-10-31:* the latest-output exemption applies only to nodes still in the workflow document (a deleted workflow keeps none; a workflow whose file exists but can't be read keeps all, since it is kept for repair), ordered by attempt id rather than `finished_at`. On open, Create Images reconciles its `images-*` holds against the ledger and documents, and a corrupt ledger is quarantined and recreated because it is history only.
 - **Assets** go to the shared store (ADR-F). Each output asset is retained by holder `images-run:<runId>`, and each Image Input asset by `images-workflow:<id>`. Prune and delete release holders. If ADR-F lands plain ref-counts, use one increment per output row. GC belongs to F.
 - **Perf target.** A synthetic 500-node run against a zero-latency fake port must spend **< 1 s total** inside ledger calls, measured by wrapping the ledger. It runs as a separate `test:create-images:perf` npm script filed into an existing CI lane (ADR-F: no new lanes), not in the default pretest chain. The old branch took 114 s.
 
