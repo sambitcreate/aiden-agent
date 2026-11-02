@@ -218,3 +218,20 @@ for (const ending of ["stop", "access-changed", "shutdown"] as const) {
     assert.equal(follows.all()[0]?.noticesSent, 0);
   });
 }
+
+test("a workspace change suspends a due poll until commit or rollback", async () => {
+  const { follows, setAnswer, posted } = harness();
+  let finish!: (value: FollowReadResult) => void;
+  setAnswer(() => new Promise((resolve) => { finish = resolve; }));
+  follows.follow(input());
+  const resume = follows.pauseChats(["chat-1"]);
+  finish({ kind: "ok", observation: open() });
+  await follows.kick();
+  assert.equal(posted.length, 0);
+  assert.equal(follows.list("chat-1")[0]?.state, "following");
+  setAnswer(() => ({ kind: "ok", observation: open() }));
+  resume();
+  await follows.kick();
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0]?.chatId, "chat-1");
+});

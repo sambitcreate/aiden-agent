@@ -313,11 +313,14 @@ export async function startFollowThrough(): Promise<void> {
   // Older releases could leave persisted follows behind after access was revoked.
   for (const follow of pullRequestFollows.all()) {
     if (follow.state !== "following") continue;
-    const chat = await chatStore.get(follow.chatId);
-    const workspace = chat?.workspaceId && await configStore.getWorkspace(chat.workspaceId);
-    if (!workspace || !workspace.folderPath || workspace.permission === "none") {
-      pullRequestFollows.stop(follow.chatId, follow, "access-changed");
+    try {
+      const chat = await chatStore.get(follow.chatId);
+      const workspace = chat?.workspaceId ? await configStore.getWorkspace(chat.workspaceId) : undefined;
+      if (workspace?.folderPath && workspace.permission !== "none") continue;
+    } catch (error) {
+      logger.warn("follow-through", "Could not verify workspace access for a restored pull request follow.", error);
     }
+    pullRequestFollows.stop(follow.chatId, follow, "access-changed");
   }
   pullRequestFollows.start();
 }
@@ -346,16 +349,29 @@ export function restoreChatFollowThrough(chatId: string): void {
 }
 
 /** Folder access changed: what ran in that folder stops. */
-export async function closeWorkspaceFollowThrough(workspaceId: string): Promise<void> {
-  const chats = await chatStore.list(workspaceId);
-  for (const chat of chats) {
-    for (const follow of pullRequestFollows.list(chat.id)) {
-      pullRequestFollows.stop(chat.id, follow, "access-changed");
-    }
+export async function closeWorkspaceFollowThrough(workspaceId: string): Promise<(committed: boolean) => Promise<void>> {
+  const chatIds = (await chatStore.list(workspaceId)).map((chat) => chat.id);
+  const resumePolls = pullRequestFollows.pauseChats(chatIds);
+  try {
+    await Promise.all([doneWhen.interruptWorkspace(workspaceId), commandHandoffs.cancelAndSettle(workspaceId)]);
+    await backgroundJobs.stopWorkspace(workspaceId, "access-changed");
+  } catch (error) {
+    resumePolls();
+    throw error;
   }
-  await Promise.all([doneWhen.clearWorkspace(workspaceId), commandHandoffs.cancelAndSettle(workspaceId)]);
-  await backgroundJobs.stopWorkspace(workspaceId, "access-changed");
-  await saveChain;
+  return async (committed) => {
+    try {
+      if (committed) {
+        for (const chatId of chatIds) {
+          for (const follow of pullRequestFollows.list(chatId)) pullRequestFollows.stop(chatId, follow, "access-changed");
+        }
+        await doneWhen.clearWorkspace(workspaceId);
+        await saveChain;
+      }
+    } finally {
+      resumePolls();
+    }
+  };
 }
 
 // ── Reads and actions for the renderer and tools ───────────────────────────
@@ -418,12 +434,19 @@ async function configureFollowThrough(
 
 /** A move invalidates in-flight setup. An active check or undelivered result
  * still belongs to the old workspace, so the person must stop it first. */
-export function beginFollowThroughMove(chatId: string): () => void {
+export async function beginFollowThroughMove(chatId: string): Promise<() => void> {
   if (noticeDelivery.hasPending(chatId)) throw new Error("Wait for this chat’s follow-up message before changing workspaces.");
-  if (doneWhen.isActive(chatId) || backgroundJobs.hasCheckGroup(chatId) || pullRequestFollows.list(chatId).some((follow) => follow.state === "following")) {
+  if (doneWhen.isActive(chatId) || pullRequestFollows.list(chatId).some((follow) => follow.state === "following")) {
     throw new Error("Stop this chat’s check or pull request follow before changing workspaces.");
   }
-  return chatConfiguration.begin(chatId);
+  const finish = chatConfiguration.begin(chatId);
+  try {
+    await backgroundJobs.confirmChatChecksStopped(chatId);
+    return finish;
+  } catch (error) {
+    finish();
+    throw error;
+  }
 }
 
 export function setDoneWhenCheck(chatId: string, command: string): Promise<void> {

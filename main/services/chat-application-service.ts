@@ -87,7 +87,7 @@ export interface ChatApplicationDependencies {
   visualSnapshots?: { cancelChat(chatId: string): void };
   /** Stops a deleted chat's background jobs and drops its followed pull requests and check. */
   followThrough?: {
-    beginMove?(chatId: string): () => void;
+    beginMove?(chatId: string): Promise<() => void> | (() => void);
     deleteChat(chatId: string): Promise<void>;
     /** The delete rolled back before its durable boundary: the retained chat's answers count again. */
     restoreChat?(chatId: string): void;
@@ -263,7 +263,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       }
       let finishFollowThroughMove: (() => void) | undefined;
       try {
-        finishFollowThroughMove = deps.followThrough?.beginMove?.(chatId);
+        finishFollowThroughMove = await deps.followThrough?.beginMove?.(chatId);
         const current = await deps.chatStore.get(chatId);
         if (!current) throw new Error(`Chat ${chatId} not found`);
         if (current.botId) {

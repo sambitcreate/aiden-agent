@@ -1,4 +1,5 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdir, readFile, rename, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "@playwright/test";
@@ -39,7 +40,13 @@ test("a crashed check is reaped before new work, and its chat keeps the interrup
   await expect(invoke(page, "chats:moveEmptyToWorkspace", id, destination.id)).rejects.toThrow(/stop this chat.s check/i);
 
   aiden.app.process().kill("SIGKILL");
-  page = await aiden.relaunch();
+  page = await aiden.relaunch(async () => {
+    // A damaged neighboring entry must not prevent recovery of this live group.
+    const ledger = path.join(aiden.userDataDir, "background-jobs", "running.json");
+    const record = JSON.parse(await readFile(ledger, "utf8"));
+    record.jobs.unshift(null);
+    await writeFile(ledger, JSON.stringify(record));
+  });
   const restored = await invoke<ChatFollowThroughV1>(page, "chats:followThrough", id);
   expect(alive(pid)).toBe(false);
   expect(restored.check).toMatchObject({ state: "waiting", checksRun: 0 });
@@ -77,6 +84,14 @@ test("checks refuse a replaced worktree and drain before its original checkout i
   const pidFile = path.join(worktree.folderPath, "check.pid");
   await expect.poll(() => readFile(pidFile, "utf8").catch(() => "")).toMatch(/^\d+\n$/);
   const pid = Number(await readFile(pidFile, "utf8"));
+  // An unprovisioned ignored file makes ordinary removal refuse before Git
+  // mutates the checkout. The process stops, but its check stays configured.
+  await writeFile(path.join(worktree.folderPath, ".gitignore"), "keep.local\n");
+  await writeFile(path.join(worktree.folderPath, "keep.local"), "keep me");
+  await expect(invoke(aiden.page, "git:deleteManagedWorktree", worktree.id)).rejects.toThrow(/ignored files/i);
+  expect(alive(pid)).toBe(false);
+  const retained = (await invoke<ChatFollowThroughV1>(aiden.page, "chats:followThrough", chat.id)).check;
+  expect(retained).toMatchObject({ state: "waiting", checksRun: 0 });
   await invoke(aiden.page, "git:deleteManagedWorktree", worktree.id, { force: true });
   expect(alive(pid)).toBe(false);
   expect((await invoke<ChatFollowThroughV1>(aiden.page, "chats:followThrough", chat.id)).check).toBeNull();
@@ -105,4 +120,33 @@ test("revoking folder access ends a restored pull request follow across relaunch
   expect((await state()).pullRequests[0]?.endedReason).toBe("access-changed");
   await aiden.relaunch();
   expect((await state()).pullRequests[0]?.endedReason).toBe("access-changed");
+});
+
+test("moving an empty chat retries a retained check after its last process exits", async ({ aiden }) => {
+  const chat = await invoke<{ id: string }>(aiden.page, "chats:create", { workspaceId: E2E_WORKSPACE_ID });
+  const next = await invoke<{ id: string }>(aiden.page, "workspaces:create", { name: "Destination" });
+  // The group leader exits and its surviving child has no visible Aiden
+  // marker. Crash recovery can neither attribute nor safely stop the child.
+  const shell = spawn("/bin/sh", ["-c", "sleep 120 </dev/null >/dev/null 2>&1 & echo $! > retained.pid"], {
+    detached: true, cwd: aiden.workspaceDir, stdio: "ignore",
+  });
+  const [code] = await once(shell, "exit");
+  expect(code).toBe(0);
+  const child = Number(await readFile(path.join(aiden.workspaceDir, "retained.pid"), "utf8"));
+  try {
+    const page = await aiden.relaunch(async () => {
+      const dir = path.join(aiden.userDataDir, "background-jobs");
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, "running.json"), JSON.stringify({
+        version: 1, jobs: [{ id: "job_abcdefab", pid: shell.pid, check: { chatId: chat.id, workspaceId: E2E_WORKSPACE_ID } }],
+      }));
+    });
+    const move = () => invoke<{ workspaceId: string }>(page, "chats:moveEmptyToWorkspace", chat.id, next.id);
+    await expect(move()).rejects.toThrow(/confirm.*check stopped/i);
+    expect(alive(child)).toBe(true);
+    process.kill(child, "SIGKILL");
+    await expect(move()).resolves.toMatchObject({ workspaceId: next.id });
+  } finally {
+    if (alive(child)) process.kill(child, "SIGKILL");
+  }
 });

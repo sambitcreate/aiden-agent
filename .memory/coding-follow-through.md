@@ -39,3 +39,5 @@ Workspace access changes and managed-worktree removal cancel generations, drain 
 The macOS Electron regression suite is `test:e2e:follow-through`. It kills Electron during a real check, verifies recovery in the same profile, exercises a replaced then removed Git worktree, and revokes a restored follow without contacting GitHub.
 
 Check recovery records carry chat and workspace ownership. A failed signal leaves the record in place and workspace revocation or removal fails until Aiden verifies that no live process remains in the group.
+
+Workspace changes suspend polling and interrupt check attempts before draining jobs. They end the follows and clear the checks only after the permission save, workspace removal, or managed Git destructive boundary. Rejected operations resume polling and keep waiting checks. Chat moves verify retained process liveness while configuration admission is held.

@@ -610,7 +610,7 @@ export class BackgroundJobs {
     let stopped = 0;
     const survivors: RunningRecordFile["jobs"] = [];
     for (const entry of parsed?.jobs ?? []) {
-      if (!Number.isSafeInteger(entry.pid) || entry.pid <= 1 || !groupExists(entry.pid)) continue;
+      if (!entry || !Number.isSafeInteger(entry.pid) || entry.pid <= 1 || !groupExists(entry.pid)) continue;
       const current = entry.processStart ? await this.processStartTime(entry.pid) : undefined;
       if (current && current === entry.processStart) {
         signalGroup(entry.pid, "SIGTERM");
@@ -939,10 +939,6 @@ export class BackgroundJobs {
       throw error;
     }
     return () => this.releaseCheckGroup(entry);
-  }
-
-  hasCheckGroup(chatId: string): boolean {
-    return [...this.checkGroups.values()].some((entry) => entry.check?.chatId === chatId);
   }
 
   async confirmChatChecksStopped(chatId: string): Promise<void> {

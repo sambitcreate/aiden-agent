@@ -144,6 +144,17 @@ export class DoneWhenChecks {
     await this.running.get(chatId)?.settled;
   }
 
+  async interruptWorkspace(workspaceId: string): Promise<void> {
+    const pending = [];
+    for (const [chatId, run] of this.running) {
+      if (run.workspaceId !== workspaceId) continue;
+      this.runWhenFree.delete(chatId);
+      run.controller.abort();
+      pending.push(run.settled);
+    }
+    await Promise.all(pending);
+  }
+
   async clearWorkspace(workspaceId: string): Promise<void> {
     for (const record of [...this.records.values()]) {
       if (record.workspaceId === workspaceId) this.clear(record.chatId);

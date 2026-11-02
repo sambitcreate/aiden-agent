@@ -53,6 +53,7 @@ export class PullRequestFollows {
   private timer: ReturnType<typeof setInterval> | undefined;
   private ticking: Promise<void> | undefined;
   private closed = false;
+  private readonly pausedChats = new Set<string>();
   private pollInFlight?: { id: string; controller: AbortController };
 
   constructor(private readonly deps: PullRequestFollowsDeps) {}
@@ -111,6 +112,18 @@ export class PullRequestFollows {
     return true;
   }
 
+  /** Suspend polling across a workspace mutation without losing its saved follows. */
+  pauseChats(chatIds: readonly string[]): () => void {
+    for (const chatId of chatIds) this.pausedChats.add(chatId);
+    const poll = this.pollInFlight;
+    const current = poll && this.records.get(poll.id);
+    if (current && this.pausedChats.has(current.chatId)) poll?.controller.abort();
+    return () => {
+      for (const chatId of chatIds) this.pausedChats.delete(chatId);
+      void this.kick();
+    };
+  }
+
   deleteChat(chatId: string): void {
     let removed = false;
     for (const [id, record] of this.records) {
@@ -150,7 +163,7 @@ export class PullRequestFollows {
     for (;;) {
       const now = this.deps.now();
       const due = [...this.records.entries()]
-        .filter(([, record]) => record.state === "following" && record.nextCheckAt <= now)
+        .filter(([, record]) => record.state === "following" && !this.pausedChats.has(record.chatId) && record.nextCheckAt <= now)
         .sort(([, left], [, right]) => left.nextCheckAt - right.nextCheckAt)[0];
       if (!due || this.closed) return;
       const [id, record] = due;

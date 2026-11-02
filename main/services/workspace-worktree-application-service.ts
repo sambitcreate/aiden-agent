@@ -1,3 +1,4 @@
+import type { FinishWorkspaceFollowThrough } from "./workspace-mutation-gate.js";
 import { workspaceCapabilityFields } from "./workspace-capabilities.js";
 import { MAX_PROVISIONED_BYTES } from "./managed-worktree-provisioner.js";
 import { randomUUID } from "node:crypto";
@@ -156,7 +157,7 @@ export interface WorkspaceWorktreeApplicationDependencies {
   /** Closes the worktree's Git metadata watcher; a later display read re-observes. */
   closeWorkspaceGitWatcher?(workspaceId: string): void;
   cancelWorkspaceGeneration(workspaceId: string): Promise<void>;
-  closeWorkspaceFollowThrough?(workspaceId: string): Promise<void>;
+  closeWorkspaceFollowThrough?(workspaceId: string): Promise<FinishWorkspaceFollowThrough | void>;
   cancelWorkspaceSchedules(workspaceId: string): Promise<void>;
   resumeWorkspaceSchedules(workspaceId: string): Promise<void>;
   createWorkspaceId(): string;
@@ -474,6 +475,7 @@ export function createWorkspaceWorktreeApplicationService(
       const managed = workspace.managedWorktree;
       if (!managed) throw new Error("This workspace is not an Aiden-managed worktree.");
       const finishMutation = dependencies.beginWorkspaceMutation(workspaceId);
+      const followThroughChange: { finish?: FinishWorkspaceFollowThrough | void; committed: boolean } = { committed: false };
       try {
         await dependencies.cancelWorkspaceOperations(workspaceId, signal);
         const result = await withWorkspaceScheduleRestoration(
@@ -489,7 +491,7 @@ export function createWorkspaceWorktreeApplicationService(
           async ({ keepPaused }) => {
             await dependencies.closeWorkspaceTerminals(workspaceId);
             await dependencies.cancelWorkspaceGeneration(workspaceId);
-            await dependencies.closeWorkspaceFollowThrough?.(workspaceId);
+            followThroughChange.finish = await dependencies.closeWorkspaceFollowThrough?.(workspaceId);
             await dependencies.cancelWorkspaceSchedules(workspaceId);
 
             // Deletion policy classification. This advisory read happens before
@@ -687,7 +689,10 @@ export function createWorkspaceWorktreeApplicationService(
               workspacePathExists: () => dependencies.workspacePathExists(managed.worktreePath),
               worktreeRegistered: () => dependencies.managedWorktreeRegistered(managed),
               worktreeUsable: () => dependencies.managedWorktreeUsable(managed),
-              onDestructiveBoundary: keepPaused,
+              onDestructiveBoundary: () => {
+                followThroughChange.committed = true;
+                keepPaused();
+              },
               removeWorkspaceRecord: () => dependencies.removeWorkspace(workspaceId),
               reconciledResult: () => ({ branchDeleted: false }),
             });
@@ -700,7 +705,11 @@ export function createWorkspaceWorktreeApplicationService(
         dependencies.notifyChanged();
         return result;
       } finally {
-        finishMutation();
+        try {
+          await followThroughChange.finish?.(followThroughChange.committed);
+        } finally {
+          finishMutation();
+        }
         // Local and Remote deletions both land here.
         dependencies.closeWorkspaceGitWatcher?.(workspaceId);
       }
