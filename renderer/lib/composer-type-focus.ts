@@ -153,6 +153,11 @@ export function composerCanAcceptTyping(composer: HTMLTextAreaElement | null): b
   );
 }
 
+/**
+ * Runs on every keydown, so the event's own facts are checked before the
+ * context: a caller may pass context fields as getters that query the page,
+ * and those run only for a key that could still be redirected.
+ */
 export function decideComposerTypeFocus(
   event: ComposerTypeFocusEvent,
   context: ComposerTypeFocusContext,
@@ -160,12 +165,6 @@ export function decideComposerTypeFocus(
   const altGr =
     event.altGraph === true || (!context.macOS && event.ctrlKey && event.altKey);
   if (
-    !context.composerAvailable ||
-    context.composerFocused ||
-    context.editable ||
-    context.overlayOpen ||
-    context.reservedSurface ||
-    context.composing ||
     event.defaultPrevented ||
     event.isComposing ||
     event.keyCode === 229 ||
@@ -176,7 +175,17 @@ export function decideComposerTypeFocus(
     return { action: "ignore" };
   }
   const text = composerInsertTextFromKey(event.key);
-  if (text === null) return { action: "ignore" };
+  if (
+    text === null ||
+    context.composing ||
+    context.composerFocused ||
+    context.editable ||
+    context.reservedSurface ||
+    !context.composerAvailable ||
+    context.overlayOpen
+  ) {
+    return { action: "ignore" };
+  }
   if (text === " " && context.activationControl) return { action: "ignore" };
   if (!context.composerWritable) return { action: "focus" };
   return { action: "focus-and-insert", text };

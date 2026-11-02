@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { Chat } from "./types.js";
+import type { Attachment, Chat } from "./types.js";
 import {
   projectVisibleChatMessage,
   projectVisibleChatMetadata,
@@ -77,6 +77,21 @@ export interface AidenChatExportV1 {
 
 export type AidenChatExportMessageV1 = VisibleChatMessage;
 
+/**
+ * Attachments as the export format has always carried them: each image with
+ * its bytes inline and none of the device's own file references. An image
+ * whose file is gone from this Mac is left out rather than written empty.
+ */
+function portableAttachments(attachments: readonly Attachment[]): Attachment[] | undefined {
+  const portable = attachments.flatMap((attachment): Attachment[] => {
+    if (attachment.kind !== "image") return [attachment];
+    if (!attachment.data) return [];
+    const { id, name, mimeType, kind, size, data } = attachment;
+    return [{ id, name, mimeType, kind, size, data }];
+  });
+  return portable.length > 0 ? portable : undefined;
+}
+
 export function projectAidenChatExport(
   chat: Chat,
   exportedAt = new Date().toISOString(),
@@ -99,6 +114,7 @@ export function projectAidenChatExport(
       message.content = [message.content, ...message.appPanels.map((panel) => panel.fallback)].filter(Boolean).join("\n\n");
       delete message.appPanels;
     }
+    if (message.attachments) message.attachments = portableAttachments(message.attachments);
     budget.chargeMessage(message);
     messages.push(message);
   }
