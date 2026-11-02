@@ -3722,6 +3722,27 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertEqual(second.outgoing.first?.status, .sent(submissionId: "17"))
     }
 
+    func testCancelledRequestCannotReturnAReceiptFromCancellation() async throws {
+        for _ in 0..<100 {
+            let gate = TestGate()
+            gate.hold()
+            let caller = Task {
+                try await aidenBotWithin(.seconds(30)) {
+                    await gate.pass()
+                    return "receipt"
+                }
+            }
+            try await waitUntil({ gate.isHolding }, what: "the request")
+            caller.cancel()
+            do {
+                _ = try await caller.value
+                XCTFail("A cancelled request must not take the receipt returned on cancellation.")
+            } catch is CancellationError {
+                // The result remains ambiguous so the idempotency key is retained.
+            }
+        }
+    }
+
     func testACancelledCallerNeverLeavesItsRequestRunning() async throws {
         // An already-cancelled caller never starts the request.
         let untouched = LiveRequests()
