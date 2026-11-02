@@ -2681,6 +2681,7 @@ export const llmClient = {
     const spendingOwner: SpendingOwner = authoritativeBot
       ? { kind: "bot", id: authoritativeBot.id }
       : { kind: "chat", id: params.chatId };
+    let dispatchSpendingRefusal: string | undefined;
     const spendingMeter = createSpendingMeter({
       spending,
       owner: spendingOwner,
@@ -3600,7 +3601,8 @@ export const llmClient = {
               ...usageLimits.streamOptions({ kind: "chat", id: params.chatId }, runtime.provider.label),
               beforeSendRefusal: async () => {
                 await spendingMeter.settled();
-                return spending.refusal(spendingOwner);
+                dispatchSpendingRefusal = await spending.refusal(spendingOwner);
+                return dispatchSpendingRefusal;
               },
             }),
           );
@@ -4949,8 +4951,9 @@ export const llmClient = {
         }
         const emergencyError = generationEmergencyUserError(runtimeOutcome.emergencyProjection);
         let replyNotSaved = false;
+        const spendingError = runtimeOutcome.kind === "provider_failed" ? dispatchSpendingRefusal : undefined;
         const finalError =
-          emergencyError ??
+          emergencyError ?? spendingError ??
           (runtimeOutcome.kind === "provider_failed"
             ? runtimeOutcome.reason === "output-limit"
               ? "The model reached its output limit."
@@ -4970,7 +4973,7 @@ export const llmClient = {
             full,
             reasoning,
             finalTimeline,
-            runtimeOutcome.kind === "provider_failed" ? runtimeOutcome.providerFailure : undefined,
+            runtimeOutcome.kind === "provider_failed" && !spendingError ? runtimeOutcome.providerFailure : undefined,
           );
           await finalizePiTurnPersistence(persisted);
           sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
