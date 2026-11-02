@@ -1,5 +1,6 @@
 "use strict";
 
+const path = require("node:path");
 const process = require("node:process");
 const { URL } = require("node:url");
 const { app } = require("electron");
@@ -10,6 +11,9 @@ const { app } = require("electron");
 const testHome = process.env.HOME;
 if (!testHome) throw new Error("The Electron E2E bootstrap requires an isolated HOME.");
 app.setPath("home", testHome);
+// macOS resolves Pictures from the account, not HOME. Create Images auto-saves
+// every generated image under app.getPath("pictures"), so keep it in the fixture.
+app.setPath("pictures", path.join(testHome, "Pictures"));
 
 // Test-only fetch rewrites. Each source origin maps to one validated loopback
 // fake; every unmatched request is left untouched. The LM Studio fixture must

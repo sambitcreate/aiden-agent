@@ -4,7 +4,8 @@ import { registerLifecycleFlush, setRendererLifecycleGuard } from "../lib/lifecy
 import { pickDefaultImageModel, type ImageModelOption } from "../shared/images/port";
 import type { OutputRef } from "../shared/images/run-types";
 import type { ImageNodeType, WorkflowDocV1, WorkflowViewport } from "../shared/images/schema";
-import { fitNodeToMediaAspect } from "./node-dimensions-core";
+import { fitNodeToMediaAspect, imageInputNodeForAsset } from "./node-dimensions-core";
+import { ownValue } from "./run-view-core";
 import { createWorkflowNode } from "./nodes/registry";
 import {
   createAutosave,
@@ -173,6 +174,22 @@ export function useWorkflowController(workflowId: string) {
     [apply],
   );
 
+  /**
+   * Adds an Image Input holding an existing image (a generated one, say) at the middle of the
+   * visible canvas: one add-node op, so a single Undo removes it. `pane` is the canvas size.
+   */
+  const addImageInput = React.useCallback(
+    (image: OutputRef, url: string | undefined, pane: { width: number; height: number }) => {
+      const current = latestSession.current;
+      if (!current) return;
+      if (url) setAssetUrls((urls) => (ownValue(urls, image.assetId) ? urls : { ...urls, [image.assetId]: url }));
+      const viewport = current.viewport ?? { x: 0, y: 0, zoom: 1 };
+      const node = imageInputNodeForAsset(image, crypto.randomUUID(), viewport, pane, current.history.present.nodes.length);
+      apply({ type: "add-node", node });
+    },
+    [apply],
+  );
+
   const addAssetUrls = React.useCallback((urls: Record<string, string>) => {
     setAssetUrls((current) => ({ ...current, ...urls }));
   }, []);
@@ -270,6 +287,7 @@ export function useWorkflowController(workflowId: string) {
     setViewport,
     addNode,
     importImage,
+    addImageInput,
     addAssetUrls,
     refreshOutputs,
     flush,

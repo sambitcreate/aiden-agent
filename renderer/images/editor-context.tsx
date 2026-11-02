@@ -1,6 +1,7 @@
 import * as React from "react";
 import type { ImageModelOption } from "../shared/images/port";
 import type { AttemptSnapshot, OutputRef } from "../shared/images/run-types";
+import type { OutputImageActions } from "./nodes/output-node";
 import type { EditorOp } from "./workflow-session-core";
 
 export interface WorkflowEditorContextValue {
@@ -14,6 +15,10 @@ export interface WorkflowEditorContextValue {
   stale: ReadonlySet<string>;
   importImage(nodeId: string): void;
   runFromHere(nodeId: string): void;
+  /** Opens the image viewer on a node's images, at the given one. */
+  openImage(nodeId: string, index: number): void;
+  /** Save, copy and reveal for a generated image, each followed by a toast. */
+  imageActions: Omit<OutputImageActions, "open">;
 }
 
 export const WorkflowEditorContext = React.createContext<WorkflowEditorContextValue | null>(null);

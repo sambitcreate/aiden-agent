@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import type { WorkflowDocV1 } from "../../renderer/shared/images/schema";
 import type { FakeOpenRouter } from "./fake-openrouter";
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
@@ -6,6 +6,11 @@ import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 const NANO_BANANA_LABEL = "OpenRouter · Nano Banana 2 (Gemini 3.1 Flash Image)";
 const CONSENT_ONE_REQUEST = "Send 1 image request?";
 const IMAGE_ONE = { name: "Generated image 1", exact: true };
+
+/** The image really decoded. A failed `aiden-asset:` load still renders a visible img role, just with no pixels. */
+async function expectDecoded(image: Locator) {
+  await expect.poll(() => image.evaluate((element: HTMLImageElement) => (element.complete ? element.naturalWidth : 0))).toBeGreaterThan(0);
+}
 
 async function openImages(page: Page) {
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Images", exact: true }).click();
@@ -102,6 +107,7 @@ test.describe("Create Images", () => {
     expect(aiden.openRouter!.imageRequests).toEqual([]);
     await sheet.getByRole("button", { name: "Generate" }).click();
     await expect(canvas.getByRole("img", IMAGE_ONE)).toBeVisible();
+    await expectDecoded(canvas.getByRole("img", IMAGE_ONE));
     expect(aiden.openRouter!.imageRequests).toEqual([
       { model: "google/gemini-3.1-flash-image", prompt: "A red bicycle at dawn", references: 0 },
     ]);
@@ -220,6 +226,30 @@ test.describe("Create Images", () => {
     await (await reviewRun(page)).getByRole("button", { name: "Generate" }).click();
     await expect(page.getByRole("region", { name: "Images canvas" }).getByRole("img", IMAGE_ONE)).toBeVisible();
     expect(aiden.openRouter!.imageRequests).toHaveLength(2);
+  });
+
+  test("the home shows each workflow's newest image, and All Images opens an image's workflow and comes back to it", async ({ aiden }) => {
+    const canvas = await newStarter(aiden.page, "A copper kettle");
+    await (await reviewRun(aiden.page)).getByRole("button", { name: "Generate" }).click();
+    await expect(canvas.getByRole("img", IMAGE_ONE)).toBeVisible();
+
+    await openImages(aiden.page);
+    const card = aiden.page.getByRole("list", { name: "Image workflows" }).getByRole("listitem").filter({ hasText: "Prompt to image" });
+    await expect(card).toContainText("1 image");
+    await expect(card.locator("img")).toHaveCount(1);
+    await expectDecoded(card.locator("img"));
+
+    await aiden.page.getByRole("tab", { name: "All Images" }).click();
+    await expect(aiden.page.getByRole("heading", { name: "Today" })).toBeVisible();
+    await aiden.page.getByRole("button", { name: "Image 1 of 1, Prompt to image: A copper kettle" }).click();
+    const viewer = aiden.page.getByRole("dialog");
+    await expect(viewer).toContainText("A copper kettle");
+    await viewer.getByRole("button", { name: "Open Workflow" }).click();
+    await expect(aiden.page.getByRole("region", { name: "Images canvas" })).toBeVisible();
+
+    await aiden.page.getByRole("button", { name: "Go back" }).click();
+    await expect(aiden.page.getByRole("tab", { name: "All Images" })).toHaveAttribute("aria-selected", "true");
+    expect(aiden.openRouter!.imageRequests).toHaveLength(1);
   });
 
   test("deleting a workflow names its image count and removes it after confirmation", async ({ aiden }) => {
