@@ -118,6 +118,10 @@ async function pruneRetiredMcpServers(agentDir: string): Promise<void> {
   }
 }
 
+function isMacAppConnector(server: McpServer): boolean {
+  return !!server?.presetId && getMcpPreset(server.presetId)?.transport === "stdio";
+}
+
 export function validateMcpServer(value: unknown): McpServer {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid MCP server.");
   const server = value as McpServer;
@@ -343,6 +347,7 @@ export async function mcpCommand(agentDir: string, args: string[]) {
     if (action === "preset" && !preset) throw new Error("MCP preset not found.");
     if (preset?.transport === "stdio") throw new Error(`Set up ${preset.name} in Settings → Connectors in the Aiden desktop app on your Mac.`);
     const parsed = validateMcpServer(preset ? serverFromPreset(preset) : JSON.parse(readFileSync(value, "utf8")));
+    if (isMacAppConnector(parsed)) throw new Error("Set up Mac app connectors in the Aiden desktop app on your Mac.");
     const existing = (await store.load()).find((item) => item.id === parsed.id);
     const server = await storeClientSecret(agentDir, parsed, existing);
     let replaced: McpServer | undefined;
@@ -426,7 +431,8 @@ export function createCliMcpPool(agentDir: string, options: { child?: boolean } 
   let closed = false;
   async function listServers() {
     await pruneRetiredMcpServers(agentDir);
-    const servers = (await storeFor(agentDir).load()).map(validateMcpServer);
+    // Keep older desktop-only records removable without ever opening a transport for them.
+    const servers = (await storeFor(agentDir).load()).filter(server => !isMacAppConnector(server)).map(validateMcpServer);
     if (servers.length > 32 || new Set(servers.map(({ id }) => id)).size !== servers.length) throw new Error("MCP inventory exceeds 32 unique servers.");
     return servers;
   }

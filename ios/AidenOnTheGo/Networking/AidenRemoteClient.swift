@@ -332,6 +332,12 @@ struct AidenServer: Codable, Equatable, Sendable {
     var supportsChatBrowserRecordings: Bool {
         features.contains(Self.chatBrowserRecordingsFeature)
     }
+    /// Revision 50: the Mac offers `attachments:raw` and this phone holds it, so
+    /// pictures go to the upload routes as their own bytes (Android parity).
+    var supportsRawUploads: Bool {
+        serverCapabilities?.contains(.attachmentsRaw) == true && capabilities.contains(.attachmentsRaw)
+    }
+
     /// The chat and Bot screens show the spending notice with Allow more (revision 47).
     var supportsSpendingLimits: Bool {
         features.contains(Self.spendingLimitsFeature)
@@ -453,6 +459,8 @@ struct AidenWorkspace: Codable, Identifiable, Equatable, Sendable {
     var memoryEnabled: Bool = true
     let hasFolder: Bool
     let isManagedWorktree: Bool
+    /// Contract revision 51: a hidden folder the Mac made for one chat without a workspace.
+    let noWorkspace: Bool
     let branchName: String?
     let repositoryName: String?
     let git: AidenWorkspaceGitSummary?
@@ -461,7 +469,7 @@ struct AidenWorkspace: Codable, Identifiable, Equatable, Sendable {
     let revision: String
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, permission, memoryEnabled, hasFolder, isManagedWorktree
+        case id, name, permission, memoryEnabled, hasFolder, isManagedWorktree, noWorkspace
         case branchName, repositoryName, git, createdAt, updatedAt, revision
     }
 
@@ -472,6 +480,7 @@ struct AidenWorkspace: Codable, Identifiable, Equatable, Sendable {
         memoryEnabled: Bool = true,
         hasFolder: Bool,
         isManagedWorktree: Bool,
+        noWorkspace: Bool = false,
         branchName: String?,
         repositoryName: String?,
         git: AidenWorkspaceGitSummary?,
@@ -485,6 +494,7 @@ struct AidenWorkspace: Codable, Identifiable, Equatable, Sendable {
         self.memoryEnabled = memoryEnabled
         self.hasFolder = hasFolder
         self.isManagedWorktree = isManagedWorktree
+        self.noWorkspace = noWorkspace
         self.branchName = branchName
         self.repositoryName = repositoryName
         self.git = git
@@ -501,12 +511,82 @@ struct AidenWorkspace: Codable, Identifiable, Equatable, Sendable {
         memoryEnabled = try values.decodeIfPresent(Bool.self, forKey: .memoryEnabled) ?? true
         hasFolder = try values.decode(Bool.self, forKey: .hasFolder)
         isManagedWorktree = try values.decode(Bool.self, forKey: .isManagedWorktree)
+        noWorkspace = try values.decodeIfPresent(Bool.self, forKey: .noWorkspace) ?? false
         branchName = try values.decodeIfPresent(String.self, forKey: .branchName)
         repositoryName = try values.decodeIfPresent(String.self, forKey: .repositoryName)
         git = try values.decodeIfPresent(AidenWorkspaceGitSummary.self, forKey: .git)
         createdAt = try values.decode(Date.self, forKey: .createdAt)
         updatedAt = try values.decode(Date.self, forKey: .updatedAt)
         revision = try values.decode(String.self, forKey: .revision)
+    }
+}
+
+/// Chats without a workspace (contract revision 51). Each runs on the Mac in a
+/// hidden workspace of its own. Phones list them under one Chats group that
+/// stands on its home record, and start new ones there; the Mac gives a new
+/// chat its own folder when the home already holds one.
+enum AidenNoWorkspace {
+    static let groupName = "Chats"
+
+    /// The record that stands for the Chats group: the long-lived `default` home, else the oldest.
+    static func home(in workspaces: [AidenWorkspace]) -> AidenWorkspace? {
+        let hidden = workspaces.filter(\.noWorkspace)
+        return hidden.first { $0.id == "default" } ?? hidden.min { left, right in
+            left.createdAt == right.createdAt ? left.id < right.id : left.createdAt < right.createdAt
+        }
+    }
+
+    /// Shown when a new chat landed in a hidden folder the phone couldn't list yet (the workspace
+    /// re-read failed), so the chat exists on the Mac but can't open until the list refreshes.
+    static var startedButUnlistedMessage: String {
+        String(localized: "Your new chat was started on your Mac but couldn't open yet. It will appear under Chats once Aiden On The Go reconnects.")
+    }
+
+    /// Workspaces a person picks, opens or manages: everything but the hidden records, except
+    /// `keeping`, a hidden record something already uses (a scheduled task being edited).
+    static func choices(_ workspaces: [AidenWorkspace], keeping workspaceID: String? = nil) -> [AidenWorkspace] {
+        workspaces.filter { !$0.noWorkspace || $0.id == workspaceID }
+    }
+
+    /// Workspaces that are not archived. A hidden record never counts as archived: an older
+    /// build could archive one, and with no way to unarchive it its chats would stay hidden.
+    static func unarchived(_ workspaces: [AidenWorkspace], archivedIDs: Set<String>) -> [AidenWorkspace] {
+        workspaces.filter { $0.noWorkspace || !archivedIDs.contains($0.id) }
+    }
+
+    /// Workspaces as the sidebar lists them: the hidden records become one Chats group on the home.
+    static func grouped(_ workspaces: [AidenWorkspace]) -> [AidenWorkspace] {
+        guard let home = home(in: workspaces) else { return workspaces }
+        return workspaces.compactMap { workspace in
+            guard workspace.noWorkspace else { return workspace }
+            guard workspace.id == home.id else { return nil }
+            var group = workspace
+            group.name = groupName
+            return group
+        }
+    }
+
+    /// The name a chat's workspace is shown and searched by: hidden records read as Chats.
+    static func label(for workspace: AidenWorkspace) -> String {
+        workspace.noWorkspace ? groupName : workspace.name
+    }
+
+    /// The id a chat in `workspaceID` is listed under: chats in a hidden record go to the home.
+    static func groupID(for workspaceID: String, in workspaces: [AidenWorkspace]) -> String {
+        guard workspaces.contains(where: { $0.id == workspaceID && $0.noWorkspace }),
+              let home = home(in: workspaces) else { return workspaceID }
+        return home.id
+    }
+
+    /// Workspace ids that chats name but the phone hasn't listed and hasn't re-read for yet.
+    /// Another device's No workspace chat gets a fresh hidden record, and phones hear of it only
+    /// by re-reading the workspace list.
+    static func unlistedWorkspaceIDs(
+        chatWorkspaceIDs: some Sequence<String>,
+        in workspaces: [AidenWorkspace],
+        alreadyReRead: Set<String>
+    ) -> Set<String> {
+        Set(chatWorkspaceIDs).subtracting(workspaces.map(\.id)).subtracting(alreadyReRead)
     }
 }
 
@@ -953,6 +1033,8 @@ final class AidenRemoteClient: @unchecked Sendable {
         let workspaceId: String
         let providerId: String?
         let modelId: String?
+        /// Revision 51: a chat started under Chats gets a hidden folder of its own. Omitted otherwise.
+        let noWorkspace: Bool?
     }
 
     private struct ChatUpdateRequest: Encodable {
@@ -1324,7 +1406,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
             .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues,
-            .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs,
+            .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
@@ -1641,6 +1723,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         workspaceId: String,
         providerId: String? = nil,
         modelId: String? = nil,
+        noWorkspace: Bool = false,
         idempotencyKey: UUID = UUID()
     ) async throws -> AidenChat {
         try await send(
@@ -1649,7 +1732,8 @@ final class AidenRemoteClient: @unchecked Sendable {
             body: ChatCreateRequest(
                 workspaceId: workspaceId,
                 providerId: providerId,
-                modelId: modelId
+                modelId: modelId,
+                noWorkspace: noWorkspace ? true : nil
             ),
             headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()],
             acceptedStatus: [201]
@@ -1767,11 +1851,23 @@ final class AidenRemoteClient: @unchecked Sendable {
         chatId: String,
         upload: AidenAttachmentUpload
     ) async throws -> AidenAttachmentReference {
-        try await send(
-            method: "POST",
+        try await uploadAttachment(chatId: chatId, upload: upload, rawImages: false, progress: nil)
+    }
+
+    /// Stages one upload for the chat's next turn. With `rawImages` (the device
+    /// holds `attachments:raw`, revision 50) a PNG or JPEG picture goes as its
+    /// own bytes. `progress` hears the share of the request body sent, 0 to 1.
+    func uploadAttachment(
+        chatId: String,
+        upload: AidenAttachmentUpload,
+        rawImages: Bool,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws -> AidenAttachmentReference {
+        try await stageUpload(
             path: ["chats", chatId, "attachments"],
-            body: upload,
-            acceptedStatus: [201]
+            upload: upload,
+            rawImages: rawImages,
+            progress: progress
         )
     }
 
@@ -2089,13 +2185,68 @@ final class AidenRemoteClient: @unchecked Sendable {
     /// Revision 33 (`bot-attachments-v1`): stages one image or text file for
     /// this device's next message to the Bot. The reference is single-use.
     func uploadBotAttachment(botId: String, upload: AidenAttachmentUpload) async throws -> AidenAttachmentReference {
+        try await uploadBotAttachment(botId: botId, upload: upload, rawImages: false, progress: nil)
+    }
+
+    /// Revision 50: as above, with a picture sent as its own bytes while the
+    /// device holds `attachments:raw`, and the upload's progress.
+    func uploadBotAttachment(
+        botId: String,
+        upload: AidenAttachmentUpload,
+        rawImages: Bool,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws -> AidenAttachmentReference {
         try validateBotIdentifier(botId)
-        return try await send(
-            method: "POST",
+        return try await stageUpload(
             path: ["bots", botId, "attachments"],
-            body: upload,
-            acceptedStatus: [201]
+            upload: upload,
+            rawImages: rawImages,
+            progress: progress
         )
+    }
+
+    /// One `POST …/attachments`: a picture as raw bytes when allowed (revision
+    /// 50), otherwise the JSON envelope every Mac takes. The reply is the same.
+    private func stageUpload(
+        path: [String],
+        upload: AidenAttachmentUpload,
+        rawImages: Bool,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws -> AidenAttachmentReference {
+        let body: Data
+        var headers: [String: String] = [:]
+        if rawImages, let raw = AidenRawAttachmentUpload(upload) {
+            body = raw.data
+            headers["Content-Type"] = raw.mimeType
+            headers[AidenRawAttachmentUpload.nameHeader] = raw.encodedName
+        } else {
+            body = try JSONEncoder().encode(upload)
+        }
+        let request = try makeRequest(
+            method: "POST",
+            path: path,
+            query: [],
+            body: body,
+            headers: headers,
+            authenticated: true
+        )
+        let delegate = progress.map(AidenUploadProgressDelegate.init(onProgress:))
+        let (data, response) = try await boundedData(
+            for: request,
+            maximumBytes: AidenRemoteProtocol.maxJSONBodyBytes,
+            delegate: delegate
+        )
+        try validate(response: response, data: data, acceptedStatus: [201])
+        do {
+            return try AidenRemoteJSONDecoder.decode(
+                AidenAttachmentReference.self,
+                from: data,
+                maximumBytes: AidenRemoteProtocol.maxJSONBodyBytes
+            )
+        } catch {
+            AidenDiagnostics.record(.contract, event: .contractRejected, outcome: .failed, code: .invalidResponse)
+            throw AidenRemoteClientError.invalidResponse
+        }
     }
 
     /// Drops a staged upload the person removed before sending.
@@ -3447,12 +3598,13 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     private func boundedData(
         for request: URLRequest,
-        maximumBytes: Int
+        maximumBytes: Int,
+        delegate: (any URLSessionTaskDelegate)? = nil
     ) async throws -> (Data, URLResponse) {
         let bytes: URLSession.AsyncBytes
         let response: URLResponse
         do {
-            (bytes, response) = try await session.bytes(for: request)
+            (bytes, response) = try await session.bytes(for: request, delegate: delegate)
         } catch is CancellationError {
             AidenDiagnostics.record(.connection, event: .requestFailed, outcome: .cancelled, code: .network)
             throw CancellationError()
@@ -3875,5 +4027,57 @@ private final class AidenRunStreamIdentity: @unchecked Sendable {
         defer { lock.unlock() }
         if let runId, runId != event.runId { throw AidenRemoteClientError.invalidResponse }
         runId = event.runId
+    }
+}
+
+/// Revision 50 (`attachments:raw`): a PNG or JPEG picture sent to an upload
+/// route as its own bytes. The name travels percent-encoded in
+/// `Aiden-Attachment-Name`; anything else keeps the JSON envelope.
+struct AidenRawAttachmentUpload: Equatable, Sendable {
+    static let nameHeader = "Aiden-Attachment-Name"
+    static let mimeTypes: Set<String> = ["image/png", "image/jpeg"]
+    /// The largest picture a Mac takes (`MAX_IMAGE_BYTES`, 8 MiB).
+    static let maxBytes = 8 * 1024 * 1024
+    static let maxEncodedNameLength = 2_048
+    /// RFC 3986 unreserved characters, the only ones left as they are.
+    private static let unreserved = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+    )
+
+    let mimeType: String
+    let encodedName: String
+    let data: Data
+
+    /// Nil when the upload is not a picture the raw route takes.
+    init?(_ upload: AidenAttachmentUpload) {
+        guard case let .image(name, mimeType, data) = upload,
+              Self.mimeTypes.contains(mimeType),
+              !data.isEmpty, data.count <= Self.maxBytes,
+              let encoded = name.addingPercentEncoding(withAllowedCharacters: Self.unreserved),
+              !encoded.isEmpty, encoded.count <= Self.maxEncodedNameLength else { return nil }
+        self.mimeType = mimeType
+        self.encodedName = encoded
+        self.data = data
+    }
+}
+
+/// Hears how much of one request's body has gone, for an upload's progress
+/// bar. Everything else, trust included, stays with the session's delegate.
+final class AidenUploadProgressDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    let onProgress: @Sendable (Double) -> Void
+
+    init(onProgress: @escaping @Sendable (Double) -> Void) {
+        self.onProgress = onProgress
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        guard totalBytesExpectedToSend > 0 else { return }
+        onProgress(min(1, max(0, Double(totalBytesSent) / Double(totalBytesExpectedToSend))))
     }
 }

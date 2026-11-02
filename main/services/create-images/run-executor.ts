@@ -26,6 +26,11 @@ export interface RunExecutorDependencies {
   onRequestEnd?(): void;
   /** Receives a secondary failure that must not replace the error being thrown. */
   reportIssue?(error: unknown): void;
+  /**
+   * Told once an attempt's images are stored, held and recorded (auto-save). Advisory: it must not
+   * block, and a throwing listener never changes the attempt's outcome.
+   */
+  onImagesStored?(step: PlannedStep, output: readonly OutputRef[]): void;
   /** How long an executor fault waits for provider requests that ignore the abort. Defaults to 10 s. */
   faultWaitMs?: number;
 }
@@ -225,7 +230,7 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
       finish(step, update ?? { state: "failed", errorCode: checked.code, errorMessage: checked.message });
       return { ok: false, state: update?.state ?? "failed" };
     }
-    if (!guarded(() => deps.ledger.claimProviderRequest(run.runId, step.nodeId, step.variant), false)) {
+    if (!guarded(() => deps.ledger.claimProviderRequest(run.runId, step.nodeId, step.variant, inputs.prompt), false)) {
       // The ledger also refuses a claim once a cancel was requested; that is a cancel, not a spent budget.
       if (signal.aborted) {
         const update = stopped();
@@ -327,6 +332,11 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
       throw error;
     }
     for (const assetId of added) held.add(assetId);
+    try {
+      deps.onImagesStored?.(step, output);
+    } catch (error) {
+      report(error);
+    }
     return { ok: true, value: { kind: "images", images: output } };
   }
 

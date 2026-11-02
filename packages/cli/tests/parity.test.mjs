@@ -492,7 +492,20 @@ test("MCP presets leave out Mac app connectors, which the desktop app sets up", 
   assert.ok(presets.every((preset) => preset.transport === "http"));
   assert.ok(!presets.some((preset) => preset.id === "imcp"));
   await assert.rejects(api.mcpCommand(dir, ["preset", "imcp"]), /Aiden desktop app on your Mac/);
+  const record = { id: "preset-imcp", name: "iMCP", presetId: "imcp", enabled: true, transport: "stdio",
+    command: "/Applications/iMCP.app/Contents/MacOS/imcp-server" };
+  const file = join(dir, "import.json");
+  writeFileSync(file, JSON.stringify(record));
+  await assert.rejects(api.mcpCommand(dir, ["add", file]), /desktop app on your Mac|works only on a Mac/);
   assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
+  // A previous CLI could persist the raw preset. It stays removable and cannot be connected.
+  writeFileSync(join(dir, "aiden-mcp.json"), JSON.stringify([record]));
+  const pool = api.createCliMcpPool(dir);
+  try {
+    assert.deepEqual(await pool.listServers(), []);
+    await assert.rejects(pool.connection(record), /disabled/);
+  } finally { await pool.close(); }
+  assert.deepEqual(await api.mcpCommand(dir, ["remove", record.id]), { removed: record.id });
 });
 
 test("provider import rejects invalid configuration without replacing the previous file", async (t) => {
@@ -2337,6 +2350,50 @@ test("a durable Bot paused from the CLI stops its running turn, refuses sends an
     watching.abort(); sse.closeAllConnections(); sse.close(); await reading;
     await remoteBots.botSessions.close();
   }
+
+  await t.test("remote revoke closes only the revoked phone's open Bot stream", async () => {
+    const remote = await api.createCliRemote(dir, daemon, scheduler, { bots: host, discovery: { async start() {}, stop() {} } });
+    try {
+      await remote.start();
+      const { lanPort } = await remote.service.status();
+      const ca = readFileSync(join(dir, "remote-tls/ca-certificate.pem"));
+      const marker = "Message sent after revocation";
+      async function watchPhone(name) {
+        const phone = await remote.state.issueDevice({ name, type: "iphone", clientVersion: "test", capabilities: ["chat:read", "bot:read"], acceptsBotCapabilities: true });
+        const request = httpsRequest({
+          hostname: "127.0.0.1", port: lanPort, ca, path: `/api/aiden/v1/bots/${bot.id}/session/events`,
+          headers: { authorization: `Bearer ${phone.credential}`, "aiden-protocol-version": "1" },
+          signal: AbortSignal.timeout(10_000),
+        });
+        const opened = once(request, "response");
+        request.end();
+        const [response] = await opened;
+        assert.equal(response.statusCode, 200);
+        // The snapshot flushes the headers. Keep reading this same connection through revoke.
+        const outcome = (async () => {
+          let body = "";
+          try {
+            for await (const chunk of response.setEncoding("utf8")) {
+              body += chunk;
+              if (body.includes(marker)) return "received message";
+            }
+          } catch (error) {
+            if (error.code !== "ECONNRESET") throw error;
+          }
+          assert.match(body, /event: snapshot/u);
+          return "closed";
+        })();
+        return { id: phone.device.id, outcome };
+      }
+      const revoked = await watchPhone("First phone");
+      const retained = await watchPhone("Second phone");
+      assert.deepEqual(await remote.command(["revoke", revoked.id]), { revoked: true });
+      await host.durable.runtime.send(bot.id, { text: marker, requestId: "send-after-device-revoke" });
+      assert.deepEqual(await Promise.all([revoked.outcome, retained.outcome]), ["closed", "received message"]);
+    } finally {
+      await remote.stop();
+    }
+  });
 
   // Deleting the Bot forgets its pause.
   await host.command(["pause", bot.id]);

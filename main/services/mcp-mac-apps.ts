@@ -9,17 +9,26 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import type { ConnectorMacApp } from "../../renderer/shared/connector-catalog.js";
 import type { McpMacAppStatus } from "../../renderer/shared/mcp-status.js";
-import { macAppServerCommands, type MacAppMcpPreset } from "./mcp-presets.js";
+import type { McpServer } from "./types.js";
+import { assertMcpPresetServer, macAppServerCommands, type MacAppMcpPreset } from "./mcp-presets.js";
 
 export type { McpMacAppStatus };
+
+/** Use a trusted launcher for app presets even if the approved pathname is replaced. */
+export function desktopStdioLaunch(server: McpServer, launcher: () => string) {
+  const preset = assertMcpPresetServer(server);
+  if (!server.command) throw new Error("This MCP server needs a command to run.");
+  if (preset?.transport === "stdio") return { command: launcher(), args: [server.command] };
+  return { command: server.command, args: server.args, env: server.env };
+}
 
 type BundleInfoKey = "CFBundleIdentifier" | "CFBundleShortVersionString";
 
 export interface McpMacAppProbe {
   platform: NodeJS.Platform;
   homedir: string;
-  /** The path is a file this user may execute. */
-  isExecutable(file: string): Promise<boolean>;
+  /** The executable and its enclosing bundle have the expected vendor signatures. */
+  isTrustedServer(file: string): Promise<boolean>;
   /** One string value from the bundle's Info.plist, or undefined when it can't be read. */
   bundleInfo(bundle: string, key: BundleInfoKey): Promise<string | undefined>;
   /** A process with exactly this name runs as this user. */
@@ -42,7 +51,7 @@ interface InstalledMacApp {
 async function findMacApp(app: ConnectorMacApp, probe: McpMacAppProbe): Promise<InstalledMacApp | undefined> {
   for (const command of macAppServerCommands(app, probe.homedir)) {
     const bundle = command.slice(0, -(app.serverPath.length + 1));
-    if (!(await probe.isExecutable(command))) continue;
+    if (!(await probe.isTrustedServer(command))) continue;
     if ((await probe.bundleInfo(bundle, "CFBundleIdentifier")) !== app.bundleId) continue;
     const version = await probe.bundleInfo(bundle, "CFBundleShortVersionString");
     return { bundle, command, ...(version ? { version } : {}) };
@@ -101,10 +110,11 @@ export function nodeMacAppProbe(): McpMacAppProbe {
   return {
     platform: process.platform,
     homedir: os.homedir(),
-    async isExecutable(file) {
+    async isTrustedServer(file) {
       try {
         await fs.access(file, fsConstants.X_OK);
-        return (await fs.stat(file)).isFile();
+        const { imcpLauncherPath } = await import("./imcp-launcher-path.js");
+        return (await run(imcpLauncherPath(), ["--check", file])).ok;
       } catch {
         return false;
       }

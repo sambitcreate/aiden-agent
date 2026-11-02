@@ -13,6 +13,11 @@ import type { Chat } from "./types.js";
 
 const MAX_ID_LENGTH = 256;
 const MAX_FILE_STEM = 120;
+/**
+ * Most UTF-8 bytes a file name stem may take. Linux file systems cap a name at 255 bytes, so a
+ * stem of 180 leaves room for a time prefix, a hash, an extension and a " (999)" suffix.
+ */
+export const MAX_FILE_STEM_BYTES = 180;
 const MAX_UNIQUE_ATTEMPTS = 1000;
 const EXTENSIONS: Readonly<Record<CanonicalRasterImageMimeType, string>> = {
   "image/png": "png",
@@ -57,16 +62,38 @@ function parseImageRef(input: unknown): ImageRef {
  * Finder), or leading dots.
  */
 export function safeImageFileStem(name: string): string {
-  const withoutExtension = name.replace(/\.[a-z0-9]{1,5}$/iu, "");
-  const cleaned = withoutExtension
+  return safeFileNameStem(name.replace(/\.[a-z0-9]{1,5}$/iu, ""));
+}
+
+/** `safeImageFileStem` for text that has no extension to strip, such as a title. */
+export function safeFileNameStem(name: string, fallback = "Image"): string {
+  const cleaned = name
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069/\\:*?"<>|]+/gu, " ")
     .replace(/\s+/gu, " ")
     .trim()
-    .replace(/^[.\s]+/u, "")
-    .slice(0, MAX_FILE_STEM)
-    .trim();
-  return cleaned || "Image";
+    .replace(/^[.\s]+/u, "");
+  return truncateFileNameText(cleaned, MAX_FILE_STEM, MAX_FILE_STEM_BYTES).trim() || fallback;
+}
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/**
+ * The longest prefix of `text` within `maxUnits` UTF-16 units and `maxBytes` UTF-8 bytes,
+ * cut only between graphemes, so no code point, emoji or accented letter is split.
+ */
+export function truncateFileNameText(text: string, maxUnits: number, maxBytes: number): string {
+  if (text.length <= maxUnits && Buffer.byteLength(text) <= maxBytes) return text;
+  let units = 0;
+  let bytes = 0;
+  let kept = "";
+  for (const { segment } of graphemes.segment(text)) {
+    units += segment.length;
+    bytes += Buffer.byteLength(segment);
+    if (units > maxUnits || bytes > maxBytes) break;
+    kept += segment;
+  }
+  return kept;
 }
 
 export function createChatImageActions(deps: ChatImageActionDeps) {

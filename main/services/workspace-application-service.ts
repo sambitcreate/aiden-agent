@@ -63,6 +63,8 @@ export interface WorkspaceApplicationDependencies {
     createDirectory(): Promise<{ folderPath: string }>;
     /** Workspace ids that still own at least one chat. */
     workspaceIdsWithChats(): Promise<ReadonlySet<string>>;
+    /** The ids of the chats saved in one workspace. */
+    chatIdsIn(workspaceId: string): Promise<readonly string[]>;
     /** Moves a released folder to the Trash. */
     trash(folderPath: string): Promise<void>;
   };
@@ -289,6 +291,23 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         if (!workspace.noWorkspace || workspace.id === DEFAULT_WORKSPACE_ID || owners.has(workspace.id)) continue;
         await releaseNoWorkspace(workspace);
       }
+    },
+
+    /**
+     * A paired device's new chat aimed at a hidden No workspace that already
+     * holds another chat gets a fresh one, so each chat keeps its own folder.
+     * A hidden record that is gone (its last chat was deleted, so it was
+     * released) also gets a fresh one: the device asked for No workspace and
+     * still lists the old record as the group's home. Returns the workspace
+     * to use; any other workspace is unchanged.
+     */
+    async workspaceForNoWorkspaceChat(workspaceId: string) {
+      if (!deps.noWorkspace) return workspaceId;
+      const workspace = await deps.configStore.getWorkspace(workspaceId);
+      if (!workspace) return (await service.createNoWorkspace()).id;
+      if (!workspace.noWorkspace) return workspaceId;
+      if ((await deps.noWorkspace.chatIdsIn(workspaceId)).length === 0) return workspaceId;
+      return (await service.createNoWorkspace()).id;
     },
 
     /** After a chat is deleted: its hidden No workspace folder goes too once no chat uses it. */
