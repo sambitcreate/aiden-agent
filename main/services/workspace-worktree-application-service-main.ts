@@ -30,6 +30,7 @@ import {
 } from "./git.js";
 import { checkCreateCapacity, checkSnapshotCapacity, checkWorktreeAllocation } from "./managed-worktree-capacity.js";
 import { provisionWorktreeIncludedFiles } from "./managed-worktree-provisioner.js";
+import { closeWorkspaceFollowThrough } from "./follow-through/follow-through-main.js";
 import { llmClient } from "./llm-client.js";
 import { scheduleService } from "./schedule-service.js";
 import { terminalService } from "./terminal.js";
@@ -140,6 +141,7 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
   workspaceIsChanging: (workspaceId) => workspaceMutationGate.isChanging(workspaceId),
   cancelWorkspaceOperations: (workspaceId, exceptSignal) =>
     workspaceOperationRegistry.cancelAndSettle(workspaceId, { exceptSignal }),
+  closeWorkspaceFollowThrough,
   closeWorkspaceTerminals: (workspaceId) => terminalService.closeForWorkspaceAndWait(workspaceId),
   closeWorkspaceGitWatcher: (workspaceId) => workspaceGitWatcher.close(workspaceId),
   cancelWorkspaceGeneration: (workspaceId) => llmClient.cancelWorkspaceAndSettle(workspaceId),

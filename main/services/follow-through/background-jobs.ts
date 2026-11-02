@@ -19,7 +19,9 @@ import {
   type BackgroundJobState,
   type BackgroundJobView,
 } from "../../../renderer/shared/background-jobs.js";
+import { processGroupStillRuns } from "../../shared/process-group.js";
 import { tailText } from "../../../renderer/shared/agent-notices.js";
+import { CheckInterruptedError } from "./done-when.js";
 import { defaultListeningPortsByProcess } from "./listening-ports.js";
 
 export const MAX_RUNNING_JOBS_PER_CHAT = 10;
@@ -151,7 +153,7 @@ interface JobRecord {
 /** Durable note of running jobs, so a launch after a crash can stop what was left. */
 interface RunningRecordFile {
   version: 1;
-  jobs: Array<{ id: string; pid: number; processStart?: string }>;
+  jobs: Array<{ id: string; pid: number; processStart?: string; check?: { workspaceId: string; chatId: string } }>;
 }
 
 const RECORD_FILE = "running.json";
@@ -293,6 +295,7 @@ export class BackgroundJobs {
   private recordWrite: Promise<void> = Promise.resolve();
   /** Last launch's jobs whose marked processes outlived cleanup; kept in the record so the next launch tries again. */
   private carriedOver: RunningRecordFile["jobs"] = [];
+  private readonly checkGroups = new Map<string, RunningRecordFile["jobs"][number]>();
   private closed = false;
 
   constructor(private readonly options: BackgroundJobsOptions) {
@@ -570,6 +573,12 @@ export class BackgroundJobs {
   async stopWorkspace(workspaceId: string, reason: BackgroundJobEndReason): Promise<void> {
     const jobs = [...this.jobs.values()].filter((job) => job.view.workspaceId === workspaceId);
     await Promise.all(jobs.map((job) => this.stopRecord(job, reason)));
+    for (const entry of this.checkGroups.values()) {
+      if (entry.check?.workspaceId === workspaceId) await this.releaseCheckGroup(entry);
+    }
+    if (jobs.some((job) => job.view.state === "running")) {
+      throw new Error("Could not confirm the workspace’s background jobs stopped. Try again.");
+    }
   }
 
   /** Stop everything for quit; no new jobs start afterwards. */
@@ -602,13 +611,14 @@ export class BackgroundJobs {
     let stopped = 0;
     const survivors: RunningRecordFile["jobs"] = [];
     for (const entry of parsed?.jobs ?? []) {
-      if (!Number.isSafeInteger(entry.pid) || entry.pid <= 1 || !groupExists(entry.pid)) continue;
+      if (!entry || !Number.isSafeInteger(entry.pid) || entry.pid <= 1 || !groupExists(entry.pid)) continue;
       const current = entry.processStart ? await this.processStartTime(entry.pid) : undefined;
       if (current && current === entry.processStart) {
         signalGroup(entry.pid, "SIGTERM");
         await this.waitUntil(() => !groupExists(entry.pid));
         if (groupExists(entry.pid)) signalGroup(entry.pid, "SIGKILL");
-        stopped += 1;
+        if (entry.check && await processGroupStillRuns(entry.pid)) survivors.push(entry);
+        else stopped += 1;
         continue;
       }
       if (typeof entry.id !== "string" || !/^job_[0-9a-f]{8}$/u.test(entry.id)) continue;
@@ -618,11 +628,20 @@ export class BackgroundJobs {
         survivors.push(entry);
         continue;
       }
+      // Without the original leader, an unobservable marker cannot prove a
+      // surviving check group is safe to release. Never signal by group here.
+      if (entry.check && !current && await processGroupStillRuns(entry.pid)) {
+        survivors.push(entry);
+        continue;
+      }
       if (left.signalled === 0) continue;
       if (left.remaining) survivors.push(entry);
       else stopped += 1;
     }
-    this.carriedOver = survivors;
+    this.carriedOver = survivors.filter((entry) => !entry.check);
+    for (const entry of survivors) {
+      if (entry.check) this.checkGroups.set(entry.id, entry);
+    }
     try {
       for (const name of await fsp.readdir(this.options.logDir)) {
         if (/^job_[0-9a-f]{8}\.log$/u.test(name) || (name === RECORD_FILE && !survivors.length)) {
@@ -907,25 +926,63 @@ export class BackgroundJobs {
     for (const other of otherChats) this.options.onChange?.(other);
   }
 
-  private writeRecord(): void {
+  /** The caller holds the shell behind a pipe until this write commits. */
+  async recordCheckGroup(id: string, pid: number, workspaceId: string, chatId: string): Promise<() => Promise<void>> {
+    const processStart = await this.processStartTime(pid);
+    if (!processStart) throw new CheckInterruptedError("Could not verify the check process. The command was not started.");
+    await this.confirmChatChecksStopped(chatId);
+    const entry = { id, pid, processStart, check: { workspaceId, chatId } };
+    this.checkGroups.set(id, entry);
+    try {
+      await this.writeRecord();
+    } catch {
+      this.checkGroups.delete(id);
+      throw new CheckInterruptedError("Could not save the check’s recovery record. The command was not started.");
+    }
+    return () => this.releaseCheckGroup(entry);
+  }
+
+  async confirmChatChecksStopped(chatId: string): Promise<void> {
+    for (const entry of this.checkGroups.values()) {
+      if (entry.check?.chatId === chatId) await this.releaseCheckGroup(entry);
+    }
+  }
+
+  private async releaseCheckGroup(entry: RunningRecordFile["jobs"][number]): Promise<void> {
+    // SIGKILL is asynchronous and can be denied. Keep the durable record and
+    // workspace guard until exit is observable, including zombie-only groups.
+    await this.waitUntil(() => !groupExists(entry.pid), 250);
+    if (await processGroupStillRuns(entry.pid)) {
+      throw new CheckInterruptedError("Could not confirm the workspace’s check stopped. Try again once its processes have ended.");
+    }
+    this.checkGroups.delete(entry.id);
+    // Exit is confirmed. A failed ledger update is logged by the write queue.
+    // The previous on-disk entry is safe for crash recovery to inspect again.
+    this.writeRecord();
+    await this.recordWrite;
+  }
+
+  private writeRecord(): Promise<void> {
     const file: RunningRecordFile = {
       version: 1,
       jobs: [
         ...this.carriedOver,
+        ...this.checkGroups.values(),
         ...[...this.jobs.values()]
           .filter((job) => job.view.state === "running" && job.view.pid)
           .map((job) => ({ id: job.view.id, pid: job.view.pid!, ...(job.processStart ? { processStart: job.processStart } : {}) })),
       ],
     };
     const target = path.join(this.options.logDir, RECORD_FILE);
-    this.recordWrite = this.recordWrite
+    const write = this.recordWrite
       .then(async () => {
         await fsp.mkdir(this.options.logDir, { recursive: true, mode: 0o700 });
         const temporary = `${target}.${process.pid}.tmp`;
         await fsp.writeFile(temporary, JSON.stringify(file), { mode: 0o600 });
         await fsp.rename(temporary, target);
-      })
-      .catch((error: unknown) => this.options.log?.("The background job record could not be saved.", error));
+      });
+    this.recordWrite = write.catch((error: unknown) => this.options.log?.("The background job record could not be saved.", error));
+    return write;
   }
 }
 
