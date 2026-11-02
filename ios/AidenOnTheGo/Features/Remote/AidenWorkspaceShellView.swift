@@ -1982,7 +1982,8 @@ struct AidenWorkspaceShellView: View {
 
                 if showsWorkspace,
                    let workspace = coordinator.workspaces.first(where: { $0.id == chat.workspaceId }) {
-                    Text(workspace.name)
+                    // A chat without a workspace is labelled with its group, as the sidebar lists it.
+                    Text(workspace.noWorkspace ? AidenNoWorkspace.groupName : workspace.name)
                         .font(.caption)
                         .foregroundStyle(palette.secondary)
                         .lineLimit(1)
