@@ -1,3 +1,5 @@
+import { DEFAULT_BOT_INTERRUPTIONS } from "../../../renderer/shared/bots.js";
+import { countedToday, createBotDeliveryGate } from "./gate.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -114,12 +116,11 @@ test("a deferred row is invisible to phones until it is due", async (t) => {
   assert.equal(await h.funnel.deliver(routineResult()), "deferred");
   assert.equal(await h.funnel.deliver(routineResult()), "deferred", "a held row stays held");
   assert.deepEqual(await h.log.due(undefined, NOW), []);
-  assert.deepEqual(
-    (await h.log.due(undefined, NOW + HOUR)).map(({ title }) => title),
-    ["Morning brief"],
-  );
+  assert.deepEqual(await h.log.due(undefined, NOW + HOUR), [], "release waits for the current quiet-hours check");
   assert.equal(h.calls.mac.length, 0);
-  assert.equal(h.calls.telegram.length, 0);
+  await h.funnel.flush(NOW + HOUR);
+  assert.deepEqual((await h.log.due(undefined, NOW + HOUR)).map(({ title }) => title), ["Morning brief"]);
+  assert.equal(h.calls.telegram.length, 1);
 });
 
 test("suppressed rows are logged but never notified", async (t) => {
@@ -300,4 +301,66 @@ test("a delivery after the Bot is forgotten writes nothing and sends nothing", a
   assert.equal(await h.funnel.deliver(routineResult()), "duplicate");
   assert.equal(h.calls.mac.length, 0);
   assert.deepEqual(await h.log.list("bot:scout"), []);
+});
+
+test("a slept-through morning does not release held results on the following quiet night", async (t) => {
+  let now = Date.parse("2026-10-27T23:00:00Z");
+  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-delivery-sleep-"));
+  t.after(() => rm(profile, { recursive: true, force: true }));
+  const log = createBotDeliveryLog({ profileDir: () => profile, now: () => now });
+  const gate = createBotDeliveryGate({ settings: async () => DEFAULT_BOT_INTERRUPTIONS, sentToday: async () => 0, timeZone: () => "UTC" });
+  const sends: string[] = [];
+  const open = () => createBotDeliveryFunnel({ log, gate, now: () => now, mac: async () => { sends.push("mac"); }, telegram: async () => { sends.push("telegram"); } });
+  const input = routineResult();
+  assert.equal(await open().deliver(input), "deferred");
+  now += 24 * HOUR;
+  const nextMorning = Date.parse("2026-10-29T07:00:00Z");
+  const restarted = open();
+  assert.deepEqual(await log.due(undefined, now), [], "a phone polling before the first flush stays quiet");
+  assert.equal(await restarted.deliver(input), "deferred", "a retried delivery also respects the new night");
+  assert.equal(await restarted.flush(now), nextMorning);
+  assert.deepEqual(sends, []);
+  const phoneCursor = now;
+  now = nextMorning;
+  await restarted.flush(now);
+  assert.deepEqual(sends, ["mac", "telegram"]);
+  assert.deepEqual((await log.due(phoneCursor, now)).map((row) => row.dedupeKey), [input.dedupeKey]);
+});
+
+test("several results competing for the last daily slot produce one result and one limit note", async (t) => {
+  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-delivery-limit-"));
+  t.after(() => rm(profile, { recursive: true, force: true }));
+  const log = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
+  const gate = createBotDeliveryGate({
+    settings: async () => ({ ...DEFAULT_BOT_INTERRUPTIONS, dailyLimit: 1 }),
+    sentToday: async (botId, start, at) => countedToday(await log.list(botId), start, at),
+    timeZone: () => "UTC",
+  });
+  const banners: string[] = [];
+  const funnel = createBotDeliveryFunnel({ log, gate, now: () => NOW, mac: async (input) => { banners.push(input.class); }, telegram: async () => {} });
+  const results = await Promise.all(["a", "b", "c"].map((key) => funnel.deliver(routineResult({ dedupeKey: key }))));
+  assert.deepEqual(results.sort(), ["sent", "suppressed", "suppressed"]);
+  assert.deepEqual(banners, ["routine_result", "digest"]);
+});
+
+test("an overdue group released on a full-budget day still sends its issue", async (t) => {
+  let now = Date.parse("2026-10-27T23:00:00Z");
+  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-delivery-held-budget-"));
+  t.after(() => rm(profile, { recursive: true, force: true }));
+  const log = createBotDeliveryLog({ profileDir: () => profile, now: () => now });
+  const gate = createBotDeliveryGate({
+    settings: async () => ({ ...DEFAULT_BOT_INTERRUPTIONS, dailyLimit: 1 }),
+    sentToday: async (id, start, at) => countedToday(await log.list(id), start, at),
+    timeZone: () => "UTC",
+  });
+  const banners: string[] = [];
+  const funnel = createBotDeliveryFunnel({ log, gate, now: () => now, mac: async (input) => { banners.push(input.class); }, telegram: async () => {} });
+  await funnel.deliver(routineResult({ dedupeKey: "held" }));
+  await funnel.deliver({ ...routineResult({ dedupeKey: "issue" }), class: "issue" });
+  now += 10 * HOUR;
+  await funnel.deliver(routineResult({ dedupeKey: "first" }));
+  await funnel.flush(now);
+  assert.deepEqual(banners, ["routine_result", "digest", "issue"]);
+  assert.equal((await log.find("bot:scout", "held"))?.suppressed, true);
+  assert.ok(!(await log.due(undefined, now)).some((row) => row.dedupeKey === "held"));
 });

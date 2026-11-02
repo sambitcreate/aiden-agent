@@ -8,7 +8,7 @@
 // Times are wall-clock times in the Mac's time zone.
 
 import type { BotInterruptions } from "../../../renderer/shared/bots.js";
-import type { BotDeliveryClass, BotDeliveryRow } from "./log.js";
+import { deliveryVisibleAt, type BotDeliveryClass, type BotDeliveryRow } from "./log.js";
 import type { BotDeliveryGate, BotDeliveryInput } from "./funnel.js";
 
 export type BotDeliveryDecision =
@@ -102,6 +102,12 @@ export function createBotDeliveryGate(deps: {
   timeZone(): string;
 }): BotDeliveryGate {
   return {
+    reviewHeld(input, now) { return this.decide(input, now); },
+    async quietUntil(botId, now) {
+      const timeZone = deps.timeZone();
+      const settings = await deps.settings(botId);
+      return inQuietHours(settings, now, timeZone) ? quietHoursEnd(settings, now, timeZone) : undefined;
+    },
     async decide(input: BotDeliveryInput, now: number) {
       const timeZone = deps.timeZone();
       const settings = await deps.settings(input.botId);
@@ -116,14 +122,15 @@ export function createBotDeliveryGate(deps: {
 /**
  * Proactive notifications that reached the person today: each counted row,
  * except that rows sent inside one "While you were away" digest count once.
- * Suppressed rows never count; held rows count once they come due.
+ * Suppressed rows never count. Held rows count on the day of their actual release.
  */
 export function countedToday(rows: readonly BotDeliveryRow[], dayStart: number, now: number): number {
   const digests = new Set<string>();
   let count = 0;
   for (const row of rows) {
     if (!BOT_DELIVERY_COUNTED_CLASSES.has(row.class) || row.suppressed === true || row.quiet === true) continue;
-    if (row.deliverAfter < dayStart || row.deliverAfter > now) continue;
+    const visibleAt = deliveryVisibleAt(row);
+    if (visibleAt === undefined || visibleAt < dayStart || visibleAt > now) continue;
     if (row.coveredBy !== undefined) digests.add(row.coveredBy);
     else count += 1;
   }

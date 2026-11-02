@@ -92,6 +92,10 @@ test("lists due rows newest first, at most 100, after since", async (t) => {
   assert.equal(after.notifications[after.notifications.length - 1]!.id, "run-51");
 
   h.advanceTo(NOW + HOUR);
+  const funnel = createBotDeliveryFunnel({
+    log: h.log, gate: ALWAYS_NOW_GATE, mac: async () => {}, telegram: async () => {}, now: () => NOW + HOUR,
+  });
+  await funnel.flush(NOW + HOUR);
   const due = await h.feed.list(undefined);
   assert.deepEqual(due.notifications[0]?.id, "held", "the held row joins once it is due");
 });

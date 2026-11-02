@@ -39,6 +39,8 @@ export interface BotDeliveryRow {
   createdAt: number;
   /** The row may reach the person (and their phones) from this time on. */
   deliverAfter: number;
+  /** When the flush actually released a held row for phone cursors. */
+  releasedAt?: number;
   /** Kept for the record only: a suppressed row never reaches a person. */
   suppressed?: boolean;
   /** When the Mac banner went out; unset while it is still owed. */
@@ -68,6 +70,7 @@ export interface BotDeliveryLog {
   /** Rows due at `now`, newest first, at most 100. `since` is exclusive. */
   due(since: number | undefined, now: number): Promise<BotDeliveryRow[]>;
   /** Records one channel's success; the first time sticks. */
+  releaseHeld(botId: string, ids: readonly string[], at: number, suppressed: ReadonlySet<string>): Promise<void>;
   markChannel(botId: string, id: string, channel: BotDeliveryChannel, at: number): Promise<void>;
   /** Records that every channel went out; keeps the first time. */
   markSent(botId: string, id: string, at: number): Promise<void>;
@@ -144,6 +147,7 @@ function parseRow(value: unknown, botId: string): BotDeliveryRow | undefined {
     createdAt,
     deliverAfter,
     ...(suppressed ? { suppressed: true } : {}),
+    ...(timestamp(value.releasedAt) !== undefined ? { releasedAt: value.releasedAt as number } : {}),
     ...(macSentAt !== undefined ? { macSentAt } : {}),
     ...(telegramSentAt !== undefined ? { telegramSentAt } : {}),
     ...(sentAt !== undefined ? { sentAt } : {}),
@@ -165,6 +169,15 @@ function parseFile(text: string, botId: string): BotDeliveryRow[] {
     .map((row) => parseRow(row, botId))
     .filter((row): row is BotDeliveryRow => row !== undefined)
     .slice(0, BOT_DELIVERIES_MAX);
+}
+
+/** Already delivered rows from older releases retain their original feed cursor. */
+export function deliveryVisibleAt(row: BotDeliveryRow): number | undefined {
+  if (row.releasedAt !== undefined) return row.releasedAt;
+  if (row.deliverAfter <= row.createdAt || row.macSentAt !== undefined || row.telegramSentAt !== undefined || row.sentAt !== undefined) {
+    return row.deliverAfter;
+  }
+  return undefined;
 }
 
 export function createBotDeliveryLog(options: { profileDir(): string; now?(): number }): BotDeliveryLog {
@@ -218,16 +231,28 @@ export function createBotDeliveryLog(options: { profileDir(): string; now?(): nu
     async due(since, at) {
       const due: BotDeliveryRow[] = [];
       for (const botId of await botIds()) {
-        for (const row of await load(botId)) {
+        for (const row of await serial(botId, () => load(botId))) {
           // A suppressed row is kept for the record, never for a person.
           if (row.suppressed === true) continue;
-          if (row.deliverAfter > at) continue;
-          if (since !== undefined && row.deliverAfter <= since) continue;
+          const visibleAt = deliveryVisibleAt(row);
+          if (visibleAt === undefined || visibleAt > at) continue;
+          if (since !== undefined && visibleAt <= since) continue;
           due.push(row);
         }
       }
       due.sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
       return due.slice(0, BOT_DELIVERIES_DUE_MAX);
+    },
+
+    releaseHeld(botId, ids, at, suppressed) {
+      return serial(botId, async () => {
+        if (forgotten.has(botId)) return;
+        const wanted = new Set(ids);
+        const rows = await load(botId);
+        const releasedAt = Math.max(at, now());
+        await save(botId, rows.map((row) => wanted.has(row.id) && deliveryVisibleAt(row) === undefined
+          ? { ...row, releasedAt, ...(suppressed.has(row.id) && { suppressed: true }) } : row));
+      });
     },
 
     markChannel(botId, id, channel, at) {

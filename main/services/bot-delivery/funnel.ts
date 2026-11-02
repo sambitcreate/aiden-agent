@@ -4,12 +4,11 @@
 // feed reads the log, so a row and its phone notification can never disagree.
 //
 // Quiet hours and the daily cap enter here as the gate (Plan B). The gate is
-// asked once, when the row is created: an existing row keeps the decision it
-// was stored with, and a retry only sends the channels that are still owed.
-// Deferred rows are sent later by the flush; this module only decides and
-// records.
+// checked on admission and again when a deferred group actually goes out.
+// A retry of a released row sends only the channels that are still owed.
 
 import { createHash } from "node:crypto";
+import { createKeyedSerial } from "../bot-routine-notes.js";
 import type { ScheduledTask } from "../types.js";
 import type { BotDeliveryClass, BotDeliveryLog, BotDeliveryRow } from "./log.js";
 
@@ -26,6 +25,9 @@ export interface BotDeliveryInput {
 }
 
 export interface BotDeliveryGate {
+  /** Review a previously deferred group against today’s settings and budget. */
+  reviewHeld?: BotDeliveryGate["decide"];
+  quietUntil?(botId: string, at: number): Promise<number | undefined>;
   decide(
     input: BotDeliveryInput,
     now: number,
@@ -107,26 +109,19 @@ export function createBotDeliveryFunnel(deps: {
     };
   }
 
+  async function limitNote(botId: string, key: string | undefined, at: number) {
+    if (!key || await deps.log.find(botId, key)) return;
+    const { row } = await deps.log.append({
+      botId, class: "digest", dedupeKey: key, title: (await deps.botName?.(botId)) ?? "Your Bot",
+      body: BOT_DELIVERY_LIMIT_NOTE, status: "info", createdAt: at, deliverAfter: at,
+    });
+    await send(row, inputOf(row), at).catch(() => undefined);
+  }
+
   /** Asks the gate and stores the row it decided for. */
   async function record(input: BotDeliveryInput, at: number): Promise<{ row: BotDeliveryRow; now: boolean }> {
     const decision = await deps.gate.decide(input, at);
-    if (decision.kind === "suppress" && decision.digestKey !== undefined) {
-      // The first row held back today leaves one note that more is in the chat.
-      const note = await deps.log.find(input.botId, decision.digestKey);
-      if (!note) {
-        const { row: digest } = await deps.log.append({
-          botId: input.botId,
-          class: "digest",
-          dedupeKey: decision.digestKey,
-          title: (await deps.botName?.(input.botId)) ?? "Your Bot",
-          body: BOT_DELIVERY_LIMIT_NOTE,
-          status: "info",
-          createdAt: at,
-          deliverAfter: at,
-        });
-        await send(digest, inputOf(digest), at).catch(() => undefined);
-      }
-    }
+    if (decision.kind === "suppress") await limitNote(input.botId, decision.digestKey, at);
     const { row } = await deps.log.append({
       botId: input.botId,
       class: input.class,
@@ -145,17 +140,28 @@ export function createBotDeliveryFunnel(deps: {
     return { row, now: decision.kind === "now" };
   }
 
-  const inFlight = new Map<string, Promise<"sent" | "deferred" | "suppressed" | "duplicate">>();
+  const serial = createKeyedSerial();
 
   async function flushBot(botId: string, at: number): Promise<number | undefined> {
     const rows = await deps.log.list(botId);
-    // A digest whose channels didn't all go out last time: only the owed ones.
-    for (const row of rows.filter((entry) => entry.class === "digest" && entry.sentAt === undefined && entry.suppressed !== true)) {
+    const held = rows.filter((row) => row.suppressed !== true && row.sentAt === undefined && row.deliverAfter > row.createdAt);
+    let due = held.filter((row) => row.deliverAfter <= at);
+    const later = held.filter((row) => row.deliverAfter > at).map((row) => row.deliverAfter);
+    const digests = rows.filter((row) => row.class === "digest" && row.sentAt === undefined && !row.suppressed);
+    const quietUntil = due.length || digests.length ? await deps.gate.quietUntil?.(botId, at) : undefined;
+    for (const row of digests) {
+      if (quietUntil !== undefined && row.dedupeKey.startsWith("digest:away:")) continue;
       await send(row, inputOf(row), at).catch(() => undefined);
     }
-    const held = rows.filter((row) => row.suppressed !== true && row.sentAt === undefined && row.deliverAfter > row.createdAt);
-    const due = held.filter((row) => row.deliverAfter <= at);
-    const later = held.filter((row) => row.deliverAfter > at).map((row) => row.deliverAfter);
+    if (quietUntil !== undefined) return Math.min(quietUntil, ...later);
+    const unreleased = due.filter((row) => row.releasedAt === undefined && row.macSentAt === undefined && row.telegramSentAt === undefined);
+    const counted = unreleased.filter((row) => row.class === "proposal" || row.class === "routine_result");
+    const decision = counted.length ? await deps.gate.reviewHeld?.(inputOf(counted[0]!), at) : undefined;
+    if (decision?.kind === "defer") return Math.min(decision.until, ...later);
+    if (decision?.kind === "suppress") await limitNote(botId, decision.digestKey, at);
+    const suppressed = new Set(decision?.kind === "suppress" ? counted.map((row) => row.id) : []);
+    if (unreleased.length) await deps.log.releaseHeld(botId, unreleased.map((row) => row.id), at, suppressed);
+    due = due.filter((row) => !suppressed.has(row.id));
     const issues = due.filter((row) => row.class === "issue");
     const others = due.filter((row) => row.class !== "issue");
     for (const row of issues) await send(row, inputOf(row), at).catch(() => undefined);
@@ -181,38 +187,19 @@ export function createBotDeliveryFunnel(deps: {
     return later.length ? Math.min(...later) : undefined;
   }
 
-  // One flush per Bot at a time, so overlapping flushes never send one digest twice.
-  const flushing = new Map<string, Promise<number | undefined>>();
-  function flushBotSerial(botId: string, at: number): Promise<number | undefined> {
-    const next = (flushing.get(botId) ?? Promise.resolve(undefined)).catch(() => undefined).then(() => flushBot(botId, at));
-    flushing.set(botId, next);
-    void next.finally(() => {
-      if (flushing.get(botId) === next) flushing.delete(botId);
-    }).catch(() => undefined);
-    return next;
-  }
-
   return {
     async flush(at) {
       let next: number | undefined;
       for (const botId of await deps.log.botIds()) {
-        const botNext = await flushBotSerial(botId, at).catch(() => undefined);
+        const botNext = await serial(botId, () => flushBot(botId, at)).catch(() => undefined);
         if (botNext !== undefined) next = next === undefined ? botNext : Math.min(next, botNext);
       }
       return next;
     },
 
     deliver(input) {
-      // One delivery per key at a time: concurrent same-key calls would both
-      // miss the stored row and both send.
-      const key = `${input.botId}\0${input.dedupeKey}`;
-      const previous = inFlight.get(key) ?? Promise.resolve();
-      const next = previous.catch(() => undefined).then(() => deliverOnce(input));
-      inFlight.set(key, next);
-      void next.finally(() => {
-        if (inFlight.get(key) === next) inFlight.delete(key);
-      }).catch(() => undefined);
-      return next;
+      // The budget decision and the durable row it counts share a lane with flushes.
+      return serial(input.botId, () => deliverOnce(input));
     },
   };
 
@@ -230,6 +217,13 @@ export function createBotDeliveryFunnel(deps: {
       if (row.sentAt !== undefined) return "duplicate";
       // A row the gate just released goes now; a stored one waits for its time.
       if (created ? !created.now : row.deliverAfter > at) return "deferred";
+      if (stored && row.deliverAfter > row.createdAt) {
+        // Only the flush releases held rows, including retries after a restart.
+        await flushBot(input.botId, at);
+        const released = await deps.log.find(input.botId, input.dedupeKey);
+        if (released?.suppressed) return "suppressed";
+        return released?.sentAt === undefined ? "deferred" : "sent";
+      }
       return send(row, input, at);
     }
   }
