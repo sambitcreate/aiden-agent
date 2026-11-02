@@ -558,18 +558,23 @@ class AidenInboxHomeTriageTest {
 
     @Test
     fun aPageWithOutputNewerThanTheSwipedRowStaysUnreadWhileTheReadIsOut() {
-        val desk = Desk("home-a")
-        desk.page = listOf(summary("chat-1", unread = true, lastAssistantAt = reply))
-        scenario(listOf(desk)) {
-            connectedTo(desk)
-            desk.heldRead = CountDownLatch(1)
-            home.markInboxRead("chat-1")
-            withContext(Dispatchers.IO) { check(desk.readArrived.await(5, TimeUnit.SECONDS)) }
-            assertFalse(row("chat-1").unread)
-            // A reply the person never saw arrives before the read is taken.
-            desk.page = listOf(summary("chat-1", unread = true, lastAssistantAt = reply.plusSeconds(60)))
-            reload()
-            assertTrue("A read of the older reply doesn't cover the new one", row("chat-1").unread)
+        for (incomingTime in listOf(reply.plusSeconds(60), reply)) {
+            val desk = Desk("home-a")
+            desk.page = listOf(summary("chat-1", unread = true, lastAssistantAt = reply))
+            scenario(listOf(desk)) {
+                connectedTo(desk)
+                desk.heldRead = CountDownLatch(1)
+                home.markInboxRead("chat-1")
+                withContext(Dispatchers.IO) { check(desk.readArrived.await(5, TimeUnit.SECONDS)) }
+                assertFalse(row("chat-1").unread)
+                // Distinct replies remain unread even when their timestamps share a millisecond.
+                desk.page = listOf(summary("chat-1", unread = true, lastAssistantAt = incomingTime).copy(lastAssistantMessageId = "new-reply"))
+                reload()
+                assertTrue("A read of the older reply doesn't cover the new one", row("chat-1").unread)
+                assertEquals("new-reply", row("chat-1").lastAssistantMessageId)
+                assertEquals("new-reply", saved("chat-1")?.lastAssistantMessageId)
+                assertEquals(true, saved("chat-1")?.unread)
+            }
         }
     }
 

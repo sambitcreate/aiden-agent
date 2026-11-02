@@ -537,3 +537,5 @@ Inbox reads carry the displayed reply ID, including reads sent after Done and Sn
 - An iOS detail/view admission keeps its whole-row generation across a later triage edit, so an older in-flight refresh cannot erase the viewed reply or restore its unread marker. A genuinely newer page reply still wins.
 - Phone search offers Mark not done and Unsnooze on held rows through the same swipe and accessibility actions. Undo restores the original Done timestamp with its revision guard.
 - Host-feed Bot attention/state reads remain transcript-free; reply times come only from an already-open live feed, never by opening a closed conversation.
+
+- Detail-versus-page precedence uses the same identity-aware reply boundary as Mark read: two different reply IDs at the same millisecond do not let an admitted read row replace the incoming unseen reply. Native refresh/cache tests cover tied IDs, strictly newer pages and stale pages.

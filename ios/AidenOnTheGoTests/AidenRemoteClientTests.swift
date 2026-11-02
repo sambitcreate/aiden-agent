@@ -7453,17 +7453,36 @@ extension AidenRemoteClientTests {
 
     @MainActor
     func testInboxPlainTriagePreservesNewReplyFromAnInflightRefresh() async throws {
-        try await checkInboxTriageRefresh(admitDetail: false)
+        try await checkInboxTriageRefresh(.newPage)
     }
 
     @MainActor
     func testInboxDetailViewedBeforeTriageSurvivesAnInflightStaleRefresh() async throws {
-        try await checkInboxTriageRefresh(admitDetail: true)
+        try await checkInboxTriageRefresh(.stalePageAfterDetail)
     }
 
     @MainActor
-    private func checkInboxTriageRefresh(admitDetail: Bool) async throws {
+    func testInboxDistinctEqualTimeReplySurvivesDetailAdmissionAndTriage() async throws {
+        try await checkInboxTriageRefresh(.equalTimePageAfterDetail)
+    }
+
+    @MainActor
+    func testInboxNewerPageReplySurvivesDetailAdmissionAndTriage() async throws {
+        try await checkInboxTriageRefresh(.newerPageAfterDetail)
+    }
+
+    private enum InboxTriageRefreshScenario {
+        case newPage, stalePageAfterDetail, equalTimePageAfterDetail, newerPageAfterDetail
+    }
+
+    @MainActor
+    private func checkInboxTriageRefresh(_ scenario: InboxTriageRefreshScenario) async throws {
+        let admitDetail = scenario != .newPage
+        let admissionWins = scenario == .stalePageAfterDetail
         let newerReply = "2026-08-18T19:10:00.000Z"
+        let detailReply = scenario == .newerPageAfterDetail ? "2026-08-18T19:09:00.000Z" : newerReply
+        let expectedID = admissionWins ? "viewed-reply" : "new-reply"
+        let expectedTitle = admissionWins ? "Viewed reply" : "New reply"
         let snoozeUntil = try Self.remoteDate("2099-01-01T09:00:00.000Z")
         let page = """
         {"summaries":[{"id":"\(Self.inboxChatID)","workspaceId":"alpha","title":"New reply","titlePending":false,
@@ -7496,14 +7515,14 @@ extension AidenRemoteClientTests {
                     return nil
                 }
                 defer { AidenRemoteMockURLProtocol.hold = nil }
-                answerNewer = !admitDetail
+                answerNewer = !admissionWins
                 let refresh = Task { await inbox.home.load(coordinator: inbox.coordinator) }
                 await fulfillment(of: [refreshArrived], timeout: 5)
                 if admitDetail {
-                    let date = try Self.remoteDate(newerReply)
+                    let date = try Self.remoteDate(detailReply)
                     inbox.home.accept(AidenChat(
-                        id: Self.inboxChatID, workspaceId: "alpha", title: "New reply", providerId: "p", modelId: "m",
-                        messages: [AidenChatMessage(id: "new-reply", role: .assistant, text: "Finished", createdAt: date)],
+                        id: Self.inboxChatID, workspaceId: "alpha", title: "Viewed reply", providerId: "p", modelId: "m",
+                        messages: [AidenChatMessage(id: "viewed-reply", role: .assistant, text: "Finished", createdAt: date)],
                         createdAt: date.addingTimeInterval(-3600), updatedAt: date,
                         revision: "rev_FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
                     ))
@@ -7526,21 +7545,23 @@ extension AidenRemoteClientTests {
                     _ = await write.value
                 }
                 let row = try XCTUnwrap(inbox.home.chats.first)
-                XCTAssertEqual(row.title, "New reply")
+                XCTAssertEqual(row.title, expectedTitle)
                 XCTAssertEqual(row.inbox.lastAssistantAt, try Self.remoteDate(newerReply))
-                XCTAssertEqual(row.inbox.lastAssistantMessageId, "new-reply")
-                XCTAssertEqual(row.unread, !admitDetail)
+                XCTAssertEqual(row.inbox.lastAssistantMessageId, expectedID)
+                XCTAssertEqual(row.unread, !admissionWins)
                 XCTAssertEqual(row.inbox.triageRevision, 4)
                 XCTAssertEqual(row.inbox.doneAt != nil, done)
                 XCTAssertEqual(row.inbox.snoozedUntil != nil, !done)
                 var saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
-                for _ in 0..<100 where saved?.inbox.lastAssistantMessageId != "new-reply" || saved?.inbox.triageRevision != 4 {
+                for _ in 0..<100 where saved?.inbox.lastAssistantMessageId != expectedID || saved?.inbox.triageRevision != 4 || saved?.unread != !admissionWins || saved?.title != expectedTitle {
                     try await Task.sleep(for: .milliseconds(20))
                     saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
                 }
-                XCTAssertEqual(saved?.inbox.lastAssistantMessageId, "new-reply")
+                XCTAssertEqual(saved?.title, expectedTitle)
+                XCTAssertEqual(saved?.inbox.lastAssistantAt, try Self.remoteDate(newerReply))
+                XCTAssertEqual(saved?.inbox.lastAssistantMessageId, expectedID)
                 XCTAssertEqual(saved?.inbox.triageRevision, 4)
-                XCTAssertEqual(saved?.unread, !admitDetail)
+                XCTAssertEqual(saved?.unread, !admissionWins)
             }
         }
     }

@@ -713,9 +713,10 @@ final class AidenHomeModel {
                                     pageRow = chats[index]
                                 }
                                 // A detail/view admitted after the request owns its row.
-                                // Triage must not erase that earlier admission's provenance.
+                                // Triage keeps that admission's provenance, but a distinct
+                                // reply at the same millisecond is outside its read boundary.
                                 if edit.wholeGeneration > requestEditGeneration, let admitted = edit.summary,
-                                   (admitted.inbox.lastAssistantAt ?? .distantPast) >= (pageRow.inbox.lastAssistantAt ?? .distantPast) {
+                                   admitted.inbox.coversReply(in: pageRow.inbox) {
                                     pageRow = admitted
                                 }
                                 // A triage or read edit owns its fields. Keep the
