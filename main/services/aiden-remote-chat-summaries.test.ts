@@ -209,7 +209,7 @@ test("summaries project attention row states and honest unread from shared marke
     metadata("chat-ask", 5_000),
     metadata("chat-busy", 4_000, { lastAssistantAt: 2_000 }),
     metadata("chat-seen", 3_000, { lastAssistantAt: 2_500 }),
-    metadata("chat-new", 2_900, { lastAssistantAt: 2_800 }),
+    metadata("chat-new", 2_900, { lastAssistantAt: 2_800, lastAssistantMessageId: "reply-2" }),
     metadata("chat-failed", 2_850, { lastAssistantAt: 2_700, lastAssistantFailed: true }),
   ], {
     activity: () => ({
@@ -244,6 +244,7 @@ test("summaries project attention row states and honest unread from shared marke
     ["chat-failed"],
   );
   // The newest output's time goes out as RFC 3339 (revision 50), and only when there is one.
+  assert.equal(byId["chat-new"]!.lastAssistantMessageId, "reply-2");
   assert.equal(byId["chat-new"]!.lastAssistantAt, new Date(2_800).toISOString());
   assert.equal("lastAssistantAt" in byId["chat-ask"]!, false);
   assert.ok(page.summaries.every((summary) => !("lastAssistantFailed" in summary)));

@@ -564,13 +564,16 @@ function fnv1a32(text: string): string {
 export function markReadThroughMessageId(
   messages: readonly { id: string; role: string; createdAt: number }[],
   renderedLastAssistantAt: number | undefined,
+  renderedSequence?: number,
 ): string | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]!;
-    if (message.role !== "user" && message.role !== "assistant") continue;
-    if (renderedLastAssistantAt === undefined || message.createdAt <= renderedLastAssistantAt) return message.id;
+  if (renderedSequence !== undefined) {
+    const reply = messages[renderedSequence];
+    return reply?.role === "assistant" && reply.createdAt === renderedLastAssistantAt ? reply.id : null;
   }
-  return null;
+  if (renderedLastAssistantAt === undefined) return null;
+  // Without a sequence, the first matching reply is the conservative
+  // boundary when two replies share the same millisecond.
+  return messages.find((message) => message.role === "assistant" && message.createdAt === renderedLastAssistantAt)?.id ?? null;
 }
 
 export interface NeedsYouLeaveInput {

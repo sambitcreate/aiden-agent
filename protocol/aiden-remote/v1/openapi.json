@@ -977,6 +977,12 @@
                   "done": {
                     "type": "boolean"
                   },
+                  "restoreDoneAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "maxLength": 40,
+                    "description": "Original Done time to restore on Undo. Requires done=true and ifRevision."
+                  },
                   "snoozeUntil": {
                     "oneOf": [
                       {
@@ -992,6 +998,12 @@
                   "ifRevision": {
                     "type": "integer",
                     "minimum": 0
+                  }
+                },
+                "dependentSchemas": {
+                  "restoreDoneAt": {
+                    "required": ["done", "ifRevision"],
+                    "properties": { "done": { "const": true } }
                   }
                 },
                 "anyOf": [
@@ -11417,6 +11429,11 @@
             "description": "Additive in contract revision 50. While a run is live, when it started. Absent otherwise.",
             "type": "string",
             "format": "date-time"
+          },
+          "lastAssistantMessageId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+            "description": "Message boundary for read actions on this Inbox row."
           },
           "lastAssistantAt": {
             "description": "Additive in contract revision 50. When the chat's newest assistant output (or failed turn) was persisted. Absent before the first reply.",

@@ -520,3 +520,12 @@ test("a Bot search reaches the host exactly as typed, and plain words still work
   }
   assert.equal(hostQueryValue("plan week"), "plan+week");
 });
+
+test("an unknown Inbox placement falls back without rejecting the paired host's page", async () => {
+  const row = { ...contract.chatSummaries.summaries[0], inboxBucket: "future_bucket", inboxSortAt: "unknown" };
+  const result = await peerOperationResult({ operation: "summaries" }, { summaries: [row] }) as typeof contract.chatSummaries;
+  assert.equal(result.summaries[0]?.id, row.id);
+  assert.equal(result.summaries[0]?.inboxBucket, undefined);
+  assert.equal(result.summaries[0]?.inboxSortAt, undefined);
+  await assert.rejects(async () => peerOperationResult({ operation: "summaries" }, { summaries: [{ ...row, unread: "yes" }] }));
+});

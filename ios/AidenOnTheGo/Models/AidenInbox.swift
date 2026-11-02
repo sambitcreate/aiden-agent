@@ -39,6 +39,7 @@ enum AidenInboxSection: String, CaseIterable, Equatable, Sendable {
 struct AidenChatInboxSignals: Codable, Equatable, Sendable {
     var bucket: AidenInboxBucket?
     var sortAt: Date?
+    var lastAssistantMessageId: String?
     var lastAssistantAt: Date?
     var attentionSince: Date?
     var runStartedAt: Date?
@@ -51,6 +52,7 @@ struct AidenChatInboxSignals: Codable, Equatable, Sendable {
     init(
         bucket: AidenInboxBucket? = nil,
         sortAt: Date? = nil,
+        lastAssistantMessageId: String? = nil,
         lastAssistantAt: Date? = nil,
         attentionSince: Date? = nil,
         runStartedAt: Date? = nil,
@@ -62,6 +64,7 @@ struct AidenChatInboxSignals: Codable, Equatable, Sendable {
         let paired = bucket != nil && sortAt != nil
         self.bucket = paired ? bucket : nil
         self.sortAt = paired ? sortAt : nil
+        self.lastAssistantMessageId = lastAssistantMessageId.flatMap { AidenChatSummary.isValidIdentifier($0) ? $0 : nil }
         self.lastAssistantAt = lastAssistantAt
         self.attentionSince = attentionSince
         self.runStartedAt = runStartedAt
@@ -79,6 +82,7 @@ struct AidenChatInboxSignals: Codable, Equatable, Sendable {
         self.init(
             bucket: ((try? values.decodeIfPresent(String.self, forKey: .bucket)) ?? nil).flatMap(AidenInboxBucket.init(rawValue:)),
             sortAt: date(.sortAt),
+            lastAssistantMessageId: try? values.decode(String.self, forKey: .lastAssistantMessageId),
             lastAssistantAt: date(.lastAssistantAt),
             attentionSince: date(.attentionSince),
             runStartedAt: date(.runStartedAt),
@@ -97,11 +101,19 @@ struct AidenChatInboxSignals: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case bucket, sortAt, lastAssistantAt, attentionSince, runStartedAt, pinnedAt, doneAt, snoozedUntil, triageRevision
+        case bucket, sortAt, lastAssistantMessageId, lastAssistantAt, attentionSince, runStartedAt, pinnedAt, doneAt, snoozedUntil, triageRevision
     }
 }
 
 extension AidenChatInboxSignals {
+    func coversReply(in other: Self) -> Bool {
+        let boundary = lastAssistantAt ?? .distantPast
+        let otherTime = other.lastAssistantAt ?? .distantPast
+        if boundary != otherTime { return boundary > otherTime }
+        guard let id = lastAssistantMessageId, let otherID = other.lastAssistantMessageId else { return true }
+        return id == otherID
+    }
+
     /// The row's signals once `chat` is admitted: a chat detail carries no
     /// triage, but its newest reply is newer output than the row may know of,
     /// which ends a Done hold and outdates the host's placement. Only
@@ -109,9 +121,10 @@ extension AidenChatInboxSignals {
     /// cancelled turn does not).
     func admitting(_ chat: AidenChat) -> Self {
         var signals = self
-        guard let newest = chat.messages.filter(\.isInboxReply).map(\.createdAt).max(),
-              newest > (lastAssistantAt ?? .distantPast) else { return signals }
-        signals.lastAssistantAt = newest
+        guard let newest = chat.messages.last(where: \.isInboxReply),
+              newest.createdAt > (lastAssistantAt ?? .distantPast) else { return signals }
+        signals.lastAssistantMessageId = newest.id
+        signals.lastAssistantAt = newest.createdAt
         signals.invalidateHostPlacement()
         return signals
     }

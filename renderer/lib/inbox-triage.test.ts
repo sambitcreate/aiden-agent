@@ -274,13 +274,25 @@ test("Undo of Done on a chat newer output had reopened puts it back where it was
   const undone = await store.set("a", write.patch, { ifRevision: write.ifRevision });
   assert.ok(undone.ok);
   assert.equal(shelf(undone.entry, reply), "updates");
-  // A Done that still held is restored as Done.
+  // Undo of Mark not done restores the original hold. Output that arrived
+  // between the two actions still ends it.
+  now = 5_000;
+  const original = await store.set("b", { done: true });
+  assert.ok(original.ok);
+  now = 6_000;
+  const reopened = await store.set("b", { done: false }, { ifRevision: original.entry.revision });
+  assert.ok(reopened.ok);
   const [held] = inboxTriageUndoWrites({
-    kind: "done",
-    items: [{ target: target("b"), before: { revision: 1, updatedAt: 0, doneAt: 1_000 }, lastAssistantAt: 900, patch: { done: true }, revision: 2 }],
-    at: 3_000,
+    kind: "undone",
+    items: [{ target: target("b"), before: original.entry, lastAssistantAt: 4_500, patch: { done: false }, revision: reopened.entry.revision }],
+    at: now,
   });
-  assert.deepEqual(held?.patch, { done: true });
+  assert.ok(held);
+  now = 8_000;
+  const restored = await store.set("b", held.patch, { ifRevision: held.ifRevision });
+  assert.ok(restored.ok);
+  assert.equal(restored.entry.doneAt, 5_000);
+  assert.equal(shelf(restored.entry, 7_000), "updates");
 });
 
 test("writes group by host in first-seen order", () => {

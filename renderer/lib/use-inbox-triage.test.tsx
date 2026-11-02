@@ -242,3 +242,16 @@ test("Undo leaves a chat another device changed since, and says so", async () =>
   assert.equal(triageToast()?.title, "That chat changed since, so Undo left it as it is.");
   assert.equal(triageToast()?.action, undefined, "nothing left to undo");
 });
+
+test("a stale initial unpin is refused and offers no Undo", async () => {
+  const store = installStore({ c1: { revision: 2, updatedAt: 12, pinnedAt: 10 } });
+  const { result } = await mount();
+  let acting!: Promise<void>;
+  act(() => { acting = result.current.act("unpin", [ROW]); });
+  assert.deepEqual(store.writes()[0], ["c1", { pinned: false }, 2]);
+  await settle(store.answers[0], { ok: false, code: "revision_conflict", currentRevision: 3, entry: null });
+  await act(() => acting);
+  assert.equal(result.current.entryFor(ROW)?.pinnedAt, 10);
+  assert.equal(triageToast(), undefined);
+  assert.ok(shownToasts().some((item) => item.type === "error" && item.title === "That chat changed on another device. Try again."));
+});

@@ -129,6 +129,7 @@
         "unread": false,
         "attentionSince": "2026-08-18T19:01:08.000Z",
         "runStartedAt": "2026-08-18T19:01:00.000Z",
+        "lastAssistantMessageId": "reply-fixture-02",
         "lastAssistantAt": "2026-08-18T19:01:05.000Z",
         "inboxBucket": "needs_you",
         "inboxSortAt": "2026-08-18T19:01:08.000Z"

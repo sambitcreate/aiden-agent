@@ -945,6 +945,26 @@ class AidenRemoteClient(
      * Report that the user viewed a chat, clearing its unread marker on every
      * surface. With a message id the marker lands exactly on what was shown.
      */
+    suspend fun markInboxRead(row: AidenChatSummary) {
+        row.lastAssistantMessageId?.takeIf(AidenChatForkLineageRow.IDENTIFIER::matches)?.let { markChatRead(row.id, it); return }
+        val detail = chat(row.id)
+        val tail = detail.messages.lastOrNull()?.id ?: throw AidenRemoteClientException.InvalidResponse("Chat has no messages.")
+        if (detail.revision != row.revision) {
+            var cursor: String? = null
+            val seen = mutableSetOf<String>()
+            while (true) {
+                val page = chatSummaryPage(cursor = cursor)
+                val current = page.summaries.firstOrNull { it.id == row.id }
+                if (current != null) {
+                    if (current.revision != row.revision) throw AidenRemoteClientException.InvalidResponse("Chat has changed.")
+                    break
+                }
+                cursor = page.nextCursor?.takeIf(seen::add) ?: throw AidenRemoteClientException.InvalidResponse("Chat is no longer listed.")
+            }
+        }
+        markChatRead(row.id, tail)
+    }
+
     suspend fun markChatRead(id: String, throughMessageId: String? = null) =
         executeRequest<Unit>(
             "/chats/$id/read",

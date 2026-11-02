@@ -903,8 +903,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       const adapter = new RemoteHostAdapter(view);
       try {
         await adapter.ready();
-        // Summaries name no message, so the host marks through its newest output.
-        const result = await adapter.markRead(chat.chatId);
+        const result = await adapter.markSummaryRead(chat.chatId, chat.lastAssistantMessageId, chat.revision);
         if (!result.ok) throw new Error(result.error.message || MARK_READ_FAILED);
       } finally {
         adapter.dispose();
@@ -1433,13 +1432,14 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   // False when the chat holds no message the row's output names, or the host
   // wrote no marker.
   const sendLocalChatRead = async (chat: ChatMeta): Promise<boolean> => {
-    // Always read the chat afresh: a cached copy can predate the reply the row shows.
+    if (chat.lastAssistantMessageId) return chatsApi.markRead(chat.id, chat.lastAssistantMessageId);
+    // Rows saved by an older build carry only the reply timestamp and sequence.
     const session = await qc.fetchQuery({
       queryKey: queryKeys.chat(chat.id),
       queryFn: () => chatsApi.get(chat.id),
       staleTime: 0,
     });
-    const through = session ? markReadThroughMessageId(session.messages, chat.lastAssistantAt) : null;
+    const through = session ? markReadThroughMessageId(session.messages, chat.lastAssistantAt, chat.lastAssistantSequence) : null;
     if (!through) return false;
     // The host writes no marker when the chat or that message is gone by now.
     return await chatsApi.markRead(chat.id, through);

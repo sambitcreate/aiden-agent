@@ -510,3 +510,23 @@ test("the desktop IPC refuses chats this host doesn't list, Bot chats and featur
   await assert.rejects(setChatTriageFromRenderer(dependencies, "design-chat", { pinned: true }), /no longer exists/u);
   assert.deepEqual(Object.keys((await store.snapshot()).chats).sort(), ["assistant-chat", "chat-a"]);
 });
+
+test("a failed snooze clear waits before retrying and recovers once storage is writable", async (t) => {
+  const root = await tmpDir(t);
+  const timers = manualTimers();
+  let now = 100;
+  const store = new ChatTriageStore(() => root, { ...timers, now: () => now });
+  t.after(() => store.dispose());
+  await store.start();
+  await store.set("chat-a", { snoozeUntil: 200 });
+  const file = path.join(root, "chat-triage.json");
+  await fs.rename(file, file + ".saved");
+  await fs.mkdir(file);
+  now = 200;
+  await assert.rejects(store.checkSnoozes());
+  assert.deepEqual(timers.live().map((timer) => timer.ms), [SNOOZE_WAKE_CHECK_MS]);
+  await fs.rmdir(file);
+  await fs.rename(file + ".saved", file);
+  await store.checkSnoozes();
+  assert.equal((await store.get("chat-a"))?.snoozedUntil, undefined);
+});

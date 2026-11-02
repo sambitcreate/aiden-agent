@@ -273,7 +273,9 @@ export function useInboxTriage({
     const markRead = options?.markRead;
     if (markRead) markReadsPending(rows);
     write(rows.map((row, index) => [row.key, predictTriage(before[index], patch, now)] as const));
-    const outcomes = await sendWrites(rows.map((row) => ({ target: row, patch })), viewsRef.current);
+    const outcomes = await sendWrites(rows.map((row, index) => ({
+      target: row, patch, ifRevision: before[index]?.revision ?? 0,
+    })), viewsRef.current);
     const items: InboxTriageUndoItem[] = [];
     const written: InboxTriageRow[] = [];
     let failure: string | null = null;
@@ -290,7 +292,7 @@ export function useInboxTriage({
         });
         return [row.key, outcome.entry] as const;
       }
-      if (!outcome.conflict) failure ??= outcome.message;
+      failure ??= outcome.conflict ? "That chat changed on another device. Try again." : outcome.message;
       return [row.key, row.hostId === LOCAL_SIDEBAR_HOST_ID ? null : before[index] ?? null] as const;
     }));
     if (failure) toast.error(failure);

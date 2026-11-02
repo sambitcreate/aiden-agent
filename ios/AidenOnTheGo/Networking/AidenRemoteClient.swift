@@ -1859,6 +1859,29 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     /// Report that the user viewed a chat, clearing its unread marker on every
     /// surface. With a message id the marker lands exactly on what was shown.
+    func markInboxRead(through row: AidenChatSummary) async throws {
+        if let id = row.inbox.lastAssistantMessageId {
+            try await markChatRead(id: row.id, throughMessageId: id)
+            return
+        }
+        let detail = try await chat(id: row.id)
+        guard let tail = detail.messages.last?.id else { throw AidenRemoteClientError.invalidResponse }
+        if detail.revision != row.revision {
+            var cursor: String?
+            var seen = Set<String>()
+            while true {
+                let page = try await chatSummaries(cursor: cursor)
+                if let current = page.summaries.first(where: { $0.id == row.id }) {
+                    guard current.revision == row.revision else { throw AidenRemoteClientError.invalidResponse }
+                    break
+                }
+                guard let next = page.nextCursor, seen.insert(next).inserted else { throw AidenRemoteClientError.invalidResponse }
+                cursor = next
+            }
+        }
+        try await markChatRead(id: row.id, throughMessageId: tail)
+    }
+
     func markChatRead(id: String, throughMessageId: String? = nil) async throws {
         try await sendWithoutResponse(
             method: "POST",

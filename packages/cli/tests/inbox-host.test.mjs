@@ -164,7 +164,9 @@ test("a desktop paired to aiden serve reads its chats' Inbox state and answers i
   assert.ok(replied.lastAssistantAt, JSON.stringify(replied));
   assert.equal(replied.attentionSince, undefined);
   assert.equal(replied.inboxBucket, "updates"); assert.equal(replied.inboxSortAt, replied.lastAssistantAt);
-  const read = await mac.request(`/chats/${chatId}/read`, "POST", {}, "read-inbox-test-000001");
+  const transcript = await mac.request(`/chats/${chatId}/messages?limit=1`);
+  assert.equal(replied.lastAssistantMessageId, transcript.data.messages[0].id);
+  const read = await mac.request(`/chats/${chatId}/read`, "POST", { throughMessageId: replied.lastAssistantMessageId }, "read-inbox-test-000001");
   assert.ok(read.status === 200 || read.status === 204, JSON.stringify(read));
   const seen = await summaryRow();
   assert.equal(seen.unread, false); assert.equal(seen.inboxBucket, "earlier"); assert.equal(seen.inboxSortAt, seen.updatedAt);

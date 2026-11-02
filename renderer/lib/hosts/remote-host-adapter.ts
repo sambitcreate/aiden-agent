@@ -354,6 +354,33 @@ export class RemoteHostAdapter implements HostChatAdapter {
     });
   }
 
+  /** A legacy row has no message ID. Capture its tail, then verify the list
+   * still describes the revision the person acted on before acknowledging it. */
+  async markSummaryRead(chatId: string, messageId?: string, revision?: string): Promise<HostChatResult<void>> {
+    if (messageId) return this.markRead(chatId, messageId);
+    return this.fenced(async () => {
+      const changed = { ok: false, error: { code: "failed", message: "Open the chat to mark its latest reply read." } } as const;
+      if (!revision) return changed;
+      const window = await this.getMessagesWindow(chatId, { limit: 1 });
+      if (!window.ok) return window;
+      const tail = window.value.messages[window.value.messages.length - 1];
+      if (!tail) return changed;
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      do {
+        const page = await this.transport.call(this.hostId, { operation: "summaries", ...(cursor ? { cursor } : {}) });
+        if (!page.ok) return page;
+        const data = record(page.value);
+        const row = Array.isArray(data.summaries) ? data.summaries.find((item) => record(item).id === chatId) : undefined;
+        if (row) return record(row).revision === revision ? this.markRead(chatId, tail.id) : changed;
+        cursor = typeof data.nextCursor === "string" ? data.nextCursor : undefined;
+        if (!cursor || seen.has(cursor)) break;
+        seen.add(cursor);
+      } while (true);
+      return changed;
+    });
+  }
+
   markRead(chatId: string, throughMessageId?: string): Promise<HostChatResult<void>> {
     return this.fenced(async () => {
       const outcome = await this.transport.call(this.hostId, {
@@ -377,6 +404,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
     const body: Record<string, unknown> = {};
     if (patch.pinned !== undefined) body.pinned = patch.pinned;
     if (patch.done !== undefined) body.done = patch.done;
+    if (patch.restoreDoneAt !== undefined) body.restoreDoneAt = new Date(patch.restoreDoneAt).toISOString();
     if (patch.snoozeUntil !== undefined) body.snoozeUntil = patch.snoozeUntil === null ? null : new Date(patch.snoozeUntil).toISOString();
     if (ifRevision !== undefined) body.ifRevision = ifRevision;
     const operation: PeerOperation = { operation: "setTriage", resourceId: chatId, body, idempotencyKey: mintPeerIdempotencyKey() };

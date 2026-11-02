@@ -22,6 +22,7 @@ export function parseChatTriageRequest(id: unknown, patch: unknown, ifRevision?:
     chatId: id,
     patch: {
       ...("pinned" in patch ? { pinned: patch.pinned } : {}),
+      ...("restoreDoneAt" in patch ? { restoreDoneAt: patch.restoreDoneAt } : {}),
       ...("done" in patch ? { done: patch.done } : {}),
       ...("snoozeUntil" in patch ? { snoozeUntil: patch.snoozeUntil } : {}),
     },

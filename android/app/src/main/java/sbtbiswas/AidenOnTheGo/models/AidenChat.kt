@@ -1039,6 +1039,7 @@ data class AidenChatSummary(
     @Serializable(with = AidenTolerantInstantSerializer::class)
     val inboxSortAtWire: Instant? = null,
     /** Revision 50 Inbox times; each is dropped on its own when malformed. */
+    @Serializable(with = AidenTolerantStringSerializer::class) val lastAssistantMessageId: String? = null,
     @Serializable(with = AidenTolerantInstantSerializer::class) val lastAssistantAt: Instant? = null,
     @Serializable(with = AidenTolerantInstantSerializer::class) val attentionSince: Instant? = null,
     @Serializable(with = AidenTolerantInstantSerializer::class) val runStartedAt: Instant? = null,
@@ -1069,6 +1070,7 @@ data class AidenChatSummary(
 
     /** Keeps [other]'s Inbox times and triage, without its host placement. */
     fun withInboxSignals(other: AidenChatSummary): AidenChatSummary = copy(
+        lastAssistantMessageId = other.lastAssistantMessageId,
         lastAssistantAt = other.lastAssistantAt,
         attentionSince = other.attentionSince,
         runStartedAt = other.runStartedAt,
@@ -1087,10 +1089,10 @@ data class AidenChatSummary(
      * placement that described the row before.
      */
     fun admittingReplies(chat: AidenChat): AidenChatSummary {
-        val newest = chat.messages.filter { it.isInboxReply }.maxOfOrNull { it.createdAt }
+        val newest = chat.messages.lastOrNull { it.isInboxReply }
             ?: return this
-        if (lastAssistantAt?.let { !newest.isAfter(it) } == true) return this
-        return copy(lastAssistantAt = newest).withoutHostPlacement()
+        if (lastAssistantAt?.let { !newest.createdAt.isAfter(it) } == true) return this
+        return copy(lastAssistantAt = newest.createdAt, lastAssistantMessageId = newest.id).withoutHostPlacement()
     }
 
     /**

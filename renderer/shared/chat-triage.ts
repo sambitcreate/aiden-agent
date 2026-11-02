@@ -32,6 +32,8 @@ export interface ChatTriageSnapshot {
 export interface ChatTriagePatch {
   pinned?: boolean;
   done?: boolean;
+  /** With done:true, restore the original hold when undoing a change. */
+  restoreDoneAt?: number;
   snoozeUntil?: number | null;
 }
 
@@ -73,9 +75,10 @@ export function isChatTriagePatch(value: unknown): value is ChatTriagePatch {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
-  if (keys.length === 0 || keys.some((key) => key !== "pinned" && key !== "done" && key !== "snoozeUntil")) {
+  if (keys.length === 0 || keys.some((key) => key !== "pinned" && key !== "done" && key !== "snoozeUntil" && key !== "restoreDoneAt")) {
     return false;
   }
+  if ("restoreDoneAt" in record && (record.done !== true || !isWhole(record.restoreDoneAt))) return false;
   if ("pinned" in record && typeof record.pinned !== "boolean") return false;
   if ("done" in record && typeof record.done !== "boolean") return false;
   if (
@@ -104,6 +107,7 @@ export function inverseTriagePatch(
   if (patch.pinned !== undefined) inverse.pinned = before?.pinnedAt !== undefined;
   if (patch.done !== undefined) {
     inverse.done = before?.doneAt !== undefined && (lastAssistantAt ?? Number.NEGATIVE_INFINITY) <= before.doneAt;
+    if (inverse.done && before) inverse.restoreDoneAt = before.doneAt;
   }
   if (patch.snoozeUntil !== undefined) inverse.snoozeUntil = before?.snoozedUntil ?? null;
   return inverse;

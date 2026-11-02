@@ -680,6 +680,7 @@ export interface ChatMeta {
   /** createdAt of the newest assistant output; drives honest unread markers. */
   lastAssistantAt?: number;
   lastAssistantSequence?: number;
+  lastAssistantMessageId?: string;
   /** The message at `lastAssistantAt` is a failed turn; the sidebar says Failed while it is unread. */
   lastAssistantFailed?: boolean;
   /** Set when this chat was created by Fork. */

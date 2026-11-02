@@ -523,3 +523,7 @@ Whether Inbox becomes the default is a separate owner decision, made afterwards.
 ## Amendment to the Unified Workspace Sidebar plan
 
 The Inbox view may list Bots, but only while they need the person (including an issue or a failed run) or have an unread reply, and (as built in 1d) the Bot that is open, the way an open chat stays listed. Bot rows open the Bot, never a workspace chat. The By workspace and Recent only views are unchanged.
+
+### Review fixes for shared Inbox state
+
+Inbox reads carry the displayed reply ID, including reads sent after Done and Snooze. A client reading an older summary checks its revision before acknowledging a captured message. Desktop triage and Undo both use revision preconditions. Undo restores the original Done time so intervening replies remain visible. Both phones reconcile read and triage fields against refreshed rows. A failed snooze expiry retries after a minute.

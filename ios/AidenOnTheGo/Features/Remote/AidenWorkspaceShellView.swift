@@ -195,7 +195,7 @@ final class AidenHomeModel {
     /// Rows changed here and not yet on a page. `readThrough` is set for a
     /// Mark read: the newest reply it covers. A page row with a newer reply
     /// is not covered by it, so that page row is shown instead.
-    private var localSummaryEdits: [String: (generation: UInt64, token: UInt64, summary: AidenChatSummary?, activityOnly: Bool, readThrough: Date?)] = [:]
+    private var localSummaryEdits: [String: (generation: UInt64, token: UInt64, summary: AidenChatSummary?, activityOnly: Bool, readThrough: AidenChatInboxSignals?)] = [:]
     private var prefetchTask: Task<Void, Never>?
     /// Changes each time a chat is viewed: a chat viewed while a swipe's
     /// write was out has been read, so a refusal never brings its dot back.
@@ -269,9 +269,9 @@ final class AidenHomeModel {
         chats[index].unread = false
         chats[index].inbox.invalidateHostPlacement()
         let optimistic = chats[index]
-        persistCurrentSummaries(changedID: chatID, readThrough: optimistic.inbox.lastAssistantAt ?? .distantPast)
+        persistCurrentSummaries(changedID: chatID, readThrough: optimistic.inbox)
         do {
-            try await coordinator.remoteClient(for: context).markChatRead(id: chatID)
+            try await coordinator.remoteClient(for: context).markInboxRead(through: before)
         } catch {
             await rollBack(chatID: chatID, optimistic: optimistic, before: before, viewed: viewed, context: context, coordinator: coordinator)
             guard coordinator.isCurrent(context) else { return }
@@ -289,23 +289,19 @@ final class AidenHomeModel {
     private func settleRead(
         chatID: String,
         readThrough: AidenChatSummary,
-        onlyRead: Bool = true,
+        settledTriage: ((AidenChatSummary) -> AidenChatSummary)? = nil,
         context: AidenRemoteRequestContext,
         coordinator: AidenRemoteCoordinator
     ) {
         guard coordinator.isCurrent(context), contentContext == context,
-              let index = chats.firstIndex(where: { $0.id == chatID }),
-              (chats[index].inbox.lastAssistantAt ?? .distantPast) <= (readThrough.inbox.lastAssistantAt ?? .distantPast)
-        else { return }
-        if chats[index].unread {
+              let index = chats.firstIndex(where: { $0.id == chatID }) else { return }
+        if let settledTriage { chats[index] = settledTriage(chats[index]) }
+        if readThrough.inbox.coversReply(in: chats[index].inbox), chats[index].unread {
             chats[index].unread = false
             chats[index].inbox.invalidateHostPlacement()
         }
-        let boundary = readThrough.inbox.lastAssistantAt ?? .distantPast
-        if !onlyRead {
-            // Done or Snooze's read: the row's whole edit keeps its authority.
-            persistCurrentSummaries(changedID: chatID)
-        } else if loadingAttempt == nil {
+        let boundary = readThrough.inbox
+        if loadingAttempt == nil {
             persistCurrentSummaries(changedID: chatID, readThrough: boundary)
         } else {
             // A list page is on its way. Saving now would take the cache's
@@ -377,6 +373,7 @@ final class AidenHomeModel {
         func isShown() -> Bool { coordinator.isCurrent(context) && contentContext == context }
         let settled: @Sendable (AidenChatSummary) -> AidenChatSummary = { row in
             var row = row
+            guard (row.inbox.triageRevision ?? 0) < result.revision else { return row }
             row.inbox.pinnedAt = result.pinnedAt
             row.inbox.doneAt = result.doneAt
             row.inbox.snoozedUntil = result.snoozedUntil
@@ -388,7 +385,7 @@ final class AidenHomeModel {
         if isShown() {
             if let index = chats.firstIndex(where: { $0.id == chatID }) {
                 chats[index] = settled(chats[index])
-                persistCurrentSummaries(changedID: chatID)
+                persistCurrentSummaries(changedID: chatID, readThrough: alsoMarkRead ? before.inbox : nil)
                 if offersUndo, !retried, let undo = AidenInbox.undo(of: change, before: before, now: now) {
                     inboxNotice = AidenInboxNotice(message: change.confirmation, undo: undo, chatID: chatID, revision: result.revision)
                 }
@@ -402,8 +399,8 @@ final class AidenHomeModel {
             // Sent with the write's own client: the Mac took Done, so it
             // should also take the read, whichever Mac is shown now.
             do {
-                try await client.markChatRead(id: chatID)
-                settleRead(chatID: chatID, readThrough: optimistic, onlyRead: false, context: context, coordinator: coordinator)
+                try await client.markInboxRead(through: before)
+                settleRead(chatID: chatID, readThrough: optimistic, settledTriage: settled, context: context, coordinator: coordinator)
             } catch {
                 if viewStamp(chatID) == viewed {
                     let wasUnread = before.unread
@@ -485,7 +482,7 @@ final class AidenHomeModel {
         persistCurrentSummaries(changedID: id)
     }
 
-    private func persistCurrentSummaries(changedID: String, activityOnly: Bool = false, readThrough: Date? = nil) {
+    private func persistCurrentSummaries(changedID: String, activityOnly: Bool = false, readThrough: AidenChatInboxSignals? = nil) {
         guard let context = contentContext else { return }
         let snapshot = AidenChatCache.SummarySnapshot(summaries: chats, nextCursor: nextChatCursor)
         let generation = nextSummaryCacheGeneration()
@@ -688,19 +685,27 @@ final class AidenHomeModel {
                         for (id, edit) in localSummaryEdits where edit.generation > requestEditGeneration {
                             let editIsNewer = edit.token > max(state.fullToken, state.rowTokens[id] ?? 0)
                             if let readThrough = edit.readThrough {
-                                if let pageRow = loadedPage.summaries.first(where: { $0.id == id }),
-                                   (pageRow.inbox.lastAssistantAt ?? .distantPast) > readThrough {
-                                    // The cache may have kept the read row over this page.
-                                    if editIsNewer {
-                                        chats.removeAll { $0.id == id }
-                                        chats.append(pageRow)
-                                        readOverPage.append(id)
-                                    }
-                                    continue
+                                guard var pageRow = loadedPage.summaries.first(where: { $0.id == id }),
+                                      let index = chats.firstIndex(where: { $0.id == id }) else { continue }
+                                // Keep a newer detail or a write from another home model.
+                                if max(state.fullToken, state.rowTokens[id] ?? 0) > max(writeToken, edit.token) {
+                                    pageRow = chats[index]
                                 }
-                                if let index = chats.firstIndex(where: { $0.id == id }), chats[index].unread {
-                                    chats[index].unread = false
-                                    chats[index].inbox.invalidateHostPlacement()
+                                // A combined Done/Snooze and read owns only its triage and
+                                // marker. Keep the page's reply and unrelated metadata.
+                                if let local = edit.summary, (local.inbox.triageRevision ?? 0) > (pageRow.inbox.triageRevision ?? 0) {
+                                    pageRow.inbox.pinnedAt = local.inbox.pinnedAt
+                                    pageRow.inbox.doneAt = local.inbox.doneAt
+                                    pageRow.inbox.snoozedUntil = local.inbox.snoozedUntil
+                                    pageRow.inbox.triageRevision = local.inbox.triageRevision
+                                    pageRow.inbox.invalidateHostPlacement()
+                                }
+                                if readThrough.coversReply(in: pageRow.inbox), pageRow.unread {
+                                    pageRow.unread = false
+                                    pageRow.inbox.invalidateHostPlacement()
+                                }
+                                if chats[index] != pageRow {
+                                    chats[index] = pageRow
                                     readOverPage.append(id)
                                 }
                                 continue
@@ -716,8 +721,7 @@ final class AidenHomeModel {
                         chats.sort(by: AidenChatSummaryPage.areInCanonicalOrder)
                         for id in readOverPage {
                             let readThrough = localSummaryEdits[id]?.readThrough
-                            let coversRow = (chats.first(where: { $0.id == id })?.inbox.lastAssistantAt ?? .distantPast) <= (readThrough ?? .distantPast)
-                            persistCurrentSummaries(changedID: id, readThrough: coversRow ? readThrough : nil)
+                            persistCurrentSummaries(changedID: id, readThrough: readThrough)
                         }
                         chatListLoadState = .loaded
                         prefetchRecentTranscripts(client: client, context: context, coordinator: coordinator)

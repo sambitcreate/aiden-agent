@@ -499,6 +499,7 @@ export interface ChatMeta {
    */
   lastAssistantAt?: number;
   lastAssistantSequence?: number;
+  lastAssistantMessageId?: string;
   /**
    * The message at `lastAssistantAt` ended its turn in failure, so an unread
    * row says Failed instead of showing a new-reply dot. Absent when false.

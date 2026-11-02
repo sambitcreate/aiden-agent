@@ -20,6 +20,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -152,6 +154,7 @@ class AidenInboxHomeTriageTest {
                             MockResponse().setBody("""{"chatId":"$chatId","revision":${triageWrites.get()},$done"updatedAt":"$doneAt"}""")
                         }
                         path.endsWith("/read") -> {
+                            check(json.parseToJsonElement(request.body.readUtf8()).jsonObject["throughMessageId"]?.jsonPrimitive?.content == "shown-reply")
                             readWrites.incrementAndGet()
                             readArrived.countDown()
                             heldRead?.let { check(it.await(8, TimeUnit.SECONDS)) }
@@ -387,6 +390,42 @@ class AidenInboxHomeTriageTest {
     }
 
     @Test
+    fun delayedReadCacheWritePreservesANewerPin() {
+        val desk = Desk("home-a")
+        desk.page = listOf(summary("chat-1", unread = true))
+        // Cache writes run on their own threads; one page save can be held
+        // just before it takes the cache lock.
+        val pool = Executors.newCachedThreadPool()
+        val holdNextWrite = AtomicBoolean(false)
+        val saveArrived = CountDownLatch(1)
+        val releaseSave = CountDownLatch(1)
+        val cacheWrites = object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) {
+                val held = holdNextWrite.getAndSet(false)
+                pool.execute {
+                    if (held) { saveArrived.countDown(); check(releaseSave.await(8, TimeUnit.SECONDS)) }
+                    block.run()
+                }
+            }
+        }
+        try {
+            scenario(listOf(desk), cacheWriteDispatcher = cacheWrites) {
+                connectedTo(desk)
+                holdNextWrite.set(true)
+                home.markInboxRead("chat-1")
+                withContext(Dispatchers.IO) { check(saveArrived.await(5, TimeUnit.SECONDS)) }
+                desk.page = listOf(summary("chat-1", unread = true, pinnedAt = pinnedAt, triageRevision = 1))
+                reload()
+                assertEquals(pinnedAt, row("chat-1").pinnedAt)
+                releaseSave.countDown()
+                waitFor("read saved and sent") { desk.readWrites.get() == 1 }
+                assertEquals(pinnedAt, saved("chat-1")?.pinnedAt)
+                assertEquals(false, saved("chat-1")?.unread)
+            }
+        } finally { releaseSave.countDown(); pool.shutdownNow() }
+    }
+
+    @Test
     fun switchingHostsDropsTheOldHostsSwipesAndItsLateAnswersStayThere() {
         val a = Desk("home-a")
         val b = Desk("home-b")
@@ -573,6 +612,7 @@ class AidenInboxHomeTriageTest {
         unread = unread,
         pinnedAt = pinnedAt,
         triageRevision = triageRevision,
+        lastAssistantMessageId = "shown-reply",
         lastAssistantAt = lastAssistantAt
     )
 }

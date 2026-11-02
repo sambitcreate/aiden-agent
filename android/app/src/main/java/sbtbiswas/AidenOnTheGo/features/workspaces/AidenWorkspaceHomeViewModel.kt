@@ -395,21 +395,28 @@ class AidenWorkspaceHomeViewModel(
                 } else null) ?: chatCache.summaries.value[instanceId]?.get(id)
             },
             publish = { row ->
-                if (coordinator.activeInstanceId == instanceId && triageGeneration == generation) {
-                    val previous = _chats.value.firstOrNull { it.id == row.id }
+                val shown = coordinator.activeInstanceId == instanceId && triageGeneration == generation
+                val previous = (if (shown) _chats.value.firstOrNull { it.id == row.id } else null)
+                    ?: chatCache.summaries.value[instanceId]?.get(row.id)
+                val changed = triageFieldsChanged(previous, row)
+                if (shown) {
                     synchronized(triageOverlay) {
-                        val fields = triageFieldsChanged(previous, row) + triageOverlay[row.id]?.fields.orEmpty()
+                        val fields = changed + triageOverlay[row.id]?.fields.orEmpty()
                         triageOverlay[row.id] = TriageOverlay(chatCache.reserveChatWrite(), row, fields)
                     }
                     _chats.value = regularNewestFirst(_chats.value.map { if (it.id == row.id) row else it })
                 }
                 withContext(cacheWriteDispatcher) {
-                    runCatching { chatCache.upsertSummary(row, instanceId, keepsWriteOrder = true) }
+                    runCatching {
+                        chatCache.updateSummary(row.id, instanceId) { cached ->
+                            mergeTriageFields(cached, row, changed, restoreUnread = row.unread && previous?.unread == false)
+                        }
+                    }
                 }
             },
             isCurrent = isCurrent,
             writeTriage = { id, change, ifRevision, key -> client.setChatTriage(id, change, ifRevision, key) },
-            writeRead = { id -> client.markChatRead(id) },
+            writeRead = client::markInboxRead,
             reload = { load(force = true) },
             viewStamp = { id -> viewStamps[id] ?: 0L }
         )
@@ -479,14 +486,22 @@ class AidenWorkspaceHomeViewModel(
     private fun overlayingTriage(page: AidenChatSummary, writeToken: Long): AidenChatSummary {
         val overlay = synchronized(triageOverlay) { triageOverlay[page.id] }
             ?.takeIf { !it.settled || it.token > writeToken } ?: return page
-        val swipe = overlay.row
+        return mergeTriageFields(page, overlay.row, overlay.fields)
+    }
+
+    private fun mergeTriageFields(
+        page: AidenChatSummary, swipe: AidenChatSummary, fields: Set<TriageField>, restoreUnread: Boolean = false
+    ): AidenChatSummary {
         var merged = page
-        for (field in overlay.fields) merged = when (field) {
-            TriageField.PINNED -> merged.copy(pinnedAt = swipe.pinnedAt)
-            TriageField.DONE -> merged.copy(doneAt = swipe.doneAt)
-            TriageField.SNOOZE -> merged.copy(snoozedUntil = swipe.snoozedUntil)
-            TriageField.REVISION -> merged.copy(triageRevision = swipe.triageRevision)
-            TriageField.UNREAD -> merged.copy(unread = page.unread && (swipe.unread || hasNewerOutput(page, swipe)))
+        for (field in fields) {
+            if (field != TriageField.UNREAD && (page.triageRevision ?: 0) > (swipe.triageRevision ?: 0)) continue
+            merged = when (field) {
+                TriageField.PINNED -> merged.copy(pinnedAt = swipe.pinnedAt)
+                TriageField.DONE -> merged.copy(doneAt = swipe.doneAt)
+                TriageField.SNOOZE -> merged.copy(snoozedUntil = swipe.snoozedUntil)
+                TriageField.REVISION -> merged.copy(triageRevision = swipe.triageRevision)
+                TriageField.UNREAD -> merged.copy(unread = restoreUnread || page.unread && (swipe.unread || hasNewerOutput(page, swipe)))
+            }
         }
         return if (merged == page) page else merged.withoutHostPlacement()
     }
@@ -495,7 +510,8 @@ class AidenWorkspaceHomeViewModel(
     private fun hasNewerOutput(page: AidenChatSummary, swipe: AidenChatSummary): Boolean {
         val pageAt = page.lastAssistantAt ?: return false
         val swipeAt = swipe.lastAssistantAt ?: return true
-        return pageAt.isAfter(swipeAt)
+        return pageAt.isAfter(swipeAt) || pageAt == swipeAt && page.lastAssistantMessageId != null &&
+            swipe.lastAssistantMessageId != null && page.lastAssistantMessageId != swipe.lastAssistantMessageId
     }
 
     private fun triageFieldsChanged(previous: AidenChatSummary?, row: AidenChatSummary): Set<TriageField> {

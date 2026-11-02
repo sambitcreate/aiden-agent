@@ -76,7 +76,7 @@ class AidenInboxTriage(
     private val writeTriage: suspend (
         chatId: String, change: AidenChatTriageChange, ifRevision: Int, idempotencyKey: UUID
     ) -> AidenChatTriageResult,
-    private val writeRead: suspend (chatId: String) -> Unit,
+    private val writeRead: suspend (row: AidenChatSummary) -> Unit,
     private val reload: suspend () -> Unit,
     private val viewStamp: (String) -> Long = { 0L },
     private val now: () -> Instant = Instant::now
@@ -93,7 +93,7 @@ class AidenInboxTriage(
         val optimistic = before.copy(unread = false).withoutHostPlacement()
         publish(optimistic)
         return try {
-            writeRead(chatId)
+            writeRead(before)
             null
         } catch (error: CancellationException) {
             throw error
@@ -145,10 +145,10 @@ class AidenInboxTriage(
             }
             return AidenInboxNotice.TriageFailed()
         }
-        row(chatId)?.let { publish(AidenInbox.applyingTriageResult(result, it)) }
+        row(chatId)?.takeIf { (it.triageRevision ?: 0) <= result.revision }?.let { publish(AidenInbox.applyingTriageResult(result, it)) }
         if (alsoMarkRead) {
             try {
-                writeRead(chatId)
+                writeRead(before)
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Throwable) {

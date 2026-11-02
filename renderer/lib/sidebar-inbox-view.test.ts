@@ -221,7 +221,8 @@ test("Mark read names the newest rendered message, so a reply landing mid-click 
     { id: "a2", role: "assistant", createdAt: NOW },
   ];
   assert.equal(markReadThroughMessageId(messages, NOW - 2 * MINUTE), "a1");
-  assert.equal(markReadThroughMessageId(messages, undefined), "a2");
+  assert.equal(markReadThroughMessageId(messages, undefined), null);
+  assert.equal(markReadThroughMessageId([...messages, { id: "a3", role: "assistant", createdAt: NOW }], NOW, 3), "a2");
   assert.equal(markReadThroughMessageId([], NOW), null);
 });
 

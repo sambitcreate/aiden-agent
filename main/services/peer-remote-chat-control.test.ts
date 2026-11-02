@@ -571,3 +571,25 @@ test("the same session control drives a chat on this Mac and one on another Mac 
     harness.close();
   }
 });
+
+test("a paired Inbox acknowledges only the displayed reply, including on legacy summary hosts", async () => {
+  const host = new FakeHost("host_b", numbered(4));
+  let revision = "rev_" + "A".repeat(43);
+  host.routes = async (input) => input.path === "/chat-summaries" ? { summaries: [{
+    id: "chat-1", workspaceId: "ws", title: "Release notes", titlePending: false,
+    createdAt: new Date(1000).toISOString(), updatedAt: new Date(2000).toISOString(), revision, activity: "idle",
+  }] } : UNHANDLED;
+  const harness = await setup(host);
+  try {
+    // The row showed m1, then m3 arrived before the user clicked.
+    assert.ok((await harness.adapter.markSummaryRead("chat-1", "m1", revision)).ok);
+    assert.deepEqual(host.reads, [{ throughMessageId: "m1" }]);
+    assert.ok((await harness.adapter.markSummaryRead("chat-1", undefined, revision)).ok);
+    const displayed = revision;
+    revision = "rev_" + "B".repeat(43);
+    assert.equal((await harness.adapter.markSummaryRead("chat-1", undefined, displayed)).ok, false);
+    assert.deepEqual(host.reads, [{ throughMessageId: "m1" }, { throughMessageId: "m3" }]);
+  } finally {
+    harness.close();
+  }
+});

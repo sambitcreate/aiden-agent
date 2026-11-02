@@ -97,7 +97,7 @@ export function predictTriage(
   const next: ChatTriageEntry = { ...(before ?? {}), revision: triageRevision(before) + 1, updatedAt: now };
   if (patch.pinned === true) next.pinnedAt = before?.pinnedAt ?? now;
   else if (patch.pinned === false) delete next.pinnedAt;
-  if (patch.done === true) next.doneAt = now;
+  if (patch.done === true) next.doneAt = patch.restoreDoneAt ?? now;
   else if (patch.done === false) delete next.doneAt;
   if (typeof patch.snoozeUntil === "number" && patch.snoozeUntil > now) next.snoozedUntil = patch.snoozeUntil;
   else if (patch.snoozeUntil !== undefined) delete next.snoozedUntil;

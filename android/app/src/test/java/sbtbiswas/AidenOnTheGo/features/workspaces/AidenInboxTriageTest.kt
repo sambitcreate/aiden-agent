@@ -44,7 +44,7 @@ class AidenInboxTriageTest {
                 idempotencyKeys += key
                 triageAnswer(change)
             },
-            writeRead = { readWrites += it; readAnswer() },
+            writeRead = { readWrites += it.id; readAnswer() },
             reload = { reloads += 1 },
             viewStamp = { viewStamp },
             now = { now }

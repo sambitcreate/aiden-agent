@@ -2488,6 +2488,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
             bucket: ((try? values.decodeIfPresent(String.self, forKey: .inboxBucket)) ?? nil)
                 .flatMap(AidenInboxBucket.init(rawValue:)),
             sortAt: timestamp(.inboxSortAt),
+            lastAssistantMessageId: try? values.decode(String.self, forKey: .lastAssistantMessageId),
             lastAssistantAt: timestamp(.lastAssistantAt),
             attentionSince: timestamp(.attentionSince),
             runStartedAt: timestamp(.runStartedAt),
@@ -2541,6 +2542,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         try values.encodeIfPresent(forkedFrom, forKey: .forkedFrom)
         try values.encodeIfPresent(inbox.bucket, forKey: .inboxBucket)
         try values.encodeIfPresent(inbox.sortAt, forKey: .inboxSortAt)
+        try values.encodeIfPresent(inbox.lastAssistantMessageId, forKey: .lastAssistantMessageId)
         try values.encodeIfPresent(inbox.lastAssistantAt, forKey: .lastAssistantAt)
         try values.encodeIfPresent(inbox.attentionSince, forKey: .attentionSince)
         try values.encodeIfPresent(inbox.runStartedAt, forKey: .runStartedAt)
@@ -2564,6 +2566,10 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
                 debugDescription: "Expected a non-empty bounded Chat summary identifier."
             )
         }
+    }
+
+    static func isValidIdentifier(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= AidenRemoteProtocol.maxIdentifierLength && value.unicodeScalars.allSatisfy(isSafeIdentifierScalar)
     }
 
     private static func isValidRevision(_ value: String) -> Bool {
@@ -2609,7 +2615,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, workspaceId, title, titlePending, createdAt, updatedAt, revision, activity
         case rowState, unread, lastRunFailed, forkedFrom
-        case inboxBucket, inboxSortAt, lastAssistantAt, attentionSince, runStartedAt
+        case inboxBucket, inboxSortAt, lastAssistantMessageId, lastAssistantAt, attentionSince, runStartedAt
         case pinnedAt, doneAt, snoozedUntil, triageRevision
     }
 }

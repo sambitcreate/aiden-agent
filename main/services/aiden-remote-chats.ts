@@ -278,6 +278,8 @@ export interface AidenRemoteChatSummaryProjection {
   runStartedAt?: string;
   /** Additive (protocol revision 50): when the newest assistant output arrived. */
   lastAssistantAt?: string;
+  /** Exact reply a read from this summary may acknowledge. */
+  lastAssistantMessageId?: string;
   /**
    * Additive (protocol revision 50): the chat's triage revision, which a
    * client compares with its own writes. Present whenever the chat has a
@@ -780,6 +782,8 @@ function safeSummaryMetadata(meta: Readonly<ChatMeta>): SafeSummaryRow | null {
       ? {
           lastAssistantAt: meta.lastAssistantAt,
           lastAssistantSequence: meta.lastAssistantSequence,
+          ...(meta.lastAssistantMessageId && SAFE_ID.test(meta.lastAssistantMessageId)
+            ? { lastAssistantMessageId: meta.lastAssistantMessageId } : {}),
           ...(meta.lastAssistantFailed === true ? { lastAssistantFailed: true } : {}),
         }
       : {}),
@@ -1164,7 +1168,7 @@ const RFC3339_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-
 export function parseAidenRemoteChatTriage(input: unknown): { patch: ChatTriagePatch; ifRevision?: number } {
   const invalid = () => new AidenRemoteServiceError("invalid_request", "The chat triage request is invalid.", 400);
   const record = ownRecord(input);
-  if (!record || !exactKeys(record, [], ["pinned", "done", "snoozeUntil", "ifRevision"])) throw invalid();
+  if (!record || !exactKeys(record, [], ["pinned", "done", "snoozeUntil", "restoreDoneAt", "ifRevision"])) throw invalid();
   const patch: ChatTriagePatch = {};
   if (hasOwnKey(record, "pinned")) {
     if (typeof record.pinned !== "boolean") throw invalid();
@@ -1173,6 +1177,13 @@ export function parseAidenRemoteChatTriage(input: unknown): { patch: ChatTriageP
   if (hasOwnKey(record, "done")) {
     if (typeof record.done !== "boolean") throw invalid();
     patch.done = record.done;
+  }
+  if (hasOwnKey(record, "restoreDoneAt")) {
+    const value = record.restoreDoneAt;
+    if (patch.done !== true || !hasOwnKey(record, "ifRevision") || typeof value !== "string" ||
+      value.length > 40 || !RFC3339_TIME.test(value)) throw invalid();
+    patch.restoreDoneAt = Date.parse(value);
+    if (!Number.isSafeInteger(patch.restoreDoneAt) || patch.restoreDoneAt < 0) throw invalid();
   }
   if (hasOwnKey(record, "snoozeUntil")) {
     const value = record.snoozeUntil;

@@ -3763,6 +3763,8 @@ export function parseAidenRemoteChatSummaryProjection(
     ...(hasOwn(value, "forkedFrom")
       ? { forkedFrom: parseChatForkLineageProjection(value.forkedFrom, label, false) }
       : {}),
+    ...(typeof value.lastAssistantMessageId === "string" && REMOTE_SAFE_ID.test(value.lastAssistantMessageId)
+      ? { lastAssistantMessageId: value.lastAssistantMessageId } : {}),
     ...parseInboxSignalFields(value, label),
   };
 }

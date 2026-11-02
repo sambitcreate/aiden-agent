@@ -153,6 +153,8 @@ export class ChatTriageStore {
     const keys = Object.keys(patch);
     if (keys.length === 0) return { ok: false, code: "invalid" };
     const now = this.now();
+    if (patch.restoreDoneAt !== undefined && (patch.done !== true || write.ifRevision === undefined ||
+      !isTimestamp(patch.restoreDoneAt) || patch.restoreDoneAt > now)) return { ok: false, code: "invalid" };
     if (patch.snoozeUntil !== undefined && patch.snoozeUntil !== null) {
       if (!isTimestamp(patch.snoozeUntil) || patch.snoozeUntil <= 0 || patch.snoozeUntil > now + MAX_SNOOZE_AHEAD_MS) {
         return { ok: false, code: "invalid" };
@@ -178,7 +180,7 @@ export class ChatTriageStore {
       };
       if (patch.pinned === true) next.pinnedAt = current?.pinnedAt ?? now;
       else if (patch.pinned === false) delete next.pinnedAt;
-      if (patch.done === true) next.doneAt = now;
+      if (patch.done === true) next.doneAt = patch.restoreDoneAt ?? now;
       else if (patch.done === false) delete next.doneAt;
       if (typeof patch.snoozeUntil === "number" && patch.snoozeUntil > now) next.snoozedUntil = patch.snoozeUntil;
       else if (patch.snoozeUntil !== undefined) delete next.snoozedUntil;
@@ -244,6 +246,7 @@ export class ChatTriageStore {
    * stops later snoozes from waking.
    */
   private async expire(): Promise<void> {
+    let retry = false;
     try {
       const now = this.now();
       const due = Object.entries((await this.store.load()).chats).some(
@@ -266,8 +269,13 @@ export class ChatTriageStore {
       } catch (error) {
         this.options.logError?.("Could not announce a chat's snooze ending.", error);
       }
+    } catch (error) {
+      // The cached deadline is still in the past when its durable clear fails.
+      retry = true;
+      throw error;
     } finally {
-      this.arm();
+      if (retry) this.schedule(SNOOZE_WAKE_CHECK_MS);
+      else this.arm();
     }
   }
 

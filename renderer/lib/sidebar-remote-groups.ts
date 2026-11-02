@@ -73,6 +73,7 @@ export interface RemoteSidebarChat extends SidebarChatSummary {
   runStartedAt?: number;
   /** Revision 50: when the chat's newest assistant output arrived. */
   lastAssistantAt?: number;
+  lastAssistantMessageId?: string;
   /**
    * Revision 50: the triage entry the host reports. Absent when the chat is
    * untriaged or the host is older (`inbox-signals-v1` tells the two apart).
@@ -238,6 +239,7 @@ export function remoteSidebarRows(
         ...(revision ? { revision } : {}),
         ...(attentionSince !== undefined ? { attentionSince } : {}),
         ...(runStartedAt !== undefined ? { runStartedAt } : {}),
+        ...(typeof row.lastAssistantMessageId === "string" ? { lastAssistantMessageId: row.lastAssistantMessageId } : {}),
         ...(lastAssistantAt !== undefined ? { lastAssistantAt } : {}),
         ...(triage ? { triage } : {}),
         ...(attentionSummary ? { attentionSummary } : {}),

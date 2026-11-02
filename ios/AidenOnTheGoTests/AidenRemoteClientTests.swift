@@ -6732,7 +6732,7 @@ extension AidenRemoteClientTests {
         {"summaries":[{"id":"\(Self.inboxChatID)","workspaceId":"alpha","title":"Reply","titlePending":false,
         "createdAt":"2026-08-18T18:30:00.000Z","updatedAt":"2026-08-18T19:01:00.000Z",
         "revision":"rev_EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE","activity":"idle","rowState":"idle",
-        "unread":true,"lastRunFailed":\(failed),"lastAssistantAt":"2026-08-18T19:01:00.000Z",
+        "unread":true,"lastRunFailed":\(failed),"lastAssistantMessageId":"shown-reply","lastAssistantAt":"2026-08-18T19:01:00.000Z",
         "pinnedAt":"2026-08-18T18:45:00.000Z","triageRevision":3,
         "inboxBucket":"\(failed ? "needs_you" : "pinned")","inboxSortAt":"2026-08-18T19:01:00.000Z"}]}
         """
@@ -6771,6 +6771,7 @@ extension AidenRemoteClientTests {
                 let (status, json) = triage(request, (try? Self.jsonBody(request)) ?? [:])
                 return Self.response(for: request, status: status, json: json)
             case ("POST", "/api/aiden/v1/chats/\(Self.inboxChatID)/read"):
+                XCTAssertEqual((try? Self.jsonBody(request))?["throughMessageId"] as? String, "shown-reply")
                 let status = markRead()
                 return Self.response(for: request, status: status, json: status < 300 ? "{}" : Self.inboxError("internal_error", retryable: true))
             default:
@@ -7111,6 +7112,12 @@ extension AidenRemoteClientTests {
 
     @MainActor
     func testInboxMarkReadKeepsAReplyNewerThanTheReadFromARefreshInEitherOrder() async throws {
+        try await checkNewerInboxReply(alsoDone: false)
+        try await checkNewerInboxReply(alsoDone: true)
+    }
+
+    @MainActor
+    private func checkNewerInboxReply(alsoDone: Bool) async throws {
         let newerReply = "2026-08-18T19:04:00.000Z"
         let newerPage = """
         {"summaries":[{"id":"\(Self.inboxChatID)","workspaceId":"alpha","title":"Reply","titlePending":false,
@@ -7123,7 +7130,8 @@ extension AidenRemoteClientTests {
         for readLandsFirst in [true, false] {
             var answerNewer = false
             let inbox = try await makeInboxHome(
-                triage: { _, _ in (500, Self.inboxError("internal_error")) },
+                failed: alsoDone,
+                triage: { _, _ in (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:02:00.000Z")) },
                 summaryOverride: { answerNewer ? newerPage : nil }
             )
             defer { try? FileManager.default.removeItem(at: inbox.root) }
@@ -7146,7 +7154,13 @@ extension AidenRemoteClientTests {
             }
             defer { AidenRemoteMockURLProtocol.hold = nil }
 
-            let read = Task { await inbox.home.markRead(chatID: Self.inboxChatID, coordinator: inbox.coordinator) }
+            let read = Task {
+                if alsoDone {
+                    await inbox.home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+                } else {
+                    await inbox.home.markRead(chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+                }
+            }
             await fulfillment(of: [readArrived], timeout: 5)
             // A reply the person hasn't seen arrives while the read is out,
             // and a refresh asked for then carries it.
@@ -7170,6 +7184,7 @@ extension AidenRemoteClientTests {
             let row = try XCTUnwrap(inbox.home.chats.first)
             XCTAssertTrue(row.unread, "The read didn't cover the newer reply (\(order)).")
             XCTAssertEqual(row.inbox.lastAssistantAt, try Self.remoteDate(newerReply), order)
+            if alsoDone { XCTAssertEqual(row.inbox.triageRevision, 4, order) }
             // The row is saved in the background once the page is reconciled.
             var saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
             for _ in 0..<100 where saved?.unread != true {
