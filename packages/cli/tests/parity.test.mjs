@@ -492,7 +492,20 @@ test("MCP presets leave out Mac app connectors, which the desktop app sets up", 
   assert.ok(presets.every((preset) => preset.transport === "http"));
   assert.ok(!presets.some((preset) => preset.id === "imcp"));
   await assert.rejects(api.mcpCommand(dir, ["preset", "imcp"]), /Aiden desktop app on your Mac/);
+  const record = { id: "preset-imcp", name: "iMCP", presetId: "imcp", enabled: true, transport: "stdio",
+    command: "/Applications/iMCP.app/Contents/MacOS/imcp-server" };
+  const file = join(dir, "import.json");
+  writeFileSync(file, JSON.stringify(record));
+  await assert.rejects(api.mcpCommand(dir, ["add", file]), /desktop app on your Mac|works only on a Mac/);
   assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
+  // A previous CLI could persist the raw preset. It stays removable and cannot be connected.
+  writeFileSync(join(dir, "aiden-mcp.json"), JSON.stringify([record]));
+  const pool = api.createCliMcpPool(dir);
+  try {
+    assert.deepEqual(await pool.listServers(), []);
+    await assert.rejects(pool.connection(record), /disabled/);
+  } finally { await pool.close(); }
+  assert.deepEqual(await api.mcpCommand(dir, ["remove", record.id]), { removed: record.id });
 });
 
 test("provider import rejects invalid configuration without replacing the previous file", async (t) => {

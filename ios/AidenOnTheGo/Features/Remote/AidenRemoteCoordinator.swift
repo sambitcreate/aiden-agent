@@ -465,6 +465,9 @@ final class AidenRemoteCoordinator {
             applyWorkspaceSnapshot(refreshed, instanceId: installationId)
             connectionIssue = nil
         connectionState = .connected
+        } catch let error where aidenIsCancellation(error) {
+            // A cancelled read (a view that went away) says nothing about the connection.
+            return
         } catch {
             guard isCurrentContext(installationId: installationId, generation: generation) else { return }
             await handleConnectionError(error, installationId: installationId)
@@ -1046,9 +1049,11 @@ final class AidenRemoteCoordinator {
     private func applyWorkspaceSnapshot(_ workspaces: [AidenWorkspace], instanceId: String) {
         guard activeInstanceId == instanceId else { return }
         self.workspaces = workspaces
+        // A hidden No workspace record can't be archived (the Chats group has no Unarchive), so
+        // a flag an older build left on one is dropped here and every archive check agrees.
         workspaceArchiveStore.prune(
             instanceID: instanceId,
-            validWorkspaceIDs: Set(workspaces.map(\.id))
+            validWorkspaceIDs: Set(AidenNoWorkspace.choices(workspaces).map(\.id))
         )
         workspaceSnapshotRevision &+= 1
         updateIntentCatalog(for: instanceId)
@@ -1167,8 +1172,15 @@ final class AidenRemoteCoordinator {
         let cachedWorkspaces: [AidenIntentWorkspaceRecord]
         if let instanceId, instanceId == activeInstanceId {
             let archivedWorkspaceIDs = workspaceArchiveStore.archivedWorkspaceIDs(for: instanceId)
-            cachedWorkspaces = workspaces.filter { !archivedWorkspaceIDs.contains($0.id) }.map {
-                AidenIntentWorkspaceRecord(id: $0.id, instanceId: instanceId, name: $0.name)
+            // Shortcuts see chats without a workspace as one Chats entry, as the sidebar does.
+            let hiddenIDs = workspaces.filter(\.noWorkspace).map(\.id)
+            cachedWorkspaces = AidenNoWorkspace.grouped(
+                AidenNoWorkspace.unarchived(workspaces, archivedIDs: archivedWorkspaceIDs)
+            ).map {
+                AidenIntentWorkspaceRecord(
+                    id: $0.id, instanceId: instanceId, name: $0.name,
+                    groupedIDs: $0.noWorkspace ? hiddenIDs : nil
+                )
             }
         } else {
             cachedWorkspaces = []

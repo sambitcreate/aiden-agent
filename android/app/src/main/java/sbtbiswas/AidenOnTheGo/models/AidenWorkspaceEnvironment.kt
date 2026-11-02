@@ -41,6 +41,8 @@ data class AidenWorkspace(
     var memoryEnabled: Boolean = true,
     val hasFolder: Boolean = false,
     val isManagedWorktree: Boolean = false,
+    /** Contract revision 51: a hidden folder the Mac made for one chat without a workspace. */
+    val noWorkspace: Boolean = false,
     val branchName: String? = null,
     val repositoryName: String? = null,
     val git: AidenWorkspaceGitSummary? = null,
@@ -48,6 +50,81 @@ data class AidenWorkspace(
     @Serializable(with = InstantIso8601Serializer::class) var updatedAt: Instant? = null,
     val revision: String
 )
+
+/**
+ * Chats without a workspace (contract revision 51). Each runs on the Mac in a hidden workspace of
+ * its own. Phones list them under one Chats group that stands on its home record, and start new
+ * ones there; the Mac gives a new chat its own folder when the home already holds one.
+ */
+object AidenNoWorkspace {
+    const val GROUP_NAME = "Chats"
+
+    /** The record that stands for the Chats group: the long-lived `default` home, else the oldest. */
+    fun home(workspaces: List<AidenWorkspace>): AidenWorkspace? {
+        val hidden = workspaces.filter { it.noWorkspace }
+        return hidden.firstOrNull { it.id == "default" }
+            ?: hidden.minWithOrNull(compareBy<AidenWorkspace> { it.createdAt ?: Instant.EPOCH }.thenBy { it.id })
+    }
+
+    /** Workspaces a person picks, opens or manages: everything but the hidden records. */
+    fun choices(workspaces: List<AidenWorkspace>): List<AidenWorkspace> = workspaces.filterNot { it.noWorkspace }
+
+    /**
+     * Workspaces that are not archived. A hidden record never counts as archived: an older build
+     * could archive one, and with no way to unarchive it its chats would stay hidden.
+     */
+    fun unarchived(workspaces: List<AidenWorkspace>, archivedIds: Set<String>): List<AidenWorkspace> =
+        workspaces.filter { it.noWorkspace || !archivedIds.contains(it.id) }
+
+    /** Workspaces as the sidebar lists them: the hidden records become one Chats group on the home. */
+    fun grouped(workspaces: List<AidenWorkspace>): List<AidenWorkspace> {
+        val home = home(workspaces) ?: return workspaces
+        return workspaces.mapNotNull { workspace ->
+            when {
+                !workspace.noWorkspace -> workspace
+                workspace.id == home.id -> workspace.copy(name = GROUP_NAME)
+                else -> null
+            }
+        }
+    }
+
+    /** The name a chat's workspace is shown and searched by: hidden records read as Chats. */
+    fun label(workspace: AidenWorkspace): String = if (workspace.noWorkspace) GROUP_NAME else workspace.name
+
+    /** The id a chat in [workspaceId] is listed under: chats in a hidden record go to the home. */
+    fun groupId(workspaceId: String, workspaces: List<AidenWorkspace>): String {
+        if (workspaces.none { it.id == workspaceId && it.noWorkspace }) return workspaceId
+        return home(workspaces)?.id ?: workspaceId
+    }
+
+    /**
+     * Workspace ids that chats name but the phone hasn't listed and hasn't re-read for yet. Another
+     * device's No workspace chat gets a fresh hidden record, and phones hear of it only by
+     * re-reading the workspace list.
+     */
+    fun unlistedWorkspaceIds(
+        chatWorkspaceIds: Collection<String>,
+        workspaces: List<AidenWorkspace>,
+        alreadyReRead: Set<String>
+    ): Set<String> = chatWorkspaceIds.toSet() - workspaces.map { it.id }.toSet() - alreadyReRead
+
+    /**
+     * Whether a chat a new-chat link just created may open, given the workspaces listed after the
+     * create. A Chats create can land in a fresh hidden workspace, also when the Mac released the
+     * home the phone aimed at, so only the chat's own workspace has to be listed. Any other create
+     * must come back in its target, and the target must still be listed.
+     */
+    fun opensCreatedChat(
+        startsUnderChats: Boolean,
+        targetWorkspaceId: String,
+        chatWorkspaceId: String,
+        workspaces: List<AidenWorkspace>
+    ): Boolean {
+        val listed = workspaces.map { it.id }.toSet()
+        return if (startsUnderChats) chatWorkspaceId in listed
+        else chatWorkspaceId == targetWorkspaceId && targetWorkspaceId in listed
+    }
+}
 
 @Serializable
 data class AidenWorkspacePatch(
