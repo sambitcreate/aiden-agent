@@ -179,6 +179,48 @@ class AidenStreamNetworkRecoveryTest {
     }
 
     @Test
+    fun networkFlapDoesNotShortenServerRequestedDelay() = runTest {
+        val network = FakeNetwork(initial = true)
+        val recovery = AidenStreamNetworkRecovery(network) { 1_000L }
+        val result = async {
+            recovery.recoverAfterProbeFailure(minimumDelayMilliseconds = 5_000, onBackoff = {}, onWaiting = {})
+        }
+        advanceTimeBy(400)
+        network.state.value = false
+        runCurrent()
+        advanceTimeBy(600)
+        network.state.value = true
+        runCurrent()
+        assertFalse("network return must not bypass the server delay", result.isCompleted)
+        advanceTimeBy(4_000)
+        runCurrent()
+        assertEquals(AidenStreamNetworkRecovery.ProbeFailureOutcome.NETWORK_RETURNED, result.await())
+    }
+
+    @Test
+    fun offlineProbeHonorsServerDelayAndLongOfflineTimeCountsTowardIt() = runTest {
+        val network = FakeNetwork(initial = false)
+        val recovery = AidenStreamNetworkRecovery(network) { 1_000L }
+        val first = async { recovery.recoverAfterProbeFailure(5_000, {}, {}) }
+        runCurrent()
+        advanceTimeBy(1_000)
+        network.state.value = true
+        runCurrent()
+        assertFalse(first.isCompleted)
+        advanceTimeBy(4_000)
+        runCurrent()
+        assertEquals(AidenStreamNetworkRecovery.ProbeFailureOutcome.NETWORK_RETURNED, first.await())
+
+        network.state.value = false
+        val second = async { recovery.recoverAfterProbeFailure(5_000, {}, {}) }
+        runCurrent()
+        advanceTimeBy(6_000)
+        network.state.value = true
+        runCurrent()
+        assertTrue(second.isCompleted)
+    }
+
+    @Test
     fun onlyARateLimitAsksForAServerDelay() {
         fun server(status: Int, retryAfter: Int?, header: Int? = null) = AidenRemoteClientException.Server(
             status,

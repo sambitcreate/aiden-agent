@@ -3,6 +3,9 @@ package sbtbiswas.AidenOnTheGo.networking
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -174,22 +177,31 @@ class AidenStreamNetworkRecovery(
         onBackoff: () -> Unit,
         onWaiting: (Boolean) -> Unit
     ): ProbeFailureOutcome {
-        return when (val decision = policy.afterProbeFailure(availability.isAvailable.value)) {
-            is AidenStreamRecoveryDecision.Backoff -> {
-                onBackoff()
-                val delay = maxOf(delayMilliseconds(decision.attempt), minimumDelayMilliseconds)
-                val lost = withTimeoutOrNull(delay) {
-                    availability.isAvailable.first { !it }
+        return coroutineScope {
+            val serverDelay = async { delay(minimumDelayMilliseconds.coerceAtLeast(0)) }
+            val outcome = when (val decision = policy.afterProbeFailure(availability.isAvailable.value)) {
+                is AidenStreamRecoveryDecision.Backoff -> {
+                    onBackoff()
+                    val delay = maxOf(delayMilliseconds(decision.attempt), minimumDelayMilliseconds)
+                    val lost = withTimeoutOrNull(delay) {
+                        availability.isAvailable.first { !it }
+                    }
+                    if (lost == null) {
+                        ProbeFailureOutcome.BACKOFF_ELAPSED
+                    } else {
+                        policy.backoffInterruptedByNetworkLoss()
+                        park(onWaiting)
+                        ProbeFailureOutcome.NETWORK_RETURNED
+                    }
                 }
-                if (lost == null) return ProbeFailureOutcome.BACKOFF_ELAPSED
-                policy.backoffInterruptedByNetworkLoss()
-                park(onWaiting)
-                ProbeFailureOutcome.NETWORK_RETURNED
+                else -> {
+                    park(onWaiting)
+                    ProbeFailureOutcome.NETWORK_RETURNED
+                }
             }
-            else -> {
-                park(onWaiting)
-                ProbeFailureOutcome.NETWORK_RETURNED
-            }
+            serverDelay.await()
+            if (!availability.isAvailable.value) park(onWaiting)
+            outcome
         }
     }
 
