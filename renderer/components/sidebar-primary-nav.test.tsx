@@ -75,6 +75,12 @@ test("the current row follows the path, including nested studio routes", () => {
   assert.deepEqual(current("/chat/chat-1"), []);
 });
 
+test("with the open Bot's Inbox row selected below, Bots doesn't read as selected too", () => {
+  const current = render({ pathname: "/bots/bot-1/chat", capabilities: ALL, openBotShownBelow: true })
+    .rows.filter(({ current }) => current === "page");
+  assert.deepEqual(current, []);
+});
+
 test("New Agent reflects its disabled state and nothing else is disabled", () => {
   const { rows } = render({ newAgentDisabled: true, capabilities: ALL });
   assert.deepEqual(

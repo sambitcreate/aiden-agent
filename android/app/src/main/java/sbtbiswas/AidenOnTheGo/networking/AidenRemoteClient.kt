@@ -953,6 +953,37 @@ class AidenRemoteClient(
             acceptedStatus = setOf(204)
         ) {}
 
+    /**
+     * Pin, mark done or snooze a chat for every surface paired to the host
+     * (`chat-triage-v1`, needs `chat:write`). [ifRevision] is the triage
+     * revision the row last showed (0 for none); a stale one is a 409
+     * `revision_conflict` and nothing changes.
+     */
+    suspend fun setChatTriage(
+        id: String,
+        change: AidenChatTriageChange,
+        ifRevision: Int?,
+        idempotencyKey: UUID = UUID.randomUUID()
+    ): AidenChatTriageResult = executeRequest(
+        "/chats/$id/triage",
+        method = "POST",
+        idempotencyKey = idempotencyKey,
+        bodyJson = chatTriageRequestBody(change, ifRevision).toString()
+    ) { bytes ->
+        val result = json.decodeFromString<ChatTriageResponse>(String(bytes, Charsets.UTF_8))
+        if (result.chatId != id || result.revision < 1) {
+            throw AidenRemoteContractException.InvalidJson("Invalid chat triage response")
+        }
+        AidenChatTriageResult(
+            chatId = result.chatId,
+            revision = result.revision,
+            updatedAt = result.updatedAt,
+            pinnedAt = result.pinnedAt,
+            doneAt = result.doneAt,
+            snoozedUntil = result.snoozedUntil
+        )
+    }
+
     suspend fun moveChat(
         id: String,
         revision: String,
@@ -2887,6 +2918,16 @@ class AidenRemoteClient(
     @Serializable
     private data class ChatUpdateRequest(val title: String)
 
+    @Serializable
+    private data class ChatTriageResponse(
+        val chatId: String,
+        val revision: Int,
+        @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant,
+        @Serializable(with = InstantIso8601Serializer::class) val pinnedAt: Instant? = null,
+        @Serializable(with = InstantIso8601Serializer::class) val doneAt: Instant? = null,
+        @Serializable(with = InstantIso8601Serializer::class) val snoozedUntil: Instant? = null
+    )
+
     /** Encodes to `{}` without a message id so the Mac reads through its newest message. */
     @Serializable
     private data class ChatReadRequest(val throughMessageId: String? = null)
@@ -3096,4 +3137,21 @@ private fun ResponseBody?.readBounded(maximumBytes: Int): ByteArray {
         }
     }
     return output.toByteArray()
+}
+
+/**
+ * The `POST /chats/{chatId}/triage` body: each field the change sets, a
+ * Snooze as an RFC 3339 millisecond UTC time or an explicit `null` to wake,
+ * and `ifRevision` (never below 0).
+ */
+internal fun chatTriageRequestBody(change: AidenChatTriageChange, ifRevision: Int?): JsonObject = buildJsonObject {
+    change.pinned?.let { put("pinned", it) }
+    change.done?.let { put("done", it) }
+    when (val snooze = change.snooze) {
+        is AidenChatTriageChange.Snooze.Until ->
+            put("snoozeUntil", InstantIso8601Serializer.millisecondFormat.format(snooze.at))
+        AidenChatTriageChange.Snooze.Wake -> put("snoozeUntil", kotlinx.serialization.json.JsonNull)
+        null -> Unit
+    }
+    ifRevision?.let { put("ifRevision", maxOf(0, it)) }
 }

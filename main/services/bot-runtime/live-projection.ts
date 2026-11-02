@@ -984,6 +984,12 @@ export interface BotLiveProjection {
   refreshActivity(botId: string): Promise<void>;
   /** Preview, time and state for a list row. */
   summary(botId: string): Promise<BotLiveSummary>;
+  /**
+   * The summary's `needsYou` alone, without reading the transcript: an open
+   * question, hand-off, approval or issue, and never for an unavailable Bot
+   * with no open feed. The Dock badge reads it on every recount.
+   */
+  needsYou(botId: string): Promise<boolean>;
   /** Stop every feed (the Bot was deleted, or the app is quitting). */
   close(botId?: string): Promise<void>;
 }
@@ -1040,6 +1046,33 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   /** Bots whose next run is a Resume. */
   const resumingBots = new Set<string>();
   const feeds = new Map<string, Feed>();
+  // A closed Bot's preview and last reply, kept with the newest entry they were
+  // read through. Every transcript change (a turn, a reset, a compaction, an
+  // edit) appends an entry, so one newest-entry read tells a list refresh (the
+  // Remote host feed asks on every chat or Bot change) whether the transcript
+  // needs reading again.
+  type BotTranscriptSummary = Pick<BotLiveSummary, "preview" | "updatedAt" | "lastReplyAt">;
+  const transcriptSummaries = new Map<string, { key: string } & BotTranscriptSummary>();
+
+  async function transcriptSummary(botId: string, conversation: Conversation): Promise<BotTranscriptSummary> {
+    const newest = await conversation.entries({ order: "descending" }, 1, undefined, BACKGROUND_CONTEXT);
+    const key = `${conversation.id}:${newest.items[0]?.id ?? ""}`;
+    const cached = transcriptSummaries.get(botId);
+    if (cached?.key === key) {
+      const { key: _key, ...summary } = cached;
+      return summary;
+    }
+    const view = await conversation.context(BACKGROUND_CONTEXT);
+    const entries = projectBotTranscript(view.entries);
+    const preview = botTranscriptPreview(entries);
+    const summary: BotTranscriptSummary = {
+      preview: preview?.text ?? null,
+      updatedAt: preview?.at ?? null,
+      lastReplyAt: botLastReplyAt(entries),
+    };
+    transcriptSummaries.set(botId, { key, ...summary });
+    return summary;
+  }
   const opening = new Map<string, Promise<Feed>>();
   const subscribers = new Map<string, Set<Subscriber>>();
   /** Where each Bot's last feed stopped, so `seq` keeps rising across epochs. */
@@ -1382,6 +1415,16 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     });
   }
 
+  /** Whether the person owes this Bot an answer: the same sources the chat shows. */
+  async function needsYouNow(botId: string): Promise<boolean> {
+    return (
+      (deps.question?.(botId) ?? null) !== null ||
+      (deps.handoff?.(botId) ?? null) !== null ||
+      deps.approvalPending?.(botId) === true ||
+      (await deps.issuePending?.(botId)) === true
+    );
+  }
+
   return {
     async subscribe(botId, sink) {
       const subscriber: Subscriber = { sink, pending: [], overflowed: false, scheduled: false, closed: false };
@@ -1469,14 +1512,17 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       await syncHandoff(feed);
     },
 
+    async needsYou(botId) {
+      const feed = feeds.get(botId);
+      if (!feed || feed.ended) {
+        if ((await deps.state(botId)).kind === "unavailable") return false;
+      }
+      return needsYouNow(botId);
+    },
+
     async summary(botId) {
       // Read right before each return, so a slow summary never reports a stale wait. It uses the
       // same sources as the chat, so a row agrees with it whether or not a chat is open.
-      const needsYouNow = async () =>
-        (deps.question?.(botId) ?? null) !== null ||
-        (deps.handoff?.(botId) ?? null) !== null ||
-        deps.approvalPending?.(botId) === true ||
-        (await deps.issuePending?.(botId)) === true;
       const feed = feeds.get(botId);
       if (feed && !feed.ended) {
         await feed.queue;
@@ -1486,7 +1532,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
           preview: preview?.text ?? null,
           updatedAt: preview?.at ?? null,
           state: feed.state,
-          needsYou: await needsYouNow(),
+          needsYou: await needsYouNow(botId),
           lastReplyAt: botLastReplyAt(feed.entries),
         };
       }
@@ -1494,16 +1540,13 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       if (state.kind === "unavailable") {
         return { botId, preview: null, updatedAt: null, state, needsYou: false, lastReplyAt: null };
       }
-      const view = await (await deps.conversation(botId)).context(BACKGROUND_CONTEXT);
-      const entries = projectBotTranscript(view.entries);
-      const preview = botTranscriptPreview(entries);
+      const conversation = await deps.conversation(botId);
+      const transcript = await transcriptSummary(botId, conversation);
       return {
         botId,
-        preview: preview?.text ?? null,
-        updatedAt: preview?.at ?? null,
+        ...transcript,
         state,
-        needsYou: await needsYouNow(),
-        lastReplyAt: botLastReplyAt(entries),
+        needsYou: await needsYouNow(botId),
       };
     },
 

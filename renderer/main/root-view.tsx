@@ -20,7 +20,7 @@ import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/t
 import { EnvironmentPanelProvider, useEnvironmentPanel } from "../components/environment-panel";
 import { toast } from "../components/ui";
 import { RoutedBotPanelProvider, useBotPanelActions } from "./bots/bot-panel-context";
-import { environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
+import { botListLocation, environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { queryKeys } from "../lib/queries";
 import { subscribeGitQuerySync } from "../lib/git-query-sync";
@@ -57,6 +57,7 @@ import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { useBotNotificationsSync } from "../lib/bot-notifications-sync";
+import { useInboxDockBadgeSync } from "../lib/use-sidebar-view";
 import { subscribeLateReturnedGuidance } from "../lib/composer-draft-store";
 import { onAssistantAutomationComposerRequested } from "../lib/assistant-dock";
 import { WindowControls } from "../components/window-controls";
@@ -220,7 +221,7 @@ function RootContent() {
         toast.info(navigationBlockedReason);
         return;
       }
-      void navigate({ to });
+      void navigate(to === "/bots" ? botListLocation() : { to });
     },
     [navigate, navigationBlockedReason],
   );
@@ -484,6 +485,7 @@ function RootContent() {
   }, [queryClient]);
 
   useBotNotificationsSync(queryClient);
+  useInboxDockBadgeSync(appApi.setInboxDockBadge, capabilities.badgeCount);
 
   React.useEffect(
     () =>

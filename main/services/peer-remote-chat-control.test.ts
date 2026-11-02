@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { HostRunRegistry } from "./host-run-registry.js";
 import { PEER_WAKE_COALESCE_MS } from "./peer-host-manager.js";
-import { FakeHost, hostControls, numbered, settle, setup, type FakeHostEffects } from "./peer-remote-chat-test-host.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { projectAidenRemoteChatTriage } from "./aiden-remote-chats.js";
+import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { ChatTriageStore } from "./chat-triage.js";
+import { PeerTransportError } from "./peer-transport.js";
+import { FakeHost, FEATURES, UNHANDLED, hostControls, numbered, settle, setup, type FakeHostEffects } from "./peer-remote-chat-test-host.js";
 import { ChatIntentLedger } from "../../renderer/lib/hosts/chat-intent-ledger.js";
 import { ChatSessionControl } from "../../renderer/lib/hosts/chat-session-control.js";
 import { HostChatControlError, isOutcomeUnknown, type HostChatAdapter } from "../../renderer/lib/hosts/host-chat-adapter.js";
@@ -317,6 +324,35 @@ test("answers and steering from this Mac reach the run on the host", async () =>
   }
 });
 
+test("a host that takes no run input or questions (aiden serve) keeps Stop and approvals but offers no steer or answers", async () => {
+  const host = new FakeHost("host_b", numbered(2));
+  // run-control-v1 without chat-run-input-v1 / chat-question-prompts-v1, as `aiden serve` advertises.
+  host.features = FEATURES.filter((token) => token !== "chat-run-input-v1" && token !== "chat-question-prompts-v1");
+  const harness = await setup(host);
+  try {
+    await host.start("run-1");
+    host.runs.publish("run-1", "chat:approval", APPROVAL);
+    await harness.open();
+    const control = controlFor(harness);
+    const granted = harness.adapter.capabilities();
+    assert.equal(granted.has("cancel"), true);
+    assert.equal(granted.has("respondApproval"), true);
+    assert.equal(granted.has("steer"), false);
+    assert.equal(granted.has("answerQuestion"), false);
+    assert.notEqual(control.refusal("steer"), null, "the pane hides Steer");
+    assert.notEqual(control.refusal("answerQuestion"), null);
+
+    await assert.rejects(control.submitInput("run-1", "steer", "Use tables"), code("unsupported"));
+    assert.deepEqual(host.effects.inputs, [], "nothing was sent for the host to refuse");
+    const approved = await control.respondApproval({ runId: "run-1", approvalId: "ap-1", decision: "allow" });
+    assert.equal(approved?.resolution, "applied");
+    assert.equal(await control.cancel("run-1"), true);
+    assert.deepEqual(host.effects.cancels, ["run-1"]);
+  } finally {
+    harness.close();
+  }
+});
+
 test("a chat renamed from this Mac can be deleted from it next, and a stale delete rereads instead of overwriting", async () => {
   const host = new FakeHost("host_b", numbered(2));
   const harness = await setup(host);
@@ -352,6 +388,34 @@ test("a chat renamed from this Mac can be deleted from it next, and a stale dele
   }
 });
 
+test("a chat renamed from its sidebar row rereads in the open pane, so the pane's next change is not refused", async () => {
+  const host = new FakeHost("host_b", numbered(2));
+  const harness = await setup(host);
+  try {
+    await harness.open();
+    const control = controlFor(harness);
+    const shown = () => harness.session.getSnapshot().transcript.revision ?? undefined;
+    const before = shown();
+
+    // The sidebar renames through its own short-lived adapter for the same host.
+    const sidebar = await harness.adapterFor();
+    try {
+      await sidebar.rename("chat-1", { title: "From the sidebar", revision: before });
+    } finally {
+      sidebar.dispose();
+    }
+    assert.equal(host.chat.title, "From the sidebar");
+    await settle();
+    await harness.session.idle();
+    assert.notEqual(shown(), before, "the open pane reread the renamed chat's revision");
+
+    await control.rename("From the pane", shown());
+    assert.equal(host.chat.title, "From the pane");
+  } finally {
+    harness.close();
+  }
+});
+
 test("an unreachable host refuses every mutation, and nothing is sent once it is back", async () => {
   const host = new FakeHost("host_b", numbered(2));
   const harness = await setup(host);
@@ -378,6 +442,64 @@ test("an unreachable host refuses every mutation, and nothing is sent once it is
     assert.equal(harness.adapter.status().availability, "online");
     assert.deepEqual(host.turnRequests(), [], "no message was queued for later");
     assert.deepEqual(host.effects, { cancels: [], approvals: [], answers: [], inputs: [] });
+  } finally {
+    harness.close();
+  }
+});
+
+test("triage from this Mac lands once on the host across a lost answer, and a stale Undo is refused", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-triage-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new ChatTriageStore(() => directory, { now: () => Date.parse("2026-11-02T10:00:00.000Z") });
+  const host = new FakeHost("host_b", numbered(2));
+  host.features = [...FEATURES, "chat-triage-v1"];
+  let dropNext = 0;
+  let writes = 0;
+  host.routes = async (input, deviceId) => {
+    if (input.path !== "/chats/chat-1/triage" || input.method !== "POST") return UNHANDLED;
+    const body = input.body as { pinned?: boolean; done?: boolean; snoozeUntil?: string | null; ifRevision?: number };
+    const entry = await host.idempotent(
+      { deviceId, route: "POST /chats/{id}/triage", resourceId: "chat-1", key: input.idempotencyKey ?? "" },
+      body,
+      async () => {
+        writes += 1;
+        const result = await store.set(
+          "chat-1",
+          {
+            ...(body.pinned !== undefined ? { pinned: body.pinned } : {}),
+            ...(body.done !== undefined ? { done: body.done } : {}),
+            ...(body.snoozeUntil !== undefined ? { snoozeUntil: body.snoozeUntil === null ? null : Date.parse(body.snoozeUntil) } : {}),
+          },
+          body.ifRevision === undefined ? {} : { ifRevision: body.ifRevision },
+        );
+        if (result.ok) return projectAidenRemoteChatTriage("chat-1", result.entry);
+        throw new AidenRemoteServiceError("revision_conflict", "Changed.", 409, false, {
+          currentRevision: String(result.code === "revision_conflict" ? result.entry?.revision ?? 0 : 0),
+        });
+      },
+    );
+    if (dropNext > 0) {
+      dropNext -= 1;
+      throw new PeerTransportError("unavailable");
+    }
+    return JSON.parse(JSON.stringify(entry));
+  };
+  const harness = await setup(host);
+  try {
+    assert.ok(harness.adapter.capabilities().has("triage"));
+    // The answer is lost after the host applied it; the retry replays it.
+    dropNext = 1;
+    const snoozeUntil = Date.parse("2026-11-02T18:00:00.000Z");
+    const snoozed = await harness.adapter.setTriage("chat-1", { snoozeUntil }, 0);
+    assert.deepEqual(snoozed, { ok: true, entry: { revision: 1, updatedAt: Date.parse("2026-11-02T10:00:00.000Z"), snoozedUntil: snoozeUntil } });
+    assert.equal(writes, 1, "the host applied the snooze once");
+
+    // Another device marks it done; an Undo of the snooze built on revision 1 is refused.
+    await store.set("chat-1", { done: true });
+    const undo = await harness.adapter.setTriage("chat-1", { snoozeUntil: null }, 1);
+    // The host names only the revision it holds, so the refusal carries no entry of its own making.
+    assert.deepEqual(undo, { ok: false, code: "revision_conflict", entry: null, currentRevision: 2 });
+    assert.equal((await store.get("chat-1"))?.snoozedUntil, snoozeUntil, "the stale Undo changed nothing");
   } finally {
     harness.close();
   }

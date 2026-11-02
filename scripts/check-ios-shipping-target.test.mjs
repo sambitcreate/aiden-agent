@@ -75,6 +75,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/AidenChatFeature.swift",
+  "AidenOnTheGo/Features/Remote/AidenInboxViews.swift",
   "AidenOnTheGo/Features/Remote/AidenMarkdownContentCache.swift",
   "AidenOnTheGo/Features/Remote/AidenOnboardingArtwork.swift",
   "AidenOnTheGo/Features/Remote/AidenOnboardingVignettes.swift",
@@ -108,6 +109,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Models/AidenBotSession.swift",
   "AidenOnTheGo/Models/AidenChat.swift",
   "AidenOnTheGo/Models/AidenChatProgress.swift",
+  "AidenOnTheGo/Models/AidenInbox.swift",
   "AidenOnTheGo/Models/AidenInstallation.swift",
   "AidenOnTheGo/Models/AidenScheduledTask.swift",
   "AidenOnTheGo/Models/AidenWorkspaceEnvironment.swift",
@@ -135,6 +137,7 @@ const testSources = [
   "AidenBotSessionTests.swift",
   "AidenActivityMarkTests.swift",
   "AidenChatTests.swift",
+  "AidenInboxTests.swift",
   "AidenNativeIntegrationTests.swift",
   "AidenNetworkPathTests.swift",
   "AidenOnboardingArtTests.swift",
@@ -449,7 +452,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   const workspacesIndex = shell.indexOf('title: "Workspaces"', usageIndex);
   const homeNavigationIndex = shell.indexOf("homeNavigationRows");
   const sidebarIndex = shell.indexOf(
-    'Text(sidebarOrganization == .workspace ? "Workspaces" : "Recents")',
+    "Text(sidebarOrganizationTitle)",
     homeNavigationIndex,
   );
   assert.ok(scheduledIndex >= 0 && scheduledIndex < usageIndex);

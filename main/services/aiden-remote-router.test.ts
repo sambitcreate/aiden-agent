@@ -117,6 +117,8 @@ async function fixture(options: {
   contextPressure?: { chatId: string; pressure: Record<string, unknown> | null };
   /** The host's spending ledger (contract revision 47). */
   spending?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["spending"];
+  /** The host keeps Inbox triage (`chat-triage-v1`, revision 50). */
+  triage?: boolean;
   /** The host's background jobs (contract revision 49). */
   backgroundJobs?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["backgroundJobs"];
 } = {}) {
@@ -490,6 +492,15 @@ async function fixture(options: {
             cancelForkSummary: async (id: string) => {
               calls.push(`fork-summary-cancel:${id}`);
               return { cancelled: true };
+            },
+          }
+        : {}),
+      ...(options.triage
+        ? {
+            supportsTriage: true,
+            setTriage: async (deviceId: string, id: string, key: string, body: unknown) => {
+              calls.push(`chat-triage:${deviceId}:${id}:${key}:${JSON.stringify(body)}`);
+              return { chatId: id, revision: 1, updatedAt: new Date(3_000).toISOString(), doneAt: new Date(3_000).toISOString() };
             },
           }
         : {}),
@@ -4664,7 +4675,8 @@ test("chat controls require both scoped grants and advertise owner-enabled negot
   const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
   try {
     const server = await (await fetch(`${app.base}/server`, { headers })).json();
-    assert.ok(server.features.includes("chat-ui-panels-v1"));
+    // Retired in revision 50: no shipped client read it, and phones needed the slot for chat-triage-v1.
+    assert.equal(server.features.includes("chat-ui-panels-v1"), false);
     assert.equal(server.features.includes("chat-ui-panels-enabled-v1"), false);
     const denied = await fetch(`${app.base}/chats/chat-1/controls/panel-1`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ control: "memory.enabled", value: false, expectedRevision: "rev", operationId: "op" }) });
     assert.equal(denied.status, 403);
@@ -6402,6 +6414,48 @@ test("a phone answers a real hand-off and pauses its Bot over HTTP, while a lega
     await holder.close();
     await legacy.close();
     await sessions.close();
+  }
+});
+
+test("phones hear chat-triage-v1 and may set Done under chat:write, but not without it", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const write = (base: string) => fetch(`${base}/chats/chat-1/triage`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json", "idempotency-key": "phone-triage-key-0001" },
+    body: JSON.stringify({ done: true, ifRevision: 0 }),
+  });
+  for (const deviceType of ["iphone", "ipad", "android"] as const) {
+    const phone = await fixture({ deviceType, triage: true, capabilities: ["server:read", "chat:read", "chat:write"] });
+    try {
+      const server = await (await fetch(`${phone.base}/server`, { headers })).json();
+      assert.ok(server.features.includes("chat-triage-v1"), deviceType);
+      const done = await write(phone.base);
+      assert.equal(done.status, 200, deviceType);
+      const body = await done.json();
+      assert.equal(body.chatId, "chat-1");
+      assert.equal(body.revision, 1);
+      assert.ok(phone.calls.some((call) => call.startsWith("chat-triage:") && call.endsWith(`:chat-1:phone-triage-key-0001:{"done":true,"ifRevision":0}`)), deviceType);
+    } finally {
+      await phone.close();
+    }
+    const readOnly = await fixture({ deviceType, triage: true, capabilities: ["server:read", "chat:read"] });
+    try {
+      const refused = await write(readOnly.base);
+      assert.equal(refused.status, 403, deviceType);
+      assert.equal((await refused.json()).error.code, "capability_denied");
+      assert.equal(readOnly.calls.some((call) => call.startsWith("chat-triage:")), false, deviceType);
+    } finally {
+      await readOnly.close();
+    }
+  }
+  // A host without the triage store announces nothing and serves no route.
+  const bare = await fixture({ deviceType: "iphone", capabilities: ["server:read", "chat:read", "chat:write"] });
+  try {
+    const server = await (await fetch(`${bare.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-triage-v1"), false);
+    assert.equal((await write(bare.base)).status, 404);
+  } finally {
+    await bare.close();
   }
 });
 

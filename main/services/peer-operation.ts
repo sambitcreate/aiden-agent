@@ -397,6 +397,11 @@ export function peerOperationRequest(
       method = "POST";
       needsKey = true;
       break;
+    case "setTriage":
+      path = `/chats/${id()}/triage`;
+      method = "POST";
+      needsKey = true;
+      break;
     case "interruptAgent":
       path = `/chats/${id()}/agents/${item()}/interrupt`;
       method = "POST";

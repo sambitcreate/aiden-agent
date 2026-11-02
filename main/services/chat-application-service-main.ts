@@ -19,7 +19,10 @@ import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
 import { cancelVisualSnapshots } from "./visual-snapshot-service.js";
 import { deleteChatFollowThrough, restoreChatFollowThrough } from "./follow-through/follow-through-main.js";
 import { interruptedWaits } from "./interrupted-waits-main.js";
+import { detachedPromptLog } from "./chat-pending-attention-main.js";
 import { workspaceApplicationService } from "./workspace-application-service-main.js";
+import { chatReadMarkers } from "./chat-read-markers-main.js";
+import { chatTriage } from "./chat-triage-main.js";
 
 export const chatApplicationService = createChatApplicationService({
   chatStore,
@@ -40,8 +43,10 @@ export const chatApplicationService = createChatApplicationService({
     forgetChatContextProfile(chatId);
     void spending.forgetChat(chatId).catch(() => undefined);
     void interruptedWaits.forgetChat(chatId).catch(() => undefined);
+    detachedPromptLog.clearChat(chatId);
   },
   forgetDeletedChat: (chatId) => llmClient.forgetDeletedChat(chatId),
+  inboxState: { readMarkers: chatReadMarkers, triage: chatTriage },
   attachments: remoteAttachmentStore,
   afterChatRemoved: (workspaceId) => workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId),
   toolOutputStore,

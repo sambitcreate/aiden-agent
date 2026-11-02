@@ -7,6 +7,10 @@ import {
 import { AidenOperationUnknownOutcomeError } from "./aiden-remote-operation-contract.js";
 import { AppendReconciliationRequiredError } from "./chat-append-commit.js";
 import type { Chat } from "./types.js";
+import { ChatTriageStore } from "./chat-triage.js";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 
 interface AgentStub {
   queueAdmissionBlocked(): "not-active" | "cancelled" | "capacity" | undefined;
@@ -14,7 +18,7 @@ interface AgentStub {
   queueFollowUp(message: unknown): { accepted: boolean; queue?: string; reason?: string };
 }
 
-function fixture() {
+function fixture(options: { onPersonWrote?: (chatId: string) => void } = {}) {
   const appended: Array<{ chatId: string; message: unknown; meta: unknown }> = [];
   const steered: unknown[] = [];
   const followedUp: unknown[] = [];
@@ -58,6 +62,7 @@ function fixture() {
       return { id: chatId, messages: [] } as unknown as Chat;
     },
     readChat: async () => readChatResult,
+    ...(options.onPersonWrote ? { onPersonWrote: options.onPersonWrote } : {}),
     now: () => 7_777,
     newMessageId: () => "message_admitted_1",
   });
@@ -311,6 +316,48 @@ test("run input admission maps the isCurrent cancel race to cancelled without co
   assert.deepEqual(result, { admitted: false, reason: "cancelled", committed: false });
   assert.equal(app.appended.length, 0);
   assert.equal(app.steered.length, 0);
+});
+
+test("a steer or follow-up the person writes ends the chat's snooze; a notice or a refused one leaves it", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-admission-triage-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const triage = new ChatTriageStore(() => root, { now: () => 1_000 });
+  const wakes: Promise<boolean>[] = [];
+  const app = fixture({ onPersonWrote: (chatId) => void wakes.push(triage.wake(chatId)) });
+  const snoozed = async () => (await triage.get("chat-1"))?.snoozedUntil;
+  await triage.set("chat-1", { snoozeUntil: 60_000 });
+
+  // A main-owned notice is not the person writing.
+  await app.admission.admit({
+    streamId: "stream-1",
+    mode: "queue",
+    text: "Background task finished",
+    notice: { version: 1, source: "background_job", tone: "success", title: "Background job ended", summary: "npm test · exit code 0" },
+  });
+  // Nor is input the run refuses before it reaches the transcript.
+  app.setProbe("capacity");
+  await app.admission.admit({ streamId: "stream-1", mode: "steer", text: "Too many" });
+  app.setProbe(undefined);
+  await Promise.all(wakes);
+  assert.equal(await snoozed(), 60_000);
+
+  for (const mode of ["steer", "queue"] as const) {
+    await triage.set("chat-1", { snoozeUntil: 60_000 });
+    const result = await app.admission.admit({ streamId: "stream-1", mode, text: `Also ${mode}` });
+    assert.equal(result.committed, true);
+    await Promise.all(wakes);
+    assert.equal(await snoozed(), undefined, `a ${mode} ends the snooze`);
+  }
+});
+
+test("a failing snooze wake never changes what the admission reports", async () => {
+  const app = fixture({
+    onPersonWrote: () => {
+      throw new Error("triage store unavailable");
+    },
+  });
+  const result = await app.admission.admit({ streamId: "stream-1", mode: "steer", text: "Steer now" });
+  assert.deepEqual(result, { admitted: true, queue: "steer", committed: true, messageId: "message_admitted_1" });
 });
 
 test("run input admission rejects uncommitted store failures without consuming the draft", async () => {

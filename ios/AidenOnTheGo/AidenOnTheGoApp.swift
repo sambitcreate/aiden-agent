@@ -95,7 +95,15 @@ struct AidenOnTheGoApp: App {
         WindowGroup {
             Group {
                 AidenAppearanceRoot(appearance: appearance) {
+#if DEBUG
+                    if AidenInboxFixtureView.isRequested {
+                        AidenInboxFixtureView()
+                    } else {
+                        ContentView(coordinator: remoteCoordinator)
+                    }
+#else
                     ContentView(coordinator: remoteCoordinator)
+#endif
                 }
                 .environment(appearance)
             }

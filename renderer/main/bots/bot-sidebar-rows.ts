@@ -82,16 +82,32 @@ export function useBotLiveSummary(botId: string) {
   });
 }
 
-export function useBotRows() {
+const NO_BOTS: readonly BotDefinition[] = [];
+
+type SummaryResult = { data?: BotLiveSummary; isPending: boolean };
+
+// Kept at module level so useQueries can hand back the same object until a summary changes.
+function combineSummaries(results: readonly SummaryResult[]) {
+  return { data: results.map((result) => result.data), settled: results.every((result) => !result.isPending) };
+}
+
+/**
+ * The Bot rows, in a new array only when a Bot or a summary changes, so a
+ * surface that memoizes on them (the Inbox) doesn't redo its work every render.
+ * `enabled: false` reads nothing: a surface that doesn't show Bots right now
+ * (the Inbox in another view).
+ */
+export function useBotRows({ enabled = true }: { enabled?: boolean } = {}) {
   const queryClient = useQueryClient();
-  const bots = useBots();
-  const list = bots.data ?? [];
+  const bots = useBots(false, enabled);
+  const list = enabled ? (bots.data ?? NO_BOTS) : NO_BOTS;
   const summaries = useQueries({
     queries: list.map((bot) => ({
       queryKey: queryKeys.botLiveSummary(bot.id),
       queryFn: () => readLiveSummary(queryClient, bot.id),
       retry: false,
     })),
+    combine: combineSummaries,
   });
   React.useEffect(() => {
     // Forget read numbers of Bots no longer listed, so the map tracks only live Bots.
@@ -99,9 +115,6 @@ export function useBotRows() {
     const live = new Set(bots.data.map((bot) => bot.id));
     for (const botId of latestSummaryRead.keys()) if (!live.has(botId)) latestSummaryRead.delete(botId);
   }, [bots.data]);
-  const rows = botSidebarRows(
-    list,
-    summaries.map((result) => result.data),
-  );
-  return { bots, rows, summariesSettled: summaries.every((result) => !result.isPending) };
+  const rows = React.useMemo(() => botSidebarRows(list, summaries.data), [list, summaries.data]);
+  return { bots, rows, summariesSettled: summaries.settled };
 }

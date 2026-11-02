@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Chat, Workspace } from "./types.js";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   createChatApplicationService,
+  forgetChatInboxState,
   type ChatApplicationDependencies,
   type ChatApplicationOwner,
 } from "./chat-application-service.js";
+import { reconcilePendingChatDeletions } from "./chat-deletion-reconciliation.js";
+import { ChatReadMarkerStore } from "./chat-read-markers.js";
+import { ChatTriageStore } from "./chat-triage.js";
 import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
 
@@ -352,6 +359,7 @@ test("a chat deletion that fails before its durable tombstone hands the chat bac
   };
   const failed = fixture({
     followThrough,
+    releaseChatContext: (chatId: string) => { events.push(`release:${chatId}`); },
     subagentRunStore: {
       deleteChat: async () => { throw new Error("disk failed"); },
       completeChatDeletion: async () => undefined,
@@ -359,12 +367,13 @@ test("a chat deletion that fails before its durable tombstone hands the chat bac
     } as ChatApplicationDependencies["subagentRunStore"],
   });
   await assert.rejects(failed.service.remove("chat-1"), /subagent history/u);
-  assert.deepEqual(events, ["suppress:chat-1", "restore:chat-1"]);
+  assert.deepEqual(events, ["suppress:chat-1", "restore:chat-1"], "the retained chat keeps its context");
   assert.equal(failed.finishDeletionCalls(), 1, "admission reopens for the retained chat");
 
   events.length = 0;
   const pending = fixture({
     followThrough,
+    releaseChatContext: (chatId: string) => { events.push(`release:${chatId}`); },
     subagentRunStore: {
       deleteChat: async () => { throw new Error("V2 tombstone failed"); },
       completeChatDeletion: async () => undefined,
@@ -372,11 +381,18 @@ test("a chat deletion that fails before its durable tombstone hands the chat bac
     } as ChatApplicationDependencies["subagentRunStore"],
   });
   await assert.rejects(pending.service.remove("chat-1"), /subagent history/u);
-  assert.deepEqual(events, ["suppress:chat-1"], "a pending durable delete keeps the chat's runs ignored");
+  assert.deepEqual(
+    events,
+    ["suppress:chat-1", "release:chat-1"],
+    "a pending durable delete keeps the chat's runs ignored and drops its context",
+  );
 
   events.length = 0;
-  await fixture({ followThrough }).service.remove("chat-1");
-  assert.deepEqual(events, ["suppress:chat-1"], "a completed delete keeps the chat's runs ignored");
+  await fixture({
+    followThrough,
+    releaseChatContext: (chatId: string) => { events.push(`release:${chatId}`); },
+  }).service.remove("chat-1");
+  assert.deepEqual(events, ["suppress:chat-1", "release:chat-1"], "a completed delete keeps the chat's runs ignored");
 });
 
 test("chat deletion checks a remote revision before cancellation or private-history changes", async () => {
@@ -533,4 +549,45 @@ test("a committed deletion offers the chat's workspace for release, and a failed
   });
   await assert.rejects(uncommitted.service.remove("chat-1"), /disk failed/u);
   assert.deepEqual(released, ["workspace-1"], "nothing is released for a deletion that did not commit");
+});
+
+test("a delete rolled forward at startup clears the chat's Inbox state, even when one store fails", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-app-inbox-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const triage = new ChatTriageStore(() => root, { now: () => 1_000 });
+  t.after(() => triage.dispose());
+  const readMarkers = new ChatReadMarkerStore(() => root, { now: () => 1_000 });
+  await triage.set("chat-gone", { pinned: true, snoozeUntil: 60_000 });
+  await triage.set("chat-kept", { pinned: true });
+  await readMarkers.markRead("chat-gone", 900);
+
+  const completed: string[] = [];
+  await reconcilePendingChatDeletions(
+    {
+      pendingChatDeletions: async () => ["chat-gone"],
+      completeChatDeletion: async (chatId) => {
+        completed.push(chatId);
+      },
+    },
+    (chatId) => forgetChatInboxState({ readMarkers, triage }, chatId, () => undefined),
+  );
+
+  assert.deepEqual(completed, ["chat-gone"]);
+  assert.deepEqual(Object.keys((await triage.snapshot()).chats), ["chat-kept"]);
+  assert.equal((await readMarkers.snapshot()).readThrough["chat-gone"], undefined);
+
+  // A read-marker store that cannot write still lets the triage go, and the
+  // roll-forward still completes: the failure is logged, never thrown.
+  await triage.set("chat-gone-2", { done: true });
+  const logged: string[] = [];
+  await forgetChatInboxState(
+    {
+      readMarkers: { remove: async () => Promise.reject(new Error("disk full")) },
+      triage,
+    },
+    "chat-gone-2",
+    (_area, message) => logged.push(message),
+  );
+  assert.deepEqual(Object.keys((await triage.snapshot()).chats), ["chat-kept"]);
+  assert.equal(logged.length, 1);
 });

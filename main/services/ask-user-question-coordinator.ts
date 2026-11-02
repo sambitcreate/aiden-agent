@@ -43,7 +43,20 @@ export class AskUserQuestionCoordinator {
       response: AskUserQuestionResponseV1,
       settledBy: AskUserQuestionSettledBy,
     ) => void,
+    /**
+     * Called when a prompt is refused unpublished because its stream was
+     * detached first: nobody saw it, and the agent is told it was cancelled.
+     */
+    private readonly onShortCircuited?: (prompt: AskUserQuestionPromptV1) => void,
   ) {}
+
+  private shortCircuited(prompt: AskUserQuestionPromptV1): void {
+    try {
+      this.onShortCircuited?.(prompt);
+    } catch {
+      // Advisory bookkeeping; the request still settles.
+    }
+  }
 
   request(
     descriptor: {
@@ -73,7 +86,9 @@ export class AskUserQuestionCoordinator {
       cancelled: true,
       answers: [],
     });
-    if (signal?.aborted || this.detachedStreams.has(prompt.streamId)) {
+    if (signal?.aborted) return Promise.resolve(cancelled());
+    if (this.detachedStreams.has(prompt.streamId)) {
+      this.shortCircuited(prompt);
       return Promise.resolve(cancelled());
     }
     return new Promise<AskUserQuestionResponseV1>((resolve) => {
@@ -104,7 +119,12 @@ export class AskUserQuestionCoordinator {
         settle: finish,
       });
       signal?.addEventListener("abort", aborted, { once: true });
-      if (signal?.aborted || this.detachedStreams.has(prompt.streamId)) {
+      if (signal?.aborted) {
+        aborted();
+        return;
+      }
+      if (this.detachedStreams.has(prompt.streamId)) {
+        this.shortCircuited(prompt);
         aborted();
         return;
       }

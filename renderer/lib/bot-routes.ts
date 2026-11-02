@@ -1,5 +1,8 @@
 // Where the Bots surfaces live in the route tree, what the panel shortcut acts
-// on there, and where ‹ in the Bots sidebar goes back to (spec §8, §9).
+// on there, where ‹ in the Bots sidebar goes back to (spec §8, §9), and
+// whether the person asked for the Bot list while the Inbox is the sidebar view.
+
+import type { AnyRouter } from "@tanstack/react-router";
 
 const BOT_CHAT_ROUTE = /^\/bots\/([^/]+)\/chat\/?$/u;
 const BOT_ROUTE = /^\/bots\/([^/]+)(?:\/chat)?\/?$/u;
@@ -52,12 +55,76 @@ export function botChatPath(botId: string): { to: "/bots/$botId/chat"; params: {
   return { to: "/bots/$botId/chat", params: { botId } };
 }
 
+declare module "@tanstack/history" {
+  interface HistoryState {
+    /** Set on the history entry when the person asked for the Bot list (see `botListLocation`). */
+    aidenBotList?: boolean;
+  }
+}
+
+/**
+ * The Bot list, asked for: the Bots nav entry, `bots.open` and the All Bots
+ * links navigate here. The ask lives on the history entry, so Back and Forward
+ * bring it back with the page. A plain `/bots` (after deleting a Bot, or from
+ * an error) doesn't start an ask; it keeps one already in progress inside Bots.
+ */
+export function botListLocation(): { to: "/bots"; state: { aidenBotList: true } } {
+  return { to: "/bots", state: { aidenBotList: true } };
+}
+
+type HistoryStateLike = { aidenBotList?: unknown } | null | undefined;
+
+function pathnameOf(href: string): string {
+  return href.split(/[?#]/u, 1)[0] ?? href;
+}
+
+/**
+ * The state a new history entry keeps. An ask for the Bot list lasts through
+ * the Bots pages that follow it (the `/bots` redirect to the last Bot, opening
+ * other Bots) and ends when the person leaves Bots; an entry that says either
+ * way itself keeps what it says.
+ */
+function nextBotListState<T extends object>(current: HistoryStateLike, pathname: string, state: T): T {
+  if (!isBotsPath(pathname)) {
+    if (!("aidenBotList" in state)) return state;
+    const { aidenBotList: _dropped, ...rest } = state as T & { aidenBotList?: unknown };
+    return rest as T;
+  }
+  if ("aidenBotList" in state) return state;
+  return current?.aidenBotList === true ? { ...state, aidenBotList: true } : state;
+}
+
+/**
+ * Carry an ask for the Bot list from entry to entry within Bots (see
+ * `nextBotListState`). It goes on each location before the router commits it,
+ * so the router compares the state the entry will really have: opening the
+ * Bot that's already open stays a no-op instead of pushing a duplicate entry.
+ */
+export function carryBotListRequest<T extends Pick<AnyRouter, "history" | "commitLocation">>(router: T): T {
+  const commit = router.commitLocation;
+  router.commitLocation = (next) =>
+    commit({ ...next, state: nextBotListState(router.history.location.state, next.pathname, next.state) });
+  return router;
+}
+
+/**
+ * Whether the sidebar shows the Bot list rather than the workspace sidebar. On
+ * any Bots page it does, except with the Inbox as the view: a Bot opened from
+ * the Inbox, a notification or a redirect keeps the Inbox (it owns ⌘1–9
+ * there), and the list shows only on an entry where the person asked for it.
+ * A notification or redirect that opens a Bot from inside an ask keeps the
+ * list, since the ask carries through Bots.
+ */
+export function sidebarShowsBotList(location: { pathname: string; state?: HistoryStateLike }, inboxView: boolean): boolean {
+  if (!isBotsPath(location.pathname)) return false;
+  return !inboxView || location.state?.aidenBotList === true;
+}
+
 let lastNonBotHref = "/";
 
-/** Called on every chat-shell navigation. Bots pages are never a back target. */
+/** Called on every resolved chat-shell navigation. Bots pages are never a back target. */
 export function rememberRoute(href: string): void {
-  const pathname = href.split(/[?#]/u, 1)[0] ?? href;
-  if (!isBotsPath(pathname)) lastNonBotHref = href;
+  if (!isBotsPath(pathnameOf(href))) lastNonBotHref = href;
 }
 
 /** Where ‹ in the Bots sidebar goes: the last page outside Bots this session, else the latest chat (`/`). */

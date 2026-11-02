@@ -34,10 +34,10 @@ const chats: ChatMeta[] = [
   { id: "unowned", title: "No workspace", createdAt: 8, updatedAt: 90 },
 ];
 
-function organize(search: string, view: SidebarView = "projects", attention = new Map<string, "needs_input">()) {
+function organize(search: string, view: SidebarView = "projects") {
   return organizeSidebar({
     projects: localSidebarProjects(workspaces),
-    chats: localSidebarChats(workspaces, chats, (chat) => attention.get(chat.id) ?? "none"),
+    chats: localSidebarChats(workspaces, chats),
     search,
     view,
     chatSort: "last_activity",
@@ -76,15 +76,10 @@ test("search matches the workspace folder path and chat titles without leaking o
   assert.deepEqual(byChat.chatSections, []);
 });
 
-test("the attention tier supplied for a local chat drives the triage view", () => {
-  const result = organize("", "attention", new Map([["alpha-old", "needs_input"]]));
-  assert.deepEqual(
-    result.chatSections.map((section) => [section.label, chatIds(section.chats)]),
-    [
-      ["Needs input", ["alpha-old"]],
-      ["Other chats", ["beta-new", "alpha-new"]],
-    ],
-  );
+test("the Inbox view leaves chat sections to the Inbox model", () => {
+  const result = organize("", "inbox");
+  assert.deepEqual(result.chatSections, []);
+  assert.deepEqual(workspaceIds(result), ["beta", "alpha", "empty"]);
 });
 
 test("No workspace chats share one Chats group instead of a row per hidden folder", () => {
@@ -107,7 +102,6 @@ test("No workspace chats share one Chats group instead of a row per hidden folde
         { id: "trip", title: "Trip ideas", workspaceId: "chat-a", createdAt: 9, updatedAt: 95 },
         { id: "recipe", title: "Soup", workspaceId: "chat-b", createdAt: 9, updatedAt: 96 },
       ],
-      () => "none",
     ),
     search: "",
     view: "projects",

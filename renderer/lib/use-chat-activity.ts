@@ -8,6 +8,7 @@ import {
 import { applyChatReadMarkersSnapshot } from "./chat-read-markers";
 import { parseChatActivitySnapshot } from "../shared/chat-activity";
 import { parseChatReadMarkersSnapshot, type ChatReadMarkersSnapshot } from "../shared/chat-row-state";
+import { parseChatTriageSnapshot, type ChatTriageSnapshot } from "../shared/chat-triage";
 
 /** Event-driven activity state: no polling and no animation clock. */
 export function useChatActivityState(): ChatActivityState {
@@ -74,4 +75,35 @@ export function useChatReadMarkers(): ChatReadMarkersSnapshot | null {
   }, []);
 
   return markers;
+}
+
+/**
+ * Inbox triage (Pin, Done, Snooze) for this Mac's chats. Null until the first
+ * snapshot arrives; a late initial read never undoes a newer change event.
+ */
+export function useChatTriage(): ChatTriageSnapshot | null {
+  const [triage, setTriage] = React.useState<ChatTriageSnapshot | null>(null);
+
+  React.useEffect(() => {
+    let disposed = false;
+    const apply = (payload: unknown) => {
+      const snapshot = parseChatTriageSnapshot(payload);
+      if (snapshot) setTriage((current) => (current && snapshot.revision < current.revision ? current : snapshot));
+    };
+    const unsubscribe = onNotification("chats:triage-changed", apply);
+    void chatsApi
+      .triage()
+      .then((payload) => {
+        if (!disposed) apply(payload);
+      })
+      .catch(() => {
+        // Rows show untriaged until a change event arrives.
+      });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
+
+  return triage;
 }

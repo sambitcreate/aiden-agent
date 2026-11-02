@@ -7,6 +7,7 @@ import { reconcilePendingProviderCredentialRotation, saveProviderWithCredentialR
 import { providerConnectionSnapshot } from "./provider-credential-rotation-core.js";
 import { secrets } from "./secrets.js";
 import { ttsService } from "./tts/service-main.js";
+import { chatTriage } from "./chat-triage-main.js";
 import { chatReadMarkers, markChatRead } from "./chat-read-markers-main.js";
 import { chatForkService } from "./chat-fork-service-main.js";
 import { forkSummaryService } from "./fork-summary-service-main.js";
@@ -133,7 +134,6 @@ import { botMemoryService } from "./bot-memory/bot-memory-main.js";
 import { botRoutineProposals } from "./bot-routine-proposals-main.js";
 import { createBotNotificationFeed } from "./bot-routine-notifications.js";
 import { botIssues } from "./bot-issues/service-main.js";
-import { projectBotSummaryIssuesForAudience } from "./aiden-remote-bot-issues.js";
 import { botDeliveryLog } from "./bot-delivery/funnel-main.js";
 import {
   AidenRemoteBotSessionService,
@@ -142,7 +142,6 @@ import {
 import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
 import { botQuestions } from "./bot-runtime/bot-questions-main.js";
 import { botHandoffs } from "./bot-runtime/bot-handoffs-main.js";
-import { LEGACY_AUDIENCE, projectBotSummaryForAudience } from "./aiden-remote-bot-handoffs.js";
 import { botRunStarts, botTurnIntents } from "./bot-runtime/bot-turn-intents-main.js";
 import { botMutationGate } from "./bot-mutation-gate.js";
 import { botApplicationService } from "./bot-application-service-main.js";
@@ -180,13 +179,11 @@ import {
 } from "./bot-runtime-inventory-lease.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
-import {
-  AidenRemoteHostFeedService,
-  type AidenRemoteHostFeedBot,
-} from "./aiden-remote-host-feed.js";
+import { AidenRemoteHostFeedService, hostFeedBotSignals } from "./aiden-remote-host-feed.js";
+import { createAidenRemoteHostFeedSource } from "./aiden-remote-host-feed-source.js";
 import { hostRunRegistry } from "./host-runs-main.js";
+import { liveRunAttention } from "./chat-pending-attention.js";
 import { gitCachedRepositoryIdentity } from "./git.js";
-import { projectAidenRemoteWorkspace } from "./aiden-remote-workspaces.js";
 import { aidenRemoteHostPlatform, type AidenRemotePendingQuestion } from "./aiden-remote-protocol.js";
 import type { ToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
 
@@ -667,6 +664,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               snapshot: () => chatReadMarkers.snapshot(),
               markRead: (chatId, throughMessageId) => markChatRead(chatId, throughMessageId),
             },
+            triage: chatTriage,
+            // Revision 50: live-run times for the summaries' Inbox signals.
+            runTimes: (chatId) => liveRunAttention(chatId, hostRunRegistry),
             forks: {
               service: chatForkService,
               admitWorkspace: (workspaceId) => {
@@ -1027,44 +1027,26 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           activeHostFeed?.close();
           const hostFeed = new AidenRemoteHostFeedService({
             now: Date.now,
-            source: {
-              read: async () => {
-                const [{ summaries, botChatIds }, workspaceRows, botList] = await Promise.all([
-                  chats.hostFeedChats(),
-                  workspaceApplicationService.list(),
-                  bots ? bots.list() : Promise.resolve(undefined),
-                ]);
-                return {
-                  summaries,
-                  botChatIds,
-                  workspaces: workspaceRows.map((workspace) => {
-                    const repository = workspace.folderPath
-                      ? gitCachedRepositoryIdentity(workspace.folderPath)
-                      : undefined;
-                    return {
-                      ...projectAidenRemoteWorkspace(workspace),
-                      ...(repository ? { repository } : {}),
-                    };
-                  }),
-                  // A desktop without `bot:handoffs` gets the revision-35 rows (a paused
-                  // Bot reads as unavailable); a holder gets `paused` (revision 37).
-                  // `issueCount` (revision 42) is a phone shape: the host feed keeps
-                  // its revision-40 rows for every desktop.
-                  bots: (botList?.bots ?? []).map((bot) =>
-                    projectBotSummaryIssuesForAudience(
-                      projectBotSummaryForAudience(bot, LEGACY_AUDIENCE),
-                      { issues: false },
-                    ),
-                  ) as unknown as AidenRemoteHostFeedBot[],
-                  handoffBots: (botList?.bots ?? []).map((bot) =>
-                    projectBotSummaryIssuesForAudience(
-                      projectBotSummaryForAudience(bot, { handoffs: true }),
-                      { issues: false },
-                    ),
-                  ) as unknown as AidenRemoteHostFeedBot[],
-                };
-              },
+            attentionSummary: (runId) => {
+              const run = hostRunRegistry.summary(runId);
+              return run ? liveRunAttention(run.chatId, hostRunRegistry)?.summary : undefined;
             },
+            liveRuns: () => hostRunRegistry.list(),
+            source: createAidenRemoteHostFeedSource({
+              chats,
+              listWorkspaces: () => workspaceApplicationService.list(),
+              repositoryIdentity: gitCachedRepositoryIdentity,
+              ...(bots ? { listBots: () => bots.list() } : {}),
+              // Revision 50: each Bot's Needs you, Failed and last reply, from the
+              // same live summaries this Mac's sidebar reads. A failed read leaves them out.
+              botSignals: async (botRows) => {
+                const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
+                const live = botLiveProjection();
+                return new Map(await mapWithConcurrency(botRows, 4, async (bot) =>
+                  [bot.id, hostFeedBotSignals(await live.summary(bot.id).catch(() => undefined))] as const,
+                ));
+              },
+            }),
           });
           activeHostFeed = hostFeed;
           const hostFeedChannels = new Set([
@@ -1072,9 +1054,12 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             "chats:metadata-updated",
             "chats:activity-changed",
             "chats:read-markers-changed",
+            "chats:triage-changed",
             "chats:fork-summary-changed",
             "workspaces:changed",
             "bots:changed",
+            // A Bot's wait began or ended: its row's `needsYou` changed (revision 50).
+            "bots:attention",
           ]);
           const detachers = [
             onBroadcast((channel) => {

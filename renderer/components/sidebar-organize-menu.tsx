@@ -1,5 +1,5 @@
 import * as React from "react";
-import { BellDot, ListTree, Rows3 } from "lucide-react";
+import { Inbox, ListTree, Rows3 } from "lucide-react";
 import {
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
@@ -80,12 +80,14 @@ export function SidebarOrganizeMenuItems({
           <Rows3 className={ICON_CLASS} aria-hidden="true" />
           Recent
         </DropdownMenuRadioItem>
-        <DropdownMenuRadioItem value="attention">
-          <BellDot className={ICON_CLASS} aria-hidden="true" />
-          Needs attention
+        <DropdownMenuRadioItem value="inbox" aria-label="Inbox (Beta)">
+          <Inbox className={ICON_CLASS} aria-hidden="true" />
+          <span className="min-w-0 flex-1">Inbox</span>
+          <span className="rounded-pill bg-control px-1.5 text-mini text-tertiary">Beta</span>
         </DropdownMenuRadioItem>
       </DropdownMenuRadioGroup>
-      {view !== "attention" ? (
+      {/* The Inbox orders itself by what needs the person, so chat sorts don't apply. */}
+      {view !== "inbox" ? (
         <>
           <DropdownMenuSeparator />
           <DropdownMenuLabel id={`${id}-chat-sort`}>Sort chats</DropdownMenuLabel>

@@ -46,6 +46,8 @@ object AidenRemoteProtocol {
     const val CHAT_SKILLS_FEATURE = "chat-skills-v1"
     const val CHAT_AGENT_INTERRUPT_FEATURE = "chat-agent-interrupt-v1"
     const val CHAT_READ_STATE_FEATURE = "chat-read-state-v1"
+    /** Phones since revision 50: `POST /chats/{chatId}/triage` (Pin, Done, Snooze). */
+    const val CHAT_TRIAGE_FEATURE = "chat-triage-v1"
     const val CHAT_MESSAGES_WINDOW_FEATURE = "chat-messages-window-v1"
     const val CHAT_MESSAGES_WINDOW_METADATA_FEATURE = "chat-messages-window-metadata-v1"
     const val CHAT_FORK_FEATURE = "chat-fork-v1"

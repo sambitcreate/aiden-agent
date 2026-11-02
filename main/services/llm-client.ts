@@ -111,6 +111,9 @@ import {
   recordRunNotification,
   recordRunSettled,
 } from "./host-runs-main.js";
+import { chatTriage } from "./chat-triage-main.js";
+import { pendingAttentionRecorder } from "./chat-pending-attention-main.js";
+import type { HostRunPendingPrompt } from "./host-run-registry.js";
 import {
   botManagedWorkspace,
   resolveBotRuntimeMcpConnectionIdentities,
@@ -606,6 +609,8 @@ interface ActiveGeneration {
   cancelRequested: boolean;
   cancellationOrigin?: GenerationCancellationOrigin;
   rendererDetached: boolean;
+  /** Nobody attends this run's prompts, so a refused one is not left for the Inbox. */
+  promptsUnattended: boolean;
   computerUse?: ComputerUseController;
   /** Set when a computer_use or fill_form call first reaches the access gate. */
   computerUseActivated?: boolean;
@@ -634,6 +639,7 @@ const initializing = new Map<
     cancelRequested: boolean;
     cancellationOrigin?: GenerationCancellationOrigin;
     rendererDetached: boolean;
+    promptsUnattended: boolean;
     controller: AbortController;
     computerUse?: ComputerUseController;
     formFill?: FormFillService;
@@ -650,6 +656,12 @@ const runInputAdmission = createChatRunInputAdmission({
   isChatDeleting: (chatId) => chatDeletionGate.isDeleting(chatId),
   appendMessage: (chatId, message, meta) => chatStore.appendMessage(chatId, message, meta),
   readChat: (chatId) => chatStore.get(chatId),
+  // A steer or follow-up is the person writing in the chat, so it ends a snooze.
+  onPersonWrote: (chatId) => {
+    void chatTriage.wake(chatId).catch((error: unknown) => {
+      logger.warn("inbox", "Could not end the chat's snooze after its steer or follow-up.", error);
+    });
+  },
 });
 const chatCopyGate = new ChatWorkspaceMutationGate();
 const chatTurnAdmission = new ChatTurnAdmission();
@@ -903,6 +915,18 @@ function forgetInterruptedWait(waitId: string): void {
   });
 }
 
+/**
+ * A prompt asked after its window left the chat is refused unpublished. Keep
+ * it for the Inbox's Unavailable row, unless nobody was ever going to attend
+ * the run or Aiden is quitting.
+ */
+function recordShortCircuitedPrompt(streamId: string, prompt: HostRunPendingPrompt & { id: string }): void {
+  if (quitInProgress) return;
+  const runtime = active.get(streamId) ?? initializing.get(streamId);
+  if (!runtime?.rendererDetached || runtime.promptsUnattended) return;
+  pendingAttentionRecorder.promptShortCircuited(streamId, prompt);
+}
+
 const approvals = new ToolApprovalCoordinator(
   (prompt) => {
     if (!sendGeneration(prompt.streamId, "chat:approval", prompt)) {
@@ -929,6 +953,12 @@ const approvals = new ToolApprovalCoordinator(
       decision: outcome === "allowed" ? "allow" : outcome === "denied" ? "deny" : "cancelled",
     });
   },
+  (prompt) =>
+    recordShortCircuitedPrompt(prompt.streamId, {
+      id: prompt.approvalId,
+      type: "approval_required",
+      payload: { summary: prompt.summary },
+    }),
 );
 const questionnaires = new AskUserQuestionCoordinator(
   (prompt) => {
@@ -956,6 +986,12 @@ const questionnaires = new AskUserQuestionCoordinator(
       outcome: response.timedOut ? "expired" : response.cancelled ? "cancelled" : "answered",
     });
   },
+  (prompt) =>
+    recordShortCircuitedPrompt(prompt.streamId, {
+      id: prompt.promptId,
+      type: "question_required",
+      payload: { questions: prompt.questions },
+    }),
 );
 // A parent can be waiting for a child that is still constructing its tools.
 // Give the child's own bounded cancellation drain time to report a cleanup
@@ -2358,6 +2394,7 @@ export const llmClient = {
       cancelRequested: false,
       cancellationOrigin: undefined as GenerationCancellationOrigin | undefined,
       rendererDetached: false,
+      promptsUnattended: Boolean(options.unattended),
       controller: new AbortController(),
       computerUse: undefined as ComputerUseController | undefined,
       loadMonitor: undefined as LoadMonitorState | undefined,
@@ -2381,6 +2418,7 @@ export const llmClient = {
             initializing.set(streamId, initialization);
             chatActivityRegistry.begin(streamId, params.chatId);
             recordRunBegin(hostRunRegistry, streamId, params.chatId, owner);
+            pendingAttentionRecorder.runBegan(params.chatId);
             chatProgressEvents.begin(params.chatId, streamId);
           },
         );
@@ -4715,6 +4753,7 @@ export const llmClient = {
       cancelRequested: initialization.cancelRequested,
       cancellationOrigin: initialization.cancellationOrigin,
       rendererDetached: initialization.rendererDetached,
+      promptsUnattended: initialization.promptsUnattended,
       computerUse,
       formFill,
       inputClosed: designWiring?.inputClosed ?? false,
@@ -5171,6 +5210,8 @@ export const llmClient = {
     endLoadMonitor(runtimeOwner, streamId, false);
     runtimeOwner.formFill?.revoke();
     void runtimeOwner.computerUse?.close();
+    // Kept for the Inbox's Unavailable row; a quit's withdrawals are interrupted waits instead.
+    if (!quitInProgress) pendingAttentionRecorder.runDetached(streamId);
     approvals.detachStream(streamId);
     questionnaires.detachStream(streamId);
     logger.info("pi", `Renderer detached from generation ${streamId}; work remains main-owned.`);

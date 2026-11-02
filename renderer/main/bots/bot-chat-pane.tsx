@@ -29,6 +29,7 @@ import { MessageAttachmentPreviewProvider, MessageAttachments } from "../../comp
 import { insertTextIntoTextarea } from "../../lib/composer-type-focus";
 import { Button, Callout, EmptyState, ScrollArea, Text, toast } from "../../components/ui";
 import { BotNoticeCard } from "../../components/bots/bot-notice-card";
+import { botListLocation } from "../../lib/bot-routes";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
@@ -1050,7 +1051,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
-  const back = () => void navigate({ to: "/bots" });
+  const back = () => void navigate(botListLocation());
   const current = bot.data ?? null;
   // A Bot over its spending limit sends nothing until the person allows more.
   const spendingReached = spending.status?.state === "reached" ? spendingNotice(spending.status, current?.name)?.title : undefined;

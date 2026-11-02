@@ -9,6 +9,7 @@ import {
 } from "node:crypto";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
+import { hostInboxPlacement, type HostInboxSignals, type InboxBucket } from "../../renderer/shared/inbox-state.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import {
@@ -48,6 +49,13 @@ import {
   type ChatReadMarkersSnapshot,
   type ChatRowState,
 } from "../../renderer/shared/chat-row-state.js";
+import type {
+  ChatTriageEntry,
+  ChatTriagePatch,
+  ChatTriageResult,
+  ChatTriageSnapshot,
+  ChatTriageWrite,
+} from "../../renderer/shared/chat-triage.js";
 import {
   appendChatMessageWithReconciliation,
   isAppendReconciliationRequiredError,
@@ -260,11 +268,52 @@ export interface AidenRemoteChatSummaryProjection {
   lastRunFailed?: true;
   /** Additive (protocol revision 21): fork lineage, without its summary. */
   forkedFrom?: Omit<AidenRemoteChatForkLineageProjection, "summary">;
+  /**
+   * Additive (protocol revision 50, `inbox-signals-v1`): when the live run's
+   * oldest pending approval was raised, or else its oldest question. Absent
+   * without one.
+   */
+  attentionSince?: string;
+  /** Additive (protocol revision 50): when the chat's live run started. Absent without a live run. */
+  runStartedAt?: string;
+  /** Additive (protocol revision 50): when the newest assistant output arrived. */
+  lastAssistantAt?: string;
+  /**
+   * Additive (protocol revision 50): the chat's triage revision, which a
+   * client compares with its own writes. Present whenever the chat has a
+   * triage entry, with `pinnedAt`, `doneAt` and `snoozedUntil` as set.
+   */
+  triageRevision?: number;
+  pinnedAt?: string;
+  doneAt?: string;
+  snoozedUntil?: string;
+  /**
+   * Additive (protocol revision 50, `inbox-signals-v1`): the Inbox bucket the
+   * host's own placement rules give the row (`hostInboxPlacement`), with the
+   * time it orders by within that bucket. Computed from state as the host
+   * knows it: the row counts as not open, no recent window applies (an old
+   * read chat is `earlier`), and a snooze is judged on the host's clock, so a
+   * client rechecks `snoozedUntil` and the recent window against its own.
+   */
+  inboxBucket?: InboxBucket;
+  inboxSortAt?: string;
 }
+
+/** The revision-50 fields `freezeSummaryPage` adds to a row. */
+type InboxSignalField =
+  | "attentionSince"
+  | "runStartedAt"
+  | "lastAssistantAt"
+  | "triageRevision"
+  | "pinnedAt"
+  | "doneAt"
+  | "snoozedUntil"
+  | "inboxBucket"
+  | "inboxSortAt";
 
 type SafeSummaryRow = Omit<
   AidenRemoteChatSummaryProjection,
-  "titlePending" | "activity" | "rowState" | "unread" | "lastRunFailed"
+  "titlePending" | "activity" | "rowState" | "unread" | "lastRunFailed" | InboxSignalField
 > & { lastAssistantAt?: number; lastAssistantSequence?: number; lastAssistantFailed?: boolean };
 
 /** Shared, main-owned read markers used for honest unread summaries. */
@@ -272,6 +321,107 @@ export interface AidenRemoteChatReadMarkers {
   snapshot(): Promise<ChatReadMarkersSnapshot>;
   /** Resolves false when the chat or message no longer exists. */
   markRead(chatId: string, throughMessageId?: string): Promise<boolean>;
+}
+
+/** Shared, main-owned Inbox triage (Pin, Done, Snooze) behind `POST /chats/{chatId}/triage`. */
+export interface AidenRemoteChatTriage {
+  snapshot(): Promise<ChatTriageSnapshot>;
+  set(chatId: string, patch: ChatTriagePatch, write?: ChatTriageWrite): Promise<ChatTriageResult>;
+  /** Clear a snooze, and only a snooze, because the person wrote in the chat. */
+  wake?(chatId: string): Promise<unknown>;
+}
+
+/** The answer to a triage write: the chat's triage after it, times in RFC 3339. */
+export interface AidenRemoteChatTriageProjection {
+  chatId: string;
+  revision: number;
+  updatedAt: string;
+  pinnedAt?: string;
+  doneAt?: string;
+  snoozedUntil?: string;
+}
+
+/** A chat's live-run times (revision 50), epoch milliseconds. */
+export interface AidenRemoteChatRunTimes {
+  /** When the run's oldest pending approval was raised, or else its oldest question. */
+  attentionSince?: number;
+  /** When the run started. */
+  runStartedAt?: number;
+}
+
+function isoTime(at: number | undefined): string | undefined {
+  if (at === undefined || !Number.isSafeInteger(at) || at < 0) return undefined;
+  const date = new Date(at);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
+
+/**
+ * A summary row's revision-50 fields: each time in RFC 3339, and the triage
+ * entry's revision with whichever of Pin, Done and Snooze it holds. A field
+ * whose time is unknown or out of range is left out. With `placement` (the
+ * row's state and the host's clock) it adds `inboxBucket` and `inboxSortAt`,
+ * placed from exactly the fields the row reports.
+ */
+export function inboxSignalFields(
+  lastAssistantAt: number | undefined,
+  run: AidenRemoteChatRunTimes | undefined,
+  triage: ChatTriageEntry | undefined,
+  placement?: { rowState: ChatRowState; unread: boolean; failed: boolean; updatedAt: string; now: number },
+): Pick<AidenRemoteChatSummaryProjection, InboxSignalField> {
+  const fields: Pick<AidenRemoteChatSummaryProjection, InboxSignalField> = {};
+  const updatedAt = placement ? Date.parse(placement.updatedAt) : Number.NaN;
+  if (placement && Number.isSafeInteger(updatedAt)) {
+    // Only the times this row reports, so the bucket never reads a time the row leaves out.
+    const optional = (key: keyof HostInboxSignals, at: number | undefined) =>
+      isoTime(at) === undefined ? {} : { [key]: at };
+    const triageUsable = triage && Number.isSafeInteger(triage.revision) && triage.revision > 0 ? triage : undefined;
+    const signals: HostInboxSignals = {
+      rowState: placement.rowState,
+      unread: placement.unread,
+      failed: placement.failed,
+      updatedAt,
+      ...optional("lastAssistantAt", lastAssistantAt),
+      ...optional("attentionSince", run?.attentionSince),
+      ...optional("runStartedAt", run?.runStartedAt),
+      ...optional("pinnedAt", triageUsable?.pinnedAt),
+      ...optional("doneAt", triageUsable?.doneAt),
+      ...optional("snoozedUntil", triageUsable?.snoozedUntil),
+    };
+    const { bucket, sortAt } = hostInboxPlacement(signals, placement.now);
+    const inboxSortAt = isoTime(sortAt);
+    if (inboxSortAt) {
+      fields.inboxBucket = bucket;
+      fields.inboxSortAt = inboxSortAt;
+    }
+  }
+  const attentionSince = isoTime(run?.attentionSince);
+  const runStartedAt = isoTime(run?.runStartedAt);
+  const lastAssistant = isoTime(lastAssistantAt);
+  if (attentionSince) fields.attentionSince = attentionSince;
+  if (runStartedAt) fields.runStartedAt = runStartedAt;
+  if (lastAssistant) fields.lastAssistantAt = lastAssistant;
+  if (triage && Number.isSafeInteger(triage.revision) && triage.revision > 0) {
+    fields.triageRevision = triage.revision;
+    const pinnedAt = isoTime(triage.pinnedAt);
+    const doneAt = isoTime(triage.doneAt);
+    const snoozedUntil = isoTime(triage.snoozedUntil);
+    if (pinnedAt) fields.pinnedAt = pinnedAt;
+    if (doneAt) fields.doneAt = doneAt;
+    if (snoozedUntil) fields.snoozedUntil = snoozedUntil;
+  }
+  return fields;
+}
+
+export function projectAidenRemoteChatTriage(chatId: string, entry: ChatTriageEntry | null): AidenRemoteChatTriageProjection {
+  const iso = (at: number) => new Date(at).toISOString();
+  return {
+    chatId,
+    revision: entry?.revision ?? 0,
+    updatedAt: iso(entry?.updatedAt ?? 0),
+    ...(entry?.pinnedAt !== undefined ? { pinnedAt: iso(entry.pinnedAt) } : {}),
+    ...(entry?.doneAt !== undefined ? { doneAt: iso(entry.doneAt) } : {}),
+    ...(entry?.snoozedUntil !== undefined ? { snoozedUntil: iso(entry.snoozedUntil) } : {}),
+  };
 }
 
 export interface AidenRemoteChatSummaryPage {
@@ -1004,6 +1154,43 @@ function parseMarkRead(input: unknown): { throughMessageId?: string } {
     : {};
 }
 
+const RFC3339_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/u;
+
+/**
+ * `POST /chats/{chatId}/triage` body: `{pinned?, done?, snoozeUntil?, ifRevision?}`.
+ * The acting device computes a snooze preset on its own clock and sends the
+ * absolute time; `snoozeUntil: null` wakes the chat.
+ */
+export function parseAidenRemoteChatTriage(input: unknown): { patch: ChatTriagePatch; ifRevision?: number } {
+  const invalid = () => new AidenRemoteServiceError("invalid_request", "The chat triage request is invalid.", 400);
+  const record = ownRecord(input);
+  if (!record || !exactKeys(record, [], ["pinned", "done", "snoozeUntil", "ifRevision"])) throw invalid();
+  const patch: ChatTriagePatch = {};
+  if (hasOwnKey(record, "pinned")) {
+    if (typeof record.pinned !== "boolean") throw invalid();
+    patch.pinned = record.pinned;
+  }
+  if (hasOwnKey(record, "done")) {
+    if (typeof record.done !== "boolean") throw invalid();
+    patch.done = record.done;
+  }
+  if (hasOwnKey(record, "snoozeUntil")) {
+    const value = record.snoozeUntil;
+    if (value === null) patch.snoozeUntil = null;
+    else {
+      if (typeof value !== "string" || value.length > 40 || !RFC3339_TIME.test(value)) throw invalid();
+      const at = Date.parse(value);
+      if (!Number.isSafeInteger(at) || at <= 0) throw invalid();
+      patch.snoozeUntil = at;
+    }
+  }
+  if (Object.keys(patch).length === 0) throw invalid();
+  if (!hasOwnKey(record, "ifRevision")) return { patch };
+  const ifRevision = record.ifRevision;
+  if (typeof ifRevision !== "number" || !Number.isSafeInteger(ifRevision) || ifRevision < 0) throw invalid();
+  return { patch, ifRevision };
+}
+
 function hasOwnKey(record: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
 }
@@ -1280,6 +1467,13 @@ export class AidenRemoteChatService {
       activitySnapshot?: () => ChatActivitySnapshot;
       /** Enables `unread` summaries and `POST /chats/{chatId}/read`. */
       readMarkers?: AidenRemoteChatReadMarkers;
+      /** Enables `POST /chats/{chatId}/triage` (`chat-triage-v1`) and the summaries' triage fields. */
+      triage?: AidenRemoteChatTriage;
+      /**
+       * Revision 50: a chat's live-run times, epoch milliseconds, for the
+       * summaries' `attentionSince` and `runStartedAt`. Undefined without a live run.
+       */
+      runTimes?: (chatId: string) => AidenRemoteChatRunTimes | undefined;
       /** Enables `POST /chats/{chatId}/fork` (`chat-fork-v1`). */
       forks?: {
         service: Pick<ChatForkService, "fork" | "supportsSummaries">;
@@ -1412,20 +1606,34 @@ export class AidenRemoteChatService {
     const activeChatIds = new Set(activity?.activeChatIds ?? this.options.activeChatIds?.() ?? []);
     const approvalChatIds = new Set(activity?.approvalChatIds ?? []);
     const inputChatIds = new Set(activity?.inputChatIds ?? []);
-    // A marker read failure hides unread dots rather than failing the list.
-    const markers = await this.options.readMarkers?.snapshot().catch(() => null);
-    return summaries.map(({ lastAssistantAt, lastAssistantSequence, lastAssistantFailed, ...summary }) => ({
-      ...summary,
-      ...(lastAssistantFailed === true ? { lastRunFailed: true as const } : {}),
-      titlePending: this.options.isTitlePending?.(summary.id) === true,
-      activity: activeChatIds.has(summary.id) ? "active" : "idle",
-      rowState: chatRowState({
+    // A marker or triage read failure leaves those fields out rather than failing the list.
+    const [markers, triage] = await Promise.all([
+      this.options.readMarkers?.snapshot().catch(() => null),
+      this.options.triage?.snapshot().catch(() => null),
+    ]);
+    const now = this.summaryNow();
+    return summaries.map(({ lastAssistantAt, lastAssistantSequence, lastAssistantFailed, ...summary }) => {
+      const rowState = chatRowState({
         active: activeChatIds.has(summary.id),
         needsApproval: approvalChatIds.has(summary.id),
         needsInput: inputChatIds.has(summary.id),
-      }),
-      unread: isChatUnread(lastAssistantAt, markers, summary.id, lastAssistantSequence),
-    }));
+      });
+      const unread = isChatUnread(lastAssistantAt, markers, summary.id, lastAssistantSequence);
+      return {
+        ...summary,
+        ...(lastAssistantFailed === true ? { lastRunFailed: true as const } : {}),
+        titlePending: this.options.isTitlePending?.(summary.id) === true,
+        activity: activeChatIds.has(summary.id) ? "active" : "idle",
+        rowState,
+        unread,
+        ...inboxSignalFields(
+          lastAssistantAt,
+          activeChatIds.has(summary.id) ? this.options.runTimes?.(summary.id) : undefined,
+          triage?.chats[summary.id],
+          { rowState, unread, failed: lastAssistantFailed === true, updatedAt: summary.updatedAt, now },
+        ),
+      };
+    });
   }
 
   /** Whether this host can record read markers for `POST /chats/{chatId}/read`. */
@@ -1446,6 +1654,46 @@ export class AidenRemoteChatService {
       throw new AidenRemoteServiceError("not_found", "Chat read state is unavailable on this host.", 404);
     }
     await readMarkers.markRead(chatId, throughMessageId);
+  }
+
+  /** Whether this host keeps Inbox triage (`chat-triage-v1`). */
+  get supportsTriage(): boolean {
+    return this.options.triage !== undefined;
+  }
+
+  /**
+   * Pin, mark done or snooze a chat for every surface paired to this host.
+   * Replays of the same Idempotency-Key answer with the first result, and an
+   * `ifRevision` that no longer matches is a `revision_conflict` carrying the
+   * chat's current triage revision.
+   */
+  async setTriage(deviceId: string, chatId: string, key: string, input: unknown): Promise<AidenRemoteChatTriageProjection> {
+    const triage = this.options.triage;
+    if (!triage) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    const resourceId = safeId(chatId, "chat");
+    const parsed = parseAidenRemoteChatTriage(input);
+    const classification = await this.classify(chatId);
+    if (classification.botId) {
+      throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+    }
+    return this.executeIdempotent(
+      { deviceId, route: "POST /chats/{id}/triage", resourceId, key },
+      parsed,
+      async () => {
+        const result = await triage.set(chatId, parsed.patch, parsed.ifRevision === undefined ? {} : { ifRevision: parsed.ifRevision });
+        if (result.ok) return projectAidenRemoteChatTriage(chatId, result.entry);
+        if (result.code === "revision_conflict") {
+          throw new AidenRemoteServiceError(
+            "revision_conflict",
+            "The chat changed since this was read.",
+            409,
+            false,
+            { currentRevision: String(result.entry?.revision ?? 0) },
+          );
+        }
+        throw new AidenRemoteServiceError("invalid_request", "The chat triage request is invalid.", 400);
+      },
+    );
   }
 
   private async executeIdempotent<T>(
@@ -2496,6 +2744,9 @@ export class AidenRemoteChatService {
             });
             appended = true;
             appendedChat = chat;
+            // The person wrote in it, so a snoozed chat is back. Never blocks
+            // or fails the send; Pin and Done are left alone.
+            void this.options.triage?.wake?.(chatId).catch(() => undefined);
             taken?.commit();
             turn.settleAsyncWork();
             const started = await startSurfaceGeneration(

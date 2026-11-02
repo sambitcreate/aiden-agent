@@ -22,9 +22,11 @@ import sbtbiswas.AidenOnTheGo.features.scheduled.AidenScheduledRunIdempotencyKey
 import sbtbiswas.AidenOnTheGo.features.shared.AidenRevalidation
 import sbtbiswas.AidenOnTheGo.models.AidenChat
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
+import sbtbiswas.AidenOnTheGo.models.AidenChatTriageChange
 import sbtbiswas.AidenOnTheGo.models.AidenScheduledTask
 import sbtbiswas.AidenOnTheGo.models.AidenModelCatalog
 import sbtbiswas.AidenOnTheGo.models.AidenUsageSummary
+import sbtbiswas.AidenOnTheGo.models.AidenServer
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
@@ -49,6 +51,38 @@ class AidenWorkspaceHomeViewModel(
 ) : ViewModel() {
     private val _chats = MutableStateFlow<List<AidenChatSummary>>(emptyList())
     val chats: StateFlow<List<AidenChatSummary>> = _chats.asStateFlow()
+
+    private val _inboxNotice = MutableStateFlow<AidenInboxNotice?>(null)
+    /** The Inbox snackbar after a swipe: a confirmation with Undo, or a rollback. */
+    val inboxNotice: StateFlow<AidenInboxNotice?> = _inboxNotice.asStateFlow()
+
+    /** The row fields an Inbox swipe writes. */
+    private enum class TriageField { PINNED, DONE, SNOOZE, REVISION, UNREAD }
+
+    /**
+     * An Inbox swipe's row, kept over list pages that may predate it: a load
+     * already in flight when the row moved carries the host's older triage.
+     * Only the [fields] the swipe's writes changed are kept, so a Mark read
+     * never hides a pin made on another device. [token] orders it against
+     * loads; while unsettled it holds over every page, and once the host
+     * answered ([settled]) only over pages requested before that answer: a
+     * refresh started while the write was out carries the host's older row.
+     */
+    private data class TriageOverlay(
+        val token: Long,
+        val row: AidenChatSummary,
+        val fields: Set<TriageField>,
+        val settled: Boolean = false
+    )
+    // Read under the cache lock by a page save (see acceptSummaryPage), so
+    // every access holds this map's monitor.
+    private val triageOverlay = mutableMapOf<String, TriageOverlay>()
+    private val triageWritesInFlight = mutableMapOf<String, Int>()
+    /** Bumped on each host switch, so a write from before it settles nothing here. */
+    private var triageGeneration = 0L
+    /** Changes each time a chat is viewed ([accept]); see [AidenInboxTriage]. */
+    private val viewStamps = mutableMapOf<String, Long>()
+    private var viewClock = 0L
 
     private val _scheduledTasks = MutableStateFlow<List<AidenScheduledTask>>(emptyList())
     val scheduledTasks: StateFlow<List<AidenScheduledTask>> = _scheduledTasks.asStateFlow()
@@ -116,11 +150,15 @@ class AidenWorkspaceHomeViewModel(
             combine(
                 coordinator.workspaces,
                 coordinator.client,
-                coordinator.connectionState
-            ) { workspaces, client, connectionState -> Triple(workspaces, client, connectionState) }
-                .collect { (workspaces, client, connectionState) ->
+                coordinator.connectionState,
+                coordinator.serverInfo
+            ) { workspaces, client, connectionState, server -> HomeLoadInputs(workspaces, client, connectionState, server) }
+                .collect { (workspaces, client, connectionState, server) ->
                     hydrate(workspaces)
-                    if (client != null && connectionState == AidenConnectionState.CONNECTED) load()
+                    // Wait for /server too: CONNECTED is published before the
+                    // capability negotiation, and a list read without it falls
+                    // back to the legacy full-chat list with no Inbox signals.
+                    if (client != null && connectionState == AidenConnectionState.CONNECTED && server != null) load()
                 }
         }
     }
@@ -150,6 +188,11 @@ class AidenWorkspaceHomeViewModel(
             _nextChatCursor.value = null
             _chatPaginationErrorMessage.value = null
             paginationBoundary = null
+            // A notice or a pending swipe belongs to the host it was made on.
+            _inboxNotice.value = null
+            synchronized(triageOverlay) { triageOverlay.clear() }
+            triageWritesInFlight.clear()
+            triageGeneration += 1
         }
 
         val cached = withContext(Dispatchers.IO) { chatCache.loadSummaries(instanceId) }
@@ -175,6 +218,14 @@ class AidenWorkspaceHomeViewModel(
     fun load(force: Boolean = false) {
         val client = coordinator.client.value ?: return
         val instanceId = coordinator.activeInstanceId ?: return
+        // CONNECTED is published before the capability negotiation finishes.
+        // A list read in that window would take the legacy full-chat list with
+        // no Inbox signals, so every caller waits: the serverInfo collector in
+        // init loads once /server is known. A host whose known info lacks
+        // summaries still falls back to the legacy list below.
+        if (coordinator.connectionState.value == AidenConnectionState.CONNECTED &&
+            coordinator.serverInfo.value == null
+        ) return
         if (loadingClient === client && !force) return
         if (!force && loadedClient === client && loadedInstanceId == instanceId) return
         loadingJob?.cancel()
@@ -314,12 +365,147 @@ class AidenWorkspaceHomeViewModel(
     fun accept(chat: AidenChat) {
         // An accepted chat is the one being viewed, so its row is read (and no
         // longer says Failed); the next summary refresh restores server flags.
-        val summary = AidenChatSummary.fromChat(chat)
-            .copy(rowStateWire = _chats.value.firstOrNull { it.id == chat.id }?.rowStateWire)
+        val existing = _chats.value.firstOrNull { it.id == chat.id }
+        val admitted = AidenChatSummary.fromChat(chat).copy(rowStateWire = existing?.rowStateWire)
+        val summary = existing?.let(admitted::withInboxSignals)?.admittingReplies(chat) ?: admitted
+        viewStamps[chat.id] = ++viewClock
         _chats.value = regularNewestFirst(_chats.value.filterNot { it.id == summary.id } + summary)
         coordinator.activeInstanceId?.let { instanceId ->
             val writeToken = chatCache.reserveSummaryMutation(instanceId)
             viewModelScope.launch(cacheWriteDispatcher) { runCatching { chatCache.saveChat(chat, instanceId, writeToken) } }
+        }
+    }
+
+    fun dismissInboxNotice(id: java.util.UUID? = null) {
+        if (id == null || _inboxNotice.value?.id == id) _inboxNotice.value = null
+    }
+
+    private fun inboxTriage(): AidenInboxTriage? {
+        val client = coordinator.client.value ?: return null
+        val instanceId = coordinator.activeInstanceId ?: return null
+        val isCurrent = { coordinator.activeInstanceId == instanceId && coordinator.client.value === client }
+        val generation = triageGeneration
+        return AidenInboxTriage(
+            // After a switch the write still settles on the host it was sent
+            // to, from that host's saved row: even back on the same host, the
+            // list may now show a newer swipe's optimistic fields.
+            row = { id ->
+                (if (coordinator.activeInstanceId == instanceId && triageGeneration == generation) {
+                    _chats.value.firstOrNull { it.id == id }
+                } else null) ?: chatCache.summaries.value[instanceId]?.get(id)
+            },
+            publish = { row ->
+                if (coordinator.activeInstanceId == instanceId && triageGeneration == generation) {
+                    val previous = _chats.value.firstOrNull { it.id == row.id }
+                    synchronized(triageOverlay) {
+                        val fields = triageFieldsChanged(previous, row) + triageOverlay[row.id]?.fields.orEmpty()
+                        triageOverlay[row.id] = TriageOverlay(chatCache.reserveChatWrite(), row, fields)
+                    }
+                    _chats.value = regularNewestFirst(_chats.value.map { if (it.id == row.id) row else it })
+                }
+                withContext(cacheWriteDispatcher) {
+                    runCatching { chatCache.upsertSummary(row, instanceId, keepsWriteOrder = true) }
+                }
+            },
+            isCurrent = isCurrent,
+            writeTriage = { id, change, ifRevision, key -> client.setChatTriage(id, change, ifRevision, key) },
+            writeRead = { id -> client.markChatRead(id) },
+            reload = { load(force = true) },
+            viewStamp = { id -> viewStamps[id] ?: 0L }
+        )
+    }
+
+    private suspend fun <T> trackingTriageWrite(chatId: String, write: suspend () -> T): T {
+        val generation = triageGeneration
+        triageWritesInFlight[chatId] = (triageWritesInFlight[chatId] ?: 0) + 1
+        try {
+            return write()
+        } finally {
+            // After a host switch the counts belong to the new host's writes.
+            if (generation == triageGeneration) {
+                val left = (triageWritesInFlight[chatId] ?: 1) - 1
+                if (left > 0) triageWritesInFlight[chatId] = left
+                else {
+                    triageWritesInFlight.remove(chatId)
+                    // Settled now, so a page requested while the write was out (a
+                    // refresh started after the swipe) still reads the swipe:
+                    // only a page requested from here on carries the host's answer.
+                    synchronized(triageOverlay) {
+                        triageOverlay[chatId]?.let {
+                            triageOverlay[chatId] = it.copy(token = chatCache.reserveChatWrite(), settled = true)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun markInboxRead(chatId: String) {
+        val triage = inboxTriage() ?: return
+        viewModelScope.launch {
+            trackingTriageWrite(chatId) {
+                triage.markRead(chatId, readsState = coordinator.serverInfo.value?.supportsChatReadState == true)
+            }?.let { _inboxNotice.value = it }
+        }
+    }
+
+    /**
+     * Done, Snooze or an Undo. An Undo passes [undoRevision], the revision
+     * its swipe's write left, and offers no further Undo.
+     */
+    fun setInboxTriage(chatId: String, change: AidenChatTriageChange, isOpen: Boolean = false, undoRevision: Int? = null) {
+        val triage = inboxTriage() ?: return
+        _inboxNotice.value = null
+        viewModelScope.launch {
+            trackingTriageWrite(chatId) {
+                triage.setTriage(
+                    chatId,
+                    change,
+                    readsFailures = coordinator.serverInfo.value?.supportsChatReadState == true,
+                    isOpen = isOpen,
+                    undoRevision = undoRevision
+                )
+            }?.let { _inboxNotice.value = it }
+        }
+    }
+
+    /**
+     * A page row with an Inbox swipe that may be newer kept over it: an
+     * unsettled swipe always, a settled one only over a page requested
+     * before it settled. Only the fields the swipe changed come from it;
+     * unread stays read once either says so, unless the page has output
+     * newer than the swipe's row. Holds the overlay's monitor.
+     */
+    private fun overlayingTriage(page: AidenChatSummary, writeToken: Long): AidenChatSummary {
+        val overlay = synchronized(triageOverlay) { triageOverlay[page.id] }
+            ?.takeIf { !it.settled || it.token > writeToken } ?: return page
+        val swipe = overlay.row
+        var merged = page
+        for (field in overlay.fields) merged = when (field) {
+            TriageField.PINNED -> merged.copy(pinnedAt = swipe.pinnedAt)
+            TriageField.DONE -> merged.copy(doneAt = swipe.doneAt)
+            TriageField.SNOOZE -> merged.copy(snoozedUntil = swipe.snoozedUntil)
+            TriageField.REVISION -> merged.copy(triageRevision = swipe.triageRevision)
+            TriageField.UNREAD -> merged.copy(unread = page.unread && (swipe.unread || hasNewerOutput(page, swipe)))
+        }
+        return if (merged == page) page else merged.withoutHostPlacement()
+    }
+
+    /** Whether [page] has assistant output [swipe] didn't show, which a read made from [swipe] doesn't cover. */
+    private fun hasNewerOutput(page: AidenChatSummary, swipe: AidenChatSummary): Boolean {
+        val pageAt = page.lastAssistantAt ?: return false
+        val swipeAt = swipe.lastAssistantAt ?: return true
+        return pageAt.isAfter(swipeAt)
+    }
+
+    private fun triageFieldsChanged(previous: AidenChatSummary?, row: AidenChatSummary): Set<TriageField> {
+        if (previous == null) return TriageField.entries.toSet()
+        return buildSet {
+            if (previous.pinnedAt != row.pinnedAt) add(TriageField.PINNED)
+            if (previous.doneAt != row.doneAt) add(TriageField.DONE)
+            if (previous.snoozedUntil != row.snoozedUntil) add(TriageField.SNOOZE)
+            if (previous.triageRevision != row.triageRevision) add(TriageField.REVISION)
+            if (previous.unread != row.unread) add(TriageField.UNREAD)
         }
     }
 
@@ -380,15 +566,22 @@ class AidenWorkspaceHomeViewModel(
         ) {
             throw AidenRemoteContractException.InvalidJson("Chat Summary pages are out of order")
         }
-        val accepted = regularNewestFirst(existing + summaries)
+        // A page requested after a swipe settled already carries it.
+        synchronized(triageOverlay) {
+            triageOverlay.entries.removeAll { (_, swipe) -> swipe.settled && swipe.token < writeToken }
+        }
+        val accepted = regularNewestFirst(existing + summaries.map { overlayingTriage(it, writeToken) })
         // Persist first so a bounded-cache failure leaves the visible list,
         // page boundary, and cursor unchanged and Retry can request the same page.
+        // The overlay is applied again under the cache lock: a swipe that
+        // lands while this save waits must not be written over.
         val retained = withContext(cacheWriteDispatcher) {
             chatCache.saveSummaries(
                 accepted,
                 instanceId,
                 unchangedPrefixCount = if (replace) 0 else existing.size,
-                writeToken = writeToken
+                writeToken = writeToken,
+                merge = { rows -> rows.map { overlayingTriage(it, writeToken) } }
             )
         }
         if (!isCurrent()) throw CancellationException("Chat list owner changed")
@@ -396,7 +589,11 @@ class AidenWorkspaceHomeViewModel(
             throw IllegalStateException("Chats changed while loading. Refresh and try again.")
         }
         paginationBoundary = summaries.lastOrNull() ?: boundary
-        _chats.value = regularNewestFirst(chatCache.summaries.value[instanceId]?.values.orEmpty().toList())
+        // A swipe made after the save, whose own cache write is still on its
+        // way, is not in the saved rows yet.
+        _chats.value = regularNewestFirst(
+            chatCache.summaries.value[instanceId]?.values.orEmpty().map { overlayingTriage(it, writeToken) }
+        )
             .filter { it.workspaceId in coordinator.workspaces.value.map(AidenWorkspace::id).toSet() }
     }
 
@@ -463,9 +660,9 @@ fun projectAidenWorkspaceSidebar(
 ): AidenWorkspaceSidebarProjection {
     val query = searchQuery.trim()
     val workspacesById = workspaces.associateBy { it.id }
-    val regularChats = aidenNeedsAttentionFirst(
-        regularNewestFirst(chats).filter { workspacesById.containsKey(it.workspaceId) }
-    )
+    // By workspace and Recent sort plainly by recency, as on the desktop;
+    // attention ordering belongs to the Inbox organization.
+    val regularChats = regularNewestFirst(chats).filter { workspacesById.containsKey(it.workspaceId) }
     val chatsByWorkspace = regularChats.groupBy { it.workspaceId }
     val sections = workspaces.mapNotNull { workspace ->
         val allChats = chatsByWorkspace[workspace.id].orEmpty()
@@ -505,3 +702,10 @@ fun aidenRelativeTimestamp(updatedAt: Instant, now: Instant = Instant.now()): St
         else -> "${seconds / 86_400}d"
     }
 }
+
+private data class HomeLoadInputs(
+    val workspaces: List<AidenWorkspace>,
+    val client: AidenRemoteClient?,
+    val connectionState: AidenConnectionState,
+    val server: AidenServer?
+)

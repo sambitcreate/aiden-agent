@@ -36,6 +36,7 @@ const operationIds: Record<PeerOperation["operation"], string> = {
   botConversations: "listBotConversations",
   botCapabilities: "getBotCapabilityCatalog",
   markRead: "markChatRead",
+  setTriage: "setChatTriage",
   interruptAgent: "interruptChatAgent",
   respondQuestion: "respondQuestion",
   inputs: "submitStreamInput",

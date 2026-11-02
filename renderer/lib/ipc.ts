@@ -1,6 +1,7 @@
 import type { PeerProjectSource } from "../shared/peer-project-clone";
 import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
 import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
+import type { ChatPendingAttention } from "../shared/chat-pending-attention";
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { WorkspaceFolderPresenceResult } from "../shared/workspace-folder-presence";
@@ -292,6 +293,7 @@ import type {
   PeerRunSubscription,
   PeerRunTarget,
 } from "../shared/peer-host";
+import type { ChatTriagePatch, ChatTriageResult } from "../shared/chat-triage";
 import type { PeerOperation } from "../shared/peer-operation";
 import type { PeerBotSessionMessage, PeerBotSessionSubscription } from "../shared/peer-bot-session";
 import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-frames";
@@ -411,6 +413,8 @@ export const appApi = {
     invoke<boolean>("app:setCloseGuard", guard),
   setDockIcon: (preference: "aiden" | "monochrome") =>
     invoke<boolean>("app:setDockIcon", preference),
+  /** Whether the app icon shows the Inbox's Needs you count; main does the counting. */
+  setInboxDockBadge: (enabled: boolean) => invoke<void>("app:setInboxDockBadge", enabled),
 };
 
 /** The window controls Aiden draws in its own top bar on Linux. */
@@ -1456,6 +1460,9 @@ export const chatsApi = {
   readMarkers: () => invoke<unknown>("chats:readMarkers"),
   markRead: (id: string, throughMessageId?: string) =>
     invoke<boolean>("chats:markRead", id, throughMessageId),
+  triage: () => invoke<unknown>("chats:triage"),
+  setTriage: (id: string, patch: ChatTriagePatch, ifRevision?: number) =>
+    invoke<ChatTriageResult>("chats:setTriage", id, patch, ifRevision),
   list: (workspaceId?: string) => invoke<ChatMeta[]>("chats:list", workspaceId),
   get: async (id: string) => {
     const response = parseChatReadResponse(await invoke<ChatReadResponse>("chats:get", id));
@@ -1650,6 +1657,10 @@ export const chatsApi = {
   /** The questions and approvals the interrupted reply was waiting on, questions first. */
   interruptedWaits: (id: string) => invoke<InterruptedWaitV1[]>("chats:interruptedWaits", id),
   dismissInterruptedWait: (id: string, waitId: string) => invoke<void>("chats:dismissInterruptedWait", id, waitId),
+  /** What each listed local chat is waiting on, for the Inbox; unknown chats and idle ones are left out. */
+  pendingAttention: (ids: readonly string[]) => invoke<ChatPendingAttention[]>("chats:pendingAttention", [...ids]),
+  /** Dismiss a chat's Unavailable prompts (those settled when its window left). */
+  dismissDetachedAttention: (id: string) => invoke<void>("chats:dismissDetachedAttention", id),
   htmlArtifactSrcdoc: (
     chatId: string,
     mediaId: string,

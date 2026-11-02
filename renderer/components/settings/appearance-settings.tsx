@@ -1,4 +1,6 @@
 import { AppControlSettings } from "./app-control-settings";
+import { handleRadioNavigation } from "./radio-navigation";
+import { InboxDockBadgeSetting, SidebarViewPicker } from "./sidebar-view-picker";
 import { LinksSettings } from "./links-settings";
 import * as React from "react";
 import {
@@ -81,29 +83,6 @@ type CssProperties = React.CSSProperties & Record<`--${string}`, string>;
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
-}
-
-function handleRadioNavigation<Value extends string>(
-  event: React.KeyboardEvent<HTMLButtonElement>,
-  index: number,
-  options: ReadonlyArray<{ value: Value }>,
-  onChange: (value: Value) => void,
-): void {
-  let nextIndex: number | null = null;
-  if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-    nextIndex = (index - 1 + options.length) % options.length;
-  } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-    nextIndex = (index + 1) % options.length;
-  } else if (event.key === "Home") {
-    nextIndex = 0;
-  } else if (event.key === "End") {
-    nextIndex = options.length - 1;
-  }
-  if (nextIndex === null) return;
-  event.preventDefault();
-  const group = event.currentTarget.closest<HTMLElement>('[role="radiogroup"]');
-  group?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[nextIndex]?.focus();
-  onChange(options[nextIndex].value);
 }
 
 function appearanceSafetyIssues(config: AppearanceConfig): string[] {
@@ -627,6 +606,14 @@ export function AppearanceSettings() {
         <h2 id="appearance-chat-width-title">Chat width</h2>
         <p className="appearance-section-description">Sets how wide messages and the composer can grow in the conversation.</p>
         <ChatWidthPicker value={config.chatWidth} onChange={changeChatWidth} />
+      </section>
+      <section className="appearance-theme-section appearance-layout-section" aria-labelledby="appearance-sidebar-title">
+        <h2 id="appearance-sidebar-title">Sidebar</h2>
+        <p className="appearance-section-description">
+          Chooses how the sidebar lists chats. The sidebar’s Organize menu switches the same setting.
+        </p>
+        <SidebarViewPicker labelledBy="appearance-sidebar-title" />
+        <InboxDockBadgeSetting />
       </section>
     </div>
   );

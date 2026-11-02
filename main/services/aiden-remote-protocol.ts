@@ -18,6 +18,7 @@ import {
   type AskUserQuestionV1,
 } from "../../renderer/shared/ask-user-question.js";
 import { CHAT_ROW_STATES } from "../../renderer/shared/chat-row-state.js";
+import { isInboxBucket } from "../../renderer/shared/inbox-state.js";
 import { DEVICE_ID_PATTERN } from "../../renderer/shared/devices.js";
 import { parseBotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
 import { BOT_MEMORY_LIMITS } from "../../renderer/shared/bot-memory.js";
@@ -70,7 +71,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * device type.
  *
  * Contract revision 32: conversation app controls. Assistant messages may carry
- * inert `appPanels` (`chat-ui-panels-v1`); owner-enabled hosts also advertise
+ * inert `appPanels` (`chat-ui-panels-v1`, retired in revision 50); owner-enabled hosts also advertise
  * `chat-ui-panels-enabled-v1`, `GET`/`POST /chats/{chatId}/controls/{panelId}`
  * behind the `app-controls:read`/`app-controls:respond` progress capabilities,
  * the `app_controls_changed` progress event and the `builtin` skill source.
@@ -214,7 +215,20 @@ export const AIDEN_REMOTE_WORKSPACE_CLONE_CONTRACT_REVISION = 48 as const;
  * list. Older phones see nothing new.
  */
 export const AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION = 49 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION;
+/**
+ * Contract revision 50 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_INBOX_SIGNALS_CONTRACT_REVISION`):
+ * Inbox signals (`inbox-signals-v1`). Chat Summary rows may carry
+ * `attentionSince` and `runStartedAt` (a live run's prompt and start times),
+ * `lastAssistantAt`, and the chat's triage (`triageRevision`, `pinnedAt`,
+ * `doneAt`, `snoozedUntil`), all RFC 3339 and present only when known. A host
+ * feed `run.state` may carry `attentionSummary` (at most 200 characters) for
+ * devices holding `runs:observe` while the run waits, and host feed Bot rows
+ * may carry `needsYou: true`, `failed: true` and `lastReplyAt`. Every field is
+ * optional; older clients ignore them.
+ */
+export const AIDEN_REMOTE_INBOX_SIGNALS_CONTRACT_REVISION = 50 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_INBOX_SIGNALS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -230,6 +244,23 @@ export const AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE = "speech-request-gzip-v1"
  * every summary reports `unread: false` and clients must not send read reports.
  */
 export const AIDEN_REMOTE_CHAT_READ_STATE_FEATURE = "chat-read-state-v1" as const;
+/**
+ * Server feature token for Inbox triage (`POST /chats/{chatId}/triage`):
+ * Pin, Done and Snooze kept by the host for every paired surface. Announced
+ * to desktops and (since revision 50) phones, which took the slot of the
+ * retired `chat-ui-panels-v1`.
+ */
+export const AIDEN_REMOTE_CHAT_TRIAGE_FEATURE = "chat-triage-v1" as const;
+/**
+ * Server feature token for Inbox signals (contract revision 50): the summary
+ * times and triage fields, `run.state` `attentionSummary` and the host feed
+ * Bot rows' `needsYou`, `failed` and `lastReplyAt`. Announced to desktops only, which use it
+ * to trust a host's reported triage over their own pending writes; phones read
+ * the optional fields without it.
+ */
+export const AIDEN_REMOTE_INBOX_SIGNALS_FEATURE = "inbox-signals-v1" as const;
+/** The longest `attentionSummary` a host feed `run.state` carries. */
+export const AIDEN_REMOTE_ATTENTION_SUMMARY_MAX = 200;
 export const AIDEN_REMOTE_MAX_SERVER_FEATURES = 32;
 export const AIDEN_REMOTE_MAX_SERVER_FEATURE_LENGTH = 64;
 /**
@@ -3732,7 +3763,66 @@ export function parseAidenRemoteChatSummaryProjection(
     ...(hasOwn(value, "forkedFrom")
       ? { forkedFrom: parseChatForkLineageProjection(value.forkedFrom, label, false) }
       : {}),
+    ...parseInboxSignalFields(value, label),
   };
+}
+
+const INBOX_SIGNAL_TIME_FIELDS = [
+  "attentionSince",
+  "runStartedAt",
+  "lastAssistantAt",
+  "pinnedAt",
+  "doneAt",
+  "snoozedUntil",
+] as const;
+
+/**
+ * Contract revision 50 (`inbox-signals-v1`): each RFC 3339 time a summary
+ * row carries for the Inbox, the triage revision those triage times belong
+ * to, and the host's `inboxBucket` with its `inboxSortAt`. Every field is
+ * additive; the triage times need the revision. The desktop places peer rows
+ * itself, so a bucket it can't use (one it doesn't know, one without a sort
+ * time, or a sort time without a bucket) is dropped with its pair instead of
+ * failing the page.
+ */
+function parseInboxSignalFields(
+  value: Record<string, unknown>,
+  label: string,
+): Partial<
+  Pick<
+    AidenRemoteChatSummaryProjection,
+    (typeof INBOX_SIGNAL_TIME_FIELDS)[number] | "triageRevision" | "inboxBucket" | "inboxSortAt"
+  >
+> {
+  const fields: Partial<Record<(typeof INBOX_SIGNAL_TIME_FIELDS)[number], string>> &
+    Pick<AidenRemoteChatSummaryProjection, "triageRevision" | "inboxBucket" | "inboxSortAt"> = {};
+  const placement = inboxPlacementFields(value, label);
+  if (placement) {
+    fields.inboxBucket = placement.inboxBucket;
+    fields.inboxSortAt = placement.inboxSortAt;
+  }
+  for (const field of INBOX_SIGNAL_TIME_FIELDS) {
+    if (hasOwn(value, field)) fields[field] = dateTimeValue(value[field], `${label} ${field}`);
+  }
+  if (hasOwn(value, "triageRevision")) {
+    fields.triageRevision = boundedIntegerValue(value.triageRevision, `${label} triageRevision`, 1, Number.MAX_SAFE_INTEGER);
+  } else if (fields.pinnedAt !== undefined || fields.doneAt !== undefined || fields.snoozedUntil !== undefined) {
+    throw new Error(`${label} triage times need a triageRevision.`);
+  }
+  return fields;
+}
+
+/** The host's bucket and sort time, or nothing when either is missing or unusable. */
+function inboxPlacementFields(
+  value: Record<string, unknown>,
+  label: string,
+): Required<Pick<AidenRemoteChatSummaryProjection, "inboxBucket" | "inboxSortAt">> | undefined {
+  if (!isInboxBucket(value.inboxBucket) || !hasOwn(value, "inboxSortAt")) return undefined;
+  try {
+    return { inboxBucket: value.inboxBucket, inboxSortAt: dateTimeValue(value.inboxSortAt, `${label} inboxSortAt`) };
+  } catch {
+    return undefined;
+  }
 }
 
 export function parseAidenRemoteChatSummaryPage(
@@ -8722,7 +8812,19 @@ function parseRevision19Fixture(
     } else if (event.type === "workspace.upsert") {
       parseHostFeedWorkspaceRepository(event.payload, "Host feed workspace");
     } else if (event.type === "run.state") {
-      assertExactKeys(event.payload, ["chatId", "runId", "state", "unread"], "Host feed run state");
+      assertExactKeys(
+        event.payload,
+        ["chatId", "runId", "state", "unread", ...(hasOwn(event.payload, "attentionSummary") ? ["attentionSummary"] : [])],
+        "Host feed run state",
+      );
+      if (hasOwn(event.payload, "attentionSummary")) {
+        // Revision 50: only a waiting run's, for `runs:observe` devices.
+        if (event.payload.state !== "needs_approval" && event.payload.state !== "needs_input") {
+          throw new Error("Host feed run attentionSummary belongs to a waiting run.");
+        }
+        const summary = boundedText(event.payload.attentionSummary, "Host feed run attentionSummary", AIDEN_REMOTE_ATTENTION_SUMMARY_MAX);
+        if (summary.trim() !== summary) throw new Error("Host feed run attentionSummary must be trimmed.");
+      }
       boundedText(event.payload.chatId, "Host feed run chatId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
       boundedText(event.payload.runId, "Host feed runId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
       if (!(AIDEN_REMOTE_RUN_STATES as readonly unknown[]).includes(event.payload.state)) {

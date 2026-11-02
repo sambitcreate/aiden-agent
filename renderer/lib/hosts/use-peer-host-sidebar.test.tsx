@@ -159,7 +159,7 @@ function installDocument(ipc: unknown) {
 
 /** Mounts the sidebar's store the way the chat shell does, sharing one query cache. */
 async function mountSidebar(container: Element, queryClient: QueryClient) {
-  let latest: PeerHostSidebarData = { hosts: [], feeds: new Map() };
+  let latest: PeerHostSidebarData = { hosts: [], feeds: new Map(), views: new Map() };
   function Harness() {
     latest = usePeerHostSidebar();
     return null;

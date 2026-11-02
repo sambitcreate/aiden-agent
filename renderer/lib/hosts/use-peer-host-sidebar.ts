@@ -5,6 +5,7 @@ import { sidebarHosts, type SidebarHost } from "../sidebar-remote-groups";
 import type {
   PeerHostFeedMessage,
   PeerHostFeedSnapshot,
+  PeerHostView,
   PeerRepositoryIdentity,
 } from "../../shared/peer-host";
 import { hostQueryKeys } from "./host-query-keys";
@@ -24,6 +25,8 @@ export interface PeerHostSidebarData {
   hosts: SidebarHost[];
   /** Last-known feed snapshot per host ID. */
   feeds: ReadonlyMap<string, PeerHostFeedSnapshot>;
+  /** The registry view of each listed host, with the features and grants it reported. */
+  views: ReadonlyMap<string, PeerHostView>;
 }
 
 const NO_FEEDS: ReadonlyMap<string, PeerHostFeedSnapshot> = new Map();
@@ -177,7 +180,11 @@ export function usePeerHostSidebar(): PeerHostSidebarData {
     () => (supervised ? sidebarHosts(list.data ?? [], statuses.data ?? []) : []),
     [list.data, statuses.data, supervised],
   );
-  return { hosts, feeds };
+  const views = useMemo(
+    () => new Map((list.data ?? []).map((view) => [view.id, view] as const)),
+    [list.data],
+  );
+  return { hosts, feeds, views };
 }
 
 const NO_IDENTITIES: ReadonlyMap<string, PeerRepositoryIdentity | null> = new Map();

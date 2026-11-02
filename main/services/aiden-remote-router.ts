@@ -35,6 +35,8 @@ import {
   AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
   AIDEN_REMOTE_CHAT_SUMMARY_FEATURE,
   AIDEN_REMOTE_CHAT_READ_STATE_FEATURE,
+  AIDEN_REMOTE_CHAT_TRIAGE_FEATURE,
+  AIDEN_REMOTE_INBOX_SIGNALS_FEATURE,
   AIDEN_REMOTE_BOT_CONNECTION_REQUESTS_FEATURE,
   AIDEN_REMOTE_BOT_DELETE_FEATURE,
   AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE,
@@ -210,7 +212,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "setTriage" | "supportsTriage" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure">>;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -463,6 +465,7 @@ export type AidenRemoteRouteLabel =
   | "chatFork"
   | "chatForkSummary"
   | "chatRead"
+  | "chatTriage"
   | "chatTasks"
   | "chatAgents"
   | "chatAgentInterrupt"
@@ -570,6 +573,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   chatFork: ["/chats/:id/fork"],
   chatForkSummary: ["/chats/:id/fork-summary/:action"],
   chatRead: ["/chats/:id/read"],
+  chatTriage: ["/chats/:id/triage"],
   chatTasks: ["/chats/:id/tasks"],
   chatAgents: ["/chats/:id/agents"],
   chatAgentInterrupt: ["/chats/:id/agents/:agentId/interrupt"],
@@ -1636,7 +1640,6 @@ function isDesktopDevice(device: Pick<AidenRemoteRouterAuthenticatedDevice, "typ
 
 /** What this host has wired, one flag per `/server.features` token it can announce. */
 export interface AidenRemoteServerFeatureSupport {
-  appControls: boolean;
   appControlsEnabled: boolean;
   peerRoutes: boolean;
   providers: boolean;
@@ -1644,6 +1647,13 @@ export interface AidenRemoteServerFeatureSupport {
   speech: boolean;
   chatSummaries: boolean;
   readState: boolean;
+  /** `POST /chats/{chatId}/triage`, announced to desktops and phones. */
+  triage: boolean;
+  /**
+   * Revision 50 Inbox signals on summaries, `run.state` and Bot rows
+   * (desktop-only token; phones decode the additive fields without it).
+   */
+  inboxSignals: boolean;
   tasks: boolean;
   agents: boolean;
   agentInterrupt: boolean;
@@ -1688,7 +1698,8 @@ export function aidenRemoteServerFeatures(
   const desktop = isDesktopDevice(device);
   const phone = !desktop;
   return [
-    ...(phone && support.appControls ? ["chat-ui-panels-v1"] : []),
+    // `chat-ui-panels-v1` (revision 32) is retired: no shipped client read it,
+    // and its slot in the phones' 32-token list went to `chat-triage-v1`.
     ...(phone && support.appControlsEnabled ? ["chat-ui-panels-enabled-v1"] : []),
     ...(desktop && support.workspaceClone ? [PEER_PROJECT_CLONE_FEATURE] : []),
     ...(desktop && support.peerRoutes ? ["peer-routes-v1"] : []),
@@ -1697,6 +1708,9 @@ export function aidenRemoteServerFeatures(
     ...(phone && support.speech ? [AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE] : []),
     ...(support.chatSummaries ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE] : []),
     ...(support.readState ? [AIDEN_REMOTE_CHAT_READ_STATE_FEATURE] : []),
+    // Inbox triage (revision 50): every device type; the route still needs `chat:write`.
+    ...(support.triage ? [AIDEN_REMOTE_CHAT_TRIAGE_FEATURE] : []),
+    ...(desktop && support.inboxSignals ? [AIDEN_REMOTE_INBOX_SIGNALS_FEATURE] : []),
     ...(support.tasks ? [AIDEN_REMOTE_CHAT_TASKS_FEATURE] : []),
     ...(support.agents ? [AIDEN_REMOTE_CHAT_AGENTS_FEATURE] : []),
     ...(support.agentInterrupt ? [AIDEN_REMOTE_CHAT_AGENT_INTERRUPT_FEATURE] : []),
@@ -1725,7 +1739,10 @@ export function aidenRemoteServerFeatures(
     ...(support.botSessions ? [AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE] : []),
     ...(support.botRoutines ? [AIDEN_REMOTE_BOT_ROUTINES_FEATURE] : []),
     ...(support.botConnectionRequests ? [AIDEN_REMOTE_BOT_CONNECTION_REQUESTS_FEATURE] : []),
-    ...(support.botPresets ? [AIDEN_REMOTE_BOT_PRESETS_FEATURE] : []),
+    // Bot presets fill a phone's empty Bots home; desktops never read the
+    // presets routes, so they are not told (contract revision 50, which keeps
+    // a fully wired host's desktop list within the 32 tokens shipped clients accept).
+    ...(phone && support.botPresets ? [AIDEN_REMOTE_BOT_PRESETS_FEATURE] : []),
     // Bot memory and proactivity (contract revision 27).
     ...(support.botMemory ? [AIDEN_REMOTE_BOT_MEMORY_FEATURE] : []),
     ...(support.botProactive ? [AIDEN_REMOTE_BOT_PROACTIVE_FEATURE] : []),
@@ -2339,7 +2356,6 @@ export function createAidenRemoteRequestHandler(
           connectionMode: dependencies.connectionMode(),
           features: aidenRemoteServerFeatures(device, {
             workspaceClone: dependencies.workspaces?.supportsClone === true,
-            appControls: Boolean(dependencies.appControls),
             appControlsEnabled: (await dependencies.appControls?.enabled()) === true,
             peerRoutes: peerRoutes !== undefined,
             providers: Boolean(dependencies.providers),
@@ -2347,6 +2363,8 @@ export function createAidenRemoteRequestHandler(
             speech: Boolean(dependencies.speech),
             chatSummaries: Boolean(dependencies.chats?.listSummaries),
             readState: Boolean(dependencies.chats?.markRead) && dependencies.chats?.supportsReadMarkers === true,
+            triage: Boolean(dependencies.chats?.setTriage) && dependencies.chats?.supportsTriage === true,
+            inboxSignals: Boolean(dependencies.chats?.listSummaries),
             tasks: progressCapabilitySupported(dependencies, "tasks:read"),
             agents: progressCapabilitySupported(dependencies, "agents:read"),
             agentInterrupt: agentInterruptSupported(dependencies),
@@ -3917,6 +3935,26 @@ export function createAidenRemoteRequestHandler(
         await chats.markRead(readMatch[1]!, body);
         response.writeHead(204, responseHeaders());
         response.end();
+        return;
+      }
+      const triageMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/triage$/u.exec(path);
+      if (triageMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "chatTriage";
+        const body = await readJsonBody(request, 1_024);
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const chats = dependencies.chats;
+        if (!chats?.setTriage || chats.supportsTriage !== true) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        writeJson(
+          response,
+          200,
+          await runChatMutation(chats, device, triageMatch[1]!, "chat", () =>
+            chats.setTriage!(device.id, triageMatch[1]!, key, body)),
+        );
         return;
       }
       const moveMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/move$/u.exec(path);

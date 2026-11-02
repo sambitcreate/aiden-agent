@@ -49,6 +49,7 @@ import { registerAssistantLiveHandlers } from "./assistant-live.js";
 import { registerAidenRemoteHandlers } from "./aiden-remote.js";
 import { registerPeerHostHandlers } from "./peer-hosts.js";
 import { registerLocalRunIpc } from "./local-runs-main.js";
+import { registerChatPendingAttentionIpc } from "./chat-pending-attention-main.js";
 import { registerBotHandlers } from "./bots.js";
 import { registerBotRoutineHandlers } from "./bot-routines.js";
 import { registerBotComputerHandlers } from "./bot-computers.js";
@@ -86,6 +87,7 @@ export function registerHandlers(): void {
   registerAppControlHandlers();
   registerAcpHarnessHandlers();
   registerChatHistoryHandlers();
+  registerChatPendingAttentionIpc();
   registerChatGenerationHandlers();
   registerWorkspaceHandlers();
   registerPullRequestHandlers();

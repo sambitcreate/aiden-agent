@@ -112,6 +112,8 @@ actor AidenChatCache {
         let lastRunFailed: Bool?
         // Optional so caches written before contract revision 21 still load.
         let forkedFrom: AidenChatForkLineage?
+        // Optional so caches written before the Inbox (revision 50) still load.
+        let inbox: AidenChatInboxSignals?
 
         init(_ summary: AidenChatSummary) {
             id = summary.id
@@ -126,6 +128,7 @@ actor AidenChatCache {
             unread = summary.unread
             lastRunFailed = summary.lastRunFailed
             forkedFrom = summary.forkedFrom
+            inbox = summary.inbox
         }
 
         var summary: AidenChatSummary {
@@ -141,7 +144,8 @@ actor AidenChatCache {
                 rowState: rowState,
                 unread: unread ?? false,
                 lastRunFailed: lastRunFailed ?? false,
-                forkedFrom: forkedFrom
+                forkedFrom: forkedFrom,
+                inbox: inbox ?? AidenChatInboxSignals()
             )
         }
     }
@@ -832,7 +836,7 @@ actor AidenChatCache {
         }
         let envelope = ChatSummaryEnvelope(instanceId: instanceId, snapshot: CachedSummarySnapshot(snapshot))
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = AidenChatCacheDates.encoding
         guard try encoder.encode(envelope).count <= maxSummaryCacheFileBytes else {
             throw CocoaError(.fileWriteOutOfSpace)
         }
@@ -858,14 +862,44 @@ actor AidenChatCache {
               isChatWriteRetained(writeToken, instanceId: instanceId, chatId: chat.id), !chat.isBotChat,
               writeToken >= summaryRowAuthority(instanceId: instanceId, chatId: chat.id) else { return }
         let cached = loadChatSummaries(instanceId: instanceId)
-        let existingActivity = cached?.summaries.first(where: { $0.id == chat.id })?.activity ?? .idle
+        let existing = cached?.summaries.first(where: { $0.id == chat.id })
+        var reconciled = AidenChatSummary(chat: chat, preservingActivity: existing?.activity ?? .idle)
+        // A chat detail carries no triage; keep the row's, without the host
+        // placement that described the row before this update.
+        if let existing {
+            reconciled.inbox = existing.inbox.admitting(chat)
+            reconciled.inbox.invalidateHostPlacement()
+        }
         let summaries = AidenChatSummaryPage.merged(
             current: cached?.summaries ?? [],
-            appending: [AidenChatSummary(chat: chat, preservingActivity: existingActivity)]
+            appending: [reconciled]
         )
         try persistChatSummaries(
             SummarySnapshot(summaries: summaries, nextCursor: cached?.nextCursor),
             instanceId: instanceId, writeToken: writeToken, updatedRows: [chat.id: writeToken]
+        )
+    }
+
+    /// Rewrites one saved row, for a write whose answer arrived after the
+    /// person moved to another Mac. Rows written since `writeToken` win.
+    func updateChatSummary(
+        id: String,
+        instanceId: String,
+        writeToken: UInt64,
+        _ update: @Sendable (AidenChatSummary) -> AidenChatSummary
+    ) throws {
+        guard metadataWriteIsRetained(writeToken, instanceId: instanceId),
+              !isChatHidden(instanceId: instanceId, chatId: id),
+              writeToken >= summaryRowAuthority(instanceId: instanceId, chatId: id),
+              let cached = loadChatSummaries(instanceId: instanceId),
+              let index = cached.summaries.firstIndex(where: { $0.id == id }) else { return }
+        var summaries = cached.summaries
+        let updated = update(summaries[index])
+        guard updated != summaries[index] else { return }
+        summaries[index] = updated
+        try persistChatSummaries(
+            SummarySnapshot(summaries: summaries, nextCursor: cached.nextCursor),
+            instanceId: instanceId, writeToken: writeToken, updatedRows: [id: writeToken]
         )
     }
 
@@ -1178,7 +1212,7 @@ actor AidenChatCache {
             return nil
         }
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = AidenChatCacheDates.decoding
         do {
             return try decoder.decode(type, from: data)
         } catch {
@@ -1254,7 +1288,7 @@ actor AidenChatCache {
         maximumBytes: Int? = nil
     ) throws {
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = AidenChatCacheDates.encoding
         let data = try encoder.encode(value)
         guard data.count <= (maximumBytes ?? maxCacheFileBytes) else {
             throw CocoaError(.fileWriteOutOfSpace)
@@ -1265,5 +1299,53 @@ actor AidenChatCache {
             attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
         )
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+}
+
+/// Cached dates keep their milliseconds, so a cached inbox orders and wakes
+/// rows exactly as the Mac does. Files written before this kept whole seconds
+/// and still decode.
+///
+/// The milliseconds are rounded and written by hand: `ISO8601FormatStyle`
+/// truncates its fraction, so a date the host sent as `.002` (stored as a
+/// double just under it) would come back `.001`.
+enum AidenChatCacheDates {
+    private static let whole = Date.ISO8601FormatStyle()
+
+    /// `yyyy-MM-dd'T'HH:mm:ss.SSS'Z'` in UTC, from the date rounded to the
+    /// nearest millisecond.
+    static func string(from date: Date) -> String {
+        let milliseconds = Int64((date.timeIntervalSince1970 * 1000).rounded())
+        let seconds = milliseconds >= 0 ? milliseconds / 1000 : (milliseconds - 999) / 1000
+        let fraction = milliseconds - seconds * 1000
+        let text = Date(timeIntervalSince1970: TimeInterval(seconds)).formatted(whole)
+        // `whole` writes UTC as a trailing "Z".
+        return String(text.dropLast()) + String(format: ".%03lldZ", fraction)
+    }
+
+    /// An ISO 8601 date with or without a fraction of a second, kept to the
+    /// millisecond.
+    static func date(from text: String) -> Date? {
+        guard let dot = text.firstIndex(of: ".") else { return try? whole.parse(text) }
+        let afterDot = text[text.index(after: dot)...]
+        let digits = afterDot.prefix { $0.isASCII && $0.isNumber }
+        guard !digits.isEmpty, let fraction = Double("0." + digits),
+              let base = try? whole.parse(String(text[..<dot]) + afterDot.dropFirst(digits.count)) else { return nil }
+        let milliseconds = (fraction * 1000).rounded()
+        // The same arithmetic as AidenStrictRFC3339Date, so a cached date
+        // equals the one the host's answer decodes to.
+        return base.addingTimeInterval(milliseconds / 1000)
+    }
+
+    static let encoding = JSONEncoder.DateEncodingStrategy.custom { date, encoder in
+        var container = encoder.singleValueContainer()
+        try container.encode(string(from: date))
+    }
+
+    static let decoding = JSONDecoder.DateDecodingStrategy.custom { decoder in
+        let container = try decoder.singleValueContainer()
+        let text = try container.decode(String.self)
+        if let date = date(from: text) { return date }
+        throw DecodingError.dataCorruptedError(in: container, debugDescription: "Expected an ISO 8601 date.")
     }
 }

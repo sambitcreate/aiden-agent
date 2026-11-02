@@ -9,6 +9,7 @@ import {
 } from "./aiden-remote-protocol.js";
 import { BOT_AVATAR_COLORS, BOT_AVATAR_COLOR_HEX, BOT_AVATAR_FACE_HEX } from "../../renderer/shared/bots.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import { hostInboxPlacement, type HostInboxSignals } from "../../renderer/shared/inbox-state.js";
 import { BOT_ACTIVITY_PHASES, botActivityDisplay, botElapsedLabel } from "../../renderer/shared/bot-activity.js";
 import {
   parseAidenRemoteBotSession,
@@ -572,6 +573,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats",
     "/chats/{chatId}",
     "/chats/{chatId}/read",
+    "/chats/{chatId}/triage",
     "/chats/{chatId}/move",
     "/chats/{chatId}/fork",
     "/chats/{chatId}/fork-summary/{action}",
@@ -1382,6 +1384,7 @@ test("mutation contracts require idempotency or revision preconditions", async (
 
   for (const [route, method] of [
     ["/workspaces", "post"],
+    ["/chats/{chatId}/triage", "post"],
     ["/chats", "post"],
     ["/chats/{chatId}/move", "post"],
     ["/chats/{chatId}/fork", "post"],
@@ -3311,4 +3314,67 @@ test("the host's full context projection is reduced to the documented counts", (
   // A projection missing a counted field is refused rather than sent half-filled.
   const { staticTokens: _staticTokens, ...partial } = desktop;
   assert.throws(() => projectAidenRemoteContextPressure(partial));
+});
+
+test("revision 50 fixtures carry Inbox signals, and a stray or malformed signal fails closed", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, unknown>;
+  const fixture = parseAidenRemoteContractFixture(raw);
+  const byId = new Map(fixture.chatSummaries.summaries.map((summary) => [summary.id, summary]));
+  const waiting = byId.get("chat_fixture_summary_02");
+  assert.equal(waiting?.attentionSince, "2026-08-18T19:01:08.000Z");
+  assert.equal(waiting?.runStartedAt, "2026-08-18T19:01:00.000Z");
+  assert.equal(waiting?.triageRevision, undefined);
+  const pinned = byId.get("chat_fixture_summary_01");
+  assert.equal(pinned?.triageRevision, 3);
+  assert.equal(pinned?.pinnedAt, "2026-08-18T18:45:00.000Z");
+  assert.equal(pinned?.snoozedUntil, "2026-08-19T09:00:00.000Z");
+  assert.equal(pinned?.doneAt, undefined);
+  // The host's bucket: the waiting run orders by its wait, the unseen failure
+  // (which outranks its snooze) by its update time.
+  assert.equal(waiting?.inboxBucket, "needs_you");
+  assert.equal(waiting?.inboxSortAt, waiting?.attentionSince);
+  assert.equal(pinned?.inboxBucket, "needs_you");
+  assert.equal(pinned?.inboxSortAt, pinned?.updatedAt);
+  // Recomputed from each row's own fields, so a placement rule change fails the fixture.
+  const at = (value: string | undefined) => (value === undefined ? undefined : Date.parse(value));
+  const beforeSnoozeEnds = Date.parse(pinned!.snoozedUntil!) - 60_000;
+  for (const row of [waiting!, pinned!]) {
+    const placed = hostInboxPlacement(
+      Object.fromEntries(Object.entries({
+        rowState: row.rowState!,
+        unread: row.unread === true,
+        failed: row.lastRunFailed === true,
+        updatedAt: Date.parse(row.updatedAt),
+        lastAssistantAt: at(row.lastAssistantAt),
+        attentionSince: at(row.attentionSince),
+        runStartedAt: at(row.runStartedAt),
+        pinnedAt: at(row.pinnedAt),
+        doneAt: at(row.doneAt),
+        snoozedUntil: at(row.snoozedUntil),
+      }).filter(([, value]) => value !== undefined)) as unknown as HostInboxSignals,
+      beforeSnoozeEnds,
+    );
+    assert.deepEqual([row.inboxBucket, row.inboxSortAt], [placed.bucket, new Date(placed.sortAt).toISOString()], row.id);
+  }
+
+  const mutate = (change: (copy: Record<string, unknown>) => void) => {
+    const copy = structuredClone(raw);
+    change(copy);
+    return () => parseAidenRemoteContractFixture(copy);
+  };
+  const runState = (copy: Record<string, unknown>) => {
+    const events = copy.hostFeedEvents as Record<string, unknown>[];
+    return record(events.find((event) => event.type === "run.state")!.payload, "run.state payload");
+  };
+  const summary = (copy: Record<string, unknown>, id: string) => {
+    const page = record(copy.chatSummaries, "chatSummaries");
+    return (page.summaries as Record<string, unknown>[]).find((row) => row.id === id)!;
+  };
+  assert.throws(mutate((copy) => { runState(copy).state = "working"; }), /belongs to a waiting run/u);
+  assert.throws(mutate((copy) => { runState(copy).attentionSummary = " Allow a write operation?"; }), /must be trimmed/u);
+  assert.throws(mutate((copy) => { runState(copy).attentionSummary = "x".repeat(201); }));
+  assert.throws(mutate((copy) => { delete summary(copy, "chat_fixture_summary_01").triageRevision; }), /triage times need a triageRevision/u);
+  assert.throws(mutate((copy) => { summary(copy, "chat_fixture_summary_02").attentionSince = "yesterday"; }));
+  // A waiting run with no ask is still a waiting run.
+  assert.doesNotThrow(mutate((copy) => { delete runState(copy).attentionSummary; }));
 });

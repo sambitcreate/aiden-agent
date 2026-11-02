@@ -58,6 +58,12 @@ import type {
 export const queryKeys = {
   providers: ["providers"] as const,
   chats: ["chats"] as const,
+  /**
+   * Not under `chats`: chat-list updaters (`setQueriesData({ queryKey: chats })`)
+   * would otherwise rewrite it as a chat list. Its key carries the chat list's
+   * `dataUpdatedAt`, so a chat-list refetch still rereads it.
+   */
+  pendingAttention: ["chatPendingAttention"] as const,
   bots: ["bots"] as const,
   bot: (id: string | undefined) => ["bot", id ?? "none"] as const,
   botChats: (id: string | undefined) => ["bot-chats", id ?? "none"] as const,
@@ -313,10 +319,11 @@ export function useAllRegularChats(enabled = true) {
   });
 }
 
-export function useBots(includeArchived = false) {
+export function useBots(includeArchived = false, enabled = true) {
   return useQuery({
     queryKey: [...queryKeys.bots, includeArchived ? "all" : "active"],
     queryFn: () => botsApi.list(includeArchived),
+    enabled,
   });
 }
 

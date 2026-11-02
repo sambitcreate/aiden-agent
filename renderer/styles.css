@@ -2404,6 +2404,45 @@ textarea {
   box-shadow: var(--elevation-toast) !important;
 }
 
+/* A toast's action (Undo, Open, Retry) is the shared small filled squircle
+   button, not Sonner's inverted pill. The source of truth is `Button` with
+   size="small" variant="filled" in renderer/components/ui.tsx: keep the
+   height, padding, fills, shadows and weight below in step with it. The weight
+   is the Button's inherited one, so Sonner's 500 is reset. The neutral
+   keyboard focus ring above still applies. Only the action button: Sonner's
+   cancel button keeps its own look. */
+:root [data-sonner-toast][data-styled="true"] [data-button][data-action] {
+  height: 28px;
+  padding-inline: 12px;
+  border-radius: var(--radius-button);
+  corner-shape: squircle;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  box-shadow: var(--elevation-control);
+  font-size: var(--ui-font-size);
+  font-weight: inherit;
+  cursor: default;
+  transition:
+    background-color var(--motion-duration) var(--motion-easing),
+    box-shadow var(--motion-duration) var(--motion-easing),
+    opacity var(--motion-duration) var(--motion-easing);
+}
+
+:root [data-sonner-toast][data-styled="true"] [data-button][data-action]:hover {
+  background: var(--surface-control-hover);
+  box-shadow: var(--elevation-control-hover);
+}
+
+:root [data-sonner-toast][data-styled="true"] [data-button][data-action]:active {
+  background: var(--surface-control-active);
+  box-shadow: var(--elevation-control-pressed);
+}
+
+:root [data-sonner-toast][data-styled="true"] [data-button][data-action]:focus-visible {
+  background: var(--surface-control-active);
+  box-shadow: var(--elevation-control);
+}
+
 /* Tell Tailwind to scan all local renderer window files for class names */
 @source "./**/*.{ts,tsx}";
 @source not "./preload.ts";
@@ -2726,6 +2765,88 @@ textarea {
 .appearance-width-option[aria-checked="true"] .appearance-width-option-label {
   background: var(--surface-list-selection);
   color: var(--text-primary);
+}
+
+/* Settings → Appearance → Sidebar: the width picker's cards, three across,
+   each previewing the sidebar's rows instead of a chat column. */
+/* Two classes, so the width picker's two-column reflow below 540px leaves it at three. */
+.appearance-width-picker.appearance-sidebar-picker {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.appearance-sidebar-preview {
+  justify-content: flex-start;
+  padding: 10% 0 0 10%;
+}
+
+.appearance-sidebar-preview-column {
+  display: flex;
+  width: 46%;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10% 9%;
+  border-radius: 7px 7px 0 0;
+  background: var(--surface-list-selection);
+}
+
+.appearance-sidebar-preview-column b,
+.appearance-sidebar-preview-column i {
+  display: block;
+  flex-shrink: 0;
+  height: 4px;
+  border-radius: 99px;
+}
+
+/* Group and section labels: short and quiet. */
+.appearance-sidebar-preview-column b {
+  width: 46%;
+  height: 3px;
+  margin-top: 2px;
+  background: var(--text-quaternary);
+  opacity: 0.7;
+}
+.appearance-sidebar-preview-column b:first-child { margin-top: 0; }
+
+.appearance-sidebar-preview-column i {
+  width: 88%;
+  background: var(--text-tertiary);
+  opacity: 0.55;
+}
+.appearance-sidebar-preview-column i:nth-of-type(even) { width: 72%; }
+.appearance-sidebar-preview-column i[data-indent] { margin-left: 12%; width: 76%; }
+
+/* The Inbox leads with the row that waits on the person, tinted amber. */
+.appearance-sidebar-preview-column i[data-waiting] {
+  height: 7px;
+  margin: 0 -6%;
+  width: 112%;
+  /* Drawn from the warning support tone at 80% alpha, without the other bars'
+     0.55 element opacity. Light schemes darken that tone for text contrast, so the
+     bar lifts it to at least an amber lightness and chroma, keeping its hue, and
+     reads amber at miniature size in both themes. */
+  background: var(--support-warning);
+  background: oklch(from var(--support-warning) max(l, 0.8) max(c, 0.15) h / 0.8);
+  opacity: 1;
+}
+
+.appearance-sidebar-option-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.appearance-sidebar-beta {
+  padding: 0 5px;
+  border-radius: 99px;
+  background: var(--surface-control);
+  color: var(--text-tertiary);
+  font-size: var(--text-mini);
+}
+
+@container settings-content (max-width: 380px) {
+  .appearance-width-picker.appearance-sidebar-picker {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @container settings-content (max-width: 540px) {

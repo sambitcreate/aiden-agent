@@ -178,6 +178,65 @@ read the pairing's saved `/server` features until the connection answers.
 
 Show agent activity with the shared activity marks (`AidenActivityMark` on desktop), never with new spinners, canvas loops or shimmering icons. Geometry, timing and the phase mapping live in [`activity-marks.md`](activity-marks.md), and iOS and Android draw the same marks natively. Chat marks use the text colour, and Live uses the accent. Pass `active={false}` for terminal states so the mark freezes on its still pose rather than disappearing.
 
+## Inbox rows
+
+The sidebar's Inbox view ([plan](plans/inbox-sidebar-plan.md)) uses a compact
+two-line row (`data-chat-row-layout="inbox"` in `renderer/components/sidebar/chat-row.tsx`)
+instead of the one-line chat row. Line 1 is quiet `text-small` meta (the
+workspace, plus the host for a paired Mac, or "Bot" led by a 14px copy of the
+Bot's face) with the status trailing it. A Bot carries its face in that meta
+line, not as a leading avatar, so every title starts at the same edge; line 2 is the title, in medium weight while unread. In Needs you
+the status is a soft pill (`bg-status-warning-surface` or
+`bg-status-red-surface` with its matching text token, an icon and a short label
+such as "Needs you" or "Approval") followed by the wait; elsewhere it is plain
+tertiary text. Never mark a row with a coloured border, stripe or outline: the
+pill, the section and the medium title carry the state. Rows held in place
+after they leave, or on an offline host, step their text tokens down rather
+than fading the whole row.
+
+The Needs you count also goes on the app icon: the Dock badge on macOS and
+the launcher count on Linux. That count is made in the main process from the
+same placement rules (`renderer/shared/inbox-state.ts`), so the icon and the
+section always agree, and nothing in the window draws a second count for it.
+
+A row offers at most one quick action, shown as a single transparent icon
+button over the row's right edge on hover or focus (`data-inbox-action`:
+**Mark read** with `CheckCheck`, **Acknowledge** with `Check`), beside the
+overflow menu when the row has one. The row reserves right padding for the
+controls it shows, so the title truncates instead of sliding under them. The
+action's accessible name repeats the title ("Mark read: Fix the build"), and
+the same action sits in the row's context and overflow menus. The row's own
+accessible name leads with the title, then meta, status, wait and "Unread":
+"Fix the build, aiden, 2h, Unread". While ⌘ is held, the trailing status gives
+way to the row's shortcut hint.
+
+Triage (**Pin** or **Unpin**, **Mark done**, and a **Snooze** submenu) lives
+only in an Inbox row's overflow and context menus, never as an inline row
+button, and never on a Bot row. The Snooze submenu lists its presets (1 hour,
+This evening, Tomorrow, Next week) with each one's time as trailing tertiary
+`text-small`, worked out when the submenu opens: the time alone for today
+("6:00 PM"), a short weekday and the time within the week ("Mon 9:00 AM"), else
+the date ("Nov 9, 9:00 AM"), since the label already names the day. This
+evening drops out once it is less than an hour away. A row that waits on the
+person or runs offers Pin alone, since Done or Snooze wouldn't move it, plus
+**Unsnooze** while a snooze set earlier is still running. On an unread failed
+run, Mark done and Snooze also mark the chat read, and the row leaves Needs you
+the moment the person acts (it reads unread again, with an error toast, if the
+read fails); a paired host that can't mark it read offers Pin alone there. In
+search, a Done or snoozed match shows a quiet "Done" or a short "Until 6 PM" /
+"Until Mon 9 AM" / "Until Nov 16" status (a 24-hour clock keeps its minutes,
+"Until 18:00"), short enough to keep the workspace beside it on a narrow sidebar (its
+accessible name still reads "Snoozed until" with the full time), and its menu
+offers **Mark not done** or **Unsnooze** in place of Mark done and Snooze. A host that can't take writes shows the items disabled rather
+than hiding them. Pinned chats get their own **Pinned** group between Needs you
+and Updates, and a pinned chat that needs the person still sits in Needs you.
+An action moves its row at once and then shows one Undo toast for five seconds;
+actions of the same kind inside that window merge into it ("3 chats marked
+done") instead of stacking toasts. The toast's action (Undo, Open, Retry) is
+the shared small filled squircle button, not Sonner's inverted pill. A failed
+write puts the row back with one error toast in the host's own words, and an Undo that finds the chat
+changed elsewhere leaves it alone and says so in the toast.
+
 ## Verification
 
 Check shared and custom actions in onboarding, the chat toolbar and composer,

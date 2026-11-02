@@ -1,4 +1,5 @@
-import { CHAT_ROW_STATES, isChatRowState, type ChatRowState } from "../shared/chat-row-state";
+import type { ChatRowState } from "../shared/chat-row-state";
+import type { ChatTriageEntry } from "../shared/chat-triage";
 import type {
   PeerBlockedReason,
   PeerFeedRow,
@@ -6,17 +7,22 @@ import type {
   PeerHostStatus,
   PeerHostView,
   PeerRepositoryIdentity,
-  PeerRunState,
 } from "../shared/peer-host";
+import {
+  latestPeerRuns,
+  PEER_LIVE_RUN_STATES,
+  peerFeedChatState,
+  peerFeedTime as time,
+} from "../shared/peer-feed-inbox";
 import {
   LOCAL_SIDEBAR_HOST_ID,
   projectOrderKey,
-  sidebarAttention,
   type SidebarChatSummary,
   type SidebarMachineFilter,
   type SidebarProjectGrouping,
   type SidebarProjectSummary,
 } from "./sidebar-organization";
+import type { HostChatCapability } from "./hosts/host-chat-adapter";
 
 /**
  * Remote adapter for the sidebar projection: maps each paired host's
@@ -59,6 +65,47 @@ export interface RemoteSidebarChat extends SidebarChatSummary {
   /** The host reports that the chat's newest output is a failed turn (revision 36). */
   lastRunFailed: boolean;
   stale: boolean;
+  /** The host's chat revision, which a rename must name. Absent from older hosts. */
+  revision?: string;
+  /** Revision 50: when the live run's oldest waiting prompt was raised. */
+  attentionSince?: number;
+  /** Revision 50: when the live run started. */
+  runStartedAt?: number;
+  /** Revision 50: when the chat's newest assistant output arrived. */
+  lastAssistantAt?: number;
+  /**
+   * Revision 50: the triage entry the host reports. Absent when the chat is
+   * untriaged or the host is older (`inbox-signals-v1` tells the two apart).
+   */
+  triage?: ChatTriageEntry;
+  /** Revision 50: what a waiting run asks, one line, from the host feed's `run.state`. */
+  attentionSummary?: string;
+}
+
+export { reportedTriage } from "../shared/peer-feed-inbox";
+
+/** One action a remote chat row offers, in menu order. */
+export interface RemoteChatRowAction {
+  id: "open" | "markRead" | "rename";
+  /** Shown but unavailable: the host is offline, so its rows are last-known. */
+  disabled: boolean;
+}
+
+/**
+ * The actions a remote chat row offers, limited to what this Mac's client for
+ * that host supports. Open always works (an offline chat opens its last-known
+ * transcript). Mark read needs the host's read-state grant and unseen output.
+ * Rename needs chat write access and the chat's revision. Delete and Rename
+ * with Apple stay in the open chat, where the host's full state is loaded.
+ */
+export function remoteChatRowActions(
+  chat: RemoteSidebarChat,
+  capabilities: ReadonlySet<HostChatCapability>,
+): RemoteChatRowAction[] {
+  const actions: RemoteChatRowAction[] = [{ id: "open", disabled: false }];
+  if (chat.unread && capabilities.has("markRead")) actions.push({ id: "markRead", disabled: chat.stale });
+  if (chat.revision && capabilities.has("rename")) actions.push({ id: "rename", disabled: chat.stale });
+  return actions;
 }
 
 export function isRemoteSidebarProject(project: SidebarProjectSummary): project is RemoteSidebarProject {
@@ -119,13 +166,6 @@ function text(row: PeerFeedRow, field: string): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-function time(row: PeerFeedRow, field: string): number | undefined {
-  const value = row[field];
-  if (typeof value !== "string") return undefined;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 function repositoryOf(row: PeerFeedRow): PeerRepositoryIdentity | null {
   const value = row.repository;
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -133,19 +173,6 @@ function repositoryOf(row: PeerFeedRow): PeerRepositoryIdentity | null {
   return typeof canonicalKey === "string" && canonicalKey && typeof relativePath === "string"
     ? { canonicalKey, relativePath }
     : null;
-}
-
-const LIVE_RUN_STATES = new Set<string>(["working", "needs_approval", "needs_input"]);
-
-function moreUrgent(left: ChatRowState, right: ChatRowState): ChatRowState {
-  return CHAT_ROW_STATES.indexOf(left) <= CHAT_ROW_STATES.indexOf(right) ? left : right;
-}
-
-/** Newest run per chat; the feed keeps runs in insertion order, newest last. */
-function latestRuns(runs: readonly PeerRunState[]): Map<string, PeerRunState> {
-  const latest = new Map<string, PeerRunState>();
-  for (const run of runs) latest.set(run.chatId, run);
-  return latest;
 }
 
 export interface RemoteSidebarRows {
@@ -181,26 +208,17 @@ export function remoteSidebarRows(
       stale,
     };
   });
-  const runs = latestRuns(snapshot.runs);
+  const runs = latestPeerRuns(snapshot.runs);
   const chats = snapshot.summaries.flatMap((row): RemoteSidebarChat[] => {
     const workspaceId = text(row, "workspaceId");
     if (!workspaceId) return [];
     const run = runs.get(row.id);
-    const summaryState: ChatRowState = isChatRowState(row.rowState)
-      ? row.rowState
-      : row.activity === "active"
-        ? "working"
-        : "idle";
-    const runState =
-      run && LIVE_RUN_STATES.has(run.state) && isChatRowState(run.state) ? run.state : "idle";
-    let rowState = moreUrgent(runState, summaryState);
-    // A stale host cannot confirm a run is still going; a waiting prompt stays visible.
-    if (stale && rowState === "working") rowState = "idle";
-    // The summary carries the host's current read marker, so it outranks the
-    // run's hint, which only stands in when a summary has no read state.
-    const hostUnread = typeof row.unread === "boolean" ? row.unread : run?.unread === true;
+    const { rowState, hostUnread, lastRunFailed, attentionSince, runStartedAt, lastAssistantAt, triage } =
+      peerFeedChatState(row, run, stale);
     const unread = !isOpen(host.id, row.id) && hostUnread;
-    const lastRunFailed = row.lastRunFailed === true;
+    const revision = text(row, "revision");
+    const waiting = rowState === "needs_approval" || rowState === "needs_input";
+    const attentionSummary = waiting && run && PEER_LIVE_RUN_STATES.has(run.state) ? run.attentionSummary : undefined;
     return [
       {
         key: projectOrderKey(host.id, row.id),
@@ -208,7 +226,6 @@ export function remoteSidebarRows(
         title: text(row, "title") ?? "New chat",
         createdAt: time(row, "createdAt"),
         lastActivityAt: time(row, "updatedAt"),
-        attention: sidebarAttention(rowState, unread, lastRunFailed),
         remote: true,
         hostId: host.id,
         hostLabel: host.label,
@@ -218,6 +235,12 @@ export function remoteSidebarRows(
         unread,
         lastRunFailed,
         stale,
+        ...(revision ? { revision } : {}),
+        ...(attentionSince !== undefined ? { attentionSince } : {}),
+        ...(runStartedAt !== undefined ? { runStartedAt } : {}),
+        ...(lastAssistantAt !== undefined ? { lastAssistantAt } : {}),
+        ...(triage ? { triage } : {}),
+        ...(attentionSummary ? { attentionSummary } : {}),
       },
     ];
   });

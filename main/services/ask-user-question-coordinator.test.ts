@@ -63,6 +63,40 @@ test("abort and renderer detach settle pending prompts as cancelled", async () =
   assert.equal(coordinator.pendingCount, 0);
 });
 
+test("a question asked after a detach reports itself unpublished; aborted or released ones do not", async () => {
+  const published: string[] = [];
+  const shortCircuited: AskUserQuestionPromptV1[] = [];
+  const coordinator = new AskUserQuestionCoordinator(
+    (prompt) => published.push(prompt.promptId),
+    undefined,
+    (prompt) => shortCircuited.push(prompt),
+  );
+  coordinator.detachStream("s-left");
+  const response = await coordinator.request(
+    { streamId: "s-left", toolCallId: "call-late", questions },
+    "document-one",
+  );
+  assert.equal(response.cancelled, true);
+  assert.equal(shortCircuited.length, 1);
+  assert.equal(shortCircuited[0]!.streamId, "s-left");
+  assert.equal(shortCircuited[0]!.promptId, response.promptId);
+  assert.equal(shortCircuited[0]!.questions[0]!.question, "Which approach?");
+  assert.deepEqual(published, []);
+
+  // The person stopped this ask themselves.
+  const controller = new AbortController();
+  controller.abort();
+  await coordinator.request({ streamId: "s-left", toolCallId: "call-aborted", questions }, "document-one", controller.signal);
+  assert.equal(shortCircuited.length, 1);
+
+  coordinator.releaseStream("s-left");
+  const live = coordinator.request({ streamId: "s-left", toolCallId: "call-live", questions }, "document-one");
+  assert.equal(published.length, 1);
+  coordinator.cancelStream("s-left");
+  await live;
+  assert.equal(shortCircuited.length, 1);
+});
+
 test("published prompts are withdrawn exactly once however they settle", async () => {
   const published: string[] = [];
   const withdrawn: string[] = [];

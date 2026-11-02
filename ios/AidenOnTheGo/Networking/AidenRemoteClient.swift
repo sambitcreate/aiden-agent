@@ -83,6 +83,89 @@ struct AidenSpeechTranscription: Codable, Equatable, Sendable {
     let modelId: String
 }
 
+/// One triage write. Each field present is set; the rest are left alone.
+struct AidenChatTriageChange: Equatable, Sendable {
+    enum Snooze: Equatable, Sendable {
+        case until(Date)
+        case wake
+    }
+
+    var pinned: Bool?
+    var done: Bool?
+    var snooze: Snooze?
+
+    static func done(_ value: Bool) -> Self { Self(done: value) }
+    static func snooze(until date: Date) -> Self { Self(snooze: .until(date)) }
+    static var wake: Self { Self(snooze: .wake) }
+}
+
+/// The chat's triage after a write.
+struct AidenChatTriageResult: Decodable, Equatable, Sendable {
+    let chatId: String
+    let revision: Int
+    let updatedAt: Date
+    let pinnedAt: Date?
+    let doneAt: Date?
+    let snoozedUntil: Date?
+
+    init(chatId: String, revision: Int, updatedAt: Date, pinnedAt: Date? = nil, doneAt: Date? = nil, snoozedUntil: Date? = nil) {
+        self.chatId = chatId
+        self.revision = revision
+        self.updatedAt = updatedAt
+        self.pinnedAt = pinnedAt
+        self.doneAt = doneAt
+        self.snoozedUntil = snoozedUntil
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        chatId = try values.decode(String.self, forKey: .chatId)
+        revision = try values.decode(Int.self, forKey: .revision)
+        // A write always leaves the chat at revision 1 or later.
+        guard revision >= 1 else {
+            throw DecodingError.dataCorruptedError(forKey: .revision, in: values, debugDescription: "Expected a triage revision.")
+        }
+        updatedAt = try values.decode(AidenRemoteTimestamp.self, forKey: .updatedAt).date
+        pinnedAt = try values.decodeIfPresent(AidenRemoteTimestamp.self, forKey: .pinnedAt)?.date
+        doneAt = try values.decodeIfPresent(AidenRemoteTimestamp.self, forKey: .doneAt)?.date
+        snoozedUntil = try values.decodeIfPresent(AidenRemoteTimestamp.self, forKey: .snoozedUntil)?.date
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case chatId, revision, updatedAt, pinnedAt, doneAt, snoozedUntil
+    }
+}
+
+private struct ChatTriageRequest: Encodable {
+    let change: AidenChatTriageChange
+    let ifRevision: Int?
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(change.pinned, forKey: .pinned)
+        try container.encodeIfPresent(change.done, forKey: .done)
+        switch change.snooze {
+        case .until(let date):
+            try container.encode(Self.timestamp(date), forKey: .snoozeUntil)
+        case .wake:
+            try container.encodeNil(forKey: .snoozeUntil)
+        case nil:
+            break
+        }
+        try container.encodeIfPresent(ifRevision.map { max(0, $0) }, forKey: .ifRevision)
+    }
+
+    /// RFC 3339 in UTC with milliseconds, as the host's parser accepts.
+    static func timestamp(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter.string(from: date)
+    }
+
+    private enum CodingKeys: String, CodingKey { case pinned, done, snoozeUntil, ifRevision }
+}
+
 /// Encodes to `{}` without a message id so the Mac reads through its newest message.
 private struct ChatReadRequest: Encodable {
     let throughMessageId: String?
@@ -117,6 +200,9 @@ struct AidenServer: Codable, Equatable, Sendable {
     static let chatSkillsFeature = "chat-skills-v1"
     static let chatAgentInterruptFeature = "chat-agent-interrupt-v1"
     static let chatReadStateFeature = "chat-read-state-v1"
+    /// `POST /chats/{chatId}/triage` (Pin, Done, Snooze). Announced to phones
+    /// since the host's `AIDEN_REMOTE_INBOX_SIGNALS_CONTRACT_REVISION`.
+    static let chatTriageFeature = "chat-triage-v1"
     static let chatMessagesWindowFeature = "chat-messages-window-v1"
     static let chatMessagesWindowMetadataFeature = "chat-messages-window-metadata-v1"
     static let chatForkFeature = "chat-fork-v1"
@@ -299,6 +385,12 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// Row states, unread markers, and `POST /chats/{id}/read` (revision 18).
     var supportsChatReadState: Bool {
         features.contains(Self.chatReadStateFeature)
+    }
+
+    /// Inbox triage writes (`POST /chats/{chatId}/triage`). The swipe actions
+    /// for Done and Snooze appear only with this token.
+    var supportsChatTriage: Bool {
+        features.contains(Self.chatTriageFeature)
     }
 
     /// `GET /chats/{chatId}/messages` pages that also carry the chat's
@@ -852,6 +944,20 @@ enum AidenRemoteClientError: Error, LocalizedError {
     var isCredentialRevoked: Bool {
         guard case .server(_, let body) = self else { return false }
         return body.code.rawValue == "credential_revoked"
+    }
+
+    /// A 409 from a triage write whose `ifRevision` was stale.
+    var isRevisionConflict: Bool {
+        guard case .server(409, let body) = self else { return false }
+        return body.code.rawValue == "revision_conflict"
+    }
+
+    /// The host's triage revision a conflict reported (`details.currentRevision`),
+    /// so a write can be sent once more from it.
+    var conflictingRevision: Int? {
+        guard isRevisionConflict, case .server(_, let body) = self,
+              let text = body.details?.currentRevision, let revision = Int(text), revision >= 0 else { return nil }
+        return revision
     }
 
     /// A 429 the server marked `retryable`. The request was refused before it
@@ -1761,6 +1867,26 @@ final class AidenRemoteClient: @unchecked Sendable {
             headers: [:],
             acceptedStatus: [204]
         )
+    }
+
+    /// Pin, mark done or snooze a chat for every surface paired to the Mac.
+    /// `ifRevision` is the triage revision the row last showed (0 for none);
+    /// a stale one is a 409 `revision_conflict` and nothing changes.
+    func setChatTriage(
+        chatId: String,
+        change: AidenChatTriageChange,
+        ifRevision: Int?,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenChatTriageResult {
+        try validateRemoteIdentifier(chatId)
+        let result: AidenChatTriageResult = try await send(
+            method: "POST",
+            path: ["chats", chatId, "triage"],
+            body: ChatTriageRequest(change: change, ifRevision: ifRevision),
+            headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()]
+        )
+        guard result.chatId == chatId else { throw AidenRemoteClientError.invalidResponse }
+        return result
     }
 
     func uploadAttachment(

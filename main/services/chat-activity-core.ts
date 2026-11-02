@@ -76,6 +76,14 @@ export class ChatActivityRegistry {
     if (this.attentionKey() !== before) this.publish();
   }
 
+  /**
+   * Broadcasts a new revision with unchanged sets, for a change the sets can't
+   * show (a prompt refused after its window left), so listeners reread.
+   */
+  touch(): void {
+    this.publish();
+  }
+
   snapshot(): ChatActivitySnapshot {
     const approval = new Set<string>();
     const input = new Set<string>();

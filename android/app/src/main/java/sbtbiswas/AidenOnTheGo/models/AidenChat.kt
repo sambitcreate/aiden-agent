@@ -6,6 +6,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.nullable
 import kotlinx.serialization.encoding.Decoder
@@ -870,6 +872,18 @@ data class AidenChatMessage(
     val timeline: AidenGenerationTimeline? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant
 ) {
+    /**
+     * Assistant output the host counts toward `lastAssistantAt`
+     * (`chat-store-core.ts` `metaOf`): visible text, attachments, artifacts,
+     * visuals or app panels, or a failed turn even with nothing visible.
+     */
+    val isInboxReply: Boolean
+        get() = role == AidenChatRole.ASSISTANT && (
+            text.isNotBlank() || !attachments.isNullOrEmpty() || !htmlArtifacts.isNullOrEmpty() ||
+                !visuals.isNullOrEmpty() || !appPanels.isNullOrEmpty() ||
+                outcome?.status == AidenMessageOutcomeStatus.FAILED ||
+                timeline?.status == AidenGenerationTimelineStatus.FAILED
+            )
     val isReadAloudEligible: Boolean get() = role == AidenChatRole.ASSISTANT && outcome == null &&
         (timeline == null || timeline.status == AidenGenerationTimelineStatus.COMPLETED) && text.isNotBlank()
     val isWireSafe: Boolean
@@ -1012,9 +1026,72 @@ data class AidenChatSummary(
      * Revision 36: the chat's newest assistant output is a failed turn. The
      * server sends it only when true; older Macs omit it.
      */
-    val lastRunFailed: Boolean = false
+    val lastRunFailed: Boolean = false,
+    /**
+     * Revision 50: the host's Inbox bucket, kept as a string so a newer
+     * host's bucket falls back to local placement. Read it through
+     * [inboxBucket], which keeps it only together with [inboxSortAtWire].
+     */
+    @SerialName("inboxBucket")
+    @Serializable(with = AidenTolerantStringSerializer::class)
+    val inboxBucketWire: String? = null,
+    @SerialName("inboxSortAt")
+    @Serializable(with = AidenTolerantInstantSerializer::class)
+    val inboxSortAtWire: Instant? = null,
+    /** Revision 50 Inbox times; each is dropped on its own when malformed. */
+    @Serializable(with = AidenTolerantInstantSerializer::class) val lastAssistantAt: Instant? = null,
+    @Serializable(with = AidenTolerantInstantSerializer::class) val attentionSince: Instant? = null,
+    @Serializable(with = AidenTolerantInstantSerializer::class) val runStartedAt: Instant? = null,
+    /** Revision 50 triage, as `POST /chats/{chatId}/triage` answers it. */
+    @Serializable(with = AidenTolerantInstantSerializer::class) val pinnedAt: Instant? = null,
+    @Serializable(with = AidenTolerantInstantSerializer::class) val doneAt: Instant? = null,
+    @Serializable(with = AidenTolerantInstantSerializer::class) val snoozedUntil: Instant? = null,
+    /** The host's triage revision for the chat; null for a chat with none. */
+    @Serializable(with = AidenTolerantPositiveIntSerializer::class) val triageRevision: Int? = null
 ) {
     val rowState: AidenChatRowState? get() = AidenChatRowState.fromWire(rowStateWire)
+
+    /**
+     * The host's bucket, only when it arrived with a sort time and names a
+     * bucket this build knows. Otherwise the row is placed by local rules.
+     */
+    val inboxBucket: AidenInboxBucket?
+        get() = if (inboxSortAtWire != null) AidenInboxBucket.fromWire(inboxBucketWire) else null
+
+    /** The host's sort time, only alongside a usable [inboxBucket]. */
+    val inboxSortAt: Instant? get() = if (inboxBucket != null) inboxSortAtWire else null
+
+    /**
+     * Drops the host's bucket after a local change it no longer describes,
+     * so the row is placed by the local rules until the host reports again.
+     */
+    fun withoutHostPlacement(): AidenChatSummary = copy(inboxBucketWire = null, inboxSortAtWire = null)
+
+    /** Keeps [other]'s Inbox times and triage, without its host placement. */
+    fun withInboxSignals(other: AidenChatSummary): AidenChatSummary = copy(
+        lastAssistantAt = other.lastAssistantAt,
+        attentionSince = other.attentionSince,
+        runStartedAt = other.runStartedAt,
+        pinnedAt = other.pinnedAt,
+        doneAt = other.doneAt,
+        snoozedUntil = other.snoozedUntil,
+        triageRevision = other.triageRevision,
+        inboxBucketWire = null,
+        inboxSortAtWire = null
+    )
+
+    /**
+     * The row after opening [chat]: a reply the host counts
+     * ([AidenChatMessage.isInboxReply]) newer than [lastAssistantAt]
+     * moves it (so a Done hold ends, as on the desktop) and drops the host
+     * placement that described the row before.
+     */
+    fun admittingReplies(chat: AidenChat): AidenChatSummary {
+        val newest = chat.messages.filter { it.isInboxReply }.maxOfOrNull { it.createdAt }
+            ?: return this
+        if (lastAssistantAt?.let { !newest.isAfter(it) } == true) return this
+        return copy(lastAssistantAt = newest).withoutHostPlacement()
+    }
 
     /**
      * The row says Failed in place of the unread dot: the unseen output is a
@@ -2276,5 +2353,57 @@ object AidenChatModelAuthority {
             modelId = if (chat.isBotChat) chat.modelId else selectedModelId,
             thinkingLevel = selectedThinkingLevel
         )
+    }
+}
+
+/**
+ * A string that reads as null when the value is anything else, so one
+ * malformed additive field never fails its row.
+ */
+object AidenTolerantStringSerializer : KSerializer<String?> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("AidenTolerantString", PrimitiveKind.STRING).nullable
+
+    override fun serialize(encoder: Encoder, value: String?) {
+        if (value == null) encoder.encodeNull() else encoder.encodeString(value)
+    }
+
+    override fun deserialize(decoder: Decoder): String? {
+        val json = decoder as? JsonDecoder ?: return decoder.decodeString()
+        val primitive = json.decodeJsonElement() as? JsonPrimitive ?: return null
+        return if (primitive.isString) primitive.content.takeIf { it.length <= 64 } else null
+    }
+}
+
+/** An RFC 3339 time that reads as null when malformed. */
+object AidenTolerantInstantSerializer : KSerializer<Instant?> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("AidenTolerantInstant", PrimitiveKind.STRING).nullable
+
+    override fun serialize(encoder: Encoder, value: Instant?) {
+        if (value == null) encoder.encodeNull()
+        else encoder.encodeString(InstantIso8601Serializer.millisecondFormat.format(value))
+    }
+
+    override fun deserialize(decoder: Decoder): Instant? {
+        val text = AidenTolerantStringSerializer.deserialize(decoder) ?: return null
+        return runCatching { Instant.parse(text) }.getOrNull()
+    }
+}
+
+/** A positive integer that reads as null when malformed, zero or negative. */
+object AidenTolerantPositiveIntSerializer : KSerializer<Int?> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("AidenTolerantPositiveInt", PrimitiveKind.INT).nullable
+
+    override fun serialize(encoder: Encoder, value: Int?) {
+        if (value == null) encoder.encodeNull() else encoder.encodeInt(value)
+    }
+
+    override fun deserialize(decoder: Decoder): Int? {
+        val json = decoder as? JsonDecoder ?: return decoder.decodeInt()
+        val primitive = json.decodeJsonElement() as? JsonPrimitive ?: return null
+        if (primitive.isString) return null
+        return primitive.content.toIntOrNull()?.takeIf { it > 0 }
     }
 }

@@ -256,7 +256,14 @@ fun AidenNavigationHost(
                 is AidenNavigationScene.Single -> if (composes(shown.screen.stateKey)) Entry(shown.screen)
                 is AidenNavigationScene.ListDetail -> Row(Modifier.fillMaxSize()) {
                     Box(Modifier.width(AidenListPaneWidth).fillMaxHeight(), propagateMinConstraints = true) {
-                        if (composes(AidenScreen.ProductShell.stateKey)) Entry(AidenScreen.ProductShell)
+                        if (composes(AidenScreen.ProductShell.stateKey)) {
+                            // The list beside an open chat treats that chat as read in place.
+                            CompositionLocalProvider(
+                                LocalAidenOpenChatId provides shown.detail?.chatId
+                            ) {
+                                Entry(AidenScreen.ProductShell)
+                            }
+                        }
                     }
                     VerticalDivider(color = AidenTheme.palette.raised)
                     detailTransition.AnimatedContent(
@@ -298,6 +305,9 @@ fun AidenNavigationHost(
  * pops it.
  */
 val LocalAidenShowsUpNavigation = compositionLocalOf { true }
+
+/** The chat open in the detail pane beside the list, or null when no chat sits beside it. */
+val LocalAidenOpenChatId = compositionLocalOf<String?> { null }
 
 /**
  * True only for a screen that belongs to the committed navigation stack. Side effects that

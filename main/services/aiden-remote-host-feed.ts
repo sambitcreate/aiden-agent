@@ -13,6 +13,9 @@ import type { AidenRemoteChatSummaryProjection } from "./aiden-remote-chats.js";
 import type { AidenRemoteWorkspaceProjection } from "./aiden-remote-workspaces.js";
 import { openCursorSse, sseFrame, type CursorSseHandle, type CursorSsePull } from "./aiden-remote-sse.js";
 import type { HostRunSummary } from "./host-run-registry.js";
+import { clipPendingAttentionSummary } from "../../renderer/shared/chat-pending-attention.js";
+import type { BotLiveSummary } from "../../renderer/shared/bot-live.js";
+import { isFailedBotSession } from "../../renderer/shared/inbox-state.js";
 
 /** Optional repository identity on a host-feed workspace (contract revision 19). */
 export interface AidenRemoteRepositoryIdentity {
@@ -29,6 +32,32 @@ export type AidenRemoteHostFeedWorkspace = AidenRemoteWorkspaceProjection & {
 export interface AidenRemoteHostFeedBot {
   id: string;
   [key: string]: unknown;
+}
+
+/** A Bot row's revision-50 Inbox signals; each is present only when it holds. */
+export interface AidenRemoteHostFeedBotSignals {
+  /** An approval, a question, a hand-off or an open issue waits on the person. */
+  needsYou?: true;
+  /** The Bot's last turn was cut short, or its model cannot be used. */
+  failed?: true;
+  /** When the Bot's newest reply with visible text arrived, RFC 3339. */
+  lastReplyAt?: string;
+}
+
+/** The Inbox signals of one Bot from its live summary; none when the summary is unknown. */
+export function hostFeedBotSignals(
+  live: Pick<BotLiveSummary, "state" | "needsYou" | "lastReplyAt"> | undefined,
+): AidenRemoteHostFeedBotSignals {
+  if (!live) return {};
+  const failed = isFailedBotSession(live.state);
+  const replied = live.lastReplyAt !== null && Number.isSafeInteger(live.lastReplyAt) && live.lastReplyAt >= 0
+    ? new Date(live.lastReplyAt)
+    : undefined;
+  return {
+    ...(live.needsYou ? { needsYou: true as const } : {}),
+    ...(failed ? { failed: true as const } : {}),
+    ...(replied && Number.isFinite(replied.getTime()) ? { lastReplyAt: replied.toISOString() } : {}),
+  };
 }
 
 /** One transcript-free read of everything the feed projects. */
@@ -77,6 +106,19 @@ export interface AidenRemoteHostFeedOptions {
   snapshotChunkBytes?: number;
   /** Fixed epoch for tests; random per process otherwise. */
   epoch?: string;
+  /**
+   * Revision 50: the bounded summary of what a waiting run asks (its oldest
+   * approval summary or question text, at most `AIDEN_REMOTE_ATTENTION_SUMMARY_MAX`
+   * characters). Only `runs:observe` desktops are sent it, on `run.state`.
+   */
+  attentionSummary?(runId: string): string | undefined;
+  /**
+   * Revision 50: the host's runs as they are now. After a `runs:observe`
+   * device takes a snapshot, which carries no runs, it is sent a `run.state`
+   * for each one still waiting, so a run that was waiting before it connected
+   * still brings its `attentionSummary`.
+   */
+  liveRuns?(): readonly Pick<HostRunSummary, "chatId" | "runId" | "state">[];
 }
 
 /** The `GET /host/events` envelope; `streamId` is always `host`. */
@@ -96,9 +138,13 @@ type Audience = "all" | "legacy" | "handoffs";
 interface JournalEntry {
   sequence: number;
   frame: string;
+  /** The same event for a `runs:observe` device, when it carries more (revision 50). */
+  observerFrame?: string;
   bytes: number;
   botOnly: boolean;
   audience: Audience;
+  /** Sent only to this `runs:observe` device: a waiting run re-announced after its snapshot. */
+  deviceId?: string;
 }
 
 interface RunStateChange {
@@ -108,6 +154,15 @@ interface RunStateChange {
 }
 
 const MAX_FRAMES_PER_PULL = 64;
+
+function isWaiting(state: string): boolean {
+  return state === "needs_approval" || state === "needs_input";
+}
+
+/** The shared one-line clip, at most `AIDEN_REMOTE_ATTENTION_SUMMARY_MAX` characters; undefined when empty. */
+function clipAttentionSummary(text: string | undefined): string | undefined {
+  return clipPendingAttentionSummary(text) || undefined;
+}
 const DEFAULT_DEBOUNCE_MS = 50;
 
 /**
@@ -196,6 +251,7 @@ export class AidenRemoteHostFeedService {
     await this.refresh();
     admit();
     const botVisible = device.capabilities.has("bot:read");
+    const observer = device.capabilities.has("runs:observe");
     const audience: Audience = device.botHandoffs === true ? "handoffs" : "legacy";
     // A device that gained or lost `bot:handoffs` since its cursor read other
     // Bot rows: replaying from it would keep a paused Bot as it read before.
@@ -218,6 +274,11 @@ export class AidenRemoteHostFeedService {
       if (position === undefined || position < this.floor) {
         position = this.head;
         snapshot = this.snapshotFrames(botVisible, audience);
+        if (observer) {
+          this.announceWaitingRuns(device.id, botVisible);
+          // Only these re-announcements can have been trimmed past the snapshot.
+          if (position < this.floor) position = this.floor;
+        }
         return { frames: [snapshot.shift()!] };
       }
       const frames: string[] = [];
@@ -231,7 +292,8 @@ export class AidenRemoteHostFeedService {
         if (entry.frame === "") continue;
         if (entry.botOnly && !botVisible) continue;
         if (entry.audience !== "all" && entry.audience !== audience) continue;
-        frames.push(entry.frame);
+        if (entry.deviceId !== undefined && (entry.deviceId !== device.id || !observer)) continue;
+        frames.push(observer && entry.observerFrame !== undefined ? entry.observerFrame : entry.frame);
       }
       return { frames };
     };
@@ -312,19 +374,74 @@ export class AidenRemoteHostFeedService {
     this.pendingRuns.clear();
     const summaries = new Map(next.summaries.map((summary) => [summary.id, summary]));
     for (const run of runs) {
-      const summary = summaries.get(run.chatId);
-      const botOnly = !summary && next.botChatIds.has(run.chatId);
-      // A chat outside every projection (assistant workspace, deleted) is never announced.
-      if (!summary && !botOnly) continue;
-      this.append("run.state", {
-        chatId: run.chatId,
-        runId: run.runId,
-        state: run.state,
-        unread: summary?.unread === true,
-      }, botOnly);
+      const event = this.runStateEvent(run, summaries, next.botChatIds);
+      if (!event) continue;
+      this.append("run.state", event.payload, event.botOnly, "all", event.observerPayload);
     }
     for (const owned of this.subscriptions.values()) {
       for (const handle of owned) handle.wake();
+    }
+  }
+
+  /**
+   * A run's `run.state` payloads: the plain one, and the `runs:observe` one
+   * when it carries an `attentionSummary`. A chat outside every projection
+   * (assistant workspace, deleted) is never announced.
+   */
+  private runStateEvent(
+    run: RunStateChange,
+    summaries: ReadonlyMap<string, AidenRemoteChatSummaryProjection>,
+    botChatIds: ReadonlySet<string>,
+  ): { payload: Record<string, unknown>; observerPayload?: Record<string, unknown>; botOnly: boolean } | undefined {
+    const summary = summaries.get(run.chatId);
+    const botOnly = !summary && botChatIds.has(run.chatId);
+    if (!summary && !botOnly) return undefined;
+    const payload = {
+      chatId: run.chatId,
+      runId: run.runId,
+      state: run.state,
+      unread: summary?.unread === true,
+    };
+    const attentionSummary = isWaiting(run.state)
+      ? clipAttentionSummary(this.options.attentionSummary?.(run.runId))
+      : undefined;
+    return { payload, ...(attentionSummary ? { observerPayload: { ...payload, attentionSummary } } : {}), botOnly };
+  }
+
+  /**
+   * Revision 50: a snapshot carries no runs, so right after one an observer
+   * is sent a `run.state` for each run still waiting, as journal entries only
+   * that device reads. Other devices skip their sequences.
+   *
+   * Cost: every observer (re)snapshot appends these entries to the one shared
+   * journal, so a burst of reconnecting observers with many waiting runs uses
+   * up retention that other devices' cursors rely on. Each pass is capped at
+   * half the journal by count and by bytes, so one pass alone never trims a
+   * cursor taken at the snapshot; repeated passes can still age a slow
+   * device's cursor out, and that device then resnapshots as usual.
+   */
+  private announceWaitingRuns(deviceId: string, botVisible: boolean): void {
+    const live = this.options.liveRuns?.();
+    if (!live || live.length === 0) return;
+    const state = this.state!;
+    const summaries = new Map(state.summaries.map((summary) => [summary.id, summary]));
+    let budget = Math.floor(this.maxEvents / 2);
+    let byteBudget = Math.floor(this.maxBytes / 2);
+    for (const run of live) {
+      if (budget <= 0) break;
+      if (!isWaiting(run.state)) continue;
+      const event = this.runStateEvent(
+        { chatId: run.chatId, runId: run.runId, state: run.state },
+        summaries,
+        state.botChatIds,
+      );
+      if (!event || (event.botOnly && !botVisible)) continue;
+      const payload = event.observerPayload ?? event.payload;
+      const bytes = Buffer.byteLength(this.frame(this.head + 1, "run.state", payload));
+      if (bytes > byteBudget) break;
+      this.append("run.state", payload, event.botOnly, "all", undefined, deviceId);
+      budget -= 1;
+      byteBudget -= bytes;
     }
   }
 
@@ -399,11 +516,22 @@ export class AidenRemoteHostFeedService {
     payload: Record<string, unknown>,
     botOnly: boolean,
     audience: Audience = "all",
+    observerPayload?: Record<string, unknown>,
+    deviceId?: string,
   ): void {
     this.head += 1;
     const frame = this.frame(this.head, type, payload);
-    const bytes = Buffer.byteLength(frame);
-    this.journal.push({ sequence: this.head, frame, bytes, botOnly, audience });
+    const observerFrame = observerPayload ? this.frame(this.head, type, observerPayload) : undefined;
+    const bytes = Buffer.byteLength(frame) + (observerFrame ? Buffer.byteLength(observerFrame) : 0);
+    this.journal.push({
+      sequence: this.head,
+      frame,
+      ...(observerFrame ? { observerFrame } : {}),
+      bytes,
+      botOnly,
+      audience,
+      ...(deviceId !== undefined ? { deviceId } : {}),
+    });
     this.journalBytes += bytes;
     this.trimJournal();
   }

@@ -5,7 +5,7 @@ Product rule: the Android client is client/server and must feel optimistic. Read
 ## Shared pieces
 - `features/shared/AidenReadPresentation.kt`: `AidenReadPresentation.of(hasContent, isFetching, hasSettled, failed)` decides CONTENT / SKELETON / EMPTY / FAILED. Content always wins, so a refresh or a failed refresh never replaces saved rows. `AidenRevalidation.isDue` gates foreground rereads (60 s, never over an in-flight read).
 - `persistence/AidenReadSnapshotCache.kt`: per-installation, size-bounded (2 MiB per entry, 64 entries, oldest-written evicted) JSON snapshots for screens without a dedicated cache. Keys in `AidenReadSnapshotKeys`: Workspace list, per-Workspace chat listing, Git review, branches, worktrees. Purged by `AidenRemoteCoordinator.removeInstallation`. An oversized write deletes the older snapshot so a stale one is never shown after a newer read could not be kept.
-- `ui/theme/AidenActivityIndicator.kt`: `AidenActivityDot`, a breathing dot (still under Reduce Motion) for active work (Working chat rows, pending fork summary, in-flight action segments). Not for reads.
+- `ui/theme/AidenActivityIndicator.kt`: `AidenActivityDot`, a breathing dot (still under Reduce Motion) for active work (pending fork summary, in-flight action segments). Not for reads. Since Inbox 3c (2026-11-01) Working chat rows use `AidenWorkingIndicator`, the desktop's 3/4 ring, instead.
 
 ## Surfaces
 - Coordinator seeds `workspaces` from the snapshot on activation and stores each successful `/workspaces` read; create/update/remove reconcile the server's answer into the list before the background refresh.

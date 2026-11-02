@@ -159,10 +159,11 @@ test("a question asked during the interrupted run is offered after a relaunch, a
     assert.deepEqual(await after.forRun("chat", 5_001), []);
 
     // Dismissing needs the chat the card belongs to.
-    await after.forget("q-1", "other-chat");
+    assert.equal(await after.forget("q-1", "other-chat"), false);
     assert.equal((await open(() => 6_000).forRun("chat", 4_000)).length, 1);
-    // Answering it (or its card settling before the quit) removes it.
-    await after.forget("q-1", "chat");
+    // Answering it (or its card settling before the quit) removes it, and says so.
+    assert.equal(await after.forget("q-1", "chat"), true);
+    assert.equal(await after.forget("q-1", "chat"), false);
     assert.deepEqual(await open(() => 6_000).forRun("chat", 4_000), []);
     // Deleting a chat removes what it was waiting on.
     await after.forgetChat("other-chat");

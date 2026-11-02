@@ -944,6 +944,95 @@
         }
       }
     },
+    "/chats/{chatId}/triage": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "setChatTriage",
+        "description": "Pin, mark done or snooze a chat in the Inbox. Each field present is set and the others are kept (last writer wins per field); snoozeUntil null wakes the chat. The acting device computes snooze presets in its own time zone and sends an absolute time. With ifRevision, the write lands only when the chat's triage revision still matches (0 for a chat with no triage), so an Undo never overwrites a newer change; a mismatch answers 409 revision_conflict with currentRevision. Triage lives outside the chat and never changes its revision. Bot chats are refused. Available only when the server advertises chat-triage-v1.",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "chat:write",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "minProperties": 1,
+                "properties": {
+                  "pinned": {
+                    "type": "boolean"
+                  },
+                  "done": {
+                    "type": "boolean"
+                  },
+                  "snoozeUntil": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "maxLength": 40
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "ifRevision": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "anyOf": [
+                  {
+                    "required": [
+                      "pinned"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "done"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "snoozeUntil"
+                    ]
+                  }
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The chat's triage after the write",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatTriage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/chats/{chatId}/move": {
       "parameters": [
         {
@@ -6208,7 +6297,7 @@
       ],
       "get": {
         "operationId": "hostEvents",
-        "description": "Contract revision 19 host feed (host-events-v1), granted to paired mac and linux devices only. The first event is a snapshot of every chat summary, workspace (with an optional credential-free repository identity) and, for bot:read devices, Bot. Later events upsert or remove one chat, workspace or Bot, or report a run.state change. Event ids are <epoch>:<sequence>; a missing, foreign-epoch or expired cursor (more than 1,000 events or 8 MiB behind) receives a fresh snapshot instead of a replay. A snapshot larger than 256 KiB arrives as consecutive snapshot frames: every frame but the last carries partial: true and no SSE id, and only the final frame carries the id, so an interrupted snapshot is retried whole on resume. A heartbeat comment is sent every 15 seconds. The feed never reads transcripts.",
+        "description": "Contract revision 19 host feed (host-events-v1), granted to paired mac and linux devices only. The first event is a snapshot of every chat summary, workspace (with an optional credential-free repository identity) and, for bot:read devices, Bot. Later events upsert or remove one chat, workspace or Bot, or report a run.state change. Event ids are <epoch>:<sequence>; a missing, foreign-epoch or expired cursor (more than 1,000 events or 8 MiB behind) receives a fresh snapshot instead of a replay. A snapshot larger than 256 KiB arrives as consecutive snapshot frames: every frame but the last carries partial: true and no SSE id, and only the final frame carries the id, so an interrupted snapshot is retried whole on resume. A heartbeat comment is sent every 15 seconds. The feed never reads transcripts. Since revision 50, right after a runs:observe device's snapshot the host also sends that device a run.state (with attentionSummary) for each run still waiting; those entries take sequences every other device skips, and each pass uses at most half the journal's event and byte retention.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "host:events",
         "parameters": [
@@ -11200,6 +11289,43 @@
         },
         "additionalProperties": false
       },
+      "ChatTriage": {
+        "type": "object",
+        "description": "A chat's Inbox triage on its host (chat-triage-v1). revision starts at 1 and rises with every write; pass it back as ifRevision.",
+        "required": [
+          "chatId",
+          "revision",
+          "updatedAt"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "pinnedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "doneAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "snoozedUntil": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
       "ChatSummary": {
         "type": "object",
         "description": "Transcript-free regular-chat projection. Harmless additive fields are tolerated, while clients still apply the recursive private-field denial policy.",
@@ -11281,6 +11407,58 @@
                 "$ref": "#/components/schemas/ChatForkLineageRow"
               }
             ]
+          },
+          "attentionSince": {
+            "description": "Additive in contract revision 50 (inbox-signals-v1). While a live run waits on an approval or question, when the oldest pending approval was raised, or else the oldest question. Absent otherwise.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "runStartedAt": {
+            "description": "Additive in contract revision 50. While a run is live, when it started. Absent otherwise.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastAssistantAt": {
+            "description": "Additive in contract revision 50. When the chat's newest assistant output (or failed turn) was persisted. Absent before the first reply.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "pinnedAt": {
+            "description": "Additive in contract revision 50. When the chat was pinned in the Inbox. Present only with triageRevision.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "doneAt": {
+            "description": "Additive in contract revision 50. When the chat was marked done. Newer output brings it back. Present only with triageRevision.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "snoozedUntil": {
+            "description": "Additive in contract revision 50. When the chat's snooze ends. Present only with triageRevision.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "triageRevision": {
+            "description": "Additive in contract revision 50. The revision of the chat's triage entry (chat-triage-v1); absent when the chat has never been triaged. Clients send it as ifRevision and drop their own pending write once the host reports it.",
+            "type": "integer",
+            "minimum": 1
+          },
+          "inboxBucket": {
+            "description": "Additive in contract revision 50 (inbox-signals-v1). The Inbox bucket the host's own placement rules give the row, computed from the state the host holds: needs_you (a pending approval or question, or unread output from a failed run), working, done (marked done with no newer output), snoozed, pinned, updates (unread), or earlier (read and idle, however old). The host can't know which chat a device has open, so the row counts as not open, and it applies no recent window. Clients recheck the time-based parts against their own clock: a snoozed row past its snoozedUntil is awake, and an earlier row older than the client's recent window ages out. Needs you rows order by tier from rowState (approval, question, then failed). Later hosts may send values outside this list; a client places those rows itself, as it does a bucket without an inboxSortAt. Present only with inboxSortAt.",
+            "enum": [
+              "needs_you",
+              "pinned",
+              "updates",
+              "earlier",
+              "working",
+              "snoozed",
+              "done"
+            ]
+          },
+          "inboxSortAt": {
+            "description": "Additive in contract revision 50. The time the row orders by within its inboxBucket: needs_you by attentionSince (else updatedAt), oldest first; pinned by pinnedAt and updates by lastAssistantAt (else updatedAt), newest first; earlier by updatedAt, newest first; working by runStartedAt (else updatedAt), oldest first. A done or snoozed row carries the time it orders by in the bucket it returns to. Present only with inboxBucket.",
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": true
