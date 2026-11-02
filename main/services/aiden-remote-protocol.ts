@@ -214,7 +214,19 @@ export const AIDEN_REMOTE_WORKSPACE_CLONE_CONTRACT_REVISION = 48 as const;
  * list. Older phones see nothing new.
  */
 export const AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION = 49 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION;
+/**
+ * Contract revision 50 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION`):
+ * New worktree on phones (`chat:new-worktree`, an opt-in capability rather
+ * than a feature token, because phones already hear the most feature tokens
+ * shipped clients accept). `POST /chats/{chatId}/worktree` with `If-Match`,
+ * `Idempotency-Key` and `{ "text" }` (the message about to be sent, which
+ * names the branch) makes a managed worktree from the chat's workspace and
+ * moves the still-empty chat into it, so the first message runs there. Older
+ * phones see nothing new.
+ */
+export const AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION = 50 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -449,14 +461,25 @@ export const AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES = ["schedule:cards"] as con
 export const AIDEN_REMOTE_CHAT_JOB_CAPABILITIES = ["chat:jobs"] as const;
 
 /**
+ * Contract revision 50: a device holding `chat:new-worktree` may put an empty
+ * chat in a new managed worktree (`POST /chats/{chatId}/worktree`, which also
+ * needs `chat:write` and `git:write`). It is offered only while the host can
+ * create worktrees, and widens nothing those grants do not already allow.
+ */
+export const AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES = ["chat:new-worktree"] as const;
+
+/**
  * Every opt-in a paired device may persist. Each changes what a device is
- * shown; `chat:jobs` also opens its two routes, which still need the chat
- * grant (`chat:read`, `chat:write`) and so widen nothing that grant allows.
+ * shown; `chat:jobs` opens its two routes, which still need the chat grant
+ * (`chat:read`, `chat:write`), and `chat:new-worktree` opens its route, which
+ * still needs the device's chat and Git write grants, so neither widens what
+ * those grants allow.
  */
 export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
+  ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
 ] as const;
 
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
@@ -472,6 +495,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
+  ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -491,6 +515,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
+  ...AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
@@ -2041,6 +2066,8 @@ export interface AidenRemoteContractFixture {
   spending?: AidenRemoteSpendingFixture;
   /** Revision 49 (`chat:jobs`): a chat's jobs, a stop, and an unknown job. */
   backgroundJobs?: AidenRemoteBackgroundJobsFixture;
+  /** Revision 50 (`chat:new-worktree`): an empty chat moved into a new worktree, and a chat with messages refused. */
+  chatNewWorktree?: AidenRemoteChatNewWorktreeFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -7796,6 +7823,13 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     backgroundJobs = parseBackgroundJobsFixture(value.backgroundJobs);
   }
+  let chatNewWorktree: AidenRemoteChatNewWorktreeFixture | undefined;
+  if (value.chatNewWorktree !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION) {
+      throw new Error(`New worktree fixtures require contract revision ${AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION}.`);
+    }
+    chatNewWorktree = parseChatNewWorktreeFixture(value.chatNewWorktree);
+  }
   if (value.peerRouteAdvertisement !== undefined) {
     if (contractRevision < 31 || !isRecord(value.peerRouteAdvertisement)) throw new Error("Peer routes require contract revision 31.");
     const advertisement = value.peerRouteAdvertisement;
@@ -7896,6 +7930,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(browserRecordings ? { browserRecordings } : {}),
     ...(spending ? { spending } : {}),
     ...(backgroundJobs ? { backgroundJobs } : {}),
+    ...(chatNewWorktree ? { chatNewWorktree } : {}),
   };
 }
 
@@ -8131,6 +8166,66 @@ function parseBackgroundJobsFixture(value: unknown): AidenRemoteBackgroundJobsFi
     throw new Error("After a stop the job is stopped.");
   }
   if (fixture.notFound.error.code !== "not_found") throw new Error("An unknown job is not_found.");
+  return fixture;
+}
+
+/** Longest message text `POST /chats/{chatId}/worktree` takes; only its first words name the branch. */
+export const AIDEN_REMOTE_MAX_NEW_WORKTREE_TEXT = 4_000;
+
+/** Revision 50: the body of `POST /chats/{chatId}/worktree`. */
+export interface AidenRemoteChatNewWorktreeRequest {
+  /** The first message, about to be sent; the branch is named from it (`aiden/<words>`). */
+  text: string;
+}
+
+export function parseAidenRemoteChatNewWorktreeRequest(value: unknown): AidenRemoteChatNewWorktreeRequest {
+  if (!isRecord(value)) throw new Error("A new worktree request must be an object.");
+  assertExactKeys(value, ["text"], "New worktree request");
+  const text = requiredString(value, "text");
+  if (!text.trim() || characterLength(text) > AIDEN_REMOTE_MAX_NEW_WORKTREE_TEXT) {
+    throw new Error("A new worktree request needs the message text.");
+  }
+  return { text };
+}
+
+/** Revision 50: the response of `POST /chats/{chatId}/worktree`. */
+export interface AidenRemoteChatNewWorktreeResponse {
+  /** The chat, now in the worktree's workspace and still without messages. */
+  chat: AidenRemoteChatProjection;
+  /** The worktree's branch, for example `aiden/fix-the-login-bug`. */
+  branch: string;
+}
+
+export function parseAidenRemoteChatNewWorktreeResponse(value: unknown): AidenRemoteChatNewWorktreeResponse {
+  if (!isRecord(value)) throw new Error("A new worktree response must be an object.");
+  assertExactKeys(value, ["chat", "branch"], "New worktree response");
+  const chat = parseAidenRemoteChatProjection(value.chat, "New worktree chat");
+  if (chat.messages.length > 0) throw new Error("A chat moved into a new worktree has no messages yet.");
+  const branch = requiredString(value, "branch");
+  if (characterLength(branch) > 200) throw new Error("A worktree branch name is too long.");
+  return { chat, branch };
+}
+
+export interface AidenRemoteChatNewWorktreeFixture {
+  request: AidenRemoteChatNewWorktreeRequest;
+  response: AidenRemoteChatNewWorktreeResponse;
+  /** The chat already has messages, so it stays where it is. */
+  notEmpty: AidenRemoteErrorEnvelope;
+  /** Git could not make the worktree (for example the base could not be fetched). */
+  failed: AidenRemoteErrorEnvelope;
+}
+
+function parseChatNewWorktreeFixture(value: unknown): AidenRemoteChatNewWorktreeFixture {
+  if (!isRecord(value)) throw new Error("New worktree fixture must be an object.");
+  assertExactKeys(value, ["request", "response", "notEmpty", "failed"], "New worktree fixture");
+  const fixture: AidenRemoteChatNewWorktreeFixture = {
+    request: parseAidenRemoteChatNewWorktreeRequest(value.request),
+    response: parseAidenRemoteChatNewWorktreeResponse(value.response),
+    notEmpty: parseErrorEnvelopeFixture(value.notEmpty, "New worktree for a chat with messages"),
+    failed: parseErrorEnvelopeFixture(value.failed, "New worktree that Git could not make"),
+  };
+  if (fixture.notEmpty.error.code !== "operation_stale") throw new Error("A chat with messages is operation_stale.");
+  if (fixture.failed.error.code !== "git_capability_denied") throw new Error("A worktree Git could not make is git_capability_denied.");
   return fixture;
 }
 

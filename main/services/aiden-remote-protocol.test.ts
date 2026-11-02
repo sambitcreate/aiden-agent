@@ -40,6 +40,9 @@ import {
   parseAidenRemoteSpendingStatus,
   AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION,
   parseAidenRemoteBackgroundJobs,
+  AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION,
+  parseAidenRemoteChatNewWorktreeRequest,
+  parseAidenRemoteChatNewWorktreeResponse,
   AIDEN_REMOTE_BOT_ISSUE_MAX,
   AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
@@ -450,6 +453,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   delete revision19.chatFork;
   delete revision19.spending;
   delete revision19.backgroundJobs;
+  delete revision19.chatNewWorktree;
   // Bot chat activity is revision 30.
   delete revision19.botActivity;
   delete revision19.botActivityPrivacy;
@@ -573,6 +577,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}",
     "/chats/{chatId}/read",
     "/chats/{chatId}/move",
+    "/chats/{chatId}/worktree",
     "/chats/{chatId}/fork",
     "/chats/{chatId}/fork-summary/{action}",
     "/chats/{chatId}/tasks",
@@ -2871,6 +2876,7 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   delete older.botHandoffs;
   delete older.spending;
   delete older.backgroundJobs;
+  delete older.chatNewWorktree;
   assert.equal(parseAidenRemoteContractFixture(older).botHandoffs, undefined);
 
   // The fixture guards its own invariants: a legacy view may not leak a holder word.
@@ -2883,6 +2889,37 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   assert.throws(() => parseAidenRemoteContractFixture(leakySnapshot), /must not carry hand-off or paused/u);
   const wrongCode = structuredClone(raw);
   wrongCode.botHandoffs.legacy.pausedError.error.code = "bot_paused";
+  assert.throws(() => parseAidenRemoteContractFixture(wrongCode), /operation_stale/u);
+});
+
+test("new worktree fixtures need their own revision, and a moved chat has no messages yet", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const fixture = parseAidenRemoteContractFixture(raw).chatNewWorktree!;
+  assert.equal(fixture.response.branch, "aiden/fix-the-login-bug");
+  assert.notEqual(fixture.response.chat.workspaceId, raw.chat.workspaceId, "the chat is in the worktree's workspace");
+
+  const older = structuredClone(raw);
+  older.contractRevision = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
+  assert.throws(
+    () => parseAidenRemoteContractFixture(older),
+    new RegExp(`require contract revision ${AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION}\\b`, "u"),
+  );
+  delete older.chatNewWorktree;
+  assert.equal(parseAidenRemoteContractFixture(older).chatNewWorktree, undefined);
+
+  assert.deepEqual(parseAidenRemoteChatNewWorktreeRequest({ text: "Fix it" }), { text: "Fix it" });
+  for (const request of [{}, { text: "   " }, { text: "x".repeat(4_001) }, { text: "Fix it", branch: "mine" }]) {
+    assert.throws(() => parseAidenRemoteChatNewWorktreeRequest(request), Error, JSON.stringify(request).slice(0, 40));
+  }
+  const response = raw.chatNewWorktree.response;
+  assert.throws(
+    () => parseAidenRemoteChatNewWorktreeResponse({ ...response, chat: { ...response.chat, messages: raw.chat.messages } }),
+    /no messages yet/u,
+  );
+  assert.throws(() => parseAidenRemoteChatNewWorktreeResponse({ ...response, path: "/Users/sam/x" }), /unsupported field/u);
+  const wrongCode = structuredClone(raw);
+  wrongCode.chatNewWorktree.notEmpty.error.code = "invalid_request";
   assert.throws(() => parseAidenRemoteContractFixture(wrongCode), /operation_stale/u);
 });
 
@@ -2902,6 +2939,7 @@ test("spending fixtures need their own revision, parse strictly, and refuse with
   );
   delete older.spending;
   delete older.backgroundJobs;
+  delete older.chatNewWorktree;
   assert.equal(parseAidenRemoteContractFixture(older).spending, undefined);
 
   const status = raw.spending.bot;
@@ -2934,6 +2972,8 @@ test("background job fixtures need their own revision, and the parser and schema
   assert.equal(fixture.notFound.error.code, "not_found");
 
   const older = structuredClone(raw);
+  // Sections from later revisions leave with the downgrade, so only this one is refused.
+  delete older.chatNewWorktree;
   older.contractRevision = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION - 1;
   assert.throws(
@@ -3032,6 +3072,7 @@ test("Bot shared images need their own revision, and the schema and parser accep
   delete older.botImages;
   delete older.spending;
   delete older.backgroundJobs;
+  delete older.chatNewWorktree;
   assert.equal(parseAidenRemoteContractFixture(older).botImages, undefined);
 
   const ajv = new Ajv2020({ strict: false });
@@ -3068,6 +3109,7 @@ test("browser recordings need their own revision, and a recording step carries o
   delete older.browserRecordings;
   delete older.spending;
   delete older.backgroundJobs;
+  delete older.chatNewWorktree;
   assert.equal(parseAidenRemoteContractFixture(older).browserRecordings, undefined);
 
   const ajv = new Ajv2020({ strict: false });

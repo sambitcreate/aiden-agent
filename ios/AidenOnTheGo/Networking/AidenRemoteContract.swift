@@ -674,6 +674,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 43 adds `bot:handoff-on-mac`, asked for the same way.
     /// Contract revision 45 adds `bot:images`, asked for alone.
     /// Contract revision 49 adds `chat:jobs`, asked for alone.
+    /// Contract revision 50 adds `chat:new-worktree`, asked for alone.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
@@ -683,6 +684,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "bot:handoff-on-mac"),
         Self(rawValue: "bot:images"),
         Self(rawValue: "chat:jobs"),
+        Self(rawValue: "chat:new-worktree"),
     ]
 
     /// Revision 27: the device renders `memory_update` and `routine_proposal`
@@ -728,6 +730,12 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// chat grant does not already allow. A Mac on an earlier revision refuses
     /// the name, so the device asks for it alone.
     static let chatJobs = Self(rawValue: "chat:jobs")
+
+    /// Revision 50: with `git:write`, the device may move an empty Workspace
+    /// chat into a new worktree made from its first message
+    /// (`POST /chats/{chatId}/worktree`). A Mac on an earlier revision refuses
+    /// the name, so the device asks for it alone.
+    static let chatNewWorktree = Self(rawValue: "chat:new-worktree")
 
     /// Revision 42: the device receives the Bot session `issues` list and
     /// `issues` frames, a summary `issueCount`, and issue items in the routine

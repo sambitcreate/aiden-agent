@@ -365,7 +365,10 @@ export function createFirstMessageWorktreeCoordinator(dependencies: FirstMessage
     }
   };
 
-  return { ensure };
+  /** The ledger's record for a key: which worktree an earlier attempt made, if any. */
+  const record = (key: string): Promise<FirstMessageWorktreeRecord | undefined> => dependencies.ledger.get(key);
+
+  return { ensure, record };
 }
 
 export type FirstMessageWorktreeCoordinator = ReturnType<typeof createFirstMessageWorktreeCoordinator>;

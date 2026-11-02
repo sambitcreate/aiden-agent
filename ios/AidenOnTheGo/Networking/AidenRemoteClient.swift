@@ -668,6 +668,53 @@ struct AidenSpending: Codable, Equatable, Sendable {
     }
 }
 
+/// Contract revision 50 (`chat:new-worktree`): the empty chat, now in its
+/// new worktree's workspace, and the worktree's branch.
+struct AidenChatNewWorktree: Decodable, Equatable, Sendable {
+    /// The server's `AIDEN_REMOTE_MAX_NEW_WORKTREE_TEXT`.
+    static let maxTextLength = 4_000
+    static let maxBranchLength = 200
+
+    let chat: AidenChat
+    let branch: String
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case chat, branch }
+
+    init(chat: AidenChat, branch: String) {
+        self.chat = chat
+        self.branch = branch
+    }
+
+    /// A first message with no words (attachments only) names the branch
+    /// `aiden/new-chat`, as on the desktop.
+    static let untitledSeed = "New chat"
+
+    /// What the Mac names the branch from: the message without its outer
+    /// whitespace, cut to the server's limit in Unicode scalars (the Mac
+    /// counts code points), or `untitledSeed` when it has no words. Only its
+    /// first words make the name.
+    static func branchSeed(from text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return untitledSeed }
+        guard trimmed.unicodeScalars.count > maxTextLength else { return trimmed }
+        var scalars = String.UnicodeScalarView()
+        scalars.append(contentsOf: trimmed.unicodeScalars.prefix(maxTextLength))
+        return String(scalars)
+    }
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        chat = try values.decode(AidenChat.self, forKey: .chat)
+        branch = try values.decode(String.self, forKey: .branch)
+        guard chat.messages.isEmpty, chat.botId == nil,
+              !branch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              branch.count <= Self.maxBranchLength else {
+            throw DecodingError.dataCorruptedError(forKey: .branch, in: values, debugDescription: "Invalid new worktree.")
+        }
+    }
+}
+
 struct AidenSpendingStatus: Codable, Equatable, Sendable {
     /// Nil: no limit applies to this chat or Bot.
     let spending: AidenSpending?
@@ -962,6 +1009,10 @@ final class AidenRemoteClient: @unchecked Sendable {
     private struct ChatMoveRequest: Encodable {
         let workspaceId: String
         let confirmedForeground = true
+    }
+
+    private struct ChatNewWorktreeRequest: Encodable {
+        let text: String
     }
 
     private struct ChatForkRequest: Encodable {
@@ -1324,7 +1375,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
             .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues,
-            .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs,
+            .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .chatNewWorktree,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
@@ -1906,6 +1957,34 @@ final class AidenRemoteClient: @unchecked Sendable {
                 "Idempotency-Key": idempotencyKey.uuidString.lowercased(),
             ]
         )
+    }
+
+    /// Revision 50 (`chat:new-worktree`, with `git:write`): the Mac makes a
+    /// worktree named from `text`, the chat's first message, and moves the
+    /// still-empty chat into it. It sends nothing; the turn follows as usual.
+    /// A long message sends only its first 4,000 characters for the name.
+    func moveChatToNewWorktree(
+        id: String,
+        revision: String,
+        text: String,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenChatNewWorktree {
+        let seed = AidenChatNewWorktree.branchSeed(from: text)
+        let moved: AidenChatNewWorktree = try await send(
+            method: "POST",
+            path: ["chats", id, "worktree"],
+            body: ChatNewWorktreeRequest(text: seed),
+            headers: [
+                "If-Match": revision,
+                "Idempotency-Key": idempotencyKey.uuidString.lowercased(),
+            ],
+            // Fetching the base branch and checking it out can take a while.
+            timeoutInterval: 120
+        )
+        guard moved.chat.id == id, moved.chat.messages.isEmpty else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return moved
     }
 
     func modelCatalog() async throws -> AidenModelCatalog {

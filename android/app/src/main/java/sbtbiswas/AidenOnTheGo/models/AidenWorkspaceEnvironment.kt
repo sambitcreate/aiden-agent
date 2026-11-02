@@ -3,6 +3,11 @@ package sbtbiswas.AidenOnTheGo.models
 import androidx.compose.ui.graphics.Color
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonTransformingSerializer
+import kotlinx.serialization.json.contentOrNull
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.InstantIso8601Serializer
 import java.time.Instant
@@ -234,7 +239,9 @@ data class AidenGitDiff(
 data class AidenGitBranches(
     val kind: String = "branches",
     val current: String,
-    val branches: List<String>
+    val branches: List<String>,
+    /** The repository has no commits yet; [branches] still lists its current branch. */
+    val unborn: Boolean? = null
 )
 
 @Serializable
@@ -304,6 +311,29 @@ data class AidenGitResult(
     val mutation: AidenGitMutation? = null,
     val result: AidenGitMutation? = null
 )
+
+/**
+ * Reads a Git reply as the Mac sends it: every projection arrives under `result`, tagged by
+ * `kind`. This moves a read (review, diff, branches, comparison, push capability, worktrees) to
+ * its typed field and leaves a mutation under `result`.
+ */
+object AidenGitResultWire : JsonTransformingSerializer<AidenGitResult>(AidenGitResult.serializer()) {
+    private val fieldForKind = mapOf(
+        "review" to "review",
+        "diff" to "diff",
+        "branches" to "branches",
+        "comparison" to "comparison",
+        "push-capability" to "pushCapability",
+        "worktrees" to "worktrees"
+    )
+
+    override fun transformDeserialize(element: JsonElement): JsonElement {
+        val reply = element as? JsonObject ?: return element
+        val result = reply["result"] as? JsonObject ?: return element
+        val field = fieldForKind[(result["kind"] as? JsonPrimitive)?.contentOrNull] ?: return element
+        return JsonObject(reply - "result" + (field to result))
+    }
+}
 
 object AidenWorkspaceEnvironmentValidation {
     fun opaqueFileID(value: String): Boolean = value.matches(Regex("^file_[A-Za-z0-9_-]{43}$"))

@@ -99,6 +99,37 @@ export interface FirstMessageWorktreeProgress {
   startPoint?: string;
 }
 
+/** What the branch menu (`git:branches`) knows about the repository. */
+export interface DraftWorktreeRepositoryState {
+  branches: readonly string[];
+  remoteBranches?: readonly string[];
+  current?: string;
+  defaultBranch?: string;
+  hasRemote?: boolean;
+  unborn?: boolean;
+}
+
+/**
+ * Where a new worktree starts unless the person picks: the remembered base
+ * while it still exists, else the repository's default branch, else the
+ * current branch. From origin defaults to on when a remote exists. Undefined
+ * when the repository has no commit to start from. Desktop drafts and
+ * phones (which never pick a base) share this rule.
+ */
+export function resolveWorktreeDefaults(
+  repository: DraftWorktreeRepositoryState,
+  remembered: { baseRef?: string; fromOrigin?: boolean } = {},
+): { baseRef: string; fromOrigin: boolean } | undefined {
+  if (repository.unborn) return undefined;
+  const exists = (ref: string | undefined): ref is string =>
+    ref !== undefined && (repository.branches.includes(ref) || (repository.remoteBranches ?? []).includes(ref));
+  const baseRef = [remembered.baseRef, repository.defaultBranch, repository.current, repository.branches[0]]
+    .find(exists);
+  if (!baseRef) return undefined;
+  const hasRemote = repository.hasRemote ?? (repository.remoteBranches?.length ?? 0) > 0;
+  return { baseRef, fromOrigin: hasRemote && (remembered.fromOrigin ?? true) };
+}
+
 const FORBIDDEN_CHARACTERS = new Set(["~", "^", ":", "?", "*", "[", "\\"]);
 
 /** Control characters, space, DEL, and the characters Git reserves for revision syntax. */

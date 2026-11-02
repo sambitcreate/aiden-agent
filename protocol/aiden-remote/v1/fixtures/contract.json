@@ -1,5 +1,5 @@
 {
-  "contractRevision": 49,
+  "contractRevision": 50,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -1555,7 +1555,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 49,
+    "contractRevision": 50,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -3272,6 +3272,41 @@
         }
       ],
       "now": "2026-10-27T09:10:00.000Z"
+    }
+  },
+  "chatNewWorktree": {
+    "request": {
+      "text": "Fix the login bug"
+    },
+    "response": {
+      "chat": {
+        "id": "chat_fixture_new_worktree",
+        "workspaceId": "workspace_fixture_worktree",
+        "title": "New chat",
+        "providerId": "provider_fixture",
+        "modelId": "model_fixture",
+        "messages": [],
+        "createdAt": "2026-10-29T09:00:00.000Z",
+        "updatedAt": "2026-10-29T09:00:04.000Z",
+        "revision": "chat_revision_new_worktree_2"
+      },
+      "branch": "aiden/fix-the-login-bug"
+    },
+    "notEmpty": {
+      "error": {
+        "code": "operation_stale",
+        "message": "This chat already has messages, so it stays in its workspace.",
+        "requestId": "request_fixture_48",
+        "retryable": false
+      }
+    },
+    "failed": {
+      "error": {
+        "code": "git_capability_denied",
+        "message": "Aiden couldn't fetch main from its remote on your Mac. Check the Mac's network, then try again.",
+        "requestId": "request_fixture_49",
+        "retryable": false
+      }
     }
   },
   "spending": {
