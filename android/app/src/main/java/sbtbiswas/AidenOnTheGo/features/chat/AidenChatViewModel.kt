@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -70,7 +71,8 @@ class AidenChatViewModel(
     private val networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable,
     private val visualSnapshotRefresh: AidenVisualSnapshotRefreshPolicy = AidenVisualSnapshotRefreshPolicy(),
     private val clock: () -> Instant = Instant::now,
-    private val foreignRunAttach: AidenForeignRunAttachPolicy = AidenForeignRunAttachPolicy()
+    private val foreignRunAttach: AidenForeignRunAttachPolicy = AidenForeignRunAttachPolicy(),
+    private val recoveryClock: () -> Long = SystemClock::elapsedRealtime
 ) : ViewModel() {
     enum class ProgressConnectionState {
         IDLE, CONNECTING, LIVE, LAST_KNOWN, UNAVAILABLE
@@ -771,7 +773,7 @@ class AidenChatViewModel(
     }
 
     private suspend fun observeProgressUntilBackground(observationToken: Long) {
-        val recovery = AidenStreamNetworkRecovery(networkAvailability)
+        val recovery = AidenStreamNetworkRecovery(networkAvailability, nowMilliseconds = recoveryClock)
         var cursor = 0
         var cursorEpoch: String? = null
         while (progressForeground && progressObservationToken == observationToken && coroutineContext.isActive) {
@@ -1902,7 +1904,7 @@ class AidenChatViewModel(
         streamJob = viewModelScope.launch {
             var stream = originalStream
             val terminalReplayGate = AidenTerminalReplayGate()
-            val recovery = AidenStreamNetworkRecovery(networkAvailability)
+            val recovery = AidenStreamNetworkRecovery(networkAvailability, nowMilliseconds = recoveryClock)
             val onWaiting: (Boolean) -> Unit = { waiting -> setWaitingForNetwork(waiting, stream.streamId) }
 
             while (activeStreamId == stream.streamId) {
