@@ -621,7 +621,12 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 return target;
               },
               release: async (workspaceId) => {
-                await workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId);
+                try {
+                  await workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId);
+                } catch {
+                  logger.warn("aiden-remote", "Could not release a moved chat's hidden folder.");
+                  return;
+                }
                 ipcMain.broadcast("workspaces:changed", {});
               },
             },

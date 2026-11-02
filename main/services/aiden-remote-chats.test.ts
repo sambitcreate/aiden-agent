@@ -1529,6 +1529,23 @@ test("a phone's chat aimed at a used No workspace folder is saved in a fresh one
   assert.deepEqual(released, ["default"]);
 });
 
+test("a phone's move out of a No workspace folder still answers when the folder can't be released", async () => {
+  const app = fixture(chat({ workspaceId: "project" }), {
+    noWorkspace: {
+      target: async () => "hidden-fresh",
+      release: async () => { throw new Error("The folder couldn't be read."); },
+    },
+  });
+  const created = await app.service.create("device-1", "chat-create-key-nows4", { workspaceId: "default", noWorkspace: true });
+  assert.equal(created.workspaceId, "hidden-fresh");
+  // The move is saved before the release, so a failed release must not turn it into an error.
+  const moved = await app.service.move("device-1", created.id, created.revision, "chat-move-key-nows03", {
+    workspaceId: "project",
+    confirmedForeground: true,
+  });
+  assert.equal(moved.workspaceId, "project");
+});
+
 test("two phones starting No workspace chats at once never share a hidden folder (revision 50)", async () => {
   let fresh = 0;
   let app: ReturnType<typeof fixture> | undefined;

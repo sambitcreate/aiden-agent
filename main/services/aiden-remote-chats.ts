@@ -1935,7 +1935,9 @@ export class AidenRemoteChatService {
               assertCurrent: (chat) => requireRevision(revision, chat),
             });
             const left = previous ? persistedChatWorkspaceId(previous.workspaceId) : undefined;
-            if (left && left !== workspaceId) await this.options.noWorkspace?.release(left);
+            // Best effort: the move is already saved, so a failed release must not turn it into an
+            // error (startup clears hidden folders left without a chat).
+            if (left && left !== workspaceId) await this.options.noWorkspace?.release(left).catch(() => undefined);
             return moved;
           });
           this.options.notifyChanged?.(chatId);

@@ -2403,6 +2403,12 @@ struct AidenWorkspaceShellView: View {
                     coordinator.presentedError = String(localized: "This conversation belongs in Bots and cannot be opened from Workspaces yet.")
                     return
                 }
+                // A chat started without a workspace can sit in a hidden folder made after the
+                // phone last read the Mac's workspaces.
+                if !coordinator.workspaces.contains(where: { $0.id == chat.workspaceId }) {
+                    await coordinator.refreshWorkspaces()
+                    guard coordinator.isCurrent(context) else { return }
+                }
                 guard activeWorkspaceIDs.contains(chat.workspaceId) else {
                     if archivedWorkspaceIDs.contains(chat.workspaceId) {
                         coordinator.presentedError = String(localized: "That chat belongs to a workspace archived on this device. Unarchive it from Workspaces to open the chat.")
@@ -2411,7 +2417,7 @@ struct AidenWorkspaceShellView: View {
                     coordinator.presentedError = String(localized: "The chat's workspace is no longer available.")
                     return
                 }
-                navigate(to: chat.workspaceId)
+                navigate(to: AidenNoWorkspace.groupID(for: chat.workspaceId, in: coordinator.workspaces))
             case .botChat:
                 // The product shell resolves Bot links before Workspaces sees
                 // them; never reinterpret a Bot ID as a Workspace destination.
