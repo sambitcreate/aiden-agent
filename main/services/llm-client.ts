@@ -2681,6 +2681,7 @@ export const llmClient = {
     const spendingOwner: SpendingOwner = authoritativeBot
       ? { kind: "bot", id: authoritativeBot.id }
       : { kind: "chat", id: params.chatId };
+    let dispatchSpendingRefusal: string | undefined;
     const spendingMeter = createSpendingMeter({
       spending,
       owner: spendingOwner,
@@ -3591,15 +3592,19 @@ export const llmClient = {
         onError: (error) =>
           logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error),
       });
-      // Outermost, so a usage-limit wait is neither timed as pace nor warmed:
-      // a request turned away before any reply waits and sends again, same model.
+      // A retry can wait while the chat's balance or limit changes. Check it
+      // again at dispatch, after waiting and before starting the provider call.
       const observedStream: typeof realStream = harnessProvider
         ? pace.wrap(warmedStream)
         : spendingMeter.wrap(
-            withUsageLimitWait(
-              pace.wrap(warmedStream),
-              usageLimits.streamOptions({ kind: "chat", id: params.chatId }, runtime.provider.label),
-            ),
+            withUsageLimitWait(pace.wrap(warmedStream), {
+              ...usageLimits.streamOptions({ kind: "chat", id: params.chatId }, runtime.provider.label),
+              beforeSendRefusal: async () => {
+                await spendingMeter.settled();
+                dispatchSpendingRefusal = await spending.refusal(spendingOwner);
+                return dispatchSpendingRefusal;
+              },
+            }),
           );
       const promptCacheTtl = promptCacheTtlMs(model);
       candidate = createGenerationHarness(generationProfile, {
@@ -3750,16 +3755,12 @@ export const llmClient = {
           tools: [...runtimeTools],
           messages: initialMessages,
         },
-        finishTurn: async (turn) => {
-          if (attendedAssistant) {
-            const decision = endRunAfterIgnoredToolRecovery(() => attendedToolRecoveryRequested)(turn);
-            if (decision) return decision;
-          }
-          // The step that crossed the spending limit has finished: end here, so
-          // the chat shows its limit notice rather than a failed reply.
-          if (harnessProvider) return undefined;
+        finishTurn: attendedAssistant
+          ? endRunAfterIgnoredToolRecovery(() => attendedToolRecoveryRequested)
+          : undefined,
+        spendingLimitReached: harnessProvider ? undefined : async () => {
           await spendingMeter.settled();
-          return (await spending.block(spendingOwner).catch(() => undefined)) ? { action: "end" } : undefined;
+          return Boolean(await spending.block(spendingOwner).catch(() => undefined));
         },
         prepareNextTurnWithContext: createPiTurnContextPreparation({
           generationOptions: generationContextOptions,
@@ -4950,8 +4951,9 @@ export const llmClient = {
         }
         const emergencyError = generationEmergencyUserError(runtimeOutcome.emergencyProjection);
         let replyNotSaved = false;
+        const spendingError = runtimeOutcome.kind === "provider_failed" ? dispatchSpendingRefusal : undefined;
         const finalError =
-          emergencyError ??
+          emergencyError ?? spendingError ??
           (runtimeOutcome.kind === "provider_failed"
             ? runtimeOutcome.reason === "output-limit"
               ? "The model reached its output limit."
@@ -4971,7 +4973,7 @@ export const llmClient = {
             full,
             reasoning,
             finalTimeline,
-            runtimeOutcome.kind === "provider_failed" ? runtimeOutcome.providerFailure : undefined,
+            runtimeOutcome.kind === "provider_failed" && !spendingError ? runtimeOutcome.providerFailure : undefined,
           );
           await finalizePiTurnPersistence(persisted);
           sendGeneration(streamId, "chat:error", withUndeliveredGuidance({

@@ -660,9 +660,9 @@ export function InterruptedReplyCallout({ actions }: { actions: InterruptedReply
       {actions.approvalSummaries?.length ? (
         <>
           <Text variant="small" color="secondary" className="mt-0.5 block">
-            Aiden closed while waiting for your approval, so this didn’t run:
+            Aiden saved an approval request before it closed.
           </Text>
-          <ul className="mt-1 flex flex-col gap-0.5" aria-label="Waiting for approval">
+          <ul className="mt-1 flex flex-col gap-0.5" aria-label="Saved approval requests">
             {actions.approvalSummaries.map((summary, index) => (
               <li key={index} className="break-words text-small text-primary">
                 {summary}
@@ -670,7 +670,7 @@ export function InterruptedReplyCallout({ actions }: { actions: InterruptedReply
             ))}
           </ul>
           <Text variant="small" color="secondary" className="mt-1 block">
-            Resume to pick up where it stopped.
+            Check whether the action ran before trying it again.
           </Text>
         </>
       ) : (

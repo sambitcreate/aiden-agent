@@ -21,3 +21,11 @@ Revision 47 `spending-limits-v1` is PROVISIONAL (first written as 40; moved to 4
 Not counted: Bot compaction summaries, the Bot memory review, chat titles. CLI has neither feature. No subscription usage meter (only source is Claude's unofficial `/api/oauth/usage`); owner chose to leave it out on 2026-10-28.
 
 Retries (#595, merged first): a give-up, a too-long hold and a refusal carry `markUsageLimitFailure` (`aidenUsageLimitFailure: true` on the AssistantMessage, kept by pi-agent-core's `Object.assign`), and `PiCompactionCoordinator.check` skips provider retries for it. Bots use Pi Durable's own retry, which the marker does not reach; the 5-minute refusal keeps those quick.
+
+## November 2, 2026
+
+The managed Pi recovery loop honors the foreground spending stop after the response and tool results are durable, before automatic compaction, retry, or cut-off continuation. For reduced history, the spending stop allows a required pi-vcc checkpoint to finish locally. With the LLM engine, or if the local checkpoint cannot be saved, the run reports a compaction failure. Otherwise a priced length stop keeps its visible text. A paid failed response still reports the provider failure. Foreground chats check the ledger again at provider dispatch, including after a rate-limit wait. If the limit changed during the wait, the chat shows the spending refusal and its existing allowance control.
+
+### Helper dispatch after provider waits (2026-11-02, PR #697 follow-up)
+
+Helpers now recheck the shared chat ledger and latest cap inside `withUsageLimitWait` before every provider dispatch, after settling their meter. The outer meter still records completed request usage. A behavioral registry test reproduces both spending by other chat work and a lowered cap during a real 429 wait (each sent a second request before the fix); both now stop before provider I/O, while Allow more still resumes the request. No Remote protocol, client DTO, or UI contract changed.

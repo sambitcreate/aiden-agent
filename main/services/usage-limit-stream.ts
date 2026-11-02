@@ -76,6 +76,8 @@ export interface UsageLimitStreamOptions {
   maxWaitMs(): number | Promise<number>;
   /** Resolves once limits saved by an earlier run are loaded into the gate. */
   ready?: () => Promise<void>;
+  /** A local spending refusal, checked again after every wait, before provider I/O. */
+  beforeSendRefusal?(): Promise<string | undefined>;
   /**
    * Read rejected responses through a recording `fetch`. Off for requests
    * that cross a process boundary, where a function cannot travel.
@@ -215,7 +217,10 @@ export async function streamWaitingOutUsageLimits(
   await limits.ready?.();
   let maxWaitMs = await limits.maxWaitMs();
   // With waiting off, requests go straight through, as they did before.
-  if (maxWaitMs <= 0) return call(options);
+  if (maxWaitMs <= 0) {
+    const refusal = await limits.beforeSendRefusal?.();
+    return refusal ? terminalStream(terminalMessage(model, "error", refusal)) : call(options);
+  }
   for (;;) {
     const ticket = await gate.acquire(order, { owner, providerLabel, modelId: model.id, signal, maxWaitMs, ...(previous ? { previous } : {}) });
     if (ticket.kind === "aborted") return terminalStream(terminalMessage(model, "aborted", "Request was aborted"));
@@ -241,6 +246,12 @@ export async function streamWaitingOutUsageLimits(
     let stream: AssistantMessageEventStream;
     let peeked: Peeked;
     try {
+      const refusal = await limits.beforeSendRefusal?.();
+      if (refusal) {
+        // A local refusal tells us nothing about the provider. Hand the probe to the next waiter.
+        gate.release(ticket);
+        return terminalStream(terminalMessage(model, "error", refusal));
+      }
       stream = await call(sent);
       peeked = await peek(stream);
     } catch (error) {
