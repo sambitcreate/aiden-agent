@@ -55,7 +55,7 @@ export function analyticsService(): AnalyticsService {
   service ??= createAnalyticsService({
     store: {
       read: () => configStore.getAnalyticsState(),
-      update: (mutate) => configStore.updateAnalyticsState(mutate),
+      update: (mutate, isCurrent) => configStore.updateAnalyticsState(mutate, isCurrent),
     },
     env: process.env,
     createTransport: transportFactory(),

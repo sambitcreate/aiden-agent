@@ -24,6 +24,7 @@ function fakeTransport() {
   const immediate: AnalyticsMessage[] = [];
   let state: "open" | "shut" | "discarded" = "open";
   const transport: PostHogTransport = {
+    revokeQueue: () => { queued.length = 0; },
     capture: (message) => void (state === "open" && queued.push(message)),
     captureOptOut: async (message) => void immediate.push(message),
     flush: async () => void sent.push(...queued.splice(0)),
@@ -419,6 +420,10 @@ test("finishing onboarding starts sending and reports a custom provider without 
   await h.service.onboardingFinished("incomplete");
   assert.equal(h.transports.length, 0);
 
+  await h.service.onboardingFinished("deferred");
+  assert.equal(h.transports.length, 0, "completion alone cannot acknowledge an unread row");
+  assert.equal(h.stored().noticeShownAt, undefined);
+  await h.service.markNoticeShown();
   await h.service.onboardingFinished("completed", "my-company-gateway");
   const finished = h.events().find((message) => message.event === "onboarding_finished");
   assert.deepEqual([finished!.properties.outcome, finished!.properties.provider_id], ["completed", "custom"]);

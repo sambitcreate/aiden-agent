@@ -29,13 +29,13 @@ Chats, prompts, replies, file names or contents, paths, API keys or other creden
 
 ## Where it goes
 
-PostHog's US cloud, project "aiden", at the fixed host `https://us.i.posthog.com`. Only the Electron main process sends; the renderer has no PostHog code. Data is kept for PostHog's default retention.
+PostHog's US cloud, project "aiden", at the fixed host `https://us.i.posthog.com`. Requests reject redirects. Only the Electron main process sends; the renderer has no PostHog code. Data is kept for PostHog's default retention.
 
 ## Turning it off
 
 - **Settings → About → Usage data**: turn off **Share anonymous usage and crash data**. Aiden drops the ordinary event queue immediately and deletes the install ID. It makes a separate, time-limited attempt to send one `analytics_disabled` event with the previous ID, even if you quit at the same time. Turning it back on starts a new ID.
 - **Environment**: `DO_NOT_TRACK=1` or `AIDEN_ANALYTICS=0` turns it off regardless of the setting; the switch shows "Turned off by your environment (DO_NOT_TRACK or AIDEN_ANALYTICS)".
-- **First run**: the last onboarding step has the same switch, on by default, with a **What's sent** link.
+- **First run**: the last onboarding step has the same switch, on by default, with a **What's sent** link. Finishing setup acknowledges the row only when it displayed sharing as on. A missing or failed settings read leaves the notice pending.
 - **Existing installs**: the first launch after updating shows a one-time notice with **OK** and **Turn off**. Nothing is sent until the notice or the onboarding row has been shown; switching usage data on in Settings also answers the notice.
 
 ## Builds that never send

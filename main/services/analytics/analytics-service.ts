@@ -21,7 +21,7 @@ import type { AnalyticsEventProps, AnalyticsSuperProperties } from "./analytics-
 
 export interface AnalyticsStateStore {
   read(): Promise<AnalyticsState>;
-  update(mutate: (state: AnalyticsState) => AnalyticsState): Promise<AnalyticsState>;
+  update(mutate: (state: AnalyticsState) => AnalyticsState, isCurrent?: () => boolean): Promise<AnalyticsState>;
 }
 
 export interface AnalyticsServiceOptions {
@@ -57,10 +57,10 @@ export type OnboardingOutcome = "incomplete" | "deferred" | "completed";
 export interface AnalyticsService {
   start(): Promise<void>;
   status(): Promise<AnalyticsStatus>;
-  setEnabled(enabled: boolean): Promise<AnalyticsStatus>;
+  setEnabled(enabled: boolean, isCurrent?: () => boolean): Promise<AnalyticsStatus>;
   // The one-time notice for people upgrading into analytics. `enabled: false`
   // is its Turn off button.
-  markNoticeShown(choice?: { readonly enabled?: boolean }): Promise<AnalyticsStatus>;
+  markNoticeShown(choice?: { readonly enabled?: boolean }, isCurrent?: () => boolean): Promise<AnalyticsStatus>;
   onboardingFinished(outcome: OnboardingOutcome, providerId?: string): Promise<void>;
   // Sends what is queued within the timeout, then stops the transport.
   shutdown(timeoutMs?: number): Promise<void>;
@@ -93,13 +93,15 @@ function within(promise: Promise<unknown>, ms: number): Promise<void> {
 // outgoing guard, then write it to the dev log instead of the network.
 export function createLoggingTransport(write: (line: string) => void): PostHogTransport {
   let stopped = false;
+  let revoked = false;
   const emit = (message: AnalyticsMessage) => {
     if (stopped) return;
     const checked = validateOutgoingEvent({ event: message.event, properties: message.properties });
     if (checked) write(`[analytics debug] ${checked.event} ${JSON.stringify(checked.properties)}`);
   };
   return {
-    capture: emit,
+    capture: (message) => { if (!revoked) emit(message); },
+    revokeQueue: () => { revoked = true; },
     captureOptOut: async (message) => {
       emit(message);
       stopped = true;
@@ -243,54 +245,47 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
   }
 
   // Stops capture and drops whatever is queued, without sending it.
-  async function stop(finalSend: Promise<void>): Promise<void> {
+  function stop(): void {
     generation += 1;
-    // An activation started before this stop gives up; the next one starts fresh.
     activation = undefined;
     if (timer !== undefined) stopTimer(timer);
     timer = undefined;
     activeDay = undefined;
-    const stopping = transport;
+    transport?.revokeQueue();
     transport = undefined;
     core = undefined;
     installId = undefined;
-    await finalSend;
-    await stopping?.discard().catch((error: unknown) => log("Queued analytics could not be dropped.", error));
   }
 
-  async function sendDisabledEvent(): Promise<void> {
-    const sending = core;
-    const current = transport;
-    if (!sending || !current) return;
-    let pending: Promise<void> | undefined;
-    sendNow = (message) => {
-      pending = current.captureOptOut(message);
-    };
+  async function turnOff(isCurrent?: () => boolean, noticeAnswered = false): Promise<void> {
+    const stopping = transport;
+    let finalMessage: AnalyticsMessage | undefined;
+    sendNow = (message) => { finalMessage = message; };
     try {
-      sending.track("analytics_disabled", {});
+      core?.track("analytics_disabled", {});
     } finally {
       sendNow = undefined;
+      stop();
     }
-    if (pending) await within(pending, DISABLED_EVENT_TIMEOUT_MS);
-  }
-
-  async function turnOff(): Promise<AnalyticsState> {
-    // Detach capture immediately. Saving consent must not wait for the network.
-    const disposed = stop(sendDisabledEvent());
-    // Nothing is owed after turning off: an update not yet reported is dropped.
-    pendingUpdate = undefined;
     try {
-      return await options.store.update((current) => {
+      await options.store.update((current) => {
         const { lastActiveDay: _lastActiveDay, ...rest } = disableAnalytics(current);
-        return { ...rest, lastVersion: options.superProperties.app_version };
-      });
-    } finally {
+        const off = { ...rest, lastVersion: options.superProperties.app_version };
+        return noticeAnswered ? markNoticeShown(off, now()) : off;
+      }, isCurrent);
+      pendingUpdate = undefined;
       try {
         deletePendingCrash(options.runDirectory);
       } catch (error) {
         log("The pending crash report could not be deleted.", error);
       }
-      await disposed;
+      if (stopping && finalMessage) await within(stopping.captureOptOut(finalMessage), DISABLED_EVENT_TIMEOUT_MS);
+    } catch (error) {
+      // If publication lost its owner, resume only under the still-saved consent.
+      if (isCurrent && !isCurrent()) await activateIfAllowed();
+      throw error;
+    } finally {
+      await stopping?.discard().catch((error: unknown) => log("Queued analytics could not be dropped.", error));
     }
   }
 
@@ -332,16 +327,17 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
 
     status,
 
-    setEnabled(enabled) {
+    setEnabled(enabled, isCurrent) {
       return inOrder(async () => {
+        if (isCurrent && !isCurrent()) throw new Error("Inactive usage data request.");
         try {
           if (enabled) {
             // Switching usage data on in Settings is a choice made with the
             // description in view, so it also answers the notice.
-            await options.store.update((state) => markNoticeShown(enableAnalytics(state), now()));
+            await options.store.update((state) => markNoticeShown(enableAnalytics(state), now()), isCurrent);
             await activateIfAllowed();
           } else {
-            await turnOff();
+            await turnOff(isCurrent);
           }
         } catch (error) {
           log("The analytics setting could not be saved.", error);
@@ -351,12 +347,16 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
       });
     },
 
-    markNoticeShown(choice) {
+    markNoticeShown(choice, isCurrent) {
       return inOrder(async () => {
+        if (isCurrent && !isCurrent()) throw new Error("Inactive usage data request.");
         try {
-          if (choice?.enabled === false) await turnOff();
-          await options.store.update((state) => markNoticeShown(state, now()));
-          await activateIfAllowed();
+          if (choice?.enabled === false) {
+            await turnOff(isCurrent, true);
+          } else {
+            await options.store.update((state) => markNoticeShown(state, now()), isCurrent);
+            await activateIfAllowed();
+          }
         } catch (error) {
           log("The analytics notice could not be recorded.", error);
           throw new Error("The usage data notice could not be saved.");
@@ -367,14 +367,9 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
 
     onboardingFinished(outcome, providerId) {
       if (outcome !== "completed" && outcome !== "deferred") return Promise.resolve();
-      // Marking the notice seen and starting to send is a consent change too,
-      // so it waits behind any switch change already in progress.
+      // Report the outcome only after any explicit disclosure or switch change.
       return inOrder(async () => {
         try {
-          // The final onboarding step shows the usage-data row, so finishing
-          // onboarding is the new-install notice.
-          await options.store.update((state) => markNoticeShown(state, now()));
-          await activateIfAllowed();
           const provider = providerId === undefined
             ? undefined
             : options.isBuiltinProvider(providerId) ? providerId : "custom";

@@ -2148,7 +2148,7 @@ if (!ownsSingleInstanceLock) {
   app.quit();
 } else {
   registerNativeHandlers();
-  registerHandlers();
+  registerHandlers((event) => !!mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
   registerBrowserHandlers();
   terminalService.setOutputObserver((workspaceId, data) => browserService.observeTerminalOutput(workspaceId, data));
 
