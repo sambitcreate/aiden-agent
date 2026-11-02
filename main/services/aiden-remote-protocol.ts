@@ -71,7 +71,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * device type.
  *
  * Contract revision 32: conversation app controls. Assistant messages may carry
- * inert `appPanels` (`chat-ui-panels-v1`, retired in revision 50); owner-enabled hosts also advertise
+ * inert `appPanels` (`chat-ui-panels-v1`, retired in revision 51); owner-enabled hosts also advertise
  * `chat-ui-panels-enabled-v1`, `GET`/`POST /chats/{chatId}/controls/{panelId}`
  * behind the `app-controls:read`/`app-controls:respond` progress capabilities,
  * the `app_controls_changed` progress event and the `builtin` skill source.
@@ -280,12 +280,12 @@ export const AIDEN_REMOTE_CHAT_READ_STATE_FEATURE = "chat-read-state-v1" as cons
 /**
  * Server feature token for Inbox triage (`POST /chats/{chatId}/triage`):
  * Pin, Done and Snooze kept by the host for every paired surface. Announced
- * to desktops and (since revision 50) phones, which took the slot of the
+ * to desktops and (since revision 51) phones, which took the slot of the
  * retired `chat-ui-panels-v1`.
  */
 export const AIDEN_REMOTE_CHAT_TRIAGE_FEATURE = "chat-triage-v1" as const;
 /**
- * Server feature token for Inbox signals (contract revision 50): the summary
+ * Server feature token for Inbox signals (contract revision 51): the summary
  * times and triage fields, `run.state` `attentionSummary` and the host feed
  * Bot rows' `needsYou`, `failed` and `lastReplyAt`. Announced to desktops only, which use it
  * to trust a host's reported triage over their own pending writes; phones read
@@ -3827,7 +3827,7 @@ const INBOX_SIGNAL_TIME_FIELDS = [
 ] as const;
 
 /**
- * Contract revision 50 (`inbox-signals-v1`): each RFC 3339 time a summary
+ * Contract revision 51 (`inbox-signals-v1`): each RFC 3339 time a summary
  * row carries for the Inbox, the triage revision those triage times belong
  * to, and the host's `inboxBucket` with its `inboxSortAt`. Every field is
  * additive; the triage times need the revision. The desktop places peer rows
@@ -8951,7 +8951,7 @@ function parseRevision19Fixture(
         "Host feed run state",
       );
       if (hasOwn(event.payload, "attentionSummary")) {
-        // Revision 50: only a waiting run's, for `runs:observe` devices.
+        // Revision 51: only a waiting run's, for `runs:observe` devices.
         if (event.payload.state !== "needs_approval" && event.payload.state !== "needs_input") {
           throw new Error("Host feed run attentionSummary belongs to a waiting run.");
         }
