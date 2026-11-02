@@ -30,7 +30,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
-import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
@@ -114,7 +113,9 @@ class AidenInboxUiTest {
         chat("update", "Summarize the review", Duration.ofMinutes(25), unread = true),
         chat("earlier", "Refactor the sidebar", Duration.ofHours(5), workspaceId = "ws-2"),
         chat("earlier-2", "Draft the changelog", Duration.ofDays(2)),
-        chat("working", "Indexing the repository", Duration.ofMinutes(2), rowState = "working")
+        chat("working", "Indexing the repository", Duration.ofMinutes(2), rowState = "working"),
+        chat("held-done", "Recovery Done", Duration.ofHours(2)).copy(doneAt = now.minusSeconds(60)),
+        chat("held-snooze", "Recovery Snooze", Duration.ofHours(2)).copy(snoozedUntil = now.plusSeconds(3600))
     )
 
     private class Calls {
@@ -128,6 +129,7 @@ class AidenInboxUiTest {
     private class Host {
         var supportsReadState by mutableStateOf(true)
         var supportsTriage by mutableStateOf(true)
+        var searchText by mutableStateOf("")
         val writes = mutableStateListOf<AidenChatTriageChange>()
         var revision = 0
     }
@@ -155,7 +157,7 @@ class AidenInboxUiTest {
                         revision = ++host.revision,
                         updatedAt = at,
                         pinnedAt = change.pinned?.let { if (it) at else null } ?: before.pinnedAt,
-                        doneAt = change.done?.let { if (it) at else null } ?: before.doneAt,
+                        doneAt = if (change.done != null) { if (change.done == true) change.restoreDoneAt ?: at else null } else before.doneAt,
                         snoozedUntil = when (val snooze = change.snooze) {
                             is AidenChatTriageChange.Snooze.Until -> snooze.at
                             AidenChatTriageChange.Snooze.Wake -> null
@@ -173,7 +175,7 @@ class AidenInboxUiTest {
                     ?.let { notice = it }
             }
         }
-        val projection = AidenInboxProjection.make(fixture.mapNotNull { rows[it.id] }, names, openChatId = null, now = now)
+        val projection = AidenInboxProjection.make(fixture.mapNotNull { rows[it.id] }, names, openChatId = null, now = now, searchText = host.searchText)
         val offers = AidenInboxRowOffers(supportsReadState = host.supportsReadState, supportsTriage = host.supportsTriage)
         val swipe = remember { AidenInboxSwipeState() }
         val palette = AidenTheme.palette
@@ -204,8 +206,8 @@ class AidenInboxUiTest {
                         swipe = swipe,
                         onOpen = { calls.opened += it },
                         onMarkRead = { calls.markRead += it },
-                        onDone = { calls.done += it; write(it, AidenChatTriageChange.done(true)) },
-                        onSnooze = { calls.snooze += it },
+                        onDone = { calls.done += it; write(it, AidenChatTriageChange.done(!offers.offer(rows.getValue(it), now).undone)) },
+                        onSnooze = { calls.snooze += it; if (offers.offer(rows.getValue(it), now).wake) write(it, AidenChatTriageChange.wake) },
                         onShowMore = {}
                     )
                 }
@@ -311,6 +313,30 @@ class AidenInboxUiTest {
     }
 
     @Test
+    fun searchOffersInverseSwipesAndTalkBackActionsAfterUndoIsGone() {
+        val host = Host().apply { searchText = "Recovery" }
+        show(AidenAppearanceMode.LIGHT, host = host)
+        assertEquals(listOf("Mark not done", "Snooze"), actions("held-done"))
+        assertEquals(listOf("Done", "Unsnooze"), actions("held-snooze"))
+        compose.onNodeWithTag("inbox_row_held-done").performTouchInput { swipeLeft() }
+        compose.onNodeWithText("Mark not done").assertIsDisplayed()
+        capture("inbox-inverse.png")
+        compose.onNodeWithTag("inbox_done_held-done", useUnmergedTree = true).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("inbox_row_held-snooze").fetchSemanticsNode().children
+            .flatMap { listOf(it) + it.children }
+            .flatMap { it.config.getOrNull(SemanticsActions.CustomActions).orEmpty() }
+            .first { it.label == "Unsnooze" }.action()
+        compose.waitForIdle()
+        assertEquals(listOf(AidenChatTriageChange.done(false), AidenChatTriageChange.wake), host.writes.toList())
+        host.searchText = ""
+        compose.waitForIdle()
+        // Both rows are visible without search after their holds are removed.
+        compose.onNodeWithTag("inbox_row_held-done").assertIsDisplayed()
+        compose.onNodeWithTag("inbox_row_held-snooze").assertIsDisplayed()
+    }
+
+    @Test
     fun doneShowsTheNoticeAndUndoPutsTheRowBack() {
         val snackbar = SnackbarHostState()
         val host = Host()
@@ -338,24 +364,27 @@ class AidenInboxUiTest {
         compose.mainClock.autoAdvance = false
         val snackbar = SnackbarHostState()
         val dismissed = mutableStateListOf<java.util.UUID>()
-        // Posted four seconds ago: about one second of Undo is left, well
-        // short of the snackbar's own long duration.
-        val notice = AidenInboxNotice.Changed(
-            AidenChatTriageChange.done(true), "earlier", AidenChatTriageChange.done(false),
-            revision = 3, postedAt = Instant.now().minusSeconds(4)
-        )
+        var notice by mutableStateOf<AidenInboxNotice.Changed?>(null)
         compose.setContent {
             AidenTheme(config = AidenAppearanceConfig(mode = AidenAppearanceMode.LIGHT)) {
                 AidenInboxNoticeEffect(notice, snackbar, onUndo = { _, _, _ -> }, onDismissed = { dismissed += it })
                 SnackbarHost(snackbar) { AidenSnackbar(it) }
             }
         }
+        // Post only after the fixture is composed: app startup must not
+        // consume the one second left in this already-aged confirmation.
+        compose.runOnIdle {
+            notice = AidenInboxNotice.Changed(
+                AidenChatTriageChange.done(true), "earlier", AidenChatTriageChange.done(false),
+                revision = 3, postedAt = Instant.now().minusSeconds(4)
+            )
+        }
         compose.mainClock.advanceTimeBy(500)
         compose.onNodeWithText("Undo").assertIsDisplayed()
 
         compose.mainClock.advanceTimeBy(4_500)
         compose.onAllNodesWithText("Undo").assertCountEquals(0)
-        assertEquals(listOf(notice.id), dismissed.toList())
+        assertEquals(listOf(notice!!.id), dismissed.toList())
     }
 
     @Test

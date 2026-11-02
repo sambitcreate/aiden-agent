@@ -703,9 +703,14 @@ private fun AidenWorkspaceHome(
                             onOpen = onNavigateToChat,
                             onMarkRead = viewModel::markInboxRead,
                             onDone = { id ->
-                                viewModel.setInboxTriage(id, AidenChatTriageChange.done(true), isOpen = id == openChatId)
+                                val held = chats.firstOrNull { it.id == id }?.let { inboxOffers.offer(it, inboxNow).undone } == true
+                                viewModel.setInboxTriage(id, AidenChatTriageChange.done(!held), isOpen = id == openChatId)
                             },
-                            onSnooze = { id -> inboxSnoozeChatId = id },
+                            onSnooze = { id ->
+                                if (chats.firstOrNull { it.id == id }?.let { inboxOffers.offer(it, inboxNow).wake } == true) {
+                                    viewModel.setInboxTriage(id, AidenChatTriageChange.wake, isOpen = id == openChatId)
+                                } else inboxSnoozeChatId = id
+                            },
                             onShowMore = { showsAllInboxEarlier = true }
                         )
                     } else {

@@ -53,6 +53,7 @@ function fakeProjection() {
     cancelStopping: () => undefined,
     refreshActivity: async () => undefined,
     needsYou: async () => true,
+    inboxSignals: async () => ({ state: { kind: "idle" }, needsYou: true, lastReplyAt: null }),
     summary: async (botId) => ({
       botId,
       preview: "hi",

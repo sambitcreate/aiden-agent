@@ -865,8 +865,11 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(bodies[0] as NSDictionary, ["done": true, "ifRevision": 3])
         XCTAssertEqual(bodies[1] as NSDictionary, ["snoozeUntil": "2026-08-19T09:00:00.000Z"])
         XCTAssertEqual(bodies[2] as NSDictionary, ["snoozeUntil": NSNull(), "ifRevision": 0])
+        let historicalDone = try Self.remoteDate("2026-08-18T18:00:00.000Z")
+        _ = try await client.setChatTriage(chatId: "chat_fixture_summary_01", change: AidenChatTriageChange(done: true, restoreDoneAt: historicalDone), ifRevision: 4)
+        XCTAssertEqual(bodies[3] as NSDictionary, ["done": true, "restoreDoneAt": "2026-08-18T18:00:00.000Z", "ifRevision": 4])
         // Each write is its own idempotent request, in the host's key alphabet.
-        XCTAssertEqual(Set(keys).count, 3)
+        XCTAssertEqual(Set(keys).count, 4)
         for key in keys {
             XCTAssertNotNil(key.range(of: #"^[\x21-\x7e]{16,128}$"#, options: .regularExpression))
         }
@@ -7450,6 +7453,16 @@ extension AidenRemoteClientTests {
 
     @MainActor
     func testInboxPlainTriagePreservesNewReplyFromAnInflightRefresh() async throws {
+        try await checkInboxTriageRefresh(admitDetail: false)
+    }
+
+    @MainActor
+    func testInboxDetailViewedBeforeTriageSurvivesAnInflightStaleRefresh() async throws {
+        try await checkInboxTriageRefresh(admitDetail: true)
+    }
+
+    @MainActor
+    private func checkInboxTriageRefresh(admitDetail: Bool) async throws {
         let newerReply = "2026-08-18T19:10:00.000Z"
         let snoozeUntil = try Self.remoteDate("2099-01-01T09:00:00.000Z")
         let page = """
@@ -7483,9 +7496,19 @@ extension AidenRemoteClientTests {
                     return nil
                 }
                 defer { AidenRemoteMockURLProtocol.hold = nil }
-                answerNewer = true
+                answerNewer = !admitDetail
                 let refresh = Task { await inbox.home.load(coordinator: inbox.coordinator) }
                 await fulfillment(of: [refreshArrived], timeout: 5)
+                if admitDetail {
+                    let date = try Self.remoteDate(newerReply)
+                    inbox.home.accept(AidenChat(
+                        id: Self.inboxChatID, workspaceId: "alpha", title: "New reply", providerId: "p", modelId: "m",
+                        messages: [AidenChatMessage(id: "new-reply", role: .assistant, text: "Finished", createdAt: date)],
+                        createdAt: date.addingTimeInterval(-3600), updatedAt: date,
+                        revision: "rev_FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+                    ))
+                    inbox.home.markViewed(chatID: Self.inboxChatID)
+                }
                 let write = Task { await inbox.home.setTriage(
                     done ? .done(true) : .snooze(until: snoozeUntil),
                     chatID: Self.inboxChatID, coordinator: inbox.coordinator
@@ -7506,7 +7529,7 @@ extension AidenRemoteClientTests {
                 XCTAssertEqual(row.title, "New reply")
                 XCTAssertEqual(row.inbox.lastAssistantAt, try Self.remoteDate(newerReply))
                 XCTAssertEqual(row.inbox.lastAssistantMessageId, "new-reply")
-                XCTAssertTrue(row.unread)
+                XCTAssertEqual(row.unread, !admitDetail)
                 XCTAssertEqual(row.inbox.triageRevision, 4)
                 XCTAssertEqual(row.inbox.doneAt != nil, done)
                 XCTAssertEqual(row.inbox.snoozedUntil != nil, !done)
@@ -7517,7 +7540,7 @@ extension AidenRemoteClientTests {
                 }
                 XCTAssertEqual(saved?.inbox.lastAssistantMessageId, "new-reply")
                 XCTAssertEqual(saved?.inbox.triageRevision, 4)
-                XCTAssertEqual(saved?.unread, true)
+                XCTAssertEqual(saved?.unread, !admitDetail)
             }
         }
     }

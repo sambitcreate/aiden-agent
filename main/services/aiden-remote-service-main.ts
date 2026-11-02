@@ -1087,13 +1087,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               listWorkspaces: () => workspaceApplicationService.list(),
               repositoryIdentity: gitCachedRepositoryIdentity,
               ...(bots ? { listBots: () => bots.list() } : {}),
-              // Revision 52: each Bot's Needs you, Failed and last reply, from the
-              // same live summaries this Mac's sidebar reads. A failed read leaves them out.
+              // Read runtime signals without opening conversation entries or context.
+              // Reply times are available only from an already-open live feed.
               botSignals: async (botRows) => {
                 const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
                 const live = botLiveProjection();
                 return new Map(await mapWithConcurrency(botRows, 4, async (bot) =>
-                  [bot.id, hostFeedBotSignals(await live.summary(bot.id).catch(() => undefined))] as const,
+                  [bot.id, hostFeedBotSignals(await live.inboxSignals(bot.id).catch(() => undefined))] as const,
                 ));
               },
             }),

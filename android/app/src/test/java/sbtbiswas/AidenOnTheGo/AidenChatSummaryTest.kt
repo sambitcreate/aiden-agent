@@ -301,6 +301,14 @@ class AidenChatSummaryTest {
         assertEquals("2026-09-02T09:00:00.000Z", snoozeBody["snoozeUntil"]?.jsonPrimitive?.content)
         assertEquals(Instant.parse("2026-09-02T09:00:00Z"), snoozed.snoozedUntil)
 
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"chatId":"chat-1","revision":7,"updatedAt":"2026-09-01T12:08:00Z","doneAt":"2026-09-01T11:00:00Z"}"""
+        ))
+        client.setChatTriage("chat-1", AidenChatTriageChange(done = true, restoreDoneAt = Instant.parse("2026-09-01T11:00:00Z")), ifRevision = 6)
+        val undoBody = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertEquals("2026-09-01T11:00:00.000Z", undoBody["restoreDoneAt"]?.jsonPrimitive?.content)
+        assertEquals("6", undoBody["ifRevision"]?.jsonPrimitive?.content)
+
         // An answer about another chat is refused, and a stale revision is a conflict.
         server.enqueue(MockResponse().setResponseCode(200).setBody(
             """{"chatId":"chat-2","revision":7,"updatedAt":"2026-09-01T12:08:00Z"}"""

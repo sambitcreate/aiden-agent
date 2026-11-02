@@ -897,7 +897,13 @@ test("needsYou agrees with the summary, with or without an open feed, and never 
     const needsYou = await live.projection.needsYou("bot:a");
     assert.equal(transcriptReads, before, `the cheap read opens no transcript (${label})`);
     assert.equal(needsYou, expected, label);
-    assert.equal((await live.projection.summary("bot:a")).needsYou, expected, `the summary agrees (${label})`);
+    const signals = await live.projection.inboxSignals("bot:a");
+    assert.equal(transcriptReads, before, "host-feed signals never open a transcript");
+    assert.equal(signals.needsYou, expected);
+    const summary = await live.projection.summary("bot:a");
+    assert.deepEqual(signals.state, summary.state, `host-feed state agrees (${label})`);
+    assert.equal(summary.needsYou, expected, `the summary agrees (${label})`);
+    if (label.startsWith("no feed") || label.startsWith("feed closed")) assert.equal(signals.lastReplyAt, null);
   };
   const states = [
     [false, false],
@@ -915,7 +921,9 @@ test("needsYou agrees with the summary, with or without an open feed, and never 
 
     issueOpen = false;
     unavailable = false;
-    const watching = await live.projection.subscribe("bot:a", recorder().sink);
+    const tape = recorder();
+    const watching = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(watching.snapshot);
     for (const [open, gone] of states) {
       issueOpen = open;
       unavailable = gone;
@@ -923,6 +931,14 @@ test("needsYou agrees with the summary, with or without an open feed, and never 
       await agree(open, `open feed, issue ${open}, unavailable ${gone}`);
     }
 
+    issueOpen = false;
+    unavailable = false;
+    await live.service.send("bot:a", { text: "hello", requestId: "feed-signals" });
+    await waitFor(() => visibleText(tape.view).includes("assistant:Hello."), { what: "the existing live feed's reply" });
+    const before = transcriptReads;
+    assert.equal((await live.projection.inboxSignals("bot:a")).lastReplyAt,
+      (await live.projection.summary("bot:a")).lastReplyAt);
+    assert.equal(transcriptReads, before, "an open feed reuses its admitted entries too");
     watching.unsubscribe();
     issueOpen = true;
     unavailable = true;

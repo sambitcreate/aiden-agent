@@ -221,6 +221,8 @@ object AidenInbox {
             markRead = markRead,
             done = !holdsDone(signals),
             snooze = !holdsSnooze(summary.snoozedUntil, now),
+            undone = holdsDone(signals),
+            wake = holdsSnooze(summary.snoozedUntil, now),
             alsoMarkRead = alsoMarkRead
         )
     }
@@ -238,7 +240,7 @@ object AidenInbox {
                 ?.let { until -> AidenChatTriageChange.Snooze.Until(until) }
                 ?: AidenChatTriageChange.Snooze.Wake
         }
-        return AidenChatTriageChange(pinned, done, snooze).takeIf { pinned != null || done != null || snooze != null }
+        return AidenChatTriageChange(pinned, done, snooze, if (done == true) before.doneAt else null).takeIf { pinned != null || done != null || snooze != null }
     }
 
     /**
@@ -288,7 +290,7 @@ object AidenInbox {
     ): AidenChatSummary {
         var row = summary
         change.pinned?.let { pinned -> row = row.copy(pinnedAt = if (pinned) row.pinnedAt ?: now else null) }
-        change.done?.let { done -> row = row.copy(doneAt = if (done) now else null) }
+        change.done?.let { done -> row = row.copy(doneAt = if (done) change.restoreDoneAt ?: now else null) }
         when (val snooze = change.snooze) {
             is AidenChatTriageChange.Snooze.Until ->
                 row = row.copy(snoozedUntil = snooze.at.takeIf { it.isAfter(now) })
@@ -316,9 +318,11 @@ data class AidenInboxRowOffer(
     val done: Boolean = false,
     val snooze: Boolean = false,
     /** Done or Snooze also reads the row's unseen failed output. */
-    val alsoMarkRead: Boolean = false
+    val alsoMarkRead: Boolean = false,
+    val undone: Boolean = false,
+    val wake: Boolean = false
 ) {
-    val triage: Boolean get() = done || snooze
+    val triage: Boolean get() = done || snooze || undone || wake
 }
 
 /** One Inbox row and where it sits. */
@@ -412,7 +416,8 @@ data class AidenInboxProjection(
 data class AidenChatTriageChange(
     val pinned: Boolean? = null,
     val done: Boolean? = null,
-    val snooze: Snooze? = null
+    val snooze: Snooze? = null,
+    val restoreDoneAt: Instant? = null
 ) {
     sealed interface Snooze {
         data class Until(val at: Instant) : Snooze

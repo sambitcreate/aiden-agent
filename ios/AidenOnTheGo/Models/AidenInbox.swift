@@ -335,7 +335,7 @@ enum AidenInbox {
             return AidenInboxRowOffer(markRead: markRead, done: false, snooze: false, alsoMarkRead: false)
         }
         let hold = triageHold(Signals(summary: summary, isOpen: isOpen), now: now)
-        return AidenInboxRowOffer(markRead: markRead, done: !hold.done, snooze: !hold.snoozed, alsoMarkRead: alsoMarkRead)
+        return AidenInboxRowOffer(markRead: markRead, done: !hold.done, snooze: !hold.snoozed, undone: hold.done, wake: hold.snoozed, alsoMarkRead: alsoMarkRead)
     }
 
     /// Done or Snooze on unseen failed output also reads it, so the row
@@ -350,7 +350,7 @@ enum AidenInbox {
         var inverse = AidenChatTriageChange()
         let hold = triageHold(Signals(summary: before, isOpen: false), now: now)
         if change.pinned != nil { inverse.pinned = before.inbox.pinnedAt != nil }
-        if change.done != nil { inverse.done = hold.done }
+        if change.done != nil { inverse.done = hold.done; inverse.restoreDoneAt = hold.done ? before.inbox.doneAt : nil }
         if change.snooze != nil {
             if hold.snoozed, let until = before.inbox.snoozedUntil {
                 inverse.snooze = .until(until)
@@ -398,6 +398,8 @@ struct AidenInboxRowOffer: Equatable {
     var markRead: Bool
     var done: Bool
     var snooze: Bool
+    var undone: Bool = false
+    var wake: Bool = false
     /// Done or Snooze also reads the row's unseen failed output.
     var alsoMarkRead: Bool
 }
@@ -582,7 +584,7 @@ extension AidenInbox {
     ) -> AidenChatSummary {
         var row = summary
         if let pinned = change.pinned { row.inbox.pinnedAt = pinned ? (row.inbox.pinnedAt ?? now) : nil }
-        if let done = change.done { row.inbox.doneAt = done ? now : nil }
+        if let done = change.done { row.inbox.doneAt = done ? change.restoreDoneAt ?? now : nil }
         switch change.snooze {
         case .until(let date): row.inbox.snoozedUntil = date > now ? date : nil
         case .wake: row.inbox.snoozedUntil = nil

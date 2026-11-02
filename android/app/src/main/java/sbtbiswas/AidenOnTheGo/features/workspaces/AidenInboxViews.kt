@@ -412,15 +412,15 @@ fun AidenInboxRowView(
     )
     val workingLabel = stringResource(R.string.inbox_status_working)
     val markReadLabel = stringResource(R.string.inbox_action_mark_read)
-    val doneLabel = stringResource(R.string.inbox_action_done)
-    val snoozeLabel = stringResource(R.string.inbox_action_snooze)
+    val doneLabel = stringResource(if (offer.undone) R.string.inbox_action_undone else R.string.inbox_action_done)
+    val snoozeLabel = stringResource(if (offer.wake) R.string.inbox_action_wake else R.string.inbox_action_snooze)
     val openLabel = stringResource(R.string.inbox_action_open)
     val leading = buildList {
         if (offer.markRead) add(AidenInboxSwipeAction(markReadLabel, Icons.Outlined.MarkEmailRead, palette.accent, "inbox_mark_read_${chat.id}", onMarkRead))
     }
     val trailing = buildList {
-        if (offer.done) add(AidenInboxSwipeAction(doneLabel, Icons.Outlined.CheckCircle, palette.success, "inbox_done_${chat.id}", onDone))
-        if (offer.snooze) add(AidenInboxSwipeAction(snoozeLabel, Icons.Outlined.Schedule, palette.warning, "inbox_snooze_${chat.id}", onSnooze))
+        if (offer.done || offer.undone) add(AidenInboxSwipeAction(doneLabel, Icons.Outlined.CheckCircle, palette.success, "inbox_done_${chat.id}", onDone))
+        if (offer.snooze || offer.wake) add(AidenInboxSwipeAction(snoozeLabel, Icons.Outlined.Schedule, palette.warning, "inbox_snooze_${chat.id}", onSnooze))
     }
     AidenInboxSwipeRow(
         key = chat.id,

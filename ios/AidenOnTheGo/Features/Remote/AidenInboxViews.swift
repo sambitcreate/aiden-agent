@@ -253,6 +253,19 @@ struct AidenInboxRowActions {
     var markRead: (() -> Void)?
     var done: (() -> Void)?
     var snooze: (() -> Void)?
+    var undone = false
+    var wake = false
+    var doneLabel: String { undone ? String(localized: "Mark not done") : String(localized: "Done") }
+    var snoozeLabel: String { wake ? String(localized: "Unsnooze") : String(localized: "Snooze") }
+
+    init(offer: AidenInboxRowOffer, markRead: @escaping () -> Void,
+         triage: @escaping (AidenChatTriageChange) -> Void, snooze: @escaping () -> Void) {
+        self.markRead = offer.markRead ? markRead : nil
+        self.done = offer.done || offer.undone ? { triage(.done(!offer.undone)) } : nil
+        self.snooze = offer.wake ? { triage(.wake) } : offer.snooze ? snooze : nil
+        undone = offer.undone
+        wake = offer.wake
+    }
 }
 
 /// One Inbox list row: tap opens the chat, a leading swipe marks it read,
@@ -282,21 +295,21 @@ struct AidenInboxListRow: View {
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             if let done = actions.done {
                 Button(action: done) {
-                    Label("Done", systemImage: "checkmark.circle")
+                    Label(actions.doneLabel, systemImage: "checkmark.circle")
                 }
                 .tint(palette.success)
             }
             if let snooze = actions.snooze {
                 Button(action: snooze) {
-                    Label("Snooze", systemImage: "clock")
+                    Label(actions.snoozeLabel, systemImage: "clock")
                 }
                 .tint(palette.warning)
             }
         }
         .accessibilityActions {
             if let markRead = actions.markRead { Button("Mark read", action: markRead) }
-            if let done = actions.done { Button("Done", action: done) }
-            if let snooze = actions.snooze { Button("Snooze", action: snooze) }
+            if let done = actions.done { Button(actions.doneLabel, action: done) }
+            if let snooze = actions.snooze { Button(actions.snoozeLabel, action: snooze) }
         }
         .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
         .listRowSeparator(.hidden)
@@ -403,10 +416,10 @@ struct AidenInboxFixtureView: View {
     private func actions(for chat: AidenChatSummary) -> AidenInboxRowActions {
         let offer = AidenInbox.rowOffer(for: chat, isOpen: false, now: now, supportsReadState: true, supportsTriage: true)
         return AidenInboxRowActions(
-            markRead: offer.markRead ? { update(chat.id) { $0.unread = false } } : nil,
-            done: offer.done ? { apply(.done(true), to: chat, alsoMarkRead: offer.alsoMarkRead) } : nil,
-            snooze: offer.snooze
-                ? { apply(.snooze(until: now.addingTimeInterval(3600)), to: chat, alsoMarkRead: offer.alsoMarkRead) } : nil
+            offer: offer,
+            markRead: { update(chat.id) { $0.unread = false } },
+            triage: { apply($0, to: chat, alsoMarkRead: offer.alsoMarkRead) },
+            snooze: { apply(.snooze(until: now.addingTimeInterval(3600)), to: chat, alsoMarkRead: offer.alsoMarkRead) }
         )
     }
 

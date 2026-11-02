@@ -282,14 +282,39 @@ final class AidenInboxTests: XCTestCase {
         // Done follows the hold: a done row with newer output offers Done again.
         let held = summary("held", minutesAgo: 5, inbox: AidenChatInboxSignals(lastAssistantAt: ago(minutes: 30), doneAt: ago(minutes: 10)))
         XCTAssertFalse(offer(held).done)
+        XCTAssertTrue(offer(held).undone)
         XCTAssertTrue(offer(held).snooze)
         let newer = summary("newer", minutesAgo: 5, inbox: AidenChatInboxSignals(lastAssistantAt: ago(minutes: 5), doneAt: ago(minutes: 10)))
         XCTAssertTrue(offer(newer).done)
         // Snooze follows this phone's clock.
         let snoozed = summary("snoozed", minutesAgo: 5, inbox: AidenChatInboxSignals(snoozedUntil: ahead(minutes: 10)))
         XCTAssertFalse(offer(snoozed).snooze)
+        XCTAssertTrue(offer(snoozed).wake)
         let woke = summary("woke", minutesAgo: 5, inbox: AidenChatInboxSignals(snoozedUntil: ago(minutes: 1)))
         XCTAssertTrue(offer(woke).snooze)
+    }
+
+    func testSearchedHeldRowsOfferPersistentInverseActionsAndSendTheInverse() throws {
+        let held = summary("held", minutesAgo: 5, inbox: AidenChatInboxSignals(
+            lastAssistantAt: ago(minutes: 30), doneAt: ago(minutes: 10), snoozedUntil: ahead(minutes: 60)))
+        XCTAssertNil(section(held))
+        let projection = AidenInboxProjection.make(chats: [held], workspaceNames: ["alpha": "Workspace"], openChatID: nil, now: now, searchText: "held")
+        XCTAssertEqual(projection.rows(in: .earlier).map(\.id), [held.id])
+        var writes: [AidenChatTriageChange] = []
+        var presentedSnooze = false
+        let actions = AidenInboxRowActions(offer: offer(held), markRead: {}, triage: { writes.append($0) }, snooze: { presentedSnooze = true })
+        // Swipe and VoiceOver use these same labels and bound callbacks.
+        XCTAssertEqual(actions.doneLabel, "Mark not done")
+        XCTAssertEqual(actions.snoozeLabel, "Unsnooze")
+        try XCTUnwrap(actions.done)()
+        try XCTUnwrap(actions.snooze)()
+        XCTAssertEqual(writes, [.done(false), .wake])
+        XCTAssertFalse(presentedSnooze)
+        var awake = held
+        for write in writes { awake = AidenInbox.applyingOptimisticTriage(write, to: awake, now: now) }
+        XCTAssertEqual(section(awake), .earlier)
+        XCTAssertNil(awake.inbox.doneAt)
+        XCTAssertNil(awake.inbox.snoozedUntil)
     }
 
     func testUndoPutsBackWhatTheRowHeldBefore() {
@@ -304,7 +329,15 @@ final class AidenInboxTests: XCTestCase {
         )
         // Undoing a wake of a done row marks it done again.
         let held = summary("held", minutesAgo: 5, inbox: AidenChatInboxSignals(doneAt: ago(minutes: 1)))
-        XCTAssertEqual(AidenInbox.undo(of: .done(false), before: held, now: now), .done(true))
+        let undo = AidenInbox.undo(of: .done(false), before: held, now: now)
+        XCTAssertEqual(undo, AidenChatTriageChange(done: true, restoreDoneAt: ago(minutes: 1)))
+        // A reply between the original Done and Undo must still wake the row.
+        let awake = AidenInbox.applyingOptimisticTriage(.done(false), to: held, now: now)
+        let restored = AidenInbox.applyingOptimisticTriage(undo!, to: awake, now: now)
+        XCTAssertEqual(restored.inbox.doneAt, held.inbox.doneAt)
+        var replied = restored
+        replied.inbox.lastAssistantAt = now.addingTimeInterval(-30)
+        XCTAssertEqual(section(replied), .earlier)
         XCTAssertEqual(AidenInbox.undo(of: AidenChatTriageChange(pinned: true), before: plain, now: now), AidenChatTriageChange(pinned: false))
         XCTAssertNil(AidenInbox.undo(of: AidenChatTriageChange(), before: plain, now: now))
     }

@@ -267,11 +267,13 @@ class AidenInboxTest {
         // ends a Done hold, so Done is offered again.
         val done = chat("d", doneAt = now.minusSeconds(600), lastAssistantAt = now.minusSeconds(900))
         assertFalse(offer(done).done)
+        assertTrue(offer(done).undone)
         assertTrue(offer(done).snooze)
         val replied = chat("r", doneAt = now.minusSeconds(600), lastAssistantAt = now.minusSeconds(60))
         assertTrue(offer(replied).done)
         val snoozed = chat("s", snoozedUntil = now.plusSeconds(600))
         assertFalse(offer(snoozed).snooze)
+        assertTrue(offer(snoozed).wake)
         assertTrue(offer(chat("e", snoozedUntil = now.minusSeconds(60))).snooze)
     }
 
@@ -281,8 +283,13 @@ class AidenInboxTest {
         val earlier = now.plusSeconds(600)
         assertEquals(AidenChatTriageChange.done(false), AidenInbox.undo(AidenChatTriageChange.done(true), chat("c"), now))
         // Done over a row that already held Done is put back as Done.
-        val held = chat("h", doneAt = now.minusSeconds(60))
-        assertEquals(AidenChatTriageChange.done(true), AidenInbox.undo(AidenChatTriageChange.done(true), held, now))
+        val held = chat("h", doneAt = now.minusSeconds(60), lastAssistantAt = now.minusSeconds(120))
+        val undo = AidenInbox.undo(AidenChatTriageChange.done(false), held, now)!!
+        assertEquals(AidenChatTriageChange(done = true, restoreDoneAt = now.minusSeconds(60)), undo)
+        val awake = AidenInbox.applyingOptimisticTriage(AidenChatTriageChange.done(false), held, now)
+        val restored = AidenInbox.applyingOptimisticTriage(undo, awake, now)
+        assertEquals(held.doneAt, restored.doneAt)
+        assertEquals(AidenInboxSection.EARLIER, section(restored.copy(lastAssistantAt = now.minusSeconds(30))))
         assertEquals(AidenChatTriageChange.wake, AidenInbox.undo(AidenChatTriageChange.snooze(later), chat("s"), now))
         // A snooze over an earlier one still running returns to it; one that ended wakes.
         assertEquals(

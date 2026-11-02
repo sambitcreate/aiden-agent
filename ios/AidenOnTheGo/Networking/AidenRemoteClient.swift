@@ -93,6 +93,7 @@ struct AidenChatTriageChange: Equatable, Sendable {
     var pinned: Bool?
     var done: Bool?
     var snooze: Snooze?
+    var restoreDoneAt: Date?
 
     static func done(_ value: Bool) -> Self { Self(done: value) }
     static func snooze(until date: Date) -> Self { Self(snooze: .until(date)) }
@@ -144,6 +145,7 @@ private struct ChatTriageRequest: Encodable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(change.pinned, forKey: .pinned)
         try container.encodeIfPresent(change.done, forKey: .done)
+        try container.encodeIfPresent(change.restoreDoneAt.map(Self.timestamp), forKey: .restoreDoneAt)
         switch change.snooze {
         case .until(let date):
             try container.encode(Self.timestamp(date), forKey: .snoozeUntil)
@@ -163,7 +165,7 @@ private struct ChatTriageRequest: Encodable {
         return formatter.string(from: date)
     }
 
-    private enum CodingKeys: String, CodingKey { case pinned, done, snoozeUntil, ifRevision }
+    private enum CodingKeys: String, CodingKey { case pinned, done, snoozeUntil, ifRevision, restoreDoneAt }
 }
 
 /// Encodes to `{}` without a message id so the Mac reads through its newest message.

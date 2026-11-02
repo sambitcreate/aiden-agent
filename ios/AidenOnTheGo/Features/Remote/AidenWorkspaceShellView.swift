@@ -204,7 +204,7 @@ final class AidenHomeModel {
     /// Rows changed here and not yet on a page. `readThrough` is set for a
     /// Mark read: the newest reply it covers. A page row with a newer reply
     /// is not covered by it, so that page row is shown instead.
-    private var localSummaryEdits: [String: (generation: UInt64, token: UInt64, summary: AidenChatSummary?, activityOnly: Bool, readThrough: AidenChatInboxSignals?, triageOnly: Bool)] = [:]
+    private var localSummaryEdits: [String: (generation: UInt64, token: UInt64, summary: AidenChatSummary?, activityOnly: Bool, readThrough: AidenChatInboxSignals?, triageOnly: Bool, wholeGeneration: UInt64)] = [:]
     private var prefetchTask: Task<Void, Never>?
     /// Changes each time a chat is viewed: a chat viewed while a swipe's
     /// write was out has been read, so a refusal never brings its dot back.
@@ -317,7 +317,7 @@ final class AidenHomeModel {
             // A list page is on its way. Saving now would take the cache's
             // authority from that page and lose its other rows, so the read
             // is only recorded here and `load` lays it over the page's row.
-            localSummaryEdits[chatID] = (nextSummaryCacheGeneration(), localSummaryEdits[chatID]?.token ?? 0, chats[index], false, boundary, localSummaryEdits[chatID]?.triageOnly ?? false)
+            localSummaryEdits[chatID] = (nextSummaryCacheGeneration(), localSummaryEdits[chatID]?.token ?? 0, chats[index], false, boundary, localSummaryEdits[chatID]?.triageOnly ?? false, localSummaryEdits[chatID]?.wholeGeneration ?? 0)
         }
     }
 
@@ -501,7 +501,7 @@ final class AidenHomeModel {
         let writeToken = chatCache.reserveSummaryWrite(instanceId: context.instanceId)
         let pending = localSummaryEdits[changedID]
         let onlyActivity = activityOnly && !(pending.map { $0.generation > persistedLocalGeneration && !$0.activityOnly } ?? false)
-        localSummaryEdits[changedID] = (generation, writeToken, chats.first(where: { $0.id == changedID }), onlyActivity, readThrough, triageOnly)
+        localSummaryEdits[changedID] = (generation, writeToken, chats.first(where: { $0.id == changedID }), onlyActivity, readThrough, triageOnly, !activityOnly && !triageOnly && readThrough == nil ? generation : pending?.wholeGeneration ?? 0)
         let editTokens = localSummaryEdits.filter { $0.value.generation > persistedLocalGeneration }.mapValues(\.token)
         let changedIDs = Set(editTokens.keys)
         let activityOnlyIDs = Set(localSummaryEdits.filter { $0.value.activityOnly && changedIDs.contains($0.key) }.keys)
@@ -711,6 +711,12 @@ final class AidenHomeModel {
                                 // Keep a newer detail or a write from another home model.
                                 if max(state.fullToken, state.rowTokens[id] ?? 0) > max(writeToken, edit.token) {
                                     pageRow = chats[index]
+                                }
+                                // A detail/view admitted after the request owns its row.
+                                // Triage must not erase that earlier admission's provenance.
+                                if edit.wholeGeneration > requestEditGeneration, let admitted = edit.summary,
+                                   (admitted.inbox.lastAssistantAt ?? .distantPast) >= (pageRow.inbox.lastAssistantAt ?? .distantPast) {
+                                    pageRow = admitted
                                 }
                                 // A triage or read edit owns its fields. Keep the
                                 // page's reply and unrelated metadata.
@@ -1464,11 +1470,6 @@ struct AidenWorkspaceShellView: View {
             supportsTriage: coordinator.server?.supportsChatTriage == true
                 && coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .chatWrite) == true
         )
-    }
-
-    private func markDone(_ chat: AidenChatSummary) {
-        let isOpen = chat.id == selectedSidebarChat?.id
-        Task { await homeModel.setTriage(.done(true), chatID: chat.id, coordinator: coordinator, isOpen: isOpen) }
     }
 
     private func snooze(_ chat: AidenChatSummary, until date: Date) {
@@ -2308,9 +2309,10 @@ struct AidenWorkspaceShellView: View {
             workspaceName: activeWorkspaces.first(where: { $0.id == chat.workspaceId }).map { AidenNoWorkspace.label(for: $0) },
             palette: palette,
             actions: AidenInboxRowActions(
-                markRead: offer.markRead ? { markRead(chat) } : nil,
-                done: offer.done ? { markDone(chat) } : nil,
-                snooze: offer.snooze ? { snoozeCandidate = chat } : nil
+                offer: offer,
+                markRead: { markRead(chat) },
+                triage: { change in Task { await homeModel.setTriage(change, chatID: chat.id, coordinator: coordinator, isOpen: chat.id == selectedSidebarChat?.id) } },
+                snooze: { snoozeCandidate = chat }
             ),
             open: { openChat(chat) }
         )

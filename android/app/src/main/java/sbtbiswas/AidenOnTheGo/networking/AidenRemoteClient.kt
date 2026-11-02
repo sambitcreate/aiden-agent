@@ -3204,6 +3204,7 @@ private fun ResponseBody?.readBounded(maximumBytes: Int): ByteArray {
 internal fun chatTriageRequestBody(change: AidenChatTriageChange, ifRevision: Int?): JsonObject = buildJsonObject {
     change.pinned?.let { put("pinned", it) }
     change.done?.let { put("done", it) }
+    change.restoreDoneAt?.let { put("restoreDoneAt", InstantIso8601Serializer.millisecondFormat.format(it)) }
     when (val snooze = change.snooze) {
         is AidenChatTriageChange.Snooze.Until ->
             put("snoozeUntil", InstantIso8601Serializer.millisecondFormat.format(snooze.at))
