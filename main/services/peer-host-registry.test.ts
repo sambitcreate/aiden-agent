@@ -611,6 +611,12 @@ test("a Mac asks for a host's Bot hand-offs in a call of its own, after the rest
   const images = await negotiate([...lists, "bot:images"]);
   assert.deepEqual(images.bodies, [{ accepts: ["bot:activity"] }, { accepts: ["bot:handoffs"] }, { accepts: ["bot:images"] }]);
   assert.ok(images.grants.includes("bot:images"));
+
+  // Revision 50: attachments:raw has no feature token at all; a host that lists it is asked alone, last.
+  const raw = await negotiate([...lists, "attachments:raw"]);
+  assert.deepEqual(raw.bodies, [{ accepts: ["bot:activity"] }, { accepts: ["bot:handoffs"] }, { accepts: ["attachments:raw"] }]);
+  assert.ok(raw.grants.includes("attachments:raw"));
+  assert.deepEqual((await negotiate(undefined)).bodies.some((body) => JSON.stringify(body).includes("attachments:raw")), false);
 });
 
 test("a lost opt-in answer is asked again on the next reconnect; a refusal is not", async () => {

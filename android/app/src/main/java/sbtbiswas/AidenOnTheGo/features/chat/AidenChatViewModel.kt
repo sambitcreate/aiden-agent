@@ -161,6 +161,14 @@ class AidenChatViewModel(
     private val _isUploadingAttachment = MutableStateFlow(false)
     val isUploadingAttachment: StateFlow<Boolean> = _isUploadingAttachment.asStateFlow()
 
+    /** How far the attachments being uploaded have got; null while none are. */
+    private val _uploadProgress = MutableStateFlow<AidenUploadProgress?>(null)
+    val uploadProgress: StateFlow<AidenUploadProgress?> = _uploadProgress.asStateFlow()
+    /** Every picked batch sending or waiting its turn, so Stop ends them all. */
+    private val attachmentBatchJobs = mutableSetOf<Job>()
+    /** The position of the picture [prepareAndUpload] is sending in its batch, and the batch size. */
+    private var attachmentBatch: Pair<Int, Int>? = null
+
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -1686,16 +1694,26 @@ class AidenChatViewModel(
     suspend fun <T> prepareAndUpload(items: List<T>, prepare: suspend (T) -> AidenAttachmentUpload?) {
         val client = activeClient() ?: return
         _preparingAttachmentBatches.value++
+        val batchJob = coroutineContext[Job]
+        batchJob?.let { attachmentBatchJobs += it }
+        var ran = false
         try {
             preparationMutex.withLock {
-                for (item in items.take((10 - _pendingAttachments.value.size).coerceAtLeast(0))) {
+                ran = true
+                val batch = items.take((10 - _pendingAttachments.value.size).coerceAtLeast(0))
+                for ((index, item) in batch.withIndex()) {
                     coroutineContext.ensureActive()
                     if (activeClient() !== client) return
                     try {
                         val upload = AidenAttachmentPreparation.onWorker { prepare(item) } ?: continue
                         coroutineContext.ensureActive()
                         if (activeClient() !== client) return
-                        upload(listOf(upload))
+                        attachmentBatch = index to batch.size
+                        try {
+                            upload(listOf(upload))
+                        } finally {
+                            attachmentBatch = null
+                        }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
@@ -1704,8 +1722,19 @@ class AidenChatViewModel(
                 }
             }
         } finally {
+            batchJob?.let { attachmentBatchJobs -= it }
+            // A batch still waiting its turn leaves the running batch's bar alone.
+            if (ran) _uploadProgress.value = null
             _preparingAttachmentBatches.value--
         }
+    }
+
+    /**
+     * Stop on the progress bar: the upload in flight and any batch waiting its turn are dropped;
+     * what already reached the Mac stays.
+     */
+    fun cancelUploads() {
+        attachmentBatchJobs.toList().forEach { it.cancel() }
     }
 
     suspend fun upload(uploads: List<AidenAttachmentUpload>): Int {
@@ -1721,16 +1750,35 @@ class AidenChatViewModel(
         var failedCount = 0
         val acceptedReferences = mutableListOf<AidenAttachmentReference>()
 
+        // Revision 50: a Mac that granted `attachments:raw` takes a picture as its own bytes.
+        val rawImages = coordinator.serverInfo.value?.supportsRawUploads == true
+        val batch = uploads.take(10 - _pendingAttachments.value.size)
         try {
-            val availableSlots = 10 - _pendingAttachments.value.size
-            for (upload in uploads.take(availableSlots)) {
+            for ((offset, upload) in batch.withIndex()) {
                 try {
                     val rawImageBytes = if (upload is AidenAttachmentUpload.Image) {
                         withContext(kotlinx.coroutines.Dispatchers.IO) { Base64.getDecoder().decode(upload.data) }
                     } else null
                     if (activeClient() !== client) return uploads.size
-                    val reference = client.uploadAttachment(chatId, upload)
-                    coroutineContext.ensureActive()
+                    val (index, count) = attachmentBatch ?: (offset to batch.size)
+                    val started = AidenUploadProgress(index, count, 0f)
+                    _uploadProgress.value = started
+                    val reference = client.uploadAttachment(chatId, upload, rawImages) { fraction ->
+                        // A late report from an earlier upload never moves the bar back.
+                        _uploadProgress.update { current ->
+                            if (current?.index == index && current.count == count) current.advancedTo(fraction) ?: current else current
+                        }
+                    }
+                    if (!coroutineContext.isActive) {
+                        // Stopped after the Mac staged it: take it off the Mac again, so it does
+                        // not count against the chat's upload limit until it expires.
+                        if (reference.isValid()) {
+                            viewModelScope.launch {
+                                try { client.removeAttachment(chatId, reference.id) } catch (_: Exception) {}
+                            }
+                        }
+                        coroutineContext.ensureActive()
+                    }
                     if (activeClient() !== client) return uploads.size
                     if (!reference.isValid()) {
                         failedCount++
@@ -1761,6 +1809,8 @@ class AidenChatViewModel(
             }
         } finally {
             _isUploadingAttachment.value = false
+            // Within a picked batch the bar stays up between pictures; the batch clears it.
+            if (attachmentBatch == null) _uploadProgress.value = null
         }
         return failedCount
     }

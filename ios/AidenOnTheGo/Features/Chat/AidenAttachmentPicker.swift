@@ -977,6 +977,81 @@ struct AidenCommittingPhotoCard: View {
     }
 }
 
+/// How far the attachments being sent to the Mac have got: which one of the
+/// batch is going, and the share of its bytes already sent.
+struct AidenUploadProgress: Equatable, Sendable {
+    let index: Int
+    let count: Int
+    var fraction: Double
+
+    /// The whole batch, 0 to 1.
+    var overall: Double {
+        guard count > 0 else { return 0 }
+        return min(1, max(0, (Double(index) + min(1, max(0, fraction))) / Double(count)))
+    }
+
+    var percent: Int { Int((overall * 100).rounded(.down)) }
+
+    /// "Sending" or "Sending 2 of 3".
+    var title: String {
+        count > 1 ? String(localized: "Sending \(index + 1) of \(count)") : String(localized: "Sending")
+    }
+
+    /// The same batch with the current upload at `fraction`, or nil when that
+    /// would not move the bar by a whole percent (the delegate reports often).
+    func advanced(to fraction: Double) -> Self? {
+        var next = self
+        next.fraction = fraction
+        return next.percent > percent || (fraction >= 1 && self.fraction < 1) ? next : nil
+    }
+}
+
+/// The bar over the composer while attachments go to the Mac, with a Stop.
+struct AidenUploadProgressRow: View {
+    @Environment(\.aidenPalette) private var palette
+    let progress: AidenUploadProgress
+    let onCancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(progress.title)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(palette.foreground)
+                    Spacer(minLength: 8)
+                    Text("\(progress.percent)%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(palette.secondary)
+                }
+                ProgressView(value: progress.overall)
+                    .progressViewStyle(.linear)
+                    .tint(palette.accent)
+                    .animation(.linear(duration: 0.15), value: progress.overall)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(progress.title)
+            .accessibilityValue("\(progress.percent) percent")
+            .accessibilityAddTraits(.updatesFrequently)
+
+            Button(action: onCancel) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(palette.secondary)
+                    .frame(width: 30, height: 30)
+                    .background(palette.canvas, in: Circle())
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Stop sending")
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 2)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
 struct AidenPendingAttachmentCard: View {
     @Environment(\.aidenPalette) private var palette
     let attachment: AidenAttachmentReference

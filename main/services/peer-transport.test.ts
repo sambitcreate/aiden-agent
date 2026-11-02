@@ -18,8 +18,9 @@ import {
 } from "./peer-transport.js";
 import { AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE } from "./aiden-remote-chats.js";
 import { decryptPeerPairing, assertPeerPairingExpiry } from "./peer-pairing.js";
-import { peerOperationRequest, peerOperationResult } from "./peer-operation.js";
+import { peerOperationRequest, peerOperationResult, peerRawUploadRequest } from "./peer-operation.js";
 import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
+import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import { AidenRemotePairingService } from "./aiden-remote-pairing.js";
 import { PeerHostRegistry, type StoredPeerHost } from "./peer-host-registry.js";
 
@@ -506,6 +507,96 @@ test(
     assert.deepEqual(frames, ["data: ☃"]);
   },
 );
+
+test("a Mac holding attachments:raw sends a picture to a real host as its own bytes, and anything else as JSON", async () => {
+  const { AidenRemoteAttachmentStore } = await import("./aiden-remote-attachments.js");
+  const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-raw-"));
+  const identity = await loadOrCreateAidenRemoteTlsIdentity({ directory });
+  // A real 1x1 PNG, so the host's own checks decide what is accepted.
+  const png = Buffer.from(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63f8cfc0f01f000502020150a5f5730000000049454e44ae426082",
+    "hex",
+  );
+  const store = new AidenRemoteAttachmentStore();
+  const received: Array<{ contentType: string | undefined; bytes: number }> = [];
+  let grants = new Set<AidenRemoteCapability>(["server:read", "bot:read", "bot:write", "chat:write"]);
+  const router = createAidenRemoteRequestHandler({
+    instanceId: "host_raw",
+    displayName: () => "Raw fixture",
+    appVersion: "1",
+    pairing: new AidenRemotePairingService("host_raw", { issueDevice: async () => { throw new Error("unused"); } }),
+    devices: {
+      acquireDeviceAuthorization: () => () => undefined,
+      authenticate: async (credential) =>
+        credential === "a".repeat(43)
+          ? { id: "device_raw", name: "Desktop", revoked: false, acceptsBotCapabilities: true, capabilities: grants }
+          : null,
+    },
+    botSessions: {
+      supportsAttachments: true,
+      uploadAttachment: async (deviceId: string, botId: string, body: unknown) => store.upload(deviceId, `bot:${botId}`, body),
+      removeAttachment: async () => {},
+    } as never,
+    connectionMode: () => "lan",
+    now: Date.now,
+    log: () => undefined,
+  });
+  const server = https.createServer({ key: identity.privateKey, cert: identity.certificateChain }, (request, response) => {
+    received.push({ contentType: request.headers["content-type"], bytes: Number(request.headers["content-length"]) });
+    void router(request, response);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const client = new PeerTransport({
+    endpoint: `https://127.0.0.1:${address.port}/api/aiden/v1`,
+    serverSpkiSha256: identity.serverSpkiSha256,
+    caCertificateDerBase64: new X509Certificate(identity.caCertificate).raw.toString("base64"),
+  });
+  const send = (operation: Record<string, unknown>, raw: boolean) => {
+    const request = peerOperationRequest(operation);
+    return client.json({ ...(raw ? peerRawUploadRequest(operation, request) : request), credential: "a".repeat(43) });
+  };
+  const picture = {
+    operation: "uploadBotAttachment",
+    resourceId: "bot-1",
+    body: { name: "it's Café (1).png", mimeType: "image/png", kind: "image", data: png.toString("base64") },
+  };
+  try {
+    // The JSON envelope works for every host.
+    const viaJson = (await send(picture, false)) as { name: string; size: number };
+    assert.equal(viaJson.name, "it's Café (1).png");
+    assert.equal(received[received.length - 1]?.contentType, "application/json");
+
+    // Raw bytes from a Mac without the grant are refused, never quietly taken.
+    await assert.rejects(send(picture, true), (error: unknown) => {
+      assert.ok(error instanceof PeerTransportError);
+      assert.equal(error.status, 403);
+      return true;
+    });
+
+    grants = new Set([...grants, "attachments:raw"]);
+    const viaRaw = (await send(picture, true)) as { name: string; size: number; mimeType: string };
+    assert.equal(viaRaw.name, "it's Café (1).png", "the name survives percent-encoding");
+    assert.equal(viaRaw.size, png.length);
+    assert.deepEqual(received[received.length - 1], { contentType: "image/png", bytes: png.length }, "the picture's own bytes, no base64");
+    assert.ok(png.length < Buffer.byteLength(JSON.stringify(picture.body)));
+
+    // Text, and a picture type the raw route does not take, keep the envelope.
+    const text = { operation: "uploadBotAttachment", resourceId: "bot-1", body: { name: "a.txt", mimeType: "text/plain", kind: "text", text: "hi" } };
+    assert.equal(peerRawUploadRequest(text, peerOperationRequest(text)).rawBody, undefined);
+    const gif = { ...picture, body: { ...picture.body, mimeType: "image/gif" } };
+    assert.equal(peerRawUploadRequest(gif, peerOperationRequest(gif)).rawBody, undefined);
+    // A name that cannot be percent-encoded (a lone surrogate) keeps the envelope instead of failing the call.
+    const unpaired = { ...picture, body: { ...picture.body, name: "\uD800.png" } };
+    assert.equal(peerRawUploadRequest(unpaired, peerOperationRequest(unpaired)).rawBody, undefined);
+    const send2 = { operation: "send", resourceId: "chat_1", idempotencyKey: "k".repeat(16), body: { text: "hi" } };
+    assert.deepEqual(peerRawUploadRequest(send2, peerOperationRequest(send2)), peerOperationRequest(send2));
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("pairing tolerates bounded skew but rejects nonsense expiry", () => {
   const now = Date.now();

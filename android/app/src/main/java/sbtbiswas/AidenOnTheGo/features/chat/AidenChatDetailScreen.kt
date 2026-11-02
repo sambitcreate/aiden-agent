@@ -194,6 +194,7 @@ fun AidenChatDetailScreen(
     val pendingAttachments by viewModel.pendingAttachments.collectAsStateWithLifecycle()
     val preparingAttachmentBatches by viewModel.preparingAttachmentBatches.collectAsStateWithLifecycle()
     val isUploadingAttachment by viewModel.isUploadingAttachment.collectAsStateWithLifecycle()
+    val uploadProgress by viewModel.uploadProgress.collectAsStateWithLifecycle()
     val draft by viewModel.draft.collectAsStateWithLifecycle()
     val selectedSkill by viewModel.selectedSkill.collectAsStateWithLifecycle()
     val modelCatalog by viewModel.catalog.collectAsStateWithLifecycle()
@@ -841,6 +842,8 @@ fun AidenChatDetailScreen(
                         )
                     },
                     onRemoveAttachment = { att -> viewModel.removePendingAttachment(att.id) },
+                    uploadProgress = uploadProgress,
+                    onCancelUpload = { viewModel.cancelUploads() },
                     onAddImage = {
                         dismissComposerKeyboard()
                         imagePickerLauncher.launch(

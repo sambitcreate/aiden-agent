@@ -51,6 +51,9 @@ import {
   AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
+  AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
+  AIDEN_REMOTE_RAW_UPLOAD_MIME_TYPES,
+  AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   AIDEN_REMOTE_CHAT_TASKS_FEATURE,
@@ -125,6 +128,7 @@ import type { AidenRemoteBackgroundJobService } from "./aiden-remote-background-
 import type { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
 import { MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES } from "./aiden-remote-attachments.js";
+import { MAX_IMAGE_BYTES } from "./attachments.js";
 import type { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import {
   AIDEN_REMOTE_SIMULATOR_HUB_PREFIX,
@@ -888,6 +892,59 @@ async function readRawBody(request: IncomingMessage, maximumBytes: number): Prom
     chunks.push(buffer);
   }
   return Buffer.concat(chunks);
+}
+
+
+/**
+ * An attachment upload body (revision 50): the JSON envelope, or one picture's
+ * raw bytes with its name in `Aiden-Attachment-Name`, turned into the same
+ * envelope so the upload services validate both alike. `raw` uploads need
+ * `attachments:raw`, which the caller checks once the device is known.
+ */
+async function readAttachmentUploadBody(
+  request: IncomingMessage,
+): Promise<{ body: unknown; raw: boolean }> {
+  const contentType = request.headers["content-type"];
+  const mimeType = typeof contentType === "string"
+    ? contentType.toLowerCase().split(";", 1)[0]?.trim()
+    : undefined;
+  if (!mimeType || !AIDEN_REMOTE_RAW_UPLOAD_MIME_TYPES.has(mimeType)) {
+    return { body: await readJsonBody(request, MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES), raw: false };
+  }
+  const declared = request.headers["content-length"];
+  if (typeof declared !== "string" || !/^\d{1,10}$/u.test(declared)) {
+    throw new AidenRemoteServiceError("invalid_request", "A picture upload needs its exact Content-Length.", 411);
+  }
+  const declaredBytes = Number(declared);
+  if (declaredBytes > MAX_IMAGE_BYTES) {
+    throw new AidenRemoteServiceError("payload_too_large", "The picture is too large.", 413);
+  }
+  if (declaredBytes === 0) {
+    throw new AidenRemoteServiceError("invalid_request", "The request body is required.", 400);
+  }
+  const encodedName = request.headers["aiden-attachment-name"];
+  let name: string;
+  try {
+    if (typeof encodedName !== "string" || encodedName.length === 0 || encodedName.length > AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME) {
+      throw new Error("missing name");
+    }
+    name = decodeURIComponent(encodedName);
+  } catch {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "Aiden-Attachment-Name is required and must be the percent-encoded UTF-8 file name.",
+      400,
+    );
+  }
+  const bytes = await readRawBody(request, MAX_IMAGE_BYTES);
+  if (!bytes) throw new AidenRemoteServiceError("payload_too_large", "The picture is too large.", 413);
+  if (bytes.length !== declaredBytes) {
+    throw new AidenRemoteServiceError("invalid_request", "The picture upload ended early.", 400);
+  }
+  return {
+    body: { name, mimeType, kind: "image", data: Buffer.from(bytes).toString("base64") },
+    raw: true,
+  };
 }
 
 async function readJsonBody(
@@ -1963,6 +2020,11 @@ function botSummaryForAudience(
   );
 }
 
+/** Revision 50: raw picture uploads ride the chat and Bot upload routes. */
+function rawUploadsWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return typeof dependencies.chats?.uploadAttachment === "function" || botAttachmentsWired(dependencies);
+}
+
 /** Revision 33: uploads, removals and `attachmentIds` ship together, or not at all. */
 function botAttachmentsWired(dependencies: AidenRemoteRouterDependencies): boolean {
   const sessions = dependencies.botSessions;
@@ -2029,6 +2091,8 @@ function advertisedServerCapabilities(
     ...(scheduleCardsWired(dependencies) ? AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES : []),
     // Revision 49: offered only while the host runs background jobs.
     ...(dependencies.backgroundJobs ? AIDEN_REMOTE_CHAT_JOB_CAPABILITIES : []),
+    // Revision 50: offered while chat or Bot uploads are served.
+    ...(rawUploadsWired(dependencies) ? AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES : []),
     ...(device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
           progressCapabilitySupported(dependencies, capability),
@@ -2461,6 +2525,11 @@ export function createAidenRemoteRequestHandler(
             if (!scheduleCardsWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Schedule cards are unavailable on this Aiden installation.", 404);
             }
+          } else if ((AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 50: raw picture uploads, offered while chat or Bot uploads are served.
+            if (!rawUploadsWired(dependencies)) {
+              throw new AidenRemoteServiceError("not_found", "Picture uploads are unavailable on this Aiden installation.", 404);
+            }
           } else if ((AIDEN_REMOTE_CHAT_JOB_CAPABILITIES as readonly string[]).includes(capability)) {
             // Revision 49: offered only while the host runs background jobs.
             if (!dependencies.backgroundJobs) {
@@ -2820,10 +2889,11 @@ export function createAidenRemoteRequestHandler(
       if (botAttachmentsMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "botAttachment";
-        const body = await readJsonBody(request, MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES);
+        const { body, raw } = await readAttachmentUploadBody(request);
         const device = await authenticate(request, dependencies.devices, "bot:write");
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read", "chat:write"]);
+        if (raw) requireDeviceCapabilities(device, AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES);
         if (!botAttachmentsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 201, await dependencies.botSessions!.uploadAttachment!(device.id, botAttachmentsMatch[1]!, body));
         return;
@@ -4158,9 +4228,10 @@ export function createAidenRemoteRequestHandler(
       if (attachmentCollectionMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "chatAttachment";
-        const body = await readJsonBody(request, MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES);
+        const { body, raw } = await readAttachmentUploadBody(request);
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
+        if (raw) requireDeviceCapabilities(device, AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES);
         if (!dependencies.chats?.uploadAttachment) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(
           response,

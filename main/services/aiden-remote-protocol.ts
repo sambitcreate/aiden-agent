@@ -214,7 +214,39 @@ export const AIDEN_REMOTE_WORKSPACE_CLONE_CONTRACT_REVISION = 48 as const;
  * list. Older phones see nothing new.
  */
 export const AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION = 49 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION;
+/**
+ * Contract revision 50 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION`):
+ * picture uploads as raw bytes (`attachments:raw`, an opt-in capability like
+ * `chat:jobs`, since phones already hear the most feature tokens shipped
+ * clients accept). `POST /chats/{chatId}/attachments` and
+ * `POST /bots/{botId}/attachments` also take an `image/png` or `image/jpeg`
+ * body with an exact `Content-Length` and the file name in
+ * `Aiden-Attachment-Name`, and return the same single-use reference as the
+ * JSON upload, which stays for older clients. No base64, so uploads are about
+ * a quarter smaller and clients can show byte progress.
+ */
+export const AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION = 50 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION;
+
+/** Revision 50: the header that carries a raw picture upload's file name. */
+export const AIDEN_REMOTE_ATTACHMENT_NAME_HEADER = "Aiden-Attachment-Name" as const;
+/** Revision 50: the longest percent-encoded name the upload routes take. */
+export const AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME = 2_048 as const;
+/** Revision 50: the picture types the upload routes take as raw bytes. */
+export const AIDEN_REMOTE_RAW_UPLOAD_MIME_TYPES: ReadonlySet<string> = new Set(["image/png", "image/jpeg"]);
+
+/**
+ * Revision 50: a file name as `Aiden-Attachment-Name` carries it, the UTF-8
+ * bytes percent-encoded with only RFC 3986 unreserved characters left as they
+ * are, so every client spells a name the same way.
+ */
+export function encodeAidenRemoteAttachmentName(name: string): string {
+  return encodeURIComponent(name).replace(
+    /[!'()*]/gu,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -449,14 +481,25 @@ export const AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES = ["schedule:cards"] as con
 export const AIDEN_REMOTE_CHAT_JOB_CAPABILITIES = ["chat:jobs"] as const;
 
 /**
+ * Contract revision 50: a device holding `attachments:raw` may upload a
+ * picture as its raw bytes to the chat and Bot attachment routes. Those
+ * uploads still need the route's own grant (`chat:write`, or `bot:write` with
+ * `bot:attachments`), so it widens nothing those grants allow.
+ */
+export const AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES = ["attachments:raw"] as const;
+
+/**
  * Every opt-in a paired device may persist. Each changes what a device is
  * shown; `chat:jobs` also opens its two routes, which still need the chat
- * grant (`chat:read`, `chat:write`) and so widen nothing that grant allows.
+ * grant (`chat:read`, `chat:write`), and `attachments:raw` opens a second body
+ * type on the upload routes, which still need their own grants. Neither
+ * widens anything those grants allow.
  */
 export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
+  ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
 ] as const;
 
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
@@ -472,6 +515,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
+  ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -491,6 +535,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
+  ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
@@ -2041,6 +2086,8 @@ export interface AidenRemoteContractFixture {
   spending?: AidenRemoteSpendingFixture;
   /** Revision 49 (`chat:jobs`): a chat's jobs, a stop, and an unknown job. */
   backgroundJobs?: AidenRemoteBackgroundJobsFixture;
+  /** Revision 50 (`attachments:raw`): one picture sent as its own bytes, and the refusal without the grant. */
+  rawUploads?: AidenRemoteRawUploadsFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -7796,6 +7843,13 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     backgroundJobs = parseBackgroundJobsFixture(value.backgroundJobs);
   }
+  let rawUploads: AidenRemoteRawUploadsFixture | undefined;
+  if (value.rawUploads !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION) {
+      throw new Error(`Raw upload fixtures require contract revision ${AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION}.`);
+    }
+    rawUploads = parseRawUploadsFixture(value.rawUploads);
+  }
   if (value.peerRouteAdvertisement !== undefined) {
     if (contractRevision < 31 || !isRecord(value.peerRouteAdvertisement)) throw new Error("Peer routes require contract revision 31.");
     const advertisement = value.peerRouteAdvertisement;
@@ -7896,6 +7950,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(browserRecordings ? { browserRecordings } : {}),
     ...(spending ? { spending } : {}),
     ...(backgroundJobs ? { backgroundJobs } : {}),
+    ...(rawUploads ? { rawUploads } : {}),
   };
 }
 
@@ -8132,6 +8187,81 @@ function parseBackgroundJobsFixture(value: unknown): AidenRemoteBackgroundJobsFi
   }
   if (fixture.notFound.error.code !== "not_found") throw new Error("An unknown job is not_found.");
   return fixture;
+}
+
+export interface AidenRemoteRawUploadsFixture {
+  capability: "attachments:raw";
+  request: {
+    method: "POST";
+    path: string;
+    contentType: string;
+    contentLength: number;
+    nameHeader: typeof AIDEN_REMOTE_ATTACHMENT_NAME_HEADER;
+    name: string;
+    encodedName: string;
+    bodyBase64: string;
+  };
+  /** The staged reference, the same as for the JSON envelope. */
+  response: { id: string; name: string; mimeType: string; kind: "image"; size: number; expiresAt: string };
+  /** Raw bytes from a device without the grant. */
+  withoutGrant: AidenRemoteErrorEnvelope;
+}
+
+function parseRawUploadsFixture(value: unknown): AidenRemoteRawUploadsFixture {
+  if (!isRecord(value)) throw new Error("Raw uploads fixture must be an object.");
+  assertExactKeys(value, ["capability", "request", "response", "withoutGrant"], "Raw uploads fixture");
+  if (value.capability !== "attachments:raw") throw new Error("Raw uploads need attachments:raw.");
+  const request = value.request;
+  if (!isRecord(request)) throw new Error("Raw upload request must be an object.");
+  assertExactKeys(
+    request,
+    ["method", "path", "contentType", "contentLength", "nameHeader", "name", "encodedName", "bodyBase64"],
+    "Raw upload request",
+  );
+  const contentType = requiredString(request, "contentType");
+  const name = requiredString(request, "name");
+  const encodedName = requiredString(request, "encodedName");
+  const bodyBase64 = requiredString(request, "bodyBase64");
+  const path = requiredString(request, "path");
+  const body = Buffer.from(bodyBase64, "base64");
+  if (request.method !== "POST" || !/^\/(?:chats|bots)\/[A-Za-z0-9._:-]+\/attachments$/u.test(path)) {
+    throw new Error("A raw upload posts to a chat or Bot upload route.");
+  }
+  if (!AIDEN_REMOTE_RAW_UPLOAD_MIME_TYPES.has(contentType)) throw new Error("A raw upload is a PNG or JPEG.");
+  if (request.contentLength !== body.length || body.toString("base64") !== bodyBase64) {
+    throw new Error("A raw upload declares its exact length.");
+  }
+  if (request.nameHeader !== AIDEN_REMOTE_ATTACHMENT_NAME_HEADER) throw new Error("A raw upload names its header.");
+  if (encodeAidenRemoteAttachmentName(name) !== encodedName || decodeURIComponent(encodedName) !== name) {
+    throw new Error("The encoded name is the name, percent-encoded.");
+  }
+  const response = value.response;
+  if (!isRecord(response)) throw new Error("Raw upload response must be an object.");
+  assertExactKeys(response, ["id", "name", "mimeType", "kind", "size", "expiresAt"], "Raw upload response");
+  const id = requiredString(response, "id");
+  if (!/^att_[A-Za-z0-9_-]{43}$/u.test(id)) throw new Error("A staged upload has an att_ id.");
+  if (response.name !== name || response.mimeType !== contentType || response.kind !== "image" || response.size !== body.length) {
+    throw new Error("The staged reference describes the picture sent.");
+  }
+  const expiresAt = requiredString(response, "expiresAt");
+  if (!Number.isFinite(Date.parse(expiresAt))) throw new Error("A staged upload expires.");
+  const withoutGrant = parseErrorEnvelopeFixture(value.withoutGrant, "Raw upload without the grant");
+  if (withoutGrant.error.code !== "capability_denied") throw new Error("Raw bytes without the grant are capability_denied.");
+  return {
+    capability: "attachments:raw",
+    request: {
+      method: "POST",
+      path,
+      contentType,
+      contentLength: body.length,
+      nameHeader: AIDEN_REMOTE_ATTACHMENT_NAME_HEADER,
+      name,
+      encodedName,
+      bodyBase64,
+    },
+    response: { id, name, mimeType: contentType, kind: "image", size: body.length, expiresAt },
+    withoutGrant,
+  };
 }
 
 function parseErrorEnvelopeFixture(value: unknown, label: string): AidenRemoteErrorEnvelope {

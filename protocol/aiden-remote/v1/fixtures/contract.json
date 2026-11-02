@@ -1,5 +1,5 @@
 {
-  "contractRevision": 49,
+  "contractRevision": 50,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -1555,7 +1555,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 49,
+    "contractRevision": 50,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -3415,6 +3415,35 @@
         "code": "not_found",
         "message": "This chat has no such background job.",
         "requestId": "request_fixture_41",
+        "retryable": false
+      }
+    }
+  },
+  "rawUploads": {
+    "capability": "attachments:raw",
+    "request": {
+      "method": "POST",
+      "path": "/chats/chat_fixture_01/attachments",
+      "contentType": "image/png",
+      "contentLength": 70,
+      "nameHeader": "Aiden-Attachment-Name",
+      "name": "Café photo.png",
+      "encodedName": "Caf%C3%A9%20photo.png",
+      "bodyBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAgIBUKX1cwAAAABJRU5ErkJggg=="
+    },
+    "response": {
+      "id": "att_RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR",
+      "name": "Café photo.png",
+      "mimeType": "image/png",
+      "kind": "image",
+      "size": 70,
+      "expiresAt": "2026-11-02T07:10:00.000Z"
+    },
+    "withoutGrant": {
+      "error": {
+        "code": "capability_denied",
+        "message": "This device does not have access to that Aiden capability.",
+        "requestId": "request_fixture_50",
         "retryable": false
       }
     }
