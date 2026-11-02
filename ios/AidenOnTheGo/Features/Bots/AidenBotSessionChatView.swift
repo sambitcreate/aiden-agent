@@ -965,7 +965,8 @@ struct AidenBotSessionChatView: View {
                 .rotationEffect(.degrees(attachmentPicker.isPresented ? 45 : 0))
                 .opacity(model.isAttaching ? 0.48 : 1)
                 .overlay(alignment: .bottomTrailing) {
-                    if model.isAttaching {
+                    // While the upload bar shows progress, it is the only spinner.
+                    if model.isAttaching, model.uploadProgress == nil {
                         ProgressView()
                             .controlSize(.mini)
                             .padding(3)

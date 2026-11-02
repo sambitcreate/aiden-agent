@@ -10072,7 +10072,8 @@ private struct AidenComposerView: View {
                         .rotationEffect(.degrees(attachmentPicker.isPresented ? 45 : 0))
                         .opacity(model.isUploadingAttachment || model.isPreparingAttachments ? 0.48 : 1)
                         .overlay(alignment: .bottomTrailing) {
-                            if model.isUploadingAttachment || model.isPreparingAttachments {
+                            // While the upload bar shows progress, it is the only spinner.
+                            if model.uploadProgress == nil, model.isUploadingAttachment || model.isPreparingAttachments {
                                 ProgressView()
                                     .controlSize(.mini)
                                     .padding(3)
