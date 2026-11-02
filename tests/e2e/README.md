@@ -15,6 +15,11 @@ npm run test:e2e:space -- tests/e2e/<spec>.spec.ts       # any Playwright args
 npm run test:e2e:space -- --run <command> [args]         # other window-opening commands
 ```
 
+The sync preserves symlinks and skips files beneath symlinked directories. If the Space
+cannot clear its previous checkout, the run stops before extracting or running anything.
+The Space reuses installed dependencies only when `package.json`, `package-lock.json`,
+the Node version, and the architecture match the previous install.
+
 The Space is Linux, so specs take their non-darwin branches there. Changes to a spec's
 darwin branch or to macOS-only behavior still need `npm run test:e2e` on the host (or
 the macOS CI gate). On Linux, follow CI's Linux E2E step: its apt packages,

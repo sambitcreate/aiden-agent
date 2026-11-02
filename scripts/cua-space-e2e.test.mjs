@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -36,6 +35,11 @@ if (command === "ls") {
   }
   fs.copyFileSync(source, path.join(dir, path.basename(target.slice(target.indexOf(":") + 1))));
 } else if (command === "exec") {
+  if (process.env.FAKE_CUA_RUN_GUEST === "1") {
+    const [script, ...guestArgs] = args.slice(6);
+    const guest = require("node:child_process").spawnSync("bash", [path.join(dir, path.basename(script)), ...guestArgs], { stdio: "inherit" });
+    process.exit(guest.status ?? 1);
+  }
   process.exit(Number(process.env.FAKE_CUA_EXEC_STATUS ?? 0));
 }
 `;
@@ -134,11 +138,88 @@ test("syncs uncommitted work into the Space but keeps untracked secrets and dele
   );
   const exec = (await calls(fake)).find((call) => call[1] === "exec");
   const runId = archive.slice("aiden-src-".length, -".tgz".length);
-  const lockHash = createHash("sha256").update(await readFile(path.join(repo, "package-lock.json"))).digest("hex");
   assert.deepEqual(exec, [
     "sb", "exec", "-i", "local:aiden-e2e", "--",
-    "bash", `/home/cua/aiden-run-${runId}.sh`, runId, lockHash, "--run", "echo", "a b", "$HOME;x",
+    "bash", `/home/cua/aiden-run-${runId}.sh`, runId, "--run", "echo", "a b", "$HOME;x",
   ]);
+});
+
+test("packs a replaced directory as a symlink without reading tracked children through it", async (t) => {
+  const space = await checkout();
+  t.after(() => rm(space.root, { recursive: true, force: true }));
+  const config = path.join(space.repo, "config");
+  const outside = path.join(space.root, "outside");
+  await mkdir(path.join(config, "nested"), { recursive: true });
+  await writeFile(path.join(config, "nested", "settings.json"), "tracked");
+  await git(space.repo, "add", "config");
+  await mkdir(path.join(outside, "nested"), { recursive: true });
+  await writeFile(path.join(outside, "nested", "settings.json"), "private");
+  await rm(config, { recursive: true });
+  await symlink(outside, config);
+
+  assertStatus(await run(space, ["--run", "true"]), 0);
+  const archive = (await readdir(space.fake)).find((name) => name.startsWith("aiden-src-"));
+  const { stdout } = await execFileAsync("tar", ["-tzf", path.join(space.fake, archive)]);
+  assert.ok(stdout.split("\n").includes("config"), "the symlink itself is synced");
+  assert.ok(!stdout.split("\n").includes("config/nested/settings.json"), "the external file stays on the host");
+});
+
+// Exercise the full host-to-guest path with real tar and offline npm. Substitute only
+// Space provisioning, the pinned Node version check and the virtual display.
+async function runnableSpace(t) {
+  const space = await checkout();
+  t.after(() => rm(space.root, { recursive: true, force: true }));
+  const bin = path.join(space.root, "bin");
+  await mkdir(bin);
+  const stubs = {
+    node: 'if [ "$1" = --version ]; then echo v22.23.4; else exec "$TEST_NODE" "$@"; fi',
+    flock: "exit 0",
+    curl: "exit 97",
+    sudo: 'case "$1:$2" in -E:apt-get) exit 0 ;; tee:*) cat >/dev/null ;; *) exit 97 ;; esac',
+    "xvfb-run": 'shift 3; exec "$@"',
+  };
+  for (const [name, body] of Object.entries(stubs)) {
+    await writeFile(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  }
+  const manifest = { name: "fixture", version: "1.0.0", scripts: { postinstall: "mkdir -p node_modules" } };
+  await writeFile(path.join(space.repo, "package.json"), JSON.stringify(manifest));
+  await writeFile(path.join(space.repo, "package-lock.json"), JSON.stringify({
+    name: "fixture", version: "1.0.0", lockfileVersion: 3, packages: { "": { name: "fixture", version: "1.0.0" } },
+  }));
+  const env = {
+    HOME: space.fake, FAKE_CUA_RUN_GUEST: "1", TEST_NODE: process.execPath, PATH: `${bin}:${process.env.PATH}`,
+    AIDEN_E2E_NODE_PREFIX: space.root, AIDEN_E2E_LOCK: path.join(space.root, "lock"), npm_config_offline: "true",
+    npm_config_cache: path.join(space.root, "npm-cache"), npm_config_ignore_scripts: "false",
+  };
+  return { ...space, bin, manifest, command: (...args) => run(space, ["--run", ...args], env) };
+}
+
+test("a failed guest cleanup prevents command execution against stale files", async (t) => {
+  const space = await runnableSpace(t);
+  const checkoutDir = path.join(space.fake, "aiden-agent");
+  await mkdir(checkoutDir);
+  await writeFile(path.join(checkoutDir, "stale"), "old source");
+  // Model an undeletable entry even when the CI user can override file permissions.
+  await writeFile(path.join(space.bin, "rm"), '#!/bin/sh\nfor arg do [ "$arg" != "./stale" ] || exit 1; done\nexec /bin/rm "$@"\n', { mode: 0o755 });
+  const marker = path.join(space.root, "command-ran");
+  const result = await space.command("cp", "stale", marker);
+  assertStatus(result, 2);
+  assert.match(result.stdout, /CHECKOUT_CLEANUP_FAILED/);
+  assert.ok(!(await readdir(space.root)).includes("command-ran"));
+});
+
+test("a warm guest rejects a manifest dependency missing from the unchanged lockfile", async (t) => {
+  const space = await runnableSpace(t);
+  assertStatus(await space.command("touch", "node_modules/warm-marker"), 0);
+  assertStatus(await space.command("test", "-f", "node_modules/warm-marker"), 0);
+  await mkdir(path.join(space.repo, "addon"));
+  await writeFile(path.join(space.repo, "addon", "package.json"), '{"name":"addon","version":"1.0.0"}');
+  await writeFile(path.join(space.repo, "package.json"), JSON.stringify({
+    ...space.manifest, dependencies: { addon: "file:addon" },
+  }));
+  const result = await space.command("true");
+  assertStatus(result, 2);
+  assert.match(result.stderr, /Missing: addon/);
 });
 
 test("creates a missing Space and reports the guest's exit status", async (t) => {
@@ -258,7 +339,7 @@ async function guestRun({ flockStatus, curlStatus = 22 }) {
   await writeFile(source, "");
   let result;
   try {
-    const { stdout } = await execFileAsync("bash", [script, "test", "lockhash", "--run", "true"], {
+    const { stdout } = await execFileAsync("bash", [script, "test", "--run", "true"], {
       env: { ...isolatedEnv, HOME: home, PATH: `${bin}:${process.env.PATH ?? ""}`, AIDEN_E2E_LOCK: path.join(root, "lock"),
         AIDEN_E2E_NODE_PREFIX: path.join(root, "node") },
     });

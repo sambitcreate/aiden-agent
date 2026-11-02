@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # The in-Space half of scripts/cua-space-e2e.sh, which copies it into the Space for each run and runs it there as
-#   bash aiden-run-<id>.sh <run id> <package-lock hash> [--run <command...> | --watch] [playwright args]
+#   bash aiden-run-<id>.sh <run id> [--run <command...> | --watch] [playwright args]
 # It takes the Space's run lock, installs Node and CI's apt packages, refreshes the synced checkout and its npm cache,
 # then runs the command or the Playwright suite and packs the results for the host. It deletes itself on exit.
 set -uo pipefail
-RUN_ID="$1"; LOCK_HASH="$2"; shift 2
+RUN_ID="$1"; shift
 SRC=~/aiden-src-$RUN_ID.tgz
 RESULTS=~/test-results-$RUN_ID.tgz
 trap 'rm -f "$SRC" "$0"' EXIT
@@ -50,9 +50,11 @@ fi
 # Fail rather than clear whatever directory we are in if the checkout directory cannot be entered.
 { mkdir -p ~/aiden-agent && cd ~/aiden-agent; } || { echo "CHECKOUT_DIR_FAILED"; exit 2; }
 # Replace the source but keep node_modules between runs.
-find . -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} +
+find . -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} + || { echo "CHECKOUT_CLEANUP_FAILED"; exit 2; }
 tar -xzf "$SRC" || { echo "SOURCE_EXTRACT_FAILED"; exit 2; }
-CACHE_KEY="$LOCK_HASH-node$NODE_VERSION-$(uname -m)"
+# Key the cache on the inputs npm ci will read from this extracted checkout.
+MANIFEST_HASHES="$(shasum -a 256 package.json package-lock.json)" || { echo "DEPENDENCY_HASH_FAILED"; exit 2; }
+CACHE_KEY="$MANIFEST_HASHES-node$NODE_VERSION-$(uname -m)"
 if [ "$(cat node_modules/.aiden-cache-key 2>/dev/null)" != "$CACHE_KEY" ]; then
   run_fg npm ci --no-audit --no-fund || { echo "NPM_CI_FAILED"; exit 2; }
   echo "$CACHE_KEY" > node_modules/.aiden-cache-key

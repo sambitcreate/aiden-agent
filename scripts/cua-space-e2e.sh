@@ -69,6 +69,20 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 RUN_ID="$(basename "$WORK")"
 
+# Git's index can still list children of a directory now replaced by a symlink.
+# Never hand those child paths to tar, which would follow the intermediate link.
+archive_inputs() {
+  local path parent
+  while IFS= read -r -d '' path; do
+    parent=$path
+    while [[ "$parent" == */* ]]; do
+      parent=${parent%/*}
+      if [ -L "$parent" ]; then continue 2; fi
+    done
+    if [ -L "$path" ] || [ -f "$path" ]; then printf '%s\0' "$path"; fi
+  done
+}
+
 # Tracked files plus untracked ones, so uncommitted work is tested too. Ignored untracked files, and untracked files
 # matching the key and credential patterns below, stay on the host. `ls-files -c` still lists tracked paths deleted
 # from the working tree, so keep only paths that exist; tar still fails on unreadable ones. Directories are dropped:
@@ -82,10 +96,7 @@ RUN_ID="$(basename "$WORK")"
     ':(exclude,glob)**/*.mobileprovision' ':(exclude,glob)**/id_rsa*' ':(exclude,glob)**/id_dsa*' \
     ':(exclude,glob)**/id_ecdsa*' ':(exclude,glob)**/id_ed25519*' ':(exclude,glob)**/.netrc' \
     ':(exclude,glob)**/.git-credentials'
-} | while IFS= read -r -d '' path; do if [ -L "$path" ] || [ -f "$path" ]; then printf '%s\0' "$path"; fi; done \
-  | COPYFILE_DISABLE=1 tar --null -T - -czf "$WORK/src.tgz" --no-xattrs)
-LOCK_HASH="$(shasum -a 256 "$ROOT/package-lock.json" | cut -d' ' -f1)"
-
+} | archive_inputs | COPYFILE_DISABLE=1 tar --no-recursion --null -T - -czf "$WORK/src.tgz" --no-xattrs)
 
 "$CUA" sb cp "$WORK/src.tgz" "$REF:/home/cua/aiden-src-$RUN_ID.tgz" >/dev/null
 "$CUA" sb cp "$ROOT/scripts/cua-space-e2e-guest.sh" "$REF:/home/cua/aiden-run-$RUN_ID.sh" >/dev/null
@@ -93,7 +104,7 @@ LOCK_HASH="$(shasum -a 256 "$ROOT/package-lock.json" | cut -d' ' -f1)"
 set +e
 # -i streams output, passes argv untouched, sets no time limit and returns the guest's exit status
 # (plain `sb exec` applies a default timeout that cuts a full run short).
-"$CUA" sb exec -i "$REF" -- bash "/home/cua/aiden-run-$RUN_ID.sh" "$RUN_ID" "$LOCK_HASH" "$@" </dev/null
+"$CUA" sb exec -i "$REF" -- bash "/home/cua/aiden-run-$RUN_ID.sh" "$RUN_ID" "$@" </dev/null
 status=$?
 set -e
 
