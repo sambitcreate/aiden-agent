@@ -35,6 +35,7 @@ import {
   PiAgentRuntimeHarness,
   PiAgentRuntimeHostError,
   resolvePiAgentRuntimeContributionSnapshot,
+  type PiAgentRuntimeExtension,
   type PiAgentRuntimeHarnessOptions,
   type PiHarnessFault,
   type PiRuntimeSessionBinding,
@@ -102,6 +103,7 @@ async function managedTestHarness(
     effects?: PiRuntimeSessionBinding["effects"];
     signal?: AbortSignal;
     streamFn?: PiAgentRuntimeHarnessOptions["streamFn"];
+    compactionEngine?: PiRuntimeSessionBinding["compaction"]["engine"];
     summaryResponses?: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0];
     generationContextTransform?: boolean;
     onContextProjection?: PiAgentRuntimeHarnessOptions["onContextProjection"];
@@ -184,6 +186,7 @@ async function managedTestHarness(
       appendInput: options.appendInput,
       beforeQueuedUser: options.beforeQueuedUser,
       compaction: {
+        engine: options.compactionEngine,
         models: compactionModels,
         model,
         thinkingLevel: "off",
@@ -2373,6 +2376,75 @@ test("an irreducible active tool result uses bounded projection without a no-op 
   assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), false);
 });
 
+const oversizedHistory: PiAgentRuntimeExtension = {
+  id: "oversized-ephemeral-history",
+  transformContext: async (messages) => [
+    { role: "user", content: `old-${"u".repeat(60_000)}`, timestamp: 1 },
+    { ...fauxAssistantMessage(`old-${"a".repeat(60_000)}`), timestamp: 2 },
+    ...messages,
+  ],
+};
+
+for (const [engine, overCap, writeFails] of [
+  ["vcc", false, false],
+  ["vcc", true, false],
+  ["vcc", true, true],
+  ["llm", false, false],
+  ["llm", true, false],
+] as const) {
+  test(`emergency checkpoint with durable history (${engine}, ${overCap ? "at cap" : "under cap"}${writeFails ? ", write fails" : ""})`, async () => {
+    let summaries = 0;
+    const { harness, session, core } = await managedTestHarness(
+      [fauxAssistantMessage("Final answer from the bounded context")],
+      {
+        compactionEngine: engine,
+        contextWindow: 4_096,
+        generationContextTransform: true,
+        extensions: [oversizedHistory],
+        spendingLimitReached: async () => overCap,
+        summaryResponses: Array.from({ length: 2 }, () => () => {
+          summaries++;
+          return fauxAssistantMessage("## Goal\nFinish the task.\n## Progress\nReviewed earlier steps.\n## Next Steps\nRespond.");
+        }),
+      },
+    );
+    for (let i = 0; i < 10; i++) {
+      await appendPiMessages(session, [
+        { role: "user", content: `Explain step ${i}`, timestamp: 10 + i * 2 },
+        fauxAssistantMessage(`Step ${i}. ${"Earlier detail. ".repeat(48)}`, { timestamp: 11 + i * 2 }),
+      ]);
+    }
+    let failedWrites = 0;
+    if (writeFails) {
+      session.appendCompaction = async () => {
+        failedWrites++;
+        throw new Error("Checkpoint storage unavailable");
+      };
+    }
+    const outcome = await harness.runManaged({
+      kind: "append-and-run",
+      message: { role: "user", content: "Finish the task", timestamp: 100 },
+    });
+
+    assert.equal(outcome.emergencyProjection?.kind, "history_removed");
+    assert.equal(core.state.callCount, 1);
+    const checkpoints = (await session.getBranch()).filter((entry) => entry.type === "compaction");
+    assert.equal(failedWrites, writeFails ? 1 : 0);
+    if (writeFails || (engine === "llm" && overCap)) {
+      assert.equal(outcome.kind, "host_failed");
+      assert.equal(outcome.faultKind, "compaction");
+      assert.equal(checkpoints.length, 0);
+      assert.equal(summaries, 0);
+    } else {
+      assert.equal(outcome.kind, "completed");
+      assert.equal(messageText(outcome.finalMessage), "Final answer from the bounded context");
+      assert.equal(checkpoints.length, 1);
+      if (engine === "vcc") assert.equal(summaries, 0);
+      else assert.ok(summaries > 0);
+    }
+  });
+}
+
 for (const overCap of [false, true]) {
   test(`hidden history removal fails closed without a durable checkpoint (${overCap ? "spending stop" : "normal finish"})`, async () => {
     const { harness, session, core } = await managedTestHarness(
@@ -2381,19 +2453,7 @@ for (const overCap of [false, true]) {
         spendingLimitReached: async () => overCap,
         contextWindow: 4_096,
         generationContextTransform: true,
-        extensions: [
-          {
-            id: "oversized-ephemeral-history",
-            transformContext: async (messages) => [
-              { role: "user", content: `old-${"u".repeat(60_000)}`, timestamp: 1 },
-              {
-                ...fauxAssistantMessage(`old-${"a".repeat(60_000)}`),
-                timestamp: 2,
-              },
-              ...messages,
-            ],
-          },
-        ],
+        extensions: [oversizedHistory],
       },
     );
 

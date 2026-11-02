@@ -2112,6 +2112,32 @@ export class PiAgentRuntimeHarness {
       }
       if (cancelled()) return await finish({ kind: "app_cancelled", attempts });
 
+      const complete = async (assistant: AssistantMessage, alreadyCompacted: boolean) => {
+        if (this.pendingEmergencyCheckpoint && !alreadyCompacted) {
+          const recoveryOperation = coordinator.compact({ localOnly: this.stoppedAtSpendingLimit });
+          const recovery = await waitForManagedPromise(recoveryOperation, abortController.signal);
+          if (recovery.kind === "cancelled") {
+            this.trackDetachedDurability(recoveryOperation);
+            return await finish({ kind: "app_cancelled", finalMessage: assistant, attempts });
+          }
+          if (
+            recovery.kind === "failed" ||
+            recovery.value.errorMessage ||
+            !recovery.value.compacted
+          ) {
+            return await finish({
+              kind: "host_failed",
+              faultKind: "compaction",
+              finalMessage: assistant,
+              attempts,
+            });
+          }
+          if (recovery.value.messages) this.installCompactedMessages(recovery.value.messages);
+          this.pendingEmergencyCheckpoint = false;
+        }
+        return await finish({ kind: "completed", finalMessage: assistant, attempts });
+      };
+
       try {
         const repairOperation = coordinator.prepareForPrompt();
         const repaired = await waitForManagedPromise(repairOperation, abortController.signal);
@@ -2342,12 +2368,7 @@ export class PiAgentRuntimeHarness {
           if (assistant.stopReason === "length" && !keptCutOffReply(assistant, "output-limit")) {
             return await finish({ kind: "provider_failed", reason: "output-limit", finalMessage: assistant, attempts });
           }
-          // The spending limit also rules out paid checkpoint recovery. A reply based
-          // on removed history cannot complete until that checkpoint is durable.
-          if (this.pendingEmergencyCheckpoint) {
-            return await finish({ kind: "host_failed", faultKind: "compaction", finalMessage: assistant, attempts });
-          }
-          return await finish({ kind: "completed", finalMessage: assistant, attempts });
+          return await complete(assistant, false);
         }
 
         let compactionResult: PiCompactionCheckResult;
@@ -2560,29 +2581,7 @@ export class PiAgentRuntimeHarness {
             attempts,
           });
         }
-        if (this.pendingEmergencyCheckpoint && !compactionResult.compacted) {
-          const recoveryOperation = coordinator.compact();
-          const recovery = await waitForManagedPromise(recoveryOperation, abortController.signal);
-          if (recovery.kind === "cancelled") {
-            this.trackDetachedDurability(recoveryOperation);
-            return await finish({ kind: "app_cancelled", finalMessage: assistant, attempts });
-          }
-          if (
-            recovery.kind === "failed" ||
-            recovery.value.errorMessage ||
-            !recovery.value.compacted
-          ) {
-            return await finish({
-              kind: "host_failed",
-              faultKind: "compaction",
-              finalMessage: assistant,
-              attempts,
-            });
-          }
-          if (recovery.value.messages) this.installCompactedMessages(recovery.value.messages);
-          this.pendingEmergencyCheckpoint = false;
-        }
-        return await finish({ kind: "completed", finalMessage: assistant, attempts });
+        return await complete(assistant, compactionResult.compacted);
       }
     } finally {
       parentSignal?.removeEventListener("abort", abortFromParent);
