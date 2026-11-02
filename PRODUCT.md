@@ -59,3 +59,5 @@ Avoid a generic web dashboard inside a desktop shell, ornamental cards, feature-
 Target WCAG 2.2 AA for text and controls. Preserve keyboard access, visible focus, semantic labels, sufficient contrast, reduced-motion behavior, and non-color-only communication. Keep dense desktop UI readable at the app's supported window sizes and system appearance settings.
 
 Paired desktops can clone a local repository-root project into an approved folder on another computer. Environment-file copying requires an explicit file selection, with no files selected by default. Repository authentication stays on the destination computer. Phones and CLI daemons retain their existing project setup surfaces.
+
+Desktop Appearance → Chat offers Compact, Standard, Detailed and Verbose work details, automatic collapse on completion or the next message, the shared link-opening preference, and a Queue/Steer busy-send default. Manual disclosure choices take priority. These controls change desktop presentation/input defaults and add no Remote protocol or native-phone setting.

@@ -6,6 +6,9 @@ import { Button, Callout, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
 import { AidenActivityMark } from "./aiden-activity-mark";
 import { ActivityFeed } from "./activity-feed";
+import { useAppearancePreference } from "../lib/use-appearance-preference";
+import { latestWorkDetailsStart } from "../lib/work-details";
+import type { WorkDetailsMode } from "../shared/appearance";
 import { EventPresence } from "./event-presence";
 import { SafeMessageBubble } from "./message-bubble";
 import { AgentNoticeCard } from "./agent-notice-card";
@@ -151,6 +154,8 @@ interface MessageListProps {
 }
 
 interface AssistantResponseProps {
+  workDetails?: WorkDetailsMode;
+  retainWorkDetails?: boolean;
   content: string;
   timeline: GenerationTimeline | null | undefined;
   reasoning?: string | null;
@@ -215,6 +220,8 @@ type RenderVisual = (
 ) => React.ReactNode;
 
 function AssistantResponse({
+  workDetails = "standard",
+  retainWorkDetails = false,
   content,
   timeline,
   reasoning,
@@ -327,7 +334,7 @@ function AssistantResponse({
       <>
         {null /* the chronological layout's leading subagent slot */}
         {[
-          <ActivityFeed key="activity" timeline={activityTimeline} animate={streaming} />,
+          <ActivityFeed key="activity" timeline={activityTimeline} animate={streaming} mode={workDetails} retainDetails={retainWorkDetails || (streaming && !streamComplete)} />,
           ...(timeline?.steps.filter(isExtractionStep).map((step) => (
             <WebExtractRecap key={`extraction-${step.id}`} recap={step.extraction} />
           )) ?? []),
@@ -408,6 +415,8 @@ function AssistantResponse({
               <ActivityFeed
                 timeline={activityTimelineFragment(timeline, row.steps)}
                 animate={streaming}
+                mode={workDetails}
+                retainDetails={retainWorkDetails || (streaming && !streamComplete)}
               />
               {visualNodes(slots.byRowKey.get(row.key))}
               {draftNodes(slots.draftsByRowKey.get(row.key))}
@@ -457,6 +466,8 @@ function settledTurnFooter(message: ChatMessage): React.ReactNode {
 }
 
 interface SettledMessageRowProps {
+  workDetails?: WorkDetailsMode;
+  retainWorkDetails?: boolean;
   chatId: string;
   deferOffscreenLayout?: boolean;
   /** Absent only for the in-flight reply, which passes `live` instead. */
@@ -494,6 +505,8 @@ interface SettledMessageRowProps {
  * only the live row, do not re-render or re-derive settled history.
  */
 const SettledMessageRow = React.memo(function SettledMessageRow({
+  workDetails,
+  retainWorkDetails,
   chatId,
   deferOffscreenLayout,
   message,
@@ -563,10 +576,12 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
       className={`${contained ? "transcript-settled-contained " : ""}${assistant ? "group/reply " : ""}flex min-w-0 flex-col gap-3`}
     >
       {live ? (
-        <AssistantResponse {...live} streaming />
+        <AssistantResponse {...live} workDetails={workDetails} retainWorkDetails={retainWorkDetails} streaming />
       ) : !message ? null : message.role === "assistant" ? (
         <>
           <AssistantResponse
+            workDetails={workDetails}
+            retainWorkDetails={retainWorkDetails}
             content={message.content}
             timeline={message.timeline}
             reasoning={message.reasoning}
@@ -785,6 +800,9 @@ export function MessageList({
   forkBeforeFirstPrompt = true,
   storedImageActions = true,
 }: MessageListProps) {
+  const workDetails = useAppearancePreference("workDetails");
+  const collapseTiming = useAppearancePreference("workDetailsCollapseTiming");
+  const latestExchangeStart = React.useMemo(() => latestWorkDetailsStart(messages), [messages]);
   const onForkRef = React.useRef(onFork);
   const onForkWithSummaryRef = React.useRef(onForkWithSummary);
   React.useLayoutEffect(() => {
@@ -1075,6 +1093,8 @@ export function MessageList({
   const liveRow = streamingRowVisible ? (
     <SettledMessageRow
       key={liveKey}
+      workDetails={workDetails}
+      retainWorkDetails={collapseTiming === "next-input" && (settlingIndex < 0 || settlingIndex >= latestExchangeStart)}
       live={{
         content: streamingText ?? "",
         timeline,
@@ -1110,6 +1130,8 @@ export function MessageList({
     transcriptRows.push(
       <SettledMessageRow
         key={settledRowKeys.get(message.id)}
+        workDetails={workDetails}
+        retainWorkDetails={collapseTiming === "next-input" && messageIndex >= latestExchangeStart}
         chatId={chatId}
         deferOffscreenLayout={messageIndex < messages.length - 32}
         message={message}
