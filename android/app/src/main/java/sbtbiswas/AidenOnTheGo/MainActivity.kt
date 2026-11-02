@@ -26,6 +26,7 @@ import sbtbiswas.AidenOnTheGo.features.settings.AidenSettingsDestination
 import sbtbiswas.AidenOnTheGo.features.workspaces.AidenGitScreen
 import sbtbiswas.AidenOnTheGo.features.workspaces.AidenWorkspaceEnvironmentScreen
 import sbtbiswas.AidenOnTheGo.models.AidenBotDeepLinkResolution
+import sbtbiswas.AidenOnTheGo.models.AidenNoWorkspace
 import sbtbiswas.AidenOnTheGo.models.aidenResolvedBotDeepLink
 import sbtbiswas.AidenOnTheGo.notifications.AidenDeepLink
 import sbtbiswas.AidenOnTheGo.notifications.AidenNavigationDestination
@@ -116,9 +117,10 @@ class MainActivity : ComponentActivity() {
                 }
                 if (connectionState == AidenConnectionState.CONNECTING || !hasCompletedWorkspaceRefresh) return@LaunchedEffect
                 val client = coordinator.pairedClient(target.pairing) ?: return@LaunchedEffect
-                fun valid(): Boolean = retained(target) && coordinator.holdsReadAuthority(client, target.pairing.instanceId) &&
+                fun authorized(): Boolean = retained(target) && coordinator.holdsReadAuthority(client, target.pairing.instanceId) &&
                     coordinator.activePairing == target.pairing && coordinator.connectionState.value == AidenConnectionState.CONNECTED &&
-                    installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.CHAT_WRITE) == true &&
+                    installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.CHAT_WRITE) == true
+                fun valid(): Boolean = authorized() &&
                     coordinator.workspaces.value.any { it.id == target.workspaceId } &&
                     !coordinator.archiveStore.isArchived(target.workspaceId, target.pairing.instanceId)
                 // This scope is independent of list refreshes. perform consumes approval before I/O.
@@ -126,14 +128,19 @@ class MainActivity : ComponentActivity() {
                     try {
                         // A chat started under Chats can land in a fresh hidden workspace of its own.
                         val startsUnderChats = coordinator.workspaces.value.any { it.id == target.workspaceId && it.noWorkspace }
-                        val chat = newChatConsent.perform(target, ::valid) {
+                        // perform checks this before the create (the target is listed then). After a Chats
+                        // create, the Mac may have replaced a released home, so the receipt is judged by
+                        // the pairing and access alone and its own workspace is checked below.
+                        val chat = newChatConsent.perform(target, { if (startsUnderChats) authorized() else valid() }) {
                             requireNotNull(client).createChat(target.workspaceId, noWorkspace = startsUnderChats)
                         } ?: return@launch
                         if (chat.isBotChat || (chat.workspaceId != target.workspaceId && !startsUnderChats)) return@launch
                         if (coordinator.workspaces.value.none { it.id == chat.workspaceId }) {
                             coordinator.refreshWorkspaces()?.join()
                             // The wait can outlive the pairing that made the chat; don't open it under another.
-                            if (!valid()) return@launch
+                            if (!(if (startsUnderChats) authorized() else valid()) ||
+                                !AidenNoWorkspace.opensCreatedChat(startsUnderChats, target.workspaceId, chat.workspaceId,
+                                    coordinator.workspaces.value)) return@launch
                         }
                         navigationStore.setSelectedArea(target.pairing.instanceId, AidenProductArea.WORKSPACES)
                         navigator.navigate(navigator.stack.resetTo(AidenScreen.ChatDetail(chat.id)))

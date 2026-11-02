@@ -270,5 +270,16 @@ class AidenChatRowStatusTest {
             listOf("elsewhere", "soup", "trip", "first"),
             projectAidenWorkspaceSidebar(reRead, chats + fromAnotherPhone, "").sections.first().chats.map { it.id }
         )
+
+        // A new-chat link aimed at a hidden home the Mac has since released (one that isn't
+        // `default`) lands in a replacement: after the re-read lists the replacement and not the
+        // old home, the chat still opens.
+        val afterRelease = workspaces.filter { it.id != "hidden-a" } + hidden("replacement", 13)
+        assertTrue(AidenNoWorkspace.opensCreatedChat(true, "hidden-a", "replacement", afterRelease))
+        assertFalse(AidenNoWorkspace.opensCreatedChat(true, "hidden-a", "never-listed", afterRelease))
+        // A create in an ordinary workspace opens only in that workspace, while it is still listed.
+        assertTrue(AidenNoWorkspace.opensCreatedChat(false, "alpha", "alpha", workspaces))
+        assertFalse(AidenNoWorkspace.opensCreatedChat(false, "alpha", "replacement", afterRelease))
+        assertFalse(AidenNoWorkspace.opensCreatedChat(false, "alpha", "alpha", workspaces.filter { it.id != "alpha" }))
     }
 }

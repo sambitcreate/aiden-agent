@@ -107,6 +107,23 @@ object AidenNoWorkspace {
         workspaces: List<AidenWorkspace>,
         alreadyReRead: Set<String>
     ): Set<String> = chatWorkspaceIds.toSet() - workspaces.map { it.id }.toSet() - alreadyReRead
+
+    /**
+     * Whether a chat a new-chat link just created may open, given the workspaces listed after the
+     * create. A Chats create can land in a fresh hidden workspace, also when the Mac released the
+     * home the phone aimed at, so only the chat's own workspace has to be listed. Any other create
+     * must come back in its target, and the target must still be listed.
+     */
+    fun opensCreatedChat(
+        startsUnderChats: Boolean,
+        targetWorkspaceId: String,
+        chatWorkspaceId: String,
+        workspaces: List<AidenWorkspace>
+    ): Boolean {
+        val listed = workspaces.map { it.id }.toSet()
+        return if (startsUnderChats) chatWorkspaceId in listed
+        else chatWorkspaceId == targetWorkspaceId && targetWorkspaceId in listed
+    }
 }
 
 @Serializable
