@@ -14,7 +14,8 @@ import { createMcpResourceTool, listMcpResourcesPage, listMcpResourceTemplatesPa
 import type { McpClient, McpTransport } from "@earendil-works/pi-mcp";
 import { AIDEN_MCP_CLIENT_NAME, connectMcpClient, createMcpClient } from "./mcp-client.js";
 import { createMcpStdioTransport } from "./mcp-stdio-transport.js";
-import { isMcpMacAppOpen } from "./mcp-mac-apps.js";
+import { imcpLauncherPath } from "./imcp-launcher-path.js";
+import { desktopStdioLaunch, isMcpMacAppOpen } from "./mcp-mac-apps.js";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { projectDiagnosticError } from "./diagnostics-contract.js";
@@ -125,15 +126,11 @@ function makeTransport(
   } = {},
 ): McpTransport {
   if (server.transport === "stdio") {
-    if (!server.command)
-      throw new Error("This MCP server needs a command to run.");
     // Only the safe default environment plus the server's declared env:
     // Aiden's own environment (tokens, proxy secrets) never reaches the child.
     return createMcpStdioTransport({
-      command: server.command,
+      ...desktopStdioLaunch(server, imcpLauncherPath),
       maxBufferSize: MAX_MCP_RESPONSE_BYTES,
-      args: server.args ?? [],
-      env: server.env ?? {},
     });
   }
   if (!server.url) throw new Error("This MCP server needs a URL.");
