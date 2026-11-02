@@ -115,7 +115,7 @@ All counts are "the moment it happened", fired from the main process unless note
 Dashboards count active users from both `app_active` and real actions (`chat_message_sent`), so a Mac left open for a week is not mistaken for engagement. Phone and peer reconnects never fire events by themselves. Phone use counts against the host Mac's install, with `origin: "phone"` on `chat_message_sent` as the phone signal; the phone apps have no analytics of their own.
 | `onboarding_finished` | `app:setOnboardingOutcome` (`main/index.ts:987`) | `outcome`: `completed` / `deferred`; `provider_id` |
 | `app_updated` | First launch on a new version | `from_version`, `to_version` |
-| `analytics_disabled` | Sent once, synchronously flushed, at the moment the user turns it off, *before* the ID is deleted. Lets us see opt-out rate. | — |
+| `analytics_disabled` | On opt-out, Aiden drops queued events and makes a separate, time-limited attempt to send this event with the previous install ID. Saving the setting and deleting the ID do not wait for the response. | — |
 
 ### Core use
 
