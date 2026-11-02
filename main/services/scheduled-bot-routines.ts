@@ -323,9 +323,11 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
       }
       const notes = ports.routineNotes ? await abortable(ports.routineNotes(task.botId, task.id), signal) : "";
       const label = routineLabel(task, trigger);
-      if (task.wakeUp && !await ports.wakeUpAllowed?.(task.botId, task.wakeUp.generation)) {
+      if (task.wakeUp && (!ports.wakeUpAllowed ||
+        !await abortable(ports.wakeUpAllowed(task.botId, task.wakeUp.generation), signal))) {
         return { result: "blocked", output: "", error: "This wake-up was turned off.", surface: false };
       }
+      if (signal.aborted) throw new Error("Routine was cancelled.");
       try {
         submission = await abortable(
           ports.send(task.botId, {

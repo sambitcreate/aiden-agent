@@ -721,6 +721,31 @@ export function createScheduleStore(
     };
   }
 
+  async function changeEnabled(id: string, enabled: boolean, options?: { clearRoutineRetriesExcept: string }) {
+    return tasks.update((draft) => {
+      const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
+      const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
+      if (!existing) throw new Error(`Scheduled task ${id} not found.`);
+      if (enabled) assertAssistantScheduleExecutionBoundary(existing);
+      const timestamp = now();
+      const task: ScheduledTask = {
+        ...existing,
+        enabled,
+        ...(!enabled && !options && existing.pendingRoutineFires?.length && { pendingRoutineFires: observeQueuedRetries(existing.pendingRoutineFires) }),
+        ...(options && {
+          pendingRoutineFires: existing.pendingRoutineFires?.filter((fire) =>
+            !fire.retry || fire.requestId === options.clearRoutineRetriesExcept),
+        }),
+        nextRunAt: enabled
+          ? nextScheduledRun(existing.cron, existing.timezone, new Date(timestamp))
+          : undefined,
+        updatedAt: nextTaskRevision(timestamp, existing.updatedAt),
+      };
+      draft[index] = task;
+      return { task: structuredClone(task), previous: existing };
+    });
+  }
+
   return {
     list,
     get,
@@ -734,31 +759,13 @@ export function createScheduleStore(
       return (await saveWithRollback(input, isCurrent)).task;
     },
 
-    restoreIfRevision,
-
     async setEnabled(id: string, enabled: boolean, options?: { clearRoutineRetriesExcept: string }): Promise<ScheduledTask> {
-      return tasks.update((draft) => {
-        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
-        const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
-        if (!existing) throw new Error(`Scheduled task ${id} not found.`);
-        if (enabled) assertAssistantScheduleExecutionBoundary(existing);
-        const timestamp = now();
-        const task: ScheduledTask = {
-          ...existing,
-          enabled,
-          ...(!enabled && !options && existing.pendingRoutineFires?.length && { pendingRoutineFires: observeQueuedRetries(existing.pendingRoutineFires) }),
-          ...(options && {
-            pendingRoutineFires: existing.pendingRoutineFires?.filter((fire) =>
-              !fire.retry || fire.requestId === options.clearRoutineRetriesExcept),
-          }),
-          nextRunAt: enabled
-            ? nextScheduledRun(existing.cron, existing.timezone, new Date(timestamp))
-            : undefined,
-          updatedAt: nextTaskRevision(timestamp, existing.updatedAt),
-        };
-        draft[index] = task;
-        return structuredClone(task);
-      });
+      return (await changeEnabled(id, enabled, options)).task;
+    },
+
+    async pauseWithRollback(id: string) {
+      const { task, previous } = await changeEnabled(id, false);
+      return { task, rollback: () => restoreIfRevision(id, task.updatedAt, previous) };
     },
 
     updateRuntime,

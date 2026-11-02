@@ -26,4 +26,4 @@ Plan: `docs/plans/bot-wake-sources-plan.md` step 2, branch `feature/bot-self-wak
 ## Open
 - The CLI's durable Bot tool sources do not offer `wake_up` yet.
 
-Self-wake admission checks the durable permission generation before sending. Reenabling rotates that generation, so a surviving task from an interrupted switch-off cannot run later. The generation stays local to Bot and schedule storage.
+Self-wake admission checks the durable permission generation before sending. Reenabling rotates that generation, so a surviving task from an interrupted switch-off cannot run later. The generation stays local to Bot and schedule storage. The executor can cancel the permission wait and checks cancellation again before sending.

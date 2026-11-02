@@ -1566,3 +1566,33 @@ test("a surviving self-wake task cannot submit after its durable permission is r
   assert.deepEqual(h.session.sends, []);
   assert.equal((await h.store.runs(wake.id))[0]?.result, "blocked");
 });
+
+for (const timing of ["while permission is pending", "just after permission resolves"] as const) {
+  test(`cancelling a wake-up ${timing} prevents admission`, async (t) => {
+    const h = harness();
+    t.after(() => h.scheduler.stop());
+    const wake = await h.routines.create({
+      botId: "bot-chef", name: "Wake-up", prompt: "Check the oven.",
+      schedule: { kind: "once", date: `${new Date().getUTCFullYear() + 1}-03-14`, time: "17:00" },
+      wakeUp: { setAt: 123 },
+    });
+    let startCheck!: () => void;
+    const checking = new Promise<void>((resolve) => { startCheck = resolve; });
+    let allow!: (allowed: boolean) => void;
+    const permission = new Promise<boolean>((resolve) => { allow = resolve; });
+    h.session.wakeUpAllowed = () => { startCheck(); return permission; };
+    const controller = new AbortController();
+    const run = h.executor.run((await h.store.get(wake.id))!, { signal: controller.signal });
+    await checking;
+    if (timing === "just after permission resolves") {
+      allow(true);
+      await Promise.resolve();
+    }
+    controller.abort();
+    const result = await Promise.race([run, new Promise<void>((resolve) => setImmediate(resolve))]);
+    allow(true);
+    await run;
+    assert.ok(result && result.result === "blocked", "cancellation settles independently of permission");
+    assert.deepEqual(h.session.sends, []);
+  });
+}

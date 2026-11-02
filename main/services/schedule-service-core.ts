@@ -586,9 +586,8 @@ export function createScheduleServiceCore(
     pendingRetryAt.clear();
   }
 
-  async function rearmCurrentTask(previous: ScheduledTask | undefined): Promise<void> {
-    if (!previous?.enabled) return;
-    const current = await store.get(previous.id);
+  async function rearmCurrentTask(id: string): Promise<void> {
+    const current = await store.get(id);
     if (current?.enabled) await schedule(current);
   }
 
@@ -799,7 +798,7 @@ export function createScheduleServiceCore(
         try {
           await store.remove(id);
         } catch (error) {
-          await rearmCurrentTask(current);
+          await rearmCurrentTask(id);
           throw error;
         }
         dependencies.broadcast({ taskId: id, removed: true });
@@ -826,26 +825,23 @@ export function createScheduleServiceCore(
         stopJob(id);
         await cancelAndSettle(id);
         if (options.signal?.aborted) {
-          if (current?.enabled) await schedule(current);
+          await rearmCurrentTask(id);
           throwIfAborted(options.signal, "pause");
         }
-        let task: ScheduledTask;
+        let paused: Awaited<ReturnType<ScheduleStore["pauseWithRollback"]>>;
         try {
-          task = await store.setEnabled(id, false);
+          paused = await store.pauseWithRollback(id);
         } catch (error) {
-          await rearmCurrentTask(current);
+          await rearmCurrentTask(id);
           throw error;
         }
         if (options.signal?.aborted) {
-          if (current) {
-            await store.restoreIfRevision(id, task.updatedAt, current);
-            if (current.enabled) await rearmCurrentTask(current);
-            else stopJob(id);
-          }
+          await paused.rollback();
+          await rearmCurrentTask(id);
           throwIfAborted(options.signal, "pause");
         }
         dependencies.broadcast({ taskId: id });
-        return task;
+        return paused.task;
       });
     },
 
