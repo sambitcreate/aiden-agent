@@ -186,7 +186,9 @@ export function useFocusRegionKeys(): void {
         }
       }
     };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
+    // Saved commands run in document capture first. Built-in navigation is a
+    // fallback after both those commands and the focused control had the key.
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
   }, []);
 }

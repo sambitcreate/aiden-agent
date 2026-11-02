@@ -49,6 +49,10 @@ single `Tab` stop: `Tab` reaches the open chat (and its `•••`), then leave
 list. ⌘K also has **Focus sidebar**, **Focus conversation** and **Focus side
 panel**, which can be given their own keys in Settings.
 
+Saved shortcuts take priority over the built-in focus keys (`⇧F6` and
+`⌥↑` / `⌥↓`) when their command can run. Disabling or changing the saved
+shortcut gives the key back to focus navigation.
+
 The chat keys (`⌘1`–`⌘9`, `⇧⌘[` / `⇧⌘]`) also work while typing in the
 message box.
 
@@ -71,7 +75,8 @@ work while Aiden is in the background.
 `↑` works like **Edit in fork**: it forks the chat just before your last
 message and puts that message back in the box, so the original chat stays as
 it was. It needs that message to have a finished reply, and does nothing while
-a reply is coming, in a Bot chat, or when the box holds anything. `⌥↑` works
+a reply is coming, in a Bot chat, when the box holds anything, or while voice
+input is recording or waiting for its final transcript. `⌥↑` works
 from the conversation or an empty message box; `⌥↓` past the latest reply
 returns to the message box. Find in chat searches the conversation on screen,
 ignoring case, and keeps counting as replies stream in. A word split by
@@ -130,7 +135,7 @@ key. You can give any of them one in Settings.
 ## Menus on rows and messages
 
 `⇧F10` (or the Menu key) opens the right-click menu of the focused sidebar
-chat, Bot row or message. Sidebar chats and Bots also have a `•••` button that
+chat, Bot row or message (including Bot messages). Sidebar chats and Bots also have a `•••` button that
 appears on hover or focus and is reachable with `Tab`. A chat's menu has
 Rename, Rename with Apple (where available) and Delete; `/delete` and ⌘K →
 Delete chat… ask the same question for the open chat.

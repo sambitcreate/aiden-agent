@@ -1,8 +1,12 @@
-import "../main/bots/test-dom";
+import { emitBotTestNotification, installBotTestIpc } from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { focusRegionWhenShown, useFocusRegionKeys } from "./focus-regions";
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { CommandSystemProvider, useCommandHandler, useShortcutBinding } from "./command-system";
+import { applyKeybindingMutation, effectiveBindings } from "../shared/keybindings";
 
 afterEach(cleanup);
 
@@ -195,3 +199,44 @@ test("focus someone moves first is left where they put it", async () => {
   assert.ok(document.activeElement === button, `focus moved to ${document.activeElement?.tagName}`);
   cancel();
 });
+
+for (const [binding, key, modifiers] of [
+  ["Alt+Up", "ArrowUp", { altKey: true }],
+  ["Alt+Down", "ArrowDown", { altKey: true }],
+  ["Shift+F6", "F6", { shiftKey: true }],
+] as const) {
+  test(`saved ${binding} runs its command before built-in focus navigation`, async () => {
+    const overrides = applyKeybindingMutation(undefined, { commandId: "model.change", binding });
+    const snapshot = { overrides, effective: effectiveBindings(overrides), global: [] };
+    installBotTestIpc({ "shortcut:get": () => snapshot, "app:renderer-ready": () => null, "app:setMenuCommands": () => true });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } });
+    client.setQueryData(["shortcuts"], snapshot);
+    let opened = 0;
+    function Command() {
+      useCommandHandler("model.change", () => { opened += 1; });
+      const currentBinding = useShortcutBinding("model.change");
+      return <><output aria-label="Model shortcut">{currentBinding ?? "Unassigned"}</output><Window /></>;
+    }
+    render(<QueryClientProvider client={client}><CommandSystemProvider><Command /></CommandSystemProvider></QueryClientProvider>);
+    const origin = key === "ArrowDown"
+      ? screen.getByRole("button", { name: "Copy second" })
+      : screen.getByRole("textbox", { name: "Message" });
+    origin.focus();
+    press(key, modifiers);
+    assert.equal(opened, 1, "the accepted saved key reaches its registered command");
+    assert.equal(document.activeElement, origin, "built-in navigation did not also move focus");
+
+    // A live rebind or disable gives the key back to its built-in action.
+    act(() => emitBotTestNotification("shortcut:changed", {
+      ...snapshot,
+      effective: effectiveBindings(applyKeybindingMutation(overrides, { commandId: "model.change", disabled: true })),
+    }));
+    await waitFor(() => assert.equal(screen.getByLabelText("Model shortcut").textContent, "Unassigned"));
+    origin.focus();
+    press(key, modifiers);
+    assert.equal(opened, 1, "the disabled command stays off");
+    assert.equal(focused(), key === "ArrowUp" ? "Copy second" : key === "ArrowDown" ? "Message" : "Conversation");
+    cleanup();
+    client.clear();
+  });
+}
