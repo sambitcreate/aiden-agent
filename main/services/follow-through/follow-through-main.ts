@@ -15,6 +15,9 @@ import {
 } from "../../../renderer/shared/follow-through.js";
 import { parseGitHubPullRequestUrl } from "../../../renderer/shared/chat-pull-requests.js";
 import { agentShellCommandEnvironment } from "../agent-command-environment.js";
+import { assertManagedWorktreeAdmission } from "../managed-worktree-admission.js";
+import { WorkspaceMutationGate, workspaceMutationGate, commitWithWorkspaceMutationAdmission } from "../workspace-mutation-gate.js";
+import { WorkspaceOperationRegistry } from "../workspace-operation-registry.js";
 import { runBoundedShellCommand } from "../bounded-shell-command.js";
 import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
@@ -39,6 +42,8 @@ import type { PullRequestFollowRecord } from "./pull-request-follow.js";
 import { PullRequestFollowReader } from "./pull-request-follow-github.js";
 import { PullRequestFollows } from "./pull-request-follows.js";
 
+const chatConfiguration = new WorkspaceMutationGate();
+const commandHandoffs = new WorkspaceOperationRegistry();
 const JOB_NOTICE_OUTPUT_CHARS = 3_000;
 const MAX_CHECK_OUTPUT_BYTES = 10 * 1024 * 1024;
 const RUN_WINDOW_SLACK_MS = 60_000;
@@ -180,19 +185,31 @@ export const backgroundJobs = new BackgroundJobs({
   log: (message, error) => logger.warn("background-jobs", message, error),
 });
 
-export const doneWhen = new DoneWhenChecks({
+export const doneWhen: DoneWhenChecks = new DoneWhenChecks({
   run: async (record, signal) => {
+    // Finish saving the running attempt before its command can take effect.
+    await saveChain;
+    const chat = await chatStore.get(record.chatId);
     const workspace = await configStore.getWorkspace(record.workspaceId);
-    if (!workspace?.folderPath || workspace.permission === "none") {
-      return { exitCode: null, timedOut: false, aborted: false, output: "Folder access is off for this chat, so the check could not run." };
+    signal.throwIfAborted();
+    if (!chat || chat.workspaceId !== workspace?.id || !workspace?.folderPath || workspace.permission === "none") {
+      doneWhen.clear(record.chatId);
+      return { exitCode: null, timedOut: false, aborted: true, output: "" };
     }
+    await assertManagedWorktreeAdmission(workspace);
+    signal.throwIfAborted();
+    if (workspaceMutationGate.isChanging(workspace.id)) {
+      return { exitCode: null, timedOut: false, aborted: true, output: "" };
+    }
+    const id = newBackgroundJobId();
     const result = await runBoundedShellCommand({
       command: record.command,
       cwd: workspace.folderPath,
-      env: agentShellCommandEnvironment(),
+      env: { ...agentShellCommandEnvironment(), [BACKGROUND_JOB_MARKER]: id },
       timeoutMs: DONE_WHEN_TIMEOUT_MS,
       maxOutputBytes: MAX_CHECK_OUTPUT_BYTES,
       signal,
+      recordGroup: (pid) => backgroundJobs.recordCheckGroup(id, pid, workspace.id, record.chatId),
     });
     return {
       exitCode: result.outputLimitExceeded ? null : result.exitCode,
@@ -231,8 +248,12 @@ export const pullRequestFollows = new PullRequestFollows({
 export function runCommandLeftovers(input: { chatId: string; workspaceId: string; cwd: string }): RunCommandLeftovers {
   return {
     begin() {
+      if (workspaceMutationGate.isChanging(input.workspaceId)) throw new Error("The workspace is changing.");
+      const operation = commandHandoffs.admit(input.workspaceId);
       const id = newBackgroundJobId();
       return {
+        signal: operation.signal,
+        release: operation.release,
         env: { [BACKGROUND_JOB_MARKER]: id },
         adopt: async (processGroup, command, description, output) => {
           let job: BackgroundJobView | undefined;
@@ -271,27 +292,42 @@ export function runCommandLeftovers(input: { chatId: string; workspaceId: string
 
 let started = false;
 
+export async function reapFollowThroughProcesses(): Promise<void> {
+  if (hostPlatformCapabilities().backgroundJobs) {
+    const reaped = await backgroundJobs.reapPreviousLaunch();
+    if (reaped) logger.info("background-jobs", `Stopped ${reaped} background job(s) left from the last launch.`);
+  }
+}
+
 export async function startFollowThrough(): Promise<void> {
   if (started) return;
   started = true;
   hostRunRegistry.onChange((summary, removed) => {
     if (!removed) observeRun(summary);
   });
-  if (hostPlatformCapabilities().backgroundJobs) {
-    const reaped = await backgroundJobs.reapPreviousLaunch().catch(() => 0);
-    if (reaped) logger.info("background-jobs", `Stopped ${reaped} background job(s) left from the last launch.`);
-  }
   const state = await loadState();
   savedFollows = state.follows;
   savedChecks = state.checks;
   pullRequestFollows.restore(state.follows);
   doneWhen.restore(state.checks);
+  // Older releases could leave persisted follows behind after access was revoked.
+  for (const follow of pullRequestFollows.all()) {
+    if (follow.state !== "following") continue;
+    try {
+      const chat = await chatStore.get(follow.chatId);
+      const workspace = chat?.workspaceId ? await configStore.getWorkspace(chat.workspaceId) : undefined;
+      if (workspace?.folderPath && workspace.permission !== "none") continue;
+    } catch (error) {
+      logger.warn("follow-through", "Could not verify workspace access for a restored pull request follow.", error);
+    }
+    pullRequestFollows.stop(follow.chatId, follow, "access-changed");
+  }
   pullRequestFollows.start();
 }
 
 export async function shutdownFollowThrough(): Promise<void> {
   pullRequestFollows.shutdown();
-  doneWhen.shutdown();
+  await doneWhen.shutdown();
   await backgroundJobs.shutdown();
   await saveChain;
 }
@@ -299,12 +335,12 @@ export async function shutdownFollowThrough(): Promise<void> {
 /** A deleted chat loses its jobs, follows and check. */
 export async function deleteChatFollowThrough(chatId: string): Promise<void> {
   pullRequestFollows.deleteChat(chatId);
-  doneWhen.clear(chatId);
+  const checkStopped = doneWhen.clearAndSettle(chatId);
   runWindows.delete(chatId);
   deletedChats.add(chatId);
   if (deletedChats.size > 500) deletedChats.delete(deletedChats.values().next().value!);
   for (const [runId, run] of runStarts) if (run.chatId === chatId) runStarts.delete(runId);
-  await backgroundJobs.stopChat(chatId, "chat-deleted", true);
+  await Promise.all([checkStopped, backgroundJobs.stopChat(chatId, "chat-deleted", true)]);
 }
 
 /** A delete that rolled back before its durable boundary leaves the chat in use: observe its runs again. */
@@ -313,9 +349,29 @@ export function restoreChatFollowThrough(chatId: string): void {
 }
 
 /** Folder access changed: what ran in that folder stops. */
-export async function closeWorkspaceFollowThrough(workspaceId: string): Promise<void> {
-  doneWhen.clearWorkspace(workspaceId);
-  await backgroundJobs.stopWorkspace(workspaceId, "access-changed");
+export async function closeWorkspaceFollowThrough(workspaceId: string): Promise<(committed: boolean) => Promise<void>> {
+  const chatIds = (await chatStore.list(workspaceId)).map((chat) => chat.id);
+  const resumePolls = pullRequestFollows.pauseChats(chatIds);
+  try {
+    await Promise.all([doneWhen.interruptWorkspace(workspaceId), commandHandoffs.cancelAndSettle(workspaceId)]);
+    await backgroundJobs.stopWorkspace(workspaceId, "access-changed");
+  } catch (error) {
+    resumePolls();
+    throw error;
+  }
+  return async (committed) => {
+    try {
+      if (committed) {
+        for (const chatId of chatIds) {
+          for (const follow of pullRequestFollows.list(chatId)) pullRequestFollows.stop(chatId, follow, "access-changed");
+        }
+        await doneWhen.clearWorkspace(workspaceId);
+        await saveChain;
+      }
+    } finally {
+      resumePolls();
+    }
+  };
 }
 
 // ── Reads and actions for the renderer and tools ───────────────────────────
@@ -348,24 +404,67 @@ export async function stopJobForPerson(chatId: string, jobId: string): Promise<v
   await backgroundJobs.stop(chatId, jobId, "person");
 }
 
-/** The chat's workspace, only when its folder is reachable with access on. */
-export async function followThroughWorkspace(chatId: string): Promise<{ workspaceId: string; folderPath: string }> {
-  const chat = await chatStore.get(chatId);
-  if (!chat) throw new Error("The chat no longer exists.");
-  if (chat.botId) throw new Error("Bots don't use this.");
-  if (!chat.workspaceId) throw new Error("This chat has no folder.");
-  const workspace = await configStore.getWorkspace(chat.workspaceId);
-  if (!workspace?.folderPath || workspace.permission === "none") throw new Error("Folder access is off for this chat.");
-  return { workspaceId: workspace.id, folderPath: workspace.folderPath };
+/** Hold configuration admission across chat and workspace reads and PR resolution. */
+async function configureFollowThrough(
+  chatId: string,
+  prepare: (workspaceId: string) => Promise<() => void>,
+): Promise<void> {
+  const admission = chatConfiguration.admit(chatId);
+  try {
+    const chat = await chatStore.get(chatId);
+    if (!hostPlatformCapabilities().backgroundJobs || !chat?.workspaceId || chat.botId || chat.owner) {
+      throw new Error("Follow-through requires a workspace chat on this computer.");
+    }
+    const workspaceId = chat.workspaceId;
+    await commitWithWorkspaceMutationAdmission(workspaceMutationGate, workspaceId, async () => {
+      const workspace = await configStore.getWorkspace(workspaceId);
+      if (!workspace?.folderPath || workspace.permission === "none") throw new Error("Folder access is off for this chat.");
+      await assertManagedWorktreeAdmission(workspace);
+      const commit = await prepare(workspaceId);
+      return () => {
+        admission.signal.throwIfAborted();
+        if (deletedChats.has(chatId)) throw new Error("The chat is being deleted.");
+        commit();
+      };
+    });
+  } finally {
+    admission.release();
+  }
 }
 
-export async function setDoneWhenCheck(chatId: string, command: string): Promise<void> {
-  const { workspaceId } = await followThroughWorkspace(chatId);
-  doneWhen.set({ chatId, workspaceId, command, runNow: !llmClient.isChatBusy(chatId) });
+/** A move invalidates in-flight setup. An active check or undelivered result
+ * still belongs to the old workspace, so the person must stop it first. */
+export async function beginFollowThroughMove(chatId: string): Promise<() => void> {
+  if (noticeDelivery.hasPending(chatId)) throw new Error("Wait for this chat’s follow-up message before changing workspaces.");
+  if (doneWhen.isActive(chatId) || pullRequestFollows.list(chatId).some((follow) => follow.state === "following")) {
+    throw new Error("Stop this chat’s check or pull request follow before changing workspaces.");
+  }
+  const finish = chatConfiguration.begin(chatId);
+  try {
+    await backgroundJobs.confirmChatChecksStopped(chatId);
+    return finish;
+  } catch (error) {
+    finish();
+    throw error;
+  }
 }
 
-export function clearDoneWhenCheck(chatId: string): void {
-  doneWhen.clear(chatId);
+export function setDoneWhenCheck(chatId: string, command: string): Promise<void> {
+  return configureFollowThrough(chatId, async (workspaceId) => () => {
+    doneWhen.set({ chatId, workspaceId, command, runNow: !llmClient.isChatBusy(chatId) });
+  });
+}
+
+export function followChatPullRequest(chatId: string, resolve: () => Promise<PullRequestTarget>): Promise<void> {
+  return configureFollowThrough(chatId, async () => {
+    const target = await resolve();
+    return () => { pullRequestFollows.follow({ chatId, ...target, startedBy: "person" }); };
+  });
+}
+
+export async function clearDoneWhenCheck(chatId: string): Promise<void> {
+  await doneWhen.clearAndSettle(chatId);
+  await backgroundJobs.confirmChatChecksStopped(chatId);
 }
 
 export interface PullRequestTarget {

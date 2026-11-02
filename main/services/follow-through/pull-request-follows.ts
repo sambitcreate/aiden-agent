@@ -53,6 +53,8 @@ export class PullRequestFollows {
   private timer: ReturnType<typeof setInterval> | undefined;
   private ticking: Promise<void> | undefined;
   private closed = false;
+  private readonly pausedChats = new Set<string>();
+  private pollInFlight?: { id: string; controller: AbortController };
 
   constructor(private readonly deps: PullRequestFollowsDeps) {}
 
@@ -80,6 +82,7 @@ export class PullRequestFollows {
 
   /** Start following, or keep following if this chat already does. Reads it right away. */
   follow(input: StartFollowInput): PullRequestFollowView {
+    if (this.closed) throw new Error("Aiden is closing.");
     const key = followKey(input);
     const id = PullRequestFollows.id(input.chatId, key);
     const existing = this.records.get(id);
@@ -99,19 +102,33 @@ export class PullRequestFollows {
     return followView(record);
   }
 
-  stop(chatId: string, key: { host: string; repository: string; number: number }, reason: "person" | "agent"): boolean {
+  stop(chatId: string, key: { host: string; repository: string; number: number }, reason: "person" | "agent" | "access-changed"): boolean {
     const id = PullRequestFollows.id(chatId, followKey(key));
     const record = this.records.get(id);
     if (!record || record.state !== "following") return false;
+    if (this.pollInFlight?.id === id) this.pollInFlight.controller.abort();
     this.records.set(id, stopFollow(record, reason, this.deps.now()));
     this.changed(chatId);
     return true;
+  }
+
+  /** Suspend polling across a workspace mutation without losing its saved follows. */
+  pauseChats(chatIds: readonly string[]): () => void {
+    for (const chatId of chatIds) this.pausedChats.add(chatId);
+    const poll = this.pollInFlight;
+    const current = poll && this.records.get(poll.id);
+    if (current && this.pausedChats.has(current.chatId)) poll?.controller.abort();
+    return () => {
+      for (const chatId of chatIds) this.pausedChats.delete(chatId);
+      void this.kick();
+    };
   }
 
   deleteChat(chatId: string): void {
     let removed = false;
     for (const [id, record] of this.records) {
       if (record.chatId === chatId) {
+        if (this.pollInFlight?.id === id) this.pollInFlight.controller.abort();
         this.records.delete(id);
         removed = true;
       }
@@ -128,6 +145,7 @@ export class PullRequestFollows {
 
   shutdown(): void {
     this.closed = true;
+    this.pollInFlight?.controller.abort();
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
   }
@@ -145,27 +163,32 @@ export class PullRequestFollows {
     for (;;) {
       const now = this.deps.now();
       const due = [...this.records.entries()]
-        .filter(([, record]) => record.state === "following" && record.nextCheckAt <= now)
+        .filter(([, record]) => record.state === "following" && !this.pausedChats.has(record.chatId) && record.nextCheckAt <= now)
         .sort(([, left], [, right]) => left.nextCheckAt - right.nextCheckAt)[0];
       if (!due || this.closed) return;
       const [id, record] = due;
+      const controller = new AbortController();
+      this.pollInFlight = { id, controller };
       try {
-        await this.poll(id, record);
+        await this.poll(id, record, controller.signal);
       } catch (error) {
+        if (controller.signal.aborted) continue;
         this.deps.log?.("A followed pull request could not be read.", error);
         const current = this.records.get(id);
         if (current === record) {
           this.records.set(id, followReadFailed(record, "Aiden could not read this pull request.", this.deps.now()));
           this.changed(record.chatId);
         }
+      } finally {
+        this.pollInFlight = undefined;
       }
     }
   }
 
-  private async poll(id: string, record: PullRequestFollowRecord): Promise<void> {
-    const read: FollowReadResult = await this.deps.reader.read(record);
+  private async poll(id: string, record: PullRequestFollowRecord, signal: AbortSignal): Promise<void> {
+    const read: FollowReadResult = await this.deps.reader.read(record, signal);
     // Stopped or deleted while the read was in flight.
-    if (this.records.get(id) !== record) return;
+    if (signal.aborted || this.records.get(id) !== record) return;
     if (read.kind === "gone") {
       this.records.set(id, followUnavailable(record, read.message, this.deps.now()));
       this.changed(record.chatId);
@@ -186,10 +209,11 @@ export class PullRequestFollows {
     };
     const logs = new Map<string, string>();
     for (const check of checksNeedingLogs(record, observation)) {
-      const tail = await this.deps.reader.jobLogTail(record, check).catch(() => undefined);
+      if (signal.aborted) return;
+      const tail = await this.deps.reader.jobLogTail(record, check, signal).catch(() => undefined);
       if (tail) logs.set(check.name, tail);
     }
-    if (this.records.get(id) !== record) return;
+    if (signal.aborted || this.records.get(id) !== record) return;
     const evaluation = evaluateFollow(record, observation, logs, this.deps.now());
     this.records.set(id, evaluation.record);
     if (evaluation.record.state === "ended") this.pruneEnded(record.chatId);

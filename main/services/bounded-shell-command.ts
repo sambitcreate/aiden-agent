@@ -18,6 +18,9 @@ export interface BoundedShellCommandOptions {
    * (`backgroundStopped`).
    */
   releaseLeftoversAfterMs?: number;
+  /** Hold a check behind stdin until its group is durably recorded. On completion
+   * terminate leftovers and release the record after group cleanup. */
+  recordGroup?: (pid: number) => Promise<() => Promise<void>>;
 }
 
 export interface BoundedShellCommandResult {
@@ -68,13 +71,18 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
     // Cancelled before it started: nothing runs.
     return { stdout: "", stderr: "", exitCode: null, timedOut: false, outputLimitExceeded: false, aborted: true, backgroundStopped: false };
   }
-  const child = spawn(options.command, {
+  const { recordGroup } = options;
+  const spawnOptions = {
     cwd: options.cwd,
     detached: process.platform !== "win32",
     env: options.env,
-    shell: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  };
+  // On a host crash the pipe closes. An unrecorded shell then exits without
+  // evaluating the person's command. Pass the command as an argument verbatim.
+  const child = recordGroup
+    ? spawn("/bin/sh", ["-c", 'IFS= read -r ready && exec /bin/sh -c "$1" </dev/null', "aiden-check", options.command],
+        { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] })
+    : spawn(options.command, { ...spawnOptions, shell: true, stdio: ["ignore", "pipe", "pipe"] });
   const terminator = createProcessGroupTerminator(child, { killGraceMs: KILL_GRACE_MS });
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
@@ -119,8 +127,20 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
     ...extra,
   });
 
+  let releaseRecord: (() => Promise<void>) | undefined;
+  let admissionError: unknown;
+  child.stdin?.on("error", () => { /* The check was stopped before admission. */ });
+  const admission = recordGroup && child.pid
+    ? recordGroup(child.pid).then((release) => {
+        releaseRecord = release;
+        child.stdin?.end(terminator.requested ? undefined : "run\n");
+      }).catch((error: unknown) => {
+        admissionError = error;
+        child.stdin?.end();
+      })
+    : undefined;
   try {
-    const releaseAfter = process.platform === "win32" ? undefined : options.releaseLeftoversAfterMs;
+    const releaseAfter = recordGroup || process.platform === "win32" ? undefined : options.releaseLeftoversAfterMs;
     if (releaseAfter !== undefined) {
       const released = await waitOrRelease(child, releaseAfter, () => !terminator.requested && processGroupExists(child.pid));
       if (released.kind === "released") {
@@ -146,6 +166,11 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
       drainMs: PIPE_DRAIN_MS,
       onPipesHeld: () => terminator.terminate(),
     });
+    if (recordGroup) {
+      await admission;
+      if (admissionError) throw admissionError;
+      if (processGroupExists(child.pid)) terminator.terminate();
+    }
     return result(code, {
       ...(pipesHeld ? {} : leftovers(child.pid, terminator.requested)),
       // Only a group stopped because of the drain counts; a timeout, the cap or
@@ -157,6 +182,8 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
     signal?.removeEventListener("abort", abort);
     // The shell can close before its descendants leave the process group.
     await terminator.finished();
+    await admission;
+    await releaseRecord?.();
   }
 }
 

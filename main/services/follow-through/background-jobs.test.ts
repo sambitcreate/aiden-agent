@@ -16,6 +16,7 @@ import {
   newBackgroundJobId,
   type BackgroundJobEnded,
 } from "./background-jobs.js";
+import { DoneWhenChecks, type DoneWhenNotice } from "./done-when.js";
 import { runBoundedShellCommand } from "../bounded-shell-command.js";
 
 const skip = process.platform === "win32" ? "background jobs run on macOS and Linux" : false;
@@ -564,6 +565,7 @@ test("deleting a chat whose job could not be confirmed stopped keeps owning that
   });
   assert.ok(await jobs.adopt({ id, chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "x &", processGroup: group }));
   lookupsFail = true;
+  await assert.rejects(jobs.stopWorkspace("ws-1", "access-changed"), /confirm.*stopped/u);
   await jobs.stopChat("chat-1", "chat-deleted", true);
   const groupRuns = () => {
     try {
@@ -713,4 +715,126 @@ test("a straggler that exits right after the command is not listed as a job", { 
     undefined,
   );
   assert.deepEqual(jobs.list("chat-1"), []);
+});
+
+function checkHarness(dir: string, jobs: BackgroundJobs) {
+  let group = 0;
+  const notices: DoneWhenNotice[] = [];
+  const checks = new DoneWhenChecks({
+    now: Date.now,
+    persist: () => {},
+    post: (notice) => notices.push(notice),
+    run: async (record, signal) => {
+      const id = newBackgroundJobId();
+      const result = await runBoundedShellCommand({
+        command: record.command, signal, cwd: dir, env: { ...process.env, AIDEN_BACKGROUND_JOB: id },
+        timeoutMs: 10_000, maxOutputBytes: 1024,
+        recordGroup: (pid) => {
+          group = pid;
+          return jobs.recordCheckGroup(id, pid, record.workspaceId, record.chatId);
+        },
+      });
+      return { ...result, output: result.stdout };
+    },
+  });
+  return { checks, notices, get group() { return group; } };
+}
+
+test("a check whose recovery record cannot be saved waits without running or waking the agent", { skip }, async (t) => {
+  const dir = await tempDir();
+  const logDir = path.join(dir, "ledger");
+  const jobs = new BackgroundJobs({ logDir });
+  t.after(() => cleanUp(jobs, dir));
+  const run = checkHarness(dir, jobs);
+  // A file at the ledger directory path forces the actual persistence step to fail.
+  await fs.writeFile(logDir, "original");
+  run.checks.set({ command: "touch executed", workspaceId: "ws-1", chatId: "chat-1", runNow: true });
+  await eventually(() => run.notices.length > 0, "the admission outcome");
+  assert.equal(run.checks.get("chat-1")?.checksRun, 0);
+  assert.equal(run.checks.get("chat-1")?.state, "waiting");
+  assert.equal(run.notices[0]?.wake, false);
+  assert.equal(run.notices[0]?.notice.tone, "info");
+  assert.doesNotMatch(run.notices[0]!.text, /EEXIST|mkdir/u);
+  assert.ok(run.group > 1 && !alive(run.group), "the gated shell exited");
+  await assert.rejects(fs.access(path.join(dir, "executed")), { code: "ENOENT" });
+  assert.equal(await fs.readFile(logDir, "utf8"), "original");
+  await jobs.stopWorkspace("ws-1", "access-changed");
+
+  await fs.unlink(logDir);
+  assert.equal(run.checks.answerFinished("chat-1"), true);
+  await eventually(() => run.notices.length === 2, "the retried command");
+  assert.equal(run.checks.get("chat-1")?.checksRun, 1);
+  assert.equal(run.checks.get("chat-1")?.state, "passed");
+  await fs.access(path.join(dir, "executed"));
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(logDir, "running.json"), "utf8")).jobs, []);
+});
+
+test("a release write failure after verified exit preserves the command result and allows removal", { skip }, async (t) => {
+  const dir = await tempDir();
+  const errors: unknown[] = [];
+  const { jobs } = harness(dir, { log: (_message, error) => errors.push(error) });
+  t.after(() => cleanUp(jobs, dir));
+  const run = checkHarness(dir, jobs);
+  // The admitted command moves its ledger aside and leaves a regular file
+  // in its place. The last committed ledger remains available for relaunch.
+  run.checks.set({ command: "mv logs saved-ledger && touch logs", workspaceId: "ws-1", chatId: "chat-1", runNow: true });
+  await eventually(() => run.notices.length > 0, "the completed command");
+  assert.equal(run.checks.get("chat-1")?.state, "passed");
+  assert.equal(run.checks.get("chat-1")?.checksRun, 1);
+  assert.equal(run.notices[0]?.wake, false);
+  assert.ok(errors.some((error) => (error as NodeJS.ErrnoException)?.code === "EEXIST"));
+  const previous = JSON.parse(await fs.readFile(path.join(dir, "saved-ledger", "running.json"), "utf8"));
+  assert.equal(previous.jobs[0]?.pid, run.group);
+  assert.equal(alive(run.group), false);
+  await jobs.stopWorkspace("ws-1", "access-changed");
+  await fs.unlink(path.join(dir, "logs"));
+  await fs.rename(path.join(dir, "saved-ledger"), path.join(dir, "logs"));
+  const restored = harness(dir).jobs;
+  t.after(() => restored.shutdown());
+  assert.equal(await restored.reapPreviousLaunch(), 0);
+  await restored.stopWorkspace("ws-1", "access-changed");
+  await assert.rejects(fs.access(path.join(dir, "logs", "running.json")), { code: "ENOENT" });
+});
+
+test("a denied check-group stop retains recovery ownership and blocks only its workspace", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs } = harness(dir);
+  const run = checkHarness(dir, jobs);
+  const kill = process.kill.bind(process);
+  t.mock.method(process, "kill", (pid: number, signal: NodeJS.Signals | number) => {
+    if (run.group && pid === -run.group && (signal === "SIGTERM" || signal === "SIGKILL")) {
+      throw Object.assign(new Error("signal denied"), { code: "EPERM" });
+    }
+    return kill(pid, signal);
+  });
+  t.after(async () => {
+    try { if (run.group) kill(-run.group, "SIGKILL"); } catch { /* Already gone. */ }
+    await cleanUp(jobs, dir);
+  });
+  const { checks, notices } = run;
+  checks.set({ command: "sleep 60 </dev/null >/dev/null 2>&1 & echo $! > child", workspaceId: "ws-1", chatId: "chat-1", runNow: true });
+  await eventually(() => notices.length > 0, "the cleanup outcome");
+  assert.equal(checks.get("chat-1")?.state, "waiting");
+  assert.equal(checks.get("chat-1")?.checksRun, 0);
+  assert.equal(notices[0]?.wake, false);
+  assert.equal(notices[0]?.notice.tone, "info");
+  assert.match(notices[0]!.text, /confirm.*check stopped/u);
+  const group = run.group;
+  const child = Number(await fs.readFile(path.join(dir, "child"), "utf8"));
+  assert.ok(alive(child));
+  const ledger = async () => JSON.parse(await fs.readFile(path.join(dir, "logs", "running.json"), "utf8")).jobs;
+  await jobs.stopWorkspace("ws-other", "access-changed");
+  await assert.rejects(jobs.stopWorkspace("ws-1", "access-changed"), /confirm.*check stopped/u);
+  assert.equal((await ledger())[0]?.pid, group);
+  // Simulate a relaunch where the original leader is gone and the live
+  // descendant's marker is hidden. Recovery cannot safely signal it.
+  const restored = harness(dir, { processHasEnvironment: async () => false }).jobs;
+  t.after(() => restored.shutdown());
+  assert.equal(await restored.reapPreviousLaunch(), 0);
+  await assert.rejects(restored.stopWorkspace("ws-1", "access-changed"), /confirm.*check stopped/u);
+  assert.equal((await ledger())[0]?.pid, group);
+  kill(-group, "SIGKILL");
+  await eventually(() => !alive(child), "the surviving descendant to exit");
+  await restored.stopWorkspace("ws-1", "access-changed");
+  assert.deepEqual(await ledger(), []);
 });

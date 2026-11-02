@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { BackgroundJobs, defaultProcessGroupMembers, newBackgroundJobId } from "./follow-through/background-jobs.js";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -118,6 +120,43 @@ test("shared workspace permission updates preserve cancellation and schedule res
   // The mutation lease must have released after the first update.
   await application.service.update("workspace-1", { name: "Again" });
   assert.equal(application.saved[application.saved.length - 1]?.name, "Again");
+});
+
+test("revoking access stops a server still being adopted when its generation is cancelled", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const application = fixture();
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-revoke-"));
+  let finishHandoff!: () => void;
+  const generationSettling = new Promise<void>((resolve) => { finishHandoff = resolve; });
+  const jobs = new BackgroundJobs({
+    logDir: dir, adoptSettleMs: 0, listeningPorts: null,
+    processGroupMembers: async (group) => {
+      await generationSettling;
+      return defaultProcessGroupMembers(group);
+    },
+  });
+  const id = newBackgroundJobId();
+  const server = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
+    detached: true, stdio: "ignore", env: { ...process.env, AIDEN_BACKGROUND_JOB: id },
+  });
+  t.after(async () => {
+    server.kill("SIGKILL");
+    await jobs.shutdown();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+  const adoption = jobs.adopt({
+    id, chatId: "chat", workspaceId: "workspace-1", cwd: dir, command: "server &", processGroup: server.pid!,
+  });
+  application.deps.llmClient.cancelWorkspaceAndSettle = async () => {
+    finishHandoff();
+    assert.ok(await adoption);
+  };
+  application.deps.followThrough = { closeForWorkspace: (workspaceId) => jobs.stopWorkspace(workspaceId, "access-changed") };
+  const saved = await application.service.update("workspace-1", { permission: "none" });
+  assert.equal(saved.permission, "none");
+  assert.equal(jobs.get("chat", id)?.endReason, "access-changed");
+  assert.throws(() => process.kill(server.pid!, 0), { code: "ESRCH" });
 });
 
 test("switching skills and connectors off for a workspace applies from the next message", async () => {
@@ -313,6 +352,8 @@ async function noWorkspaceFixture(t: { after(fn: () => Promise<void>): void }, i
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const registry = new Map(initial.map((entry) => [entry.id, entry]));
   const chatOwners = new Set<string>();
+  /** Chat ids per workspace, for the paired-device checks. */
+  const chatsIn = new Map<string, string[]>();
   const trashed: string[] = [];
   let nextId = 0;
   const deps = {
@@ -338,6 +379,7 @@ async function noWorkspaceFixture(t: { after(fn: () => Promise<void>): void }, i
     noWorkspace: {
       createDirectory: () => createScratchWorkspaceDirectory(path.join(root, "chat-folders")),
       workspaceIdsWithChats: async () => new Set(chatOwners),
+      chatIdsIn: async (workspaceId: string) => chatsIn.get(workspaceId) ?? [],
       trash: async (folderPath: string) => {
         trashed.push(folderPath);
         await fs.rm(folderPath, { recursive: true });
@@ -347,7 +389,7 @@ async function noWorkspaceFixture(t: { after(fn: () => Promise<void>): void }, i
     now: () => 500,
     logError: () => undefined,
   } as unknown as WorkspaceApplicationDependencies;
-  return { service: createWorkspaceApplicationService(deps), registry, chatOwners, trashed, root };
+  return { service: createWorkspaceApplicationService(deps), registry, chatOwners, chatsIn, trashed, root };
 }
 
 const exists = (target: string) => fs.stat(target).then(() => true, () => false);
@@ -415,4 +457,27 @@ test("deleting the last chat of a No workspace folder moves the folder's files t
 
   await app.service.releaseNoWorkspaceAfterChat("project");
   assert.equal(app.registry.has("project"), true, "a real workspace is never released with a chat");
+});
+
+test("a paired device's chat in a No workspace folder that holds another chat gets a folder of its own", async (t) => {
+  const app = await noWorkspaceFixture(t, [
+    workspace({ id: "default", name: "No workspace", folderPath: "/data/chat-folders/home", noWorkspace: true }),
+    workspace({ id: "project", folderPath: "/code/project" }),
+  ]);
+  assert.equal(await app.service.workspaceForNoWorkspaceChat("default"), "default", "an unused hidden folder is used");
+  assert.equal(app.registry.size, 2);
+
+  app.chatsIn.set("default", ["older"]);
+  const fresh = await app.service.workspaceForNoWorkspaceChat("default");
+  assert.notEqual(fresh, "default");
+  assert.equal(app.registry.get(fresh)?.noWorkspace, true);
+
+  app.chatsIn.set("project", ["a", "b"]);
+  assert.equal(await app.service.workspaceForNoWorkspaceChat("project"), "project", "a real workspace is shared");
+
+  // A phone still aims at a hidden home that was released with its last chat.
+  const replacement = await app.service.workspaceForNoWorkspaceChat("released-home");
+  assert.notEqual(replacement, "released-home");
+  assert.equal(app.registry.get(replacement)?.noWorkspace, true, "a gone home gets a fresh hidden folder");
+  assert.equal(app.registry.has("released-home"), false);
 });

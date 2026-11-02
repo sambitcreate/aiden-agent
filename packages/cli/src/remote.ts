@@ -229,7 +229,14 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
       switch (action) {
         case "status": return service.status();
         case "devices": return state.listDevices();
-        case "revoke": { if (!value) throw new Error("Provide a paired device id."); const revoked = await revokeAidenRemoteRuntimeDevice({ state, streams: chatApi?.streams, chats: chatApi?.chats, workspaceOwners: owners }, value); await bots.application.revokeNoticeAudience(value); return { revoked }; }
+        case "revoke": {
+          if (!value) throw new Error("Provide a paired device id.");
+          // Close existing Bot streams before the mutation drain. The registry fences new opens synchronously.
+          botSessions?.revokeDevice(value);
+          const revoked = await revokeAidenRemoteRuntimeDevice({ state, streams: chatApi?.streams, chats: chatApi?.chats, workspaceOwners: owners }, value);
+          await bots.application.revokeNoticeAudience(value);
+          return { revoked };
+        }
         case "pair": { if (value !== "lan" && value !== "tailscale") throw new Error("Usage: remote pair lan|tailscale"); return value === "tailscale" ? beginTailscalePairing(service, tailscale) : service.beginPairing(value); }
         case "pair-status": return service.pairingStatus() ?? { state: "none" };
         case "pair-cancel": { if (!value) throw new Error("Provide a pairing session id."); return { closed: await service.closePairing(value) }; }

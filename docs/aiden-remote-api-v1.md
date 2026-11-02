@@ -116,7 +116,7 @@ Forbidden: local usernames, config/user-data paths, environment values, provider
 
 ### Workspace
 
-Allowed: `id`, `name`, `permission`, `hasFolder`, `isManagedWorktree`, optional branch/repository display names, small Git summary, `createdAt`, `updatedAt`, `revision`.
+Allowed: `id`, `name`, `permission`, `hasFolder`, `isManagedWorktree`, the optional `noWorkspace: true` marker (contract revision 51), optional branch/repository display names, small Git summary, `createdAt`, `updatedAt`, `revision`.
 
 Forbidden: `folderPath`, repository/worktree/Git-admin paths, ownership token, device/inode identity, remote URL, created-from HEAD, config-store record.
 
@@ -558,6 +558,7 @@ Tailscale mode uses the server-owned loopback Aiden HTTP listener behind Tailsca
 ### Operating multiple devices and Aiden installations
 
 - One Aiden installation accepts multiple paired phones and iPads. Each device receives a distinct credential and has independent activity, streams, approvals, attachment references, scheduled-task operations, and revocation. Revoking one device must not interrupt or re-authorize another.
+- On a CLI host, `aiden remote revoke <id>` closes that device's open Bot session event streams before returning. Other devices can continue watching the same Bot.
 - Aiden On The Go stores each Mac as a separate installation keyed by its public `instanceId`. The display name is only a label, so same-named Macs remain distinct. Credentials, caches, navigation work, App Intents, and Live Activities stay scoped to that identifier during repeated switching and removal.
 - Multiple fresh Aiden profiles on one physical Mac may use distinct persisted LAN/loopback port pairs. A profile with paired devices never moves its endpoint automatically; a collision is reported as `remote_port_in_use` with recovery guidance.
 - Only one profile on a physical Mac may own the canonical Tailscale Serve path. A live incumbent cannot be taken over. A stale exact Aiden handler may be replaced only after an explicit review and immediate verification; unrelated Serve handlers and Funnel state remain unchanged.
@@ -1060,3 +1061,17 @@ Revision 49 is provisional and is re-claimed at merge, after whatever `main` hol
 **Clients.** Aiden On The Go for iOS and Android show "N in background" beside the composer of a workspace chat while a job runs. It opens a list with each job's label, how long it has run or how it ended (the Mac's words: "Running for 2m", "Failed with code 1", "Ended", "Stopped"), its addresses as text ("localhost:5173 on your Mac", since localhost on the phone is the phone), and **Stop**. Bot chats show nothing.
 
 **Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `backgroundJobs`: a chat's list (a dev server, a server a command left running, a failed test run), the stop request and response, and the unknown-job error. The desktop parser reads the section only when `contractRevision` is 49 or newer.
+
+## Chats without a workspace on phones, revision 51 (provisional)
+
+Revision 51 is provisional and is re-claimed at merge, after whatever `main` holds then. The host keeps it in one constant (`AIDEN_REMOTE_NO_WORKSPACE_CONTRACT_REVISION`). It lets phones list and start chats without a workspace the way the desktop does. See [Chats without a workspace](no-workspace-chats.md) for the feature itself.
+
+**Discovery.** There is no new capability or `/server` feature token. A `Workspace` and a `HostFeedWorkspace` carry `noWorkspace: true` when the record is one of the hidden per-chat folders behind a No workspace chat, and omit the key otherwise. A desktop host lists at least one such record once it has a No workspace chat or home: on first start an install whose `default` workspace has no folder turns it into the No workspace home, and an install whose `default` already had a folder gets its first hidden record when someone starts a No workspace chat on the desktop. A phone that sees one knows the host supports the feature; until then it offers no No Workspace choice. The CLI host lists none, so phones offer nothing new there. Older phones ignore the unknown key and keep listing each hidden record by its name, "No workspace".
+
+**Home.** Phones treat one hidden record as the home: the one with id `default`, else the oldest by `createdAt` (then id). The sidebar shows the home as one **Chats** group holding every chat whose workspace is a hidden record, and drops the other hidden records. Pickers, the workspace list, Scheduled Tasks and workspace settings never offer a hidden record (a scheduled task's editor still lists the one the task already runs in, so its name shows and saving keeps it), and a phone ignores an archive flag an older build left on one, since there is no longer a way to unarchive it. With no workspace page to delete them from, iPhone offers Delete on a Chats row's menu (`DELETE /chats/{chatId}` against the chat's current revision), then re-reads `GET /workspaces` so the released record leaves its list.
+
+**Starting a chat.** A phone starts a No workspace chat with `POST /chats {workspaceId, noWorkspace: true}` aimed at the home, then sends. With that flag the host checks the target: when the home (or any hidden record) already holds another chat, or is gone because its last chat was deleted, it creates a fresh hidden record and saves the new chat there, so every chat keeps its own folder. The host handles these creates one at a time, so two phones starting a chat at once never share a folder. The response's `workspaceId` names the record the chat really landed in; a phone that has not listed that record yet reads `GET /workspaces` again before opening the chat (iPhone does the same for a chat link whose workspace it hasn't listed), and an idempotent retry returns the same chat. Without the flag (every phone before revision 51) the chat stays in the workspace named, as before, so an older phone never gets back a chat in a record it hasn't listed. `noWorkspace` accepts only `true`; a host before revision 51 refuses the unknown key, and phones send it only to a host that lists a hidden record. A move keeps the workspace it names; moving a chat out of a hidden record releases that record's folder when no chat is left in it. That release is best effort: if it fails, the move still answers with the moved chat, and startup clears hidden folders left without a chat.
+
+**Chats from other devices.** The host tells the desktop when it makes a hidden record, but phones hear of a new record only by reading `GET /workspaces`. So when a phone's chat list names a workspace it hasn't listed (for example a chat another phone or the Mac just started without a workspace), it re-reads the workspace list once for that id, and the chat then shows under **Chats**.
+
+**Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` lists a third workspace, the `default` home with `noWorkspace: true`.
