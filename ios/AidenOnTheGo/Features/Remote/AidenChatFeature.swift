@@ -3349,8 +3349,13 @@ final class AidenChatViewModel {
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             chat.messages.removeAll { $0.id == optimisticID }
             chat.updatedAt = previousUpdatedAt
-            if draft.isEmpty { draft = text }
-            if pendingAttachments.isEmpty { pendingAttachments = submittedAttachments }
+            // A Cancel can come long after the send (New worktree waits on a
+            // fetch), so keep anything typed meanwhile beside the message.
+            draft = AidenDraftSendReconciliation.failedDraft(submitted: text, current: draft)
+            pendingAttachments = AidenDraftSendReconciliation.failedAttachments(
+                submitted: submittedAttachments,
+                current: pendingAttachments
+            )
             streamState = nil
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }

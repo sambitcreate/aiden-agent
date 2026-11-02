@@ -565,12 +565,18 @@ final class AidenChatTests: XCTestCase {
             let sending = Task { await model.send() }
             await fulfillment(of: [held], timeout: 3)
             XCTAssertTrue(model.isSettingUpWorktree)
+            // The second time, the person types more while the Mac works.
+            if attempt == 3 { model.draft = "And the footer" }
             model.cancelWorktreeSetup()
             await sending.value
             _ = AidenChatProgressLifecycleURLProtocol.takeHeldRequest()
             XCTAssertFalse(model.isSettingUpWorktree)
             XCTAssertNil(model.presentedError, "Cancel is not an error")
-            XCTAssertEqual(model.draft, "Fix the header")
+            XCTAssertEqual(
+                model.draft,
+                attempt == 3 ? "Fix the header\n\nAnd the footer" : "Fix the header",
+                "the canceled message comes back, ahead of anything typed meanwhile"
+            )
             XCTAssertTrue(model.chat.messages.isEmpty)
         }
 
