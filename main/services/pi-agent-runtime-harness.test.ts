@@ -2370,38 +2370,42 @@ test("an irreducible active tool result uses bounded projection without a no-op 
   assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), false);
 });
 
-test("hidden history removal fails closed when no durable checkpoint can be written", async () => {
-  const { harness, session } = await managedTestHarness(
-    [fauxAssistantMessage("provider answered the bounded projection")],
-    {
-      contextWindow: 4_096,
-      generationContextTransform: true,
-      extensions: [
-        {
-          id: "oversized-ephemeral-history",
-          transformContext: async (messages) => [
-            { role: "user", content: `old-${"u".repeat(60_000)}`, timestamp: 1 },
-            {
-              ...fauxAssistantMessage(`old-${"a".repeat(60_000)}`),
-              timestamp: 2,
-            },
-            ...messages,
-          ],
-        },
-      ],
-    },
-  );
+for (const hostEnds of [false, true]) {
+  test(`hidden history removal fails closed without a durable checkpoint (${hostEnds ? "host stop" : "normal finish"})`, async () => {
+    const { harness, session, core } = await managedTestHarness(
+      [fauxAssistantMessage("provider answered the bounded projection")],
+      {
+        finishTurn: hostEnds ? () => ({ action: "end" }) : undefined,
+        contextWindow: 4_096,
+        generationContextTransform: true,
+        extensions: [
+          {
+            id: "oversized-ephemeral-history",
+            transformContext: async (messages) => [
+              { role: "user", content: `old-${"u".repeat(60_000)}`, timestamp: 1 },
+              {
+                ...fauxAssistantMessage(`old-${"a".repeat(60_000)}`),
+                timestamp: 2,
+              },
+              ...messages,
+            ],
+          },
+        ],
+      },
+    );
 
-  const outcome = await harness.runManaged({
-    kind: "append-and-run",
-    message: { role: "user", content: "current request", timestamp: 3 },
+    const outcome = await harness.runManaged({
+      kind: "append-and-run",
+      message: { role: "user", content: "current request", timestamp: 3 },
+    });
+
+    assert.equal(outcome.emergencyProjection?.kind, "history_removed");
+    assert.equal(core.state.callCount, 1);
+    assert.equal(outcome.kind, "host_failed");
+    assert.equal(outcome.kind === "host_failed" ? outcome.faultKind : undefined, "compaction");
+    assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), false);
   });
-
-  assert.equal(outcome.emergencyProjection?.kind, "history_removed");
-  assert.equal(outcome.kind, "host_failed");
-  assert.equal(outcome.kind === "host_failed" ? outcome.faultKind : undefined, "compaction");
-  assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), false);
-});
+}
 
 test("provider hooks receive curated options and compose payload/response hooks in Pi order", async () => {
   const trace: string[] = [];

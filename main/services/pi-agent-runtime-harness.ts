@@ -2337,6 +2337,11 @@ export class PiAgentRuntimeHarness {
           if (assistant.stopReason === "length" && !keptCutOffReply(assistant, "output-limit")) {
             return await finish({ kind: "provider_failed", reason: "output-limit", finalMessage: assistant, attempts });
           }
+          // The end vote also rules out paid checkpoint recovery. A reply based
+          // on removed history cannot complete until that checkpoint is durable.
+          if (this.pendingEmergencyCheckpoint) {
+            return await finish({ kind: "host_failed", faultKind: "compaction", finalMessage: assistant, attempts });
+          }
           return await finish({ kind: "completed", finalMessage: assistant, attempts });
         }
 
