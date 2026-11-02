@@ -137,6 +137,7 @@ const FAILED_UNREAD = {
     hostOnline: true,
     updatedAt: Date.now() - 3_600_000,
     lastAssistantAt: Date.now() - 3_600_000,
+    lastAssistantMessageId: "reply-1",
   } satisfies InboxSignals,
 };
 
@@ -153,7 +154,7 @@ test("Mark done on unseen failed output takes the row out of Needs you before th
   const read = deferred<void>();
   let acting!: Promise<void>;
   act(() => {
-    acting = result.current.act("done", [{ ...ROW, readThrough: FAILED_UNREAD.signals.lastAssistantAt }], undefined, {
+    acting = result.current.act("done", [{ ...ROW, readThrough: FAILED_UNREAD.signals }], undefined, {
       markRead: () => read.promise,
     });
   });
@@ -163,6 +164,8 @@ test("Mark done on unseen failed output takes the row out of Needs you before th
   await act(() => acting);
   assert.equal(shelfOf(result.current), "hidden", "the read is on its way");
   // Output newer than the action still reads unread, and brings the row back.
+  const sameTime = { ...FAILED_UNREAD.signals, lastAssistantMessageId: "reply-2" };
+  assert.deepEqual(settledInboxReads(result.current.readsPending, [{ key: ROW.key, signals: sameTime }]), [ROW.key]);
   const newer = { ...FAILED_UNREAD.signals, lastAssistantAt: Date.now() + 1_000 };
   assert.equal(shelfOf(result.current, newer), "needs_you");
   assert.deepEqual(settledInboxReads(result.current.readsPending, [{ key: ROW.key, signals: newer }]), [ROW.key]);
@@ -179,7 +182,7 @@ test("a read the host refuses puts the row back in Needs you, and says so", asyn
   const { result } = await mount();
   let acting!: Promise<void>;
   act(() => {
-    acting = result.current.act("snooze", [{ ...ROW, readThrough: FAILED_UNREAD.signals.lastAssistantAt }], Date.now() + 3_600_000, {
+    acting = result.current.act("snooze", [{ ...ROW, readThrough: FAILED_UNREAD.signals }], Date.now() + 3_600_000, {
       markRead: async () => {
         throw new Error("Error invoking remote method 'chats:markRead': Error: That chat is gone.");
       },

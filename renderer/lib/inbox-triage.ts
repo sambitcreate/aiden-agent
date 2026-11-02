@@ -141,12 +141,17 @@ export function settledTriageOverlayKeys(
  * Rows this device marked read along with Mark done or Snooze, by row key: the
  * newest output each row showed then (`InboxTriageRow.readThrough`).
  */
-export type InboxReadsPending = ReadonlyMap<string, number | undefined>;
+export type InboxReadBoundary = Pick<InboxSignals, "lastAssistantAt" | "lastAssistantMessageId">;
+export type InboxReadsPending = ReadonlyMap<string, InboxReadBoundary>;
 
-type ReadSignals = Pick<InboxSignals, "unread" | "isOpen" | "lastAssistantAt">;
+type ReadSignals = InboxReadBoundary & Pick<InboxSignals, "unread" | "isOpen">;
 
-function readCovers(through: number | undefined, signals: ReadSignals): boolean {
-  return (signals.lastAssistantAt ?? Number.NEGATIVE_INFINITY) <= (through ?? Number.NEGATIVE_INFINITY);
+function readCovers(through: InboxReadBoundary | undefined, signals: ReadSignals): boolean {
+  if (!through) return false;
+  if (through.lastAssistantAt === signals.lastAssistantAt && through.lastAssistantMessageId && signals.lastAssistantMessageId) {
+    return through.lastAssistantMessageId === signals.lastAssistantMessageId;
+  }
+  return (signals.lastAssistantAt ?? Number.NEGATIVE_INFINITY) <= (through.lastAssistantAt ?? Number.NEGATIVE_INFINITY);
 }
 
 /**
@@ -161,7 +166,7 @@ export function withInboxReadsPending<Row extends { key: string; signals: ReadSi
 ): Row[] {
   if (pending.size === 0) return [...rows];
   return rows.map((row) =>
-    row.signals.unread && pending.has(row.key) && readCovers(pending.get(row.key), row.signals)
+    row.signals.unread && readCovers(pending.get(row.key), row.signals)
       ? { ...row, signals: { ...row.signals, unread: false } }
       : row,
   );

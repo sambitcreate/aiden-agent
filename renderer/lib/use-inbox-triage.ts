@@ -18,6 +18,7 @@ import {
   mergeInboxTriageUndo,
   newerTriage,
   predictTriage,
+  type InboxReadBoundary,
   type InboxReadsPending,
   settledTriageOverlayKeys,
   type InboxTriageKind,
@@ -36,7 +37,7 @@ export interface InboxTriageRow extends InboxTriageTarget {
    * the action (`markRead`) covers output up to here; anything newer stays
    * unread. Undo reads a Done that output already ended as not done.
    */
-  readThrough?: number;
+  readThrough?: InboxReadBoundary;
 }
 
 interface TriageWrite {
@@ -191,7 +192,7 @@ export function useInboxTriage({
   const markReadsPending = React.useCallback((rows: readonly InboxTriageRow[]) => {
     setReadsPending((current) => {
       const next = new Map(current);
-      for (const row of rows) next.set(row.key, row.readThrough);
+      for (const row of rows) next.set(row.key, row.readThrough ?? {});
       return next;
     });
   }, []);
@@ -286,7 +287,7 @@ export function useInboxTriage({
         items.push({
           target: row,
           before: before[index] ?? null,
-          ...(row.readThrough !== undefined ? { lastAssistantAt: row.readThrough } : {}),
+          ...(row.readThrough?.lastAssistantAt !== undefined ? { lastAssistantAt: row.readThrough.lastAssistantAt } : {}),
           patch,
           revision: outcome.entry.revision,
         });

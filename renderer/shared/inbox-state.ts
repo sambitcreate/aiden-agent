@@ -38,6 +38,7 @@ export interface InboxSignals {
   hostOnline: boolean;
   updatedAt: number;
   lastAssistantAt?: number;
+  lastAssistantMessageId?: string;
   attentionSince?: number;
   runStartedAt?: number;
   /** Phase 2. */

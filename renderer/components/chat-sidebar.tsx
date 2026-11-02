@@ -1512,7 +1512,8 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         context.touch();
         const readAfter = offer.alsoMarkRead && markRead && (kind === "done" || kind === "snooze") ? markRead : null;
         // The output the row shows: a read sent with the action covers it, and Undo knows whether an older Done still held.
-        const target = entry.signals.lastAssistantAt !== undefined ? { ...row, readThrough: entry.signals.lastAssistantAt } : row;
+        const { lastAssistantAt, lastAssistantMessageId } = entry.signals;
+        const target = { ...row, readThrough: { lastAssistantAt, lastAssistantMessageId } };
         void triage.act(kind, [target], until, readAfter ? { markRead: readAfter } : undefined);
       },
     });
