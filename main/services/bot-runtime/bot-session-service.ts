@@ -29,6 +29,7 @@ import {
   AssistantEntry,
   type Conversation,
   type Cursor,
+  GenerationTask,
   type Harness,
   HarnessInspection,
   HarnessSettings,
@@ -36,6 +37,8 @@ import {
   type SettledSubmissionRecord,
   SubmissionId,
   SubmissionRecord,
+  type TaskId,
+  ToolTask,
   UserInput,
 } from "@earendil-works/pi-durable";
 import {
@@ -694,20 +697,31 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
           const record = await tx.submissionByRequest(conversation.id, requestId);
           if (record?.type !== "input" || record.status !== "unanswered") return false;
           if (record.entry === undefined) return true; // Settled before placement.
-          // Pi commits the assistant's tool call before its tool task can run.
-          // Scan raw entries so compaction cannot hide a possible side effect.
-          const query = { conversationId: conversation.id, minEntryId: record.entry, order: "ascending" as const };
+          if (!await tx.entry(record.entry)) return false;
+          // A routine is placed as a follow-up. Pi creates its first generation
+          // in the same commit, after all the inputs it serves. Entries and
+          // tasks share a monotonically increasing ID space. Walk back to that
+          // generation, ignoring later turns and including any co-placed inputs.
+          const query = { conversationId: conversation.id, order: "descending" as const };
+          const toolOwners = new Set<TaskId>();
+          let safe = false;
           let cursor: Cursor | undefined;
           do {
-            const page = await tx.scanEntries(query, 64, cursor);
-            if (!cursor && page.items[0]?.id !== record.entry) return false;
-            for (const entry of page.items) {
-              if (entry.model?.some((message) => message.role === "assistant" &&
-                message.content.some((part) => part.type === "toolCall"))) return false;
+            const page = await tx.scanTasks(query, 64, cursor);
+            for (const task of page.items) {
+              if (task.id < record.entry) return safe;
+              if (task.kind === ToolTask.definition.name && task.owner) toolOwners.add(task.owner);
+              if (task.kind === GenerationTask.definition.name) {
+                // A completed generation may already have handed off to a
+                // successor. An aborted one may have started a tool task.
+                safe = task.state.status === "terminal" &&
+                  (task.state.outcome.status === "failed" || task.state.outcome.status === "aborted") &&
+                  !toolOwners.has(task.id);
+              }
             }
             cursor = page.next;
           } while (cursor);
-          return true;
+          return safe;
         }, ctx);
       });
     },
