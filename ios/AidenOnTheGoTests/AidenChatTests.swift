@@ -12066,6 +12066,40 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertNil(AidenWorkspaceNavigation.reconciledSelection(current: selected, workspaceIDs: []))
     }
 
+    func testSplitViewSelectsTheChatsHomeOnlyWhileOneOfItsChatsIsOpen() {
+        let base = Date(timeIntervalSince1970: 1_000)
+        func workspace(_ id: String, noWorkspace: Bool = false) -> AidenWorkspace {
+            AidenWorkspace(
+                id: id,
+                name: noWorkspace ? "No workspace" : id.capitalized,
+                permission: .ask,
+                hasFolder: true,
+                isManagedWorktree: false,
+                noWorkspace: noWorkspace,
+                branchName: nil,
+                repositoryName: nil,
+                git: nil,
+                createdAt: base,
+                updatedAt: base,
+                revision: "\(id)-r1"
+            )
+        }
+        // The Mac lists its seeded hidden home first.
+        let workspaces = [workspace("default", noWorkspace: true), workspace("hidden-2", noWorkspace: true), workspace("project")]
+
+        let idle = AidenWorkspaceNavigation.selectableIDs(workspaces, openChatWorkspaceID: nil)
+        XCTAssertEqual(idle, ["project"])
+        XCTAssertEqual(
+            AidenWorkspaceNavigation.reconciledSelection(current: "default", workspaceIDs: idle),
+            "project",
+            "with no Chats chat open, a hidden selection falls to a workspace that has a page"
+        )
+
+        let chatOpen = AidenWorkspaceNavigation.selectableIDs(workspaces, openChatWorkspaceID: "hidden-2")
+        XCTAssertEqual(chatOpen, ["default", "project"], "an open chat in any hidden folder keeps the Chats home")
+        XCTAssertEqual(AidenWorkspaceNavigation.reconciledSelection(current: "default", workspaceIDs: chatOpen), "default")
+    }
+
     func testCompactWorkspacePathPreservesOnlyAnAvailableDestination() {
         let ids = ["workspace-a", "workspace-b", "workspace-c"]
 

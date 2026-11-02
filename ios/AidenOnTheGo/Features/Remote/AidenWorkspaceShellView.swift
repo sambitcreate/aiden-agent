@@ -770,6 +770,13 @@ private struct AidenHomeLoadID: Equatable {
 }
 
 enum AidenWorkspaceNavigation {
+    /// Workspaces split view can select. A hidden No workspace record has no page of its own, so
+    /// only the Chats group's home is selectable, and only while one of its chats is open.
+    static func selectableIDs(_ workspaces: [AidenWorkspace], openChatWorkspaceID: String?) -> [String] {
+        let openGroupID = openChatWorkspaceID.map { AidenNoWorkspace.groupID(for: $0, in: workspaces) }
+        return workspaces.filter { !$0.noWorkspace || $0.id == openGroupID }.map(\.id)
+    }
+
     static func reconciledSelection(current: String?, workspaceIDs: [String]) -> String? {
         guard !workspaceIDs.isEmpty else { return nil }
         if let current, workspaceIDs.contains(current) { return current }
@@ -2325,7 +2332,10 @@ struct AidenWorkspaceShellView: View {
         fullyRevealedSidebarWorkspaceIDs.formIntersection(workspaceIDs)
         selectedWorkspaceId = AidenWorkspaceNavigation.reconciledSelection(
             current: selectedWorkspaceId,
-            workspaceIDs: workspaceIDs
+            workspaceIDs: AidenWorkspaceNavigation.selectableIDs(
+                activeWorkspaces.filter { workspaceIDs.contains($0.id) },
+                openChatWorkspaceID: selectedSidebarChat?.workspaceId
+            )
         )
         compactWorkspacePath = AidenWorkspaceNavigation.reconciledCompactPath(
             current: compactWorkspacePath,

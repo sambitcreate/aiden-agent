@@ -339,8 +339,9 @@ private fun AidenWorkspaceHome(
             try {
                 val chat = activeClient.createChat(workspace.id, noWorkspace = workspace.noWorkspace)
                 viewModel.accept(chat)
-                // A No workspace chat can land in a fresh hidden workspace the phone hasn't listed yet.
-                if (workspaces.none { it.id == chat.workspaceId }) coordinator.refreshWorkspaces()
+                // A No workspace chat can land in a fresh hidden workspace the phone hasn't listed
+                // yet; the sidebar lists it under Chats once that re-read lands.
+                if (workspaces.none { it.id == chat.workspaceId }) coordinator.refreshWorkspaces()?.join()
                 onNavigateToChat(chat.id)
             } catch (error: Exception) {
                 snackbarHostState.showSnackbar(error.message ?: resources.getString(R.string.workspace_home_create_chat_failed))

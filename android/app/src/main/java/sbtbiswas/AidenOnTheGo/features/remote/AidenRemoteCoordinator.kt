@@ -694,11 +694,12 @@ class AidenRemoteCoordinator(
         return refreshed
     }
 
-    fun refreshWorkspaces(expectedGeneration: Long = activationGeneration) {
-        val currentClient = _client.value ?: return
+    /** Re-reads the Mac's workspaces; callers that must see the result can join the returned job. */
+    fun refreshWorkspaces(expectedGeneration: Long = activationGeneration): Job? {
+        val currentClient = _client.value ?: return null
         val instanceId = activeInstanceId
-        val installationId = installationStore.activeInstallation?.id ?: return
-        scope.launch {
+        val installationId = installationStore.activeInstallation?.id ?: return null
+        return scope.launch {
             try {
                 val list = currentClient.workspaces()
                 if (!isCurrent(expectedGeneration, installationId, currentClient)) return@launch
