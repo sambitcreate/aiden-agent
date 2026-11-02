@@ -529,3 +529,5 @@ The Inbox view may list Bots, but only while they need the person (including an 
 Inbox reads carry the displayed reply ID, including reads sent after Done and Snooze. A client reading an older summary captures a one-message window when supported, otherwise reads the whole chat, and checks its revision before acknowledging the captured message. Desktop triage and Undo both use revision preconditions. Undo restores the original Done time so intervening replies remain visible. Both phones reconcile read and triage fields against refreshed rows. A failed snooze expiry retries after a minute.
 
 - The subsequent merge with main retained raw picture uploads at Remote revision 50 and moved Inbox signals to revision 51.
+
+- After the merge with main added workspace-free chats in Remote revision 51, Inbox signals use revision 52.

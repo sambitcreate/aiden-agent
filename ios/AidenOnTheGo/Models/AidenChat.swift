@@ -2394,7 +2394,7 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     /// Additive in contract revision 21: lineage for the fork glyph. Rows
     /// never carry the summary.
     var forkedFrom: AidenChatForkLineage?
-    /// Additive in contract revision 51: the Inbox times, triage, and
+    /// Additive in contract revision 52: the Inbox times, triage, and
     /// the host's `inboxBucket` / `inboxSortAt`. The phone places rows with
     /// `AidenInbox.placement`, which falls back to local rules without them.
     var inbox: AidenChatInboxSignals

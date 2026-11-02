@@ -107,13 +107,13 @@ export interface AidenRemoteHostFeedOptions {
   /** Fixed epoch for tests; random per process otherwise. */
   epoch?: string;
   /**
-   * Revision 51: the bounded summary of what a waiting run asks (its oldest
+   * Revision 52: the bounded summary of what a waiting run asks (its oldest
    * approval summary or question text, at most `AIDEN_REMOTE_ATTENTION_SUMMARY_MAX`
    * characters). Only `runs:observe` desktops are sent it, on `run.state`.
    */
   attentionSummary?(runId: string): string | undefined;
   /**
-   * Revision 51: the host's runs as they are now. After a `runs:observe`
+   * Revision 52: the host's runs as they are now. After a `runs:observe`
    * device takes a snapshot, which carries no runs, it is sent a `run.state`
    * for each one still waiting, so a run that was waiting before it connected
    * still brings its `attentionSummary`.
@@ -138,7 +138,7 @@ type Audience = "all" | "legacy" | "handoffs";
 interface JournalEntry {
   sequence: number;
   frame: string;
-  /** The same event for a `runs:observe` device, when it carries more (revision 51). */
+  /** The same event for a `runs:observe` device, when it carries more (revision 52). */
   observerFrame?: string;
   bytes: number;
   botOnly: boolean;
@@ -409,7 +409,7 @@ export class AidenRemoteHostFeedService {
   }
 
   /**
-   * Revision 51: a snapshot carries no runs, so right after one an observer
+   * Revision 52: a snapshot carries no runs, so right after one an observer
    * is sent a `run.state` for each run still waiting, as journal entries only
    * that device reads. Other devices skip their sequences.
    *

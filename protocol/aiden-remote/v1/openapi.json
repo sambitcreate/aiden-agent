@@ -781,6 +781,11 @@
                   },
                   "modelId": {
                     "type": "string"
+                  },
+                  "noWorkspace": {
+                    "type": "boolean",
+                    "const": true,
+                    "description": "Contract revision 51. Sent by a phone starting a chat under Chats (workspaceId names a hidden No workspace record): the host saves the chat in a hidden folder of its own, a fresh one when the named record already holds a chat. Without it the chat stays in the workspace named."
                   }
                 },
                 "additionalProperties": false
@@ -6330,7 +6335,7 @@
       ],
       "get": {
         "operationId": "hostEvents",
-        "description": "Contract revision 19 host feed (host-events-v1), granted to paired mac and linux devices only. The first event is a snapshot of every chat summary, workspace (with an optional credential-free repository identity) and, for bot:read devices, Bot. Later events upsert or remove one chat, workspace or Bot, or report a run.state change. Event ids are <epoch>:<sequence>; a missing, foreign-epoch or expired cursor (more than 1,000 events or 8 MiB behind) receives a fresh snapshot instead of a replay. A snapshot larger than 256 KiB arrives as consecutive snapshot frames: every frame but the last carries partial: true and no SSE id, and only the final frame carries the id, so an interrupted snapshot is retried whole on resume. A heartbeat comment is sent every 15 seconds. The feed never reads transcripts. Since revision 51, right after a runs:observe device's snapshot the host also sends that device a run.state (with attentionSummary) for each run still waiting; those entries take sequences every other device skips, and each pass uses at most half the journal's event and byte retention.",
+        "description": "Contract revision 19 host feed (host-events-v1), granted to paired mac and linux devices only. The first event is a snapshot of every chat summary, workspace (with an optional credential-free repository identity) and, for bot:read devices, Bot. Later events upsert or remove one chat, workspace or Bot, or report a run.state change. Event ids are <epoch>:<sequence>; a missing, foreign-epoch or expired cursor (more than 1,000 events or 8 MiB behind) receives a fresh snapshot instead of a replay. A snapshot larger than 256 KiB arrives as consecutive snapshot frames: every frame but the last carries partial: true and no SSE id, and only the final frame carries the id, so an interrupted snapshot is retried whole on resume. A heartbeat comment is sent every 15 seconds. The feed never reads transcripts. Since revision 52, right after a runs:observe device's snapshot the host also sends that device a run.state (with attentionSummary) for each run still waiting; those entries take sequences every other device skips, and each pass uses at most half the journal's event and byte retention.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "host:events",
         "parameters": [
@@ -8796,6 +8801,11 @@
           },
           "isManagedWorktree": {
             "type": "boolean"
+          },
+          "noWorkspace": {
+            "type": "boolean",
+            "const": true,
+            "description": "Contract revision 51. Present only on a hidden folder Aiden made for one chat without a workspace. Clients list those chats under one Chats group instead of a workspace each."
           },
           "branchName": {
             "type": "string"
@@ -11452,12 +11462,12 @@
             ]
           },
           "attentionSince": {
-            "description": "Additive in contract revision 51 (inbox-signals-v1). While a live run waits on an approval or question, when the oldest pending approval was raised, or else the oldest question. Absent otherwise.",
+            "description": "Additive in contract revision 52 (inbox-signals-v1). While a live run waits on an approval or question, when the oldest pending approval was raised, or else the oldest question. Absent otherwise.",
             "type": "string",
             "format": "date-time"
           },
           "runStartedAt": {
-            "description": "Additive in contract revision 51. While a run is live, when it started. Absent otherwise.",
+            "description": "Additive in contract revision 52. While a run is live, when it started. Absent otherwise.",
             "type": "string",
             "format": "date-time"
           },
@@ -11467,32 +11477,32 @@
             "description": "Message boundary for read actions on this Inbox row."
           },
           "lastAssistantAt": {
-            "description": "Additive in contract revision 51. When the chat's newest assistant output (or failed turn) was persisted. Absent before the first reply.",
+            "description": "Additive in contract revision 52. When the chat's newest assistant output (or failed turn) was persisted. Absent before the first reply.",
             "type": "string",
             "format": "date-time"
           },
           "pinnedAt": {
-            "description": "Additive in contract revision 51. When the chat was pinned in the Inbox. Present only with triageRevision.",
+            "description": "Additive in contract revision 52. When the chat was pinned in the Inbox. Present only with triageRevision.",
             "type": "string",
             "format": "date-time"
           },
           "doneAt": {
-            "description": "Additive in contract revision 51. When the chat was marked done. Newer output brings it back. Present only with triageRevision.",
+            "description": "Additive in contract revision 52. When the chat was marked done. Newer output brings it back. Present only with triageRevision.",
             "type": "string",
             "format": "date-time"
           },
           "snoozedUntil": {
-            "description": "Additive in contract revision 51. When the chat's snooze ends. Present only with triageRevision.",
+            "description": "Additive in contract revision 52. When the chat's snooze ends. Present only with triageRevision.",
             "type": "string",
             "format": "date-time"
           },
           "triageRevision": {
-            "description": "Additive in contract revision 51. The revision of the chat's triage entry (chat-triage-v1); absent when the chat has never been triaged. Clients send it as ifRevision and drop their own pending write once the host reports it.",
+            "description": "Additive in contract revision 52. The revision of the chat's triage entry (chat-triage-v1); absent when the chat has never been triaged. Clients send it as ifRevision and drop their own pending write once the host reports it.",
             "type": "integer",
             "minimum": 1
           },
           "inboxBucket": {
-            "description": "Additive in contract revision 51 (inbox-signals-v1). The Inbox bucket the host's own placement rules give the row, computed from the state the host holds: needs_you (a pending approval or question, or unread output from a failed run), working, done (marked done with no newer output), snoozed, pinned, updates (unread), or earlier (read and idle, however old). The host can't know which chat a device has open, so the row counts as not open, and it applies no recent window. Clients recheck the time-based parts against their own clock: a snoozed row past its snoozedUntil is awake, and an earlier row older than the client's recent window ages out. Needs you rows order by tier from rowState (approval, question, then failed). Later hosts may send values outside this list; a client places those rows itself, as it does a bucket without an inboxSortAt. Present only with inboxSortAt.",
+            "description": "Additive in contract revision 52 (inbox-signals-v1). The Inbox bucket the host's own placement rules give the row, computed from the state the host holds: needs_you (a pending approval or question, or unread output from a failed run), working, done (marked done with no newer output), snoozed, pinned, updates (unread), or earlier (read and idle, however old). The host can't know which chat a device has open, so the row counts as not open, and it applies no recent window. Clients recheck the time-based parts against their own clock: a snoozed row past its snoozedUntil is awake, and an earlier row older than the client's recent window ages out. Needs you rows order by tier from rowState (approval, question, then failed). Later hosts may send values outside this list; a client places those rows itself, as it does a bucket without an inboxSortAt. Present only with inboxSortAt.",
             "enum": [
               "needs_you",
               "pinned",
@@ -11504,7 +11514,7 @@
             ]
           },
           "inboxSortAt": {
-            "description": "Additive in contract revision 51. The time the row orders by within its inboxBucket: needs_you by attentionSince (else updatedAt), oldest first; pinned by pinnedAt and updates by lastAssistantAt (else updatedAt), newest first; earlier by updatedAt, newest first; working by runStartedAt (else updatedAt), oldest first. A done or snoozed row carries the time it orders by in the bucket it returns to. Present only with inboxBucket.",
+            "description": "Additive in contract revision 52. The time the row orders by within its inboxBucket: needs_you by attentionSince (else updatedAt), oldest first; pinned by pinnedAt and updates by lastAssistantAt (else updatedAt), newest first; earlier by updatedAt, newest first; working by runStartedAt (else updatedAt), oldest first. A done or snoozed row carries the time it orders by in the bucket it returns to. Present only with inboxBucket.",
             "type": "string",
             "format": "date-time"
           }
@@ -15740,6 +15750,11 @@
           },
           "isManagedWorktree": {
             "type": "boolean"
+          },
+          "noWorkspace": {
+            "type": "boolean",
+            "const": true,
+            "description": "Contract revision 51. Present only on a hidden folder Aiden made for one chat without a workspace. Clients list those chats under one Chats group instead of a workspace each."
           },
           "branchName": {
             "type": "string"

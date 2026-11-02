@@ -3359,7 +3359,7 @@ test("the host's full context projection is reduced to the documented counts", (
   assert.throws(() => projectAidenRemoteContextPressure(partial));
 });
 
-test("revision 51 fixtures carry Inbox signals, and a stray or malformed signal fails closed", async () => {
+test("revision 52 fixtures carry Inbox signals, and a stray or malformed signal fails closed", async () => {
   const raw = (await json("fixtures/contract.json")) as Record<string, unknown>;
   const fixture = parseAidenRemoteContractFixture(raw);
   const byId = new Map(fixture.chatSummaries.summaries.map((summary) => [summary.id, summary]));

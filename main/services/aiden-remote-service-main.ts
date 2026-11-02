@@ -609,6 +609,24 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               const workspace = await configStore.getWorkspace(workspaceId);
               return workspace ? workspaceFolderRemoteRefusal(workspace) : undefined;
             },
+            noWorkspace: {
+              // The desktop's sidebar lists a chat only once it knows the chat's workspace, so a
+              // hidden record made or removed here is announced like any other workspace change.
+              target: async (workspaceId) => {
+                const target = await workspaceApplicationService.workspaceForNoWorkspaceChat(workspaceId);
+                if (target !== workspaceId) ipcMain.broadcast("workspaces:changed", {});
+                return target;
+              },
+              release: async (workspaceId) => {
+                try {
+                  await workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId);
+                } catch {
+                  logger.warn("aiden-remote", "Could not release a moved chat's hidden folder.");
+                  return;
+                }
+                ipcMain.broadcast("workspaces:changed", {});
+              },
+            },
             deviceSupportsSkillInvocation: async (deviceId) => {
               const device = (await state.snapshot()).devices.find(
                 (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
@@ -665,7 +683,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               markRead: (chatId, throughMessageId) => markChatRead(chatId, throughMessageId),
             },
             triage: chatTriage,
-            // Revision 51: live-run times for the summaries' Inbox signals.
+            // Revision 52: live-run times for the summaries' Inbox signals.
             runTimes: (chatId) => liveRunAttention(chatId, hostRunRegistry),
             forks: {
               service: chatForkService,
@@ -1037,7 +1055,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               listWorkspaces: () => workspaceApplicationService.list(),
               repositoryIdentity: gitCachedRepositoryIdentity,
               ...(bots ? { listBots: () => bots.list() } : {}),
-              // Revision 51: each Bot's Needs you, Failed and last reply, from the
+              // Revision 52: each Bot's Needs you, Failed and last reply, from the
               // same live summaries this Mac's sidebar reads. A failed read leaves them out.
               botSignals: async (botRows) => {
                 const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
@@ -1058,7 +1076,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             "chats:fork-summary-changed",
             "workspaces:changed",
             "bots:changed",
-            // A Bot's wait began or ended: its row's `needsYou` changed (revision 51).
+            // A Bot's wait began or ended: its row's `needsYou` changed (revision 52).
             "bots:attention",
           ]);
           const detachers = [

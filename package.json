@@ -462,7 +462,8 @@
         "Contents/Helpers/aiden-subagent-file-mutator",
         "Contents/Helpers/aiden-subagent-shell-runner",
         "Contents/Helpers/aiden-worktree-remover",
-        "Contents/Helpers/aiden-worktree-file-io"
+        "Contents/Helpers/aiden-worktree-file-io",
+        "Contents/Helpers/aiden-imcp-launcher"
       ],
       "extraResources": [
         {
@@ -502,6 +503,10 @@
         {
           "from": "build/native/aiden-worktree-remover",
           "to": "Helpers/aiden-worktree-remover"
+        },
+        {
+          "from": "build/native/aiden-imcp-launcher",
+          "to": "Helpers/aiden-imcp-launcher"
         },
         {
           "from": "build/native/aiden-worktree-file-io",

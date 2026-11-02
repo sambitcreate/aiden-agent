@@ -28,6 +28,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenModelCatalog
 import sbtbiswas.AidenOnTheGo.models.AidenUsageSummary
 import sbtbiswas.AidenOnTheGo.models.AidenServer
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
+import sbtbiswas.AidenOnTheGo.models.AidenNoWorkspace
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenUsageCache
@@ -130,6 +131,7 @@ class AidenWorkspaceHomeViewModel(
     private var paginationBoundary: AidenChatSummary? = null
     private var lastLoadedAtMillis: Long? = null
     private val pendingRunKeysByInstance = mutableMapOf<String, AidenScheduledRunIdempotencyKeys>()
+    private val workspaceReReadsByInstance = mutableMapOf<String, MutableSet<String>>()
 
     fun pendingScheduledRunKeys(instanceId: String): AidenScheduledRunIdempotencyKeys =
         pendingRunKeysByInstance.getOrPut(instanceId) { AidenScheduledRunIdempotencyKeys() }
@@ -139,12 +141,9 @@ class AidenWorkspaceHomeViewModel(
             chatCache.summaries.collect { cachedByInstance ->
                 val instanceId = hydratedInstanceId ?: return@collect
                 if (instanceId != coordinator.activeInstanceId) return@collect
-                _chats.value = regularNewestFirst(
-                    cachedByInstance[instanceId]
-                        ?.values
-                        ?.filter { it.workspaceId in hydratedWorkspaceIds }
-                        .orEmpty()
-                )
+                val cached = cachedByInstance[instanceId]?.values.orEmpty()
+                _chats.value = regularNewestFirst(cached.filter { it.workspaceId in hydratedWorkspaceIds })
+                reReadWorkspacesForUnlistedChats(instanceId, cached)
             }
         }
         viewModelScope.launch {
@@ -607,12 +606,25 @@ class AidenWorkspaceHomeViewModel(
             throw IllegalStateException("Chats changed while loading. Refresh and try again.")
         }
         paginationBoundary = summaries.lastOrNull() ?: boundary
-        // A swipe made after the save, whose own cache write is still on its
-        // way, is not in the saved rows yet.
-        _chats.value = regularNewestFirst(
-            chatCache.summaries.value[instanceId]?.values.orEmpty().map { overlayingTriage(it, writeToken) }
-        )
+        val cached = chatCache.summaries.value[instanceId]?.values.orEmpty()
+        _chats.value = regularNewestFirst(cached.map { overlayingTriage(it, writeToken) })
             .filter { it.workspaceId in coordinator.workspaces.value.map(AidenWorkspace::id).toSet() }
+        reReadWorkspacesForUnlistedChats(instanceId, cached)
+    }
+
+    /**
+     * A chat another device started without a workspace sits in a hidden record this phone hasn't
+     * listed, so the sidebar would leave it out. Re-read the workspace list once for each such id.
+     */
+    private fun reReadWorkspacesForUnlistedChats(instanceId: String, chats: Collection<AidenChatSummary>) {
+        if (coordinator.activeInstanceId != instanceId) return
+        if (!coordinator.hasCompletedWorkspaceRefresh.value) return
+        if (coordinator.connectionState.value != AidenConnectionState.CONNECTED) return
+        val reRead = workspaceReReadsByInstance.getOrPut(instanceId) { mutableSetOf() }
+        val unlisted = AidenNoWorkspace.unlistedWorkspaceIds(chats.map { it.workspaceId }, coordinator.workspaces.value, reRead)
+        if (unlisted.isEmpty()) return
+        reRead += unlisted
+        coordinator.refreshWorkspaces()
     }
 
     private suspend fun <T> request(block: suspend () -> T): Result<T> = try {
@@ -678,11 +690,10 @@ fun projectAidenWorkspaceSidebar(
 ): AidenWorkspaceSidebarProjection {
     val query = searchQuery.trim()
     val workspacesById = workspaces.associateBy { it.id }
-    // By workspace and Recent sort plainly by recency, as on the desktop;
-    // attention ordering belongs to the Inbox organization.
+    // Workspace and Recent views stay in recency order.
     val regularChats = regularNewestFirst(chats).filter { workspacesById.containsKey(it.workspaceId) }
-    val chatsByWorkspace = regularChats.groupBy { it.workspaceId }
-    val sections = workspaces.mapNotNull { workspace ->
+    val chatsByWorkspace = regularChats.groupBy { AidenNoWorkspace.groupId(it.workspaceId, workspaces) }
+    val sections = AidenNoWorkspace.grouped(workspaces).mapNotNull { workspace ->
         val allChats = chatsByWorkspace[workspace.id].orEmpty()
         val workspaceMatches = query.isNotEmpty() && workspace.name.contains(query, ignoreCase = true)
         val visibleChats = when {
@@ -706,7 +717,7 @@ fun projectAidenWorkspaceSidebar(
     val recents = regularChats.filter { chat ->
         query.isEmpty() ||
             chat.title.contains(query, ignoreCase = true) ||
-            workspacesById[chat.workspaceId]?.name?.contains(query, ignoreCase = true) == true
+            workspacesById[chat.workspaceId]?.let(AidenNoWorkspace::label)?.contains(query, ignoreCase = true) == true
     }
     return AidenWorkspaceSidebarProjection(sections, recents)
 }
