@@ -498,6 +498,9 @@ class AidenRemoteCoordinator(
     }
 
     init {
+        // No download or player belongs to this coordinator yet. Reclaim
+        // leftovers from a prior process before admitting any current Play.
+        purgeBrowserRecordings()
         scope.launch {
             installationStore.activeInstallationId.collect {
                 refreshClient()
