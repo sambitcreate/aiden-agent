@@ -69,13 +69,16 @@ export function createPiImageGenerationPort(options: PiImagePortOptions): ImageG
   };
 
   async function preflight(request: ImageGenerationRequest): Promise<ImageGenerationPreflight> {
+    let model: ImageModelEntry | undefined;
     try {
       await options.prepare?.();
+      const available = await options.models.getAvailableOfType("image", request.provider, { signal: request.signal });
+      model = available.find((entry) => entry.provider === request.provider && entry.id === request.model);
     } catch {
+      if (request.signal.aborted) return failed("aborted", "Stopped before sending.");
       return failed("unknown-model", "Image models could not be loaded. Check Settings → Image Generation.");
     }
-    const model = options.models.getModelOfType("image", request.provider, request.model);
-    if (!model || model.provider !== request.provider || model.id !== request.model || AUTO_ROUTER.test(model.id)) {
+    if (!model || AUTO_ROUTER.test(model.id)) {
       return failed("unknown-model", "This image model is not available. Choose another model.");
     }
     if (request.references.length > 0 && !model.input.includes("image")) {
@@ -112,27 +115,54 @@ export function createPiImageGenerationPort(options: PiImagePortOptions): ImageG
       return failed("references-unsupported", error instanceof Error ? error.message : "These reference images cannot be sent.");
     }
     if (request.signal.aborted) return failed("aborted", "Stopped before sending.");
-    return { kind: "ready", send: () => send(model, request, references) };
+    return { kind: "ready", send: (claim) => send(model, request, references, claim) };
   }
 
-  async function send(model: ImageModelEntry, request: ImageGenerationRequest, references: ImageContent[]): Promise<ImageGenerationResult> {
+  async function send(
+    model: ImageModelEntry,
+    request: ImageGenerationRequest,
+    references: ImageContent[],
+    claim?: () => boolean,
+  ): Promise<ImageGenerationResult> {
     const identity = {
       provider: model.provider,
       providerLabel: options.providerLabel(model.provider),
       model: model.id,
       modelLabel: model.name || model.id,
     };
+    let dispatched = false;
+    let denied = false;
     let result: AssistantImages;
     try {
       result = await options.models.generateImages(
         model,
         { input: [{ type: "text", text: request.prompt }, ...references] },
-        { signal: request.signal, maxRetries: 0 },
+        {
+          signal: request.signal,
+          maxRetries: 0,
+          // Pi calls this hook after resolving image auth, immediately before provider dispatch.
+          transformHeaders: (headers) => {
+            if (!options.models.getModelOfType("image", model.provider, model.id)) {
+              throw new Error("Image model disabled before dispatch.");
+            }
+            if (request.signal.aborted || (claim && !claim())) {
+              denied = true;
+              throw new Error("Image request declined before dispatch.");
+            }
+            dispatched = true;
+            return headers;
+          },
+        },
       );
     } catch (error) {
       // Models.generateImages never rejects; this guards a regression without hiding the outcome.
-      await account({ ...identity, status: request.signal.aborted ? "cancelled" : "failed" });
+      if (dispatched) await account({ ...identity, status: request.signal.aborted ? "cancelled" : "failed" });
       return failed(request.signal.aborted ? "aborted" : "provider-error", error instanceof Error ? error.message : "The image request failed.");
+    }
+    if (!dispatched) {
+      if (request.signal.aborted) return failed("aborted", "Stopped before sending.");
+      if (denied) return failed("request-limit", "This run already used every request it was approved for.");
+      return failed("unknown-model", "This image model is unavailable. Check Settings → Image Generation.");
     }
     const stopped = result.stopReason === "aborted" || (result.stopReason !== "stop" && request.signal.aborted);
     await account({
