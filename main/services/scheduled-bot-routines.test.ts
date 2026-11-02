@@ -50,6 +50,7 @@ class MemoryPersistence<T> {
  * what a routine did and did not touch.
  */
 class FakeBotSession implements BotRoutinePorts {
+  wakeUpAllowed = async () => true;
   states = new Map<string, BotSessionState>();
   replies: Array<BotRoutineSubmissionOutcome | Promise<BotRoutineSubmissionOutcome>> = [];
   sends: Array<{ botId: string; text: string; requestId: string; label?: string }> = [];
@@ -1551,4 +1552,17 @@ test("a wake-up marker cannot be added through the routine IPC parser", () => {
       wakeUp: { setAt: 1 },
     }),
   );
+});
+
+test("a surviving self-wake task cannot submit after its durable permission is revoked", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const nextYear = new Date().getUTCFullYear() + 1;
+  const wake = await h.routines.create({ botId: "bot-chef", name: "Wake-up", schedule: { kind: "once", date: `${nextYear}-03-14`, time: "17:00" },
+    prompt: "Check the oven.", wakeUp: { setAt: 123 } });
+  h.session.wakeUpAllowed = async () => false;
+  await h.scheduler.start();
+  await fireWhenDue(t, jobFor(wake.id));
+  assert.deepEqual(h.session.sends, []);
+  assert.equal((await h.store.runs(wake.id))[0]?.result, "blocked");
 });

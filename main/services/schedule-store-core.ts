@@ -39,7 +39,7 @@ function finiteTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-function isWakeUpMarker(value: unknown): value is { setAt: number } {
+function isWakeUpMarker(value: unknown): value is NonNullable<ScheduledTask["wakeUp"]> {
   return (
     !!value &&
     typeof value === "object" &&
@@ -179,6 +179,10 @@ function assertBotRoutineShape(task: {
   }
 }
 
+function observeQueuedRetries(fires: ScheduledTask["pendingRoutineFires"]) {
+  return fires?.map((fire) => fire.retry ? { ...fire, observeOnly: true as const } : fire);
+}
+
 function normalizeInput(
   input: ScheduledTaskInput,
   existing: ScheduledTask | undefined,
@@ -297,6 +301,9 @@ function normalizeInput(
   ) {
     throw new Error("Pick a time in the future for this routine.");
   }
+  const retiredRetries = existing && (!enabled || !existing.enabled || existing.prompt !== prompt ||
+    existing.cron !== cron || existing.timezone !== timezone);
+  const pending = retiredRetries ? observeQueuedRetries(existing.pendingRoutineFires) : existing?.pendingRoutineFires;
   return {
     id: existing?.id ?? cleanOptional(input.id, 160) ?? randomUUID(),
     name,
@@ -305,9 +312,7 @@ function normalizeInput(
     cron,
     timezone,
     nextRunAt,
-    ...(botId !== undefined && existing?.pendingRoutineFires?.length
-      ? { pendingRoutineFires: existing.pendingRoutineFires }
-      : {}),
+    ...(botId !== undefined && pending?.length ? { pendingRoutineFires: pending } : {}),
     lastRunAt: existing?.lastRunAt,
     workspaceId,
     providerId,
@@ -331,7 +336,7 @@ function normalizeInput(
       : {}),
     // Set once, when the Bot sets a wake-up; an edit never adds or removes it.
     ...(botId !== undefined && isWakeUpMarker(existing ? existing.wakeUp : input.wakeUp)
-      ? { wakeUp: { setAt: (existing ? existing.wakeUp : input.wakeUp)!.setAt } }
+      ? { wakeUp: existing ? existing.wakeUp : input.wakeUp }
       : {}),
     notify: input.notify ?? existing?.notify ?? true,
     lastResult: existing?.lastResult,
@@ -515,7 +520,7 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     ...(botId !== undefined && typeof task.sourceProposalId === "string" && /^[0-9a-f-]{36}$/u.test(task.sourceProposalId)
       ? { sourceProposalId: task.sourceProposalId }
       : {}),
-    ...(botId !== undefined && isWakeUpMarker(task.wakeUp) ? { wakeUp: { setAt: task.wakeUp.setAt } } : {}),
+    ...(botId !== undefined && isWakeUpMarker(task.wakeUp) ? { wakeUp: task.wakeUp } : {}),
     notify: task.notify !== false,
     lastResult: scheduleError
       ? "error"
@@ -741,6 +746,7 @@ export function createScheduleStore(
         const task: ScheduledTask = {
           ...existing,
           enabled,
+          ...(!enabled && !options && { pendingRoutineFires: observeQueuedRetries(existing.pendingRoutineFires) }),
           ...(options && {
             pendingRoutineFires: existing.pendingRoutineFires?.filter((fire) =>
               !fire.retry || fire.requestId === options.clearRoutineRetriesExcept),
