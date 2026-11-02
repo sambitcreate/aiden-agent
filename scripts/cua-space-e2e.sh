@@ -71,7 +71,9 @@ RUN_ID="$(basename "$WORK")"
 
 # Tracked files plus untracked ones, so uncommitted work is tested too. Ignored untracked files, and untracked files
 # matching the key and credential patterns below, stay on the host. `ls-files -c` still lists tracked paths deleted
-# from the working tree, so keep only paths that exist; tar still fails on unreadable ones.
+# from the working tree, so keep only paths that exist; tar still fails on unreadable ones. Directories are dropped:
+# `ls-files -o` lists an untracked nested repository or worktree as one directory, which tar would pack whole,
+# secrets and .git included.
 (cd "$ROOT" && {
   git ls-files -c -z
   git ls-files -o --exclude-standard -z -- . ':(exclude,glob)**/.env*' ':(exclude,glob)**/.npmrc' \
@@ -80,7 +82,7 @@ RUN_ID="$(basename "$WORK")"
     ':(exclude,glob)**/*.mobileprovision' ':(exclude,glob)**/id_rsa*' ':(exclude,glob)**/id_dsa*' \
     ':(exclude,glob)**/id_ecdsa*' ':(exclude,glob)**/id_ed25519*' ':(exclude,glob)**/.netrc' \
     ':(exclude,glob)**/.git-credentials'
-} | while IFS= read -r -d '' path; do if [ -e "$path" ] || [ -L "$path" ]; then printf '%s\0' "$path"; fi; done \
+} | while IFS= read -r -d '' path; do if [ -L "$path" ] || [ -f "$path" ]; then printf '%s\0' "$path"; fi; done \
   | COPYFILE_DISABLE=1 tar --null -T - -czf "$WORK/src.tgz" --no-xattrs)
 LOCK_HASH="$(shasum -a 256 "$ROOT/package-lock.json" | cut -d' ' -f1)"
 

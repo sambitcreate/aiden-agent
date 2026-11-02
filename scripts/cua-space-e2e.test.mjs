@@ -103,6 +103,12 @@ test("syncs uncommitted work into the Space but keeps untracked secrets and dele
   for (const secret of [".env.local", ".npmrc", "keys/AuthKey_ABC123.p8", "keys/dev.pem", "keys/release.jks", "keys/signing.p12", "keys/id_ed25519", "keys/id_rsa.pub", "keys/dev.mobileprovision", ".netrc", ".git-credentials"]) {
     await writeFile(path.join(repo, secret), "secret\n");
   }
+  // An untracked nested repository (a scratch clone or worktree) is listed by git as a single directory.
+  const nested = path.join(repo, "scratch-clone");
+  await mkdir(nested);
+  await git(nested, "init", "-q");
+  await writeFile(path.join(nested, ".env.local"), "secret\n");
+  await writeFile(path.join(nested, "notes.ts"), "export {};\n");
 
   const result = await run(space, ["--run", "echo", "a b", "$HOME;x"], {
     FAKE_CUA_LS: '[{"id":"local:aiden-e2e","status":"ready"}]',
@@ -119,6 +125,7 @@ test("syncs uncommitted work into the Space but keeps untracked secrets and dele
   for (const excluded of ["removed.ts", "ignored.log", ".env.local", ".npmrc", "keys/AuthKey_ABC123.p8", "keys/dev.pem", "keys/release.jks", "keys/signing.p12", "keys/id_ed25519", "keys/id_rsa.pub", "keys/dev.mobileprovision", ".netrc", ".git-credentials"]) {
     assert.ok(!files.includes(excluded), `${excluded} stays on the host`);
   }
+  assert.deepEqual(files.filter((name) => name.startsWith("scratch-clone")), [], "an untracked nested repository stays on the host");
 
   assert.equal(
     await readFile(path.join(fake, `aiden-run-${archive.slice("aiden-src-".length, -".tgz".length)}.sh`), "utf8"),

@@ -18,7 +18,7 @@ npm run test:e2e:space -- --run <command> [args]         # other window-opening 
 The Space is Linux, so specs take their non-darwin branches there. Changes to a spec's
 darwin branch or to macOS-only behavior still need `npm run test:e2e` on the host (or
 the macOS CI gate). On Linux, follow CI's Linux E2E step: its apt packages,
-`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, `ulimit -c 0`, then
+`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, `sudo sysctl -w kernel.core_pattern=core`, `ulimit -c 0`, then
 `xvfb-run --auto-servernum npm run test:e2e`.
 
 Hosted CI splits deterministic spec files across three isolated macOS runners, each with
