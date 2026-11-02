@@ -1707,7 +1707,7 @@ export interface AidenRemoteServerFeatureSupport {
   /** `POST /chats/{chatId}/triage`, announced to desktops and phones. */
   triage: boolean;
   /**
-   * Revision 50 Inbox signals on summaries, `run.state` and Bot rows
+   * Revision 51 Inbox signals on summaries, `run.state` and Bot rows
    * (desktop-only token; phones decode the additive fields without it).
    */
   inboxSignals: boolean;
@@ -1765,7 +1765,7 @@ export function aidenRemoteServerFeatures(
     ...(phone && support.speech ? [AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE] : []),
     ...(support.chatSummaries ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE] : []),
     ...(support.readState ? [AIDEN_REMOTE_CHAT_READ_STATE_FEATURE] : []),
-    // Inbox triage (revision 50): every device type; the route still needs `chat:write`.
+    // Inbox triage (revision 51): every device type; the route still needs `chat:write`.
     ...(support.triage ? [AIDEN_REMOTE_CHAT_TRIAGE_FEATURE] : []),
     ...(desktop && support.inboxSignals ? [AIDEN_REMOTE_INBOX_SIGNALS_FEATURE] : []),
     ...(support.tasks ? [AIDEN_REMOTE_CHAT_TASKS_FEATURE] : []),
@@ -1797,7 +1797,7 @@ export function aidenRemoteServerFeatures(
     ...(support.botRoutines ? [AIDEN_REMOTE_BOT_ROUTINES_FEATURE] : []),
     ...(support.botConnectionRequests ? [AIDEN_REMOTE_BOT_CONNECTION_REQUESTS_FEATURE] : []),
     // Bot presets fill a phone's empty Bots home; desktops never read the
-    // presets routes, so they are not told (contract revision 50, which keeps
+    // presets routes, so they are not told (contract revision 51, which keeps
     // a fully wired host's desktop list within the 32 tokens shipped clients accept).
     ...(phone && support.botPresets ? [AIDEN_REMOTE_BOT_PRESETS_FEATURE] : []),
     // Bot memory and proactivity (contract revision 27).
