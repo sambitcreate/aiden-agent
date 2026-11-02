@@ -7456,7 +7456,7 @@ final class AidenChatTests: XCTestCase {
         XCTAssertTrue(AidenNewAgentChoice.allCases.allSatisfy { !$0.detail.isEmpty })
     }
 
-    func testChatsWithoutAWorkspaceShareOneChatsSectionOnTheirHome() {
+    func testChatsWithoutAWorkspaceShareOneChatsSectionOnTheirHome() throws {
         let base = Date(timeIntervalSince1970: 1_000)
         func record(_ id: String, created: TimeInterval, noWorkspace: Bool = false) -> AidenWorkspace {
             AidenWorkspace(
@@ -7528,6 +7528,23 @@ final class AidenChatTests: XCTestCase {
             AidenNoWorkspace.unarchived(workspaces, archivedIDs: ["hidden-first", "project"]).map(\.id),
             ["hidden-later", "hidden-first"]
         )
+
+        // A link or Shortcut that remembers a hidden folder on a Mac that isn't the active one
+        // finds the Chats entry through the catalog; other ids are left as they are.
+        let catalog = [
+            AidenIntentWorkspaceRecord(id: "hidden-first", instanceId: "other", name: "Chats",
+                                       groupedIDs: ["hidden-first", "hidden-later"]),
+            AidenIntentWorkspaceRecord(id: "project", instanceId: "other", name: "Project"),
+        ]
+        XCTAssertEqual(AidenIntentWorkspaceRecord.listedID(for: "hidden-later", in: catalog), "hidden-first")
+        XCTAssertEqual(AidenIntentWorkspaceRecord.listedID(for: "project", in: catalog), "project")
+        XCTAssertEqual(AidenIntentWorkspaceRecord.listedID(for: "gone", in: catalog), "gone")
+        // A catalog saved by an older build has no grouped ids and still decodes.
+        let older = try JSONDecoder().decode(
+            AidenIntentWorkspaceRecord.self,
+            from: Data(#"{"id":"default","instanceId":"other","name":"No workspace"}"#.utf8)
+        )
+        XCTAssertNil(older.groupedIDs)
 
         // Recents search matches the label a hidden chat shows ("Chats"), not the record's name.
         let hiddenChats = [chat("soup", in: "hidden-later", updated: 40), chat("fix", in: "project", updated: 5)]

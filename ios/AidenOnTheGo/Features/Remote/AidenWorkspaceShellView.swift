@@ -1416,6 +1416,11 @@ struct AidenWorkspaceShellView: View {
                 for: coordinator.activeInstanceId
             )
         }
+        .onChange(of: selectedSidebarChat?.workspaceId) { _, workspaceID in
+            // The Chats home is selectable only while one of its chats is open, so closing that
+            // chat hands the split view back to a workspace that has a page.
+            if workspaceID == nil { reconcileNavigation(workspaceIDs: activeWorkspaceIDs) }
+        }
         .onChange(of: coordinator.activeInstanceId) { _, _ in
             cancelPendingSidebarChatNavigation()
             isShowingScheduledTasks = false
