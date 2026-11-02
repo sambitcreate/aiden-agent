@@ -107,7 +107,7 @@ function fakeIssues() {
  * The real store, scheduler and executor with a scripted Bot session, so a
  * test can drive fires and see what recovery did to durable state.
  */
-function harness() {
+function harness(checkRetrySafety?: (requestId: string) => Promise<boolean>) {
   const store = createScheduleStore(new MemoryPersistence<unknown[]>([]), new MemoryPersistence<unknown[]>([]));
   const replies: BotRoutineSubmissionOutcome[] = [];
   const sends: string[] = [];
@@ -119,7 +119,7 @@ function harness() {
     consumeStall(botId: string): boolean;
     checkClaims(botId: string): Promise<{ stepIds: string[]; toolNames: string[] } | undefined>;
   } = {
-    canRetryRoutineRequest: async (_botId, requestId) => submissions.has(requestId),
+    canRetryRoutineRequest: async (_botId, requestId) => submissions.has(requestId) && (checkRetrySafety ? await checkRetrySafety(requestId) : true),
     consumeStall: (botId) => stalled.delete(botId),
     checkClaims: async () => claims.shift(),
     async state() { return { kind: "idle" }; },
@@ -205,6 +205,24 @@ test("a temporary failure queues one durable retry 5 minutes later", async () =>
   assert.equal(retries[0]?.fireTime, failed.finishedAt + 300_000);
   assert.equal(h.open.size, 0, "a passing failure does not bother the person");
 });
+
+for (const evidence of ["tool requested", "session unreadable"] as const) {
+  test(`a temporary failure is delivered without scheduling a retry when ${evidence}`, async () => {
+    const toolsByRequest = new Map<string, string[]>();
+    const h = harness(async (requestId) => {
+      if (evidence === "session unreadable") throw new Error("Cannot read the durable session");
+      return !toolsByRequest.get(requestId)?.length;
+    });
+    const routine = await h.routines.create({ botId: "bot-1", name: "Mail", schedule: { kind: "daily", time: "09:00" }, prompt: "Send the update." });
+    const at = Date.now() - 1_000;
+    toolsByRequest.set(`routine:${routine.id}:${at}`, ["send_email"]);
+    h.replies.push(TIMEOUT);
+    const failed = await fire(h, routine.id, at);
+    assert.equal(failed.failure?.kind, "temporary");
+    assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.some((entry) => entry.retry) ?? false, false);
+    assert.equal(h.deliveries.length, 1);
+  });
+}
 
 test("a sign-in failure raises one issue at once and is not retried", async () => {
   const h = harness();
