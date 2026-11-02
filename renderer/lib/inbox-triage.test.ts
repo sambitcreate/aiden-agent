@@ -247,6 +247,42 @@ test("Undo lands only where nothing changed since, by the store's ifRevision", a
   assert.equal(inboxTriageUndoConflictText(1, 2), "1 chat changed since, so Undo left it as it is.");
 });
 
+test("Undo of Done on a chat newer output had reopened puts it back where it was, not hidden again", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-inbox-undo-reopened-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  let now = 1_000;
+  const store = new ChatTriageStore(() => root, { now: () => now });
+  const shelf = (entry: ChatTriageEntry | null | undefined, lastAssistantAt: number) =>
+    inboxState(signals({ unread: true, lastAssistantAt, ...triageSignals(entry ?? undefined) }), now, 24 * HOUR).shelf;
+  assert.ok((await store.set("a", { done: true })).ok);
+  // A reply at 2000 ends that Done; the chat is back in Updates.
+  const reply = 2_000;
+  now = 2_500;
+  const before = (await store.get("a")) ?? null;
+  assert.equal(shelf(before, reply), "updates");
+  now = 3_000;
+  const done = await store.set("a", { done: true });
+  assert.ok(done.ok);
+  assert.notEqual(shelf(done.entry, reply), "updates");
+  now = 4_000;
+  const [write] = inboxTriageUndoWrites({
+    kind: "done",
+    items: [{ target: target("a"), before, lastAssistantAt: reply, patch: { done: true }, revision: done.entry.revision }],
+    at: 3_000,
+  });
+  assert.ok(write);
+  const undone = await store.set("a", write.patch, { ifRevision: write.ifRevision });
+  assert.ok(undone.ok);
+  assert.equal(shelf(undone.entry, reply), "updates");
+  // A Done that still held is restored as Done.
+  const [held] = inboxTriageUndoWrites({
+    kind: "done",
+    items: [{ target: target("b"), before: { revision: 1, updatedAt: 0, doneAt: 1_000 }, lastAssistantAt: 900, patch: { done: true }, revision: 2 }],
+    at: 3_000,
+  });
+  assert.deepEqual(held?.patch, { done: true });
+});
+
 test("writes group by host in first-seen order", () => {
   const writes = [target("a"), target("b", "studio"), target("c"), target("d", "studio")].map((entry) => ({ target: entry }));
   const groups = groupByHost(writes);

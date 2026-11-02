@@ -90,12 +90,21 @@ export function isChatTriagePatch(value: unknown): value is ChatTriagePatch {
 
 /**
  * The patch that puts an entry's fields back as they were before `patch`, for
- * Undo. Only the fields `patch` named are restored.
+ * Undo. Only the fields `patch` named are restored. Done is restored as it
+ * held: a `doneAt` that output newer than it (`lastAssistantAt`, the newest
+ * output the row showed before the action) already ended reads as not done,
+ * so Undo doesn't hide that output again under a fresh `doneAt`.
  */
-export function inverseTriagePatch(before: ChatTriageEntry | null | undefined, patch: ChatTriagePatch): ChatTriagePatch {
+export function inverseTriagePatch(
+  before: ChatTriageEntry | null | undefined,
+  patch: ChatTriagePatch,
+  lastAssistantAt?: number,
+): ChatTriagePatch {
   const inverse: ChatTriagePatch = {};
   if (patch.pinned !== undefined) inverse.pinned = before?.pinnedAt !== undefined;
-  if (patch.done !== undefined) inverse.done = before?.doneAt !== undefined;
+  if (patch.done !== undefined) {
+    inverse.done = before?.doneAt !== undefined && (lastAssistantAt ?? Number.NEGATIVE_INFINITY) <= before.doneAt;
+  }
   if (patch.snoozeUntil !== undefined) inverse.snoozeUntil = before?.snoozedUntil ?? null;
   return inverse;
 }

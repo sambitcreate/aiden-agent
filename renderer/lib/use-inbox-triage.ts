@@ -33,7 +33,8 @@ export interface InboxTriageRow extends InboxTriageTarget {
   reported?: ChatTriageEntry | null;
   /**
    * The newest output the row showed when the person acted. A read sent with
-   * the action (`markRead`) covers output up to here; anything newer stays unread.
+   * the action (`markRead`) covers output up to here; anything newer stays
+   * unread. Undo reads a Done that output already ended as not done.
    */
   readThrough?: number;
 }
@@ -280,7 +281,13 @@ export function useInboxTriage({
       const row = rows[index]!;
       if (outcome.ok) {
         written.push(row);
-        items.push({ target: row, before: before[index] ?? null, patch, revision: outcome.entry.revision });
+        items.push({
+          target: row,
+          before: before[index] ?? null,
+          ...(row.readThrough !== undefined ? { lastAssistantAt: row.readThrough } : {}),
+          patch,
+          revision: outcome.entry.revision,
+        });
         return [row.key, outcome.entry] as const;
       }
       if (!outcome.conflict) failure ??= outcome.message;

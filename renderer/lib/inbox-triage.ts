@@ -191,6 +191,8 @@ export interface InboxTriageUndoItem {
   target: InboxTriageTarget;
   /** The entry before the first action in the batch touched this chat. */
   before: ChatTriageEntry | null;
+  /** The newest output the row showed before that action, which says whether `before`'s Done still held. */
+  lastAssistantAt?: number;
   /** Every field the batch's actions on this chat named. */
   patch: ChatTriagePatch;
   /** The chat's triage revision after this device's last write; Undo sends it as `ifRevision`. */
@@ -240,7 +242,7 @@ export function inboxTriageUndoWrites(
 ): { target: InboxTriageTarget; patch: ChatTriagePatch; ifRevision: number; before: ChatTriageEntry | null }[] {
   return batch.items.map((item) => ({
     target: item.target,
-    patch: inverseTriagePatch(item.before, item.patch),
+    patch: inverseTriagePatch(item.before, item.patch, item.lastAssistantAt),
     ifRevision: item.revision,
     before: item.before,
   }));
