@@ -1,3 +1,4 @@
+import { isBotInputEntryKind } from "./bot-input-entry.js";
 // Live projection of each Bot's durable conversation to renderer windows
 // (spec §6.5, plan Task 1.4).
 //
@@ -479,7 +480,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     const message = firstMessage(record);
-    if (record.kind === "pi.user" && message?.role === "user") {
+    if (isBotInputEntryKind(record.kind) && message?.role === "user") {
       const content = message.content as UserContent;
       const text = textOf(content);
       turn = {
@@ -722,7 +723,7 @@ function inputAnswered(entries: readonly EntryRecord[]): boolean {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const kind = entries[index]!.kind;
     if (kind === "pi.assistant") return true;
-    if (kind === "pi.user") return false;
+    if (isBotInputEntryKind(kind)) return false;
   }
   return false;
 }

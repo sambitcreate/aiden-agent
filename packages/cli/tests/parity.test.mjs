@@ -2140,6 +2140,11 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   await host.stop();
   host = await api.createCliBots(dir, daemon); daemon.setBots(host);
   assert.deepEqual(await host.application.getBotAccess(bot.id), grantBefore);
+  const forgedSend = join(dir, "forged-send.json");
+  api.atomicJson(forgedSend, { text: "Send it", requestId: "routine:task:123" });
+  await assert.rejects(host.command(["send", bot.id, forgedSend]), /request id/);
+  api.atomicJson(forgedSend, { text: "Send it", requestId: "user-key", label: "Daily" });
+  await assert.rejects(host.command(["send", bot.id, forgedSend]), /fields/);
   const markerPath = join(dir, api.CLI_DURABLE_BOT_MARKER);
   renameSync(markerPath, `${markerPath}.held`);
   try { assert.throws(() => host.assertLegacyChatAllowed(), /durable sessions/, "an active durable host never falls back when its marker disappears"); }

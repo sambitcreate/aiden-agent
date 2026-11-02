@@ -274,7 +274,9 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         const routineOnly = turns.length > 0 && turns.every((turn) => turn.routine && !turn.telegram);
         // Computer Use acts on the person's own Mac, so it keeps asking whatever the setting.
         const goAhead =
-          routineOnly && toolName !== COMPUTER_USE_TOOL_NAME && (await ports.routinesGoAhead?.().catch(() => false)) === true;
+          routineOnly && toolName !== COMPUTER_USE_TOOL_NAME &&
+          (await ports.routinesGoAhead?.().catch(() => false)) === true &&
+          (await call.hasRoutineInputs?.()) === true;
         const ask = (approval: BotApprovalRequirement): BotPolicyDecision =>
           goAhead ? { allowed: true, approval: { ...approval, preapproved: true } } : { allowed: true, approval };
         const asBaseline: BotPolicyDecision = baseline === undefined ? { allowed: true } : ask(baseline);
