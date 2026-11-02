@@ -1,3 +1,4 @@
+import type { WorkspaceChatAssignment } from "./workspace-application-service.js";
 import { agentNoticeDisplayText, parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { parseAppControlPanels, REMOTE_APP_CONTROL_TOPICS } from "../../renderer/shared/app-controls.js";
 import {
@@ -1437,7 +1438,7 @@ export class AidenRemoteChatService {
        * workspaces are used as requested.
        */
       noWorkspace?: {
-        target(workspaceId: string): Promise<string>;
+        target(workspaceId: string): Promise<string | WorkspaceChatAssignment>;
         release(workspaceId: string): Promise<void>;
       };
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
@@ -2134,18 +2135,29 @@ export class AidenRemoteChatService {
           const created = await this.assigningNoWorkspace(async () => {
             // Only a phone that knows the Chats group (revision 51) asks for a folder of its own;
             // an older phone keeps the workspace it named, as it always has.
-            const workspaceId = parsed.noWorkspace
-              ? ((await this.options.noWorkspace?.target(parsed.workspaceId)) ?? parsed.workspaceId)
-              : parsed.workspaceId;
-            return this.options.application.create(
-              {
-                workspaceId,
-                ...(selection
-                  ? { providerId: selection.providerId, model: selection.modelId }
-                  : {}),
-              },
-              owner,
-            );
+            const target = parsed.noWorkspace ? await this.options.noWorkspace?.target(parsed.workspaceId) : undefined;
+            const assignment = typeof target === "object" ? target : undefined;
+            const workspaceId = assignment?.workspaceId ?? (typeof target === "string" ? target : parsed.workspaceId);
+            let uncertain = false;
+            try {
+              return await this.options.application.create(
+                {
+                  workspaceId,
+                  ...(selection
+                    ? { providerId: selection.providerId, model: selection.modelId }
+                    : {}),
+                },
+                owner,
+              );
+            } catch (error) {
+              uncertain = isChatCreateReconciliationRequiredError(error);
+              if (!uncertain && workspaceId !== parsed.workspaceId) {
+                await this.options.noWorkspace?.release(workspaceId).catch(() => undefined);
+              }
+              throw error;
+            } finally {
+              if (!uncertain) assignment?.release();
+            }
           });
           if (!created) throw new AidenRemoteServiceError("internal_error", "Aiden could not create the chat.", 500);
           this.options.notifyChanged?.(created.id);

@@ -1,3 +1,4 @@
+import type { WorkspaceChatAssignment } from "./workspace-application-service.js";
 import { randomUUID } from "node:crypto";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
@@ -64,6 +65,10 @@ export interface ChatForkServiceDependencies {
   /** Hold the source still for the copy; null while it is busy. */
   beginChatCopy(chatId: string): (() => void) | null;
   workspaceExists(workspaceId: string): Promise<boolean>;
+  /** A fresh hidden home for No workspace copies; named workspaces keep their id. */
+  prepareWorkspace?(sourceWorkspaceId: string): Promise<WorkspaceChatAssignment>;
+  /** Release only an unowned hidden home; never discard a possibly committed copy. */
+  releaseUnusedWorkspace?(workspaceId: string): Promise<void>;
   /** Why the chat cannot be copied yet, such as an unrecovered visual artifact. */
   blockedReason?(chatId: string): Promise<string | undefined>;
   htmlArtifacts?: ChatForkHtmlArtifacts;
@@ -145,9 +150,14 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
           );
         }
         const admission = caller.admitWorkspace(workspaceId);
+        let targetWorkspaceId = workspaceId;
+        let targetAdmission: ChatForkWorkspaceAdmission | undefined;
+        let preserveTarget = false;
+        let uncertain = false;
+        let assignment: WorkspaceChatAssignment | undefined;
         try {
           const assertCurrent = () => {
-            if (admission.isAborted()) {
+            if (admission.isAborted() || targetAdmission?.isAborted()) {
               throw new ChatForkError("busy", "The workspace changed before the chat was copied.");
             }
             caller.assertCurrent?.();
@@ -155,11 +165,29 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
           if (!(await deps.workspaceExists(workspaceId))) {
             throw new ChatForkError("unavailable", "The chat workspace is no longer available.");
           }
-          const copied = await copyRegular(source, workspaceId, request, caller, assertCurrent);
+          assertCurrent();
+          assignment = await deps.prepareWorkspace?.(workspaceId);
+          targetWorkspaceId = assignment?.workspaceId ?? workspaceId;
+          if (targetWorkspaceId !== workspaceId) targetAdmission = caller.admitWorkspace(targetWorkspaceId);
+          assertCurrent();
+          const copied = await copyRegular(source, workspaceId, targetWorkspaceId, request, caller, assertCurrent);
+          preserveTarget = true;
           deps.published?.(copied);
           return copied;
+        } catch (error) {
+          // The target may be durable even though its index could not be reconciled.
+          if (isChatCreateReconciliationRequiredError(error)) {
+            preserveTarget = true;
+            uncertain = true;
+          }
+          throw error;
         } finally {
+          targetAdmission?.release();
           admission.release();
+          if (!preserveTarget && targetWorkspaceId !== workspaceId) {
+            await deps.releaseUnusedWorkspace?.(targetWorkspaceId).catch((error: unknown) => deps.reportDegraded?.(error));
+          }
+          if (!uncertain) assignment?.release();
         }
       } finally {
         finishCopy?.();
@@ -171,6 +199,7 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
   async function copyRegular(
     source: Chat,
     workspaceId: string,
+    targetWorkspaceId: string,
     request: ChatForkRequest,
     caller: ChatForkCaller,
     assertCurrent: () => void,
@@ -184,6 +213,7 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
         sourceChatId: request.chatId,
         targetChatId,
         expectedWorkspaceId: workspaceId,
+        targetWorkspaceId,
         forkAt: request.forkAt,
         ...(request.summary ? { forkSummary: request.summary } : {}),
         assertCurrent,

@@ -2,6 +2,7 @@ import { ipcMain } from "../platform.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { createChatForkService } from "./chat-fork-service.js";
 import { chatStore } from "./chat-store.js";
+import { workspaceApplicationService } from "./workspace-application-service-main.js";
 import { configStore } from "./config-store.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import { forkSummaryService } from "./fork-summary-service-main.js";
@@ -15,6 +16,15 @@ export const chatForkService = createChatForkService({
   chatStore,
   beginChatCopy: (chatId) => llmClient.beginChatCopy(chatId),
   workspaceExists: async (workspaceId) => Boolean(await configStore.getWorkspace(workspaceId)),
+  prepareWorkspace: async (workspaceId) => {
+    const target = await workspaceApplicationService.reserveNoWorkspaceChat(workspaceId);
+    if (target.workspaceId !== workspaceId) ipcMain.broadcast("workspaces:changed", {});
+    return target;
+  },
+  releaseUnusedWorkspace: async (workspaceId) => {
+    await workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId);
+    ipcMain.broadcast("workspaces:changed", {});
+  },
   blockedReason: async (chatId) => {
     const unresolved = await unresolvedGuiArtifactMessage(chatId);
     return unresolved
