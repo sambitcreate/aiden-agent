@@ -130,7 +130,11 @@ class MainActivity : ComponentActivity() {
                             requireNotNull(client).createChat(target.workspaceId, noWorkspace = startsUnderChats)
                         } ?: return@launch
                         if (chat.isBotChat || (chat.workspaceId != target.workspaceId && !startsUnderChats)) return@launch
-                        if (coordinator.workspaces.value.none { it.id == chat.workspaceId }) coordinator.refreshWorkspaces()?.join()
+                        if (coordinator.workspaces.value.none { it.id == chat.workspaceId }) {
+                            coordinator.refreshWorkspaces()?.join()
+                            // The wait can outlive the pairing that made the chat; don't open it under another.
+                            if (!valid()) return@launch
+                        }
                         navigationStore.setSelectedArea(target.pairing.instanceId, AidenProductArea.WORKSPACES)
                         navigator.navigate(navigator.stack.resetTo(AidenScreen.ChatDetail(chat.id)))
                     } catch (cancelled: CancellationException) { throw cancelled }
