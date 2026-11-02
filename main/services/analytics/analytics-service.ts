@@ -100,7 +100,10 @@ export function createLoggingTransport(write: (line: string) => void): PostHogTr
   };
   return {
     capture: emit,
-    captureNow: async (message) => emit(message),
+    captureOptOut: async (message) => {
+      emit(message);
+      stopped = true;
+    },
     flush: async () => {},
     shutdown: async () => {
       stopped = true;
@@ -240,7 +243,7 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
   }
 
   // Stops capture and drops whatever is queued, without sending it.
-  async function stop(): Promise<void> {
+  async function stop(finalSend: Promise<void>): Promise<void> {
     generation += 1;
     // An activation started before this stop gives up; the next one starts fresh.
     activation = undefined;
@@ -251,6 +254,7 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
     transport = undefined;
     core = undefined;
     installId = undefined;
+    await finalSend;
     await stopping?.discard().catch((error: unknown) => log("Queued analytics could not be dropped.", error));
   }
 
@@ -260,7 +264,7 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
     if (!sending || !current) return;
     let pending: Promise<void> | undefined;
     sendNow = (message) => {
-      pending = current.captureNow(message);
+      pending = current.captureOptOut(message);
     };
     try {
       sending.track("analytics_disabled", {});
@@ -271,20 +275,23 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
   }
 
   async function turnOff(): Promise<AnalyticsState> {
-    await sendDisabledEvent();
-    await stop();
+    // Detach capture immediately. Saving consent must not wait for the network.
+    const disposed = stop(sendDisabledEvent());
     // Nothing is owed after turning off: an update not yet reported is dropped.
     pendingUpdate = undefined;
-    const state = await options.store.update((current) => {
-      const { lastActiveDay: _lastActiveDay, ...rest } = disableAnalytics(current);
-      return { ...rest, lastVersion: options.superProperties.app_version };
-    });
     try {
-      deletePendingCrash(options.runDirectory);
-    } catch (error) {
-      log("The pending crash report could not be deleted.", error);
+      return await options.store.update((current) => {
+        const { lastActiveDay: _lastActiveDay, ...rest } = disableAnalytics(current);
+        return { ...rest, lastVersion: options.superProperties.app_version };
+      });
+    } finally {
+      try {
+        deletePendingCrash(options.runDirectory);
+      } catch (error) {
+        log("The pending crash report could not be deleted.", error);
+      }
+      await disposed;
     }
-    return state;
   }
 
   async function status(): Promise<AnalyticsStatus> {
@@ -381,9 +388,9 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
     async shutdown(timeoutMs = 1_500) {
       if (timer !== undefined) stopTimer(timer);
       timer = undefined;
-      const current = transport;
-      if (!current) return;
-      await within(current.shutdown(timeoutMs), timeoutMs + 250);
+      // An accepted consent change owns the queue until it has persisted the
+      // choice and disposed of its final request. Keep the quit deadline.
+      await within(consentQueue.then(() => transport?.shutdown(timeoutMs)), timeoutMs + 250);
     },
 
     markCleanExit() {

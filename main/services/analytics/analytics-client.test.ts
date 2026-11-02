@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { AnalyticsState } from "./analytics-consent.js";
+import { createAnalyticsService } from "./analytics-service.js";
 import { gunzipSync } from "node:zlib";
 
 import { ANALYTICS_HOST, createPostHogTransport } from "./analytics-client.js";
 
 const INSTALL_ID = "0b6f4a6e-3c1d-4f8e-9a2b-7c5d1e0f9a8b";
-const SUPER = { app_version: "1.40.0", platform: "darwin", arch: "arm64", os_major: 26, surface: "desktop", channel: "release" };
+const SUPER = { app_version: "1.40.0", platform: "darwin", arch: "arm64", os_major: 26, surface: "desktop", channel: "release" } as const;
 
 interface Recorded {
   readonly url: string;
@@ -134,8 +139,52 @@ test("an immediate send goes out on its own", async () => {
   const { fetch, requests } = fakeFetch(200);
   const transport = createPostHogTransport({ apiKey: "phc_test", fetch: fetch as never });
 
-  await transport.captureNow({ distinctId: INSTALL_ID, event: "analytics_disabled", properties: { ...SUPER } });
+  await transport.captureOptOut({ distinctId: INSTALL_ID, event: "analytics_disabled", properties: { ...SUPER } });
 
   assert.deepEqual(requests.flatMap((request) => request.events).map((event) => event.event), ["analytics_disabled"]);
   await transport.discard();
+});
+
+test("quitting while the opt-out response is pending never sends the old lifecycle batch", { timeout: 5000 }, async (t) => {
+  const runDirectory = mkdtempSync(join(tmpdir(), "analytics-quit-"));
+  t.after(() => rmSync(runDirectory, { recursive: true, force: true }));
+  let received!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>(resolve => { received = resolve; });
+  const responseGate = new Promise<void>(resolve => { release = resolve; });
+  const { fetch: record, requests } = fakeFetch(200);
+  const transport = createPostHogTransport({
+    apiKey: "phc_test",
+    fetch: async (url, init) => {
+      const response = await record(url, init);
+      if (requests[requests.length - 1]?.events.some(({ event }) => event === "analytics_disabled")) {
+        received();
+        await responseGate;
+      }
+      return response;
+    },
+  });
+  let state: AnalyticsState = { enabled: true, noticeShownAt: new Date().toISOString() };
+  const service = createAnalyticsService({
+    runDirectory, env: {}, appRoots: [], isBuiltinProvider: () => false,
+    superProperties: SUPER,
+    store: { read: async () => state, update: async (mutate) => (state = mutate(state)) },
+    createTransport: async () => transport,
+  });
+  await service.start();
+  const previousId = state.installId;
+  assert.ok(previousId);
+  const off = service.setEnabled(false);
+  await started;
+  const quit = service.shutdown();
+  const consentWhilePending = { enabled: state.enabled, installId: state.installId };
+  try {
+    await transport.flush(); // Exercise the SDK queue while the final request is held.
+  } finally {
+    release();
+    await Promise.all([off, quit]);
+  }
+  assert.deepEqual(requests.flatMap(r => r.events.map(e => [e.event, e.distinct_id])),
+    [["analytics_disabled", previousId]]);
+  assert.deepEqual(consentWhilePending, { enabled: false, installId: undefined });
 });

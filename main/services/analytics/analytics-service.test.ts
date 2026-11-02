@@ -25,7 +25,7 @@ function fakeTransport() {
   let state: "open" | "shut" | "discarded" = "open";
   const transport: PostHogTransport = {
     capture: (message) => void (state === "open" && queued.push(message)),
-    captureNow: async (message) => void immediate.push(message),
+    captureOptOut: async (message) => void immediate.push(message),
     flush: async () => void sent.push(...queued.splice(0)),
     shutdown: async () => {
       sent.push(...queued.splice(0));
@@ -304,7 +304,7 @@ test("switching off then back on while the opt-out is still sending leaves it on
     createTransport: async () => {
       const fake = fakeTransport();
       if (created.length === 0) {
-        fake.transport.captureNow = (message) => new Promise((resolve) => {
+        fake.transport.captureOptOut = (message) => new Promise((resolve) => {
           fake.immediate.push(message);
           releaseDisabled = () => resolve();
         });
