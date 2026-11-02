@@ -51,7 +51,10 @@ panel**, which can be given their own keys in Settings.
 
 Saved shortcuts take priority over the built-in focus keys (`⇧F6` and
 `⌥↑` / `⌥↓`) when their command can run. Disabling or changing the saved
-shortcut gives the key back to focus navigation.
+shortcut gives the key back to focus navigation. `F6` / `⇧F6` also work from
+simulator screens, Bot computers, the terminal and inline device-tab names;
+the focused control receives the key only when no area move or saved command
+claims it.
 
 The chat keys (`⌘1`–`⌘9`, `⇧⌘[` / `⇧⌘]`) also work while typing in the
 message box.

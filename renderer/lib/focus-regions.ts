@@ -150,20 +150,24 @@ function isEmptyMessageBox(element: Element | null): boolean {
   );
 }
 
-/** Listens for F6, ⇧F6, ⌥↑ and ⌥↓ across the window. */
-export function useFocusRegionKeys(): void {
+/** The command dispatcher calls this after saved keys, before nested inputs. */
+export function handleAreaFocusKey(event: KeyboardEvent): void {
+  if (event.key !== "F6" || !keyIsPlain(event) || event.defaultPrevented || event.isComposing) return;
+  const active = document.activeElement;
+  if (typingRedirectBlockedByOverlay(document, active)) return;
+  if (cycleFocusRegion(event.shiftKey ? -1 : 1, active)) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+}
+
+/** ⌥↑ and ⌥↓ step replies after the focused control has had the key. */
+export function useReplyFocusKeys(): void {
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing) return;
       const active = document.activeElement;
       if (typingRedirectBlockedByOverlay(document, active)) return;
-      if (event.key === "F6" && keyIsPlain(event)) {
-        if (cycleFocusRegion(event.shiftKey ? -1 : 1, active)) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-        return;
-      }
       if (
         (event.key === "ArrowUp" || event.key === "ArrowDown") &&
         event.altKey &&
@@ -186,8 +190,6 @@ export function useFocusRegionKeys(): void {
         }
       }
     };
-    // Saved commands run in document capture first. Built-in navigation is a
-    // fallback after both those commands and the focused control had the key.
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, []);

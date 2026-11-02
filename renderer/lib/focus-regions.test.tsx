@@ -1,17 +1,46 @@
 import { emitBotTestNotification, installBotTestIpc } from "../main/bots/test-dom";
 import assert from "node:assert/strict";
+import type * as React from "react";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { focusRegionWhenShown, useFocusRegionKeys } from "./focus-regions";
+import { focusRegionWhenShown, useReplyFocusKeys } from "./focus-regions";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CommandSystemProvider, useCommandHandler, useShortcutBinding } from "./command-system";
-import { applyKeybindingMutation, effectiveBindings } from "../shared/keybindings";
+import { applyKeybindingMutation, effectiveBindings, type KeybindingOverridesV1 } from "../shared/keybindings";
+import { useDeviceStream } from "./use-device-stream";
+import { DeviceViewer } from "../components/device-viewer";
+import { DeviceTabRenameInput } from "../components/device-workspace-tabs";
+import { TooltipProvider } from "../components/ui";
 
-afterEach(cleanup);
+const clients: QueryClient[] = [];
+afterEach(() => {
+  cleanup();
+  for (const client of clients.splice(0)) client.clear();
+});
+
+function renderWindow(props: Parameters<typeof Window>[0] = {}) {
+  return renderCommands(<Window {...props} />);
+}
+
+function renderCommands(children: React.ReactNode, overrides?: KeybindingOverridesV1, applicationModal = false) {
+  const snapshot = { overrides, effective: effectiveBindings(overrides), global: [] };
+  const calls = installBotTestIpc({ "shortcut:get": () => snapshot, "app:renderer-ready": () => null, "app:setMenuCommands": () => true });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } });
+  clients.push(client);
+  client.setQueryData(["shortcuts"], snapshot);
+  const view = render(
+    <QueryClientProvider client={client}>
+      <TooltipProvider>
+        <CommandSystemProvider applicationModal={applicationModal}>{children}</CommandSystemProvider>
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
+  return { ...view, calls };
+}
 
 function Keys() {
-  useFocusRegionKeys();
+  useReplyFocusKeys();
   return null;
 }
 
@@ -20,10 +49,12 @@ function Window({
   panel = "open",
   draft = "",
   menuOpen = false,
+  panelContent,
 }: {
   panel?: "open" | "closed";
   draft?: string;
   menuOpen?: boolean;
+  panelContent?: React.ReactNode;
 }) {
   return (
     <>
@@ -59,6 +90,7 @@ function Window({
         <textarea aria-label="Message" data-message-draft="" data-focus-region-entry defaultValue={draft} />
       </div>
       <aside data-focus-region="panel" data-state={panel}>
+        {panelContent}
         <div role="separator" tabIndex={0} aria-label="Resize" />
         <button type="button" role="tab" aria-selected="false">
           Files
@@ -83,7 +115,7 @@ const press = (key: string, init: Partial<KeyboardEventInit> = {}) =>
   fireEvent.keyDown(document.activeElement ?? document.body, { key, ...init });
 
 test("F6 visits the sidebar's open chat, the conversation, the message box and the panel's tab, then wraps", () => {
-  render(<Window />);
+  renderWindow();
   screen.getByRole("button", { name: "Title bar" }).focus();
   const visits = [];
   for (let step = 0; step < 5; step += 1) {
@@ -94,7 +126,7 @@ test("F6 visits the sidebar's open chat, the conversation, the message box and t
 });
 
 test("⇧F6 goes the other way, and a closed panel is skipped", () => {
-  render(<Window panel="closed" />);
+  renderWindow({ panel: "closed" });
   screen.getByRole("textbox", { name: "Message" }).focus();
   press("F6", { shiftKey: true });
   assert.equal(focused(), "Conversation");
@@ -105,19 +137,19 @@ test("⇧F6 goes the other way, and a closed panel is skipped", () => {
 });
 
 test("F6 does nothing while a menu is open, or with ⌘ held", () => {
-  render(<Window menuOpen />);
+  renderWindow({ menuOpen: true });
   screen.getByRole("menuitem", { name: "Rename" }).focus();
   press("F6");
   assert.equal(focused(), "Rename");
   cleanup();
-  render(<Window />);
+  renderWindow();
   screen.getByRole("textbox", { name: "Message" }).focus();
   press("F6", { metaKey: true });
   assert.equal(focused(), "Message");
 });
 
 test("⌥↑ from an empty message box lands on the latest reply's Copy, and steps back and forward from there", () => {
-  render(<Window />);
+  renderWindow();
   screen.getByRole("textbox", { name: "Message" }).focus();
   press("ArrowUp", { altKey: true });
   assert.equal(focused(), "Copy second");
@@ -132,7 +164,7 @@ test("⌥↑ from an empty message box lands on the latest reply's Copy, and ste
 });
 
 test("⌥↑ in a message box that holds text moves the caret, not focus", () => {
-  render(<Window draft="half a thought" />);
+  renderWindow({ draft: "half a thought" });
   screen.getByRole("textbox", { name: "Message" }).focus();
   const event = press("ArrowUp", { altKey: true });
   assert.equal(focused(), "Message");
@@ -240,3 +272,100 @@ for (const [binding, key, modifiers] of [
     client.clear();
   });
 }
+
+
+function StreamScreen() {
+  const stream = useDeviceStream({ hostId: "local", deviceId: "screen-1", platform: "ios", active: false });
+  return <div role="application" aria-label="Stream screen" tabIndex={0} data-typing-surface="device"
+    onKeyDown={stream.key("down")} onKeyUp={stream.key("up")} onBlur={stream.releaseKeys}>
+    <canvas ref={stream.canvasRef} />
+  </div>;
+}
+
+function DeviceScreen() {
+  return <DeviceViewer chatId="chat-1"
+    session={{ chatId: "chat-1", hostId: "local", deviceId: "screen-1", openedBy: "user" }}
+    device={{ hostId: "local", id: "screen-1", name: "Test phone", platform: "ios", version: "27", booted: true, kind: "iphone" }}
+    active={false} compact={false} onClose={() => {}} />;
+}
+
+for (const [name, content, target] of [
+  ["stream screen", <StreamScreen />, () => screen.getByRole("application")],
+  ["full device viewer", <DeviceScreen />, () => screen.getByRole("application")],
+  ["device-tab rename", <DeviceTabRenameInput title="Phone tab" onCommit={() => {}} onCancel={() => {}} />, () => screen.getByRole("textbox", { name: "Device tab name" })],
+] as const) {
+  test(`F6 leaves the real ${name}; a saved key wins and disabling restores navigation`, async () => {
+    localStorage.setItem("aiden.devices.framePreference", "flat");
+    let commands = 0;
+    function Host() {
+      useCommandHandler("model.change", () => { commands += 1; });
+      const binding = useShortcutBinding("model.change");
+      return <><output aria-label="Model shortcut">{binding ?? "Unassigned"}</output><Window panelContent={content} /></>;
+    }
+    const { calls } = renderCommands(<Host />);
+    const surface = target();
+    surface.focus();
+    press("F6", { code: "F6" });
+    assert.equal(focused(), "Open chat", "unbound F6 leaves the nested handler for the sidebar");
+    surface.focus();
+    press("F6", { code: "F6", shiftKey: true });
+    assert.equal(focused(), "Message", "unbound Shift-F6 leaves the nested handler for the composer");
+    assert.equal(commands, 0);
+
+    const overrides = applyKeybindingMutation(undefined, { commandId: "model.change", binding: "Shift+F6" });
+    act(() => emitBotTestNotification("shortcut:changed", { overrides, effective: effectiveBindings(overrides), global: [] }));
+    await waitFor(() => assert.equal(screen.getByLabelText("Model shortcut").textContent, "Shift+F6"));
+    surface.focus();
+    press("F6", { code: "F6", shiftKey: true });
+    assert.equal(commands, 1);
+    assert.equal(document.activeElement, surface, "the saved command did not also cycle focus");
+
+    const disabled = applyKeybindingMutation(overrides, { commandId: "model.change", disabled: true });
+    act(() => emitBotTestNotification("shortcut:changed", { overrides: disabled, effective: effectiveBindings(disabled), global: [] }));
+    await waitFor(() => assert.equal(screen.getByLabelText("Model shortcut").textContent, "Unassigned"));
+    surface.focus();
+    press("F6", { code: "F6", shiftKey: true });
+    assert.equal(focused(), "Message");
+    assert.equal(commands, 1);
+    assert.equal(calls.some((call) => call.channel === "devices:stream-grant"), false);
+  });
+}
+
+for (const guard of ["application modal", "dialog", "menu", "picker", "shortcut recorder", "IME"] as const) {
+  test(`area navigation stays off under the ${guard} guard`, () => {
+    renderCommands(<Window />, undefined, guard === "application modal");
+    const message = screen.getByRole("textbox", { name: "Message" });
+    if (guard === "shortcut recorder") message.setAttribute("data-shortcut-recorder", "true");
+    const overlay = document.createElement("div");
+    if (guard === "dialog") { overlay.setAttribute("data-slot", "dialog-content"); overlay.setAttribute("data-state", "open"); }
+    if (guard === "menu") { overlay.setAttribute("role", "menu"); overlay.setAttribute("data-state", "open"); }
+    if (guard === "picker") { overlay.setAttribute("data-slot", "popover-content"); overlay.setAttribute("data-state", "open"); overlay.setAttribute("role", "listbox"); }
+    document.body.append(overlay);
+    try {
+      message.focus();
+      const untouched = press("F6", { code: "F6", shiftKey: true, isComposing: guard === "IME" });
+      assert.equal(document.activeElement, message);
+      assert.equal(untouched, true, "the guard leaves the key untouched");
+    } finally { overlay.remove(); }
+  });
+}
+
+
+test("an unavailable saved command leaves F6 free for area navigation", () => {
+  const overrides = applyKeybindingMutation(undefined, { commandId: "model.change", binding: "Shift+F6" });
+  // No model.change handler on this page.
+  renderCommands(<Window />, overrides);
+  screen.getByRole("textbox", { name: "Message" }).focus();
+  press("F6", { code: "F6", shiftKey: true });
+  assert.equal(focused(), "Conversation");
+});
+
+test("an already handled F6 does not also move between areas", () => {
+  renderWindow();
+  const message = screen.getByRole("textbox", { name: "Message" });
+  message.focus();
+  const key = new KeyboardEvent("keydown", { key: "F6", code: "F6", shiftKey: true, bubbles: true, cancelable: true });
+  key.preventDefault();
+  fireEvent(message, key);
+  assert.equal(document.activeElement, message);
+});
