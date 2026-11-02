@@ -361,10 +361,20 @@ export class RemoteHostAdapter implements HostChatAdapter {
     return this.fenced(async () => {
       const changed = { ok: false, error: { code: "failed", message: "Open the chat to mark its latest reply read." } } as const;
       if (!revision) return changed;
-      const window = await this.getMessagesWindow(chatId, { limit: 1 });
-      if (!window.ok) return window;
-      const tail = window.value.messages[window.value.messages.length - 1];
-      if (!tail) return changed;
+      let messageId: string | undefined;
+      if (this.granted.has("messagesWindow")) {
+        const window = await this.getMessagesWindow(chatId, { limit: 1 });
+        if (!window.ok) return window;
+        messageId = window.value.messages[window.value.messages.length - 1]?.id;
+      } else {
+        const chat = await this.transport.call(this.hostId, { operation: "chat", resourceId: chatId });
+        if (!chat.ok) return chat;
+        const detail = record(chat.value);
+        if (detail.id !== chatId || !Array.isArray(detail.messages)) return changed;
+        const tail = record(detail.messages[detail.messages.length - 1]);
+        messageId = typeof tail.id === "string" ? tail.id : undefined;
+      }
+      if (!messageId) return changed;
       let cursor: string | undefined;
       const seen = new Set<string>();
       // A host snapshot holds at most 10,000 rows (100 default-sized pages).
@@ -373,7 +383,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
         if (!page.ok) return page;
         const data = record(page.value);
         const row = Array.isArray(data.summaries) ? data.summaries.find((item) => record(item).id === chatId) : undefined;
-        if (row) return record(row).revision === revision ? this.markRead(chatId, tail.id) : changed;
+        if (row) return record(row).revision === revision ? this.markRead(chatId, messageId) : changed;
         cursor = typeof data.nextCursor === "string" ? data.nextCursor : undefined;
         if (!cursor || seen.has(cursor)) break;
         seen.add(cursor);

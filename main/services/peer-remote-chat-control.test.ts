@@ -593,3 +593,28 @@ test("a paired Inbox acknowledges only the displayed reply, including on legacy 
     harness.close();
   }
 });
+
+test("a paired Inbox reads legacy hosts without message windows and refuses stale summaries", async () => {
+  const host = new FakeHost("host_b", numbered(4));
+  host.features = FEATURES.filter((feature) => feature !== "chat-messages-window-v1");
+  let revision = "rev_" + "A".repeat(43);
+  let windowRequests = 0;
+  host.routes = async (input) => {
+    if (input.path.startsWith("/chats/chat-1/messages")) { windowRequests += 1; return UNHANDLED; }
+    if (input.path === "/chat-summaries") return { summaries: [{
+      id: "chat-1", workspaceId: "ws", title: "Release notes", titlePending: false,
+      createdAt: new Date(1000).toISOString(), updatedAt: new Date(2000).toISOString(), revision, activity: "idle",
+    }] };
+    return UNHANDLED;
+  };
+  const harness = await setup(host);
+  try {
+    assert.ok((await harness.adapter.markSummaryRead("chat-1", undefined, revision)).ok);
+    assert.deepEqual(host.reads, [{ throughMessageId: "m3" }]);
+    const displayed = revision;
+    revision = "rev_" + "B".repeat(43);
+    assert.equal((await harness.adapter.markSummaryRead("chat-1", undefined, displayed)).ok, false);
+    assert.deepEqual(host.reads, [{ throughMessageId: "m3" }]);
+    assert.equal(windowRequests, 0);
+  } finally { harness.close(); }
+});

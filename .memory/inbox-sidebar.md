@@ -270,3 +270,4 @@ Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control
 - iOS Bot request cancellation claims the pending continuation under the request race lock before cancelling transport work. This prevents a receipt returned during cancellation from falsely settling the message and losing its retry key.
 - iOS and Android Earlier projections reserve the last capped slot for an open chat that falls past the cap, matching desktop, and keep the overflow count accurate.
 - A messages-window revision identifies the full chat, not its summary. Inbox fallback always rechecks the summary revision after capturing a window; only legacy whole-chat-derived rows may compare their transcript revisions directly.
+- Paired desktops use a whole-chat fallback when an older host advertises read markers but not message windows, followed by the same summary-revision check before acknowledging the captured message.
