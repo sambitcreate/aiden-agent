@@ -289,6 +289,7 @@ class AidenInboxHomeTriageTest {
         desk.page = listOf(summary("chat-1"))
         scenario(listOf(desk)) {
             connectedTo(desk)
+            desk.page = listOf(summary("chat-1", unread = true, lastAssistantAt = reply).copy(lastAssistantMessageId = "new-reply"))
             val release = holdReload(desk)
             home.setInboxTriage("chat-1", AidenChatTriageChange.done(true))
             waitFor("Done confirmed") { home.inboxNotice.value is AidenInboxNotice.Changed }
@@ -298,6 +299,11 @@ class AidenInboxHomeTriageTest {
             assertEquals(doneAt, row("chat-1").doneAt)
             assertEquals(1, row("chat-1").triageRevision)
             assertEquals(doneAt, saved("chat-1")?.doneAt)
+            assertEquals(reply, row("chat-1").lastAssistantAt)
+            assertEquals("new-reply", row("chat-1").lastAssistantMessageId)
+            assertTrue(row("chat-1").unread)
+            assertEquals("new-reply", saved("chat-1")?.lastAssistantMessageId)
+            assertEquals(true, saved("chat-1")?.unread)
 
             // The desktop has since undone it: a page requested after the
             // swipe settled is the host's word and wins.

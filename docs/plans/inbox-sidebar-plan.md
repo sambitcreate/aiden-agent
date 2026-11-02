@@ -532,3 +532,4 @@ Inbox reads carry the displayed reply ID, including reads sent after Done and Sn
 
 - After the merge with main added workspace-free chats in Remote revision 51, Inbox signals use revision 52.
 - On both phones, Earlier reserves one of its 20 visible slots for the open chat when it falls beyond the cap.
+- A phone refresh keeps newly arrived reply fields while applying an in-flight Done or Snooze. iOS records a triage-only edit for this merge, including plain actions that send no read marker.

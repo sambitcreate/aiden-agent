@@ -204,7 +204,7 @@ final class AidenHomeModel {
     /// Rows changed here and not yet on a page. `readThrough` is set for a
     /// Mark read: the newest reply it covers. A page row with a newer reply
     /// is not covered by it, so that page row is shown instead.
-    private var localSummaryEdits: [String: (generation: UInt64, token: UInt64, summary: AidenChatSummary?, activityOnly: Bool, readThrough: AidenChatInboxSignals?)] = [:]
+    private var localSummaryEdits: [String: (generation: UInt64, token: UInt64, summary: AidenChatSummary?, activityOnly: Bool, readThrough: AidenChatInboxSignals?, triageOnly: Bool)] = [:]
     private var prefetchTask: Task<Void, Never>?
     /// Changes each time a chat is viewed: a chat viewed while a swipe's
     /// write was out has been read, so a refusal never brings its dot back.
@@ -317,7 +317,7 @@ final class AidenHomeModel {
             // A list page is on its way. Saving now would take the cache's
             // authority from that page and lose its other rows, so the read
             // is only recorded here and `load` lays it over the page's row.
-            localSummaryEdits[chatID] = (nextSummaryCacheGeneration(), localSummaryEdits[chatID]?.token ?? 0, chats[index], false, boundary)
+            localSummaryEdits[chatID] = (nextSummaryCacheGeneration(), localSummaryEdits[chatID]?.token ?? 0, chats[index], false, boundary, localSummaryEdits[chatID]?.triageOnly ?? false)
         }
     }
 
@@ -353,7 +353,7 @@ final class AidenHomeModel {
         if alsoMarkRead, coordinator.server?.supportsChatReadState != true { return false }
         let optimistic = AidenInbox.applyingOptimisticTriage(change, to: before, now: now, alsoMarkRead: alsoMarkRead)
         chats[index] = optimistic
-        persistCurrentSummaries(changedID: chatID)
+        persistCurrentSummaries(changedID: chatID, triageOnly: true, readThrough: alsoMarkRead ? before.inbox : nil)
         inboxNotice = nil
         let client: AidenRemoteClient
         let result: AidenChatTriageResult
@@ -370,7 +370,7 @@ final class AidenHomeModel {
                 coordinator: coordinator
             )
         } catch {
-            await rollBack(chatID: chatID, optimistic: optimistic, before: before, viewed: viewed, context: context, coordinator: coordinator)
+            await rollBack(chatID: chatID, optimistic: optimistic, before: before, viewed: viewed, triageOnly: true, context: context, coordinator: coordinator)
             guard coordinator.isCurrent(context) else { return false }
             let conflict = (error as? AidenRemoteClientError)?.isRevisionConflict == true
             inboxNotice = AidenInboxNotice(message: !conflict
@@ -396,7 +396,7 @@ final class AidenHomeModel {
         if isShown() {
             if let index = chats.firstIndex(where: { $0.id == chatID }) {
                 chats[index] = settled(chats[index])
-                persistCurrentSummaries(changedID: chatID, readThrough: alsoMarkRead ? before.inbox : nil)
+                persistCurrentSummaries(changedID: chatID, triageOnly: true, readThrough: alsoMarkRead ? before.inbox : nil)
                 if offersUndo, !retried, let undo = AidenInbox.undo(of: change, before: before, now: now) {
                     inboxNotice = AidenInboxNotice(message: change.confirmation, undo: undo, chatID: chatID, revision: result.revision)
                 }
@@ -460,6 +460,7 @@ final class AidenHomeModel {
         optimistic: AidenChatSummary,
         before: AidenChatSummary,
         viewed: UInt64,
+        triageOnly: Bool = false,
         context: AidenRemoteRequestContext,
         coordinator: AidenRemoteCoordinator
     ) async {
@@ -469,7 +470,7 @@ final class AidenHomeModel {
             let restored = AidenInbox.rollingBack(chats[index], optimistic: optimistic, before: before, restoresUnread: restoresUnread)
             guard restored != chats[index] else { return }
             chats[index] = restored
-            persistCurrentSummaries(changedID: chatID)
+            persistCurrentSummaries(changedID: chatID, triageOnly: triageOnly)
             return
         }
         await updateSavedRow(chatID: chatID, instanceId: context.instanceId) {
@@ -493,14 +494,14 @@ final class AidenHomeModel {
         persistCurrentSummaries(changedID: id)
     }
 
-    private func persistCurrentSummaries(changedID: String, activityOnly: Bool = false, readThrough: AidenChatInboxSignals? = nil) {
+    private func persistCurrentSummaries(changedID: String, activityOnly: Bool = false, triageOnly: Bool = false, readThrough: AidenChatInboxSignals? = nil) {
         guard let context = contentContext else { return }
         let snapshot = AidenChatCache.SummarySnapshot(summaries: chats, nextCursor: nextChatCursor)
         let generation = nextSummaryCacheGeneration()
         let writeToken = chatCache.reserveSummaryWrite(instanceId: context.instanceId)
         let pending = localSummaryEdits[changedID]
         let onlyActivity = activityOnly && !(pending.map { $0.generation > persistedLocalGeneration && !$0.activityOnly } ?? false)
-        localSummaryEdits[changedID] = (generation, writeToken, chats.first(where: { $0.id == changedID }), onlyActivity, readThrough)
+        localSummaryEdits[changedID] = (generation, writeToken, chats.first(where: { $0.id == changedID }), onlyActivity, readThrough, triageOnly)
         let editTokens = localSummaryEdits.filter { $0.value.generation > persistedLocalGeneration }.mapValues(\.token)
         let changedIDs = Set(editTokens.keys)
         let activityOnlyIDs = Set(localSummaryEdits.filter { $0.value.activityOnly && changedIDs.contains($0.key) }.keys)
@@ -570,7 +571,16 @@ final class AidenHomeModel {
         // and any newer cross-owner detail updates that followed admission.
         chats = state.snapshot?.summaries ?? []
         for (id, edit) in localSummaryEdits where edit.token > max(state.fullToken, state.rowTokens[id] ?? 0) {
-            if edit.activityOnly {
+            if edit.triageOnly, let index = chats.firstIndex(where: { $0.id == id }), let row = edit.summary {
+                if (row.inbox.triageRevision ?? 0) >= (chats[index].inbox.triageRevision ?? 0) {
+                    chats[index].inbox.pinnedAt = row.inbox.pinnedAt
+                    chats[index].inbox.doneAt = row.inbox.doneAt
+                    chats[index].inbox.snoozedUntil = row.inbox.snoozedUntil
+                    chats[index].inbox.triageRevision = row.inbox.triageRevision
+                    chats[index].inbox.invalidateHostPlacement()
+                }
+                if let boundary = edit.readThrough, boundary.coversReply(in: chats[index].inbox) { chats[index].unread = false }
+            } else if edit.activityOnly {
                 if let index = chats.firstIndex(where: { $0.id == id }), let row = edit.summary { chats[index].activity = row.activity }
             } else {
                 chats.removeAll { $0.id == id }
@@ -695,23 +705,23 @@ final class AidenHomeModel {
                         var readOverPage: [String] = []
                         for (id, edit) in localSummaryEdits where edit.generation > requestEditGeneration {
                             let editIsNewer = edit.token > max(state.fullToken, state.rowTokens[id] ?? 0)
-                            if let readThrough = edit.readThrough {
+                            if edit.triageOnly || edit.readThrough != nil {
                                 guard var pageRow = loadedPage.summaries.first(where: { $0.id == id }),
                                       let index = chats.firstIndex(where: { $0.id == id }) else { continue }
                                 // Keep a newer detail or a write from another home model.
                                 if max(state.fullToken, state.rowTokens[id] ?? 0) > max(writeToken, edit.token) {
                                     pageRow = chats[index]
                                 }
-                                // A combined Done/Snooze and read owns only its triage and
-                                // marker. Keep the page's reply and unrelated metadata.
-                                if let local = edit.summary, (local.inbox.triageRevision ?? 0) > (pageRow.inbox.triageRevision ?? 0) {
+                                // A triage or read edit owns its fields. Keep the
+                                // page's reply and unrelated metadata.
+                                if let local = edit.summary, (local.inbox.triageRevision ?? 0) >= (pageRow.inbox.triageRevision ?? 0) {
                                     pageRow.inbox.pinnedAt = local.inbox.pinnedAt
                                     pageRow.inbox.doneAt = local.inbox.doneAt
                                     pageRow.inbox.snoozedUntil = local.inbox.snoozedUntil
                                     pageRow.inbox.triageRevision = local.inbox.triageRevision
                                     pageRow.inbox.invalidateHostPlacement()
                                 }
-                                if readThrough.coversReply(in: pageRow.inbox), pageRow.unread {
+                                if let readThrough = edit.readThrough, readThrough.coversReply(in: pageRow.inbox), pageRow.unread {
                                     pageRow.unread = false
                                     pageRow.inbox.invalidateHostPlacement()
                                 }
@@ -732,7 +742,7 @@ final class AidenHomeModel {
                         chats.sort(by: AidenChatSummaryPage.areInCanonicalOrder)
                         for id in readOverPage {
                             let readThrough = localSummaryEdits[id]?.readThrough
-                            persistCurrentSummaries(changedID: id, readThrough: readThrough)
+                            persistCurrentSummaries(changedID: id, triageOnly: localSummaryEdits[id]?.triageOnly ?? false, readThrough: readThrough)
                         }
                         chatListLoadState = .loaded
                         prefetchRecentTranscripts(client: client, context: context, coordinator: coordinator)

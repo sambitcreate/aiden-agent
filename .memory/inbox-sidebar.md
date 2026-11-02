@@ -271,3 +271,4 @@ Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control
 - iOS and Android Earlier projections reserve the last capped slot for an open chat that falls past the cap, matching desktop, and keep the overflow count accurate.
 - A messages-window revision identifies the full chat, not its summary. Inbox fallback always rechecks the summary revision after capturing a window; only legacy whole-chat-derived rows may compare their transcript revisions directly.
 - Paired desktops use a whole-chat fallback when an older host advertises read markers but not message windows, followed by the same summary-revision check before acknowledging the captured message.
+- iOS plain triage edits are recorded separately from whole-summary edits. Refresh and pagination reconciliation overlays only pin/done/snooze/revision, preserving newer reply identity, timestamps and unread state. Android already merges those fields with its cache lock.

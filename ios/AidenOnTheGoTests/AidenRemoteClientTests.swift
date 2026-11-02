@@ -7449,6 +7449,80 @@ extension AidenRemoteClientTests {
     }
 
     @MainActor
+    func testInboxPlainTriagePreservesNewReplyFromAnInflightRefresh() async throws {
+        let newerReply = "2026-08-18T19:10:00.000Z"
+        let snoozeUntil = try Self.remoteDate("2099-01-01T09:00:00.000Z")
+        let page = """
+        {"summaries":[{"id":"\(Self.inboxChatID)","workspaceId":"alpha","title":"New reply","titlePending":false,
+        "createdAt":"2026-08-18T18:30:00.000Z","updatedAt":"\(newerReply)",
+        "revision":"rev_FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF","activity":"idle","rowState":"idle",
+        "unread":true,"lastAssistantMessageId":"new-reply","lastAssistantAt":"\(newerReply)",
+        "triageRevision":3,"pinnedAt":"2026-08-18T18:45:00.000Z"}]}
+        """
+        for done in [true, false] {
+            for writeFirst in [true, false] {
+                var answerNewer = false
+                let inbox = try await makeInboxHome(
+                    failed: false,
+                    triage: { _, _ in
+                        (200, done ? Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z") :
+                            """
+                            {"chatId":"\(Self.inboxChatID)","revision":4,"updatedAt":"2026-08-18T19:06:00.000Z","snoozedUntil":"2099-01-01T09:00:00.000Z"}
+                            """)
+                    },
+                    summaryOverride: { answerNewer ? page : nil }
+                )
+                defer { try? FileManager.default.removeItem(at: inbox.root) }
+                let refreshArrived = expectation(description: "refresh")
+                let writeArrived = expectation(description: "triage")
+                let releaseRefresh = DispatchSemaphore(value: 0)
+                let releaseWrite = DispatchSemaphore(value: 0)
+                AidenRemoteMockURLProtocol.hold = { request in
+                    if request.url?.path.hasSuffix("/chat-summaries") == true { refreshArrived.fulfill(); return releaseRefresh }
+                    if request.url?.path.hasSuffix("/triage") == true { writeArrived.fulfill(); return releaseWrite }
+                    return nil
+                }
+                defer { AidenRemoteMockURLProtocol.hold = nil }
+                answerNewer = true
+                let refresh = Task { await inbox.home.load(coordinator: inbox.coordinator) }
+                await fulfillment(of: [refreshArrived], timeout: 5)
+                let write = Task { await inbox.home.setTriage(
+                    done ? .done(true) : .snooze(until: snoozeUntil),
+                    chatID: Self.inboxChatID, coordinator: inbox.coordinator
+                ) }
+                await fulfillment(of: [writeArrived], timeout: 5)
+                if writeFirst {
+                    releaseWrite.signal()
+                    _ = await write.value
+                    releaseRefresh.signal()
+                    await refresh.value
+                } else {
+                    releaseRefresh.signal()
+                    await refresh.value
+                    releaseWrite.signal()
+                    _ = await write.value
+                }
+                let row = try XCTUnwrap(inbox.home.chats.first)
+                XCTAssertEqual(row.title, "New reply")
+                XCTAssertEqual(row.inbox.lastAssistantAt, try Self.remoteDate(newerReply))
+                XCTAssertEqual(row.inbox.lastAssistantMessageId, "new-reply")
+                XCTAssertTrue(row.unread)
+                XCTAssertEqual(row.inbox.triageRevision, 4)
+                XCTAssertEqual(row.inbox.doneAt != nil, done)
+                XCTAssertEqual(row.inbox.snoozedUntil != nil, !done)
+                var saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+                for _ in 0..<100 where saved?.inbox.lastAssistantMessageId != "new-reply" || saved?.inbox.triageRevision != 4 {
+                    try await Task.sleep(for: .milliseconds(20))
+                    saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+                }
+                XCTAssertEqual(saved?.inbox.lastAssistantMessageId, "new-reply")
+                XCTAssertEqual(saved?.inbox.triageRevision, 4)
+                XCTAssertEqual(saved?.unread, true)
+            }
+        }
+    }
+
+    @MainActor
     func testInboxWriteOutDuringASwitchToAnotherMacSettlesOnTheMacItWasSentTo() async throws {
         for (refused, readRefused) in [(true, false), (false, false), (false, true)] {
             let arrived = expectation(description: "triage sent")
