@@ -204,7 +204,7 @@ export class SubagentRuntimeRegistry {
    */
   private childStreamOptions(sessionId: string, childRuntime: ResolvedModelRuntime, spec: SubagentChildSpec) {
     const options = buildAgentRuntimeOptions(sessionId, childRuntime);
-    if (!options.streamFn || isAcpHarnessProvider(spec.runtime.provider.id)) return options;
+    if (!options.streamFn || isAcpHarnessProvider(spec.runtime.provider.id)) return { agentOptions: options };
     const owner = { kind: "chat", id: spec.authority.chatId } as const;
     const spending = this.spending;
     const spendingMeter = spending ? createSpendingMeter({
@@ -217,17 +217,20 @@ export class SubagentRuntimeRegistry {
         models: spec.runtime.models,
       }),
     }) : undefined;
+    const beforeSendRefusal = spending && spendingMeter ? async () => {
+      await spendingMeter.settled();
+      return spending.refusal(owner);
+    } : undefined;
     let streamFn = options.streamFn;
     if (this.usageLimits) {
       const limits = this.usageLimits(owner, spec.runtime.provider.label, {
         observeFetch: childRuntime === spec.runtime,
       });
-      streamFn = withUsageLimitWait(streamFn, spending && spendingMeter ? {
+      streamFn = withUsageLimitWait(streamFn, beforeSendRefusal ? {
         ...limits,
         beforeSendRefusal: async () => {
           // The cap or shared chat spending can change while this request waits.
-          await spendingMeter.settled();
-          return (await limits.beforeSendRefusal?.()) ?? spending.refusal(owner);
+          return (await limits.beforeSendRefusal?.()) ?? beforeSendRefusal();
         },
       } : limits);
     }
@@ -235,7 +238,7 @@ export class SubagentRuntimeRegistry {
       // A helper's spending is its chat's, including requests after a provider wait.
       streamFn = spendingMeter.wrap(streamFn);
     }
-    return { ...options, streamFn };
+    return { agentOptions: { ...options, streamFn }, spendingMeter, beforeSendRefusal };
   }
 
   get activeCount(): number {
@@ -284,12 +287,15 @@ export class SubagentRuntimeRegistry {
         generationId: spec.authority.generationId,
         childId,
       }) ?? spec.runtime;
+    const { agentOptions, spendingMeter, beforeSendRefusal } = this.childStreamOptions(sessionId, childRuntime, spec);
     const compactionOptions = {
       engine: spec.compactionEngine,
       settings: budget,
-      models: createPiCompactionModels(childRuntime, (message) =>
-        this.recordCompactionUsage?.(message, spec.runtime),
-      ),
+      models: createPiCompactionModels(childRuntime, async (message) => {
+        spendingMeter?.count(message);
+        await spendingMeter?.settled();
+        await this.recordCompactionUsage?.(message, spec.runtime);
+      }, beforeSendRefusal),
       model: spec.runtime.model,
       thinkingLevel: spec.thinkingLevel,
       signal: cancellation.signal,
@@ -314,7 +320,7 @@ export class SubagentRuntimeRegistry {
           ]);
         }
       },
-      ...this.childStreamOptions(sessionId, childRuntime, spec),
+      ...agentOptions,
       convertToLlm,
       transformContext: createGenerationContextTransform(contextOptions),
       durability: {

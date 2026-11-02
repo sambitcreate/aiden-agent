@@ -21,7 +21,6 @@ import {
 import { terminalMessage, terminalStream } from "./usage-limit-stream.js";
 
 export const SPENDING_FILE = "spending.json";
-const SAVE_DEBOUNCE_MS = 500;
 
 export interface SpendingPersistence {
   load(): Promise<unknown>;
@@ -61,7 +60,7 @@ export function responseCostUsd(message: { usage?: { cost?: { total?: number } }
 export class SpendingService {
   private readonly ledger = new SpendingLedger();
   private loading: Promise<void> | undefined;
-  private saveTimer: ReturnType<typeof setTimeout> | undefined;
+  private needsSave = false;
   private saving: Promise<void> = Promise.resolve();
 
   constructor(private readonly dependencies: SpendingServiceDependencies) {}
@@ -107,7 +106,7 @@ export class SpendingService {
   async record(owner: SpendingOwner, usd: number): Promise<void> {
     await this.ready();
     if (!this.ledger.record(owner, usd, await this.settings(), this.now())) return;
-    this.changed(owner.kind, owner.id);
+    await this.changed(owner.kind, owner.id);
   }
 
   async status(kind: "chat" | "bot", id: string): Promise<SpendingStatusView | undefined> {
@@ -135,7 +134,7 @@ export class SpendingService {
     if (before === undefined) return { view: undefined, accepted: true };
     if (!current(before)) return { view: before, accepted: false };
     const after = this.ledger.allowMore(kind, id, settings, now);
-    if (after && after.extraUsd !== before.extraUsd) this.changed(kind, id);
+    if (after && after.extraUsd !== before.extraUsd) await this.changed(kind, id);
     return { view: after, accepted: true };
   }
 
@@ -148,18 +147,18 @@ export class SpendingService {
   async setBotLimit(botId: string, limit: number | null | undefined): Promise<SpendingStatusView | undefined> {
     await this.ready();
     this.ledger.setBotLimit(botId, limit);
-    this.changed("bot", botId);
+    await this.changed("bot", botId);
     return this.ledger.status("bot", botId, await this.settings(), this.now());
   }
 
   async forgetChat(id: string): Promise<void> {
     await this.ready();
-    if (this.ledger.forgetChat(id)) this.scheduleSave();
+    if (this.ledger.forgetChat(id)) await this.save();
   }
 
   async forgetBot(id: string): Promise<void> {
     await this.ready();
-    if (this.ledger.forgetBot(id)) this.scheduleSave();
+    if (this.ledger.forgetBot(id)) await this.save();
   }
 
   /** The settings changed: every open chat and Bot re-reads its limit. */
@@ -172,39 +171,33 @@ export class SpendingService {
     }
   }
 
-  /** Write pending changes now, for quit. */
+  /** Drain accepted writes and retry the latest snapshot if persistence failed. */
   async flush(): Promise<void> {
-    if (this.saveTimer !== undefined) {
-      clearTimeout(this.saveTimer);
-      this.saveTimer = undefined;
-      this.save();
-    }
     await this.saving;
+    if (this.needsSave) await this.save();
   }
 
-  private changed(kind: "chat" | "bot", id: string): void {
-    this.scheduleSave();
+  private async changed(kind: "chat" | "bot", id: string): Promise<void> {
+    const saved = this.save();
     try {
       this.dependencies.broadcast({ ownerKind: kind, ownerId: id });
     } catch (error) {
       this.dependencies.onError?.(error);
     }
+    await saved;
   }
 
-  private scheduleSave(): void {
-    if (this.saveTimer !== undefined) return;
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = undefined;
-      this.save();
-    }, SAVE_DEBOUNCE_MS);
-    this.saveTimer.unref?.();
-  }
-
-  private save(): void {
+  private save(): Promise<void> {
     const document = this.ledger.snapshot();
-    this.saving = this.saving
-      .then(() => this.dependencies.persistence.save(document))
-      .catch((error: unknown) => this.dependencies.onError?.(error));
+    const write = this.saving.then(() => this.dependencies.persistence.save(document));
+    this.saving = write.then(
+      () => { this.needsSave = false; },
+      (error: unknown) => {
+        this.needsSave = true;
+        this.dependencies.onError?.(error);
+      },
+    );
+    return write;
   }
 }
 

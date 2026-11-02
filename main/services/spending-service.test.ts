@@ -110,9 +110,8 @@ test("spending is saved and read back by the next start; a bad setting means no 
   const first = service({ botMonthUsd: 5 }, saved);
   await first.record({ kind: "bot", id: "ada" }, 2);
   await first.setBotLimit("ada", 3);
-  await first.flush();
-  assert.equal(saved.length, 1);
-  const second = service({ botMonthUsd: 5 }, [], [], saved[0]);
+
+  const second = service({ botMonthUsd: 5 }, [], [], saved[saved.length - 1]);
   assert.deepEqual(
     { ...(await second.status("bot", "ada")), periodStart: undefined, periodEnd: undefined },
     { ownerKind: "bot", ownerId: "ada", period: "month", limitUsd: 3, extraUsd: 0, spentUsd: 2, state: "under", periodStart: undefined, periodEnd: undefined },
@@ -120,4 +119,38 @@ test("spending is saved and read back by the next start; a bad setting means no 
   const bad = service({ chatUsd: -1 });
   await bad.record({ kind: "chat", id: "c" }, 9);
   assert.equal(await bad.status("chat", "c"), undefined);
+});
+
+test("a restart immediately after recording restores the routine and monthly balances", async () => {
+  const saved: SpendingDocument[] = [];
+  const settings = { routineRunUsd: 1, botMonthUsd: 3 };
+  const first = service(settings, saved);
+  const owner = { kind: "bot", id: "ada", run: "morning" } as const;
+  await Promise.all([first.record(owner, 0.25), first.record(owner, 0.75)]);
+  const reopened = service(settings, [], [], saved[saved.length - 1]);
+  assert.deepEqual(await reopened.block(owner), { kind: "run", allowedUsd: 1, spentUsd: 1 });
+  assert.equal((await reopened.status("bot", owner.id))?.spentUsd, 1);
+  assert.equal(await reopened.block({ ...owner, run: "evening" }), undefined);
+});
+
+test("a failed write retains the charge for a later flush", async () => {
+  let saved: SpendingDocument | undefined;
+  let writable = false;
+  const spending = new SpendingService({
+    persistence: {
+      load: async () => undefined,
+      save: async (document) => {
+        if (!writable) throw new Error("disk full");
+        saved = document;
+      },
+    },
+    settings: async () => ({ chatUsd: 1 }),
+    broadcast() {},
+  });
+  const owner = { kind: "chat", id: "test" } as const;
+  await assert.rejects(spending.record(owner, 1), /disk full/u);
+  assert.equal((await spending.block(owner))?.kind, "chat");
+  writable = true;
+  await spending.flush();
+  assert.equal((await service({ chatUsd: 1 }, [], [], saved).block(owner))?.kind, "chat");
 });

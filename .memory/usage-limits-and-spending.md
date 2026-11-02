@@ -29,3 +29,5 @@ The managed Pi recovery loop honors the foreground spending stop after the respo
 ### Helper dispatch after provider waits (2026-11-02, PR #697 follow-up)
 
 Helpers now recheck the shared chat ledger and latest cap inside `withUsageLimitWait` before every provider dispatch, after settling their meter. The outer meter still records completed request usage. A behavioral registry test reproduces both spending by other chat work and a lowered cap during a real 429 wait (each sent a second request before the fix); both now stop before provider I/O, while Allow more still resumes the request. No Remote protocol, client DTO, or UI contract changed.
+
+Spending mutations await serialized ledger saves. A completed routine charge survives an abrupt process exit, and a failed save leaves its in-memory snapshot available for a later write or flush. The desktop Allow more handler compares the displayed owner, period, limit and extra allowance against the current ledger in the same mutation used by Remote. A helper’s split-history summaries use the child meter and settle before the following summary or model reply. Usage still receives each delivered summary separately.

@@ -330,11 +330,15 @@ test("a Bot without an AI model asks for one and sends nothing", async () => {
 
 test("a Bot over its monthly spending limit sends nothing until Allow more", async () => {
   const month = { ownerKind: "bot", ownerId: "bot-1", period: "month", limitUsd: 20, extraUsd: 0 } as const;
+  let extraUsd = 0;
   const calls = await mountChat({
     "bots:live:subscribe": () => snapshot(),
     "bots:send": () => ({ submissionId: "s", deduped: false }),
-    "spending:status": () => ({ ...month, spentUsd: 20.4, state: "reached" }),
-    "spending:allowMore": () => ({ ...month, extraUsd: 20, spentUsd: 20.4, state: "under" }),
+    "spending:status": () => ({ ...month, extraUsd, spentUsd: 20.4, state: extraUsd ? "under" : "reached" }),
+    "spending:allowMore": () => {
+      extraUsd = 20;
+      return { ...month, extraUsd, spentUsd: 20.4, state: "under" };
+    },
   });
   const reached = "Planner reached its $20.00 spending limit this month.";
   // The composer's status line says why it can't send, alongside the notice.
