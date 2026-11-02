@@ -41,8 +41,16 @@ import { ambientRuntimeToolEstimate } from "./context-pressure-tools.js";
 import { mcpManager } from "./mcp.js";
 import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
 import { draftUserPiMessage } from "./generation-messages.js";
+import { RecentChatCache } from "./recent-chat-cache.js";
 
-const generationProfiles = new Map<string, GenerationContextProfile>();
+/**
+ * Profiles are kept for the chats used most recently. An evicted chat's next
+ * estimate rebuilds the ambient profile, and its next generation re-registers
+ * the exact one, so the cap bounds memory without losing correctness.
+ */
+const RECENT_CHAT_PROFILE_LIMIT = 16;
+
+const generationProfiles = new RecentChatCache<GenerationContextProfile>(RECENT_CHAT_PROFILE_LIMIT);
 
 /**
  * Callers register right after the runtime applied AGENTS.md to `options`
@@ -56,6 +64,11 @@ export function rememberChatContextProfile(
   generationProfiles.set(chatId, createGenerationContextProfile(options, scope));
 }
 
+/**
+ * Not LRU-bounded: evicting a refresh would show a still-warm prompt cache as
+ * expired. Each entry is three short fields for a chat cache warming touched,
+ * and it is released when the chat is deleted.
+ */
 const promptCacheRefreshes = new Map<string, PromptCacheRefresh>();
 
 /** Cache warming refreshed this chat's cache; ambient reads keep the later expiry. */
@@ -74,7 +87,7 @@ interface AmbientProfile {
   key: string;
   options: GenerationContextOptions;
 }
-const ambientProfiles = new Map<string, AmbientProfile>();
+const ambientProfiles = new RecentChatCache<AmbientProfile>(RECENT_CHAT_PROFILE_LIMIT);
 
 interface JournalSnapshot {
   at: number;
@@ -146,7 +159,8 @@ async function ambientContextOptions(
   contextWindow: number,
   supportsImages: boolean,
 ): Promise<GenerationContextOptions | undefined> {
-  const chat = await chatStore.get(chatId);
+  // Only the chat's settings are needed here, so leave stored image files unread.
+  const chat = await chatStore.getWithImageReferences(chatId);
   if (!chat) return undefined;
   const { workspaceId, workspace, folderPath, permission, instructionRoots } =
     await currentInstructionScope(chat.workspaceId);
@@ -228,10 +242,17 @@ async function journalMessages(
   if (cached && Date.now() - cached.at < JOURNAL_SNAPSHOT_TTL_MS) {
     return cached.messages;
   }
+  if (cached) journalSnapshots.delete(chatId);
   const opened = await piCompactionSessionStore.openChatIfEligible(chatId, { createdAt });
   if (!opened.session) return undefined;
   const context = await opened.session.buildContext();
-  journalSnapshots.set(chatId, { at: Date.now(), messages: context.messages });
+  const snapshot: JournalSnapshot = { at: Date.now(), messages: context.messages };
+  journalSnapshots.set(chatId, snapshot);
+  // A snapshot is only useful while the composer is typing; release the whole
+  // message list once it expires instead of holding it until chat delete.
+  setTimeout(() => {
+    if (journalSnapshots.get(chatId) === snapshot) journalSnapshots.delete(chatId);
+  }, JOURNAL_SNAPSHOT_TTL_MS).unref();
   return context.messages;
 }
 
@@ -249,7 +270,8 @@ export async function chatContextPressure(
   chatId: string,
   draft?: { draftText?: string } & DraftContextPressureSelection,
 ): Promise<ChatContextPressureV1 | null> {
-  const chat = await chatStore.get(chatId);
+  // Runs on every draft refresh: read the chat's settings without its image files.
+  const chat = await chatStore.getWithImageReferences(chatId);
   if (!chat) return null;
   // The composer selection leads the persisted chat pair — a model the user
   // just picked in the picker must price the next request before it commits.

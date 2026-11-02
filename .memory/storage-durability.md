@@ -49,23 +49,29 @@ Branch `perf/storage-durability`, from the main-process optimization audit (MAIN
   | `appendMessage` | 72 ms, 502 reads | 8 ms, 1 read |
   | 20 parallel appends to different chats | 1391 ms | 78 ms |
 
-## Deferred design note — blob attachments (MAIN-11)
-- Today, attachment data lives inline in chat JSON, so every append rewrites it.
-- Proposal:
-  - Content-addressed blobs under `chats/blobs/<sha256[0:2]>/<sha256>`, written via `writeFileAtomic({ exclusive: true })`. EEXIST counts as success.
-  - Messages keep `{ blob: sha256, size, mime, name }`.
-  - Reads resolve lazily for renderer/IPC.
-  - GC is a startup-only mark-and-sweep over all chat payloads plus Pi journals, with a grace window (skip blobs newer than 24 h) so in-flight writes are never collected.
-- Migration: dual-read (inline or blob), and write blobs only for new attachments. Do not rewrite old chats eagerly.
-- Needs Remote protocol and mobile consumer review before landing, because summaries and transcripts may embed attachment data.
+## Image attachments as files (MAIN-11, built 2026-10-31, cross-machine images phase 2)
+- Built differently from the old proposal below in a few ways; see `.memory/cross-machine-images.md` "Step 2" for the shipped design.
+- Images (only images; text attachments stay inline) live in `chats/images/<sha[0:2]>/<sha256>` (`chat-image-store.ts`), written via `writeFileAtomic({ exclusive: true, mode: 0o600 })`. `put` resolves only once the file and its shard entry are durable: puts of one hash are serialized, and a file this process has not synced itself (earlier run, or a put whose sync failed) is fsynced with its shard before reuse.
+- Chat JSON keeps `{id, name, mimeType, kind, size, sha256, width?, height?}`; old inline chats migrate lazily in `writeChat`.
+- GC: `sweepUnusedImages` regex-scans every file in the chats folder (also quarantined and staged payloads) for `"sha256":"<hex>"`, 24 h grace by mtime (renewed on reuse) plus an in-process "written into a chat recently" map. It runs only while `images/.sweep-needed` exists (set by delete, clear, replaced snapshot), 2 min after startup and after each such change, and again when the first deferred file's grace runs out (never sooner than the 2 min delay). A sweep that throws or cannot read a chat file keeps the marker and retries with doubling backoff (2 min up to 1 h). The composer context meter reads chats with `getWithImageReferences`, so its 500 ms draft refresh reads no image files. Pi journals are not scanned: they never name image hashes.
+- Original proposal (kept for history): blobs under `chats/blobs/`, messages `{ blob: sha256, ... }`, dual-read, startup-only GC with a 24 h grace.
+
+## Done on `claude/audit-fix-persistence-cpu` (2026-10-29)
+- MAIN-15: the diagnostic journal batches every line queued during one drain into a single append, and prunes expired rotations only when due. The full directory validation runs once; each append re-checks the directory's dev/ino with one lstat and revalidates (refusing a symlink) if it changed. Lines lost to a failed append count in `droppedWrites`. No persistent fd: batching gets the CPU win and keeps the rename/delete semantics.
+- MAIN-13 (partial): the usage store indexes buckets in a Map and coalesces saves for 2 s (unref'd timer, compact JSON). `usageStore.flush()` joins the quit flush in `main/index.ts`, and from then on the store is write-through, so usage recorded by work that settles later in shutdown (Create Images, routines, Bots) still saves. A failed timed save re-arms the timer. The CLI passes no delay, so it still saves per record.
+- Usage aggregates accepted in the last 2 s can be lost on a crash or force-kill (not on a normal quit). Accepted trade-off for MAIN-13; usage is a statistics ledger, not billing truth. Roll-up of old buckets is NOT done: it changes the "all" range, streaks and day series, so it needs an owner decision.
+- MAIN-29 (partial): `generationProfiles` and `ambientProfiles` are `RecentChatCache` LRUs of 16 chats. `promptCacheRefreshes` stays an unbounded Map on purpose (tiny entries; evicting one would show a warm cache as expired). Each `journalSnapshots` entry is dropped by an unref'd timer at its TTL. Pi compaction `sessions` is NOT bounded: there is no lease or refcount, so evicting a session in use would let `openChat` create a second writer for the same JSONL journal. It needs a lease design first.
+- MAIN-19 (partial): memory-store caches prepared statements per open `DatabaseSync` (a WeakMap, so closing drops them), and the cached `db()` path no longer re-chmods on every call. Modes are still repaired at open, after writes and on close. `busy_timeout` is unchanged: lowering it would turn rare stalls into failed memory writes. The real fix is a worker/utility process.
+- `DataStore.writeNow` clones the previous value only when a publish hook needs it.
+- `secrets.ts` keeps the parsed (still encrypted) key map, validated by an lstat stamp (dev, ino, size, mtimeNs, ctimeNs), and writes through `writeFileAtomic` with the mutation guard and authority invalidation in `beforePublish`.
+- App-controls ledger: unresolved (`outcome_unknown`) receipts are kept on purpose. `docs/aiden-remote-api-v1.md` documents that the ledger rejects new operations at 500 records rather than drop replay protection. Expiring them is an owner decision.
 
 ## Not done yet (audit leads, still open)
-- MAIN-13 usage-store debounce and roll-up
+- MAIN-13 roll-up of old usage buckets (see above).
 - MAIN-14 subagent run-store memo
-- MAIN-15 diagnostic-journal fd and batching
 - MAIN-27 local-model swap/staging/`stopDownloads`
-- MAIN-29 bounded `ambientProfiles` / `journalSnapshots` / Pi `sessions` maps. `journalSnapshots` retains full message arrays per viewed chat for the process lifetime.
-- MAIN-19 memory-store prepared statements.
+- MAIN-29 Pi compaction `sessions` lease and idle eviction (see above).
+- MAIN-19 moving SQLite off the main thread.
 - `ensureUserDataDir` memo: skipped, because memoizing would break recovery if the folder is deleted while running, and `mkdir -p` on an existing directory is cheap.
 
 ## Known pre-existing failures (also on main `3f86d41af`)

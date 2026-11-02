@@ -79,6 +79,30 @@ If a computer reached over the local network presents a different identity, Aide
 
 The **Usage** row on the Aiden On The Go home screen reads aggregate usage from the paired Mac. It reflects Aiden Agent's device-local usage store and sends only aggregate request, token, activity, and estimated-cost totals to the phone. Chat content, workspace paths, and provider credentials are not included.
 
+## Add a local project to a paired computer
+
+In a new chat with a repository-root project selected, open the machine menu and
+choose **Add this project to another machine…**. Pick a connected desktop that
+supports project cloning (contract revision 48), then browse its approved folders and choose the parent
+folder for the new repository. The target uses its own Git authentication.
+The item is not offered in a No workspace chat, a scratch folder, or any folder
+outside a Git repository.
+
+Environment files may contain secrets. All choices start unchecked. Select only
+files you want on that computer. Aiden offers ignored root-level `.env*` and
+`.dev.vars*` text files, skips symlinks, hard links and files over 128 KiB, and caps
+the transfer at 16 files and 512 KiB. Nothing existing is overwritten. The cloned
+project becomes available after the selected files arrive. The new chat opens on
+the destination; a typed prompt and attachments carry over when that computer has
+no saved draft. An existing remote draft is retained, with the local prompt still
+saved here.
+
+The flow clones committed history from the remote. Local edits and unpushed commits
+stay here. Nested project folders must first be opened as repository-root projects.
+A clone can run for up to 90 seconds. **Stop** requests cancellation; if the
+connection is interrupted, check the destination project list before trying again.
+Phones and CLI daemons do not offer this desktop setup action.
+
 ## Bot hand-offs and pause on the phone
 
 When the paired Mac offers it (contract revision 37), Aiden On The Go for iPhone and Android shows a step a Bot hands back to you ("Your turn: Enter the code your bank sent you") as a card in the Bot's chat. **Done** marks it done: to add a note, type it in the composer and send it. A step your password-or-code rule hands back takes no note, so the composer waits and says "Enter it yourself, then tap Done": a code typed there would reach the Bot. **Skip** skips the step, and **Open** opens the page it names in the phone's browser. A sign-in step is finished in the Bot's own browser on the Mac: **Finish on your Mac** brings it forward there, or you can **Skip** it. A step in the Bot's own browser or on its own computer (a newer Mac) reads "This step is on the Bot’s own screen on your Mac": **Finish on your Mac** opens the Bot's screen there, and **Done** or **Skip** answers it from the phone. If the Bot's chat is open while the app is in the background, a notification says the Bot needs you. The Bot's profile menu offers **Pause Bot** and **Resume Bot**. A paused Bot reads "Paused" in the Bots list, and its chat shows a Resume card and takes no messages until you resume it. An interrupted Bot reads "Interrupted — tap to resume". With an older Mac, the step appears as a "needs you on your Mac" message, and you answer it on the Mac.
@@ -100,6 +124,10 @@ When the agent records a browser tab, the paired Mac (contract revision 46) lets
 When the agent reads a page in extract mode, the Mac (contract revision 38) sends the values it read with the chat's activity. Aiden On The Go for iPhone and Android shows them as a card under the "Fetched web page" line: each value with the line of the page it came from, a **Guess** label on values the agent isn't sure of, and "Not on the page" for values the page doesn't have. Only the field names, a short form of each value and its page line reach the phone, never the page. Older phones and Macs show the activity line without the card. See [web-fetch-extract.md](web-fetch-extract.md).
 
 When the paired Mac has spending limits on (contract revision 47), Aiden On The Go for iPhone and Android shows a quiet line in a workspace chat or Bot chat once it has used 80% of its limit, and a card with **Allow $X more** once it reaches it. Allowing more from the phone and the Mac at the same moment adds the amount once. The limits themselves are set on the Mac in Settings → Limits & spending; see [usage limits and spending limits](usage-limits-and-spending.md). With an older phone, or from another paired Mac, a send over the limit is refused with the Mac's message, and you allow more on the Mac.
+
+## Background jobs
+
+When the agent leaves something running for a workspace chat on the Mac (a dev server, a watcher, a long test run, or a server a command started), Aiden On The Go for iPhone and Android shows **N in background** beside the composer (contract revision 49, `chat:jobs`, asked for in a call of its own). Its list says how long each job has run or how it ended and which addresses a server listens on ("localhost:5173 on your Mac"; open them in a browser on the Mac), and **Stop** ends a job and everything it started. The list refreshes after each reply and every few seconds while something runs. Linux desktops serve it too; the CLI does not run background jobs. Older phones and Macs show nothing new. See [coding follow-through](coding-follow-through.md).
 
 ## Pictures in a reply
 
@@ -123,7 +151,7 @@ If the selected local speech model is not installed, the mobile settings can ask
 - **Tailnet HTTPS unavailable:** complete Tailscale's HTTPS authorization flow, then retry Connect in Aiden. Aiden will not authorize it on your behalf.
 - **Serve conflict:** inspect the route shown in the error. Remove or relocate the conflicting handler yourself; Aiden will not take it over.
 - **A folder is missing:** add it from the Mac. The phone cannot submit an arbitrary path or approve a new browser root.
-- **A chat says its workspace folder is missing:** the folder was moved, renamed or deleted on the Mac, or its drive isn't connected. Nothing was sent; your message stays in the box. Put the folder back on the Mac, then send again.
+- **"This chat's workspace folder is missing" or "This chat's worktree folder is missing on your Mac":** the chat's workspace folder was moved, renamed or deleted on the Mac, or its drive isn't connected. Nothing was sent; your message stays in the box. Put the folder back, or for a worktree choose **Restore worktree** in that chat on the Mac, then send again. The phone never receives the folder's path.
 - **Paired-Mac speech is unavailable:** confirm Aiden Agent is running, Remote Access is reachable, and the paired Mac remains selected in mobile speech settings.
 - **Speech model needs setup:** open mobile speech settings and choose setup for the fixed local model, or complete the same setup in Aiden Agent on the Mac.
 - **Speech setup failed:** keep Aiden Agent online, retry once, and verify the Mac has enough free local storage. Aiden will discard an incomplete staged model.
@@ -133,6 +161,12 @@ If the selected local speech model is not installed, the mobile settings can ask
 Remote Access diagnostics keep only closed route categories, outcome/status classes, bounded latency, stable Aiden-owned error codes, and categorical Tailscale inspection phase/reason/attempt counts. Successful production traffic is reduced to daily aggregate counts; durable records never contain Tailscale command output, request IDs, device or instance suffixes, bearer credentials, pairing secrets, provider keys, request/response bodies, URLs, or filesystem paths.
 
 ## Connection recovery
+
+On iPhone and iPad, the disconnected recovery panel offers **Switch connection**
+alongside **Retry connection**. It opens the saved-computer list, where you can
+select another paired computer or choose **Pair Another Aiden Agent** without
+reconnecting first. Switching remains available when a secure-identity failure
+prevents retrying.
 
 Settings → Connections separates computers that control this device from computers
 this device controls. A paired computer shows its current route, route count, and last

@@ -262,6 +262,18 @@ test("an attachment-backed Image draws its picture when given the attachment, an
   view.rerender(<AidenUiBlock visual={visual} attachments={[{ id: "photo-1", mimeType: "image/png", data: "iVBORw0KGgo=" }]} />);
   const picture = screen.getByRole("img", { name: "Original chart" });
   assert.equal(picture.getAttribute("src"), "data:image/png;base64,iVBORw0KGgo=");
+
+  // An image stored beside the chat arrives as its private link, with no bytes.
+  const link = `aiden-attachment://image/chat-1/${"a".repeat(64)}`;
+  view.rerender(<AidenUiBlock visual={visual} attachments={[{ id: "photo-1", mimeType: "image/png", url: link }]} />);
+  assert.equal(screen.getByRole("img", { name: "Original chart" }).getAttribute("src"), link);
+
+  // Any other URL is never loaded.
+  view.rerender(
+    <AidenUiBlock visual={visual} attachments={[{ id: "photo-1", mimeType: "image/png", url: "https://example.test/photo.png" }]} />,
+  );
+  assert.equal(view.container.querySelector("img"), null);
+  assert.ok(screen.getByText("Original chart"));
 });
 
 test("a computed Image reference draws its picture from the snapshot's image set", () => {

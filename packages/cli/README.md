@@ -53,20 +53,24 @@ When `aiden serve` runs in the foreground in an interactive terminal, it prints 
 
 | Command | What it does |
 | --- | --- |
-| `aiden serve` | Run in the foreground; Ctrl-C stops it after active work settles |
+| `aiden serve` | Run in the foreground; Ctrl-C, SIGTERM or a closed terminal (SIGHUP) stops it after active work settles |
 | `aiden serve --daemon` | Run in the background, logging to `<agentDir>/serve.log` |
 | `aiden serve status` | Report the running server's PID and control socket |
-| `aiden serve stop` | Stop the running server |
+| `aiden serve stop` | Stop the running server; one still running 15 seconds later is force-killed |
 | `aiden remote pair lan\|tailscale` | Open a new ~5-minute pairing window and print its QR and manual code |
 | `aiden remote pair-status`, `remote pair-cancel <session-id>` | Inspect or cancel the pairing window |
 | `aiden remote devices`, `remote revoke <id>` | List or revoke paired devices |
 | `aiden remote roots`, `remote approve-root <path>` | Folders that paired devices may open |
 
+**Stopping.** Once shutdown starts, the server takes no new connections, requests or chat turns, cancels running ones and drains. `aiden serve stop` force-kills a server still running 15 seconds after SIGTERM, after checking the PID is still that server: a `--daemon` server together with its process group (its Remote advertiser), a foreground `aiden serve` on its own so the rest of its shell job (`aiden serve | tee`) survives. Either way, its stdio MCP servers (each in a process group of its own, recorded in the lease directory) are killed too, but only groups that still contain a process the server started. A foreground server logs a stray unhandled rejection instead of exiting. Aiden commands exit 0 quietly when their reader closes early (`aiden schedule list | head -1`).
+
 `remote` and `bots` commands talk to the running server over its control socket and fail if it is not running. `schedule` and `workspace` commands also work without the server, through a one-shot lease. `telegram status` works anytime; `telegram connect|configure|disable|disconnect` take the server's lease, so stop `aiden serve` before changing Telegram configuration.
 
 **Pairing over the local network.** The pairing code carries the endpoint `https://<hostname>.local:<port>/api/aiden/v1`, and the phone apps connect only to that exact endpoint. LAN pairing therefore works only when `<hostname>.local` resolves on the phone's network, which needs an mDNS responder on the server: on Linux, `sudo apt install avahi-daemon avahi-utils` and `sudo systemctl enable --now avahi-daemon` (macOS has one built in). The server also uses `avahi-publish-service` to advertise itself so phones can find it. If that tool is missing, the server warns at startup but keeps running, and pairing still works when another responder answers for the name. If the tool exits (usually because avahi-daemon is not running, as when a service starts before it at boot), the server warns once that the name may not resolve and tries again every 30 seconds, so discovery comes up once avahi-daemon does. In either case, pair over Tailscale when the name can't be made to resolve.
 
-**Pairing over Tailscale.** `aiden serve --pair tailscale` and `aiden remote pair tailscale` set Tailscale up on first use: they check that Tailscale is installed, signed in and has HTTPS certificates, add Tailscale next to LAN (`remote mode both`), connect the server's own Tailscale Serve route at `/api/aiden/v1`, then open the pairing window. They never replace a Serve route they don't own. When the server can't finish the setup, the error names the next step: install Tailscale, run `sudo tailscale up`, turn on HTTPS certificates for the tailnet, run `sudo tailscale set --operator=$USER`, turn off a Funnel on port 443, review and take over a stale route left by another Aiden install (`aiden remote mode both`, then `aiden remote tailscale-review`, then `aiden remote tailscale-takeover <token>`), or check an unfinished route change (`aiden remote tailscale-reconcile`). If the route can't be connected, the server switches back to LAN-only mode.
+**Pairing over Tailscale.** `aiden serve --pair tailscale` and `aiden remote pair tailscale` set Tailscale up on first use: they check that Tailscale is installed, signed in and has HTTPS certificates, add Tailscale next to LAN (`remote mode both`), connect the server's own Tailscale Serve route at `/api/aiden/v1`, and wait (for up to 45 seconds) until the server's Tailscale address answers before opening the pairing window. That first request makes Tailscale fetch the HTTPS certificate for a new name, which both the pairing step and the phone's first connection need, so neither stalls on it; if the address doesn't answer in time, the window still opens with a pointer to `aiden remote check`. Stopping the server ends the wait at once. They never replace a Serve route they don't own. When the server can't finish the setup, the error names the next step: install Tailscale, run `sudo tailscale up`, turn on HTTPS certificates for the tailnet, run `sudo tailscale set --operator=$USER`, turn off a Funnel on port 443, review and take over a stale route left by another Aiden install (`aiden remote mode both`, then `aiden remote tailscale-review`, then `aiden remote tailscale-takeover <token>`), check an unfinished or unconfirmed route change (`aiden remote tailscale-reconcile`), or wait while another Aiden install changes the route; anything else points to `aiden remote check` and LAN pairing. If the route can't be connected, the server switches back to LAN-only mode.
+
+**Checking reachability.** `aiden remote check` lists every step between a phone and this server, with ✓, ✗, ! or – and the fix for each one that fails. It covers whether Tailscale is installed and signed in, whether HTTPS certificates are on, whether this Linux user may change Serve settings (`sudo tailscale set --operator=$USER`; a warning when Tailscale's settings can't be read to tell), whether a public Funnel is on port 443, and whether an exit node without local network access could cut off phones on the same Wi-Fi. It then shows the running server's local network address, whether Aiden's Tailscale route is connected (and, when it isn't, the specific fix for an unfinished route change, a route another Aiden install or another program holds, or a Funnel), and whether its Tailscale address really answers. On a cloud server (one that answers at the cloud metadata address 169.254.169.254) it warns that phones can't reach it over a local network. If Tailscale itself doesn't answer within 10 seconds, the check (and the install question) says so instead of waiting on it. It exits non-zero when a step the server uses fails; a server on the local network only is not failed for a missing Tailscale.
 
 Each lease holds an OS lock on a permanent `*.lease.lock` guard. Process death releases the lock; owner JSON is diagnostic and stale metadata is cleaned only under the guard. Never delete or replace guard files. Stop old `aiden` processes and daemons before upgrading a shared agent directory, because old binaries do not use this guard. Each server needs its own agent directory.
 
@@ -76,13 +80,13 @@ Each lease holds an OS lock on a permanent `*.lease.lock` guard. Process death r
 aiden service install
 ```
 
-`aiden service install` keeps the server running after you close the SSH session and starts it again after a reboot. It asks who should be able to reach the server:
+`aiden service install` keeps the server running after you close the SSH session and starts it again after a reboot. It looks at this machine first, shows whether Tailscale is ready (or the one step it still needs), and asks who should be able to reach the server:
 
 1. **Local network only:** phones on the same Wi-Fi or LAN. Pairing needs `<hostname>.local` to resolve, as described under Pairing over the local network.
 2. **Tailscale only:** your devices from anywhere on your tailnet. The install sets Tailscale up the same way `aiden remote pair tailscale` does, and the local network listener stops answering.
 3. **Both.**
 
-Pass `--network local|tailscale|both` to skip the question (the default without a terminal is `local`). A reinstall without `--network` keeps a server that already uses Tailscale on its current network instead of asking. If Tailscale can't be set up, the install says what to do next and keeps the server on the network it had. Once the server is running, the install shows a pairing code in the terminal; `--no-pair` skips it, and Ctrl-C closes the code and stops waiting without stopping the server.
+The suggested answer is Tailscale only on a cloud server (where phones can't reach a local network), Both when Tailscale is ready, and Local network only otherwise. On Linux, a Tailscale whose settings this user can't read counts as not ready, since Aiden can't tell whether the operator grant is in place. Pass `--network local|tailscale|both` to skip the question; without a terminal the install uses the suggested answer when Tailscale is ready, and `local` otherwise. A reinstall without `--network` keeps a server that already uses Tailscale on its current network instead of asking. If Tailscale can't be set up, the install says what to do next and keeps the server on the network it had; when an earlier Tailscale route change never finished, it says to run `aiden remote tailscale-reconcile` and shows no pairing code. Once the server is running, the install shows a pairing code in the terminal; `--no-pair` skips it, and Ctrl-C (or a dropped SSH session or a kill) closes the code and stops waiting without stopping the server.
 
 - **Linux** gets a systemd user unit, `~/.config/systemd/user/aiden.service`, that runs `aiden serve --no-pair`. It turns on lingering (`loginctl enable-linger`) so the server starts at boot without a login; when that needs root, it tells you to run `sudo loginctl enable-linger $USER` once. Run the install as the server's user over SSH (not through `su` or `sudo`), because systemd user services need that user's session. Logs: `journalctl --user -u aiden`.
 - **macOS** gets a LaunchAgent, `~/Library/LaunchAgents/com.sambitcreate.aiden-agent.serve.plist`, that runs while you are logged in. On a Mac without a screen, turn on automatic login. Logs go to `<agentDir>/serve.log`.
@@ -93,7 +97,7 @@ The service runs the built `dist/app/cli.js` of this checkout with the current N
 | --- | --- |
 | `aiden service install [--network local\|tailscale\|both] [--no-pair]` | Install (or reinstall) and start the service |
 | `aiden service status` | Whether the service is installed and running, and where its logs are |
-| `aiden service uninstall` | Stop the service and remove it |
+| `aiden service uninstall` | Stop the service and remove it, then take down Aiden's Tailscale Serve route (through Tailscale directly once the server has stopped; a route that is no longer Aiden's, or one with an unfinished change, is left alone with the command to remove it by hand). If the service can't be stopped, the route is left in place so the still-running server stays reachable |
 | `aiden remote network local\|tailscale\|both` | Change who can reach a running server; Tailscale is set up for you |
 
 `aiden serve stop` stops the server without removing the service; it starts again at the next boot or login.
@@ -103,7 +107,7 @@ The service runs the built `dist/app/cli.js` of this checkout with the current N
 Phones and Macs paired with the server see its workspaces, chats, Bots, scheduled tasks and files. Chats run on the server through Pi's SDK with a headless tool set: workspace tools under the workspace's access tier, memory, todo, MCP, web search, advisor, and artifact export (HTML visuals are written to `<agentDir>/artifacts` and the path is returned). Image display in the terminal and `ask_user_question` are not available on the server. Server sessions don't load codemode and declare MCP tools directly.
 
 - **Forks.** Paired phones fork server chats with the Remote `chat-fork-v1` feature; the fork's journal is seeded from the copied visible messages, so tool results before the cut are not carried. The server does not offer Fork with summary (`chat-fork-summary-v1`).
-- **Desktop limits.** The server does not serve the host feed or live runs, so paired desktops cannot list its chats.
+- **Desktop limits.** The server does not serve the host feed or live runs, so paired desktops cannot list its chats. It also does not advertise the desktop's `workspace-clone-v1` project transfer (Add this project to another machine); its Remote API keeps the existing workspace creation modes.
 - **Scheduled-run notifications.** Run completions show up through `aiden schedule runs <id>`, `aiden schedule notifications` and, for tasks with `notify`, local notifications on paired phones via the Remote `scheduled-tasks/notifications` feed.
 
 ## Bots
@@ -144,6 +148,7 @@ The desktop's per-workspace skill and connector switches (Workspace settings) ar
 | `service install [--network local\|tailscale\|both] [--no-pair]\|uninstall\|status` | Run the server at login and boot (systemd or launchd) |
 | `remote status\|devices\|pair lan\|tailscale\|pair-status\|pair-cancel <id>\|revoke <id>\|roots\|approve-root <path>` | Pairing and paired-device administration (server must be running) |
 | `remote network local\|tailscale\|both` | Who can reach the server; Tailscale is set up for you (server must be running) |
+| `remote check` | Check each step a phone needs to reach the server, with fixes |
 | `auth list\|login\|logout` | Provider credentials (OAuth or API key) |
 | `workspace list\|add\|remove\|access\|scratch` | Workspace registry and tool access tiers |
 | `mcp list\|presets\|add\|preset\|login\|logout\|remove` | MCP connectors and their OAuth sign-ins |

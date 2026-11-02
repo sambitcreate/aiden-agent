@@ -188,6 +188,7 @@ export interface AidenRemoteServiceOptions {
         providers?: Pick<AidenRemoteProviderService, "create">;
         memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
         spending?: AidenRemoteRouterDependencies["spending"];
+        backgroundJobs?: AidenRemoteRouterDependencies["backgroundJobs"];
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
         readAloud?: AidenRemoteTtsService;
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
@@ -227,6 +228,7 @@ export interface AidenRemoteServiceOptions {
         providers?: Pick<AidenRemoteProviderService, "create">;
         memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
         spending?: AidenRemoteRouterDependencies["spending"];
+        backgroundJobs?: AidenRemoteRouterDependencies["backgroundJobs"];
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
         readAloud?: AidenRemoteTtsService;
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;

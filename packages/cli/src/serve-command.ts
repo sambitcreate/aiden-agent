@@ -83,7 +83,7 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
  * over Tailscale and every other server pairs over LAN. Resolves the opened
  * window's session id, so a caller whose server keeps running can close it.
  */
-export async function showStartupPairing(agentDir: string, requested: PairTransport | undefined, signal: AbortSignal, out: NodeJS.WritableStream = process.stdout, err: NodeJS.WritableStream = process.stderr): Promise<string | undefined> {
+export async function showStartupPairing(agentDir: string, requested: PairTransport | undefined, signal: AbortSignal, out: NodeJS.WritableStream = process.stdout, err: NodeJS.WritableStream = process.stderr, waitForAddress?: typeof import("./reachability.ts").waitForTailscaleAddress): Promise<string | undefined> {
   const mode = requested ? undefined : (await daemonRemoteSummary(agentDir)).connectionMode;
   // An unanswered status leaves the mode unknown; LAN is then a guess, and a failure names both commands.
   const guessed = !requested && mode === undefined;
@@ -91,6 +91,11 @@ export async function showStartupPairing(agentDir: string, requested: PairTransp
   if (signal.aborted) return;
   let pairing: AidenRemoteDesktopPairing;
   try {
+    if (transport === "tailscale") {
+      const { prepareTailscalePairing, waitForTailscaleAddress } = await import("./reachability.ts");
+      await prepareTailscalePairing(agentDir, signal, out, err, waitForAddress ?? waitForTailscaleAddress);
+      if (signal.aborted) return;
+    }
     pairing = await remoteDaemonCommand(agentDir, "remote", ["pair", transport]) as AidenRemoteDesktopPairing;
   } catch (error) {
     // Tailscale failures already name the setup step and the command to retry with.
@@ -143,7 +148,12 @@ export async function serveCommand(agentDir: string, args: string[]): Promise<vo
   }
   const controller = new AbortController();
   const stop = () => controller.abort();
-  process.once("SIGINT", stop); process.once("SIGTERM", stop);
+  // SIGHUP (terminal or ssh pane closed) drains like SIGINT/SIGTERM instead of killing live turns.
+  // A stray rejection in one turn is logged rather than crashing every other turn the daemon serves.
+  const rejected = (reason: unknown) => { process.stderr.write(`aiden: Unhandled daemon rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}\n`); };
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  for (const name of signals) process.once(name, stop);
+  process.on("unhandledRejection", rejected);
   let pairing: Promise<unknown> | undefined;
   const onReady = () => {
     if (!flags.remote || flags.pair === "off") return;
@@ -160,6 +170,7 @@ export async function serveCommand(agentDir: string, args: string[]): Promise<vo
   } finally {
     controller.abort();
     await pairing;
-    process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop);
+    for (const name of signals) process.removeListener(name, stop);
+    process.removeListener("unhandledRejection", rejected);
   }
 }

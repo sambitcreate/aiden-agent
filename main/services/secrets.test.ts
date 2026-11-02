@@ -233,6 +233,29 @@ test("garbled ciphertext reads as absent for lenient callers and as an error for
   assert.equal(h.logged.length > 0, true, "the read failure is logged");
 });
 
+test("reads that already ran still see a store replaced or removed behind the service", async () => {
+  const h = await harness();
+  await h.secrets.setKey("openrouter", SENTINEL);
+  assert.equal(await h.secrets.getKey("openrouter"), SENTINEL);
+  assert.equal(await h.secrets.getKey("openrouter"), SENTINEL);
+
+  // Another writer (a restore, a second app instance) publishes a new map.
+  const replacement = `${SENTINEL}-restored`;
+  const staged = `${h.file}.restore`;
+  await fs.writeFile(
+    staged,
+    JSON.stringify({
+      openrouter: h.safeStorage.encryptString(replacement).toString("base64"),
+    }),
+  );
+  await fs.rename(staged, h.file);
+  assert.equal(await h.secrets.getKey("openrouter"), replacement);
+
+  await fs.rm(h.file);
+  assert.equal(await h.secrets.getKey("openrouter"), null);
+  assert.equal(await h.secrets.hasKey("openrouter"), false);
+});
+
 for (const [label, contents] of [
   ["truncated JSON", `{"openrouter": "dj`],
   ["a JSON array", `["${SENTINEL}"]`],

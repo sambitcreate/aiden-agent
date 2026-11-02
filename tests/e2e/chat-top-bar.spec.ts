@@ -531,26 +531,34 @@ test.describe("folder workspaces", () => {
       await expect(group.locator("[data-environment-toggle]")).toBeVisible();
     }
   });
-  test("a tool covered by Quick View reads as not showing until it comes forward", async ({ aiden }) => {
-    const { page } = aiden;
-    await startPersistedChat(page);
-    await page.getByRole("button", { name: "Hide sidebar", exact: true }).click();
-    // 890px: Quick View no longer fits beside the floating tools (they stack), while
-    // the collapsed-sidebar header is still wide enough for individual tool buttons.
-    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(890, 720));
-    const files = page.locator('[data-workspace-tool="files"]');
-    const tools = page.locator('[data-environment-surface="tools"]');
-    await files.click();
-    await expect(files).toHaveAttribute("aria-pressed", "true");
-    await page.locator("[data-quick-view-toggle]").click();
-    await expect(page.locator('[data-environment-stacked="true"]')).toHaveCount(1);
-    await expect(tools).toHaveAttribute("inert", "");
-    await expect(files).toHaveAttribute("aria-pressed", "false");
+  test.describe("with the desktop's own title bar", () => {
+    // The 890px geometry below assumes no window controls in the top bar.
+    // Linux's Aiden-drawn controls take ~57px more of the header, which folds
+    // the tools at every width where Quick View still stacks, so this Linux run
+    // uses the system title bar (a tiling desktop picks it automatically).
+    test.use({ appEnvironment: { XDG_CURRENT_DESKTOP: "sway" } });
 
-    // Pressing it brings the tools forward rather than closing what was hidden.
-    await files.click();
-    await expect(tools).not.toHaveAttribute("inert", "");
-    await expect(files).toHaveAttribute("aria-pressed", "true");
+    test("a tool covered by Quick View reads as not showing until it comes forward", async ({ aiden }) => {
+      const { page } = aiden;
+      await startPersistedChat(page);
+      await page.getByRole("button", { name: "Hide sidebar", exact: true }).click();
+      // 890px: Quick View no longer fits beside the floating tools (they stack), while
+      // the collapsed-sidebar header is still wide enough for individual tool buttons.
+      await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(890, 720));
+      const files = page.locator('[data-workspace-tool="files"]');
+      const tools = page.locator('[data-environment-surface="tools"]');
+      await files.click();
+      await expect(files).toHaveAttribute("aria-pressed", "true");
+      await page.locator("[data-quick-view-toggle]").click();
+      await expect(page.locator('[data-environment-stacked="true"]')).toHaveCount(1);
+      await expect(tools).toHaveAttribute("inert", "");
+      await expect(files).toHaveAttribute("aria-pressed", "false");
+
+      // Pressing it brings the tools forward rather than closing what was hidden.
+      await files.click();
+      await expect(tools).not.toHaveAttribute("inert", "");
+      await expect(files).toHaveAttribute("aria-pressed", "true");
+    });
   });
   test("history traversal keeps unsaved file edits until they are saved", async ({ aiden }) => {
     const { page } = aiden;

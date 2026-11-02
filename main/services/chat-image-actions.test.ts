@@ -66,11 +66,48 @@ test("only an image stored in that chat can be saved or copied", async (t) => {
   ]) {
     await assert.rejects(invoke("chats:saveImageToDownloads", input));
     await assert.rejects(invoke("chats:copyImage", input));
+    await assert.rejects(invoke("chats:imageData", input));
   }
   assert.deepEqual(await fs.readdir(dir), []);
   assert.equal(clipboard.length, 0);
   assert.equal(await invoke("chats:copyImage", { chatId: "chat-1", attachmentId: "img" }), true);
   assert.deepEqual(clipboard, [Buffer.from(PNG, "base64")]);
+  assert.deepEqual(await invoke("chats:imageData", { chatId: "chat-1", attachmentId: "img" }), { data: PNG });
+});
+
+test("an image kept as a file is read from that file alone", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-image-actions-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
+  const reads: string[] = [];
+  const sha256 = "c".repeat(64);
+  registerChatImageActionHandlers({ handle: (channel, fn) => void handlers.set(channel, fn) }, {
+    getChat: async () => ({
+      messages: [{
+        id: "m1",
+        role: "assistant",
+        content: "",
+        createdAt: 1,
+        attachments: [
+          { id: "img", name: "Chart.png", mimeType: "image/png", kind: "image", size: 68, sha256 },
+          { id: "gone", name: "Gone.png", mimeType: "image/png", kind: "image", size: 68, sha256: "d".repeat(64) },
+        ],
+      }],
+    }),
+    readImage: async (hash, size) => {
+      reads.push(hash);
+      return hash === sha256 && size === 68 ? Buffer.from(PNG, "base64") : undefined;
+    },
+    downloadsDir: () => dir,
+    writeClipboardImage: () => undefined,
+    showItemInFolder: () => undefined,
+  });
+  const invoke = (channel: string, ...args: unknown[]) => Promise.resolve().then(() => handlers.get(channel)!({}, ...args));
+  assert.deepEqual(await invoke("chats:imageData", { chatId: "chat-1", attachmentId: "img" }), { data: PNG });
+  const saved = (await invoke("chats:saveImageToDownloads", { chatId: "chat-1", attachmentId: "img" })) as { path: string };
+  assert.deepEqual(await fs.readFile(saved.path), Buffer.from(PNG, "base64"));
+  await assert.rejects(invoke("chats:imageData", { chatId: "chat-1", attachmentId: "gone" }), /isn't saved/);
+  assert.deepEqual(reads, [sha256, sha256, "d".repeat(64)]);
 });
 
 test("file names lose separators, control characters and leading dots", () => {

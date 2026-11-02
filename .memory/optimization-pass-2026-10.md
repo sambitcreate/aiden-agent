@@ -17,7 +17,7 @@ Open owner decisions:
 - The PR #310 follow-up branch needs a new PR.
 
 Follow-ups not started:
-- Storage: MAIN-13/14/15/19/27/29.
+- Storage: MAIN-14/27. MAIN-15 is done, and MAIN-13/19/29 are partly done on `claude/audit-fix-persistence-cpu` (2026-10-29); the remainder is listed in storage-durability.md.
 - Native clients sending ETag and an `after` cursor (server support is on `perf/remote-server`).
 - MAIN-33.
 - Knip in CI.

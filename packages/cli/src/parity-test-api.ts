@@ -33,10 +33,11 @@ export { createCliAuthCoordinator } from "./auth.ts";
 
 export { createCliBotAvatars } from "./bot-avatars.ts";
 export { createCliMcpPool } from "./mcp.ts";
+export { createMcpStdioTransport } from "../../../main/services/mcp-stdio-transport.js";
 
 export { createCliProviderCredentials } from "./provider-credentials.ts";
 
-export { runScheduledInference } from "./scheduled-inference.ts";
+export { createReplyMeter, runScheduledInference } from "./scheduled-inference.ts";
 
 export { createBotSubagentTool } from "./bot-subagents.ts";
 
@@ -57,4 +58,5 @@ export { cliDurableBotToolContext } from "./bot-durable.ts";
 export { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 export { capturePersistedSubagentContext } from "../../../main/services/subagents/forked-context.js";
 export { createAdvisorInlineExtension } from "./extensions/advisor.ts";
-export { installService, launchdPlist, parseInstallFlags, reachableNetwork, restoreService, savedNetwork, serviceCommand, serviceFile, serviceStatus, systemdUnit, uninstallService } from "./service.ts";
+export { chooseNetwork, installService, launchdPlist, parseInstallFlags, reachableNetwork, releaseTailscaleRoute, restoreService, savedNetwork, serviceCommand, serviceFile, serviceStatus, systemdUnit, uninstallService } from "./service.ts";
+export { formatChecklist, looksLikeCloudServer, networkQuestion, probeAidenHealth, readSystemTailscaleFacts, readTailscaleFacts, recommendNetwork, remoteCheckCommand, serverChecklist, tailscaleChecklist, tailscaleReady, waitForTailscaleAddress } from "./reachability.ts";

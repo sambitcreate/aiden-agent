@@ -382,6 +382,11 @@ export function peerOperationRequest(
       path = "/workspace-browser/selections";
       method = "POST";
       break;
+    case "cloneWorkspace":
+      path = "/workspaces";
+      method = "POST";
+      needsKey = true;
+      break;
     case "createWorkspace":
       path = "/workspaces";
       method = "POST";
@@ -539,5 +544,6 @@ export function peerOperationRequest(
     ...(needsKey ? { idempotencyKey: token(input.idempotencyKey, 16) } : {}),
     ...(needsRevision ? { revision: token(input.revision, 1) } : {}),
     ...(maxBodyBytes !== undefined ? { maxBodyBytes } : {}),
+    ...(operation === "cloneWorkspace" ? { timeoutMs: 115_000 } : {}),
   };
 }

@@ -35,7 +35,7 @@ import { createChatStore } from "./chat-store-core.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 import type { VisualViewerAppearance, VisualViewerSource } from "./visual-viewer-document.js";
 import { HostRunRegistry } from "./host-run-registry.js";
-import { workspaceFolderMissing } from "./workspace-folder-presence.js";
+import { workspaceFolderRemoteRefusal } from "./workspace-folder-presence.js";
 
 const ONE_PIXEL_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
@@ -70,7 +70,7 @@ function fixture(
     botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
     botPaused?: (botId: string) => Promise<boolean>;
     spendingRefusal?: (chat: { id: string; botId?: string }) => Promise<string | undefined>;
-    workspaceFolderMissing?: (workspaceId: string) => Promise<boolean>;
+    workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
@@ -91,6 +91,8 @@ function fixture(
     contextPressure?: ConstructorParameters<typeof AidenRemoteChatService>[0]["contextPressure"];
     /** The host's configured models; anything else is refused as `resolve` refuses it. */
     configuredModels?: readonly string[];
+    /** Bytes of images the chat keeps as files, by hash. */
+    readImage?: (sha256: string, size: number) => Promise<Uint8Array | undefined>;
   } = {},
 ) {
   let current: Chat | null = structuredClone(initial);
@@ -165,6 +167,7 @@ function fixture(
       },
     },
     chatStore: {
+      ...(fixtureOptions.readImage ? { readImage: fixtureOptions.readImage } : {}),
       get: async () => current ? structuredClone(current) : null,
       appendMessage: async (_id, message, meta) => {
         if (!current || !meta?.isCurrent?.()) throw new Error("stale");
@@ -288,8 +291,8 @@ function fixture(
       fixtureOptions.botTurnAuthorityPreflight ?? (async () => undefined),
     ...(fixtureOptions.botPaused ? { botPaused: fixtureOptions.botPaused } : {}),
     ...(fixtureOptions.spendingRefusal ? { spendingRefusal: fixtureOptions.spendingRefusal } : {}),
-    ...(fixtureOptions.workspaceFolderMissing
-      ? { workspaceFolderMissing: fixtureOptions.workspaceFolderMissing }
+    ...(fixtureOptions.workspaceFolderRefusal
+      ? { workspaceFolderRefusal: fixtureOptions.workspaceFolderRefusal }
       : {}),
     ...(fixtureOptions.attachments ? { attachments: fixtureOptions.attachments } : {}),
     ...(fixtureOptions.isTitlePending ? { isTitlePending: fixtureOptions.isTitlePending } : {}),
@@ -1311,6 +1314,29 @@ test("visual documents open the projected HTML and native visuals with the image
   assert.deepEqual(ui.kind === "ui" && ui.attachments, [{ id: "photo-1", mimeType: "image/png", data: ONE_PIXEL_PNG }]);
 });
 
+test("visual documents read a stored picture back from its file", async () => {
+  const bytes = Buffer.from(ONE_PIXEL_PNG, "base64");
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  // As the Mac stores it now: the picture's hash, no bytes in the chat.
+  const photo = { id: "photo-1", name: "team.png", mimeType: "image/png", kind: "image" as const, size: bytes.length, sha256 };
+  const stored = visualsMessage();
+  const message = visualsMessage({
+    attachments: [...(stored.attachments ?? []), photo],
+    uiVisuals: [{
+      ...stored.uiVisuals![0]!,
+      tree: { t: "Visual", k: "0", c: [{ t: "Image", k: "0.0", p: { attachment: { op: "lit", v: "photo-1" } } }] },
+    }],
+  });
+  const recorder = viewerRecorder();
+  const { service } = fixture(chat({ messages: [message] }), {
+    visualViewer: recorder.viewer,
+    readImage: async (hash, size) => (hash === sha256 && size === bytes.length ? bytes : undefined),
+  });
+  await service.visualDocument("chat-1", "ui-1", { scheme: "light", preset: "aiden" });
+  const ui = recorder.rendered[0]!.source;
+  assert.deepEqual(ui.kind === "ui" && ui.attachments, [{ id: "photo-1", mimeType: "image/png", data: ONE_PIXEL_PNG }]);
+});
+
 test("visual documents refuse visuals the chat does not project and hosts without a viewer", async () => {
   const recorder = viewerRecorder({});
   const { service } = fixture(chat({ messages: [visualsMessage()] }), { visualViewer: recorder.viewer });
@@ -1677,9 +1703,10 @@ test("a phone turn in a workspace whose folder moved is refused before it is sto
   try {
     await mkdir(folderPath);
     const app = fixture(chat(), {
-      workspaceFolderMissing: async (workspaceId) =>
-        workspaceId === "workspace-1" &&
-        (await workspaceFolderMissing({ name: "Project", folderPath, permission: "ask" })),
+      workspaceFolderRefusal: async (workspaceId) =>
+        workspaceId === "workspace-1"
+          ? workspaceFolderRemoteRefusal({ name: "Project", folderPath, permission: "ask" })
+          : undefined,
     });
     await rename(folderPath, moved);
 
@@ -2902,6 +2929,43 @@ test("a fork summary reaches a paired device without host files or provider erro
     await read(lineage({ state: "ready", afterMessageId: "a2", text: "Settled on revision 21.", files })),
     { state: "ready", afterMessageId: "a2", text: "Settled on revision 21." },
   );
+});
+
+test("a Remote fork before a prompt restages its photo from the Mac's image file", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "aiden-remote-fork-image-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const created = await store.create({ title: "Photo", workspaceId: "workspace-1" });
+  await store.appendMessage(created.id, { role: "user", content: "Why does it fail?" });
+  await store.appendMessage(created.id, { role: "assistant", content: "A missing token." });
+  const photo = { id: "screen", name: "screen.png", mimeType: "image/png", kind: "image" as const, size: Buffer.from(ONE_PIXEL_PNG, "base64").length, data: ONE_PIXEL_PNG };
+  const source = await store.appendMessage(created.id, { role: "user", content: "Fix it.", attachments: [photo] });
+  let sequence = 0;
+  const attachments = new AidenRemoteAttachmentStore({
+    now: () => 20_000,
+    randomId: () => `att_${String(sequence++).padStart(43, "E")}`,
+  });
+  const app = fixture(source, {
+    attachments,
+    readImage: (sha256, size) => store.readImage(sha256, size),
+    forks: {
+      service: createChatForkService({
+        chatStore: store,
+        beginChatCopy: () => () => undefined,
+        workspaceExists: async () => true,
+      }),
+      admitWorkspace: () => ({ isAborted: () => false, release: () => undefined }),
+    },
+  });
+  const { revision } = await app.service.get(source.id);
+  const forked = await app.service.fork("device-1", source.id, revision, "fork-key-000000000098", {
+    messageId: source.messages[2]!.id,
+    position: "before",
+  });
+  assert.equal(forked.prefill?.text, "Fix it.");
+  assert.deepEqual(forked.prefill?.attachments?.map(({ name }) => name), ["screen.png"]);
+  const [resent] = attachments.consume("device-1", forked.chat.id, [forked.prefill!.attachments![0]!.id]) ?? [];
+  assert.equal(resent?.data, ONE_PIXEL_PNG);
 });
 
 test("a fork too large to send from a paired device is refused without creating it", async (t) => {

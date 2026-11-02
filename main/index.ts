@@ -19,11 +19,18 @@ import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
 import { externalUrl } from "./services/browser/core.js";
 import { shutdownDevices, terminateDeviceHelperCommands } from "./handlers/devices.js";
+import { disposeWorkspaceGitWatchers } from "./handlers/workspaces.js";
 import { forwardTrackpadScrollEnd } from "./services/devices/trackpad-scroll-end.js";
 import { registerBrowserHandlers } from "./handlers/browser.js";
 import { TerminalHistoryStore } from "./services/terminal-history.js";
 import { getPreloadPath, getWindowUrl } from "./windows/window-paths.js";
 import { mainWindowOptions } from "./windows/main-window-options.js";
+import {
+  registerWindowControlHandlers,
+  trackWindowControlsState,
+  WINDOW_STATE_NOTIFICATION_CHANNEL,
+} from "./handlers/window-controls.js";
+import { resolveWindowChrome } from "../renderer/shared/window-chrome.js";
 import {
   initShortcut,
   initDictationShortcut,
@@ -60,6 +67,7 @@ import { llmClient } from "./services/llm-client.js";
 import { modelPaceRecorder } from "./services/model-pace-runtime.js";
 import { spending } from "./services/spending-main.js";
 import { usageLimits } from "./services/usage-limit-main.js";
+import { usageStore } from "./services/usage-store.js";
 import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
 import { closeRendererBeforeShutdown, type DeadlineOutcome, joinInFlight, requireWithinDeadline, withDeadline } from "./services/quit-barrier.js";
@@ -111,6 +119,7 @@ import { displayImageArtifactStore } from "./services/display-image-artifact-sto
 import { toolOutputStore } from "./services/tool-output-store.js";
 import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
 import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.js";
+import { registerChatAttachmentProtocol } from "./services/chat-attachment-protocol.js";
 import { createMainVisualSnapshotQueue } from "./services/visual-snapshot-main.js";
 import { disposeVisualSnapshots, installVisualSnapshotQueue } from "./services/visual-snapshot-service.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
@@ -361,6 +370,7 @@ function cleanupApplication(): void {
   telegramService.stop();
   subagentRuntimeRegistry.abortAll();
   botSkillContentWatcher.dispose();
+  disposeWorkspaceGitWatchers();
   geminiLiveTranscription.dispose();
   void mcpManager.closeAll({ final: true });
 }
@@ -545,9 +555,9 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
       "Subagent work did not settle before the shutdown deadline; forcing application shutdown.",
     );
   }
-  // Every reply has settled: save the last spending and usage-limit changes.
-  await settleShutdownStep("main", "Spending and usage limits", SHUTDOWN_BUDGET_MS.spending, () =>
-    Promise.all([spending.flush(), usageLimits.flush()]),
+  // Every reply has settled: save the last spending, usage-limit and usage changes.
+  await settleShutdownStep("main", "Spending, usage limits and usage", SHUTDOWN_BUDGET_MS.spending, () =>
+    Promise.all([spending.flush(), usageLimits.flush(), usageStore.flush()]),
   );
   // Send queued usage data, bounded (the service caps itself at 1.5 s).
   await settleShutdownStep("main", "Usage data", SHUTDOWN_BUDGET_MS.analytics, () => analyticsService().shutdown());
@@ -1501,11 +1511,22 @@ async function createMainWindow(
     return;
   }
 
+  const windowChrome = resolveWindowChrome({
+    platform: process.platform,
+    preference: normalizeAppearanceConfig((await configStore.getSettings()).appearance).linuxTitleBar,
+    env: process.env,
+  });
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    await revealExistingMainWindow(mainWindow);
+    return;
+  }
+
   mainWindow = new BrowserWindow({
     ...mainWindowOptions(
       getPreloadPath(),
       process.platform,
       nativeTheme.shouldUseDarkColors,
+      windowChrome,
     ),
     ...restoredWindowState.bounds,
     title: app.getName(),
@@ -1519,6 +1540,13 @@ async function createMainWindow(
   registerBroadcastReceiver(createdWindow);
   imageQuitCoverage.clear();
   mainWindowState.track(createdWindow);
+  if (windowChrome === "aiden") {
+    // Aiden draws the window controls; keep their maximize/full-screen look current.
+    const stopTracking = trackWindowControlsState(createdWindow, (state) => {
+      if (!createdWindow.isDestroyed()) createdWindow.webContents.send(WINDOW_STATE_NOTIFICATION_CHANNEL, state);
+    });
+    createdWindow.once("closed", stopTracking);
+  }
   writeDiagnosticEvent({
     level: "info",
     area: "renderer",
@@ -1996,6 +2024,19 @@ registerAppPathOpener(async (path) => {
 let applicationMenuInputs: { settings: AppSettings; acceleratorsEnabled: boolean } | null = null;
 let applicationMenuAvailable: ReadonlySet<string> | null = null;
 
+registerWindowControlHandlers<BrowserWindow>({
+  handle: (channel, handler) => ipcMain.handle(channel, handler),
+  mainWindow: () => mainWindow,
+  popupMenu: (window, point) => {
+    const menu = Menu.getApplicationMenu();
+    if (!menu) return false;
+    // The renderer measures in CSS pixels; the menu wants window points.
+    const zoom = window.webContents.getZoomFactor();
+    menu.popup({ window, x: Math.round(point.x * zoom), y: Math.round(point.y * zoom) });
+    return true;
+  },
+});
+
 ipcMain.handle("app:setMenuCommands", (event, commandIds: unknown) => {
   if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) return false;
   const next = parseMenuCommandIds(commandIds);
@@ -2271,6 +2312,9 @@ if (!ownsSingleInstanceLock) {
       await displayImageArtifactStore.initialize();
       await generativeUiArtifactStore.initialize();
       registerGenerativeUiProtocol();
+      registerChatAttachmentProtocol();
+      // Remove picture files left behind by chats deleted while Aiden was closed.
+      chatStore.scheduleImageSweep();
       // Phones and other clients that cannot draw a visual get its snapshot.
       installVisualSnapshotQueue(
         createMainVisualSnapshotQueue({

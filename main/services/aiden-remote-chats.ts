@@ -10,7 +10,6 @@ import {
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
-import { WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL } from "../../renderer/shared/workspace-folder-presence.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import {
   isToolStep,
@@ -198,6 +197,8 @@ export interface AidenRemoteMessageOutcomeProjection {
 export interface AidenRemoteAttachmentContent {
   bytes: Buffer;
   mimeType: string;
+  /** SHA-256 of a stored image's bytes, sent as the response's ETag. */
+  sha256?: string;
 }
 
 /**
@@ -1145,6 +1146,8 @@ export class AidenRemoteChatService {
         & Partial<Pick<ChatApplicationService, "listSummaryMetadata">>;
       chatStore: {
         get(id: string): Promise<Chat | null>;
+        /** A stored image's bytes; chats reach this service with stored images by hash only. */
+        readImage?(sha256: string, size: number): Promise<Uint8Array | undefined>;
         appendMessage(
           id: string,
           message: Omit<ChatMessage, "id" | "createdAt"> & { id?: string; createdAt?: number },
@@ -1220,10 +1223,11 @@ export class AidenRemoteChatService {
        */
       deviceSupportsQuestionPrompts?: (deviceId: string) => Promise<boolean>;
       /**
-       * Whether a workspace's folder was moved or deleted, so a paired device
-       * hears why before its message is stored. Absent: never refused here.
+       * Why a workspace's turns are refused when its folder (or its managed
+       * worktree's checkout) was moved or deleted, so a paired device hears
+       * why before its message is stored. Undefined, or absent: not refused.
        */
-      workspaceFolderMissing?: (workspaceId: string) => Promise<boolean>;
+      workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
@@ -1784,14 +1788,12 @@ export class AidenRemoteChatService {
     }
     const attachment = matches[0]!;
     if (attachment.kind === "image") {
-      if (
-        (attachment.mimeType !== "image/png" && attachment.mimeType !== "image/jpeg") ||
-        typeof attachment.data !== "string"
-      ) {
+      if (attachment.mimeType !== "image/png" && attachment.mimeType !== "image/jpeg") {
         throw new AidenRemoteServiceError("not_found", "This image is unavailable.", 404);
       }
-      const bytes = Buffer.from(attachment.data, "base64");
+      const bytes = await this.imageBytes(attachment);
       if (
+        !bytes ||
         bytes.length === 0 ||
         bytes.length > MAX_IMAGE_BYTES ||
         bytes.length !== attachment.size ||
@@ -1800,9 +1802,32 @@ export class AidenRemoteChatService {
       ) {
         throw new AidenRemoteServiceError("not_found", "This image is unavailable.", 404);
       }
-      return { bytes, mimeType: attachment.mimeType };
+      return {
+        bytes,
+        mimeType: attachment.mimeType,
+        ...(attachment.sha256 ? { sha256: attachment.sha256 } : {}),
+      };
     }
     throw new AidenRemoteServiceError("not_found", "This image is unavailable.", 404);
+  }
+
+  /** An image's bytes: inline in an older chat, otherwise from its own file. */
+  /** The attachments with each stored image's bytes read back from its file, for staging a new upload. */
+  private async withImageBytes(attachments: readonly Attachment[]): Promise<Attachment[]> {
+    return Promise.all(
+      attachments.map(async (attachment) => {
+        if (attachment.kind !== "image" || attachment.data !== undefined) return attachment;
+        const bytes = await this.imageBytes(attachment);
+        return bytes ? { ...attachment, data: bytes.toString("base64") } : attachment;
+      }),
+    );
+  }
+
+  private async imageBytes(attachment: Attachment): Promise<Buffer | undefined> {
+    if (typeof attachment.data === "string") return Buffer.from(attachment.data, "base64");
+    if (!attachment.sha256 || !this.options.chatStore.readImage) return undefined;
+    const bytes = await this.options.chatStore.readImage(attachment.sha256, attachment.size).catch(() => undefined);
+    return bytes ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength) : undefined;
   }
 
   revokeDevice(deviceId: string): void {
@@ -1909,8 +1934,15 @@ export class AidenRemoteChatService {
       } else {
         const visual = parseChatUiVisuals(message.uiVisuals)?.find((candidate) => candidate.id === visualId);
         if (!visual) throw unavailable();
-        const attachments = visualSnapshotImages(visual, safeStoredAttachments(message.attachments) ?? [])
-          .flatMap((attachment) => (attachment.data ? [{ id: attachment.id, mimeType: attachment.mimeType, data: attachment.data }] : []));
+        const attachments = (
+          await Promise.all(
+            // Stored images carry no bytes in the chat; read them back first so
+            // the same eligibility rules as the desktop apply.
+            visualSnapshotImages(visual, await this.withImageBytes(safeStoredAttachments(message.attachments) ?? [])).map(
+              async (attachment) => (attachment.data ? [{ id: attachment.id, mimeType: attachment.mimeType, data: attachment.data }] : []),
+            ),
+          )
+        ).flat();
         source = { kind: "ui", title: projected.title, visual, attachments, ...(projected.layout ? { layout: projected.layout } : {}) };
       }
       try {
@@ -2086,7 +2118,7 @@ export class AidenRemoteChatService {
           this.options.notifyChanged?.(forked.id);
           const prefill = prefillSource();
           const staged = prefill && prefill.stored.length > 0
-            ? this.attachments.stage(deviceId, forked.id, prefill.stored).staged
+            ? this.attachments.stage(deviceId, forked.id, await this.withImageBytes(prefill.stored)).staged
             : [];
           return this.forkResult(forked, prefill && { text: prefill.text, attachments: staged });
         },
@@ -2359,18 +2391,14 @@ export class AidenRemoteChatService {
             // this check is enforced on the generation: it checks again once
             // registered, and the pause stops the chat's running work.
             await this.refuseIfBotPaused(authoritative);
-            if (
-              workspaceId &&
-              !authoritative.botId &&
-              (await this.options.workspaceFolderMissing?.(workspaceId)) === true
-            ) {
+            const folderRefusal =
+              workspaceId && !authoritative.botId
+                ? await this.options.workspaceFolderRefusal?.(workspaceId)
+                : undefined;
+            if (folderRefusal) {
               // Nothing ran, so the same send runs once the folder is back.
               throw new AidenOperationNotExecutedError(
-                new AidenRemoteServiceError(
-                  "workspace_unavailable",
-                  WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL,
-                  409,
-                ),
+                new AidenRemoteServiceError("workspace_unavailable", folderRefusal, 409),
               );
             }
             taken = parsed.attachmentIds === undefined
