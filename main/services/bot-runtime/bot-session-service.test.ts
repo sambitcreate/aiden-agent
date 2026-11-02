@@ -455,9 +455,11 @@ function routineExecutor(service: BotSessionRuntime) {
   });
 }
 
-test("a tool-free failed routine can retry after an unrelated chat turn uses a tool", async () => {
+test("a tool-free failed routine can retry between unrelated chat turns that use tools", async () => {
   const lookup = countingTool("lookup");
   const models = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("lookup", { text: "calendar" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("No appointments."),
     fauxAssistantMessage("", { stopReason: "error", errorMessage: "503 Service Unavailable" }),
     fauxAssistantMessage([fauxToolCall("lookup", { text: "weather" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Sunny."),
@@ -471,15 +473,18 @@ test("a tool-free failed routine can retry after an unrelated chat turn uses a t
     const executor = routineExecutor(service);
     const task = { id: "briefing", botId: "bot:a", prompt: "Brief me.", enabled: true } as ScheduledTask;
     const signal = new AbortController().signal;
+    const earlier = await service.send("bot:a", { requestId: "desktop-calendar", text: "Check the calendar." });
+    assert.equal((await service.awaitReply("bot:a", earlier.submissionId, signal)).kind, "completed");
+    assert.equal(lookup.executions.length, 1);
     const original = await executor.run(task, { trigger: { kind: "automatic", fireTime: 42 }, signal });
     assert.equal(original.failure?.kind, "temporary");
     const chat = await service.send("bot:a", { requestId: "desktop-weather", text: "Check the weather." });
     assert.equal((await service.awaitReply("bot:a", chat.submissionId, signal)).kind, "completed");
-    assert.equal(lookup.executions.length, 1);
+    assert.equal(lookup.executions.length, 2);
     const requestId = `${original.id}:retry-1`;
     const retry = await executor.run(task, { runId: requestId, trigger: { kind: "retry", requestId, failedRunId: original.id, attempt: 1 }, signal });
     assert.equal(retry.output, "Briefing ready.");
-    assert.equal(models.calls(), 4);
+    assert.equal(models.calls(), 6);
   } finally {
     await service.shutdown();
   }
@@ -489,7 +494,7 @@ test("a delayed routine retry cannot repeat a tool after the next model call fai
   const send = countingTool("send_email");
   const sendMessage = () => fauxAssistantMessage([fauxToolCall("send_email", { text: "briefing" })], { stopReason: "toolUse" });
   const failed = fauxAssistantMessage("", { stopReason: "error", errorMessage: "503 Service Unavailable" });
-  const models = createFauxModels([sendMessage(), failed, sendMessage(), fauxAssistantMessage("Sent.")]);
+  const models = createFauxModels([failed, sendMessage(), failed, sendMessage(), fauxAssistantMessage("Sent.")]);
   const service = await serviceFor(tempProfile(), models, {
     extension: recordingDeps({ tools: [{ tool: send, replay: "unsafe" }] }),
     settings: { retry: { enabled: false } },
@@ -498,6 +503,8 @@ test("a delayed routine retry cannot repeat a tool after the next model call fai
     const executor = routineExecutor(service);
     const task = { id: "email", botId: "bot:a", prompt: "Email the briefing.", enabled: true } as ScheduledTask;
     const signal = new AbortController().signal;
+    const greeting = await service.send("bot:a", { requestId: "desktop-greeting", text: "Hello." });
+    assert.equal((await service.awaitReply("bot:a", greeting.submissionId, signal)).kind, "failed");
     const original = await executor.run(task, { trigger: { kind: "automatic", fireTime: 42 }, signal });
     assert.equal(original.failure?.kind, "temporary");
     assert.equal(send.executions.length, 1);
