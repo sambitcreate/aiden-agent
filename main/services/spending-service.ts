@@ -213,10 +213,7 @@ export interface SpendingMeterOptions {
   owner: SpendingOwner;
   /** Whether this runtime's requests cost money; read once. */
   counts(): Promise<boolean>;
-  /**
-   * Refuse a request over the limit with an error. Chats leave this off: they
-   * end the run after the step instead, so the chat shows no failure.
-   */
+  /** Check the owner's current limit immediately before dispatching a request. */
   refuse?: boolean;
 }
 

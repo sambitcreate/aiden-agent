@@ -3591,15 +3591,18 @@ export const llmClient = {
         onError: (error) =>
           logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error),
       });
-      // Outermost, so a usage-limit wait is neither timed as pace nor warmed:
-      // a request turned away before any reply waits and sends again, same model.
+      // A retry can wait while the chat's balance or limit changes. Check it
+      // again at dispatch, after waiting and before starting the provider call.
       const observedStream: typeof realStream = harnessProvider
         ? pace.wrap(warmedStream)
         : spendingMeter.wrap(
-            withUsageLimitWait(
-              pace.wrap(warmedStream),
-              usageLimits.streamOptions({ kind: "chat", id: params.chatId }, runtime.provider.label),
-            ),
+            withUsageLimitWait(pace.wrap(warmedStream), {
+              ...usageLimits.streamOptions({ kind: "chat", id: params.chatId }, runtime.provider.label),
+              beforeSendRefusal: async () => {
+                await spendingMeter.settled();
+                return spending.refusal(spendingOwner);
+              },
+            }),
           );
       const promptCacheTtl = promptCacheTtlMs(model);
       candidate = createGenerationHarness(generationProfile, {

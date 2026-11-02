@@ -901,6 +901,7 @@ export class PiAgentRuntimeHarness {
   private cancelledQueuedProjectionSettlements: Array<Promise<void>> = [];
   private capturedTurnMessages: AgentMessage[] = [];
   private turnHadToolExecution = false;
+  private turnRequestedEnd = false;
   private activeEffectOperation:
     | {
         operationId: string;
@@ -1220,7 +1221,11 @@ export class PiAgentRuntimeHarness {
         };
       },
       identity: AIDEN_PI_CLIENT_IDENTITY,
-      finishTurn,
+      finishTurn: finishTurn && (async (turn, signal) => {
+        const decision = await finishTurn(turn, signal);
+        this.turnRequestedEnd = decision?.action === "end";
+        return decision ?? undefined;
+      }),
       transformContext:
         options.transformContext || extensions.some((extension) => extension.transformContext)
           ? async (messages, signal) => {
@@ -2237,6 +2242,7 @@ export class PiAgentRuntimeHarness {
           });
         }
         attempts += 1;
+        this.turnRequestedEnd = false;
         this.runtimeEvents?.setAttempt(attempts);
         this.lastAssistantMessage = undefined;
         try {
@@ -2314,6 +2320,24 @@ export class PiAgentRuntimeHarness {
               ? { kind: "app_cancelled", attempts }
               : { kind: "host_failed", faultKind: "invariant", attempts },
           );
+        }
+
+        // Pi has ended this step at the host's request (e.g. the spending cap).
+        // Its outer recovery loop must not start another request or paid summary.
+        if (this.turnRequestedEnd) {
+          if (cancelled()) return await finish({ kind: "app_cancelled", finalMessage: assistant, attempts });
+          if (assistant.stopReason === "error" || assistant.stopReason === "aborted") {
+            return await finish({
+              kind: "provider_failed",
+              reason: assistant.stopReason === "aborted" ? "interrupted" : "request-failed",
+              finalMessage: assistant,
+              attempts,
+            });
+          }
+          if (assistant.stopReason === "length" && !keptCutOffReply(assistant, "output-limit")) {
+            return await finish({ kind: "provider_failed", reason: "output-limit", finalMessage: assistant, attempts });
+          }
+          return await finish({ kind: "completed", finalMessage: assistant, attempts });
         }
 
         let compactionResult: PiCompactionCheckResult;

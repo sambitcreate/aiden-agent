@@ -1,3 +1,4 @@
+import { createSpendingMeter, SpendingService } from "./spending-service.js";
 import { buildCodingTools } from "./coding-tools.js";
 import { toolOutputScope } from "./tool-output-store.js";
 import { InMemorySessionRepo } from "./pi-session-repository-port.js";
@@ -88,6 +89,7 @@ async function managedTestHarness(
     appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[]) => Promise<void>;
     appendInput?: (session: PiSessionPort, message: AgentMessage) => Promise<void>;
     beforeQueuedUser?: PiRuntimeSessionBinding["beforeQueuedUser"];
+    finishTurn?: PiAgentRuntimeHarnessOptions["finishTurn"];
     beforeToolCall?: PiAgentRuntimeHarnessOptions["beforeToolCall"];
     prepareNextTurnWithContext?: PiAgentRuntimeHarnessOptions["prepareNextTurnWithContext"];
     initialSystemPrompt?: string;
@@ -169,6 +171,7 @@ async function managedTestHarness(
       messages: options.initialMessages ?? [],
       model,
     },
+    finishTurn: options.finishTurn,
     beforeToolCall: options.beforeToolCall,
     prepareNextTurnWithContext: options.prepareNextTurnWithContext,
     ...(options.onContextProjection ? { onContextProjection: options.onContextProjection } : {}),
@@ -1525,6 +1528,51 @@ test("a reply cut off by the output limit continues from its text, at most twice
     " and the end.",
   ]);
 });
+
+for (const stopReason of ["length", "error"] as const) {
+  test(`a priced ${stopReason} reply that reaches the chat cap sends no recovery request`, async () => {
+    const owner = { kind: "chat", id: "limited-chat" } as const;
+    const spending = new SpendingService({
+      persistence: { load: async () => undefined, save: async () => {} },
+      settings: async () => ({ chatUsd: 1 }),
+      broadcast: () => {},
+    });
+    const meter = createSpendingMeter({ owner, spending, counts: async () => true });
+    let requests = 0;
+    const { harness, session } = await managedTestHarness([], {
+      streamFn: meter.wrap((model) => {
+        requests++;
+        const message = {
+          ...fauxAssistantMessage("Part of the answer", {
+            stopReason: requests === 1 ? stopReason : "stop",
+            ...(stopReason === "error" ? { errorMessage: "terminated" } : {}),
+          }),
+          provider: model.provider, model: model.id, api: model.api,
+        };
+        message.usage = { ...message.usage, cost: { ...message.usage.cost, total: 1 } };
+        const stream = createAssistantMessageEventStream();
+        if (message.stopReason === "error") stream.push({ type: "error", reason: "error", error: message });
+        else stream.push({ type: "done", reason: requests === 1 ? "length" : "stop", message });
+        return stream;
+      }),
+      finishTurn: async () => {
+        await meter.settled();
+        return (await spending.block(owner)) ? { action: "end" } : undefined;
+      },
+      retryDelayMs: 1,
+    });
+    const outcome = await harness.runManaged(
+      { kind: "append-and-run", message: cutOffPrompt("Write the answer") },
+      { maxCutOffContinuations: 2 },
+    );
+    assert.equal(requests, 1);
+    assert.equal((await spending.status("chat", owner.id))?.spentUsd, 1);
+    assert.equal(outcome.kind, stopReason === "length" ? "completed" : "provider_failed");
+    const history = (await session.buildContext()).messages;
+    assert.deepEqual(history.filter((message) => message.role === "user").map(messageText), ["Write the answer"]);
+    if (stopReason === "length") assert.equal(messageText(history[history.length - 1]), "Part of the answer");
+  });
+}
 
 test("a third cut-off ends the reply at the output limit, and replies without text never continue", async () => {
   const cut = (text: string) => fauxAssistantMessage(text, { stopReason: "length" });
