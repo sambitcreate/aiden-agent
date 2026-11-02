@@ -363,7 +363,7 @@ export function botRoutineRetryRequestId(failedRunId: string, attempt: 1 | 2): s
 function storedRoutineRetry(value: unknown, requestId: unknown, taskId: string): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const retry = value as Record<string, unknown>;
-  return Object.keys(retry).length === 2 &&
+  return Object.keys(retry).length === (retry.verifiedToolFree === true ? 3 : 2) &&
     (retry.attempt === 1 || retry.attempt === 2) &&
     typeof retry.failedRunId === "string" && retry.failedRunId.length <= 200 &&
     retry.failedRunId.startsWith(`routine:${taskId}:`) &&
@@ -731,7 +731,7 @@ export function createScheduleStore(
 
     restoreIfRevision,
 
-    async setEnabled(id: string, enabled: boolean): Promise<ScheduledTask> {
+    async setEnabled(id: string, enabled: boolean, options?: { clearRoutineRetriesExcept: string }): Promise<ScheduledTask> {
       return tasks.update((draft) => {
         const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
         const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
@@ -741,6 +741,10 @@ export function createScheduleStore(
         const task: ScheduledTask = {
           ...existing,
           enabled,
+          ...(options && {
+            pendingRoutineFires: existing.pendingRoutineFires?.filter((fire) =>
+              !fire.retry || fire.requestId === options.clearRoutineRetriesExcept),
+          }),
           nextRunAt: enabled
             ? nextScheduledRun(existing.cron, existing.timezone, new Date(timestamp))
             : undefined,
@@ -791,7 +795,7 @@ export function createScheduleStore(
      */
     async addRoutineRetry(
       id: string,
-      retry: { failedRunId: string; attempt: 1 | 2; at: number },
+      retry: { failedRunId: string; attempt: 1 | 2; at: number; verifiedToolFree?: true },
     ): Promise<boolean> {
       return tasks.update((draft) => {
         const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
@@ -808,7 +812,7 @@ export function createScheduleStore(
             requestId,
             prompt: existing.prompt ?? "",
             name: existing.name,
-            retry: { failedRunId: retry.failedRunId, attempt: retry.attempt },
+            retry: { failedRunId: retry.failedRunId, attempt: retry.attempt, ...(retry.verifiedToolFree && { verifiedToolFree: true }) },
           }],
           updatedAt: nextTaskRevision(now(), existing.updatedAt),
         };

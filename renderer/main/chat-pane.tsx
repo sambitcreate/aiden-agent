@@ -52,6 +52,7 @@ import {
   seedComposerAttachments,
   stageComposerText,
 } from "../lib/composer-draft-store";
+import { attachmentsWithBytes } from "../lib/stored-attachments";
 import { reduceVisualDrafts, type VisualDrafts } from "../lib/html-artifact-transcript";
 import { reduceUiDrafts, reduceUiVisuals, type UiDrafts } from "../lib/ui-visual-transcript";
 import type { ChatUiVisualV1 } from "../shared/aiden-ui/types";
@@ -85,7 +86,7 @@ import { useObservedLocalRun } from "../lib/hosts/use-observed-local-run";
 import { useActiveChatIds } from "../lib/use-chat-activity";
 import { useChatSession } from "../lib/hosts/use-chat-session";
 import { LOCAL_HOST_ID } from "../shared/peer-host";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { replaceEqualDeep, useQuery, useQueryClient } from "@tanstack/react-query";
 import { WorkspaceFolderMissingNotice } from "../components/workspace-folder-missing-notice";
 import {
   MANAGED_WORKTREE_MISSING_SEND_REFUSAL,
@@ -322,6 +323,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
     : persistedChat;
   React.useEffect(() => retainChatDraft(chatId), [chatId]);
   useMarkChatRead(draft ? undefined : chatId, draft ? undefined : persistedChat.data?.messages);
+  // Opening a chat clears its Unavailable prompts (the run that raised them is
+  // gone). A dismissal that drops any broadcasts a new activity revision, which
+  // the Inbox's waits query keys on.
+  const openedDraft = Boolean(draft);
+  React.useEffect(() => {
+    if (openedDraft) return;
+    void Promise.resolve()
+      .then(() => chatsApi.dismissDetachedAttention(chatId))
+      .catch(() => {
+        // The row keeps reading Unavailable until the next change event.
+      });
+  }, [chatId, openedDraft]);
   // A Bot's conversation lives at its own route, rendered from the live projection.
   const botChatId = chat.data?.botId;
   React.useEffect(() => {
@@ -1287,7 +1300,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (!message || message.role !== "user") {
         throw new Error("That message is no longer in this chat.");
       }
-      const prefill = { text: message.content, attachments: message.attachments ?? [] };
+      const prefill = {
+        text: message.content,
+        attachments: await attachmentsWithBytes(chatId, message.attachments ?? [], chatsApi.imageData),
+      };
       if (messages.slice(0, index).some((earlier) => earlier.role === "user")) {
         await copyChat({ messageId, position }, prefill, summary);
         return;
@@ -1410,6 +1426,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
     return () => environmentPanel.releaseSubagents(chatId, effectiveWorkspaceId);
   }, [chatId, effectiveWorkspaceId, environmentPanel.releaseSubagents]);
 
+  // A boolean, so a timeline update re-publishes the panel's details only when it flips.
+  const timelineCompacting =
+    displayedGenerationTimeline?.steps.some((step) => isToolStep(step) && step.toolName === "compact_context" && (step.status === "pending" || step.status === "running")) ?? false;
   React.useEffect(() => {
     environmentPanel.setContextDetails(!draft && chat.data ? {
       chat: chat.data,
@@ -1419,10 +1438,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
       modelId: model,
       modelLabel: model ? resolveModelDisplay(model, modelInfo.data?.[model]).label : "Unavailable",
       pressure: contextPressure,
-      compacting: contextCompactPending || (displayedGenerationTimeline?.steps.some((step) => isToolStep(step) && step.toolName === "compact_context" && (step.status === "pending" || step.status === "running")) ?? false),
+      compacting: contextCompactPending || timelineCompacting,
     } : null);
     return () => environmentPanel.setContextDetails(null);
-  }, [chat.data, draft, selectedProvider?.label, selectedProvider?.artwork, providerId, model, modelInfo.data, contextPressure, contextCompactPending, displayedGenerationTimeline, environmentPanel.setContextDetails]);
+  }, [chat.data, draft, selectedProvider?.label, selectedProvider?.artwork, providerId, model, modelInfo.data, contextPressure, contextCompactPending, timelineCompacting, environmentPanel.setContextDetails]);
 
   // The PR rail/push dialog read the presented chat even without subagents.
   React.useLayoutEffect(() => {
@@ -1690,8 +1709,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 },
               }
             : {}),
-          onTimeline: (timeline) => {
+          onTimeline: (next) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
+              // Each update carries every step; keeping the unchanged ones
+              // lets their memoized rows skip rendering.
+              const timeline = replaceEqualDeep(generationTimelineRef.current, next);
               generationTimelineRef.current = timeline;
               setGenerationTimeline(timeline);
               // A tool starting means the retried request answered.
@@ -3198,7 +3220,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     const frame = requestAnimationFrame(() => approvalDenyRef.current?.focus());
     return () => {
       cancelAnimationFrame(frame);
-      if (previousFocus?.isConnected) requestAnimationFrame(() => previousFocus.focus());
+      // A chat opened from the sidebar (an Inbox row, ⌘1–9) answers in the chat:
+      // once the prompt resolves, focus stays with the composer.
+      if (previousFocus?.isConnected && !previousFocus.closest("[data-sidebar]")) {
+        requestAnimationFrame(() => previousFocus.focus());
+      }
     };
   }, [pending?.approvalId]);
 

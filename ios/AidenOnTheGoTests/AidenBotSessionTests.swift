@@ -128,6 +128,8 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     let resumeGate = TestGate()
     let sendGate = TestGate()
     let stopGate = TestGate()
+    /// Holds each upload once armed, after it is recorded.
+    let uploadGate = TestGate()
     /// Holds each Resume until `releaseResume()`.
     var holdResume: Bool {
         get { resumeGate.isArmed }
@@ -267,6 +269,8 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
             _uploads.append(upload)
             return (_uploads.count - 1, _uploadFailures.contains(_uploads.count - 1))
         }
+        await uploadGate.pass()
+        try Task.checkCancellation()
         if fails { throw URLError(.networkConnectionLost) }
         let (name, mimeType, kind, size): (String, String, String, Int) = switch upload {
         case let .image(name, mimeType, data): (name, mimeType, "image", data.count)
@@ -3718,6 +3722,27 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertEqual(second.outgoing.first?.status, .sent(submissionId: "17"))
     }
 
+    func testCancelledRequestCannotReturnAReceiptFromCancellation() async throws {
+        for _ in 0..<100 {
+            let gate = TestGate()
+            gate.hold()
+            let caller = Task {
+                try await aidenBotWithin(.seconds(30)) {
+                    await gate.pass()
+                    return "receipt"
+                }
+            }
+            try await waitUntil({ gate.isHolding }, what: "the request")
+            caller.cancel()
+            do {
+                _ = try await caller.value
+                XCTFail("A cancelled request must not take the receipt returned on cancellation.")
+            } catch is CancellationError {
+                // The result remains ambiguous so the idempotency key is retained.
+            }
+        }
+    }
+
     func testACancelledCallerNeverLeavesItsRequestRunning() async throws {
         // An already-cancelled caller never starts the request.
         let untouched = LiveRequests()
@@ -4646,6 +4671,34 @@ final class AidenBotSessionAttachmentTests: XCTestCase {
         // Something typed since stays, after the message's own words.
         XCTAssertEqual(model.reattach(failed.id, into: "Also the totals"), "Summarise\n\nAlso the totals")
         XCTAssertNil(model.reattach(failed.id, into: ""), "it comes back once")
+    }
+
+    func testStopDropsTheUploadInFlightButKeepsWhatReachedTheMac() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = try await loaded(transport)
+        // The first upload goes through; the second waits on the Mac.
+        transport.uploadGate.hold()
+        transport.uploadGate.release()
+        defer { transport.uploadGate.releaseAll() }
+        let attaching = Task { await model.attach([photo, notes, photo]) }
+        let deadline = Date().addingTimeInterval(5)
+        while !transport.uploadGate.isHolding {
+            guard Date() < deadline else { return XCTFail("Timed out waiting for the second upload") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(model.uploadProgress?.index, 1)
+        XCTAssertEqual(model.uploadProgress?.count, 3)
+        XCTAssertEqual(model.uploadProgress?.title, "Sending 2 of 3")
+
+        model.cancelUploads()
+        _ = await attaching.value
+
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["receipt.png"], "what reached the Mac stays ready to send")
+        XCTAssertNil(model.uploadProgress, "the bar goes away")
+        XCTAssertFalse(model.isAttaching)
+        XCTAssertTrue(model.canAttach, "the + opens again")
+        XCTAssertEqual(transport.uploads.count, 2, "the third picture never left the phone")
+        XCTAssertTrue(transport.removedAttachmentIds.isEmpty, "Stop doesn't take the staged photo off the Mac")
     }
 
     func testAMacWithoutBotAttachmentsOffersNoPlus() async throws {

@@ -10,6 +10,7 @@ import { useWorkflowEditor } from "../editor-context";
 import type { WorkflowFlowNode } from "../flow-adapter-core";
 import { ModelPicker } from "../model-picker";
 import { STALE_LABEL } from "../run-view-core";
+import { ImageNodeFrame } from "./node-frame";
 import { NodePorts } from "./node-ports";
 
 export function GenerateImageNodeBody({
@@ -49,7 +50,7 @@ export function GenerateImageNode({ id, data, selected }: NodeProps<WorkflowFlow
   const node = data.node;
   if (node.type !== "generate-image") return null;
   return (
-    <div className="image-node">
+    <ImageNodeFrame>
       <CanvasNodeChrome title={node.title ?? "Generate Image"} selected={selected}>
         <GenerateImageNodeBody
           model={node.data.model}
@@ -63,6 +64,6 @@ export function GenerateImageNode({ id, data, selected }: NodeProps<WorkflowFlow
         />
       </CanvasNodeChrome>
       <NodePorts type="generate-image" />
-    </div>
+    </ImageNodeFrame>
   );
 }

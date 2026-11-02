@@ -40,6 +40,8 @@ export const workspaceApplicationService = createWorkspaceApplicationService({
       createScratchWorkspaceDirectory(await ensureUserDataDir("chat-folders")),
     workspaceIdsWithChats: async () =>
       new Set((await chatStore.list()).map((chat) => chat.workspaceId).filter((id): id is string => Boolean(id))),
+    chatIdsIn: async (workspaceId) =>
+      (await chatStore.list()).filter((chat) => chat.workspaceId === workspaceId).map((chat) => chat.id),
     trash: (folderPath) => shell.trashItem(folderPath),
   },
   createId: defaultWorkspaceId,

@@ -49,15 +49,12 @@ Branch `perf/storage-durability`, from the main-process optimization audit (MAIN
   | `appendMessage` | 72 ms, 502 reads | 8 ms, 1 read |
   | 20 parallel appends to different chats | 1391 ms | 78 ms |
 
-## Deferred design note — blob attachments (MAIN-11)
-- Today, attachment data lives inline in chat JSON, so every append rewrites it.
-- Proposal:
-  - Content-addressed blobs under `chats/blobs/<sha256[0:2]>/<sha256>`, written via `writeFileAtomic({ exclusive: true })`. EEXIST counts as success.
-  - Messages keep `{ blob: sha256, size, mime, name }`.
-  - Reads resolve lazily for renderer/IPC.
-  - GC is a startup-only mark-and-sweep over all chat payloads plus Pi journals, with a grace window (skip blobs newer than 24 h) so in-flight writes are never collected.
-- Migration: dual-read (inline or blob), and write blobs only for new attachments. Do not rewrite old chats eagerly.
-- Needs Remote protocol and mobile consumer review before landing, because summaries and transcripts may embed attachment data.
+## Image attachments as files (MAIN-11, built 2026-10-31, cross-machine images phase 2)
+- Built differently from the old proposal below in a few ways; see `.memory/cross-machine-images.md` "Step 2" for the shipped design.
+- Images (only images; text attachments stay inline) live in `chats/images/<sha[0:2]>/<sha256>` (`chat-image-store.ts`), written via `writeFileAtomic({ exclusive: true, mode: 0o600 })`. `put` resolves only once the file and its shard entry are durable: puts of one hash are serialized, and a file this process has not synced itself (earlier run, or a put whose sync failed) is fsynced with its shard before reuse.
+- Chat JSON keeps `{id, name, mimeType, kind, size, sha256, width?, height?}`; old inline chats migrate lazily in `writeChat`.
+- GC: `sweepUnusedImages` regex-scans every file in the chats folder (also quarantined and staged payloads) for `"sha256":"<hex>"`, 24 h grace by mtime (renewed on reuse) plus an in-process "written into a chat recently" map. It runs only while `images/.sweep-needed` exists (set by delete, clear, replaced snapshot), 2 min after startup and after each such change, and again when the first deferred file's grace runs out (never sooner than the 2 min delay). A sweep that throws or cannot read a chat file keeps the marker and retries with doubling backoff (2 min up to 1 h). The composer context meter reads chats with `getWithImageReferences`, so its 500 ms draft refresh reads no image files. Pi journals are not scanned: they never name image hashes.
+- Original proposal (kept for history): blobs under `chats/blobs/`, messages `{ blob: sha256, ... }`, dual-read, startup-only GC with a 24 h grace.
 
 ## Done on `claude/audit-fix-persistence-cpu` (2026-10-29)
 - MAIN-15: the diagnostic journal batches every line queued during one drain into a single append, and prunes expired rotations only when due. The full directory validation runs once; each append re-checks the directory's dev/ino with one lstat and revalidates (refusing a symlink) if it changed. Lines lost to a failed append count in `droppedWrites`. No persistent fd: batching gets the CPU win and keeps the rename/delete semantics.

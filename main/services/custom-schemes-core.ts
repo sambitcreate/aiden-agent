@@ -1,6 +1,8 @@
 import { GENERATIVE_UI_PROTOCOL_SCHEME } from "../../renderer/shared/generative-ui.js";
 
 export const STUDIO_ASSET_SCHEME = "aiden-asset";
+/** Stored chat images, loaded by the window instead of base64 over IPC. */
+export const CHAT_ATTACHMENT_SCHEME = "aiden-attachment";
 
 export interface CustomSchemeDefinition {
   scheme: string;
@@ -29,6 +31,7 @@ const LOCAL_CONTENT_PRIVILEGES: CustomSchemeDefinition["privileges"] = Object.fr
 export function customSchemePrivileges(options: { studioAssets: boolean }): CustomSchemeDefinition[] {
   return [
     { scheme: GENERATIVE_UI_PROTOCOL_SCHEME, privileges: { ...LOCAL_CONTENT_PRIVILEGES } },
+    { scheme: CHAT_ATTACHMENT_SCHEME, privileges: { ...LOCAL_CONTENT_PRIVILEGES } },
     ...(options.studioAssets
       ? [{ scheme: STUDIO_ASSET_SCHEME, privileges: { ...LOCAL_CONTENT_PRIVILEGES } }]
       : []),

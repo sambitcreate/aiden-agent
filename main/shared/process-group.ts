@@ -3,7 +3,7 @@
 // leader, also stops the shell's background jobs, Git's helpers and a script's
 // children. Windows has no process groups; there only the child is signalled.
 
-import type { ChildProcess } from "node:child_process";
+import { execFile, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
 const POLL_MS = 25;
@@ -18,6 +18,26 @@ export function processGroupExists(pid: number | undefined): boolean {
     // EPERM still means a member exists.
     return (error as NodeJS.ErrnoException).code !== "ESRCH";
   }
+}
+
+/**
+ * Whether anything in the group still runs. A group can outlive its work
+ * as zombies nobody has reaped (a non-reaping init), and those need no
+ * stopping. A lookup that fails says nothing either way, so it counts.
+ */
+export async function processGroupStillRuns(group: number): Promise<boolean> {
+  if (!processGroupExists(group)) return false;
+  return new Promise((resolve) => {
+    execFile("ps", ["-A", "-o", "pgid=,stat="], { timeout: 2_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
+      if (error || typeof stdout !== "string") return resolve(true);
+      resolve(
+        stdout.split("\n").some((line) => {
+          const [pgid, stat] = line.trim().split(/\s+/u);
+          return Number(pgid) === group && Boolean(stat) && !stat!.startsWith("Z");
+        }),
+      );
+    });
+  });
 }
 
 /** Signals the child's whole process group, falling back to the child itself. Never throws. */

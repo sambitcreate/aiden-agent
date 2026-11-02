@@ -3,7 +3,6 @@ import {
   createMemoryHistory,
   createRootRouteWithContext,
   createRoute,
-  createRouter,
   lazyRouteComponent,
 } from "@tanstack/react-router";
 import * as React from "react";
@@ -20,8 +19,9 @@ import { parseRemoteNewChatSearch } from "../lib/hosts/remote-new-chat-search";
 import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { parseBotPageSearch } from "./bots/bot-page-search";
+import { parseImagesHomeSearch } from "./images-home-search";
 import { StudioCapabilityRoute } from "./studio-capability-route";
-import { guardHistoryTraversal } from "../lib/guarded-history";
+import { createAppRouter } from "../lib/app-router";
 import { reopenClosedChatDraft } from "../lib/chat-draft";
 
 // Chat is the startup surface, so only its shell and pane are in the entry
@@ -225,10 +225,12 @@ const designProjectRoute = createRoute({
 const imagesRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
   path: "/images",
+  validateSearch: parseImagesHomeSearch,
   component: preloadsWith(function CreateImagesRoute() {
+    const { view } = imagesRoute.useSearch();
     return (
       <StudioCapabilityRoute feature="createImages">
-        <ImagesView />
+        <ImagesView view={view ?? "workflows"} />
       </StudioCapabilityRoute>
     );
   }, ImagesView),
@@ -283,10 +285,11 @@ const routeTree = rootRoute.addChildren([
 
 const queryClient = createAppQueryClient();
 
-const router = createRouter({
+// Back/Forward (sidebar history buttons, Settings' Back to app) run leave
+// guards too, and an ask for the Bot list rides on the entries it commits.
+const router = createAppRouter({
   routeTree,
-  // Back/Forward (sidebar history buttons, Settings' Back to app) run leave guards too.
-  history: guardHistoryTraversal(createMemoryHistory()),
+  history: createMemoryHistory(),
   defaultPreloadStaleTime: 0,
   scrollRestoration: true,
   context: {

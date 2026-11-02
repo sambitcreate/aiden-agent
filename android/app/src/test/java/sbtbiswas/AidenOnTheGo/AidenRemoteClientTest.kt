@@ -223,6 +223,20 @@ class AidenRemoteClientTest {
     }
 
     @Test
+    fun aChatStartedUnderChatsAsksTheMacForAFolderOfItsOwn() = runBlocking {
+        val chat = """{"id":"chat-1","workspaceId":"hidden-1","title":"New Chat","messages":[],"createdAt":"2026-08-19T07:00:00.000Z","updatedAt":"2026-08-19T07:00:01.000Z","revision":"revision-1"}"""
+        server.enqueue(MockResponse().setResponseCode(201).setBody(chat))
+        server.enqueue(MockResponse().setResponseCode(201).setBody(chat))
+        client.createChat("default", noWorkspace = true)
+        val asked = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertEquals("default", asked.getValue("workspaceId").jsonPrimitive.content)
+        assertEquals("true", asked.getValue("noWorkspace").jsonPrimitive.content)
+        // An ordinary create never asks (revision 51).
+        client.createChat("workspace-1")
+        assertFalse(Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject.containsKey("noWorkspace"))
+    }
+
+    @Test
     fun providerCreationSendsExplicitVisionAndWriteOnlyKey() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(201).setBody("""{"id":"custom:remote-fixture","label":"Private","models":["vision"]}"""))
         val key = UUID.fromString("10000000-0000-4000-8000-000000000001")
@@ -1552,4 +1566,30 @@ class AidenRemoteClientTest {
         assertEquals(AidenChatForkPosition.BEFORE, summaries[0].forkedFrom?.position)
         assertNull(summaries[1].forkedFrom)
     }
+    @Test
+    fun legacyInboxReadUsesBoundedWindowAndRejectsChangedSummary() = runBlocking {
+        val fixture = contractFixture()
+        val page = Json.decodeFromJsonElement<AidenChatSummaryPage>(fixture.getValue("chatSummaries"))
+        val row = page.summaries.first().copy(lastAssistantMessageId = null)
+        val window = """{"chatId":"${row.id}","revision":"${row.revision}","messages":[{"id":"last-shown","role":"assistant","text":"reply","createdAt":"2026-08-18T19:01:00.000Z"}],"hasOlder":true}"""
+        server.enqueue(MockResponse().setBody(window))
+        server.enqueue(MockResponse().setBody(fixture.getValue("chatSummaries").toString()))
+        server.enqueue(MockResponse().setResponseCode(204))
+        client.markInboxRead(row, supportsMessagesWindow = true)
+        assertEquals("/api/aiden/v1/chats/${row.id}/messages?limit=1", server.takeRequest().path)
+        assertTrue(server.takeRequest().path!!.startsWith("/api/aiden/v1/chat-summaries"))
+        val read = server.takeRequest()
+        assertEquals("last-shown", Json.parseToJsonElement(read.body.readUtf8()).jsonObject["throughMessageId"]!!.jsonPrimitive.content)
+
+        val rows = fixture.getValue("chatSummaries").jsonObject.getValue("summaries").jsonArray.toMutableList()
+        rows[0] = kotlinx.serialization.json.JsonObject(rows[0].jsonObject + ("revision" to kotlinx.serialization.json.JsonPrimitive("rev_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")))
+        val changed = kotlinx.serialization.json.JsonObject(fixture.getValue("chatSummaries").jsonObject + ("summaries" to kotlinx.serialization.json.JsonArray(rows)))
+        server.enqueue(MockResponse().setBody(window))
+        server.enqueue(MockResponse().setBody(changed.toString()))
+        assertTrue(runCatching { client.markInboxRead(row, supportsMessagesWindow = true) }.isFailure)
+        server.takeRequest()
+        server.takeRequest()
+        assertNull(server.takeRequest(100, TimeUnit.MILLISECONDS))
+    }
+
 }

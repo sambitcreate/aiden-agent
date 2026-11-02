@@ -323,7 +323,12 @@ export type ChatRole = "user" | "assistant" | "system";
 
 export type AttachmentKind = "image" | "text";
 
-/** A durable file attached to a chat message. Images carry base64 `data`; text files carry inlined `text`. */
+/**
+ * A durable file attached to a chat message. Text files carry inlined `text`.
+ * An image carries base64 `data`, a `sha256` naming its file in the chat image
+ * store, or both: chat files on disk keep only the hash, and the chat store
+ * fills `data` back in for main-process readers.
+ */
 export interface Attachment {
   id: string;
   name: string;
@@ -332,6 +337,13 @@ export interface Attachment {
   size: number;
   /** base64 (no data: prefix) for image attachments. */
   data?: string;
+  /** SHA-256 (lowercase hex) of a stored image's bytes. */
+  sha256?: string;
+  /** Pixel size of a stored image, so a transcript reserves its box before the bytes load. */
+  width?: number;
+  height?: number;
+  /** Renderer only: private `aiden-attachment:` link to a stored image's bytes. */
+  url?: string;
   /** UTF-8 contents for text/code attachments (truncated). */
   text?: string;
 }
@@ -487,6 +499,7 @@ export interface ChatMeta {
    */
   lastAssistantAt?: number;
   lastAssistantSequence?: number;
+  lastAssistantMessageId?: string;
   /**
    * The message at `lastAssistantAt` ended its turn in failure, so an unread
    * row says Failed instead of showing a new-reply dot. Absent when false.
@@ -546,7 +559,7 @@ export interface ScheduledTask {
      * Set when this entry is a delayed retry of a failed fire rather than a
      * scheduled fire. `fireTime` is when the retry becomes due.
      */
-    retry?: { failedRunId: string; attempt: 1 | 2 };
+    retry?: { failedRunId: string; attempt: 1 | 2; verifiedToolFree?: true };
   }>;
   /** When a Bot routine was last turned back on; failure streaks count only runs after it. */
   enabledAt?: number;

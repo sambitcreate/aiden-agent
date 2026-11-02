@@ -1,9 +1,9 @@
 // A hand-off card's Open in the Bot's own browser (blueprint §2.5, G14): the
 // `botBrowser` opener of `bot-handoff-open.ts`.
 //
-// - A sign-in opens its site in a new tab of the Bot's browser. An action's
-//   link opens in the Bot's tab already showing that page (a rule handed the
-//   Bot's own step there to the person), else in a new tab. Either is shown
+// - A rule holds only the probed tab while its document still matches.
+//   A sign-in opens a new tab. A tool-authored action link reuses a tab
+//   showing that page, else opens a new one. Either is shown
 //   to the person (`source: "user"`, so the panel's Browser tab comes
 //   forward).
 // - Open again on the same card brings back the tab it already opened,
@@ -22,6 +22,7 @@
 //
 // Holds live in memory: tabs don't survive a restart, so neither do holds.
 
+import type { BrowserApprovalTarget } from "../browser/approval.js";
 import type { BrowserCommand, BrowserCommandResult } from "../../../renderer/shared/browser.js";
 import type { BrowserCommandContext, BrowserHold } from "../browser/service.js";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
@@ -32,14 +33,15 @@ export interface BotBrowserHandoffService {
   hasOwner(workspaceId: string): boolean;
   transferOwner(workspaceId: string, owner: RendererDocumentOwner): void;
   command(workspaceId: string, command: BrowserCommand, context: BrowserCommandContext): Promise<BrowserCommandResult>;
-  hold(workspaceId: string, tabId: string, hold: BrowserHold): void;
+  getApprovalTarget(workspaceId: string, tabId: string): BrowserApprovalTarget;
+  hold(workspaceId: string, tabId: string, hold: BrowserHold, show?: boolean): void;
   getState(workspaceId: string): { activeTabId: string | null };
   release(workspaceId: string, holdId: string): void;
 }
 
 export interface BotBrowserHandoffDeps {
   service(): Promise<BotBrowserHandoffService>;
-  handoffs: Pick<BotHandoffs, "get" | "onSettled">;
+  handoffs: Pick<BotHandoffs, "get" | "onSettled" | "browserTarget">;
   /** The Bot's browser workspace, admitted to the browser service; `null` when the Bot is gone. */
   workspace(botId: string): Promise<string | null>;
   /** Whether the Bot's access includes Browser right now. */
@@ -152,7 +154,22 @@ export function createBotBrowserHandoffOpener(deps: BotBrowserHandoffDeps): BotB
     if (document === undefined && !service.hasOwner(workspaceId)) return false;
     if (document !== undefined) service.transferOwner(workspaceId, document);
     const key = heldKey(botId, waitId);
-    let tabId = await reopen(service, key, workspaceId);
+    const prompt = deps.handoffs.get(botId, waitId);
+    if (!prompt) return false;
+    const target = deps.handoffs.browserTarget(botId, waitId);
+    let tabId: string | undefined;
+    if (prompt.source === "rule") {
+      if (!target || target.workspaceId !== workspaceId) return false;
+      try {
+        const current = service.getApprovalTarget(workspaceId, target.tabId);
+        if (current.url !== target.url || current.documentRevision !== target.documentRevision) return false;
+      } catch {
+        return false; // The tab was closed.
+      }
+      tabId = target.tabId;
+    } else {
+      tabId = await reopen(service, key, workspaceId);
+    }
     if (tabId === undefined && url === undefined) {
       if (hold === "sign_in") return false;
       // No page named: the tab the Bot is on now, kept on its page.
@@ -166,7 +183,7 @@ export function createBotBrowserHandoffOpener(deps: BotBrowserHandoffDeps): BotB
       tabId = (await service.command(workspaceId, command, { source: "user" })).tabId;
     }
     if (tabId === undefined) return false;
-    service.hold(workspaceId, tabId, { holdId: waitId, reason: hold });
+    service.hold(workspaceId, tabId, { holdId: waitId, reason: hold }, prompt.source === "rule");
     const tabs = (held.get(key)?.tabs ?? []).filter((tab) => !(tab.workspaceId === workspaceId && tab.tabId === tabId));
     held.set(key, { botId, waitId, hold, tabs: [...tabs, { workspaceId, tabId }] });
     // The card may have settled while the tab opened: nothing would release it then.

@@ -25,7 +25,13 @@ Duplicate workspace names receive a short stable ID suffix in both visible and a
 
 ## Chat width
 
-`AppearanceConfig.chatWidth` (`narrow`, `default`, `wide`, or `full`; default `default`) is the one Appearance layout preference. `applyAppearanceConfig` writes it to `--chat-content-max-width` (44rem, 52rem, 64rem, or `none`) and `data-chat-width` on the root. Every `.chat-content-column` surface shares that token, so the transcript, pending approvals, the task and subagent row above the composer, and the composer stay aligned. The dock inset still reserves the floating Live button's gutter at Full. Older v1 settings and exports without the field load as Default, and strict parsing rejects unknown values. The control is a four-option radio card group: selection is the label's list-selection fill, never a border, and keyboard focus uses the neutral focus ring. Below 540px of content width it reflows to two columns. `settings-unification.spec.ts` measures the rendered transcript and composer widths for every option and checks that the choice survives a relaunch.
+`AppearanceConfig.chatWidth` (`narrow`, `default`, `wide`, or `full`; default `default`) is the one Appearance layout preference stored in `AppearanceConfig`; the sidebar view below is a per-device sidebar preference shown on the same page. `applyAppearanceConfig` writes it to `--chat-content-max-width` (44rem, 52rem, 64rem, or `none`) and `data-chat-width` on the root. Every `.chat-content-column` surface shares that token, so the transcript, pending approvals, the task and subagent row above the composer, and the composer stay aligned. The dock inset still reserves the floating Live button's gutter at Full. Older v1 settings and exports without the field load as Default, and strict parsing rejects unknown values. The control is a four-option radio card group: selection is the label's list-selection fill, never a border, and keyboard focus uses the neutral focus ring. Below 540px of content width it reflows to two columns. `settings-unification.spec.ts` measures the rendered transcript and composer widths for every option and checks that the choice survives a relaunch.
+
+## Sidebar
+
+Settings → Appearance → Sidebar, under Chat width, picks how the sidebar lists chats: **By workspace** (the default), **Recent only** or **Inbox**, which carries a Beta pill and is named "Inbox (Beta)". It is not an `AppearanceConfig` field: `SidebarViewPicker` reads and writes the same `useSidebarView()` store as the sidebar's Organize menu (`SidebarPreferences.view` in local storage), so a change in either one shows in the other at once, in every window. The control reuses the Chat width radio cards: a three-option `radiogroup` with one tab stop, arrow keys, Home and End (`radio-navigation.ts`), selection drawn with the label's list-selection fill, never a border, and the neutral focus ring on keyboard focus. Each card's preview is a few skeleton bars (indented rows for By workspace, a flat list for Recent only, a soft warning-tinted row on top for Inbox), with no outline or stripe. The three cards keep one row down to 380px of content width (unlike Chat width, which reflows to two columns below 540px), then stack in one column. `sidebar-view-picker.test.tsx` covers the selection, the sync with the menu's store and the keyboard.
+
+While Inbox is the chosen view, and only on a host with the `badgeCount` capability (macOS and Linux), a grouped card below the cards holds one switch row: **Show Needs you count on the Dock icon** ("on the app icon" on Linux), with a one-line description of what counts. It uses the shared `FieldSet`, `Field` and trailing `Switch`, like any other settings row. It is on by default and stored as `SidebarPreferences.dockBadge` in the same local-storage record as the view, so it is not an `AppearanceConfig` field either. Switching to another view hides the row and clears the badge, and keeps the choice for when the Inbox comes back. `sidebar-view-picker.test.tsx` covers when the row shows, its default, the stored choice and what the window reports to main.
 
 ## Window (Linux only)
 
@@ -41,7 +47,7 @@ Settings → Connectors (section id `mcp`) has one heading with an ⓘ, **Add cu
 
 Local connectors added outside Aiden remain blocked while their environment is sealed into encrypted device-local storage. The pending card shows variable names and saved/missing indicators, never plaintext values. **Review and approve** opens a trusted native confirmation containing the exact command, arguments and resolved environment overrides, JSON-escaped without truncation so settings such as `NODE_OPTIONS` and `PATH` can be reviewed. Cancel is the default. Main resolves and compares the effective launch again before approval, and rejects failed sealing, missing values or a changed configuration. An editor save that introduces a new launch also opens this review. Ordinary unchanged approved saves and storage-only migrations keep existing consent. No plaintext fallback is permitted.
 
-A connector served by a Mac app (iMCP, `macApp` in the catalog) appears only where `app:getInfo` reports `macAppConnectors` (macOS). Its setup dialog (`mcp-mac-app-setup.tsx`) has three rows: **Install** (a green "Installed" chip with the version, or **Check again** and a **Download** link to the vendor's page), **Open** (a green "Open" chip, or **Open iMCP**, which opens the installed copy only when pressed), and **Choose what Aiden can use** (where in the app to turn services on, with an ⓘ saying tool results go to the chat's model). Connection details show the one command it runs. A failed Test or Connect adds a line with the app and macOS settings that usually fix it. Aiden never bundles, downloads, updates or quits the app.
+A connector served by a Mac app (iMCP, `macApp` in the catalog) appears only where `app:getInfo` reports `macAppConnectors` (macOS). Its setup dialog (`mcp-mac-app-setup.tsx`) has three rows: **Install** (a green "Installed" chip with the version, or **Check again** and a **Download** link to the vendor's page), **Open** (a green "Open" chip, or **Open iMCP**, which opens the installed copy only when pressed), and **Choose what Aiden can use** (where in the app to turn services on, with an ⓘ saying tool results go to the chat's model). Connection details show the approved server path. Setup checks the iMCP publisher’s signatures on both the app and server. Each connection verifies them again, and macOS enforces the server’s Developer ID team and signing identifier at launch. A failed Test or Connect adds a line with the app and macOS settings that usually fix it. Aiden never bundles, downloads, updates or quits the app.
 
 Settings → Providers → Manage shows **Let custom connectors use this key** (off by default) only for a built-in provider with a saved API key; the custom-connector key picker lists only providers with it turned on.
 
@@ -82,3 +88,35 @@ legacy settings). It uses the normal live-preview/save path. This is separate
 from `autoHideComposerContext`, which controls the workspace strip. Hiding the
 meter changes only presentation; Context remains in the workspace launcher and
 the runtime continues context accounting and compaction.
+
+## Work details and busy sends
+
+Appearance → Chat has **Work details** (Compact, Standard, Detailed, Verbose),
+**When to collapse work details** (On completion / On next message), **Open chat
+links in**, and **Send behavior while busy** (Queue / Steer). The work and send
+preferences use `AppearanceConfig.workDetails`, `workDetailsCollapseTiming`, and
+`busySendBehavior`, defaulting to `standard`, `completion`, and `queue` for new and
+legacy v1 settings. They follow live preview and the normal debounced save path.
+
+Compact keeps work behind summary headers. Standard shows a three-row activity
+preview; Detailed opens eligible tool trails; Verbose keeps automatic details
+open in history. On next message retains the latest exchange's work until the
+next committed ordinary prompt, including across reopening the chat. Reasoning is
+not part of these modes: it stays the steady one-line Thinking row that only the
+reader opens, so the transcript does not jump while a model thinks. Manual
+opens/closes win over automatic timing. Completed work never keeps live shimmer or announcements.
+Answers, visuals, approvals and question recaps keep their normal placement.
+Bot activity availability still follows each Bot's Quiet/Summary/Detailed level;
+the global mode and timing adjust Detailed recaps without adding hidden steps.
+
+The link row edits the same browser-service preference as Settings → Links,
+including Ask each time, Aiden browser and System browser. Local-file checks,
+loopback rules, modifier-click and restricted-content confirmation still apply.
+This preference remains separate from Appearance import/reset.
+
+While busy, Enter and the send pill use the chosen Queue/Steer default, and
+Cmd/Ctrl+Enter uses the other action. The pill's menu can override the default
+for that run; the next idle transition restores the saved default. Unsupported
+Steer uses the Queue affordance. Shift+Enter and idle sends are unchanged. These
+preferences apply to desktop viewers/composers; native phones and the CLI keep
+their existing local behavior, with no Remote wire change.

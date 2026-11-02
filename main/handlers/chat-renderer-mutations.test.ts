@@ -8,7 +8,9 @@ import {
   createChatApplicationService,
   type ChatApplicationDependencies,
 } from "../services/chat-application-service.js";
+import { ChatReadMarkerStore } from "../services/chat-read-markers.js";
 import { createChatStore } from "../services/chat-store-core.js";
+import { ChatTriageStore } from "../services/chat-triage.js";
 import { assertRenameAllowedFromChat } from "../services/chat-title-policy.js";
 import type { ChatTurnLease } from "../services/chat-turn-admission.js";
 import { WorkspaceMutationGate } from "../services/workspace-mutation-gate.js";
@@ -49,6 +51,16 @@ async function fixture(t: TestContext, options: { busyChats?: ReadonlySet<string
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-renderer-chat-mutations-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const chatStore = createChatStore(async () => root);
+  // The real Inbox stores, as main wires them. Their writes after a send or a
+  // delete are fire-and-forget, so each is tracked for a test to await.
+  const inboxWrites: Promise<unknown>[] = [];
+  const track = <T>(write: Promise<T>): Promise<T> => {
+    inboxWrites.push(write);
+    return write;
+  };
+  let triageWrites = 0;
+  const triage = new ChatTriageStore(() => root, { onChange: () => { triageWrites += 1; } });
+  const readMarkers = new ChatReadMarkerStore(() => root);
   await chatStore.create({ id: "design-chat", owner: { kind: "design-project", projectId: "project-1" } });
   await chatStore.create({ id: "regular-chat", title: "Regular" });
   const busyChats = options.busyChats ?? new Set<string>();
@@ -85,6 +97,10 @@ async function fixture(t: TestContext, options: { busyChats?: ReadonlySet<string
     },
     piRuntimeEffectStore: { deleteChat: async () => undefined },
     piCompactionSessionStore: { deleteChat: async () => undefined },
+    inboxState: {
+      readMarkers: { remove: (chatId: string) => track(readMarkers.remove(chatId)) },
+      triage: { remove: (chatId: string) => track(triage.remove(chatId)) },
+    },
     logError: () => undefined,
   } as unknown as ChatApplicationDependencies);
   const rendererChats = createRendererChatMutationHandlers({
@@ -102,7 +118,7 @@ async function fixture(t: TestContext, options: { busyChats?: ReadonlySet<string
     botApplicationService: { deleteChat: async () => assert.fail("no Bot chat is deleted here") },
     hostPlatformCapabilities: () => ({ bots: false }),
     closeDeviceSessionsForChat: () => undefined,
-    chatReadMarkers: { remove: async () => undefined },
+    chatTriage: { wake: (chatId) => track(triage.wake(chatId)) },
     rendererDocumentOwner: () => owner,
     llmClient: {
       requiresAppendReconciliation: () => false,
@@ -124,7 +140,14 @@ async function fixture(t: TestContext, options: { busyChats?: ReadonlySet<string
     ["chats:dismissComputerUseContinue", rendererChats.dismissComputerUseContinue as Handler],
   ]);
   const invoke = async (channel: string, ...args: unknown[]) => handlers.get(channel)!(event, ...args);
-  return { chatStore, invoke };
+  return {
+    chatStore,
+    invoke,
+    triage,
+    readMarkers,
+    triageWrites: () => triageWrites,
+    inboxSettled: () => Promise.all(inboxWrites),
+  };
 }
 
 const append = (chatId: string, turnId: string) =>
@@ -159,6 +182,52 @@ test("the same channels still rename, append to and delete an ordinary chat", as
   );
   await f.invoke("chats:remove", "regular-chat");
   assert.equal(await f.chatStore.get("regular-chat"), null);
+});
+
+test("sending in a snoozed chat brings it back once and leaves Pin alone; an unsnoozed chat is not written", async (t) => {
+  const f = await fixture(t);
+  await f.chatStore.create({ id: "other-chat", title: "Other" });
+  await f.triage.set("regular-chat", { pinned: true, snoozeUntil: Date.now() + 3_600_000 });
+  await f.triage.set("other-chat", { pinned: true });
+  const before = f.triageWrites();
+
+  await f.invoke("chats:appendMessage", ...append("regular-chat", "turn-snoozed"));
+  await f.inboxSettled();
+  const woken = await f.triage.get("regular-chat");
+  assert.equal(woken?.snoozedUntil, undefined);
+  assert.equal(typeof woken?.pinnedAt, "number");
+  assert.equal(woken?.revision, 2);
+  assert.equal(f.triageWrites(), before + 1);
+
+  await f.invoke("chats:appendMessage", ...append("other-chat", "turn-plain"));
+  await f.invoke("chats:appendMessage", ...append("regular-chat", "turn-again"));
+  await f.inboxSettled();
+  assert.equal(f.triageWrites(), before + 1, "no snooze, no write");
+  assert.equal((await f.triage.get("other-chat"))?.revision, 1);
+  assert.equal((await f.triage.get("regular-chat"))?.revision, 2);
+});
+
+test("deleting a chat drops its read marker and triage and keeps other chats'", async (t) => {
+  const f = await fixture(t);
+  await f.chatStore.create({ id: "other-chat", title: "Other" });
+  for (const chatId of ["regular-chat", "other-chat"]) {
+    await f.triage.set(chatId, { pinned: true });
+    assert.equal(await f.readMarkers.markRead(chatId, 5_000, 0), true);
+  }
+
+  await f.invoke("chats:remove", "regular-chat");
+  await f.inboxSettled();
+  assert.equal(await f.triage.get("regular-chat"), null);
+  const markers = await f.readMarkers.snapshot();
+  assert.equal("regular-chat" in markers.readThrough, false);
+  assert.equal(markers.readThrough["other-chat"], 5_000);
+  assert.equal(typeof (await f.triage.get("other-chat"))?.pinnedAt, "number");
+
+  // A refused delete (a Design project's hidden chat) leaves its Inbox state.
+  await f.triage.set("design-chat", { done: true });
+  await assert.rejects(f.invoke("chats:remove", "design-chat"));
+  await f.inboxSettled();
+  assert.equal(typeof (await f.triage.get("design-chat"))?.doneAt, "number");
 });
 
 test("picking a model in one chat changes only that chat", async (t) => {

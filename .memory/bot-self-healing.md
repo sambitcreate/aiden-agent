@@ -13,7 +13,8 @@ Spec: `docs/superpowers/specs/2026-10-27-bot-autonomy-design.md` §4–§5. Plan
   - Raises are coalesced in flight. A failed append or delivery is repaired by the next raise. `act` claims the issue by id.
   - Open issues count toward `needsYou`. Remote `bot:issues` (revision 42) is in `aiden-remote-bot-issues.ts`.
 - **Recovery:** `main/services/bot-routine-recovery.ts` (+ `-main.ts`), called from the executor's `afterRun` dependency (desktop only; the CLI does not wire it).
-  - A retry is a `pendingRoutineFires` entry with `retry: {failedRunId, attempt}`. The request id is `<failedRunId>:retry-N`; the trigger is `{kind: "retry", requestId, failedRunId, attempt}`.
+  - A retry is a `pendingRoutineFires` entry keyed by `<failedRunId>:retry-N`. New entries carry `verifiedToolFree: true` after the durable session confirms the failed attempt requested no tools. The check uses the first generation created with the input and its owned tool tasks, so a later chat's tools cannot disqualify the routine. Before a fresh submission, older entries check previous attempts. A previously admitted retry is observed by its existing submission ID.
+  - Auto-pause runs inside the active fire. It disables the routine and clears queued retries in one store update, preserving the active receipt until delivery settles, then disarms its cron job. The person-facing pause path waits for the active fire and must stay outside that callback.
   - The pending scan waits for the first future retry instead of backing off.
   - Issue keys are `routine_failed:<taskId>` and `routine_paused:<taskId>`. Three same-kind failed fires pause the routine. Claim-flagged success runs count as failed fires.
 - **Health:** `renderer/shared/bot-health.ts`, `main/services/bot-health/{checks,preflight,health-main}.ts`.

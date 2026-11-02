@@ -117,6 +117,8 @@ async function fixture(options: {
   contextPressure?: { chatId: string; pressure: Record<string, unknown> | null };
   /** The host's spending ledger (contract revision 47). */
   spending?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["spending"];
+  /** The host keeps Inbox triage (`chat-triage-v1`, revision 50). */
+  triage?: boolean;
   /** The host's background jobs (contract revision 49). */
   backgroundJobs?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["backgroundJobs"];
 } = {}) {
@@ -277,7 +279,8 @@ async function fixture(options: {
               capability !== "bot:images" &&
               capability !== "bot:issues" &&
               capability !== "schedule:cards" &&
-              capability !== "chat:jobs",
+              capability !== "chat:jobs" &&
+              capability !== "attachments:raw",
           )
         ) {
           return null;
@@ -490,6 +493,15 @@ async function fixture(options: {
             cancelForkSummary: async (id: string) => {
               calls.push(`fork-summary-cancel:${id}`);
               return { cancelled: true };
+            },
+          }
+        : {}),
+      ...(options.triage
+        ? {
+            supportsTriage: true,
+            setTriage: async (deviceId: string, id: string, key: string, body: unknown) => {
+              calls.push(`chat-triage:${deviceId}:${id}:${key}:${JSON.stringify(body)}`);
+              return { chatId: id, revision: 1, updatedAt: new Date(3_000).toISOString(), doneAt: new Date(3_000).toISOString() };
             },
           }
         : {}),
@@ -1885,6 +1897,7 @@ test("progress support is advertised and upgraded only when the Mac can serve it
       "schedule:read",
       "schedule:write",
       "schedule:cards",
+      "attachments:raw",
       "skills:invoke",
     ]);
     assert.equal(server.features.includes("chat-tasks-v1"), false);
@@ -4664,7 +4677,8 @@ test("chat controls require both scoped grants and advertise owner-enabled negot
   const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
   try {
     const server = await (await fetch(`${app.base}/server`, { headers })).json();
-    assert.ok(server.features.includes("chat-ui-panels-v1"));
+    // Retired in revision 50: no shipped client read it, and phones needed the slot for chat-triage-v1.
+    assert.equal(server.features.includes("chat-ui-panels-v1"), false);
     assert.equal(server.features.includes("chat-ui-panels-enabled-v1"), false);
     const denied = await fetch(`${app.base}/chats/chat-1/controls/panel-1`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ control: "memory.enabled", value: false, expectedRevision: "rev", operationId: "op" }) });
     assert.equal(denied.status, 403);
@@ -5741,6 +5755,102 @@ test("bot-attachments-v1 is offered only while Bot uploads are wired, and its ro
   }
 });
 
+test("attachments:raw is offered with uploads, and a holder uploads a picture as raw bytes to chats and Bots", async () => {
+  const { AidenRemoteAttachmentStore } = await import("./aiden-remote-attachments.js");
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  // A real 1x1 PNG, so the store's own checks decide what is accepted.
+  const png = Buffer.from(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63f8cfc0f01f000502020150a5f5730000000049454e44ae426082",
+    "hex",
+  );
+  const store = new AidenRemoteAttachmentStore();
+  const staged: Array<{ name: string; bytes: number }> = [];
+  const sessions = {
+    ...(recordingActivitySessions([], false) as unknown as Record<string, unknown>),
+    supportsAttachments: true,
+    uploadAttachment: async (deviceId: string, botId: string, body: unknown) => {
+      const projection = store.upload(deviceId, `bot:${botId}`, body);
+      staged.push({ name: projection.name, bytes: projection.size });
+      return projection;
+    },
+    removeAttachment: async () => {},
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+  const grants: AidenRemoteCapability[] = ["server:read", "bot:read", "bot:write", "chat:read", "chat:write"];
+  const raw = (base: string, route: string, body: Buffer, extra: Record<string, string> = {}) =>
+    fetch(`${base}${route}`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "image/png", "aiden-attachment-name": encodeURIComponent("Café photo.png"), ...extra },
+      body: new Uint8Array(body),
+    });
+
+  const before = await fixture({ capabilities: grants, acceptsBotCapabilities: true, deviceType: "iphone", botSessions: sessions });
+  try {
+    const server = await (await fetch(`${before.base}/server`, { headers })).json();
+    assert.equal(server.serverCapabilities.includes("attachments:raw"), true);
+    assert.equal(server.features.some((feature: string) => feature.includes("raw")), false, "no feature token is spent on it");
+    const refused = await raw(before.base, "/bots/bot-1/attachments", png);
+    assert.equal(refused.status, 403, "raw bytes need the opt-in");
+    // The refusal every client reads from the shared revision 50 fixture.
+    const sharedFixture = JSON.parse(
+      readFileSync(new URL("../../protocol/aiden-remote/v1/fixtures/contract.json", import.meta.url), "utf8"),
+    ) as { rawUploads: { withoutGrant: { error: { code: string; message: string; retryable: boolean } } } };
+    const refusal = (await refused.json()) as { error: { code: string; message: string; retryable: boolean } };
+    const expected = sharedFixture.rawUploads.withoutGrant.error;
+    assert.deepEqual(
+      { code: refusal.error.code, message: refusal.error.message, retryable: refusal.error.retryable },
+      { code: expected.code, message: expected.message, retryable: expected.retryable },
+    );
+    assert.equal((await raw(before.base, "/chats/chat-1/attachments", png)).status, 403);
+    const negotiated = await fetch(`${before.base}/device/capabilities`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ accepts: ["attachments:raw"] }),
+    });
+    assert.equal(negotiated.status, 200);
+    assert.equal(before.calls.some((call) => call.startsWith("attachment-upload:")), false);
+    assert.deepEqual(staged, []);
+  } finally {
+    await before.close();
+  }
+
+  const holder = await fixture({
+    capabilities: [...grants, "attachments:raw"],
+    acceptsBotCapabilities: true,
+    deviceType: "android",
+    botSessions: sessions,
+  });
+  try {
+    const accepted = await raw(holder.base, "/bots/bot-1/attachments", png);
+    assert.equal(accepted.status, 201);
+    const reference = await accepted.json();
+    assert.equal(reference.name, "Café photo.png");
+    assert.equal(reference.mimeType, "image/png");
+    assert.equal(reference.kind, "image");
+    assert.equal(reference.size, png.length, "the reference counts the picture's own bytes");
+    assert.match(reference.id, /^att_[A-Za-z0-9_-]{43}$/u);
+
+    assert.equal((await raw(holder.base, "/chats/chat-1/attachments", png)).status, 201);
+    assert.equal(holder.calls.some((call) => call.startsWith("attachment-upload:")), true);
+
+    // The same store checks apply: bytes that are not the declared picture, no name, too large.
+    const notPng = await raw(holder.base, "/bots/bot-1/attachments", Buffer.from("not a picture"));
+    assert.equal(notPng.status, 400);
+    const unnamed = await fetch(`${holder.base}/bots/bot-1/attachments`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "image/png" },
+      body: new Uint8Array(png),
+    });
+    assert.equal(unnamed.status, 400);
+    const oversized = await raw(holder.base, "/bots/bot-1/attachments", Buffer.alloc(8 * 1024 * 1024 + 1));
+    assert.equal(oversized.status, 413);
+    const otherType = await raw(holder.base, "/bots/bot-1/attachments", png, { "content-type": "image/gif" });
+    assert.equal(otherType.status, 415, "anything else is still read as the JSON upload");
+    assert.deepEqual(staged, [{ name: "Café photo.png", bytes: png.length }]);
+  } finally {
+    await holder.close();
+  }
+});
+
 test("only a device holding bot:activity is served activity frames and a Bot's chatActivity", async () => {
   const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
   const seen: string[] = [];
@@ -6402,6 +6512,48 @@ test("a phone answers a real hand-off and pauses its Bot over HTTP, while a lega
     await holder.close();
     await legacy.close();
     await sessions.close();
+  }
+});
+
+test("phones hear chat-triage-v1 and may set Done under chat:write, but not without it", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const write = (base: string) => fetch(`${base}/chats/chat-1/triage`, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json", "idempotency-key": "phone-triage-key-0001" },
+    body: JSON.stringify({ done: true, ifRevision: 0 }),
+  });
+  for (const deviceType of ["iphone", "ipad", "android"] as const) {
+    const phone = await fixture({ deviceType, triage: true, capabilities: ["server:read", "chat:read", "chat:write"] });
+    try {
+      const server = await (await fetch(`${phone.base}/server`, { headers })).json();
+      assert.ok(server.features.includes("chat-triage-v1"), deviceType);
+      const done = await write(phone.base);
+      assert.equal(done.status, 200, deviceType);
+      const body = await done.json();
+      assert.equal(body.chatId, "chat-1");
+      assert.equal(body.revision, 1);
+      assert.ok(phone.calls.some((call) => call.startsWith("chat-triage:") && call.endsWith(`:chat-1:phone-triage-key-0001:{"done":true,"ifRevision":0}`)), deviceType);
+    } finally {
+      await phone.close();
+    }
+    const readOnly = await fixture({ deviceType, triage: true, capabilities: ["server:read", "chat:read"] });
+    try {
+      const refused = await write(readOnly.base);
+      assert.equal(refused.status, 403, deviceType);
+      assert.equal((await refused.json()).error.code, "capability_denied");
+      assert.equal(readOnly.calls.some((call) => call.startsWith("chat-triage:")), false, deviceType);
+    } finally {
+      await readOnly.close();
+    }
+  }
+  // A host without the triage store announces nothing and serves no route.
+  const bare = await fixture({ deviceType: "iphone", capabilities: ["server:read", "chat:read", "chat:write"] });
+  try {
+    const server = await (await fetch(`${bare.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-triage-v1"), false);
+    assert.equal((await write(bare.base)).status, 404);
+  } finally {
+    await bare.close();
   }
 });
 

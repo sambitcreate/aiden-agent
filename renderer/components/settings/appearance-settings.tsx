@@ -1,4 +1,7 @@
 import { AppControlSettings } from "./app-control-settings";
+import { handleRadioNavigation } from "./radio-navigation";
+import { InboxDockBadgeSetting, SidebarViewPicker } from "./sidebar-view-picker";
+import { LinksSettings } from "./links-settings";
 import * as React from "react";
 import {
   Check,
@@ -33,6 +36,9 @@ import {
 } from "../../lib/appearance-runtime";
 import {
   CHAT_WIDTH_OPTIONS,
+  WORK_DETAILS_LABELS,
+  COLLAPSE_TIMING_LABELS,
+  BUSY_SEND_LABELS,
   THEME_PRESETS,
   createDefaultAppearanceConfig,
   getPresetVariant,
@@ -54,33 +60,29 @@ const INLINE_VISUALS_LABELS: Record<InlineVisualsMode, string> = {
   off: "Off",
 };
 
+function ChatPreferenceField<Value extends string>({ label, description, value, labels, onChange }: {
+  label: string;
+  description: string;
+  value: Value;
+  labels: Record<Value, string>;
+  onChange(value: Value): void;
+}) {
+  return (
+    <Field label={label} description={description}>
+      <Select value={value} onValueChange={(next) => {
+        if (Object.prototype.hasOwnProperty.call(labels, next)) onChange(next as Value);
+      }}>
+        <SelectTrigger size="small" aria-label={label}><SelectValue>{labels[value]}</SelectValue></SelectTrigger>
+        <SelectContent>{Object.entries<string>(labels).map(([id, text]) => <SelectItem key={id} value={id}>{text}</SelectItem>)}</SelectContent>
+      </Select>
+    </Field>
+  );
+}
+
 type CssProperties = React.CSSProperties & Record<`--${string}`, string>;
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
-}
-
-function handleRadioNavigation<Value extends string>(
-  event: React.KeyboardEvent<HTMLButtonElement>,
-  index: number,
-  options: ReadonlyArray<{ value: Value }>,
-  onChange: (value: Value) => void,
-): void {
-  let nextIndex: number | null = null;
-  if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-    nextIndex = (index - 1 + options.length) % options.length;
-  } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-    nextIndex = (index + 1) % options.length;
-  } else if (event.key === "Home") {
-    nextIndex = 0;
-  } else if (event.key === "End") {
-    nextIndex = options.length - 1;
-  }
-  if (nextIndex === null) return;
-  event.preventDefault();
-  const group = event.currentTarget.closest<HTMLElement>('[role="radiogroup"]');
-  group?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[nextIndex]?.focus();
-  onChange(options[nextIndex].value);
 }
 
 function appearanceSafetyIssues(config: AppearanceConfig): string[] {
@@ -545,6 +547,25 @@ export function AppearanceSettings() {
       </section>
 
       <FieldSet title="Chat">
+        <ChatPreferenceField
+          label="Work details"
+          description="Choose how much tool activity to show. Verbose keeps it open in history. Thinking always stays one line until you open it."
+          value={config.workDetails} labels={WORK_DETAILS_LABELS}
+          onChange={(workDetails) => update((current) => ({ ...current, workDetails }))}
+        />
+        <ChatPreferenceField
+          label="When to collapse work details"
+          description="Choose when to automatically collapse work previews. Verbose keeps them open; manual choices always take priority."
+          value={config.workDetailsCollapseTiming} labels={COLLAPSE_TIMING_LABELS}
+          onChange={(workDetailsCollapseTiming) => update((current) => ({ ...current, workDetailsCollapseTiming }))}
+        />
+        <LinksSettings embedded />
+        <ChatPreferenceField
+          label="Send behavior while busy"
+          description="Enter and the Send button use this default while a response runs. Cmd/Ctrl+Enter uses the other action. Steer accepts text only."
+          value={config.busySendBehavior} labels={BUSY_SEND_LABELS}
+          onChange={(busySendBehavior) => update((current) => ({ ...current, busySendBehavior }))}
+        />
         <Field label="Show context usage in composer" description="Show the token meter beside your message. Context details remain available in the workspace panel.">
           <Switch checked={config.showComposerContextUsage} onCheckedChange={(checked) => update((current) => ({ ...current, showComposerContextUsage: checked }))} aria-label="Show context usage in composer" />
         </Field>
@@ -585,6 +606,14 @@ export function AppearanceSettings() {
         <h2 id="appearance-chat-width-title">Chat width</h2>
         <p className="appearance-section-description">Sets how wide messages and the composer can grow in the conversation.</p>
         <ChatWidthPicker value={config.chatWidth} onChange={changeChatWidth} />
+      </section>
+      <section className="appearance-theme-section appearance-layout-section" aria-labelledby="appearance-sidebar-title">
+        <h2 id="appearance-sidebar-title">Sidebar</h2>
+        <p className="appearance-section-description">
+          Chooses how the sidebar lists chats. The sidebar’s Organize menu switches the same setting.
+        </p>
+        <SidebarViewPicker labelledBy="appearance-sidebar-title" />
+        <InboxDockBadgeSetting />
       </section>
     </div>
   );

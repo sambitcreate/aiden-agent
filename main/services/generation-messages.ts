@@ -48,10 +48,16 @@ function userMessage(
           `Attached image reference: ${visionAttachmentAlias(attachment)} (${attachment.name}).`,
         )
         .join("\n");
+  // An image whose stored file is gone is named, so the model knows the
+  // person shared one even though it can no longer be shown.
+  const unavailableImages = attachments
+    .filter((attachment) => attachment.kind === "image" && !attachment.data)
+    .map((attachment) => `[Image unavailable: ${attachment.name}]`)
+    .join("\n");
   const combinedText = (
     contentFirst
-      ? [content, textPrefix, imageReferences]
-      : [textPrefix, content, imageReferences]
+      ? [content, textPrefix, imageReferences, unavailableImages]
+      : [textPrefix, content, imageReferences, unavailableImages]
   )
     .filter(Boolean)
     .join("\n\n");

@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isMcpMacAppOpen, mcpMacAppStatus, openMcpMacApp, type McpMacAppProbe } from "./mcp-mac-apps.js";
+import { execFile } from "node:child_process";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+import { createMcpStdioApprovalStore } from "./mcp-stdio-approvals.js";
+import { resolveMcpConnectionCredentials } from "./mcp-connection-credentials.js";
+import { desktopStdioLaunch, isMcpMacAppOpen, mcpMacAppStatus, openMcpMacApp, type McpMacAppProbe } from "./mcp-mac-apps.js";
 import { getMcpPreset, serverFromPreset, type MacAppMcpPreset } from "./mcp-presets.js";
 
 const imcp = getMcpPreset("imcp") as MacAppMcpPreset;
@@ -22,7 +29,7 @@ function fakeMac(bundles: Record<string, FakeBundle>, running: string[] = [], pl
   const probe: McpMacAppProbe = {
     platform,
     homedir: HOME,
-    isExecutable: async (file) => {
+    isTrustedServer: async (file) => {
       calls.push(`exec:${file}`);
       return Object.entries(bundles).some(([bundle, info]) => info.server !== false && file === `${bundle}/Contents/MacOS/imcp-server`);
     },
@@ -104,4 +111,39 @@ test("off a Mac nothing is looked up, checked or opened", async () => {
   await assert.rejects(openMcpMacApp(imcp, linux.probe), /works only on a Mac/u);
   assert.deepEqual(linux.calls, []);
   assert.deepEqual(linux.opened, []);
+});
+
+test("an approved iMCP path cannot run a replacement executable", { skip: process.platform !== "darwin" }, async (t) => {
+  const run = promisify(execFile);
+  await run(process.execPath, ["scripts/build-imcp-launcher.mjs"]);
+  const launcher = path.resolve("build/native/aiden-imcp-launcher");
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-imcp-replaced-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  t.mock.method(os, "homedir", () => root);
+  const bundle = path.join(root, "Applications", "iMCP.app");
+  const command = path.join(bundle, "Contents/MacOS/imcp-server");
+  const marker = path.join(root, "executed");
+  await mkdir(path.dirname(command), { recursive: true });
+  await writeFile(command, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const record = serverFromPreset(imcp, command);
+  const approvals = createMcpStdioApprovalStore(async () => path.join(root, "approvals.json"));
+  await approvals.approve(record);
+  // The replacement keeps both the approved path and the expected plist identity.
+  await writeFile(path.join(bundle, "Contents/Info.plist"),
+    "<plist version='1.0'><dict><key>CFBundleIdentifier</key><string>co.dododo.iMCP</string></dict></plist>");
+  await writeFile(command, "#!/bin/sh\nprintf ran > executed\n");
+  const resolved = await resolveMcpConnectionCredentials(record, {
+    isLaunchApproved: server => approvals.isApproved(server),
+    isMacAppOpen: async () => true,
+    isCurrent: () => true,
+    resolveFieldSecrets: async () => assert.fail(),
+    presetKey: async () => assert.fail(),
+    missingKey: () => assert.fail(),
+  });
+  const launch = desktopStdioLaunch(resolved, () => launcher);
+  await assert.rejects(run(launch.command, launch.args ?? [], { cwd: root }), /could not verify the signed iMCP/u);
+  await assert.rejects(access(marker), { code: "ENOENT" });
+  // Positive control: the very same executable really does write the marker if launched directly.
+  await run(command, [], { cwd: root });
+  await access(marker);
 });

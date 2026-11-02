@@ -15,6 +15,14 @@ import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
 import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
+import { chatTriage, startChatTriage, stopChatTriage } from "./services/chat-triage-main.js";
+import {
+  registerInboxDockBadgeIpc,
+  startInboxDockBadge,
+  stopInboxDockBadge,
+} from "./services/inbox-dock-badge-main.js";
+import { chatReadMarkers } from "./services/chat-read-markers-main.js";
+import { forgetChatInboxState } from "./services/chat-application-service.js";
 import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
 import { externalUrl } from "./services/browser/core.js";
@@ -119,6 +127,7 @@ import { displayImageArtifactStore } from "./services/display-image-artifact-sto
 import { toolOutputStore } from "./services/tool-output-store.js";
 import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
 import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.js";
+import { registerChatAttachmentProtocol } from "./services/chat-attachment-protocol.js";
 import { createMainVisualSnapshotQueue } from "./services/visual-snapshot-main.js";
 import { disposeVisualSnapshots, installVisualSnapshotQueue } from "./services/visual-snapshot-service.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
@@ -128,7 +137,7 @@ import { startDesignStudio } from "./services/design/startup-core.js";
 import { createImagesRuntime } from "./services/create-images/main.js";
 import { ImageQuitCoverage, imageRunsAllowQuit } from "./services/create-images/quit-confirm-core.js";
 import { registerStudioAssetProtocol } from "./services/studio-assets/protocol.js";
-import { startStudioAssets } from "./services/studio-assets/startup-core.js";
+import { installStudioAssetProtocol, startStudioAssets } from "./services/studio-assets/startup-core.js";
 import { studioAssetGrants, studioAssetStore } from "./services/studio-assets/main.js";
 import { subagentRunStore } from "./services/subagents/subagent-run-store.js";
 import { flushSubagentRuntimeDiagnostics } from "./services/subagents/subagent-runtime-diagnostics.js";
@@ -187,7 +196,7 @@ import {
 import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { destroyPill } from "./windows/pill-window.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
-import { shutdownFollowThrough, startFollowThrough } from "./services/follow-through/follow-through-main.js";
+import { backgroundJobs, reapFollowThroughProcesses, shutdownFollowThrough, startFollowThrough } from "./services/follow-through/follow-through-main.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 import { removeWorkspaceArtifacts } from "./services/workspace-artifacts/main.js";
 
@@ -213,11 +222,19 @@ let resolveShortcutInitialization: (() => void) | null = null;
 const shortcutInitializationPromise = new Promise<void>((resolve) => {
   resolveShortcutInitialization = resolve;
 });
+/** Which renderer surfaces hold the unsaved or saving work, as the renderer's close guard reports them. */
+interface CloseGuardSources {
+  dirty: readonly string[];
+  saving: readonly string[];
+  /** The image workflow's title, while it is unsaved or saving. */
+  imagesLabel?: string;
+}
 let closeGuard = {
   dirty: false,
   gitBusy: false,
   path: undefined as string | undefined,
   saving: false,
+  sources: undefined as CloseGuardSources | undefined,
 };
 let protectedAction: "close" | "quit" | "reload" | "onboarding-reset" | null =
   null;
@@ -308,11 +325,21 @@ function confirmProtectedAction(
     });
     return false;
   }
+  // The Files editor reports no sources through the IPC path; without them it is the editor.
+  const sources = closeGuard.sources;
+  const imagesSaving = sources?.saving.includes("images") === true;
+  const editorSaving = sources ? sources.saving.includes("editor") : true;
+  const imagesDirty = sources?.dirty.includes("images") === true;
+  const editorDirty = sources ? sources.dirty.includes("editor") || !imagesDirty : true;
+  const workflow = sources?.imagesLabel
+    ? `the image workflow “${sources.imagesLabel}”`
+    : "the image workflow";
   if (closeGuard.saving) {
+    const imagesOnly = imagesSaving && !editorSaving;
     dialog.showMessageBoxSync(window, {
       type: "info",
-      title: "File save in progress",
-      message: `Wait for the open file to finish saving before ${action === "close" ? "closing Aiden" : "reloading"}.`,
+      title: imagesOnly ? "Image workflow save in progress" : "File save in progress",
+      message: `Wait for ${imagesOnly ? workflow : "the open file"} to finish saving before ${action === "close" ? "closing Aiden" : "reloading"}.`,
       buttons: ["Keep Aiden Open"],
       defaultId: 0,
       cancelId: 0,
@@ -321,21 +348,25 @@ function confirmProtectedAction(
     return false;
   }
   if (!closeGuard.dirty) return true;
+  const file = closeGuard.path ? `“${closeGuard.path}”` : "The open file";
+  const imagesOnly = imagesDirty && !editorDirty;
   const response = dialog.showMessageBoxSync(window, {
     type: "warning",
-    title: "Discard unsaved edits?",
-    message: closeGuard.path
-      ? `“${closeGuard.path}” has edits that have not been saved.`
-      : "The open file has edits that have not been saved.",
+    title: imagesOnly ? "Discard unsaved changes?" : "Discard unsaved edits?",
+    message: imagesOnly
+      ? `${workflow.charAt(0).toUpperCase()}${workflow.slice(1)} has changes that have not been saved.`
+      : imagesDirty
+        ? `${file} and ${workflow} have edits that have not been saved.`
+        : `${file} has edits that have not been saved.`,
     detail:
       action === "close"
-        ? "Closing Aiden will permanently discard those edits."
-        : "Reloading Aiden will permanently discard those edits.",
+        ? `Closing Aiden will permanently discard those ${imagesOnly ? "changes" : "edits"}.`
+        : `Reloading Aiden will permanently discard those ${imagesOnly ? "changes" : "edits"}.`,
     buttons: [
       "Keep Editing",
       action === "close"
-        ? "Discard Edits and Close"
-        : "Discard Edits and Reload",
+        ? imagesOnly ? "Discard Changes and Close" : "Discard Edits and Close"
+        : imagesOnly ? "Discard Changes and Reload" : "Discard Edits and Reload",
     ],
     defaultId: 0,
     cancelId: 0,
@@ -364,6 +395,8 @@ function cleanupApplication(): void {
   formFillRuntime.dispose();
   computerUseStatus.invalidate();
   scheduleService.stop();
+  stopChatTriage();
+  stopInboxDockBadge();
   llmClient.abortAll();
   void geminiLiveService.shutdown();
   telegramService.stop();
@@ -403,7 +436,9 @@ const SHUTDOWN_BUDGET_MS = {
   subagentRunStore: 3_000,
   terminalHistory: 2_000,
   designWork: 2_000,
-  imageRuns: 2_000,
+  // ImageRunCoordinator.shutdown(): 1.5 s for in-flight requests to settle, then up to
+  // 3 s for background auto-saves to finish before the run ledger closes.
+  imageRuns: 5_000,
   studioAssets: 2_000,
   browser: 3_000,
   botComputers: 5_000,
@@ -762,7 +797,10 @@ async function refreshCloseGuardFromRenderer(
           dirty: document.documentElement.dataset.aidenDirty === "1",
           gitBusy: document.documentElement.dataset.aidenGitBusy === "1",
           revision: Number(document.documentElement.dataset.aidenGuardRevision || "0"),
-          saving: document.documentElement.dataset.aidenSaving === "1"
+          saving: document.documentElement.dataset.aidenSaving === "1",
+          dirtySources: document.documentElement.dataset.aidenDirtySources ?? "",
+          savingSources: document.documentElement.dataset.aidenSavingSources ?? "",
+          imagesLabel: document.documentElement.dataset.aidenImagesLabel ?? ""
         };
       })()`,
     )) as {
@@ -770,12 +808,26 @@ async function refreshCloseGuardFromRenderer(
       gitBusy?: unknown;
       revision?: unknown;
       saving?: unknown;
+      dirtySources?: unknown;
+      savingSources?: unknown;
+      imagesLabel?: unknown;
     };
+    const sourceList = (value: unknown) =>
+      typeof value === "string" && value.length <= 256 ? value.split(" ").filter(Boolean) : [];
+    const imagesLabel =
+      typeof latest?.imagesLabel === "string" && latest.imagesLabel.length > 0 && latest.imagesLabel.length <= 200
+        ? latest.imagesLabel
+        : undefined;
     closeGuard = {
       dirty: latest?.dirty === true,
       gitBusy: latest?.gitBusy === true,
       path: closeGuard.path,
       saving: latest?.saving === true,
+      sources: {
+        dirty: sourceList(latest?.dirtySources),
+        saving: sourceList(latest?.savingSources),
+        ...(imagesLabel ? { imagesLabel } : {}),
+      },
     };
     return Number.isSafeInteger(latest?.revision) &&
       Number(latest.revision) >= 0
@@ -1004,6 +1056,7 @@ async function requestWindowReload(
       gitBusy: false,
       path: undefined,
       saving: false,
+      sources: undefined,
     };
     protectedAction = "reload";
     if (options.ignoreCache) window.webContents.reloadIgnoringCache();
@@ -1236,6 +1289,8 @@ ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
         ? input.path
         : undefined,
     saving: input.saving === true,
+    // The renderer's own close-guard read (just before any prompt) supplies the sources.
+    sources: closeGuard.sources,
   };
   return true;
 });
@@ -1447,6 +1502,14 @@ ipcMain.handle("app:setDockIcon", async (event, value: unknown) => {
   if (value !== "aiden" && value !== "monochrome")
     throw new Error("Invalid Dock icon preference.");
   return applyDockIconPreference(value);
+});
+
+// The Inbox switch and view, reported by the main window only.
+registerInboxDockBadgeIpc({
+  isMainWindow: (event) =>
+    !!mainWindow &&
+    !mainWindow.isDestroyed() &&
+    event.sender.id === mainWindow.webContents.id,
 });
 
 function openExternalUrl(value: string): void {
@@ -1757,6 +1820,7 @@ async function createMainWindow(
       gitBusy: false,
       path: undefined,
       saving: false,
+      sources: undefined,
     };
     protectedAction = null;
   });
@@ -2248,6 +2312,12 @@ if (!ownsSingleInstanceLock) {
       ) {
         app.dock?.setBadge("DEV");
       }
+      // Inbox snoozes: one timer for the next wake, plus the early wake when
+      // a run needs an approval, an answer, or fails. Local only.
+      startChatTriage();
+      // The Inbox's Needs you count on the Dock tile (or Linux launcher), from
+      // local state and paired hosts' cached feeds. No polling, no network.
+      startInboxDockBadge({ packaged: isPackagedRuntime() });
       // Local-only housekeeping for on-device speech storage; no network.
       void prepareLocalSpeechStorage().catch((error: unknown) => {
         logger.warn("local-speech", `Speech storage cleanup failed: ${String(error)}`);
@@ -2282,6 +2352,14 @@ if (!ownsSingleInstanceLock) {
       nativeTheme.themeSource = normalizeAppearanceConfig(
         (await configStore.getSettings()).appearance,
       ).mode;
+      // Before the window loads: a document only gets the custom-scheme image
+      // loaders that exist when it commits. The store itself opens below.
+      installStudioAssetProtocol({
+        enabled: studioAssetsEnabled(),
+        store: studioAssetStore,
+        grants: studioAssetGrants,
+        registerProtocol: registerStudioAssetProtocol,
+      });
       initialMainWindow = createMainWindow({ startupAdmissionHeld: true });
       // Observed below after reconciliation; never an unhandled rejection.
       initialMainWindow.catch(() => undefined);
@@ -2311,6 +2389,9 @@ if (!ownsSingleInstanceLock) {
       await displayImageArtifactStore.initialize();
       await generativeUiArtifactStore.initialize();
       registerGenerativeUiProtocol();
+      registerChatAttachmentProtocol();
+      // Remove picture files left behind by chats deleted while Aiden was closed.
+      chatStore.scheduleImageSweep();
       // Phones and other clients that cannot draw a visual get its snapshot.
       installVisualSnapshotQueue(
         createMainVisualSnapshotQueue({
@@ -2321,8 +2402,6 @@ if (!ownsSingleInstanceLock) {
       await startStudioAssets({
         enabled: studioAssetsEnabled(),
         store: studioAssetStore,
-        grants: studioAssetGrants,
-        registerProtocol: registerStudioAssetProtocol,
         onError: (error) =>
           logger.warn(
             "studio",
@@ -2376,6 +2455,11 @@ if (!ownsSingleInstanceLock) {
         });
       }, 60 * 60 * 1_000);
       toolOutputCleanup.unref();
+      // Stop prior-session shells before startup removes chats or worktrees.
+      const processRecoveryReady = await reapFollowThroughProcesses().then(() => true, (error: unknown) => {
+        logger.warn("background-jobs", "Could not finish recovery of prior-session processes.", error);
+        return false;
+      });
       await reconcilePendingChatDeletions(subagentRunStore, async (chatId) => {
         await toolOutputStore.deleteByChat(chatId);
         if (displayImageArtifactAvailability.available) {
@@ -2387,6 +2471,11 @@ if (!ownsSingleInstanceLock) {
         await piRuntimeEffectStore.deleteChat(chatId);
         await piCompactionSessionStore.deleteChat(chatId);
         await chatStore.remove(chatId);
+        // The same Inbox cleanup the live delete runs: no snooze or pin is left
+        // behind for a chat whose delete a crash cut short.
+        await forgetChatInboxState({ readMarkers: chatReadMarkers, triage: chatTriage }, chatId, (area, message, error) =>
+          logger.warn(area, message, error),
+        );
       });
       // After deletions settle and before any renderer draft exists.
       await workspaceApplicationService.prepareNoWorkspaceChats().catch((error: unknown) => {
@@ -2511,8 +2600,11 @@ if (!ownsSingleInstanceLock) {
             managed.ownershipToken,
           );
         },
-        blockWorkspace: (workspaceId) =>
-          scheduleService.cancelWorkspace(workspaceId),
+        blockWorkspace: async (workspaceId) => {
+          await scheduleService.cancelWorkspace(workspaceId);
+          if (!processRecoveryReady) throw new Error("Background process recovery did not finish.");
+          await backgroundJobs.stopWorkspace(workspaceId, "access-changed");
+        },
         deleteWorktree: async (workspace) => {
           const managed = workspace.managedWorktree!;
           await gitDeleteManagedWorktree(
@@ -2654,6 +2746,12 @@ if (!ownsSingleInstanceLock) {
       app.on("browser-window-focus", () => focusConfigRefresh.trigger());
       powerMonitor.on("resume", () => void portableConfigWatcher.refresh());
 
+      // Restore follows and checks before any local or
+      // remote caller can start work and write this launch’s records.
+      if (shutdownHasBegun()) return;
+      await startFollowThrough().catch((error: unknown) => {
+        logger.warn("follow-through", "Could not finish restoring checks and pull request follows.", error);
+      });
       try {
         if (!shutdownHasBegun()) await initializeAidenRemoteService();
       } catch (error) {
@@ -2698,10 +2796,6 @@ if (!ownsSingleInstanceLock) {
         );
       }
       if (shutdownHasBegun()) return;
-      // Followed pull requests and done-when checks resume; jobs a crash left behind stop.
-      await startFollowThrough().catch((error: unknown) =>
-        logger.error("follow-through", "Follow-through state could not be restored.", error),
-      );
       // Telegram restoration is optional to desktop availability. Bot-bound
       // routes independently revalidate their exact managed home and access
       // policy before queue admission whenever the binding store is healthy.

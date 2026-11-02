@@ -5466,6 +5466,51 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testStopDropsTheUploadInFlightButKeepsWhatAlreadyReachedTheMac() async throws {
+        let model = try await makeProgressLifecycleModel(mode: .denied)
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        await model.load(observeProgress: false)
+        let secondArrived = expectation(description: "the second upload reached the Mac")
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            guard request.httpMethod == "POST", request.url?.path.hasSuffix("/attachments") == true else { return nil }
+            let count = AidenChatProgressLifecycleURLProtocol.uploadRequestCount
+            // The first upload is staged; the second waits on the Mac until Stop.
+            if count == 2 {
+                AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/attachments") { secondArrived.fulfill() }
+            }
+            return (201, "application/json", try! JSONSerialization.data(withJSONObject: [
+                "id": "att_" + String(repeating: count == 1 ? "a" : "b", count: 43),
+                "name": "file-\(count).txt", "mimeType": "text/plain", "kind": "text", "size": 1,
+                "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(3_600)),
+            ]))
+        }
+        defer { AidenChatProgressLifecycleURLProtocol.releaseHeldRequest() }
+
+        let uploading = Task {
+            await model.upload([
+                .text(name: "file-1.txt", mimeType: "text/plain", text: "1"),
+                .text(name: "file-2.txt", mimeType: "text/plain", text: "2"),
+                .text(name: "file-3.txt", mimeType: "text/plain", text: "3"),
+            ])
+        }
+        await fulfillment(of: [secondArrived], timeout: 5)
+        XCTAssertEqual(model.uploadProgress?.title, "Sending 2 of 3")
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["file-1.txt"])
+
+        model.cancelUploads()
+        _ = await uploading.value
+
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["file-1.txt"], "what reached the Mac stays ready to send")
+        XCTAssertNil(model.uploadProgress, "the bar goes away")
+        XCTAssertFalse(model.isUploadingAttachment)
+        XCTAssertNil(model.presentedError, "Stop is not a failure")
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.uploadRequestCount, 2, "the third file never left the phone")
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 0, "Stop doesn't take the staged file off the Mac")
+        XCTAssertTrue(model.canSend, "the staged file can still be sent")
+        model.setAllowsMutations(false)
+    }
+
+    @MainActor
     func testRemovalCancelsOwnedUploadAndRejectsHeldImageCompletion() async throws {
         try await assertRemovalJoinsUploadCleanup()
     }
@@ -7399,20 +7444,145 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenRelativeTimestamp.text(for: now.addingTimeInterval(30), now: now), "just now")
     }
 
-    func testNewAgentPopoverKeepsTheThreeReviewedWorkspaceChoices() {
+    func testNewAgentPopoverOffersNoWorkspaceOnlyWhenTheMacHasAChatsHome() {
         XCTAssertEqual(
-            AidenNewAgentChoice.allCases,
+            AidenNewAgentChoice.available(noWorkspace: false),
             [.existingWorkspace, .newWorkspace, .scratchWorkspace]
         )
         XCTAssertEqual(
-            AidenNewAgentChoice.allCases.map(\.title),
-            ["Existing Workspace", "New Workspace", "Managed Scratch Workspace"]
-        )
-        XCTAssertEqual(
-            AidenNewAgentChoice.allCases.map(\.symbol),
-            ["folder", "folder.badge.plus", "hammer.fill"]
+            AidenNewAgentChoice.available(noWorkspace: true),
+            [.noWorkspace, .existingWorkspace, .newWorkspace, .scratchWorkspace]
         )
         XCTAssertTrue(AidenNewAgentChoice.allCases.allSatisfy { !$0.detail.isEmpty })
+    }
+
+    func testChatsWithoutAWorkspaceShareOneChatsSectionOnTheirHome() throws {
+        let base = Date(timeIntervalSince1970: 1_000)
+        func record(_ id: String, created: TimeInterval, noWorkspace: Bool = false) -> AidenWorkspace {
+            AidenWorkspace(
+                id: id,
+                name: noWorkspace ? "No workspace" : id.capitalized,
+                permission: .ask,
+                hasFolder: true,
+                isManagedWorktree: false,
+                noWorkspace: noWorkspace,
+                branchName: nil,
+                repositoryName: nil,
+                git: nil,
+                createdAt: base.addingTimeInterval(created),
+                updatedAt: base.addingTimeInterval(created),
+                revision: "\(id)-r1"
+            )
+        }
+        func chat(_ id: String, in workspaceId: String, updated: TimeInterval) -> AidenChat {
+            AidenChat(
+                id: id,
+                workspaceId: workspaceId,
+                title: id,
+                providerId: nil,
+                modelId: nil,
+                messages: [],
+                createdAt: base,
+                updatedAt: base.addingTimeInterval(updated),
+                revision: "\(id)-r1"
+            )
+        }
+        let workspaces = [
+            record("project", created: 0),
+            record("hidden-later", created: 30, noWorkspace: true),
+            record("hidden-first", created: 10, noWorkspace: true),
+        ]
+        XCTAssertEqual(AidenNoWorkspace.home(in: workspaces)?.id, "hidden-first", "the oldest stands for the group")
+        XCTAssertEqual(
+            AidenNoWorkspace.home(in: workspaces + [record("default", created: 50, noWorkspace: true)])?.id,
+            "default",
+            "the long-lived default home wins"
+        )
+        XCTAssertEqual(AidenNoWorkspace.choices(workspaces).map(\.id), ["project"])
+        // A scheduled task that already runs in a hidden folder keeps it as a choice while edited.
+        XCTAssertEqual(
+            AidenNoWorkspace.choices(workspaces, keeping: "hidden-later").map(\.id),
+            ["project", "hidden-later"]
+        )
+
+        let projection = AidenWorkspaceSidebarProjection.make(
+            workspaces: workspaces,
+            chats: [
+                chat("soup", in: "hidden-later", updated: 40),
+                chat("trip", in: "hidden-first", updated: 20),
+                chat("fix", in: "project", updated: 5),
+            ],
+            searchText: ""
+        )
+        XCTAssertEqual(projection.sections.map(\.workspace.id), ["hidden-first", "project"])
+        XCTAssertEqual(projection.sections[0].workspace.name, "Chats")
+        XCTAssertEqual(projection.sections[0].chats.map(\.id), ["soup", "trip"])
+        XCTAssertEqual(projection.sections[1].chats.map(\.id), ["fix"])
+
+        // A Mac before revision 51 marks nothing: every workspace stays its own section.
+        XCTAssertNil(AidenNoWorkspace.home(in: [record("project", created: 0)]))
+
+        // An older build could archive a "No workspace" record; the Chats group has no Unarchive,
+        // so that flag is ignored and its chats stay listed. Archived projects stay archived.
+        XCTAssertEqual(
+            AidenNoWorkspace.unarchived(workspaces, archivedIDs: ["hidden-first", "project"]).map(\.id),
+            ["hidden-later", "hidden-first"]
+        )
+
+        // A link or Shortcut that remembers a hidden folder on a Mac that isn't the active one
+        // finds the Chats entry through the catalog; other ids are left as they are.
+        let catalog = [
+            AidenIntentWorkspaceRecord(id: "hidden-first", instanceId: "other", name: "Chats",
+                                       groupedIDs: ["hidden-first", "hidden-later"]),
+            AidenIntentWorkspaceRecord(id: "project", instanceId: "other", name: "Project"),
+        ]
+        XCTAssertEqual(AidenIntentWorkspaceRecord.listedID(for: "hidden-later", in: catalog), "hidden-first")
+        XCTAssertEqual(AidenIntentWorkspaceRecord.listedID(for: "project", in: catalog), "project")
+        XCTAssertEqual(AidenIntentWorkspaceRecord.listedID(for: "gone", in: catalog), "gone")
+        // A catalog saved by an older build has no grouped ids and still decodes.
+        let older = try JSONDecoder().decode(
+            AidenIntentWorkspaceRecord.self,
+            from: Data(#"{"id":"default","instanceId":"other","name":"No workspace"}"#.utf8)
+        )
+        XCTAssertNil(older.groupedIDs)
+
+        // Recents search matches the label a hidden chat shows ("Chats"), not the record's name.
+        let hiddenChats = [chat("soup", in: "hidden-later", updated: 40), chat("fix", in: "project", updated: 5)]
+        XCTAssertEqual(
+            AidenWorkspaceSidebarProjection.make(workspaces: workspaces, chats: hiddenChats, searchText: "chats").recents.map(\.id),
+            ["soup"]
+        )
+        XCTAssertEqual(
+            AidenWorkspaceSidebarProjection.make(workspaces: workspaces, chats: hiddenChats, searchText: "No workspace").recents.map(\.id),
+            []
+        )
+
+        // A chat another device started in a fresh hidden record is left out until the phone
+        // re-reads its workspaces, and it asks once per such record.
+        let elsewhere = chat("elsewhere", in: "hidden-new", updated: 60)
+        XCTAssertFalse(
+            AidenWorkspaceSidebarProjection.make(workspaces: workspaces, chats: [elsewhere], searchText: "")
+                .recents.contains { $0.id == "elsewhere" }
+        )
+        let chatWorkspaceIDs = ["hidden-later", "project", "hidden-new"]
+        XCTAssertEqual(
+            AidenNoWorkspace.unlistedWorkspaceIDs(chatWorkspaceIDs: chatWorkspaceIDs, in: workspaces, alreadyReRead: []),
+            ["hidden-new"]
+        )
+        XCTAssertEqual(
+            AidenNoWorkspace.unlistedWorkspaceIDs(chatWorkspaceIDs: chatWorkspaceIDs, in: workspaces, alreadyReRead: ["hidden-new"]),
+            []
+        )
+        let reRead = workspaces + [record("hidden-new", created: 60, noWorkspace: true)]
+        XCTAssertEqual(
+            AidenNoWorkspace.unlistedWorkspaceIDs(chatWorkspaceIDs: chatWorkspaceIDs, in: reRead, alreadyReRead: []),
+            []
+        )
+        XCTAssertEqual(
+            AidenWorkspaceSidebarProjection.make(workspaces: reRead, chats: [elsewhere], searchText: "")
+                .sections.first?.chats.map(\.id),
+            ["elsewhere"]
+        )
     }
 
     func testProviderIconResolverMatchesDesktopAliasesAndFallbackRules() {
@@ -11845,70 +12015,7 @@ final class AidenAppearanceTests: XCTestCase {
         )
     }
 
-    func testNeedsAttentionChatsSortAboveNewerWorkingAndIdleChats() {
-        let newestFirst = [
-            attentionSummary("idle-newest", updated: 50),
-            attentionSummary("running", updated: 40, active: true, rowState: .working),
-            attentionSummary("idle-middle", updated: 30),
-            attentionSummary("question", updated: 20, active: true, rowState: .needsInput),
-            attentionSummary("approval", updated: 10, active: true, rowState: .needsApproval),
-        ]
-
-        XCTAssertEqual(
-            aidenNeedsAttentionFirst(newestFirst).map(\.id),
-            ["approval", "question", "running", "idle-newest", "idle-middle"]
-        )
-    }
-
-    func testNeedsAttentionOrderingKeepsIncomingOrderWithinATier() {
-        // Older Macs send no row state; an active chat still counts as working.
-        let newestFirst = [
-            attentionSummary("idle-c", updated: 30),
-            attentionSummary("run-b", updated: 25, active: true),
-            attentionSummary("idle-b", updated: 20),
-            attentionSummary("run-a", updated: 15, active: true, rowState: .working),
-            attentionSummary("idle-a", updated: 10),
-        ]
-
-        XCTAssertEqual(
-            aidenNeedsAttentionFirst(newestFirst).map(\.id),
-            ["run-b", "run-a", "idle-c", "idle-b", "idle-a"]
-        )
-    }
-
-    func testUnseenFailuresSortBetweenChatsNeedingTheUserAndWorkingChats() {
-        var seenFailure = attentionSummary("seen-failure", updated: 40)
-        seenFailure.lastRunFailed = true
-        var unseenFailure = attentionSummary("unseen-failure", updated: 30)
-        unseenFailure.unread = true
-        unseenFailure.lastRunFailed = true
-        var unreadReply = attentionSummary("unread-reply", updated: 25)
-        unreadReply.unread = true
-        let newestFirst = [
-            attentionSummary("idle-newest", updated: 60),
-            attentionSummary("running", updated: 50, active: true, rowState: .working),
-            seenFailure,
-            unseenFailure,
-            unreadReply,
-            attentionSummary("question", updated: 20, active: true, rowState: .needsInput),
-        ]
-
-        XCTAssertEqual(
-            aidenNeedsAttentionFirst(newestFirst).map(\.id),
-            ["question", "unseen-failure", "running", "idle-newest", "seen-failure", "unread-reply"]
-        )
-    }
-
-    func testStaleAttentionStateOnIdleChatDoesNotJumpTheQueue() {
-        let newestFirst = [
-            attentionSummary("newer", updated: 20),
-            attentionSummary("stale-approval", updated: 10, active: false, rowState: .needsApproval),
-        ]
-
-        XCTAssertEqual(aidenNeedsAttentionFirst(newestFirst).map(\.id), ["newer", "stale-approval"])
-    }
-
-    func testWorkspaceSidebarSurfacesAttentionFirstWithoutReorderingWorkspaces() {
+    func testWorkspaceAndRecentSidebarsSortPlainlyByRecencyAsOnTheDesktop() {
         let base = Date(timeIntervalSince1970: 1_000)
         let workspaces = ["alpha", "beta"].map { id in
             AidenWorkspace(
@@ -11938,14 +12045,15 @@ final class AidenAppearanceTests: XCTestCase {
             searchText: ""
         )
 
-        // Workspaces stay ordered by their newest activity, not by attention.
+        // Attention ordering belongs to the Inbox; By workspace and Recent
+        // keep newest first, and workspaces follow their newest activity.
         XCTAssertEqual(projection.sections.map(\.workspace.id), ["alpha", "beta"])
         XCTAssertEqual(projection.sections[0].newestActivityAt, base.addingTimeInterval(100))
-        XCTAssertEqual(projection.sections[0].chats.map(\.id), ["alpha-approval", "alpha-newest"])
-        XCTAssertEqual(projection.sections[1].chats.map(\.id), ["beta-working", "beta-idle"])
+        XCTAssertEqual(projection.sections[0].chats.map(\.id), ["alpha-newest", "alpha-approval"])
+        XCTAssertEqual(projection.sections[1].chats.map(\.id), ["beta-idle", "beta-working"])
         XCTAssertEqual(
             projection.recents.map(\.id),
-            ["alpha-approval", "beta-working", "alpha-newest", "beta-idle"]
+            ["alpha-newest", "beta-idle", "beta-working", "alpha-approval"]
         )
     }
 
@@ -11960,10 +12068,21 @@ final class AidenAppearanceTests: XCTestCase {
         store.setWorkspaceSidebarOrganization(.recent, for: "mac-one")
         store.toggleExpandedSidebarWorkspace("alpha", for: "mac-one")
         store.toggleExpandedSidebarWorkspace("beta", for: "mac-two")
+        store.setWorkspaceSidebarOrganization(.inbox, for: "mac-three")
 
         let restored = AidenProductNavigationStore(defaults: defaults)
         XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-one"), .recent)
         XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-two"), .workspace)
+        XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-three"), .inbox)
+        // Each Mac's sidebar header names the organization it restored; only Inbox is Beta.
+        XCTAssertEqual(
+            ["mac-one", "mac-two", "mac-three"].map { restored.workspaceSidebarOrganization(for: $0).title },
+            ["Recents", "Workspaces", "Inbox"]
+        )
+        XCTAssertEqual(
+            ["mac-one", "mac-two", "mac-three"].map { restored.workspaceSidebarOrganization(for: $0).isBeta },
+            [false, false, true]
+        )
         XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-one"), ["alpha"])
         XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-two"), ["beta"])
 
@@ -11975,6 +12094,28 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-one"), .workspace)
         XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-one"), [])
         XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-two"), ["beta"])
+    }
+
+    @MainActor
+    func testASidebarViewThisBuildDoesNotKnowDropsOnlyThatMacsChoice() throws {
+        let suiteName = "AidenWorkspaceSidebarTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        // As a newer build might save it: one Mac on a view this build lacks.
+        let saved = #"""
+        {"areasByInstance":{"mac-one":"workspaces"},"selectedWorkspaceByInstance":{"mac-one":"alpha"},
+         "compactWorkspacePathByInstance":{},"compactBotPathByInstance":{},
+         "workspaceSidebarOrganizationsByInstance":{"mac-one":"recent","mac-two":"kanban"},
+         "expandedSidebarWorkspaceIDsByInstance":{"mac-one":["alpha"]}}
+        """#
+        defaults.set(Data(saved.utf8), forKey: "aiden.product-navigation.v1")
+
+        let store = AidenProductNavigationStore(defaults: defaults)
+
+        XCTAssertEqual(store.workspaceSidebarOrganization(for: "mac-one"), .recent)
+        XCTAssertEqual(store.workspaceSidebarOrganization(for: "mac-two"), .workspace)
+        XCTAssertEqual(store.expandedSidebarWorkspaceIDs(for: "mac-one"), ["alpha"])
+        XCTAssertEqual(store.selectedWorkspace(for: "mac-one"), "alpha", "The rest of the snapshot survives.")
     }
 
     func testWorkspaceSelectionSurvivesAdaptiveLayoutChangesAndReconcilesCRUD() {
@@ -11994,6 +12135,40 @@ final class AidenAppearanceTests: XCTestCase {
             "Removing the selected workspace should converge on an available detail"
         )
         XCTAssertNil(AidenWorkspaceNavigation.reconciledSelection(current: selected, workspaceIDs: []))
+    }
+
+    func testSplitViewSelectsTheChatsHomeOnlyWhileOneOfItsChatsIsOpen() {
+        let base = Date(timeIntervalSince1970: 1_000)
+        func workspace(_ id: String, noWorkspace: Bool = false) -> AidenWorkspace {
+            AidenWorkspace(
+                id: id,
+                name: noWorkspace ? "No workspace" : id.capitalized,
+                permission: .ask,
+                hasFolder: true,
+                isManagedWorktree: false,
+                noWorkspace: noWorkspace,
+                branchName: nil,
+                repositoryName: nil,
+                git: nil,
+                createdAt: base,
+                updatedAt: base,
+                revision: "\(id)-r1"
+            )
+        }
+        // The Mac lists its seeded hidden home first.
+        let workspaces = [workspace("default", noWorkspace: true), workspace("hidden-2", noWorkspace: true), workspace("project")]
+
+        let idle = AidenWorkspaceNavigation.selectableIDs(workspaces, openChatWorkspaceID: nil)
+        XCTAssertEqual(idle, ["project"])
+        XCTAssertEqual(
+            AidenWorkspaceNavigation.reconciledSelection(current: "default", workspaceIDs: idle),
+            "project",
+            "with no Chats chat open, a hidden selection falls to a workspace that has a page"
+        )
+
+        let chatOpen = AidenWorkspaceNavigation.selectableIDs(workspaces, openChatWorkspaceID: "hidden-2")
+        XCTAssertEqual(chatOpen, ["default", "project"], "an open chat in any hidden folder keeps the Chats home")
+        XCTAssertEqual(AidenWorkspaceNavigation.reconciledSelection(current: "default", workspaceIDs: chatOpen), "default")
     }
 
     func testCompactWorkspacePathPreservesOnlyAnAvailableDestination() {
