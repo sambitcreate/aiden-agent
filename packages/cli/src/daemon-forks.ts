@@ -4,7 +4,7 @@ import { rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
-import { parseAttachments } from "../../../main/services/attachment-contract.js";
+import { parseAttachments, withReadableImages } from "../../../main/services/attachment-contract.js";
 import { createChatForkService } from "../../../main/services/chat-fork-service.js";
 import type { ChatMessage } from "../../../main/services/types.js";
 import type { createDaemonChats } from "./daemon-chats.ts";
@@ -17,7 +17,7 @@ function journalMessage(message: ChatMessage): Message {
       api: "openai-completions", provider: "forked", model: message.model ?? "forked", stopReason: "stop",
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
   }
-  const attachments = parseAttachments(message.attachments ?? []) ?? [];
+  const attachments = parseAttachments(withReadableImages(message.attachments)) ?? [];
   return { role: "user", timestamp: message.createdAt, content: [{ type: "text", text: message.content }, ...attachments.map((attachment) => attachment.kind === "image" && attachment.data
     ? { type: "image" as const, data: attachment.data, mimeType: attachment.mimeType }
     : { type: "text" as const, text: `Attachment: ${attachment.name}\n${attachment.text ?? ""}` })] };
@@ -42,7 +42,10 @@ export function createCliChatForks(daemon: ReturnType<typeof createDaemonChats>,
         const file = daemon.sessionPath(input.targetChatId);
         // Each turn opens the journal with the workspace folder as its cwd.
         const manager = SessionManager.create(dirname(file), dirname(file));
-        for (const message of input.visible) manager.appendMessage(journalMessage(message));
+        // The copied history names stored images by hash; the journal needs their bytes.
+        for (const message of await daemon.chatStore.messagesWithImageData(input.visible)) {
+          manager.appendMessage(journalMessage(message));
+        }
         // Pi defers persistence until a reply, so write the seeded journal now.
         mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
         const temporary = `${file}.${randomUUID()}.tmp`;

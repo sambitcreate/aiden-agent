@@ -1,3 +1,4 @@
+import { workspaceIntakeService } from "./workspace-intake-main.js";
 import { mcpLiveStatus } from "./mcp-status-events.js";
 import { remoteAppControls } from "./aiden-remote-app-controls.js";
 import { publishAppControlsChanged } from "./app-controls-events-main.js";
@@ -10,7 +11,7 @@ import { chatReadMarkers, markChatRead } from "./chat-read-markers-main.js";
 import { chatForkService } from "./chat-fork-service-main.js";
 import { forkSummaryService } from "./fork-summary-service-main.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
-import { workspaceFolderMissing } from "./workspace-folder-presence.js";
+import { workspaceFolderRemoteRefusal } from "./workspace-folder-presence.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { buildVisualViewerDocument, type VisualViewerAppearance, type VisualViewerSource } from "./visual-viewer-document.js";
@@ -117,6 +118,8 @@ import { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
 import { usageStore } from "./usage-store.js";
 import { spending } from "./spending-main.js";
 import { AidenRemoteSpendingService } from "./aiden-remote-spending.js";
+import { AidenRemoteBackgroundJobService } from "./aiden-remote-background-jobs.js";
+import { backgroundJobs } from "./follow-through/follow-through-main.js";
 import { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import { scheduledTaskApplicationService } from "./scheduled-task-application-service-main.js";
 import { botStore } from "./bot-store.js";
@@ -414,6 +417,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     providers: AidenRemoteProviderService;
     memorySettings: AidenRemoteMemorySettingsService;
     spending: AidenRemoteSpendingService;
+    backgroundJobs?: AidenRemoteBackgroundJobService;
     usage: typeof usageStore;
     speech: AidenRemoteSpeechService;
     readAloud: AidenRemoteTtsService;
@@ -604,9 +608,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 device.capabilities.includes("questions:respond")
               );
             },
-            workspaceFolderMissing: async (workspaceId) => {
+            workspaceFolderRefusal: async (workspaceId) => {
               const workspace = await configStore.getWorkspace(workspaceId);
-              return workspace !== undefined && (await workspaceFolderMissing(workspace));
+              return workspace ? workspaceFolderRemoteRefusal(workspace) : undefined;
             },
             deviceSupportsSkillInvocation: async (deviceId) => {
               const device = (await state.snapshot()).devices.find(
@@ -1117,6 +1121,15 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 await bots.bot(botId);
               },
             }),
+            // Background jobs run on the Mac and Linux desktop; phones list and stop them.
+            ...(hostPlatformCapabilities().backgroundJobs
+              ? {
+                  backgroundJobs: new AidenRemoteBackgroundJobService({
+                    list: (chatId) => backgroundJobs.list(chatId),
+                    stop: (chatId, jobId) => backgroundJobs.stop(chatId, jobId, "person"),
+                  }),
+                }
+              : {}),
             usage: usageStore,
             speech,
             readAloud,
@@ -1131,6 +1144,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             hostRuns,
             settle: () => { readAloud.suspend(); return streams.settlePersistence(); },
             workspaces: new AidenRemoteWorkspaceService({
+              clone: workspaceIntakeService.clone,
               application: workspaceApplicationService,
               browser: workspaceBrowser,
               idempotency,

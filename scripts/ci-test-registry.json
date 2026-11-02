@@ -83,6 +83,7 @@
         "main/services/dictation-voice-check.test.ts",
         "main/services/follow-through/background-job-tool.test.ts",
         "main/services/follow-through/background-jobs.test.ts",
+        "main/services/follow-through/listening-ports.test.ts",
         "main/services/follow-through/done-when.test.ts",
         "main/services/follow-through/notice-delivery.test.ts",
         "main/services/follow-through/pull-request-follow-github.test.ts",
@@ -315,6 +316,7 @@
         "main/shared/guards.test.ts",
         "main/shared/path-containment.test.ts",
         "main/shared/redaction.test.ts",
+        "main/shared/process-group.test.ts",
         "main/windows/pill-window-security.test.ts",
         "main/native-ipc-core.test.ts",
         "renderer/shared/images/ports.test.ts",
@@ -341,6 +343,7 @@
         "renderer/shared/image-generation/catalog.test.ts",
         "renderer/shared/image-generation/placeholder-spec.test.ts",
         "main/services/chat-image-actions.test.ts",
+        "main/services/chat-image-storage.test.ts",
         "main/services/openrouter-benchmark.test.ts",
         "main/services/model-pace.test.ts",
         "main/handlers/model-pace.test.ts",
@@ -372,7 +375,12 @@
         "main/services/web-extract-core.test.ts",
         "main/services/web-fetch-transport.test.ts",
         "main/services/web-page-text.test.ts",
-        "main/handlers/web-fetch.test.ts"
+        "main/handlers/web-fetch.test.ts",
+        "main/services/peer-project-source.test.ts",
+        "main/services/peer-project-file-io.test.ts",
+        "main/handlers/peer-project-clone.test.ts",
+        "renderer/shared/peer-project-clone.test.ts",
+        "renderer/main/peer-project-clone-dialog.test.tsx"
       ],
       "preserved": [
         "browser",
@@ -895,7 +903,8 @@
         "renderer/components/image-model-logo.test.tsx",
         "renderer/components/image-generation-placeholder.test.tsx",
         "renderer/components/assistant-image-actions.test.tsx",
-        "renderer/lib/image-dimensions.test.ts",
+        "renderer/shared/image-dimensions.test.ts",
+        "renderer/lib/stored-attachments.test.tsx",
         "renderer/shared/image-placements.test.ts",
         "renderer/components/settings/web-search-key-pool.test.tsx",
         "renderer/components/settings/web-search-settings.test.tsx",
@@ -1256,7 +1265,9 @@
         "renderer/components/settings/web-page-settings.test.tsx",
         "renderer/components/web-extract-recap.test.tsx",
         "renderer/components/chat-approval-card.test.tsx",
-        "renderer/shared/tool-approval-preview.test.ts"
+        "renderer/shared/tool-approval-preview.test.ts",
+        "renderer/lib/work-details.test.ts",
+        "renderer/components/chat-preferences.test.tsx"
       ],
       "preserved": [
         "generative-ui-chromium",

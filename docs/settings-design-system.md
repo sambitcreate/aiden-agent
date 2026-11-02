@@ -27,6 +27,10 @@ Duplicate workspace names receive a short stable ID suffix in both visible and a
 
 `AppearanceConfig.chatWidth` (`narrow`, `default`, `wide`, or `full`; default `default`) is the one Appearance layout preference. `applyAppearanceConfig` writes it to `--chat-content-max-width` (44rem, 52rem, 64rem, or `none`) and `data-chat-width` on the root. Every `.chat-content-column` surface shares that token, so the transcript, pending approvals, the task and subagent row above the composer, and the composer stay aligned. The dock inset still reserves the floating Live button's gutter at Full. Older v1 settings and exports without the field load as Default, and strict parsing rejects unknown values. The control is a four-option radio card group: selection is the label's list-selection fill, never a border, and keyboard focus uses the neutral focus ring. Below 540px of content width it reflows to two columns. `settings-unification.spec.ts` measures the rendered transcript and composer widths for every option and checks that the choice survives a relaunch.
 
+## Window (Linux only)
+
+`AppearanceConfig.linuxTitleBar` (`auto`, `aiden`, or `system`; default `auto`) picks the Linux window frame. Appearance shows a "Window" group with one trailing **Use system title bar** switch only when the host is Linux. `auto` draws Aiden's own title bar (window buttons in the 52px top bar, a ☰ main menu button, no menu bar strip) except on tiling window managers, which get the system title bar. The switch reads `auto` as whatever the running window uses and writes `aiden` or `system`. The frame is chosen when the main window is created, so the description adds "Takes effect the next time you open Aiden." while the saved choice differs from the running window. Older settings without the field load as `auto`, and strict parsing rejects unknown values. `linux-window-controls.spec.ts` checks that the choice is saved and applied after a relaunch.
+
 ## Aiden Live
 
 Settings → Aiden Live opens with an "Availability" group of two trailing switches (not titled "Aiden Live", so the page keeps one heading with that name). `AppSettings.aidenLiveEnabled` (omitted means on) turns the feature off everywhere: the window's Live pill and HUD are not rendered, the `assistant.open` command and shortcut are ignored (so the `/assistant` slash command reports unavailable), any running session is stopped, and the main process refuses `assistant-live:start` with `aiden_live_disabled`. While it is off, the readiness, audio, and actions groups are hidden. `aidenLiveButtonVisible` (omitted means shown) appears only while Live is on and hides just the idle pill. Whenever a session is active, connecting, closing, awaiting approval, or in error, the pill and HUD still render so the user can see and stop it.
@@ -76,3 +80,35 @@ legacy settings). It uses the normal live-preview/save path. This is separate
 from `autoHideComposerContext`, which controls the workspace strip. Hiding the
 meter changes only presentation; Context remains in the workspace launcher and
 the runtime continues context accounting and compaction.
+
+## Work details and busy sends
+
+Appearance → Chat has **Work details** (Compact, Standard, Detailed, Verbose),
+**When to collapse work details** (On completion / On next message), **Open chat
+links in**, and **Send behavior while busy** (Queue / Steer). The work and send
+preferences use `AppearanceConfig.workDetails`, `workDetailsCollapseTiming`, and
+`busySendBehavior`, defaulting to `standard`, `completion`, and `queue` for new and
+legacy v1 settings. They follow live preview and the normal debounced save path.
+
+Compact keeps work behind summary headers. Standard shows a three-row activity
+preview; Detailed opens eligible tool trails; Verbose keeps automatic details
+open in history. On next message retains the latest exchange's work until the
+next committed ordinary prompt, including across reopening the chat. Reasoning is
+not part of these modes: it stays the steady one-line Thinking row that only the
+reader opens, so the transcript does not jump while a model thinks. Manual
+opens/closes win over automatic timing. Completed work never keeps live shimmer or announcements.
+Answers, visuals, approvals and question recaps keep their normal placement.
+Bot activity availability still follows each Bot's Quiet/Summary/Detailed level;
+the global mode and timing adjust Detailed recaps without adding hidden steps.
+
+The link row edits the same browser-service preference as Settings → Links,
+including Ask each time, Aiden browser and System browser. Local-file checks,
+loopback rules, modifier-click and restricted-content confirmation still apply.
+This preference remains separate from Appearance import/reset.
+
+While busy, Enter and the send pill use the chosen Queue/Steer default, and
+Cmd/Ctrl+Enter uses the other action. The pill's menu can override the default
+for that run; the next idle transition restores the saved default. Unsupported
+Steer uses the Queue affordance. Shift+Enter and idle sends are unchanged. These
+preferences apply to desktop viewers/composers; native phones and the CLI keep
+their existing local behavior, with no Remote wire change.

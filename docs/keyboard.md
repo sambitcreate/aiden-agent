@@ -103,7 +103,10 @@ Profile), **Chat** (model, attach, find, stop and the open chat's actions) and
 its current key, and items that can't run right now (no chat open, nothing to
 stop) are greyed out. These items only show their key: the key itself still
 follows the rules on this page (for example, it doesn't act while you type in
-the terminal). On Linux, `Alt` opens the menu bar.
+the terminal). On Linux with Aiden's own title bar there is no menu bar: the
+main menu button (☰) at the left of the top bar opens the same menus, and their
+keys keep working. With **Settings → Appearance → Window → Use system title
+bar** on, the menu bar comes back and `Alt` opens it.
 
 When first-run setup finishes, the message box has focus, so you can start
 typing straight away.

@@ -236,6 +236,24 @@ test("drops image data for a text-only child without dropping visible prose", ()
   assert.match(JSON.stringify(messages), /brief/u);
 });
 
+test("an image whose stored file is gone is left out instead of refusing the fork", () => {
+  const chat = persistedChat();
+  const image = chat.messages[1]!.attachments![1]! as Record<string, unknown>;
+  delete image.data;
+  Object.assign(image, { sha256: "a".repeat(64), width: 1, height: 1 });
+  const capture = capturePersistedSubagentContext(chat);
+  assert.deepEqual(
+    capture.messages[0]?.attachments?.map((attachment) => attachment.name),
+    ["brief.txt"],
+  );
+  assert.equal(capture.messages[0]?.content, "Use the approved blue palette.");
+
+  // A reference without a valid hash is still corrupt, not a missing file.
+  const forged = persistedChat();
+  delete (forged.messages[1]!.attachments![1]! as Record<string, unknown>).data;
+  assert.throws(() => capturePersistedSubagentContext(forged), /unsupported attachment/u);
+});
+
 test("rejects corrupt or excessive persisted attachments instead of silently forking", () => {
   const badSize = persistedChat();
   badSize.messages[1]!.attachments![1]!.size = 2;

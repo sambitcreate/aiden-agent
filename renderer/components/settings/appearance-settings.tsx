@@ -1,4 +1,5 @@
 import { AppControlSettings } from "./app-control-settings";
+import { LinksSettings } from "./links-settings";
 import * as React from "react";
 import {
   Check,
@@ -12,7 +13,10 @@ import {
   toast,
 } from "../ui";
 import { isInlineVisualsMode, type InlineVisualsMode } from "../../shared/appearance";
+import type { LinuxTitleBarPreference, WindowChrome } from "../../shared/window-chrome";
 import { settingsApi } from "../../lib/ipc";
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { useWindowChrome } from "../../lib/window-chrome";
 import {
   APPEARANCE_CHANGE_EVENT,
   APPEARANCE_INTENT_FAILED_EVENT,
@@ -30,6 +34,9 @@ import {
 } from "../../lib/appearance-runtime";
 import {
   CHAT_WIDTH_OPTIONS,
+  WORK_DETAILS_LABELS,
+  COLLAPSE_TIMING_LABELS,
+  BUSY_SEND_LABELS,
   THEME_PRESETS,
   createDefaultAppearanceConfig,
   getPresetVariant,
@@ -50,6 +57,25 @@ const INLINE_VISUALS_LABELS: Record<InlineVisualsMode, string> = {
   on_request: "Only when I ask",
   off: "Off",
 };
+
+function ChatPreferenceField<Value extends string>({ label, description, value, labels, onChange }: {
+  label: string;
+  description: string;
+  value: Value;
+  labels: Record<Value, string>;
+  onChange(value: Value): void;
+}) {
+  return (
+    <Field label={label} description={description}>
+      <Select value={value} onValueChange={(next) => {
+        if (Object.prototype.hasOwnProperty.call(labels, next)) onChange(next as Value);
+      }}>
+        <SelectTrigger size="small" aria-label={label}><SelectValue>{labels[value]}</SelectValue></SelectTrigger>
+        <SelectContent>{Object.entries<string>(labels).map(([id, text]) => <SelectItem key={id} value={id}>{text}</SelectItem>)}</SelectContent>
+      </Select>
+    </Field>
+  );
+}
 
 type CssProperties = React.CSSProperties & Record<`--${string}`, string>;
 
@@ -258,7 +284,24 @@ function ThemeTileGrid({
   );
 }
 
+/**
+ * Whether the switch shows the system title bar. "auto" follows what this
+ * window resolved to (Aiden's, unless a tiling window manager runs).
+ */
+function usesSystemTitleBar(preference: LinuxTitleBarPreference, current: WindowChrome): boolean {
+  return preference === "auto" ? current === "system" : preference === "system";
+}
+
+function systemTitleBarDescription(preference: LinuxTitleBarPreference, current: WindowChrome): string {
+  const base = "Show your desktop's own title bar and menu bar instead of Aiden's window buttons.";
+  return usesSystemTitleBar(preference, current) === (current === "system")
+    ? base
+    : `${base} Takes effect the next time you open Aiden.`;
+}
+
 export function AppearanceSettings() {
+  const capabilities = useAppCapabilities();
+  const windowChrome = useWindowChrome();
   const [config, setConfig] = React.useState<AppearanceConfig>(() => readCachedAppearance() ?? createDefaultAppearanceConfig());
   const [hydrated, setHydrated] = React.useState(false);
   const [saveError, setSaveError] = React.useState<string | null>(null);
@@ -525,6 +568,25 @@ export function AppearanceSettings() {
       </section>
 
       <FieldSet title="Chat">
+        <ChatPreferenceField
+          label="Work details"
+          description="Choose how much tool activity to show. Verbose keeps it open in history. Thinking always stays one line until you open it."
+          value={config.workDetails} labels={WORK_DETAILS_LABELS}
+          onChange={(workDetails) => update((current) => ({ ...current, workDetails }))}
+        />
+        <ChatPreferenceField
+          label="When to collapse work details"
+          description="Choose when to automatically collapse work previews. Verbose keeps them open; manual choices always take priority."
+          value={config.workDetailsCollapseTiming} labels={COLLAPSE_TIMING_LABELS}
+          onChange={(workDetailsCollapseTiming) => update((current) => ({ ...current, workDetailsCollapseTiming }))}
+        />
+        <LinksSettings embedded />
+        <ChatPreferenceField
+          label="Send behavior while busy"
+          description="Enter and the Send button use this default while a response runs. Cmd/Ctrl+Enter uses the other action. Steer accepts text only."
+          value={config.busySendBehavior} labels={BUSY_SEND_LABELS}
+          onChange={(busySendBehavior) => update((current) => ({ ...current, busySendBehavior }))}
+        />
         <Field label="Show context usage in composer" description="Show the token meter beside your message. Context details remain available in the workspace panel.">
           <Switch checked={config.showComposerContextUsage} onCheckedChange={(checked) => update((current) => ({ ...current, showComposerContextUsage: checked }))} aria-label="Show context usage in composer" />
         </Field>
@@ -547,6 +609,20 @@ export function AppearanceSettings() {
           </Select>
         </Field>
       </FieldSet>
+      {capabilities.platform === "linux" ? (
+        <FieldSet title="Window">
+          <Field
+            label="Use system title bar"
+            description={systemTitleBarDescription(config.linuxTitleBar, windowChrome)}
+          >
+            <Switch
+              checked={usesSystemTitleBar(config.linuxTitleBar, windowChrome)}
+              onCheckedChange={(checked) => update((current) => ({ ...current, linuxTitleBar: checked ? "system" : "aiden" }))}
+              aria-label="Use system title bar"
+            />
+          </Field>
+        </FieldSet>
+      ) : null}
       <section className="appearance-theme-section appearance-layout-section" aria-labelledby="appearance-chat-width-title">
         <h2 id="appearance-chat-width-title">Chat width</h2>
         <p className="appearance-section-description">Sets how wide messages and the composer can grow in the conversation.</p>

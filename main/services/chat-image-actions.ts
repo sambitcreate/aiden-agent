@@ -30,7 +30,10 @@ const EXTENSIONS: Readonly<Record<CanonicalRasterImageMimeType, string>> = {
 };
 
 export interface ChatImageActionDeps {
+  /** The chat as stored; an image may be a file reference instead of carrying its bytes. */
   getChat(chatId: string): Promise<Pick<Chat, "messages"> | null>;
+  /** One stored image's bytes by hash, when the chat keeps images as files. */
+  readImage?(sha256: string, size: number): Promise<Uint8Array | undefined>;
   downloadsDir(): string;
   /** Throws when the bytes cannot be decoded as an image. */
   writeClipboardImage(bytes: Buffer): void;
@@ -103,9 +106,14 @@ export function createChatImageActions(deps: ChatImageActionDeps) {
     for (const message of chat.messages) {
       const attachment = message.attachments?.find((candidate) => candidate.id === ref.attachmentId);
       if (!attachment) continue;
-      if (attachment.kind !== "image" || !attachment.data || !isCanonicalRasterImageMimeType(attachment.mimeType))
-        break;
-      return { attachment, mimeType: attachment.mimeType, bytes: Buffer.from(attachment.data, "base64") };
+      if (attachment.kind !== "image" || !isCanonicalRasterImageMimeType(attachment.mimeType)) break;
+      const bytes = attachment.data
+        ? Buffer.from(attachment.data, "base64")
+        : attachment.sha256 && deps.readImage
+          ? await deps.readImage(attachment.sha256, attachment.size)
+          : undefined;
+      if (!bytes) break;
+      return { attachment, mimeType: attachment.mimeType, bytes: Buffer.from(bytes) };
     }
     throw new Error("This image isn't saved in the chat yet. Try again when the response finishes.");
   }
@@ -148,6 +156,14 @@ export function createChatImageActions(deps: ChatImageActionDeps) {
       }
       return true;
     },
+    /**
+     * The image's base64 bytes, for reusing it in a new message (a fork's
+     * composer). The window otherwise loads stored images by link.
+     */
+    async data(input: unknown): Promise<{ data: string }> {
+      const { bytes } = await image(input);
+      return { data: bytes.toString("base64") };
+    },
     /** Reveals only a file this app session saved. */
     showSaved(input: unknown): true {
       if (typeof input !== "string" || !saved.has(input)) throw new Error("That saved image isn't available.");
@@ -164,4 +180,5 @@ export function registerChatImageActionHandlers(ipc: { handle: Handle }, deps: C
   ipc.handle("chats:saveImageToDownloads", (_event, input) => actions.saveToDownloads(input));
   ipc.handle("chats:copyImage", (_event, input) => actions.copy(input));
   ipc.handle("chats:showSavedImage", (_event, filePath) => actions.showSaved(filePath));
+  ipc.handle("chats:imageData", (_event, input) => actions.data(input));
 }

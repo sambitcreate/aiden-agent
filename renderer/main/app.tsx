@@ -16,6 +16,7 @@ import {
   DISABLED_APP_CAPABILITIES,
   parseAppCapabilities,
 } from "../lib/app-capabilities";
+import { currentWindowChrome } from "../lib/window-chrome";
 
 declare const __APP_DISPLAY_NAME__: string | undefined;
 
@@ -33,6 +34,8 @@ const unsubscribeCodexProviderState = subscribeCodexProviderState(queryClient);
 if (import.meta.hot) import.meta.hot.dispose(unsubscribeCodexProviderState);
 
 document.title = __APP_DISPLAY_NAME__ || document.title;
+// "mac", "aiden" (Linux, Aiden-drawn controls) or "system" (desktop title bar).
+document.documentElement.dataset.windowChrome = currentWindowChrome();
 
 // Get the root element
 const rootElement = document.getElementById("root");

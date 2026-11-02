@@ -14,6 +14,7 @@ import { STREAMING_REVEAL_FADE_MS, STREAMING_REVEAL_RELEASE_MS, STREAMING_REVEAL
 afterEach(() => {
   mock.restoreAll();
   cleanup();
+  localStorage.clear();
   delete document.documentElement.dataset.reduceMotion;
 });
 
@@ -729,4 +730,46 @@ test("links a reparsed reply replaces keep their previews, as the saved reply sh
   assert.equal(previews(view.container), 50);
   view.rerender(transcript({ messages: [prompt, saved], streamingText: null }));
   assert.equal(previews(view.container), fromHistory, "the settled reply shows what history shows");
+});
+
+test("latest work details retain on completion, fold on an admitted prompt, and preserve answer identity", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  installBotTestIpc({ "chats:htmlArtifactSrcdoc": () => new Promise(() => undefined) });
+  localStorage.setItem("aiden-agent.appearance-v1", JSON.stringify({ workDetails: "detailed", workDetailsCollapseTiming: "next-input" }));
+  const completed: GenerationTimeline = {
+    version: 3, generationId: "details-run", status: "completed", startedAt: 1, finishedAt: 2,
+    steps: [{ ...toolStep(0), status: "completed", target: "preferences.json" }],
+  };
+  const saved: ChatMessage = { id: "details-answer", role: "assistant", content: "Preferences checked.", reasoning: "Inspecting the saved preference.", createdAt: 2, timeline: completed };
+  const view = render(transcript({ messages: [prompt, saved], streamingText: null }));
+  const answer = screen.getByText("Preferences checked.");
+  const reasoning = screen.getByRole("button", { name: /Thought|Thinking/u });
+  // Thinking is the steady one-line row in every mode; only the reader opens it.
+  assert.equal(reasoning.getAttribute("aria-expanded"), "false");
+  const activity = view.container.querySelector("details.activity-feed")!;
+  assert.equal(activity.hasAttribute("open"), true);
+  view.rerender(transcript({ messages: [prompt, saved, { id: "next-user", role: "user", content: "Continue", createdAt: 3 }], streamingText: null }));
+  assert.equal(activity.hasAttribute("open"), false);
+  assert.equal(screen.getByText("Preferences checked."), answer);
+  localStorage.clear();
+});
+
+test("a next prompt admitted during handoff folds the old automatic preview once", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  installBotTestIpc({ "chats:htmlArtifactSrcdoc": () => new Promise(() => undefined) });
+  localStorage.setItem("aiden-agent.appearance-v1", JSON.stringify({ workDetails: "detailed", workDetailsCollapseTiming: "next-input" }));
+  const finished: GenerationTimeline = {
+    version: 3, generationId: "handoff-run", status: "completed", startedAt: 1, finishedAt: 2,
+    steps: [{ ...toolStep(0), status: "completed", target: "first.txt" }],
+  };
+  const saved: ChatMessage = { id: "handoff-details", role: "assistant", content: "First answer.", createdAt: 2, timeline: finished };
+  const next: ChatMessage = { id: "handoff-next", role: "user", content: "Next request", createdAt: 3 };
+  const view = render(transcript({ messages: [prompt], streamingText: "First answer.", timeline: finished }));
+  const activity = () => view.container.querySelector("details.activity-feed");
+  assert.equal(activity()?.hasAttribute("open"), true, "Detailed keeps the live exchange's steps open");
+  view.rerender(transcript({ messages: [prompt, saved, next], streamingText: saved.content, timeline: finished, streamComplete: true, persistedHandoffMessageId: saved.id }));
+  assert.equal(activity()?.hasAttribute("open"), false);
+  view.rerender(transcript({ messages: [prompt, saved, next], streamingText: null }));
+  assert.equal(activity()?.hasAttribute("open"), false);
+  localStorage.clear();
 });

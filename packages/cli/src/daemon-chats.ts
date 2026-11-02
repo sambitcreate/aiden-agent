@@ -21,7 +21,7 @@ import type { ChatGenerationOwner } from "../../../main/services/chat-generation
 import type { UsageRequestSource } from "../../../main/services/usage-store-core.js";
 import { ChatTurnAdmission } from "../../../main/services/chat-turn-admission.js";
 import { ChatDeletionGate } from "../../../main/services/chat-deletion-gate.js";
-import { parseAttachments } from "../../../main/services/attachment-contract.js";
+import { parseAttachments, withReadableImages } from "../../../main/services/attachment-contract.js";
 import { createCliModelRuntime } from "./providers.ts";
 import { acquireLease } from "./state.ts";
 import { workspaceStore, accessFor } from "./workspaces.ts";
@@ -53,7 +53,9 @@ export function daemonApprovalSummary(toolName: string, input: unknown): string 
 export function createDaemonChats(agentDir: string) {
   let bots: CliBotGenerationRuntime | undefined;
   const root = join(agentDir, "daemon-chats"); mkdirSync(root, { recursive: true, mode: 0o700 });
-  const chatStore = createChatStore(async () => root);
+  // Picture files of deleted chats are cleaned up a couple of minutes later, and once after start.
+  const chatStore = createChatStore(async () => root, undefined, { imageSweepDelayMs: 2 * 60 * 1000 });
+  chatStore.scheduleImageSweep();
   const activity = new ChatActivityRegistry(() => {});
   const admission = new ChatTurnAdmission();
   const deletion = new ChatDeletionGate();
@@ -270,7 +272,7 @@ export function createDaemonChats(agentDir: string) {
         });
         const input = params.messages.at(-1) ?? chat.messages.at(-1);
         if (!input) throw new Error("A user message is required.");
-        const attachments = parseAttachments(input.attachments ?? []) ?? [];
+        const attachments = parseAttachments(withReadableImages(input.attachments)) ?? [];
         const text = [input.content, ...attachments.filter((item) => item.kind === "image" && !model.input.includes("image")).map((item) => `Attached image: ${visionAttachmentAlias(item)} (${item.name}). Use inspect_image to analyze it.`), ...attachments.filter((item) => item.kind === "text").map((item) => `Attachment: ${item.name}\n${item.text ?? ""}`)].join("\n\n");
         await assertAuthority();
         await session.prompt(text, { expandPromptTemplates: false, preflightResult: (accepted) => { if (accepted) options.onTurnAccepted?.(); }, images: (model.input.includes("image") ? attachments : []).flatMap((item) => item.kind === "image" && item.data ? [{ type: "image" as const, data: item.data, mimeType: item.mimeType }] : []) });
