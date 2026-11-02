@@ -557,6 +557,7 @@ Tailscale mode uses the server-owned loopback Aiden HTTP listener behind Tailsca
 ### Operating multiple devices and Aiden installations
 
 - One Aiden installation accepts multiple paired phones and iPads. Each device receives a distinct credential and has independent activity, streams, approvals, attachment references, scheduled-task operations, and revocation. Revoking one device must not interrupt or re-authorize another.
+- On a CLI host, `aiden remote revoke <id>` closes that device's open Bot session event streams before returning. Other devices can continue watching the same Bot.
 - Aiden On The Go stores each Mac as a separate installation keyed by its public `instanceId`. The display name is only a label, so same-named Macs remain distinct. Credentials, caches, navigation work, App Intents, and Live Activities stay scoped to that identifier during repeated switching and removal.
 - Multiple fresh Aiden profiles on one physical Mac may use distinct persisted LAN/loopback port pairs. A profile with paired devices never moves its endpoint automatically; a collision is reported as `remote_port_in_use` with recovery guidance.
 - Only one profile on a physical Mac may own the canonical Tailscale Serve path. A live incumbent cannot be taken over. A stale exact Aiden handler may be replaced only after an explicit review and immediate verification; unrelated Serve handlers and Funnel state remain unchanged.
