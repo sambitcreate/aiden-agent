@@ -296,6 +296,20 @@ test("uninstall releases only the installed profile and refuses an ambiguous ser
   }
 });
 
+test("uninstall refuses a manager override pointing at another profile", async (t) => {
+  const { host, calls, home, local } = fakeHost(t, "linux", { "loginctl show-user": { stdout: "yes\n" } });
+  const { file } = api.installService(host, local);
+  const override = join(dirname(file), "aiden.service.d", "override.conf");
+  mkdirSync(dirname(override), { recursive: true });
+  writeFileSync(override, `[Service]\nEnvironment="AIDEN_CODING_AGENT_DIR=${join(home, "other-profile")}"\n`);
+  calls.length = 0;
+  const released = [];
+  await assert.rejects(api.serviceCommand(local.agentDir, ["uninstall"], host, { releaseRoute: async dir => { released.push(dir); } }), /profile|override/i);
+  assert.equal(existsSync(file), true);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(released, []);
+});
+
 test("macOS install replaces any loaded job with a LaunchAgent in the person's login session", (t) => {
   const { host, calls, home, local } = fakeHost(t, "darwin", { "launchctl print": { stdout: "state = running\n" } });
   const result = api.installService(host, local);
