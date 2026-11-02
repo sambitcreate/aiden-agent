@@ -2504,10 +2504,7 @@ for (const stalledStage of ["inspection", "pin"] as const) {
       assert.equal(throughTailnet.body.peerRoutes.length, 1);
       assert.equal(app.tailscale.inspectionCalls, 1, "concurrent identity reads share one optional refresh");
 
-      const identity = await loadOrCreateAidenRemoteTlsIdentity({
-      directory: path.join(app.directory, "identity"),
-      hostnames: ["aiden-test", "aiden-test.local"],
-    });
+      const identity = await loadOrCreateAidenRemoteTlsIdentity({ directory: path.join(app.directory, "identity"), hostnames: ["aiden-test", "aiden-test.local"] });
       registry = new PeerHostRegistry({
         storage: { load: async () => [{ id: app.persisted().instanceId, name: "Host", enabled: true, deviceId: issued.device.id, credential: issued.credential, capabilities: [...issued.device.capabilities], features: [], endpoint: `https://aiden-test.local:${app.persisted().lanPort}/api/aiden/v1`, serverSpkiSha256: identity.serverSpkiSha256, caCertificateDerBase64: new X509Certificate(identity.caCertificate).raw.toString("base64") }], save: async () => {} },
         localInstanceId: async () => "viewer", clientVersion: "1", deviceName: "Viewer", platform: "mac",
