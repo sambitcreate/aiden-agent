@@ -273,7 +273,31 @@ final class AidenHomeModel {
             await rollBack(chatID: chatID, optimistic: optimistic, before: before, viewed: viewed, context: context, coordinator: coordinator)
             guard coordinator.isCurrent(context) else { return }
             inboxNotice = AidenInboxNotice(message: String(localized: "Couldn’t mark that chat read. Try again once your Mac is reachable."))
+            return
         }
+        settleRead(chatID: chatID, readThrough: optimistic, context: context, coordinator: coordinator)
+    }
+
+    /// The Mac took a read: record it again as a new edit, so a list page
+    /// requested while the read was out (which still says unread) doesn't
+    /// bring the dot back, whether that page landed already or is still on
+    /// its way. A row with output newer than `readThrough` keeps its dot:
+    /// the read didn't cover it.
+    private func settleRead(
+        chatID: String,
+        readThrough: AidenChatSummary,
+        context: AidenRemoteRequestContext,
+        coordinator: AidenRemoteCoordinator
+    ) {
+        guard coordinator.isCurrent(context), contentContext == context,
+              let index = chats.firstIndex(where: { $0.id == chatID }),
+              (chats[index].inbox.lastAssistantAt ?? .distantPast) <= (readThrough.inbox.lastAssistantAt ?? .distantPast)
+        else { return }
+        if chats[index].unread {
+            chats[index].unread = false
+            chats[index].inbox.invalidateHostPlacement()
+        }
+        persistCurrentSummaries(changedID: chatID)
     }
 
     /// Done, Snooze or their undo. The row moves at once; a refusal puts back
@@ -364,6 +388,7 @@ final class AidenHomeModel {
             // should also take the read, whichever Mac is shown now.
             do {
                 try await client.markChatRead(id: chatID)
+                settleRead(chatID: chatID, readThrough: optimistic, context: context, coordinator: coordinator)
             } catch {
                 if viewStamp(chatID) == viewed {
                     let wasUnread = before.unread
@@ -1001,6 +1026,18 @@ enum AidenWorkspaceSidebarOrganization: String, Codable, Equatable {
     case recent
     /// Beta: Needs you, Pinned, Updates and Earlier, with the Working shelf.
     case inbox
+
+    /// The sidebar header's title for this organization.
+    var title: String {
+        switch self {
+        case .workspace: String(localized: "Workspaces")
+        case .recent: String(localized: "Recents")
+        case .inbox: String(localized: "Inbox")
+        }
+    }
+
+    /// Whether the header carries the Beta badge.
+    var isBeta: Bool { self == .inbox }
 }
 
 struct AidenWorkspaceSidebarSection: Identifiable, Equatable {
@@ -1300,13 +1337,7 @@ struct AidenWorkspaceShellView: View {
         )
     }
 
-    private var sidebarOrganizationTitle: String {
-        switch sidebarOrganization {
-        case .workspace: String(localized: "Workspaces")
-        case .recent: String(localized: "Recents")
-        case .inbox: String(localized: "Inbox")
-        }
-    }
+    private var sidebarOrganizationTitle: String { sidebarOrganization.title }
 
     /// The row's swipes: Mark read needs `chat-read-state-v1`; Done and
     /// Snooze need `chat-triage-v1`, chat:write and the desktop's offer rules.
@@ -1780,7 +1811,7 @@ struct AidenWorkspaceShellView: View {
                 Text(sidebarOrganizationTitle)
                     .font(.title3.bold())
                     .foregroundStyle(palette.foreground)
-                if sidebarOrganization == .inbox {
+                if sidebarOrganization.isBeta {
                     AidenBetaBadge()
                 }
 

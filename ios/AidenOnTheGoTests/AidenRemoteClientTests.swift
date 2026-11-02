@@ -7064,6 +7064,47 @@ extension AidenRemoteClientTests {
     }
 
     @MainActor
+    func testInboxMarkReadStaysReadWhenARefreshRequestedWhileItWasOutLandsAfterIt() async throws {
+        let inbox = try await makeInboxHome(triage: { _, _ in (500, Self.inboxError("internal_error")) })
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        XCTAssertTrue(inbox.home.chats[0].unread)
+        let readArrived = expectation(description: "read sent")
+        let refreshArrived = expectation(description: "refresh asked")
+        let releaseRead = DispatchSemaphore(value: 0)
+        let releaseRefresh = DispatchSemaphore(value: 0)
+        AidenRemoteMockURLProtocol.hold = { request in
+            switch request.url?.path ?? "" {
+            case "/api/aiden/v1/chats/\(Self.inboxChatID)/read":
+                readArrived.fulfill()
+                return releaseRead
+            case "/api/aiden/v1/chat-summaries":
+                refreshArrived.fulfill()
+                return releaseRefresh
+            default:
+                return nil
+            }
+        }
+        defer { AidenRemoteMockURLProtocol.hold = nil }
+
+        let read = Task { await inbox.home.markRead(chatID: Self.inboxChatID, coordinator: inbox.coordinator) }
+        await fulfillment(of: [readArrived], timeout: 5)
+        // A refresh asked for while the read is out: the Mac answers it as
+        // it stood then, still unread, after the read has landed.
+        let refresh = Task { await inbox.home.load(coordinator: inbox.coordinator) }
+        await fulfillment(of: [refreshArrived], timeout: 5)
+        releaseRead.signal()
+        await read.value
+        XCTAssertFalse(inbox.home.chats[0].unread)
+        releaseRefresh.signal()
+        await refresh.value
+
+        XCTAssertFalse(inbox.home.chats[0].unread, "A page asked for before the Mac took the read doesn't bring the dot back.")
+        XCTAssertNil(inbox.home.inboxNotice)
+        let saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+        XCTAssertEqual(saved?.unread, false, "The saved list keeps the read too.")
+    }
+
+    @MainActor
     func testInboxWriteOutDuringASwitchToAnotherMacSettlesOnTheMacItWasSentTo() async throws {
         for (refused, readRefused) in [(true, false), (false, false), (false, true)] {
             let arrived = expectation(description: "triage sent")

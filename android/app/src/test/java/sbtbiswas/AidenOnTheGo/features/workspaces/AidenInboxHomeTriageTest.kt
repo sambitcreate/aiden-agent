@@ -8,6 +8,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainCoroutineDispatcher
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
@@ -88,6 +89,10 @@ class AidenInboxHomeTriageTest {
         /** Triage writes answered, counted once a held one is let go. */
         val triageAnswered = AtomicInteger()
         val readWrites = AtomicInteger()
+        /** When set, a read marker is answered only once it opens; [readArrived] opens when one arrives. */
+        @Volatile var heldRead: CountDownLatch? = null
+        val readArrived = CountDownLatch(1)
+        val readsAnswered = AtomicInteger()
 
         init {
             server.dispatcher = object : Dispatcher() {
@@ -122,6 +127,9 @@ class AidenInboxHomeTriageTest {
                         }
                         path.endsWith("/read") -> {
                             readWrites.incrementAndGet()
+                            readArrived.countDown()
+                            heldRead?.let { check(it.await(8, TimeUnit.SECONDS)) }
+                            readsAnswered.incrementAndGet()
                             MockResponse().setResponseCode(204)
                         }
                         else -> MockResponse().setResponseCode(503)
@@ -199,7 +207,7 @@ class AidenInboxHomeTriageTest {
             .loadSummaries(coordinator.activeInstanceId!!)?.first { it.id == id }
 
         fun close() {
-            desks.forEach { it.heldPage?.countDown(); it.heldTriage.values.forEach(CountDownLatch::countDown) }
+            desks.forEach { it.heldPage?.countDown(); it.heldRead?.countDown(); it.heldTriage.values.forEach(CountDownLatch::countDown) }
             owners.clear()
             scope.cancel()
             desks.forEach { it.server.shutdown() }
@@ -444,11 +452,55 @@ class AidenInboxHomeTriageTest {
         } finally { releaseUpsert.countDown(); pool.shutdownNow() }
     }
 
+    @Test
+    fun aMarkReadThatLandsWhileARefreshIsOutStaysReadWhenThatRefreshReturns() {
+        val desk = Desk("home-a")
+        desk.page = listOf(summary("chat-1", unread = true, lastAssistantAt = reply))
+        scenario(listOf(desk)) {
+            connectedTo(desk)
+            val releaseRead = CountDownLatch(1).also { desk.heldRead = it }
+            home.markInboxRead("chat-1")
+            withContext(Dispatchers.IO) { check(desk.readArrived.await(5, TimeUnit.SECONDS)) }
+            // Requested after the swipe and before the host took the read: it reads the host's unread row.
+            val releasePage = holdReload(desk)
+            releaseRead.countDown()
+            waitFor("read marker answered") { desk.readsAnswered.get() == 1 }
+            // Let the answer settle the swipe before the old page returns. Too short a
+            // wait only lets the page land first, which passes without the fix too.
+            delay(300)
+            desk.page = listOf(summary("chat-1", lastAssistantAt = reply))
+            releasePage.countDown()
+            waitFor("held page landed") { !home.isLoading.value }
+            assertFalse("The read the host took must survive the older page", row("chat-1").unread)
+            assertEquals(false, saved("chat-1")?.unread)
+        }
+    }
+
+    @Test
+    fun aPageWithOutputNewerThanTheSwipedRowStaysUnreadWhileTheReadIsOut() {
+        val desk = Desk("home-a")
+        desk.page = listOf(summary("chat-1", unread = true, lastAssistantAt = reply))
+        scenario(listOf(desk)) {
+            connectedTo(desk)
+            desk.heldRead = CountDownLatch(1)
+            home.markInboxRead("chat-1")
+            withContext(Dispatchers.IO) { check(desk.readArrived.await(5, TimeUnit.SECONDS)) }
+            assertFalse(row("chat-1").unread)
+            // A reply the person never saw arrives before the read is taken.
+            desk.page = listOf(summary("chat-1", unread = true, lastAssistantAt = reply.plusSeconds(60)))
+            reload()
+            assertTrue("A read of the older reply doesn't cover the new one", row("chat-1").unread)
+        }
+    }
+
+    private val reply = Instant.parse("2026-09-01T12:00:30Z")
+
     private fun summary(
         id: String,
         unread: Boolean = false,
         pinnedAt: Instant? = null,
-        triageRevision: Int? = null
+        triageRevision: Int? = null,
+        lastAssistantAt: Instant? = null
     ) = AidenChatSummary(
         id = id,
         workspaceId = "workspace-1",
@@ -461,6 +513,7 @@ class AidenInboxHomeTriageTest {
         activity = AidenChatSummaryActivity.IDLE,
         unread = unread,
         pinnedAt = pinnedAt,
-        triageRevision = triageRevision
+        triageRevision = triageRevision,
+        lastAssistantAt = lastAssistantAt
     )
 }

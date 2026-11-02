@@ -65,7 +65,8 @@ class AidenWorkspaceHomeViewModel(
      * Only the [fields] the swipe's writes changed are kept, so a Mark read
      * never hides a pin made on another device. [token] orders it against
      * loads; while unsettled it holds over every page, and once the host
-     * answered ([settled]) only over pages requested before its last write.
+     * answered ([settled]) only over pages requested before that answer: a
+     * refresh started while the write was out carries the host's older row.
      */
     private data class TriageOverlay(
         val token: Long,
@@ -418,8 +419,13 @@ class AidenWorkspaceHomeViewModel(
                 if (left > 0) triageWritesInFlight[chatId] = left
                 else {
                     triageWritesInFlight.remove(chatId)
+                    // Settled now, so a page requested while the write was out (a
+                    // refresh started after the swipe) still reads the swipe:
+                    // only a page requested from here on carries the host's answer.
                     synchronized(triageOverlay) {
-                        triageOverlay[chatId]?.let { triageOverlay[chatId] = it.copy(settled = true) }
+                        triageOverlay[chatId]?.let {
+                            triageOverlay[chatId] = it.copy(token = chatCache.reserveChatWrite(), settled = true)
+                        }
                     }
                 }
             }
@@ -458,8 +464,9 @@ class AidenWorkspaceHomeViewModel(
     /**
      * A page row with an Inbox swipe that may be newer kept over it: an
      * unsettled swipe always, a settled one only over a page requested
-     * before its last write. Only the fields the swipe changed come from it;
-     * unread stays read once either says so. Holds the overlay's monitor.
+     * before it settled. Only the fields the swipe changed come from it;
+     * unread stays read once either says so, unless the page has output
+     * newer than the swipe's row. Holds the overlay's monitor.
      */
     private fun overlayingTriage(page: AidenChatSummary, writeToken: Long): AidenChatSummary {
         val overlay = synchronized(triageOverlay) { triageOverlay[page.id] }
@@ -471,9 +478,16 @@ class AidenWorkspaceHomeViewModel(
             TriageField.DONE -> merged.copy(doneAt = swipe.doneAt)
             TriageField.SNOOZE -> merged.copy(snoozedUntil = swipe.snoozedUntil)
             TriageField.REVISION -> merged.copy(triageRevision = swipe.triageRevision)
-            TriageField.UNREAD -> merged.copy(unread = page.unread && swipe.unread)
+            TriageField.UNREAD -> merged.copy(unread = page.unread && (swipe.unread || hasNewerOutput(page, swipe)))
         }
         return if (merged == page) page else merged.withoutHostPlacement()
+    }
+
+    /** Whether [page] has assistant output [swipe] didn't show, which a read made from [swipe] doesn't cover. */
+    private fun hasNewerOutput(page: AidenChatSummary, swipe: AidenChatSummary): Boolean {
+        val pageAt = page.lastAssistantAt ?: return false
+        val swipeAt = swipe.lastAssistantAt ?: return true
+        return pageAt.isAfter(swipeAt)
     }
 
     private fun triageFieldsChanged(previous: AidenChatSummary?, row: AidenChatSummary): Set<TriageField> {
