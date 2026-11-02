@@ -257,6 +257,45 @@ test("Linux uninstall stops the service and removes the unit; a second uninstall
   assert.equal(api.uninstallService(host), false);
 });
 
+test("uninstall from another profile leaves the installed service and both profiles intact", async (t) => {
+  for (const platform of ["linux", "darwin"]) {
+    const { host, calls, home, local } = fakeHost(t, platform, { "loginctl show-user": { stdout: "yes\n" } });
+    const { file } = api.installService(host, local);
+    const other = join(home, "other profile", "agent");
+    mkdirSync(other, { recursive: true });
+    const route = JSON.stringify({ tailscaleOwnership: { path: "/api/aiden/v1", target: "http://127.0.0.1:47124/api/aiden/v1" } });
+    writeFileSync(join(local.agentDir, "remote.json"), route);
+    writeFileSync(join(other, "remote.json"), route);
+    calls.length = 0;
+    const released = [];
+    await assert.rejects(api.serviceCommand(other, ["uninstall"], host, { releaseRoute: async (dir) => { released.push(dir); } }), /installed.*profile/i);
+    assert.deepEqual(released, []);
+    assert.equal(existsSync(file), true, platform);
+    assert.deepEqual(calls, [], platform);
+    assert.equal(readFileSync(join(local.agentDir, "remote.json"), "utf8"), route);
+    assert.equal(readFileSync(join(other, "remote.json"), "utf8"), route);
+  }
+});
+
+test("uninstall releases only the installed profile and refuses an ambiguous service definition", async (t) => {
+  for (const platform of ["linux", "darwin"]) {
+    const { host, calls, local } = fakeHost(t, platform, { "loginctl show-user": { stdout: "yes\n" } });
+    const profile = { ...local, agentDir: `${local.agentDir} % & \"quoted\"` };
+    const { file } = api.installService(host, profile);
+    const released = [];
+    await api.serviceCommand(profile.agentDir, ["uninstall"], host, { releaseRoute: async (dir) => { released.push(dir); } });
+    assert.deepEqual(released, [profile.agentDir], platform);
+    assert.equal(existsSync(file), false);
+    api.installService(host, profile);
+    writeFileSync(file, "unrecognized service definition");
+    calls.length = 0;
+    await assert.rejects(api.serviceCommand(profile.agentDir, ["uninstall"], host, { releaseRoute: async (dir) => { released.push(dir); } }), /unrecognized profile/i);
+    assert.equal(existsSync(file), true);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(released, [profile.agentDir]);
+  }
+});
+
 test("macOS install replaces any loaded job with a LaunchAgent in the person's login session", (t) => {
   const { host, calls, home, local } = fakeHost(t, "darwin", { "launchctl print": { stdout: "state = running\n" } });
   const result = api.installService(host, local);

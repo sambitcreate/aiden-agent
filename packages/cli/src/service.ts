@@ -396,6 +396,8 @@ export interface ServiceCommandOptions {
   pair?: (transport: "lan" | "tailscale", signal: AbortSignal) => Promise<string | undefined>;
   /** Whether stdout is a terminal that can show a pairing code. */
   tty?: boolean;
+  /** Releases the stopped service profile's owned route. */
+  releaseRoute?: (agentDir: string) => Promise<string | undefined>;
 }
 
 /** `aiden service ...`. Prints its own output. */
@@ -408,13 +410,27 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
     return;
   }
   if (action === "uninstall" && rest.length === 0) {
+    // The service is shared by profiles. Only the installed profile can safely
+    // release its route, and an unrecognized service definition must stay intact.
+    const file = serviceFile(host);
+    if (existsSync(file)) {
+      const installed = readFileSync(file, "utf8");
+      const sample: ServiceLaunch = { node: "/node", entry: "/cli.js", agentDir: resolve(agentDir), path: "/bin" };
+      const expected = manager(host) === "systemd"
+        ? systemdUnit(sample).split("\n").find((line) => line.startsWith('Environment="AIDEN_CODING_AGENT_DIR='))!
+        : launchdPlist(sample).split("\n").find((line) => line.includes("<key>AIDEN_CODING_AGENT_DIR</key>"))!;
+      const profileLines = installed.split("\n").filter((line) => line.includes("AIDEN_CODING_AGENT_DIR"));
+      if (profileLines.length !== 1 || profileLines[0] !== expected || /^\s*EnvironmentFile\s*=/mu.test(installed)) {
+        throw new Error("The installed Aiden service uses another or unrecognized profile. Run `aiden service uninstall` with its installed AIDEN_CODING_AGENT_DIR; the service remains installed.");
+      }
+    }
     // Stop the service first: if the manager refuses, the running server keeps its route and a retry can still remove it.
     if (!uninstallService(host)) {
       out("The Aiden service was not installed.");
       return;
     }
     out("Removed the Aiden service. The server no longer starts on its own.");
-    const released = await releaseTailscaleRoute(agentDir);
+    const released = await (options.releaseRoute ?? releaseTailscaleRoute)(agentDir);
     if (released) out(released);
     return;
   }
