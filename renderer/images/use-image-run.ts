@@ -15,6 +15,8 @@ export function useImageRun(
   const [plan, setPlan] = React.useState<ImageRunConsentPlan | null>(null);
   const [issues, setIssues] = React.useState<GraphIssue[]>([]);
   const [busy, setBusy] = React.useState(false);
+  // A second Retry or Run before the first re-render must not open a second consent.
+  const preparing = React.useRef(false);
   const { addAssetUrls, flush, refreshOutputs, assetUrls } = controller;
   const latestSnapshot = React.useRef(snapshot);
   latestSnapshot.current = snapshot;
@@ -65,8 +67,10 @@ export function useImageRun(
   }, [settledRunId, refreshOutputs]);
 
   // Retry from here and Retry this node only both come through here as a scope; each opens its own consent.
-  const prepare = React.useCallback(
+  const prepareAsync = React.useCallback(
     async (scope: RunScope) => {
+      if (preparing.current) return;
+      preparing.current = true;
       setBusy(true);
       setIssues([]);
       try {
@@ -81,11 +85,14 @@ export function useImageRun(
       } catch (failure) {
         setIssues([{ code: "error", message: failureText(failure, "The run could not be prepared.") }]);
       } finally {
+        preparing.current = false;
         setBusy(false);
       }
     },
     [flush, workflowId],
   );
+  // Stable identity: nodes read Run from Here through the editor context.
+  const prepare = React.useCallback((scope: RunScope) => void prepareAsync(scope), [prepareAsync]);
 
   const confirm = React.useCallback(async () => {
     if (!plan) return;
@@ -107,7 +114,7 @@ export function useImageRun(
     issues,
     busy,
     running: snapshot?.run.state === "running",
-    prepare: (scope: RunScope) => void prepare(scope),
+    prepare,
     confirm: () => void confirm(),
     // Dismissing sends nothing; the unused consent expires in main.
     dismiss: () => setPlan(null),

@@ -9,6 +9,7 @@ import {
   costLabel,
   deleteWorkflowDescription,
   formatBytes,
+  issueNotices,
   outputsForNode,
   referenceSummary,
   runHeadline,
@@ -42,6 +43,10 @@ test("stopped and interrupted requests that were sent say they may have been bil
   assert.equal(attemptDetail(attempt({ state: "failed", errorMessage: "Rate limited" })), "Rate limited");
   assert.deepEqual(attemptStatus(attempt({ state: "running", submittedAt: 1 })), { label: "Generating", tone: "blue" });
   assert.match(attemptDetail(attempt({ state: "succeeded", cancelRequested: true })) ?? "", /before Stop/u);
+  // Truncated covers images skipped as malformed or oversized, not only extras past the count.
+  const truncated = attemptDetail(attempt({ state: "succeeded", truncated: true })) ?? "";
+  assert.match(truncated, /not kept/u);
+  assert.doesNotMatch(truncated, /extra/iu);
 });
 
 test("headlines, costs and consent copy are honest about counts and unknown prices", () => {
@@ -52,9 +57,9 @@ test("headlines, costs and consent copy are honest about counts and unknown pric
   assert.equal(costLabel(attempt({ state: "skipped" })), null);
   const request: ImageRunConsentRequest = {
     nodeId: "g", variant: 0, provider: "openrouter", providerLabel: "OpenRouter", model: "m", modelLabel: "M",
-    referenceCount: 3, referenceBytes: 1_572_864, pendingReferenceCount: 1,
+    referenceCount: 6, referenceBytes: 1_572_864, pendingReferenceCount: 4, pendingReferenceSteps: 1,
   };
-  assert.equal(referenceSummary(request), "2 reference images (1.5 MB) + images from 1 earlier step in this run");
+  assert.equal(referenceSummary(request), "2 reference images (1.5 MB) + up to 4 images from 1 earlier step in this run");
   assert.equal(referenceSummary({ ...request, referenceCount: 0, pendingReferenceCount: 0 }), null);
   assert.equal(formatBytes(900), "900 B");
   assert.equal(consentTitle({ totalRequests: 1 } as Parameters<typeof consentTitle>[0]), "Send 1 image request?");
@@ -94,4 +99,21 @@ test("the delete confirmation names the image count and says it cannot be undone
   for (const count of [0, 1, 12]) {
     assert.match(deleteWorkflowDescription(count), /permanently deletes the workflow and its run history.*cannot be undone/u);
   }
+});
+
+test("graph issues that repeat a message stay separate notices, each naming its node", () => {
+  const notices = issueNotices(
+    [
+      { code: "missing-prompt", message: "Connect a prompt.", nodeId: "g1" },
+      { code: "missing-prompt", message: "Connect a prompt.", nodeId: "g2" },
+      { code: "cycle", message: "The workflow has a loop." },
+    ],
+    new Map([["g1", "Hero image"], ["g2", "Banner"]]),
+  );
+  assert.deepEqual(notices.map((notice) => notice.text), [
+    "Hero image: Connect a prompt.",
+    "Banner: Connect a prompt.",
+    "The workflow has a loop.",
+  ]);
+  assert.equal(new Set(notices.map((notice) => notice.key)).size, notices.length);
 });

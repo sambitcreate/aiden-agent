@@ -1,5 +1,6 @@
 // Create Images IPC. Every handler checks its renderer document first, parses
 // an exact request shape second, and only then touches a store.
+import * as fs from "node:fs/promises";
 import { IMAGE_IMPORT_MAX_BYTES, type ImportImageResponse } from "../../../renderer/shared/images/ipc-types.js";
 import { pickDefaultImageModel } from "../../../renderer/shared/images/port.js";
 import type { CreateImagesServices } from "../../services/create-images/runtime.js";
@@ -28,9 +29,36 @@ export interface CreateImagesHandlerDependencies<Event> {
   enabled: boolean;
   handle(channel: string, listener: (event: Event, input: unknown) => unknown): void;
   owner(event: Event): CreateImagesOwner;
-  services(): CreateImagesServices;
+  /** May open storage again after an earlier failure, so it can be asynchronous. */
+  services(): CreateImagesServices | Promise<CreateImagesServices>;
   grants: Pick<StudioAssetGrants, "issue">;
   pickImage(event: Event): Promise<Uint8Array | null>;
+}
+
+const PICKED_IMAGE_REFUSED = "Choose a PNG, JPEG or WebP image of 8 MiB or less.";
+
+/**
+ * Reads a file the person picked, never more than the import limit: the size is checked on the
+ * opened handle and the read itself is bounded, so a file swapped or grown after the check
+ * cannot make Aiden read an unbounded amount.
+ */
+export async function readPickedImage(file: string, limit = IMAGE_IMPORT_MAX_BYTES): Promise<Uint8Array> {
+  const handle = await fs.open(file, "r");
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > limit) throw new Error(PICKED_IMAGE_REFUSED);
+    const buffer = new Uint8Array(limit + 1);
+    let length = 0;
+    while (length < buffer.byteLength) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.byteLength - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    if (length > limit) throw new Error(PICKED_IMAGE_REFUSED);
+    return buffer.slice(0, length);
+  } finally {
+    await handle.close();
+  }
 }
 
 export function registerCreateImagesHandlers<Event>(deps: CreateImagesHandlerDependencies<Event>): number {
@@ -55,14 +83,14 @@ export function registerCreateImagesHandlers<Event>(deps: CreateImagesHandlerDep
   handle("imageWorkflows:list", async (event, input) => {
     deps.owner(event);
     parseEmptyRequest(input);
-    const { workflows, coordinator } = deps.services();
+    const { workflows, coordinator } = await deps.services();
     return { workflows: workflows.list(), imageCounts: await coordinator.imageCounts() };
   });
 
   handle("imageWorkflows:create", async (event, input) => {
     deps.owner(event);
     const request = parseCreateRequest(input);
-    const services = deps.services();
+    const services = await deps.services();
     const model = pickDefaultImageModel(await services.port.listModels());
     const workflow = await services.workflows.create(request.template, {
       ...(request.title !== undefined ? { title: request.title } : {}),
@@ -74,7 +102,7 @@ export function registerCreateImagesHandlers<Event>(deps: CreateImagesHandlerDep
   handle("imageWorkflows:get", async (event, input) => {
     const owner = deps.owner(event);
     const { workflowId } = parseWorkflowRequest(input);
-    const services = deps.services();
+    const services = await deps.services();
     const workflow = await services.workflows.get(workflowId);
     if (!workflow) throw new Error("This workflow no longer exists.");
     const latestOutputs = services.coordinator.latestOutputs(workflowId);
@@ -88,13 +116,13 @@ export function registerCreateImagesHandlers<Event>(deps: CreateImagesHandlerDep
   handle("imageWorkflows:save", async (event, input) => {
     deps.owner(event);
     const request = parseSaveRequest(input);
-    return deps.services().workflows.save(request.workflowId, request.baseRevision, request.document);
+    return (await deps.services()).workflows.save(request.workflowId, request.baseRevision, request.document);
   });
 
   handle("imageWorkflows:mutate", async (event, input) => {
     deps.owner(event);
     const request = parseMutateRequest(input);
-    const { workflows, coordinator } = deps.services();
+    const { workflows, coordinator } = await deps.services();
     if (request.op === "rename") return { ok: (await workflows.rename(request.workflowId, request.title)).ok };
     if (request.op === "duplicate") {
       const copy = await workflows.duplicate(request.workflowId);
@@ -108,7 +136,8 @@ export function registerCreateImagesHandlers<Event>(deps: CreateImagesHandlerDep
   handle("imageWorkflows:list-models", async (event, input) => {
     deps.owner(event);
     parseEmptyRequest(input);
-    return { models: await deps.services().port.listModels() };
+    const { port } = await deps.services();
+    return { models: await port.listModels() };
   });
 
   handle("imageWorkflows:import-image", async (event, input): Promise<ImportImageResponse> => {
@@ -118,7 +147,8 @@ export function registerCreateImagesHandlers<Event>(deps: CreateImagesHandlerDep
     if (!bytes) return { cancelled: true };
     if (bytes.byteLength > IMAGE_IMPORT_MAX_BYTES) throw new Error("Choose an image of 8 MiB or less.");
     // The store sniffs the content; a declared type must agree with it.
-    const record = await deps.services().assets.put({
+    const { assets } = await deps.services();
+    const record = await assets.put({
       bytes,
       ...(request.source === "bytes" ? { declaredMimeType: request.mimeType } : {}),
     });
@@ -134,24 +164,24 @@ export function registerCreateImagesHandlers<Event>(deps: CreateImagesHandlerDep
 
   handle("imageWorkflows:prepare-run", async (event, input) => {
     const owner = deps.owner(event);
-    return deps.services().coordinator.prepare(owner.key, parsePrepareRequest(input));
+    return (await deps.services()).coordinator.prepare(owner.key, parsePrepareRequest(input));
   });
 
   handle("imageWorkflows:start-run", async (event, input) => {
     const owner = deps.owner(event);
-    return deps.services().coordinator.start(owner.key, parseConsentRequest(input).consentId);
+    return (await deps.services()).coordinator.start(owner.key, parseConsentRequest(input).consentId);
   });
 
   handle("imageWorkflows:cancel-run", async (event, input) => {
     // Any Aiden document may stop any run (ADR-CI, Cancel): stopping only reduces spend, and a
     // reloaded or second Images window has a new document id yet must still be able to stop it.
     deps.owner(event);
-    return { ok: deps.services().coordinator.cancel(parseRunRequest(input).runId) };
+    return { ok: (await deps.services()).coordinator.cancel(parseRunRequest(input).runId) };
   });
 
   handle("imageWorkflows:get-run", async (event, input) => {
     const owner = deps.owner(event);
-    const snapshot = deps.services().coordinator.getRun(parseGetRunRequest(input));
+    const snapshot = (await deps.services()).coordinator.getRun(parseGetRunRequest(input));
     const assetIds = snapshot ? snapshot.attempts.flatMap((attempt) => attempt.output.map((ref) => ref.assetId)) : [];
     return { snapshot, assetUrls: urls(owner, assetIds) };
   });
@@ -159,7 +189,7 @@ export function registerCreateImagesHandlers<Event>(deps: CreateImagesHandlerDep
   handle("imageWorkflows:list-runs", async (event, input) => {
     deps.owner(event);
     const request = parseListRunsRequest(input);
-    return { runs: deps.services().coordinator.listRuns(request.workflowId, request.limit) };
+    return { runs: (await deps.services()).coordinator.listRuns(request.workflowId, request.limit) };
   });
 
   return registered;
