@@ -52,26 +52,9 @@ case "$SPACE_STATUS" in
 esac
 
 if [ "${1:-}" = "--reset" ]; then
-  # Stop this user's processes that run in or from the synced checkout (npm, builds, Electron, xvfb-run/Xvfb) or
-  # hold the run lock. It matches on cwd, executable and open files, not command lines, so it cannot match itself.
-  # Exits 1 when nothing was found, which is a clean Space rather than a failure.
-  # shellcheck disable=SC2016
-  RESET_GUEST='cd / || exit 2
-    uid="$(id -u)"; found=""
-    for dir in /proc/[0-9]*; do
-      pid="${dir#/proc/}"
-      [ "$pid" = "$$" ] && continue
-      [ "$(stat -c %u "$dir" 2>/dev/null)" = "$uid" ] || continue
-      hit=0
-      case "$(readlink "$dir/cwd" 2>/dev/null)" in "$HOME/aiden-agent" | "$HOME/aiden-agent/"*) hit=1 ;; esac
-      case "$(readlink "$dir/exe" 2>/dev/null)" in "$HOME/aiden-agent/"*) hit=1 ;; esac
-      for fd in "$dir"/fd/*; do [ "$(readlink "$fd" 2>/dev/null)" = /tmp/aiden-e2e.lock ] && hit=1; done
-      [ "$hit" = 1 ] && found="$found $pid"
-    done
-    [ -n "$found" ] || exit 1
-    kill $found 2>/dev/null; sleep 2; kill -9 $found 2>/dev/null; exit 0'
+  # The guest half stops leftover processes from the synced checkout and exits 1 on a clean Space.
   set +e
-  "$CUA" sb exec -i "$REF" -- bash -c "$RESET_GUEST" </dev/null
+  "$CUA" sb exec -i "$REF" -- bash -c "$(cat "$ROOT/scripts/cua-space-e2e-reset.sh")" </dev/null
   status=$?
   set -e
   case "$status" in

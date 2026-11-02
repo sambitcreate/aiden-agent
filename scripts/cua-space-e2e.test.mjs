@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -12,6 +12,7 @@ import test from "node:test";
 const execFileAsync = promisify(execFile);
 const runner = fileURLToPath(new URL("./cua-space-e2e.sh", import.meta.url));
 const guest = fileURLToPath(new URL("./cua-space-e2e-guest.sh", import.meta.url));
+const reset = fileURLToPath(new URL("./cua-space-e2e-reset.sh", import.meta.url));
 
 // A stand-in for the cua CLI: records every call, keeps files copied into the Space, and answers
 // `sb ls` / `sb exec` from the environment.
@@ -56,6 +57,7 @@ async function checkout() {
   await mkdir(fake);
   await copyFile(runner, path.join(repo, "scripts", "cua-space-e2e.sh"));
   await copyFile(guest, path.join(repo, "scripts", "cua-space-e2e-guest.sh"));
+  await copyFile(reset, path.join(repo, "scripts", "cua-space-e2e-reset.sh"));
   await writeFile(path.join(repo, "package-lock.json"), '{"lockfileVersion":3}\n');
   await writeFile(path.join(repo, "tracked.ts"), "export {};\n");
   await writeFile(path.join(repo, "removed.ts"), "export {};\n");
@@ -182,7 +184,9 @@ test("--reset succeeds on a clean Space and surfaces real failures", async (t) =
   assertStatus(await run(space, ["--reset"], { ...ready, FAKE_CUA_EXEC_STATUS: "2" }), 2);
   const recorded = await calls(space.fake);
   assert.ok(recorded.every((call) => call[1] !== "cp"), "--reset copies nothing into the Space");
-  assert.deepEqual(recorded.find((call) => call[1] === "exec").slice(2, 6), ["-i", "local:aiden-e2e", "--", "bash"]);
+  const exec = recorded.find((call) => call[1] === "exec");
+  assert.deepEqual(exec.slice(2, 7), ["-i", "local:aiden-e2e", "--", "bash", "-c"]);
+  assert.equal(exec[7], (await readFile(reset, "utf8")).replace(/\n$/, ""), "the Space runs the reset script as written");
 });
 
 test("brings the run's artifacts back and keeps the previous ones when an archive is unreadable, empty or missing", async (t) => {
@@ -275,4 +279,65 @@ test("the guest stops at a failed Node install instead of running on", async (t)
   assert.doesNotMatch(failed.stdout, /APT_|NPM_|E2E_BUILD/);
   assert.deepEqual(failed.leftovers, [], "the run script and source archive are removed");
   assert.equal(failed.provisioning, "", "no sudo or apt-get ran");
+});
+
+// The reset half scans /proc inside the Space. Here it scans a stand-in /proc whose entries point real decoy
+// processes at the checkout, elsewhere, or the run lock, so the test can see exactly which ones it stops.
+test("--reset in the Space stops only processes in the checkout or holding the run lock", async (t) => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "aiden-cua-reset-")));
+  const decoys = [];
+  t.after(async () => {
+    for (const decoy of decoys) decoy.child.kill("SIGKILL");
+    await rm(root, { recursive: true, force: true });
+  });
+  const home = path.join(root, "home");
+  const checkoutDir = path.join(home, "aiden-agent");
+  const proc = path.join(root, "proc");
+  const lock = path.join(root, "lock");
+  await mkdir(path.join(checkoutDir, "tests"), { recursive: true });
+  await mkdir(path.join(home, "aiden-agent-old"));
+  await mkdir(proc);
+
+  async function decoy(name, links) {
+    const child = spawn("sleep", ["300"], { stdio: "ignore" });
+    const exited = new Promise((resolve) => child.once("exit", (_code, signal) => resolve(signal)));
+    const entry = path.join(proc, String(child.pid));
+    await mkdir(path.join(entry, "fd"), { recursive: true });
+    for (const [link, target] of Object.entries(links)) await symlink(target, path.join(entry, link));
+    const record = { name, child, exited, entry };
+    decoys.push(record);
+    return record;
+  }
+  const inCheckout = await decoy("cwd in the checkout", { cwd: path.join(checkoutDir, "tests") });
+  const fromCheckout = await decoy("binary from the checkout", { cwd: root, exe: path.join(checkoutDir, "node_modules", ".bin", "electron") });
+  const lockHolder = await decoy("lock holder", { cwd: root, "fd/9": lock });
+  const elsewhere = await decoy("unrelated", { cwd: root, exe: "/bin/sleep", "fd/9": path.join(root, "other.lock") });
+  const lookalike = await decoy("sibling directory", { cwd: path.join(home, "aiden-agent-old") });
+
+  async function runReset() {
+    try {
+      const { stdout, stderr } = await execFileAsync("bash", ["-c", await readFile(reset, "utf8")], {
+        env: { ...isolatedEnv, HOME: home, AIDEN_E2E_PROC: proc, AIDEN_E2E_LOCK: lock },
+      });
+      return { status: 0, stdout, stderr };
+    } catch (error) {
+      return { status: error.code, stdout: error.stdout, stderr: error.stderr };
+    }
+  }
+
+  assertStatus(await runReset(), 0, "leftover processes were found");
+  for (const stopped of [inCheckout, fromCheckout, lockHolder]) {
+    // The reset has already sent TERM and then KILL by the time it returns, so only the exit event is outstanding.
+    const signal = await Promise.race([stopped.exited, new Promise((resolve) => setTimeout(resolve, 1000, "still running"))]);
+    assert.equal(signal, "SIGTERM", `${stopped.name} is stopped`);
+    await rm(stopped.entry, { recursive: true });
+  }
+  for (const kept of [elsewhere, lookalike]) {
+    assert.equal(kept.child.exitCode ?? kept.child.signalCode, null, `${kept.name} keeps running`);
+  }
+
+  assertStatus(await runReset(), 1, "a second pass finds nothing left");
+  for (const kept of [elsewhere, lookalike]) {
+    assert.equal(kept.child.exitCode ?? kept.child.signalCode, null, `${kept.name} keeps running`);
+  }
 });
