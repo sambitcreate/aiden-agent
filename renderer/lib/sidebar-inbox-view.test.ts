@@ -356,6 +356,33 @@ test("Bots the Inbox doesn't list still have rows, with their live state, for th
   assert.equal(inboxState(seen.signals, NOW).shelf, "earlier", "held, it reads as a quiet row");
 });
 
+test("a local Bot whose last turn failed is Failed in Needs you with no prompt, issue or unread reply, until it runs again", () => {
+  const rowsFor = (state: { kind: string } | undefined, openBotId: string | null = null) =>
+    botInboxRows({
+      bots: [{ bot: bot("b1"), ...(state ? { state } : {}), activityAt: NOW - 4 * MINUTE, needsYou: false, lastReplyAt: NOW - HOUR }],
+      openBotId,
+      // Its last reply was already seen.
+      unread: () => false,
+    });
+  for (const state of [{ kind: "interrupted" }, { kind: "model_error" }]) {
+    const [failed] = rowsFor(state).listed;
+    assert.ok(failed, `${state.kind} is listed`);
+    assert.equal(inboxState(failed.signals, NOW).shelf, "needs_you");
+    const status = inboxRowStatus(failed, "needs_you", NOW);
+    assert.deepEqual([status.label, status.tone], ["Failed", "danger"]);
+    assert.equal(inboxRowDescription(failed, status), "The last run failed");
+    // Its next run clears it; there is nothing to acknowledge.
+    assert.equal(inboxRowAction(failed, "needs_you", status, false), null);
+    // Open, it stays listed but reads as seen.
+    const [open] = rowsFor(state, "b1").listed;
+    assert.ok(open);
+    assert.notEqual(inboxState(open.signals, NOW).shelf, "needs_you");
+  }
+  // Running again, or idle and read, it drops out.
+  assert.equal(rowsFor({ kind: "running" }).listed.length, 0);
+  assert.equal(rowsFor({ kind: "idle" }).listed.length, 0);
+});
+
 test("the open Bot stays listed while it is open, never as unread, and its key can't collide with a chat's", () => {
   const [open] = botEntries([{ id: "b1", lastReplyAt: NOW - MINUTE }], { openBotId: "b1" });
   assert.ok(open);

@@ -15,6 +15,7 @@ import { openCursorSse, sseFrame, type CursorSseHandle, type CursorSsePull } fro
 import type { HostRunSummary } from "./host-run-registry.js";
 import { clipPendingAttentionSummary } from "../../renderer/shared/chat-pending-attention.js";
 import type { BotLiveSummary } from "../../renderer/shared/bot-live.js";
+import { isFailedBotSession } from "../../renderer/shared/inbox-state.js";
 
 /** Optional repository identity on a host-feed workspace (contract revision 19). */
 export interface AidenRemoteRepositoryIdentity {
@@ -48,7 +49,7 @@ export function hostFeedBotSignals(
   live: Pick<BotLiveSummary, "state" | "needsYou" | "lastReplyAt"> | undefined,
 ): AidenRemoteHostFeedBotSignals {
   if (!live) return {};
-  const failed = live.state.kind === "interrupted" || live.state.kind === "model_error";
+  const failed = isFailedBotSession(live.state);
   const replied = live.lastReplyAt !== null && Number.isSafeInteger(live.lastReplyAt) && live.lastReplyAt >= 0
     ? new Date(live.lastReplyAt)
     : undefined;

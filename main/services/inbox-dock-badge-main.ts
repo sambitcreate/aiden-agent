@@ -1,5 +1,5 @@
 import type { ChatPendingAttention } from "../../renderer/shared/chat-pending-attention.js";
-import { isLocalInboxChat } from "../../renderer/shared/inbox-state.js";
+import { isFailedBotSession, isLocalInboxChat } from "../../renderer/shared/inbox-state.js";
 import { app, ipcMain, logger, onBroadcast } from "../platform.js";
 import { botApplicationService } from "./bot-application-service-main.js";
 import { chatActivityRegistry } from "./chat-activity.js";
@@ -50,8 +50,9 @@ async function botsNeedingYou(): Promise<string[]> {
   if (!hostPlatformCapabilities().bots) return [];
   const bots = await botApplicationService.list();
   if (bots.length === 0) return [];
-  const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
+  const { botLiveProjection, botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
   const live = botLiveProjection();
+  const sessions = await botSessionRuntime();
   const ids = bots.map((bot) => bot.id);
   const waiting: string[] = [];
   let next = 0;
@@ -64,7 +65,10 @@ async function botsNeedingYou(): Promise<string[]> {
         // can't be read is still counted when it waits on the person, though the host
         // feed (built from `summary`, which then throws) sends its row without
         // `needsYou`: the person does owe it an answer.
+        // A Bot whose last turn failed (interrupted, or a model it can't use) counts too, as
+        // the sidebar lists it as Failed in Needs you until its next run.
         if (await live.needsYou(id).catch(() => false)) waiting.push(id);
+        else if (isFailedBotSession(await sessions.state(id).catch(() => undefined))) waiting.push(id);
       }
     }),
   );

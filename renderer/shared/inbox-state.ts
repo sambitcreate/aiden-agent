@@ -179,6 +179,16 @@ export function triageSignals(
 }
 
 /**
+ * Whether a Bot's session state is a failed last turn: cut short
+ * (`interrupted`) or blocked on a model it can't use (`model_error`). The
+ * Inbox shows such a Bot as Failed in Needs you until its next run, on this
+ * Mac and through a paired host's feed (`failed`) alike.
+ */
+export function isFailedBotSession(state: { kind: string } | undefined | null): boolean {
+  return state?.kind === "interrupted" || state?.kind === "model_error";
+}
+
+/**
  * Whether the Inbox lists a local chat. Bot chats show through their Bot and
  * feature-owned chats never show; chats of removed workspaces are left out.
  * The Assistant chat and workspace-less scheduled chats (saved with no

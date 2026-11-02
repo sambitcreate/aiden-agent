@@ -1,5 +1,5 @@
 import { ASSISTANT_WORKSPACE_ID } from "../shared/assistant";
-import { isLocalInboxChat } from "../shared/inbox-state";
+import { isFailedBotSession, isLocalInboxChat } from "../shared/inbox-state";
 import type { ChatPendingAttention } from "../shared/chat-pending-attention";
 import type { ChatRowState } from "../shared/chat-row-state";
 import type { ChatTriageEntry } from "../shared/chat-triage";
@@ -169,9 +169,10 @@ export interface BotInboxRows {
 }
 
 /**
- * This Mac's Bots, listed only while they need the person (`needsYou`, which
- * covers pending prompts, issues and failed runs) or have an unread reply
- * (plan D8). The open Bot also stays listed until the person leaves it, as an
+ * This Mac's Bots, listed only while they need the person (`needsYou`: a
+ * pending prompt, hand-off, approval or issue), their last turn failed (an
+ * `interrupted` or `model_error` session, Failed in Needs you until the next
+ * run, as a paired host's Bot reads) or they have an unread reply (plan D8). The open Bot also stays listed until the person leaves it, as an
  * open chat does. Bot chats never show as chats; a Bot that is only running
  * isn't listed, so Bots never join the Working shelf.
  */
@@ -179,7 +180,10 @@ export function botInboxRows(input: BotInboxInput): BotInboxRows {
   const rows: BotInboxRows = { listed: [], unlisted: [] };
   for (const row of input.bots) {
     const isOpen = row.bot.id === input.openBotId;
-    const unread = !isOpen && input.unread(row.bot.id, row.lastReplyAt);
+    // A turn cut short or a model that can't be used: the same failure a paired host reports.
+    const failed = isFailedBotSession(row.state);
+    // A failure stays unseen until the next run, as a paired host's does; the open Bot never reads as unread.
+    const unread = !isOpen && (failed || input.unread(row.bot.id, row.lastReplyAt));
     const entry: InboxEntry = {
       key: botInboxKey(row.bot.id),
       title: row.bot.name,
@@ -196,7 +200,7 @@ export function botInboxRows(input: BotInboxInput): BotInboxRows {
         // Placement needs only that the Bot waits; its status reads "Needs you" whatever the wait is.
         rowState: row.needsYou ? "needs_input" : "idle",
         unread,
-        failed: false,
+        failed,
         isOpen,
         hostOnline: true,
         updatedAt: row.activityAt,
@@ -205,7 +209,7 @@ export function botInboxRows(input: BotInboxInput): BotInboxRows {
         ...(row.needsYou ? { attentionSince: row.activityAt } : {}),
       },
     };
-    (row.needsYou || unread || isOpen ? rows.listed : rows.unlisted).push(entry);
+    (row.needsYou || failed || unread || isOpen ? rows.listed : rows.unlisted).push(entry);
   }
   return rows;
 }
@@ -392,8 +396,10 @@ const NEEDS_YOU_LABELS: Readonly<Record<InboxNeedsYouKind, string>> = {
 export function inboxNeedsYouKind(entry: InboxEntry, now: number): InboxNeedsYouKind | null {
   const placement = inboxState(entry.signals, now);
   if (placement.shelf !== "needs_you") return null;
-  if (entry.source.kind === "bot") return "needs_you";
-  if (entry.source.kind === "remoteBot") return placement.tier === INBOX_TIERS.failed ? "failed" : "needs_you";
+  // A Bot reads Failed or Needs you, never which kind of wait it has.
+  if (entry.source.kind === "bot" || entry.source.kind === "remoteBot") {
+    return placement.tier === INBOX_TIERS.failed ? "failed" : "needs_you";
+  }
   switch (placement.tier) {
     case INBOX_TIERS.approval:
       return "approval";
@@ -460,7 +466,7 @@ export function inboxRowDescription(entry: InboxEntry, status: InboxRowStatus): 
     if (asked && prefix) return `${prefix}: ${asked}. On ${entry.hostLabel}, waiting ${status.wait}${offline}`;
     return `${status.label} on ${entry.hostLabel}, waiting ${status.wait}${offline}`;
   }
-  if (entry.source.kind === "bot") return INBOX_BOT_NEEDS_YOU_DESCRIPTION;
+  if (entry.source.kind === "bot") return status.needsYou === "failed" ? "The last run failed" : INBOX_BOT_NEEDS_YOU_DESCRIPTION;
   if (entry.source.kind === "remoteBot") {
     const what = status.needsYou === "failed" ? "The last run failed" : INBOX_BOT_NEEDS_YOU_DESCRIPTION;
     return `${what} on ${entry.hostLabel}${offline}`;
@@ -496,8 +502,9 @@ export function inboxRowAction(
   remoteCanMarkRead: boolean,
 ): InboxRowActionKind | null {
   if (entry.source.kind === "remote" && (!remoteCanMarkRead || !entry.signals.hostOnline)) return null;
-  // A paired host's Bot has no read state to acknowledge: its next run clears it.
-  if (entry.source.kind === "remoteBot") return null;
+  // A paired host's Bot has no read state to acknowledge, and a failed Bot's failure
+  // isn't a reply to mark seen: its next run clears it.
+  if (entry.source.kind === "remoteBot" || (entry.source.kind === "bot" && entry.signals.failed)) return null;
   if (section === "needs_you") return status.needsYou === "failed" ? "acknowledge" : null;
   if (section !== "updates" && section !== "earlier") return null;
   return entry.signals.unread && !entry.signals.isOpen ? "mark_read" : null;
