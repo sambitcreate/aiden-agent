@@ -808,7 +808,7 @@ final class AidenRemoteClientTests: XCTestCase {
             if path.hasSuffix("/messages") {
                 XCTAssertEqual(request.url?.query, "limit=1")
                 let json = """
-                {"chatId":"\(row.id)","revision":"rev_ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+                {"chatId":"\(row.id)","revision":"\(row.revision)",
                 "messages":[{"id":"last-shown","role":"assistant","text":"reply","createdAt":"2026-08-18T19:01:00.000Z"}],"hasOlder":true}
                 """
                 return Self.response(for: request, status: 200, json: json)

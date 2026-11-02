@@ -960,7 +960,8 @@ class AidenRemoteClient(
             val detail = chat(row.id)
             (detail.messages.lastOrNull()?.id ?: throw AidenRemoteClientException.InvalidResponse("Chat has no messages.")) to detail.revision
         }
-        if (transcriptRevision != row.revision) {
+        // A window carries the full-chat revision, distinct from a summary revision.
+        if (supportsMessagesWindow || transcriptRevision != row.revision) {
             var cursor: String? = null
             val seen = mutableSetOf<String>()
             while (true) {

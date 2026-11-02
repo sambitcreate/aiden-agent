@@ -1961,7 +1961,8 @@ final class AidenRemoteClient: @unchecked Sendable {
             tail = id
             transcriptRevision = detail.revision
         }
-        if transcriptRevision != row.revision {
+        // A window carries the full-chat revision, distinct from a summary revision.
+        if supportsMessagesWindow || transcriptRevision != row.revision {
             var cursor: String?
             var seen = Set<String>()
             while true {

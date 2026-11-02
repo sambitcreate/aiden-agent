@@ -1571,7 +1571,7 @@ class AidenRemoteClientTest {
         val fixture = contractFixture()
         val page = Json.decodeFromJsonElement<AidenChatSummaryPage>(fixture.getValue("chatSummaries"))
         val row = page.summaries.first().copy(lastAssistantMessageId = null)
-        val window = """{"chatId":"${row.id}","revision":"rev_ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ","messages":[{"id":"last-shown","role":"assistant","text":"reply","createdAt":"2026-08-18T19:01:00.000Z"}],"hasOlder":true}"""
+        val window = """{"chatId":"${row.id}","revision":"${row.revision}","messages":[{"id":"last-shown","role":"assistant","text":"reply","createdAt":"2026-08-18T19:01:00.000Z"}],"hasOlder":true}"""
         server.enqueue(MockResponse().setBody(window))
         server.enqueue(MockResponse().setBody(fixture.getValue("chatSummaries").toString()))
         server.enqueue(MockResponse().setResponseCode(204))
