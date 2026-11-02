@@ -75,9 +75,14 @@ export interface ImageRunConsentRequest {
   providerLabel: string;
   model: string;
   modelLabel: string;
+  /** Known references plus the worst case from earlier steps in this run. */
   referenceCount: number;
+  /** Bytes of the known references only. */
   referenceBytes: number;
+  /** The most images earlier Generate steps in this run can supply: up to 4 per step. */
   pendingReferenceCount: number;
+  /** How many earlier Generate steps in this run supply references (always set by main). */
+  pendingReferenceSteps?: number;
 }
 
 /** The exact set of requests a consent sheet shows before a run may start. */

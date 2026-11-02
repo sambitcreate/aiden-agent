@@ -214,11 +214,19 @@ let resolveShortcutInitialization: (() => void) | null = null;
 const shortcutInitializationPromise = new Promise<void>((resolve) => {
   resolveShortcutInitialization = resolve;
 });
+/** Which renderer surfaces hold the unsaved or saving work, as the renderer's close guard reports them. */
+interface CloseGuardSources {
+  dirty: readonly string[];
+  saving: readonly string[];
+  /** The image workflow's title, while it is unsaved or saving. */
+  imagesLabel?: string;
+}
 let closeGuard = {
   dirty: false,
   gitBusy: false,
   path: undefined as string | undefined,
   saving: false,
+  sources: undefined as CloseGuardSources | undefined,
 };
 let protectedAction: "close" | "quit" | "reload" | "onboarding-reset" | null =
   null;
@@ -309,11 +317,21 @@ function confirmProtectedAction(
     });
     return false;
   }
+  // The Files editor reports no sources through the IPC path; without them it is the editor.
+  const sources = closeGuard.sources;
+  const imagesSaving = sources?.saving.includes("images") === true;
+  const editorSaving = sources ? sources.saving.includes("editor") : true;
+  const imagesDirty = sources?.dirty.includes("images") === true;
+  const editorDirty = sources ? sources.dirty.includes("editor") || !imagesDirty : true;
+  const workflow = sources?.imagesLabel
+    ? `the image workflow “${sources.imagesLabel}”`
+    : "the image workflow";
   if (closeGuard.saving) {
+    const imagesOnly = imagesSaving && !editorSaving;
     dialog.showMessageBoxSync(window, {
       type: "info",
-      title: "File save in progress",
-      message: `Wait for the open file to finish saving before ${action === "close" ? "closing Aiden" : "reloading"}.`,
+      title: imagesOnly ? "Image workflow save in progress" : "File save in progress",
+      message: `Wait for ${imagesOnly ? workflow : "the open file"} to finish saving before ${action === "close" ? "closing Aiden" : "reloading"}.`,
       buttons: ["Keep Aiden Open"],
       defaultId: 0,
       cancelId: 0,
@@ -322,21 +340,25 @@ function confirmProtectedAction(
     return false;
   }
   if (!closeGuard.dirty) return true;
+  const file = closeGuard.path ? `“${closeGuard.path}”` : "The open file";
+  const imagesOnly = imagesDirty && !editorDirty;
   const response = dialog.showMessageBoxSync(window, {
     type: "warning",
-    title: "Discard unsaved edits?",
-    message: closeGuard.path
-      ? `“${closeGuard.path}” has edits that have not been saved.`
-      : "The open file has edits that have not been saved.",
+    title: imagesOnly ? "Discard unsaved changes?" : "Discard unsaved edits?",
+    message: imagesOnly
+      ? `${workflow.charAt(0).toUpperCase()}${workflow.slice(1)} has changes that have not been saved.`
+      : imagesDirty
+        ? `${file} and ${workflow} have edits that have not been saved.`
+        : `${file} has edits that have not been saved.`,
     detail:
       action === "close"
-        ? "Closing Aiden will permanently discard those edits."
-        : "Reloading Aiden will permanently discard those edits.",
+        ? `Closing Aiden will permanently discard those ${imagesOnly ? "changes" : "edits"}.`
+        : `Reloading Aiden will permanently discard those ${imagesOnly ? "changes" : "edits"}.`,
     buttons: [
       "Keep Editing",
       action === "close"
-        ? "Discard Edits and Close"
-        : "Discard Edits and Reload",
+        ? imagesOnly ? "Discard Changes and Close" : "Discard Edits and Close"
+        : imagesOnly ? "Discard Changes and Reload" : "Discard Edits and Reload",
     ],
     defaultId: 0,
     cancelId: 0,
@@ -763,7 +785,10 @@ async function refreshCloseGuardFromRenderer(
           dirty: document.documentElement.dataset.aidenDirty === "1",
           gitBusy: document.documentElement.dataset.aidenGitBusy === "1",
           revision: Number(document.documentElement.dataset.aidenGuardRevision || "0"),
-          saving: document.documentElement.dataset.aidenSaving === "1"
+          saving: document.documentElement.dataset.aidenSaving === "1",
+          dirtySources: document.documentElement.dataset.aidenDirtySources ?? "",
+          savingSources: document.documentElement.dataset.aidenSavingSources ?? "",
+          imagesLabel: document.documentElement.dataset.aidenImagesLabel ?? ""
         };
       })()`,
     )) as {
@@ -771,12 +796,26 @@ async function refreshCloseGuardFromRenderer(
       gitBusy?: unknown;
       revision?: unknown;
       saving?: unknown;
+      dirtySources?: unknown;
+      savingSources?: unknown;
+      imagesLabel?: unknown;
     };
+    const sourceList = (value: unknown) =>
+      typeof value === "string" && value.length <= 256 ? value.split(" ").filter(Boolean) : [];
+    const imagesLabel =
+      typeof latest?.imagesLabel === "string" && latest.imagesLabel.length > 0 && latest.imagesLabel.length <= 200
+        ? latest.imagesLabel
+        : undefined;
     closeGuard = {
       dirty: latest?.dirty === true,
       gitBusy: latest?.gitBusy === true,
       path: closeGuard.path,
       saving: latest?.saving === true,
+      sources: {
+        dirty: sourceList(latest?.dirtySources),
+        saving: sourceList(latest?.savingSources),
+        ...(imagesLabel ? { imagesLabel } : {}),
+      },
     };
     return Number.isSafeInteger(latest?.revision) &&
       Number(latest.revision) >= 0
@@ -1005,6 +1044,7 @@ async function requestWindowReload(
       gitBusy: false,
       path: undefined,
       saving: false,
+      sources: undefined,
     };
     protectedAction = "reload";
     if (options.ignoreCache) window.webContents.reloadIgnoringCache();
@@ -1237,6 +1277,8 @@ ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
         ? input.path
         : undefined,
     saving: input.saving === true,
+    // The renderer's own close-guard read (just before any prompt) supplies the sources.
+    sources: closeGuard.sources,
   };
   return true;
 });
@@ -1758,6 +1800,7 @@ async function createMainWindow(
       gitBusy: false,
       path: undefined,
       saving: false,
+      sources: undefined,
     };
     protectedAction = null;
   });
