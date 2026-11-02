@@ -277,7 +277,8 @@ async function fixture(options: {
               capability !== "bot:images" &&
               capability !== "bot:issues" &&
               capability !== "schedule:cards" &&
-              capability !== "chat:jobs",
+              capability !== "chat:jobs" &&
+              capability !== "attachments:raw",
           )
         ) {
           return null;
@@ -1885,6 +1886,7 @@ test("progress support is advertised and upgraded only when the Mac can serve it
       "schedule:read",
       "schedule:write",
       "schedule:cards",
+      "attachments:raw",
       "skills:invoke",
     ]);
     assert.equal(server.features.includes("chat-tasks-v1"), false);
@@ -5738,6 +5740,102 @@ test("bot-attachments-v1 is offered only while Bot uploads are wired, and its ro
     } finally {
       await app.close();
     }
+  }
+});
+
+test("attachments:raw is offered with uploads, and a holder uploads a picture as raw bytes to chats and Bots", async () => {
+  const { AidenRemoteAttachmentStore } = await import("./aiden-remote-attachments.js");
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  // A real 1x1 PNG, so the store's own checks decide what is accepted.
+  const png = Buffer.from(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63f8cfc0f01f000502020150a5f5730000000049454e44ae426082",
+    "hex",
+  );
+  const store = new AidenRemoteAttachmentStore();
+  const staged: Array<{ name: string; bytes: number }> = [];
+  const sessions = {
+    ...(recordingActivitySessions([], false) as unknown as Record<string, unknown>),
+    supportsAttachments: true,
+    uploadAttachment: async (deviceId: string, botId: string, body: unknown) => {
+      const projection = store.upload(deviceId, `bot:${botId}`, body);
+      staged.push({ name: projection.name, bytes: projection.size });
+      return projection;
+    },
+    removeAttachment: async () => {},
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+  const grants: AidenRemoteCapability[] = ["server:read", "bot:read", "bot:write", "chat:read", "chat:write"];
+  const raw = (base: string, route: string, body: Buffer, extra: Record<string, string> = {}) =>
+    fetch(`${base}${route}`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "image/png", "aiden-attachment-name": encodeURIComponent("Café photo.png"), ...extra },
+      body: new Uint8Array(body),
+    });
+
+  const before = await fixture({ capabilities: grants, acceptsBotCapabilities: true, deviceType: "iphone", botSessions: sessions });
+  try {
+    const server = await (await fetch(`${before.base}/server`, { headers })).json();
+    assert.equal(server.serverCapabilities.includes("attachments:raw"), true);
+    assert.equal(server.features.some((feature: string) => feature.includes("raw")), false, "no feature token is spent on it");
+    const refused = await raw(before.base, "/bots/bot-1/attachments", png);
+    assert.equal(refused.status, 403, "raw bytes need the opt-in");
+    // The refusal every client reads from the shared revision 50 fixture.
+    const sharedFixture = JSON.parse(
+      readFileSync(new URL("../../protocol/aiden-remote/v1/fixtures/contract.json", import.meta.url), "utf8"),
+    ) as { rawUploads: { withoutGrant: { error: { code: string; message: string; retryable: boolean } } } };
+    const refusal = (await refused.json()) as { error: { code: string; message: string; retryable: boolean } };
+    const expected = sharedFixture.rawUploads.withoutGrant.error;
+    assert.deepEqual(
+      { code: refusal.error.code, message: refusal.error.message, retryable: refusal.error.retryable },
+      { code: expected.code, message: expected.message, retryable: expected.retryable },
+    );
+    assert.equal((await raw(before.base, "/chats/chat-1/attachments", png)).status, 403);
+    const negotiated = await fetch(`${before.base}/device/capabilities`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ accepts: ["attachments:raw"] }),
+    });
+    assert.equal(negotiated.status, 200);
+    assert.equal(before.calls.some((call) => call.startsWith("attachment-upload:")), false);
+    assert.deepEqual(staged, []);
+  } finally {
+    await before.close();
+  }
+
+  const holder = await fixture({
+    capabilities: [...grants, "attachments:raw"],
+    acceptsBotCapabilities: true,
+    deviceType: "android",
+    botSessions: sessions,
+  });
+  try {
+    const accepted = await raw(holder.base, "/bots/bot-1/attachments", png);
+    assert.equal(accepted.status, 201);
+    const reference = await accepted.json();
+    assert.equal(reference.name, "Café photo.png");
+    assert.equal(reference.mimeType, "image/png");
+    assert.equal(reference.kind, "image");
+    assert.equal(reference.size, png.length, "the reference counts the picture's own bytes");
+    assert.match(reference.id, /^att_[A-Za-z0-9_-]{43}$/u);
+
+    assert.equal((await raw(holder.base, "/chats/chat-1/attachments", png)).status, 201);
+    assert.equal(holder.calls.some((call) => call.startsWith("attachment-upload:")), true);
+
+    // The same store checks apply: bytes that are not the declared picture, no name, too large.
+    const notPng = await raw(holder.base, "/bots/bot-1/attachments", Buffer.from("not a picture"));
+    assert.equal(notPng.status, 400);
+    const unnamed = await fetch(`${holder.base}/bots/bot-1/attachments`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "image/png" },
+      body: new Uint8Array(png),
+    });
+    assert.equal(unnamed.status, 400);
+    const oversized = await raw(holder.base, "/bots/bot-1/attachments", Buffer.alloc(8 * 1024 * 1024 + 1));
+    assert.equal(oversized.status, 413);
+    const otherType = await raw(holder.base, "/bots/bot-1/attachments", png, { "content-type": "image/gif" });
+    assert.equal(otherType.status, 415, "anything else is still read as the JSON upload");
+    assert.deepEqual(staged, [{ name: "Café photo.png", bytes: png.length }]);
+  } finally {
+    await holder.close();
   }
 });
 

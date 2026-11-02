@@ -25,6 +25,8 @@ import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.MediaType
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.ResponseBody
@@ -55,6 +57,7 @@ import javax.crypto.spec.SecretKeySpec
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
 import kotlin.coroutines.resume
+import okio.BufferedSink
 import kotlin.coroutines.resumeWithException
 
 /**
@@ -417,6 +420,7 @@ class AidenRemoteClient(
         requestTimeoutSeconds: Long? = null,
         maximumResponseBytes: Int? = null,
         retryConnectionFailure: Boolean = true,
+        customBody: RequestBody? = null,
         deserializer: (ByteArray) -> T
     ): T = try {
         withContext(Dispatchers.IO) {
@@ -447,7 +451,8 @@ class AidenRemoteClient(
         }
 
         cached?.let { requestBuilder.header("If-None-Match", it.etag) }
-        val requestBody = bodyBytes?.toRequestBody("application/json".toMediaType())
+        val requestBody = customBody
+            ?: bodyBytes?.toRequestBody("application/json".toMediaType())
             ?: bodyJson?.toRequestBody("application/json".toMediaType())
         when (method.uppercase()) {
             "GET" -> requestBuilder.get()
@@ -1029,16 +1034,38 @@ class AidenRemoteClient(
         chat
     }
 
+    /**
+     * Stages one upload for the chat's next turn. With [rawImages] (this phone holds
+     * `attachments:raw`, revision 50) a PNG or JPEG picture goes as its own bytes; anything else
+     * keeps the JSON envelope. [onProgress] hears the share of the request body sent, 0 to 1.
+     */
     suspend fun uploadAttachment(
         chatId: String,
-        upload: AidenAttachmentUpload
-    ): AidenAttachmentReference = executeRequest(
-        "/chats/$chatId/attachments",
-        method = "POST",
-        bodyJson = json.encodeToString(upload),
-        acceptedStatus = setOf(201)
-    ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
+        upload: AidenAttachmentUpload,
+        rawImages: Boolean = false,
+        onProgress: ((Float) -> Unit)? = null
+    ): AidenAttachmentReference {
+        val raw = if (rawImages) AidenRawAttachmentUpload.from(upload) else null
+        val body: ByteArray
+        val contentType: String
+        val headers = mutableMapOf<String, String>()
+        if (raw != null) {
+            body = raw.data
+            contentType = raw.mimeType
+            headers[AidenRawAttachmentUpload.NAME_HEADER] = raw.encodedName
+        } else {
+            body = json.encodeToString(upload).toByteArray(Charsets.UTF_8)
+            contentType = "application/json"
+        }
+        return executeRequest(
+            "/chats/$chatId/attachments",
+            method = "POST",
+            headers = headers,
+            acceptedStatus = setOf(201),
+            customBody = AidenProgressRequestBody(body, contentType.toMediaType(), onProgress)
+        ) { bytes ->
+            json.decodeFromString(String(bytes, Charsets.UTF_8))
+        }
     }
 
     suspend fun removeAttachment(chatId: String, attachmentId: String) =
@@ -3096,4 +3123,78 @@ private fun ResponseBody?.readBounded(maximumBytes: Int): ByteArray {
         }
     }
     return output.toByteArray()
+}
+
+/**
+ * Revision 50 (`attachments:raw`): a PNG or JPEG picture sent to an upload route as its own
+ * bytes, its name percent-encoded UTF-8 in `Aiden-Attachment-Name`. Anything the raw route would
+ * refuse keeps the JSON envelope, so the Mac answers it as it always has.
+ */
+internal class AidenRawAttachmentUpload private constructor(
+    val mimeType: String,
+    val encodedName: String,
+    val data: ByteArray
+) {
+    companion object {
+        const val NAME_HEADER = "Aiden-Attachment-Name"
+        /** The largest picture a Mac takes (8 MiB). */
+        const val MAX_BYTES = 8 * 1024 * 1024
+        const val MAX_ENCODED_NAME_LENGTH = 2_048
+        private val MIME_TYPES = setOf("image/png", "image/jpeg")
+        private const val UNRESERVED = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+        private val HEX = "0123456789ABCDEF".toCharArray()
+
+        fun from(upload: AidenAttachmentUpload): AidenRawAttachmentUpload? {
+            if (upload !is AidenAttachmentUpload.Image || upload.mimeType !in MIME_TYPES) return null
+            val data = runCatching { Base64.getDecoder().decode(upload.data) }.getOrNull() ?: return null
+            if (data.isEmpty() || data.size > MAX_BYTES) return null
+            val name = encodeName(upload.name)
+            if (name.isEmpty() || name.length > MAX_ENCODED_NAME_LENGTH) return null
+            return AidenRawAttachmentUpload(upload.mimeType, name, data)
+        }
+
+        /** RFC 3986 percent-encoding of the UTF-8 bytes; only unreserved characters stay as they are. */
+        fun encodeName(name: String): String = buildString {
+            for (byte in name.toByteArray(Charsets.UTF_8)) {
+                val value = byte.toInt() and 0xff
+                val char = value.toChar()
+                if (value < 0x80 && char in UNRESERVED) {
+                    append(char)
+                } else {
+                    append('%').append(HEX[value shr 4]).append(HEX[value and 0x0f])
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A request body that reports how much of itself has gone, for an upload's progress bar. A retry
+ * on a fresh connection writes it again from the start; the bar only moves forward.
+ */
+internal class AidenProgressRequestBody(
+    private val bytes: ByteArray,
+    private val contentType: MediaType,
+    private val onProgress: ((Float) -> Unit)?
+) : RequestBody() {
+    override fun contentType(): MediaType = contentType
+    override fun contentLength(): Long = bytes.size.toLong()
+    override fun writeTo(sink: BufferedSink) {
+        if (onProgress == null || bytes.isEmpty()) {
+            sink.write(bytes)
+            return
+        }
+        var sent = 0
+        while (sent < bytes.size) {
+            val count = minOf(SEGMENT_BYTES, bytes.size - sent)
+            sink.write(bytes, sent, count)
+            sink.flush()
+            sent += count
+            onProgress.invoke(sent.toFloat() / bytes.size)
+        }
+    }
+
+    private companion object {
+        const val SEGMENT_BYTES = 64 * 1024
+    }
 }

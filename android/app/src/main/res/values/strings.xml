@@ -995,6 +995,10 @@
 
     <!-- Chat: composer -->
     <string name="chat_composer_remove_attachment">Remove %1$s</string>
+    <string name="chat_composer_uploading">Sending</string>
+    <string name="chat_composer_uploading_of">Sending %1$d of %2$d</string>
+    <string name="chat_composer_upload_percent">%1$d%%</string>
+    <string name="chat_composer_stop_upload">Stop sending</string>
     <string name="chat_composer_remove_skill">Remove skill %1$s</string>
     <string name="chat_composer_add_attachment">Add attachment</string>
     <string name="chat_composer_photo_library">Photo Library</string>
