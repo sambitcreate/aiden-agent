@@ -58,6 +58,8 @@ export interface AttemptSnapshot {
   costStatus?: AttemptCostStatus;
   output: OutputRef[];
   mayHaveBeenBilled: boolean;
+  /** The prompt text sent with the request, recorded when the run started. */
+  prompt?: string;
 }
 
 /** A run with its attempts and a monotonic version for change detection. */

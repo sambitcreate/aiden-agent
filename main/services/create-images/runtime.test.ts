@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs/promises";
 import { access, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { StudioAssetStore } from "../studio-assets/store.js";
 import { fakeThumbnailer, pngBytes } from "../studio-assets/test-fixture.js";
+import type { RunSnapshot } from "../../../renderer/shared/images/run-types.js";
+import type { ExportFileSystem } from "./image-export.js";
 import { createPiImageGenerationPort } from "./image-port.js";
 import { ImageRunLedger } from "./run-ledger.js";
 import { CreateImagesRuntime, type CreateImagesAssets } from "./runtime.js";
@@ -24,6 +27,9 @@ async function environment(t: TestContext, options: Parameters<typeof fakeImageM
       reportIssue?: (message: string, error: unknown) => void;
       retryCooldownMs?: number;
       assets?: CreateImagesAssets;
+      saveRoot?: () => string;
+      exportFs?: ExportFileSystem;
+      notify?: (snapshot: RunSnapshot) => void;
     } = {},
   ) => {
     const instance = new CreateImagesRuntime({
@@ -108,6 +114,70 @@ test("shutdown aborts in-flight requests and records app-quit", async (t) => {
   assert.deepEqual([snapshot.run.state, snapshot.run.endReason], ["cancelled", "app-quit"]);
   const attempt = snapshot.attempts.find((entry) => entry.nodeId === "g1")!;
   assert.deepEqual([attempt.state, attempt.mayHaveBeenBilled], ["cancelled", true]);
+});
+
+test("quit waits for an auto-save still writing, so the file is complete and recorded before storage closes", async (t) => {
+  const env = await environment(t);
+  // The auto-save's write is held until quit has begun.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  // Signalled from the write itself: the run, its storage and the save folder touch the real
+  // disk first, which can outlast any fixed number of event-loop turns on a busy machine.
+  let writing!: () => void;
+  const writeStarted = new Promise<void>((resolve) => {
+    writing = resolve;
+  });
+  const real = fs as unknown as ExportFileSystem;
+  const held: ExportFileSystem = {
+    ...real,
+    open: async (target, flags, mode) => {
+      const handle = await real.open(target, flags, mode);
+      return {
+        writeFile: async (data: Uint8Array) => {
+          writing();
+          await gate;
+          return handle.writeFile(data);
+        },
+        close: () => handle.close(),
+      };
+    },
+  };
+  let ended!: () => void;
+  const runEnded = new Promise<void>((resolve) => {
+    ended = resolve;
+  });
+  const saveRoot = path.join(env.root, "Pictures");
+  const runtime = env.runtime({
+    saveRoot: () => saveRoot,
+    exportFs: held,
+    notify: (snapshot) => {
+      if (snapshot.run.state === "succeeded") ended();
+    },
+  });
+  await runtime.initialize({ enabled: true, onError: failOnError });
+  const doc = await saveWorkflow(runtime.services().workflows, generateChains(1));
+  const plan = await runtime.services().coordinator.prepare(OWNER, { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } });
+  assert.ok("plan" in plan);
+  const started = await runtime.services().coordinator.start(OWNER, plan.plan.consentId);
+  assert.ok("runId" in started);
+  // The image's auto-save starts as soon as it is stored; the run ends while the write is held.
+  await Promise.all([writeStarted, runEnded]);
+
+  const quitting = runtime.shutdown("app-quit");
+  setTimeout(release, 30);
+  await quitting;
+
+  const ledger = ImageRunLedger.open({ directory: path.join(env.root, "create-images") });
+  t.after(() => ledger.close());
+  const recorded = [...ledger.exportPaths()];
+  assert.equal(recorded.length, 1, "the auto-save was recorded before the ledger closed");
+  const [assetId, file] = recorded[0]!;
+  assert.deepEqual(await fs.readFile(file), Buffer.from((await env.assets.read(assetId)).bytes));
+  // Only the finished image is in the folder.
+  const saved = (await readdir(saveRoot, { recursive: true, withFileTypes: true })).filter((entry) => entry.isFile());
+  assert.deepEqual(saved.map((entry) => path.join(entry.parentPath, entry.name)), [file]);
 });
 
 test("startup prunes runs beyond retention and releases their asset holds", async (t) => {

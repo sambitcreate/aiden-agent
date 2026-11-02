@@ -41,7 +41,7 @@ data class AidenWorkspace(
     var memoryEnabled: Boolean = true,
     val hasFolder: Boolean = false,
     val isManagedWorktree: Boolean = false,
-    /** Contract revision 50: a hidden folder the Mac made for one chat without a workspace. */
+    /** Contract revision 51: a hidden folder the Mac made for one chat without a workspace. */
     val noWorkspace: Boolean = false,
     val branchName: String? = null,
     val repositoryName: String? = null,
@@ -52,7 +52,7 @@ data class AidenWorkspace(
 )
 
 /**
- * Chats without a workspace (contract revision 50). Each runs on the Mac in a hidden workspace of
+ * Chats without a workspace (contract revision 51). Each runs on the Mac in a hidden workspace of
  * its own. Phones list them under one Chats group that stands on its home record, and start new
  * ones there; the Mac gives a new chat its own folder when the home already holds one.
  */

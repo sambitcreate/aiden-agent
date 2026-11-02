@@ -715,7 +715,7 @@ private fun AidenWorkspaceHome(
             ) {
                 Text(stringResource(R.string.workspace_new_chat), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(10.dp))
-                // Revision 50: the Mac gives the chat a folder of its own if the home already holds one.
+                // Revision 51: the Mac gives the chat a folder of its own if the home already holds one.
                 noWorkspaceHome?.let { home ->
                     AidenNewChatChoice(
                         stringResource(R.string.workspace_home_choice_no_workspace),

@@ -137,6 +137,13 @@ internal fun aidenShouldRequestBotIssues(server: AidenServer, installation: Aide
 internal fun aidenShouldRequestChatJobs(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.CHAT_JOBS, server, installation)
 
+/**
+ * Revision 50: a Mac that offers `attachments:raw` in `serverCapabilities` is asked for it, in a
+ * call of its own after `chat:jobs`, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestRawUploads(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.ATTACHMENTS_RAW, server, installation)
+
 private fun aidenShouldRequestSoloCapability(
     capability: AidenRemoteCapability,
     server: AidenServer,
@@ -228,6 +235,22 @@ internal suspend fun aidenRequestChatJobs(
 ): AidenSoloCapabilityNegotiation? =
     aidenRequestCapabilitiesAlone(
         if (aidenShouldRequestChatJobs(server, installation)) listOf(AidenRemoteCapability.CHAT_JOBS) else emptyList(),
+        client,
+        stillCurrent
+    )
+
+/**
+ * Revision 50: asks [server] for `attachments:raw` alone. A Mac that refuses it (400 or 404)
+ * leaves the pairing as it was; pictures then go as base64 inside JSON, as before.
+ */
+internal suspend fun aidenRequestRawUploads(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestRawUploads(server, installation)) listOf(AidenRemoteCapability.ATTACHMENTS_RAW) else emptyList(),
         client,
         stillCurrent
     )
@@ -578,13 +601,21 @@ class AidenRemoteCoordinator(
                     server = imagesServer,
                     request = ::aidenRequestBotIssues
                 )
-                // Revision 49: `chat:jobs` goes alone too, last.
-                val negotiatedServer = negotiateSoloCapability(
+                // Revision 49: `chat:jobs` goes alone too.
+                val jobsServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
                     server = issuesServer,
                     request = ::aidenRequestChatJobs
+                )
+                // Revision 50: `attachments:raw` goes alone too, last.
+                val negotiatedServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = jobsServer,
+                    request = ::aidenRequestRawUploads
                 )
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(

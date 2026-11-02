@@ -124,7 +124,7 @@ test("workspace projections omit local paths and internal managed-worktree ident
   assert.match(projected.revision, /^rev_[A-Za-z0-9_-]{43}$/u);
 });
 
-test("a hidden No workspace folder is marked for phones and ordinary workspaces are not (revision 50)", () => {
+test("a hidden No workspace folder is marked for phones and ordinary workspaces are not (revision 51)", () => {
   const hidden = projectAidenRemoteWorkspace(workspace({
     name: "No workspace",
     folderPath: "/private/app-data/chat-folders/quiet-otter",

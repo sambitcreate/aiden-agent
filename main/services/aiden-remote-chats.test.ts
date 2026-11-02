@@ -1494,7 +1494,7 @@ test("chat create is device-scoped idempotent and CRUD checks exact revisions", 
   assert.equal(app.notifications(), 3);
 });
 
-test("a phone's chat aimed at a used No workspace folder is saved in a fresh one (revision 50)", async () => {
+test("a phone's chat aimed at a used No workspace folder is saved in a fresh one (revision 51)", async () => {
   const released: string[] = [];
   const app = fixture(chat({ workspaceId: "project" }), {
     noWorkspace: {
@@ -1512,7 +1512,7 @@ test("a phone's chat aimed at a used No workspace folder is saved in a fresh one
     "a retried create keeps the folder it was given",
   );
 
-  // A phone from before revision 50 doesn't ask, so its chat stays in the workspace it named.
+  // A phone from before revision 51 doesn't ask, so its chat stays in the workspace it named.
   const older = await app.service.create("device-2", "chat-create-key-nows2", { workspaceId: "default" });
   assert.equal(older.workspaceId, "default");
   await assert.rejects(
@@ -1546,7 +1546,7 @@ test("a phone's move out of a No workspace folder still answers when the folder 
   assert.equal(moved.workspaceId, "project");
 });
 
-test("two phones starting No workspace chats at once never share a hidden folder (revision 50)", async () => {
+test("two phones starting No workspace chats at once never share a hidden folder (revision 51)", async () => {
   let fresh = 0;
   let app: ReturnType<typeof fixture> | undefined;
   app = fixture(chat({ workspaceId: "project" }), {

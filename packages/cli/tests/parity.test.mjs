@@ -2338,6 +2338,50 @@ test("a durable Bot paused from the CLI stops its running turn, refuses sends an
     await remoteBots.botSessions.close();
   }
 
+  await t.test("remote revoke closes only the revoked phone's open Bot stream", async () => {
+    const remote = await api.createCliRemote(dir, daemon, scheduler, { bots: host, discovery: { async start() {}, stop() {} } });
+    try {
+      await remote.start();
+      const { lanPort } = await remote.service.status();
+      const ca = readFileSync(join(dir, "remote-tls/ca-certificate.pem"));
+      const marker = "Message sent after revocation";
+      async function watchPhone(name) {
+        const phone = await remote.state.issueDevice({ name, type: "iphone", clientVersion: "test", capabilities: ["chat:read", "bot:read"], acceptsBotCapabilities: true });
+        const request = httpsRequest({
+          hostname: "127.0.0.1", port: lanPort, ca, path: `/api/aiden/v1/bots/${bot.id}/session/events`,
+          headers: { authorization: `Bearer ${phone.credential}`, "aiden-protocol-version": "1" },
+          signal: AbortSignal.timeout(10_000),
+        });
+        const opened = once(request, "response");
+        request.end();
+        const [response] = await opened;
+        assert.equal(response.statusCode, 200);
+        // The snapshot flushes the headers. Keep reading this same connection through revoke.
+        const outcome = (async () => {
+          let body = "";
+          try {
+            for await (const chunk of response.setEncoding("utf8")) {
+              body += chunk;
+              if (body.includes(marker)) return "received message";
+            }
+          } catch (error) {
+            if (error.code !== "ECONNRESET") throw error;
+          }
+          assert.match(body, /event: snapshot/u);
+          return "closed";
+        })();
+        return { id: phone.device.id, outcome };
+      }
+      const revoked = await watchPhone("First phone");
+      const retained = await watchPhone("Second phone");
+      assert.deepEqual(await remote.command(["revoke", revoked.id]), { revoked: true });
+      await host.durable.runtime.send(bot.id, { text: marker, requestId: "send-after-device-revoke" });
+      assert.deepEqual(await Promise.all([revoked.outcome, retained.outcome]), ["closed", "received message"]);
+    } finally {
+      await remote.stop();
+    }
+  });
+
   // Deleting the Bot forgets its pause.
   await host.command(["pause", bot.id]);
   await host.command(["delete", bot.id]);

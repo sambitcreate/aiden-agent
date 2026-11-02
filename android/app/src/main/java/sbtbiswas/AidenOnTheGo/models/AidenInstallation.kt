@@ -216,6 +216,11 @@ data class AidenServer(
         get() = serverCapabilities?.contains(AidenRemoteCapability.CHAT_JOBS) == true &&
             capabilities.contains(AidenRemoteCapability.CHAT_JOBS)
 
+    /** Offered and held (revision 50): pictures go to the upload routes as their own bytes. */
+    val supportsRawUploads: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.ATTACHMENTS_RAW) == true &&
+            capabilities.contains(AidenRemoteCapability.ATTACHMENTS_RAW)
+
     /**
      * Chat messages may carry inline `visuals` (revision 28). Informational:
      * the transcript renders whatever visuals a message carries.

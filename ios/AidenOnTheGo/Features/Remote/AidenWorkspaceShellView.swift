@@ -133,7 +133,7 @@ enum AidenNewAgentChoice: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// The choices to offer: No Workspace only when the Mac lists a Chats home (revision 50).
+    /// The choices to offer: No Workspace only when the Mac lists a Chats home (revision 51).
     static func available(noWorkspace: Bool) -> [AidenNewAgentChoice] {
         allCases.filter { noWorkspace || $0 != .noWorkspace }
     }

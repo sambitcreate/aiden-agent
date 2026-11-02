@@ -1873,7 +1873,7 @@ export class AidenRemoteChatService {
             ? await this.options.models.resolve(parsed.providerId, parsed.model)
             : undefined;
           const created = await this.assigningNoWorkspace(async () => {
-            // Only a phone that knows the Chats group (revision 50) asks for a folder of its own;
+            // Only a phone that knows the Chats group (revision 51) asks for a folder of its own;
             // an older phone keeps the workspace it named, as it always has.
             const workspaceId = parsed.noWorkspace
               ? ((await this.options.noWorkspace?.target(parsed.workspaceId)) ?? parsed.workspaceId)

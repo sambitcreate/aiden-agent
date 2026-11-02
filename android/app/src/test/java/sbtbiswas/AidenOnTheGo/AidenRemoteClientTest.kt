@@ -231,7 +231,7 @@ class AidenRemoteClientTest {
         val asked = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
         assertEquals("default", asked.getValue("workspaceId").jsonPrimitive.content)
         assertEquals("true", asked.getValue("noWorkspace").jsonPrimitive.content)
-        // An ordinary create never asks (revision 50).
+        // An ordinary create never asks (revision 51).
         client.createChat("workspace-1")
         assertFalse(Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject.containsKey("noWorkspace"))
     }

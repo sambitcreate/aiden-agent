@@ -2632,6 +2632,105 @@ class AidenChatTest {
         }
     }
 
+    @Test
+    fun stopDropsTheUploadInFlightAndWaitingBatchesButKeepsWhatReachedTheMac() {
+        val directory = kotlin.io.path.createTempDirectory("aiden-upload-stop-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val secondArrived = CountDownLatch(1)
+        val releaseSecond = CountDownLatch(1)
+        val uploadedNames = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val initialChat = AidenChat(
+            id = "chat-stop", workspaceId = "workspace-stop", title = "Stop uploads",
+            messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH,
+            revision = "revision-stop"
+        )
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
+                "/api/aiden/v1/chats/chat-stop/attachments" -> {
+                    val name = json.parseToJsonElement(request.body.readUtf8()).jsonObject["name"]!!.jsonPrimitive.content
+                    uploadedNames.add(name)
+                    if (name == "second") {
+                        // Hold the second upload so Stop lands while it is in flight.
+                        secondArrived.countDown()
+                        releaseSecond.await(5, TimeUnit.SECONDS)
+                    }
+                    MockResponse().setResponseCode(201).setBody(json.encodeToString(AidenAttachmentReference(
+                        id = "att_" + name.padEnd(43, 'x'), name = name, mimeType = "text/plain",
+                        kind = AidenAttachmentKind.TEXT, size = 1, expiresAt = Instant.now().plusSeconds(600)
+                    )))
+                }
+                "/api/aiden/v1/chats/chat-stop" -> MockResponse().setBody(json.encodeToString(initialChat))
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(
+                    AidenPairingExchange(
+                        instanceId = "instance-stop", deviceId = "device-stop",
+                        endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test",
+                        credential = "synthetic-credential",
+                        capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
+                    ), null
+                )
+                val drafts = AidenChatDraftStore(directory)
+                val cache = AidenChatCache(directory)
+                val coordinator = AidenRemoteCoordinator(
+                    installations, directory, cache, drafts,
+                    scope = CoroutineScope(dispatcher + Job().apply { cancel() })
+                )
+                coordinator.refreshClient()
+                val model = AidenChatViewModel(initialChat.id, coordinator, cache, drafts, initialChat)
+                viewModels.put("chat", model)
+                yield()
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                val text = { name: String -> AidenAttachmentUpload.Text(name = name, mimeType = "text/plain", text = "x") }
+                val picked = launch(start = CoroutineStart.UNDISPATCHED) {
+                    model.prepareAndUpload(listOf("first", "second")) { text(it) }
+                }
+                val waiting = launch(start = CoroutineStart.UNDISPATCHED) {
+                    model.prepareAndUpload(listOf("third")) { text(it) }
+                }
+                try {
+                    withContext(Dispatchers.IO) { assertTrue(secondArrived.await(5, TimeUnit.SECONDS)) }
+                    val sending = withTimeout(5_000) { model.uploadProgress.first { it?.index == 1 } }!!
+                    assertEquals(2, sending.count)
+                    assertTrue(sending.percent >= 50)
+                    assertEquals(listOf("first"), model.pendingAttachments.value.map { it.name })
+
+                    model.cancelUploads()
+                    withTimeout(5_000) { picked.join(); waiting.join() }
+
+                    assertTrue(picked.isCancelled)
+                    assertTrue(waiting.isCancelled)
+                    // The picture that reached the Mac stays ready to send; the bar is gone.
+                    assertEquals(listOf("first"), model.pendingAttachments.value.map { it.name })
+                    assertNull(model.uploadProgress.value)
+                    assertEquals(0, model.preparingAttachmentBatches.value)
+                    assertFalse(model.isUploadingAttachment.value)
+                    // The batch waiting its turn never reached the Mac.
+                    assertEquals(listOf("first", "second"), uploadedNames.toList())
+                } finally {
+                    releaseSecond.countDown()
+                    picked.cancelAndJoin()
+                    waiting.cancelAndJoin()
+                }
+            }
+        } finally {
+            releaseSecond.countDown()
+            runBlocking(dispatcher) { viewModels.clearAndJoin() }
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
     private fun assertFailedSendDraft(newerText: String = "", purgeWhileSending: Boolean = false, checkPreparation: Boolean = false) {
         val directory = kotlin.io.path.createTempDirectory("aiden-failed-send-").toFile()
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
