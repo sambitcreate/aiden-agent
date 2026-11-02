@@ -156,6 +156,7 @@ export interface AidenRemoteServiceOptions {
   pairingRequestSettings?: {
     load(): Promise<boolean>;
     save(accept: boolean): Promise<void>;
+    revokeDevice(deviceId: string): Promise<boolean>;
   };
   /** Called whenever the set of incoming connection requests may have changed. */
   notifyPairingRequestsChanged?: () => void;
@@ -601,7 +602,10 @@ export class AidenRemoteService {
       pairingRequests = this.options.pairingRequestSettings
         ? new AidenRemotePairingRequestService({
             instanceId: state.instanceId,
-            devices: this.options.state,
+            devices: {
+              issueDevice: (...args) => this.options.state.issueDevice(...args),
+              revokeDevice: (deviceId) => this.options.pairingRequestSettings!.revokeDevice(deviceId),
+            },
             accepting: () => this.acceptPairingRequests === true,
             admission: () => pairing.admissionWindow(),
             resolveTransport: (transport) =>
