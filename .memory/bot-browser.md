@@ -3,7 +3,7 @@
 Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §5.1 (package P6). Branch `wp/p6-browser`, on top of P1 (hand-offs), P3 (rules) and P4. User doc: `docs/environment-browser.md` "A Bot's own browser".
 
 ## Rule hand-offs (2026-11-02)
-The host keeps the probed tab and document revision with the waiting card. Open checks that document and holds and reveals the tab synchronously. The public card omits the binding. A closed or navigated tab cannot be replaced by a same-URL tab.
+The host keeps the probed tab and document revision with the waiting card. Open checks that document and holds and reveals the tab synchronously. The public card omits the binding. A closed or navigated tab cannot be replaced by a same-URL tab. The rule handoff case in `tests/e2e/bot-sign-in.spec.ts` checks active-tab selection and the owning window’s reveal event with two same-URL tabs in Electron.
 
 ## Profile and workspace
 - `main/services/browser/bot-profile.ts`: profile id `bot:<botId>` (a real id gives `bot:bot:<uuid>`), partition `persist:aiden-bot-<botDirectoryName>`. `botDirectoryName` validates the id.
