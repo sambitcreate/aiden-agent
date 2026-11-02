@@ -491,7 +491,7 @@ test("the desktop IPC parser copies only known fields and refuses bad input", ()
   assert.throws(() => parseChatTriageRequest("chat-a", { done: true }, "2"));
 });
 
-test("the desktop IPC refuses chats this host doesn't list and Bot chats, as the Remote route does", async (t) => {
+test("the desktop IPC refuses chats this host doesn't list, Bot chats and feature-owned chats, as the Remote route does", async (t) => {
   const root = await tmpDir(t);
   const store = new ChatTriageStore(() => root, { now: () => 100 });
   const dependencies = {
@@ -499,6 +499,7 @@ test("the desktop IPC refuses chats this host doesn't list and Bot chats, as the
       { id: "chat-a" },
       { id: "assistant-chat", workspaceId: "assistant" },
       { id: "bot-chat", botId: "bot-1" },
+      { id: "design-chat", owner: { kind: "design-project" as const, projectId: "project-1" } },
     ],
     triage: store,
   };
@@ -506,5 +507,6 @@ test("the desktop IPC refuses chats this host doesn't list and Bot chats, as the
   assert.equal((await setChatTriageFromRenderer(dependencies, "assistant-chat", { done: true })).ok, true);
   await assert.rejects(setChatTriageFromRenderer(dependencies, "gone", { pinned: true }), /no longer exists/u);
   await assert.rejects(setChatTriageFromRenderer(dependencies, "bot-chat", { done: true }), /no longer exists/u);
+  await assert.rejects(setChatTriageFromRenderer(dependencies, "design-chat", { pinned: true }), /no longer exists/u);
   assert.deepEqual(Object.keys((await store.snapshot()).chats).sort(), ["assistant-chat", "chat-a"]);
 });

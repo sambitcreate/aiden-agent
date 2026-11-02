@@ -179,7 +179,8 @@ export function registerChatHistoryHandlers(): void {
   ipcMain.handle("chats:triage", () => chatTriage.snapshot());
   ipcMain.handle("chats:setTriage", async (_event, id: unknown, patch: unknown, ifRevision?: unknown) =>
     setChatTriageFromRenderer(
-      { chats: () => chatStore.listSummaryMetadata(), triage: chatTriage },
+      // The reconciled list the Remote triage route classifies chats from.
+      { chats: () => chatApplicationService.list(), triage: chatTriage },
       id,
       patch,
       ifRevision,

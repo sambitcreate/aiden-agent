@@ -42,6 +42,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -242,7 +243,7 @@ object AidenInboxNoticeText {
         if (snooze is AidenChatTriageChange.Snooze.Until) {
             val date = snooze.at.atZone(zone)
             val time = AidenInboxTimeText.time(snooze.at, zone, locale)
-            val today = LocalDate.ofInstant(now, zone)
+            val today = now.atZone(zone).toLocalDate()
             return when (date.toLocalDate()) {
                 today -> Confirmation.SnoozedToday(time)
                 today.plusDays(1) -> Confirmation.SnoozedTomorrow(time)
@@ -265,23 +266,25 @@ object AidenInboxNoticeText {
  * Shows an Inbox notice as a snackbar, with Undo when the change can be put
  * back. A confirmation goes when its Undo window closes, as on the desktop,
  * even while queued behind another snackbar; with TalkBack it stays until
- * dismissed. One first shown past that window is dropped instead.
- * [onUndo] runs the inverse write; [onDismissed] gets the notice's id.
+ * dismissed, and turning TalkBack on or off while it shows re-evaluates
+ * that. One first shown past that window is dropped instead.
+ * [onUndo] runs the inverse write against the revision the change left;
+ * [onDismissed] gets the notice's id.
  */
 @Composable
 fun AidenInboxNoticeEffect(
     notice: AidenInboxNotice?,
     snackbarHostState: SnackbarHostState,
-    onUndo: suspend (chatId: String, undo: AidenChatTriageChange) -> Unit,
+    onUndo: suspend (chatId: String, undo: AidenChatTriageChange, revision: Int) -> Unit,
     onDismissed: (UUID) -> Unit
 ) {
     val context = LocalContext.current
     val resources = context.resources
-    val accessibilityManager = remember(context) { context.getSystemService(AccessibilityManager::class.java) }
+    val talkBack = rememberTouchExplorationEnabled()
     val undoLabel = stringResource(R.string.inbox_action_undo)
     val currentOnUndo by rememberUpdatedState(onUndo)
     val currentOnDismissed by rememberUpdatedState(onDismissed)
-    LaunchedEffect(notice?.id) {
+    LaunchedEffect(notice?.id, talkBack) {
         val shown = notice ?: return@LaunchedEffect
         // Back on the screen after the Undo window: the confirmation is stale.
         if (shown is AidenInboxNotice.Changed && shown.isStale(Instant.now())) {
@@ -289,7 +292,6 @@ fun AidenInboxNoticeEffect(
             return@LaunchedEffect
         }
         val undo = (shown as? AidenInboxNotice.Changed)?.undo
-        val talkBack = accessibilityManager?.isTouchExplorationEnabled == true
         val duration = if (talkBack) SnackbarDuration.Indefinite else SnackbarDuration.Long
         val show: suspend () -> SnackbarResult = {
             snackbarHostState.showSnackbar(
@@ -304,10 +306,26 @@ fun AidenInboxNoticeEffect(
         val result = if (closesAt == null) show()
         else withTimeoutOrNull(Duration.between(Instant.now(), closesAt).toMillis().coerceAtLeast(0)) { show() }
         if (result == SnackbarResult.ActionPerformed && shown is AidenInboxNotice.Changed && undo != null) {
-            currentOnUndo(shown.chatId, undo)
+            currentOnUndo(shown.chatId, undo, shown.revision)
         }
         currentOnDismissed(shown.id)
     }
+}
+
+/** Whether TalkBack (touch exploration) is on, following changes while shown. */
+@Composable
+private fun rememberTouchExplorationEnabled(): Boolean {
+    val context = LocalContext.current
+    val manager = remember(context) { context.getSystemService(AccessibilityManager::class.java) }
+    var enabled by remember(manager) { mutableStateOf(manager?.isTouchExplorationEnabled == true) }
+    DisposableEffect(manager) {
+        val listener = AccessibilityManager.TouchExplorationStateChangeListener { enabled = it }
+        manager?.addTouchExplorationStateChangeListener(listener)
+        // A change between the first read and registering the listener.
+        enabled = manager?.isTouchExplorationEnabled == true
+        onDispose { manager?.removeTouchExplorationStateChangeListener(listener) }
+    }
+    return enabled
 }
 
 /** A small Beta capsule beside the Inbox title: secondary ink on a 12% fill. */

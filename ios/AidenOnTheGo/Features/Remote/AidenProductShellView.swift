@@ -297,8 +297,10 @@ final class AidenProductNavigationStore {
             compactBotPathByInstance = try container.decodeIfPresent([String: [String]].self, forKey: .compactBotPathByInstance) ?? [:]
             selectedBotByScope = try container.decodeIfPresent([String: String].self, forKey: .selectedBotByScope)
             botCoachmarkVersionsByScope = try container.decodeIfPresent([String: Int].self, forKey: .botCoachmarkVersionsByScope)
-            // Read per entry: a view a newer build saved (Inbox, on a
-            // downgrade) drops only that Mac's choice, not the whole snapshot.
+            // Read per entry: a sidebar view this build doesn't know (one a
+            // later build adds) drops only that Mac's choice, not the whole
+            // snapshot. This guards builds that have this decoder; an older
+            // build without it still fails on such a value.
             workspaceSidebarOrganizationsByInstance = (try? container.decodeIfPresent(
                 [String: String].self,
                 forKey: .workspaceSidebarOrganizationsByInstance

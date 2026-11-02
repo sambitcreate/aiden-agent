@@ -1305,20 +1305,45 @@ actor AidenChatCache {
 /// Cached dates keep their milliseconds, so a cached inbox orders and wakes
 /// rows exactly as the Mac does. Files written before this kept whole seconds
 /// and still decode.
+///
+/// The milliseconds are rounded and written by hand: `ISO8601FormatStyle`
+/// truncates its fraction, so a date the host sent as `.002` (stored as a
+/// double just under it) would come back `.001`.
 enum AidenChatCacheDates {
-    private static let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
     private static let whole = Date.ISO8601FormatStyle()
+
+    /// `yyyy-MM-dd'T'HH:mm:ss.SSS'Z'` in UTC, from the date rounded to the
+    /// nearest millisecond.
+    static func string(from date: Date) -> String {
+        let milliseconds = Int64((date.timeIntervalSince1970 * 1000).rounded())
+        let seconds = milliseconds >= 0 ? milliseconds / 1000 : (milliseconds - 999) / 1000
+        let fraction = milliseconds - seconds * 1000
+        let text = Date(timeIntervalSince1970: TimeInterval(seconds)).formatted(whole)
+        // `whole` writes UTC as a trailing "Z".
+        return String(text.dropLast()) + String(format: ".%03lldZ", fraction)
+    }
+
+    /// An ISO 8601 date with or without a fraction of a second, kept to the
+    /// millisecond.
+    static func date(from text: String) -> Date? {
+        guard let dot = text.firstIndex(of: ".") else { return try? whole.parse(text) }
+        let afterDot = text[text.index(after: dot)...]
+        let digits = afterDot.prefix { $0.isASCII && $0.isNumber }
+        guard !digits.isEmpty, let fraction = Double("0." + digits),
+              let base = try? whole.parse(String(text[..<dot]) + afterDot.dropFirst(digits.count)) else { return nil }
+        let milliseconds = (fraction * 1000).rounded()
+        return Date(timeIntervalSince1970: base.timeIntervalSince1970 + milliseconds / 1000)
+    }
 
     static let encoding = JSONEncoder.DateEncodingStrategy.custom { date, encoder in
         var container = encoder.singleValueContainer()
-        try container.encode(date.formatted(fractional))
+        try container.encode(string(from: date))
     }
 
     static let decoding = JSONDecoder.DateDecodingStrategy.custom { decoder in
         let container = try decoder.singleValueContainer()
         let text = try container.decode(String.self)
-        if let date = try? fractional.parse(text) { return date }
-        if let date = try? whole.parse(text) { return date }
+        if let date = date(from: text) { return date }
         throw DecodingError.dataCorruptedError(in: container, debugDescription: "Expected an ISO 8601 date.")
     }
 }

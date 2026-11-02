@@ -316,8 +316,8 @@ private fun AidenWorkspaceHome(
     AidenInboxNoticeEffect(
         notice = inboxNotice,
         snackbarHostState = snackbarHostState,
-        onUndo = { chatId, undo ->
-            viewModel.setInboxTriage(chatId, undo, isOpen = chatId == openChatId, offersUndo = false)
+        onUndo = { chatId, undo, revision ->
+            viewModel.setInboxTriage(chatId, undo, isOpen = chatId == openChatId, undoRevision = revision)
         },
         onDismissed = viewModel::dismissInboxNotice
     )

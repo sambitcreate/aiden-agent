@@ -459,11 +459,19 @@ Claim the revision after the one on `main` at merge time. It is 49 today (`AIDEN
 
 *Final integration fixes (2026-11-01).* No new token or revision.
 
-- Desktop: dismissing a detached prompt or an interrupted wait now refreshes the Dock badge and the sidebar (`chats:activity-changed`), and only when something was dismissed. `chats:setTriage` refuses a chat that no longer exists and a Bot chat. Triage pruning drops Done marks and passed snoozes before pins and live snoozes. A merged Undo toast for chats snoozed to different times names no time.
+- Desktop: dismissing a detached prompt or an interrupted wait now refreshes the Dock badge and the sidebar (`chats:activity-changed`), and only when something was dismissed. `chats:setTriage` refuses a chat that no longer exists and a Bot chat. Triage pruning drops Done marks and passed snoozes before pins and live snoozes. A merged snooze Undo batch keeps its `until` only while every chat in it wakes then; this is bookkeeping with no visible change, since the toast names a time only for a single chat ("2 chats snoozed" either way).
 - iOS and Android: Undo is never retried. Its `ifRevision` is the revision its own write left, so a `409` means another device changed the chat since; the phone puts the row back, reloads and says "That chat changed since, so Undo left it as it is.", as the desktop does. Swipes keep their one retry. A triage answer with a revision below 1 is refused. Snooze confirmations say "tomorrow".
 - iOS: the banner is announced to VoiceOver and stays until dismissed while VoiceOver runs; otherwise an Undo banner goes after 5 s and other notices after 10 s, as on Android. A sidebar view this build doesn't know drops only that Mac's choice. The chat-summary cache keeps milliseconds and still reads whole-second files.
 - Android: Mark read writes nothing to a host without `chat-read-state-v1`.
 - Feature tokens: since revision 50 both the phone list and the desktop list hold exactly 32 tokens, with no headroom; the next token for either audience must retire one.
+
+*Final review fixes (2026-11-01).* No new token or revision.
+
+- iOS and Android: the Undo notice carries the revision its swipe's own write left (iOS `AidenInboxNotice.revision`, Android `AidenInboxNotice.Changed.revision`), and Undo sends that as `ifRevision`, as the desktop keeps `item.revision` in its Undo batch. A reload between the swipe and Undo that brought in another device's newer revision therefore makes Undo a `409` (no retry, nothing overwritten) instead of writing over it.
+- iOS: the banner's window counts from when it was posted (`postedAt`), so a banner shown again after navigating back gets only what is left, and VoiceOver hears each banner once. VoiceOver turning on or off while a banner shows re-evaluates its timer (`accessibilityVoiceOverEnabled` is part of the task key). Android: TalkBack changes are observed (`TouchExplorationStateChangeListener`) and re-evaluate the snackbar's duration.
+- iOS: the chat-summary cache writes milliseconds rounded from the date by hand (`ISO8601FormatStyle` truncated, so `.002` came back `.001`) and reads the fraction back to the millisecond.
+- Android: the snooze confirmation's day no longer uses `LocalDate.ofInstant` (API 34) on a minSdk 26 app; lint reports no `NewApi` in the branch.
+- Desktop: `chats:setTriage` classifies the chat from the same reconciled chat list the Remote triage route uses (`ChatApplicationService.list`), not the transcript-free summary index; a feature-owned chat is refused as well as a Bot chat.
 
 *3d deferred (2026-11-01).* Onboarding stays as it is while Inbox is Beta: the gallery tile below waits until Inbox leaves Beta or becomes a headline feature.
 

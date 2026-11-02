@@ -622,13 +622,28 @@ struct AidenInboxNotice: Identifiable, Equatable {
     let message: String
     var undo: AidenChatTriageChange?
     var chatID: String?
+    /// The triage revision the swipe's own write left. Undo is sent against
+    /// it, never against whatever revision the row holds by then, so a newer
+    /// write from another device is a conflict rather than overwritten (the
+    /// desktop keeps `item.revision` in its Undo batch).
+    var revision: Int?
+    /// When the banner was posted: its window counts from here, so a banner
+    /// shown again (after navigating back) gets only what is left.
+    var postedAt = Date()
 
-    /// How long the banner stays before it goes by itself, as on Android: an
-    /// Undo lasts its 5-second window, any other notice (a refusal, a
-    /// conflict) 10 seconds. With VoiceOver on it stays until dismissed, so it
-    /// can be reached after it is announced.
+    /// How long the banner stays in all before it goes by itself, as on
+    /// Android: an Undo lasts its 5-second window, any other notice (a
+    /// refusal, a conflict) 10 seconds. With VoiceOver on it stays until
+    /// dismissed, so it can be reached after it is announced.
     func autoDismissDelay(voiceOverRunning: Bool) -> Duration? {
         if voiceOverRunning { return nil }
         return undo == nil ? .seconds(10) : .seconds(5)
+    }
+
+    /// What is left of `autoDismissDelay` at `now`; zero once it has passed.
+    func remainingDelay(voiceOverRunning: Bool, now: Date = Date()) -> Duration? {
+        guard let total = autoDismissDelay(voiceOverRunning: voiceOverRunning) else { return nil }
+        let elapsed = Duration.milliseconds(Int64((now.timeIntervalSince(postedAt) * 1000).rounded()))
+        return max(.zero, total - max(.zero, elapsed))
     }
 }

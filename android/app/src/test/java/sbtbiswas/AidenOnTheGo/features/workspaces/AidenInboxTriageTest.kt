@@ -93,9 +93,11 @@ class AidenInboxTriageTest {
         // Done on a row with no unseen failure never writes a read marker.
         assertTrue(host.readWrites.isEmpty())
 
-        // Undo writes the reverse and offers no second Undo.
+        // Undo writes the reverse against the revision the swipe left and
+        // offers no second Undo.
+        assertEquals(3, notice.revision)
         host.triageAnswer = { AidenChatTriageResult("chat-1", 4, now) }
-        assertNull(host.triage(now).setTriage("chat-1", notice.undo!!, readsFailures = true, offersUndo = false))
+        assertNull(host.triage(now).setTriage("chat-1", notice.undo!!, readsFailures = true, undoRevision = notice.revision))
         assertEquals(3, host.triageWrites.last().third)
         assertNull(host.rows.getValue("chat-1").doneAt)
     }
@@ -189,11 +191,35 @@ class AidenInboxTriageTest {
         val host = Host(row(revision = 4).copy(doneAt = now))
         host.triageAnswer = { throw conflict(currentRevision = "5") }
         val notice = host.triage(now).setTriage(
-            "chat-1", AidenChatTriageChange.done(false), readsFailures = true, offersUndo = false
+            "chat-1", AidenChatTriageChange.done(false), readsFailures = true, undoRevision = 4
         )
         assertTrue(notice is AidenInboxNotice.UndoConflict)
         assertEquals(listOf(4), host.triageWrites.map { it.third })
         assertEquals(now, host.rows.getValue("chat-1").doneAt)
+        assertEquals(1, host.reloads)
+    }
+
+    @Test
+    fun anUndoIsSentAgainstTheSwipesRevisionNotOneAReloadBroughtIn() = runBlocking {
+        val host = Host(row(revision = 3))
+        host.triageAnswer = { AidenChatTriageResult("chat-1", 4, now, doneAt = now) }
+        val notice = host.triage(now).setTriage(
+            "chat-1", AidenChatTriageChange.done(true), readsFailures = true
+        ) as AidenInboxNotice.Changed
+        // A reload brings the row in at revision 5: another device wrote
+        // after the swipe (here it snoozed the chat).
+        val elsewhere = now.plusSeconds(3600)
+        host.rows["chat-1"] = host.rows.getValue("chat-1").copy(doneAt = null, snoozedUntil = elsewhere, triageRevision = 5)
+        host.triageAnswer = { throw conflict(currentRevision = "5") }
+        val undone = host.triage(now).setTriage(
+            "chat-1", notice.undo!!, readsFailures = true, undoRevision = notice.revision
+        )
+        assertTrue(undone is AidenInboxNotice.UndoConflict)
+        // Sent once, at the swipe's revision 4, never at 5 and never retried.
+        assertEquals(listOf(3, 4), host.triageWrites.map { it.third })
+        // The other device's write stands.
+        assertEquals(elsewhere, host.rows.getValue("chat-1").snoozedUntil)
+        assertEquals(5, host.rows.getValue("chat-1").triageRevision)
         assertEquals(1, host.reloads)
     }
 
@@ -314,7 +340,7 @@ class AidenInboxTriageTest {
 
     @Test
     fun aConfirmationGoesStaleAfterTheDesktopsUndoWindow() {
-        val notice = AidenInboxNotice.Changed(AidenChatTriageChange.done(true), "chat-1", AidenChatTriageChange.done(false), postedAt = now)
+        val notice = AidenInboxNotice.Changed(AidenChatTriageChange.done(true), "chat-1", AidenChatTriageChange.done(false), revision = 3, postedAt = now)
         assertFalse(notice.isStale(now.plusMillis(4_999)))
         // The desktop's window closes at five seconds exactly.
         assertTrue(notice.isStale(now.plusSeconds(5)))

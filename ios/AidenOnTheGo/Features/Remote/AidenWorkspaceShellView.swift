@@ -251,6 +251,10 @@ final class AidenHomeModel {
     /// a confirmation that can undo the change.
     var inboxNotice: AidenInboxNotice?
 
+    /// The banner VoiceOver last heard, so one shown again (the overlay
+    /// rebuilt after navigating back) is not announced twice.
+    var announcedInboxNoticeID: UUID?
+
     /// Mark read from a swipe. The dot clears at once and comes back with a
     /// banner if the Mac refuses. A Mac without read markers gets no write.
     func markRead(chatID: String, coordinator: AidenRemoteCoordinator) async {
@@ -276,9 +280,11 @@ final class AidenHomeModel {
     /// what the write changed with a banner, and a stale revision is sent
     /// once more from the host's revision before it counts as a refusal. A
     /// write that landed on that retry offers no Undo, since `before` may no
-    /// longer be what the host held (the desktop never retries). Undo itself
-    /// (`offersUndo: false`) is never retried: its `ifRevision` is the one its
-    /// own write left, so a conflict means another device changed the chat
+    /// longer be what the host held (the desktop never retries). Undo passes
+    /// `undoRevision`, the revision its swipe's write left
+    /// (`AidenInboxNotice.revision`), and is sent against that rather than
+    /// the row's current revision, which a reload may have moved on. It is
+    /// never retried: a conflict means another device changed the chat
     /// since, and Undo leaves it as it is, as on the desktop. Done or
     /// Snooze on unseen failed output also reads it, as on the desktop, so a
     /// Mac without read markers is sent neither; the read marker is sent even
@@ -290,8 +296,9 @@ final class AidenHomeModel {
         coordinator: AidenRemoteCoordinator,
         isOpen: Bool = false,
         now: Date = Date(),
-        offersUndo: Bool = true
+        undoRevision: Int? = nil
     ) async -> Bool {
+        let offersUndo = undoRevision == nil
         guard let index = chats.firstIndex(where: { $0.id == chatID }),
               let context = try? coordinator.requestContext() else { return false }
         let before = chats[index]
@@ -310,7 +317,7 @@ final class AidenHomeModel {
             (result, retried) = try await sendTriage(
                 change,
                 chatID: chatID,
-                ifRevision: before.inbox.triageRevision ?? 0,
+                ifRevision: undoRevision ?? before.inbox.triageRevision ?? 0,
                 retriesConflict: offersUndo,
                 client: client,
                 context: context,
@@ -344,7 +351,7 @@ final class AidenHomeModel {
                 chats[index] = settled(chats[index])
                 persistCurrentSummaries(changedID: chatID)
                 if offersUndo, !retried, let undo = AidenInbox.undo(of: change, before: before, now: now) {
-                    inboxNotice = AidenInboxNotice(message: change.confirmation, undo: undo, chatID: chatID)
+                    inboxNotice = AidenInboxNotice(message: change.confirmation, undo: undo, chatID: chatID, revision: result.revision)
                 }
             }
         } else {
@@ -1160,6 +1167,13 @@ final class AidenWorkspaceArchiveStore {
     }
 }
 
+/// What restarts the Inbox banner's timer: a new banner, or VoiceOver
+/// turning on or off while it shows.
+private struct InboxNoticeTiming: Hashable {
+    let id: UUID
+    let voiceOver: Bool
+}
+
 private struct AidenWorkspaceDefaultApplication {
     let workspace: AidenWorkspace
     let feedback: AidenHapticEvent
@@ -1202,6 +1216,7 @@ struct AidenWorkspaceShellView: View {
     @FocusState private var searchFieldIsFocused: Bool
     @Namespace private var newAgentTransition
     @Environment(\.aidenReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @AppStorage("aiden.defaults.workspacePermission") private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
 
     init(
@@ -1999,7 +2014,12 @@ struct AidenWorkspaceShellView: View {
                             {
                                 homeModel.inboxNotice = nil
                                 Task {
-                                    await homeModel.setTriage(undo, chatID: chatID, coordinator: coordinator, offersUndo: false)
+                                    await homeModel.setTriage(
+                                        undo,
+                                        chatID: chatID,
+                                        coordinator: coordinator,
+                                        undoRevision: notice.revision ?? 0
+                                    )
                                 }
                             }
                         }
@@ -2009,11 +2029,17 @@ struct AidenWorkspaceShellView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
                 .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
-                .task(id: notice.id) {
-                    // The banner can't take focus, so VoiceOver hears it here.
-                    AccessibilityNotification.Announcement(notice.message).post()
-                    guard let delay = notice.autoDismissDelay(voiceOverRunning: UIAccessibility.isVoiceOverRunning) else { return }
+                .task(id: InboxNoticeTiming(id: notice.id, voiceOver: voiceOverEnabled)) {
+                    // The banner can't take focus, so VoiceOver hears it here,
+                    // once: not again when the overlay is rebuilt.
+                    if homeModel.announcedInboxNoticeID != notice.id {
+                        homeModel.announcedInboxNoticeID = notice.id
+                        AccessibilityNotification.Announcement(notice.message).post()
+                    }
+                    // Only what is left of the window since it was posted.
+                    guard let delay = notice.remainingDelay(voiceOverRunning: voiceOverEnabled) else { return }
                     try? await Task.sleep(for: delay)
+                    guard !Task.isCancelled else { return }
                     if homeModel.inboxNotice?.id == notice.id { homeModel.inboxNotice = nil }
                 }
             }

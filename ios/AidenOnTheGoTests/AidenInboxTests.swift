@@ -436,6 +436,16 @@ final class AidenInboxTests: XCTestCase {
         XCTAssertNil(refusal.autoDismissDelay(voiceOverRunning: true))
     }
 
+    func testABannerShownAgainGetsOnlyWhatIsLeftOfItsWindow() {
+        let posted = Date(timeIntervalSince1970: 1_800_000_000)
+        let undo = AidenInboxNotice(message: "Marked done", undo: .done(false), chatID: "c", revision: 4, postedAt: posted)
+        XCTAssertEqual(undo.remainingDelay(voiceOverRunning: false, now: posted), .seconds(5))
+        // Back on the list 3.2 seconds later: 1.8 seconds of Undo are left.
+        XCTAssertEqual(undo.remainingDelay(voiceOverRunning: false, now: posted.addingTimeInterval(3.2)), .milliseconds(1800))
+        XCTAssertEqual(undo.remainingDelay(voiceOverRunning: false, now: posted.addingTimeInterval(9)), .zero, "Past its window it goes at once.")
+        XCTAssertNil(undo.remainingDelay(voiceOverRunning: true, now: posted.addingTimeInterval(9)), "VoiceOver keeps it until dismissed.")
+    }
+
     // MARK: Row text
 
     func testRowStatusSaysWhatTheDesktopSays() throws {

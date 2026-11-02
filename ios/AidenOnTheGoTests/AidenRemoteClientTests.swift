@@ -696,14 +696,26 @@ final class AidenRemoteClientTests: XCTestCase {
         var summaries = page.summaries
         // The host sends milliseconds; the cache keeps them, so a cached
         // snooze wakes and a cached pin orders exactly as the Mac's do.
-        summaries[0].inbox.snoozedUntil = Date(timeIntervalSince1970: 1_789_030_800.25)
+        // `.002` is stored as a double just under it, which a truncating
+        // formatter would write back as `.001`.
+        let snoozed = Date(timeIntervalSince1970: 1_789_030_800 + 0.002)
+        let pinned = Date(timeIntervalSince1970: 1_789_030_800 + 0.123)
+        summaries[0].inbox.snoozedUntil = snoozed
+        summaries[0].inbox.pinnedAt = pinned
         try await cache.saveChatSummaries(
             .init(summaries: summaries, nextCursor: nil),
             instanceId: "inbox", writeToken: cache.reserveChatWrite()
         )
         let restored = await cache.loadChatSummaries(instanceId: "inbox")
         XCTAssertEqual(restored?.summaries.map(\.inbox), summaries.map(\.inbox))
-        XCTAssertEqual(restored?.summaries.first?.inbox.snoozedUntil?.timeIntervalSince1970 ?? 0, 1_789_030_800.25, accuracy: 0.0005)
+        XCTAssertEqual(restored?.summaries.first?.inbox.snoozedUntil, snoozed)
+        XCTAssertEqual(restored?.summaries.first?.inbox.pinnedAt, pinned)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = AidenChatCacheDates.encoding
+        XCTAssertEqual(
+            String(decoding: try encoder.encode([snoozed, pinned]), as: UTF8.self),
+            #"["2026-09-10T09:00:00.002Z","2026-09-10T09:00:00.123Z"]"#
+        )
 
         // Files written by earlier builds kept whole seconds and still load.
         let decoder = JSONDecoder()
@@ -6691,7 +6703,8 @@ extension AidenRemoteClientTests {
         otherMac: Bool = false,
         triage: @escaping (URLRequest, [String: Any]) -> (Int, String),
         markRead: @escaping () -> Int = { 204 },
-        summaryReads: @escaping () -> Void = {}
+        summaryReads: @escaping () -> Void = {},
+        summaryOverride: @escaping () -> String? = { nil }
     ) async throws -> InboxHome {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "aiden-inbox-home-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -6753,7 +6766,7 @@ extension AidenRemoteClientTests {
                 return Self.response(for: request, status: 200, json: #"{"workspaces":[]}"#)
             case ("GET", "/api/aiden/v1/chat-summaries"):
                 summaryReads()
-                return Self.response(for: request, status: 200, json: row)
+                return Self.response(for: request, status: 200, json: summaryOverride() ?? row)
             case ("POST", "/api/aiden/v1/chats/\(Self.inboxChatID)/triage"):
                 let (status, json) = triage(request, (try? Self.jsonBody(request)) ?? [:])
                 return Self.response(for: request, status: status, json: json)
@@ -6814,7 +6827,10 @@ extension AidenRemoteClientTests {
         let notice = try XCTUnwrap(home.inboxNotice)
         XCTAssertEqual(notice.undo, .done(false))
 
-        let undone = await home.setTriage(try XCTUnwrap(notice.undo), chatID: Self.inboxChatID, coordinator: inbox.coordinator, offersUndo: false)
+        XCTAssertEqual(notice.revision, 4, "The banner keeps the revision its swipe left.")
+        let undone = await home.setTriage(
+            try XCTUnwrap(notice.undo), chatID: Self.inboxChatID, coordinator: inbox.coordinator, undoRevision: notice.revision
+        )
 
         XCTAssertTrue(undone)
         XCTAssertEqual(bodies.last as NSDictionary?, ["done": false, "ifRevision": 4], "Undo writes from the revision the first write returned.")
@@ -6843,10 +6859,11 @@ extension AidenRemoteClientTests {
         let landed = await home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
         XCTAssertTrue(landed)
         let undo = try XCTUnwrap(home.inboxNotice?.undo)
+        let revision = home.inboxNotice?.revision
         let readsBeforeUndo = summaryReads
         bodies = []
 
-        let undone = await home.setTriage(undo, chatID: Self.inboxChatID, coordinator: inbox.coordinator, offersUndo: false)
+        let undone = await home.setTriage(undo, chatID: Self.inboxChatID, coordinator: inbox.coordinator, undoRevision: revision)
 
         XCTAssertFalse(undone)
         XCTAssertEqual(bodies.count, 1, "Retrying from the host's revision would write over the other device's change.")
@@ -6854,6 +6871,53 @@ extension AidenRemoteClientTests {
         XCTAssertEqual(home.inboxNotice?.message, "That chat changed since, so Undo left it as it is.")
         XCTAssertNil(home.inboxNotice?.undo)
         XCTAssertGreaterThan(summaryReads, readsBeforeUndo, "The Inbox reloads to show what the other device wrote.")
+    }
+
+    @MainActor
+    func testInboxUndoIsSentAgainstTheSwipesRevisionNotOneAReloadBroughtIn() async throws {
+        var bodies: [[String: Any]] = []
+        var reloaded: String?
+        let inbox = try await makeInboxHome(
+            triage: { _, body in
+                bodies.append(body)
+                if body["done"] as? Bool == true {
+                    return (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z"))
+                }
+                // The host is at revision 5 now, so an Undo from 4 is refused.
+                return body["ifRevision"] as? Int == 5
+                    ? (200, Self.triageResult(revision: 6))
+                    : (409, Self.inboxError("revision_conflict", currentRevision: "5"))
+            },
+            summaryOverride: { reloaded }
+        )
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        let home = inbox.home
+        let landed = await home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertTrue(landed)
+        let notice = try XCTUnwrap(home.inboxNotice)
+
+        // Another device snoozed the chat after the Done; a reload brings
+        // the row in at revision 5 while the banner is still up.
+        reloaded = """
+        {"summaries":[{"id":"\(Self.inboxChatID)","workspaceId":"alpha","title":"Reply","titlePending":false,
+        "createdAt":"2026-08-18T18:30:00.000Z","updatedAt":"2026-08-18T19:07:00.000Z",
+        "revision":"rev_EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE","activity":"idle","rowState":"idle",
+        "unread":false,"lastRunFailed":false,"lastAssistantAt":"2026-08-18T19:01:00.000Z",
+        "pinnedAt":"2026-08-18T18:45:00.000Z","snoozedUntil":"2099-01-01T09:00:00.000Z","triageRevision":5}]}
+        """
+        await home.load(coordinator: inbox.coordinator)
+        XCTAssertEqual(home.chats.first?.inbox.triageRevision, 5)
+        bodies = []
+
+        let undone = await home.setTriage(
+            try XCTUnwrap(notice.undo), chatID: Self.inboxChatID, coordinator: inbox.coordinator, undoRevision: notice.revision
+        )
+
+        XCTAssertFalse(undone)
+        XCTAssertEqual(bodies.map { $0 as NSDictionary }, [["done": false, "ifRevision": 4] as NSDictionary], "Sent once, at the swipe's revision.")
+        XCTAssertEqual(home.inboxNotice?.message, "That chat changed since, so Undo left it as it is.")
+        XCTAssertEqual(home.chats.first?.inbox.triageRevision, 5, "The other device's write stands.")
+        XCTAssertEqual(home.chats.first?.inbox.snoozedUntil, try Self.remoteDate("2099-01-01T09:00:00.000Z"))
     }
 
     @MainActor

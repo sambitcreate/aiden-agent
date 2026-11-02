@@ -19,11 +19,16 @@ sealed interface AidenInboxNotice {
      * The change landed; [undo] puts it back. Undo is meant for right after
      * the swipe, as on the desktop: a notice still unshown (or shown again
      * on returning to the screen) once [UNDO_WINDOW] passed is dropped.
+     * [revision] is the triage revision the swipe's own write left; the Undo
+     * is sent against it, never against whatever revision the row holds by
+     * then, so a newer write from another device is a conflict, not
+     * overwritten (the desktop keeps `item.revision` in its Undo batch).
      */
     data class Changed(
         val change: AidenChatTriageChange,
         val chatId: String,
         val undo: AidenChatTriageChange?,
+        val revision: Int,
         val postedAt: Instant = Instant.now(),
         override val id: UUID = UUID.randomUUID()
     ) : AidenInboxNotice {
@@ -105,18 +110,21 @@ class AidenInboxTriage(
      * A swipe's stale revision is sent once more from the host's revision
      * with a new idempotency key before it counts as a refusal; a write that
      * landed that way offers no Undo, since [before] may no longer be what
-     * the host held (the desktop never retries). An Undo ([offersUndo]
-     * false) is never retried: its revision is the one its own write left,
-     * so a conflict means another device changed the chat since, and the
-     * Undo leaves it as that device made it. Returns the snackbar.
+     * the host held (the desktop never retries). An Undo passes
+     * [undoRevision], the revision its swipe's write left
+     * ([AidenInboxNotice.Changed.revision]), and is sent against that rather
+     * than the row's current revision. It is never retried: a conflict means
+     * another device changed the chat since, and the Undo leaves it as that
+     * device made it. Returns the snackbar.
      */
     suspend fun setTriage(
         chatId: String,
         change: AidenChatTriageChange,
         readsFailures: Boolean,
         isOpen: Boolean = false,
-        offersUndo: Boolean = true
+        undoRevision: Int? = null
     ): AidenInboxNotice? {
+        val offersUndo = undoRevision == null
         val before = row(chatId) ?: return null
         val viewed = viewStamp(chatId)
         val at = now()
@@ -125,7 +133,7 @@ class AidenInboxTriage(
         val optimistic = AidenInbox.applyingOptimisticTriage(change, before, at, alsoMarkRead)
         publish(optimistic)
         val (result, retried) = try {
-            sendTriage(chatId, change, before.triageRevision ?: 0, retriesConflict = offersUndo)
+            sendTriage(chatId, change, undoRevision ?: before.triageRevision ?: 0, retriesConflict = offersUndo)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
@@ -150,7 +158,7 @@ class AidenInboxTriage(
             }
         }
         if (!isCurrent() || !offersUndo || retried) return null
-        return AidenInbox.undo(change, before, at)?.let { AidenInboxNotice.Changed(change, chatId, it, postedAt = now()) }
+        return AidenInbox.undo(change, before, at)?.let { AidenInboxNotice.Changed(change, chatId, it, revision = result.revision, postedAt = now()) }
     }
 
     /** The host's answer, and whether it came from the one retry. */

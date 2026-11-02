@@ -167,9 +167,9 @@ class AidenInboxUiTest {
                 reload = {}
             )
         }
-        fun write(id: String, change: AidenChatTriageChange, offersUndo: Boolean = true) {
+        fun write(id: String, change: AidenChatTriageChange, undoRevision: Int? = null) {
             scope.launch {
-                triage.setTriage(id, change, readsFailures = host.supportsReadState, offersUndo = offersUndo)
+                triage.setTriage(id, change, readsFailures = host.supportsReadState, undoRevision = undoRevision)
                     ?.let { notice = it }
             }
         }
@@ -181,7 +181,7 @@ class AidenInboxUiTest {
             AidenInboxNoticeEffect(
                 notice = notice,
                 snackbarHostState = snackbar,
-                onUndo = { id, undo -> write(id, undo, offersUndo = false) },
+                onUndo = { id, undo, revision -> write(id, undo, undoRevision = revision) },
                 onDismissed = { id -> if (notice?.id == id) notice = null }
             )
         }
@@ -342,11 +342,11 @@ class AidenInboxUiTest {
         // short of the snackbar's own long duration.
         val notice = AidenInboxNotice.Changed(
             AidenChatTriageChange.done(true), "earlier", AidenChatTriageChange.done(false),
-            postedAt = Instant.now().minusSeconds(4)
+            revision = 3, postedAt = Instant.now().minusSeconds(4)
         )
         compose.setContent {
             AidenTheme(config = AidenAppearanceConfig(mode = AidenAppearanceMode.LIGHT)) {
-                AidenInboxNoticeEffect(notice, snackbar, onUndo = { _, _ -> }, onDismissed = { dismissed += it })
+                AidenInboxNoticeEffect(notice, snackbar, onUndo = { _, _, _ -> }, onDismissed = { dismissed += it })
                 SnackbarHost(snackbar) { AidenSnackbar(it) }
             }
         }

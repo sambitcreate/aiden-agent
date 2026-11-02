@@ -430,8 +430,11 @@ class AidenWorkspaceHomeViewModel(
         }
     }
 
-    /** Done, Snooze or an Undo. Undo itself offers no further Undo. */
-    fun setInboxTriage(chatId: String, change: AidenChatTriageChange, isOpen: Boolean = false, offersUndo: Boolean = true) {
+    /**
+     * Done, Snooze or an Undo. An Undo passes [undoRevision], the revision
+     * its swipe's write left, and offers no further Undo.
+     */
+    fun setInboxTriage(chatId: String, change: AidenChatTriageChange, isOpen: Boolean = false, undoRevision: Int? = null) {
         val triage = inboxTriage() ?: return
         _inboxNotice.value = null
         viewModelScope.launch {
@@ -441,7 +444,7 @@ class AidenWorkspaceHomeViewModel(
                     change,
                     readsFailures = coordinator.serverInfo.value?.supportsChatReadState == true,
                     isOpen = isOpen,
-                    offersUndo = offersUndo
+                    undoRevision = undoRevision
                 )
             }?.let { _inboxNotice.value = it }
         }

@@ -133,8 +133,7 @@ export function createInterruptedWaitStore(
         draft.waits = [...kept.filter((item) => !dropped.has(item)), record].slice(-MAX_INTERRUPTED_WAITS);
       });
     },
-    /** The card was answered, dismissed or withdrawn: nothing to offer again. */
-    /** True when a saved wait was removed. */
+    /** The card was answered, dismissed or withdrawn: nothing to offer again. Resolves true when a saved wait was removed. */
     forget(waitId: string, chatId?: string): Promise<boolean> {
       return persistence.update((draft) => {
         const before = draft.waits.length;
