@@ -28,6 +28,14 @@ export interface DoneWhenRecord {
   lastTimedOut?: boolean;
 }
 
+/** The check cannot finish or start another attempt until cleanup is verified. */
+export class CheckProcessStillRunningError extends Error {
+  constructor() {
+    super("Could not confirm the workspace’s check stopped. Try again once its processes have ended.");
+    this.name = "CheckProcessStillRunningError";
+  }
+}
+
 export interface DoneWhenRunResult {
   exitCode: number | null;
   timedOut: boolean;
@@ -195,13 +203,15 @@ export class DoneWhenChecks {
     this.records.set(chatId, started);
     this.changed(chatId);
     let result: DoneWhenRunResult;
+    let cleanupIssue: CheckProcessStillRunningError | undefined;
     try {
       result = await this.deps.run(started, controller.signal);
     } catch (error) {
+      if (error instanceof CheckProcessStillRunningError) cleanupIssue = error;
       result = {
         exitCode: null,
         timedOut: false,
-        aborted: controller.signal.aborted,
+        aborted: controller.signal.aborted || cleanupIssue !== undefined,
         output: error instanceof Error ? error.message : String(error),
       };
     } finally {
@@ -214,6 +224,14 @@ export class DoneWhenChecks {
     if (result.aborted || controller.signal.aborted) {
       this.records.set(chatId, { ...started, state: "waiting", checksRun: record.checksRun });
       this.changed(chatId);
+      if (cleanupIssue && !controller.signal.aborted) {
+        this.deps.post({
+          chatId,
+          notice: agentNotice({ source: "check", tone: "info", title: "Check waiting", summary: cleanupIssue.message }),
+          text: cleanupIssue.message,
+          wake: false,
+        });
+      }
       return;
     }
     const passed = result.exitCode === 0 && !result.timedOut;

@@ -21,6 +21,7 @@ import {
 } from "../../../renderer/shared/background-jobs.js";
 import { processGroupStillRuns } from "../../shared/process-group.js";
 import { tailText } from "../../../renderer/shared/agent-notices.js";
+import { CheckProcessStillRunningError } from "./done-when.js";
 import { defaultListeningPortsByProcess } from "./listening-ports.js";
 
 export const MAX_RUNNING_JOBS_PER_CHAT = 10;
@@ -952,7 +953,7 @@ export class BackgroundJobs {
     // workspace guard until exit is observable, including zombie-only groups.
     await this.waitUntil(() => !groupExists(entry.pid), 250);
     if (await processGroupStillRuns(entry.pid)) {
-      throw new Error("Could not confirm the workspace’s check stopped. Try again once its processes have ended.");
+      throw new CheckProcessStillRunningError();
     }
     this.checkGroups.delete(entry.id);
     await this.writeRecord();

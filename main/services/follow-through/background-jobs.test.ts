@@ -16,6 +16,7 @@ import {
   newBackgroundJobId,
   type BackgroundJobEnded,
 } from "./background-jobs.js";
+import { DoneWhenChecks, type DoneWhenNotice } from "./done-when.js";
 import { runBoundedShellCommand } from "../bounded-shell-command.js";
 
 const skip = process.platform === "win32" ? "background jobs run on macOS and Linux" : false;
@@ -747,14 +748,30 @@ test("a denied check-group stop retains recovery ownership and blocks only its w
     try { if (group) kill(-group, "SIGKILL"); } catch { /* Already gone. */ }
     await cleanUp(jobs, dir);
   });
-  await assert.rejects(runBoundedShellCommand({
-    command: "sleep 60 </dev/null >/dev/null 2>&1 & echo $! > child",
-    cwd: dir, env: { ...process.env, AIDEN_BACKGROUND_JOB: id }, timeoutMs: 10_000, maxOutputBytes: 1024,
-    recordGroup: (pid) => {
-      group = pid;
-      return jobs.recordCheckGroup(id, pid, "ws-1", "chat-1");
+  const notices: DoneWhenNotice[] = [];
+  const checks = new DoneWhenChecks({
+    now: Date.now,
+    persist: () => {},
+    post: (notice) => notices.push(notice),
+    run: async (record, signal) => {
+      const result = await runBoundedShellCommand({
+        command: record.command, signal, cwd: dir, env: { ...process.env, AIDEN_BACKGROUND_JOB: id },
+        timeoutMs: 10_000, maxOutputBytes: 1024,
+        recordGroup: (pid) => {
+          group = pid;
+          return jobs.recordCheckGroup(id, pid, record.workspaceId, record.chatId);
+        },
+      });
+      return { ...result, output: result.stdout };
     },
-  }), /confirm.*check stopped/u);
+  });
+  checks.set({ command: "sleep 60 </dev/null >/dev/null 2>&1 & echo $! > child", workspaceId: "ws-1", chatId: "chat-1", runNow: true });
+  await eventually(() => notices.length > 0, "the cleanup outcome");
+  assert.equal(checks.get("chat-1")?.state, "waiting");
+  assert.equal(checks.get("chat-1")?.checksRun, 0);
+  assert.equal(notices[0]?.wake, false);
+  assert.equal(notices[0]?.notice.tone, "info");
+  assert.match(notices[0]!.text, /confirm.*check stopped/u);
   const child = Number(await fs.readFile(path.join(dir, "child"), "utf8"));
   assert.ok(alive(child));
   const ledger = async () => JSON.parse(await fs.readFile(path.join(dir, "logs", "running.json"), "utf8")).jobs;

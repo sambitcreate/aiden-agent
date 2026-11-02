@@ -68,7 +68,7 @@ Type `/until` followed by the check, for example `/until npm test`. The check is
 
 A chat has one check at a time; `/until` with a new command replaces it. A replaced check that was running is stopped first, and the new one runs once it has. The composer shows an **Until npm test passes** chip, and **Stop checking** clears it. Changing the workspace's folder access or deleting the chat clears it too. Stop an active check or follow before moving an empty chat to another workspace. Each check verifies that its chat still owns the workspace and that a managed checkout still has its original identity. When the command ends, Aiden stops any remaining processes in its group, including ones that redirected their output.
 
-Aiden records the check’s process group before running its command. If a stop signal fails and a descendant stays alive, Aiden retains the recovery record and blocks changes to that workspace until it can confirm the group has ended. After a crash, startup reaps recorded groups before opening desktop and remote requests. An interrupted check waits for the next answer and keeps its previous attempt count.
+Aiden records the check’s process group before running its command. If a stop signal fails and a descendant stays alive, Aiden retains the recovery record and blocks changes to that workspace until it can confirm the group has ended. The chat receives a **Check waiting** notice. The interrupted check keeps its attempt count and does not wake the agent. After a crash, startup reaps recorded groups before opening desktop and remote requests. An interrupted check waits for the next answer and keeps its previous attempt count.
 
 ## Network
 

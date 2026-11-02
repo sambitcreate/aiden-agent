@@ -41,3 +41,5 @@ The macOS Electron regression suite is `test:e2e:follow-through`. It kills Elect
 Check recovery records carry chat and workspace ownership. A failed signal leaves the record in place and workspace revocation or removal fails until Aiden verifies that no live process remains in the group.
 
 Workspace changes suspend polling and interrupt check attempts before draining jobs. They end the follows and clear the checks only after the permission save, workspace removal, or managed Git destructive boundary. Rejected operations resume polling and keep waiting checks. Chat moves verify retained process liveness while configuration admission is held.
+
+A check whose process cleanup cannot be confirmed returns to waiting with its prior attempt count and posts an informational notice without waking the agent. Workspace cleanup still fails until the group exits.
