@@ -2,6 +2,9 @@
 
 Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §5.1 (package P6). Branch `wp/p6-browser`, on top of P1 (hand-offs), P3 (rules) and P4. User doc: `docs/environment-browser.md` "A Bot's own browser".
 
+## Rule hand-offs (2026-11-02)
+The host keeps the probed tab and document revision with the waiting card. Open checks that document and holds and reveals the tab synchronously. The public card omits the binding. A closed or navigated tab cannot be replaced by a same-URL tab.
+
 ## Profile and workspace
 - `main/services/browser/bot-profile.ts`: profile id `bot:<botId>` (a real id gives `bot:bot:<uuid>`), partition `persist:aiden-bot-<botDirectoryName>`. `botDirectoryName` validates the id.
 - `bot-workspaces.ts`: main-only registry from a Bot's managed workspace to its Bot. Registered by `bot-browser-tools.ts` `candidates()` and by `botBrowserWorkspace()` (the panel's `bots:browser:workspace`). Renderer input never registers one.

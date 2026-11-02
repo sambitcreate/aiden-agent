@@ -115,9 +115,11 @@ function harness() {
   const stalled = new Set<string>();
   const claims: Array<{ stepIds: string[]; toolNames: string[] } | undefined> = [];
   const session: BotRoutinePorts & {
+    canRetryRoutineRequest(botId: string, requestId: string): Promise<boolean>;
     consumeStall(botId: string): boolean;
     checkClaims(botId: string): Promise<{ stepIds: string[]; toolNames: string[] } | undefined>;
   } = {
+    canRetryRoutineRequest: async (_botId, requestId) => submissions.has(requestId),
     consumeStall: (botId) => stalled.delete(botId),
     checkClaims: async () => claims.shift(),
     async state() { return { kind: "idle" }; },
@@ -134,10 +136,11 @@ function harness() {
     async markSilent() {},
   };
   const { open, resolved, issues } = fakeIssues();
-  let routines: ReturnType<typeof createBotRoutineService> | undefined;
+  let scheduler: ReturnType<typeof createScheduleServiceCore>;
   const recovery = createBotRoutineRecovery({
     store,
-    routines: { pause: (botId, id) => routines!.pause(botId, id) },
+    canRetryRoutineRequest: session.canRetryRoutineRequest,
+    pauseAfterFailedRun: (id) => scheduler.pauseAfterFailedRun(id),
     issues,
     now: () => Date.now(),
   });
@@ -152,7 +155,7 @@ function harness() {
     broadcast: () => undefined,
     afterRun: (task, recorded, trigger) => recovery.afterRun(task, recorded, trigger),
   });
-  const scheduler = createScheduleServiceCore({
+  scheduler = createScheduleServiceCore({
     store,
     execution: {
       run: (task: ScheduledTask, runId?: string, trigger?: ScheduledRunTrigger) =>
@@ -167,7 +170,7 @@ function harness() {
     pendingRetryIntervalMs: 5,
     catchUp: { staggerMs: 0 },
   });
-  routines = createBotRoutineService({
+  const routines = createBotRoutineService({
     store,
     service: scheduler,
     botExists: async () => true,
@@ -217,10 +220,10 @@ test("a sign-in failure raises one issue at once and is not retried", async () =
 test("pauses after three failed fires of the same kind and raises one issue", async () => {
   const h = harness();
   const routine = await h.routines.create({ botId: "bot-1", name: "Briefing", schedule: { kind: "daily", time: "09:00" }, prompt: "Brief me." });
-  const base = Date.now() - 10 * 86_400_000;
-  for (let day = 0; day < 3; day += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     h.replies.push(SIGNED_OUT);
-    await fire(h, routine.id, base + day * 86_400_000);
+    const run = await h.scheduler.runNow(routine.id, { runId: `attempt-${attempt}` });
+    assert.equal(run.failure?.kind, "sign_in");
   }
   const task = await h.store.get(routine.id);
   assert.equal(task?.enabled, false);
@@ -228,6 +231,8 @@ test("pauses after three failed fires of the same kind and raises one issue", as
   assert.equal(paused?.title, "Paused Briefing");
   assert.equal(paused?.body, "It failed 3 times in a row. Its AI provider needs signing in again.");
   assert.equal(h.open.has(`routine_failed:${routine.id}`), false, "the pause card replaces the earlier card");
+  await h.routines.update({ botId: "bot-1", id: routine.id, expectedUpdatedAt: task!.updatedAt, enabled: true });
+  assert.equal((await h.scheduler.runNow(routine.id)).result, "success");
 });
 
 test("different kinds do not pause", async () => {

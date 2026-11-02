@@ -103,10 +103,10 @@ export function routinePausedKey(taskId: string): string { return `routine_pause
 export interface BotRoutineRecoveryDependencies {
   store: {
     runs(taskId: string): Promise<ScheduledRun[]>;
-    addRoutineRetry(id: string, retry: { failedRunId: string; attempt: 1 | 2; at: number }): Promise<boolean>;
-    clearRoutineRetries(id: string): Promise<void>;
+    addRoutineRetry(id: string, retry: { failedRunId: string; attempt: 1 | 2; at: number; verifiedToolFree: true }): Promise<boolean>;
   };
-  routines: { pause(botId: string, id: string): Promise<unknown> };
+  canRetryRoutineRequest(botId: string, requestId: string): Promise<boolean>;
+  pauseAfterFailedRun(id: string): Promise<void>;
   issues: Pick<BotIssueService, "raise" | "resolve">;
   /** Runs the Bot's health checks after a failure only the person can fix. */
   afterPersonFailure?(botId: string, routineId: string): void;
@@ -157,9 +157,16 @@ export function createBotRoutineRecovery(dependencies: BotRoutineRecoveryDepende
         })
         : undefined;
       // The fire is not final while a retry is queued; judge it after the retry.
-      if (plan && (task.enabled || task.routineSchedule?.kind === "once")) {
+      if (plan && (task.enabled || task.routineSchedule?.kind === "once") &&
+        await dependencies.canRetryRoutineRequest(botId, run.id).catch(() => false)) {
         const failedRunId = trigger.kind === "retry" ? trigger.failedRunId : run.id;
-        if (await dependencies.store.addRoutineRetry(task.id, { failedRunId, attempt: plan.attempt, at: plan.at })) {
+        // A retry admitted by an older version might have skipped the safety
+        // check on its original attempt. Verify that attempt before chaining.
+        const originalSafe = trigger.kind !== "retry" || trigger.verifiedToolFree ||
+          await dependencies.canRetryRoutineRequest(botId, failedRunId).catch(() => false);
+        if (originalSafe && await dependencies.store.addRoutineRetry(task.id, {
+          failedRunId, attempt: plan.attempt, at: plan.at, verifiedToolFree: true,
+        })) {
           return { retrying: true };
         }
       }
@@ -185,8 +192,7 @@ export function createBotRoutineRecovery(dependencies: BotRoutineRecoveryDepende
       const since = task.enabledAt ?? 0;
       const streak = failureStreak(fireOutcomes((await dependencies.store.runs(task.id)).filter((entry) => entry.finishedAt > since)));
       if (streak.count < BOT_ROUTINE_FAILURE_PAUSE_THRESHOLD || !streak.kind) return { retrying: false };
-      await dependencies.routines.pause(botId, task.id);
-      await dependencies.store.clearRoutineRetries(task.id);
+      await dependencies.pauseAfterFailedRun(task.id);
       await dependencies.issues.resolve(botId, routineFailedKey(task.id), "superseded");
       await dependencies.issues.raise({
         botId,

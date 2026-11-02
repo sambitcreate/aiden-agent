@@ -43,6 +43,7 @@
 //   the flush by the current run; the compacted conversation is handed over
 //   too, so the flush also reads each historical entry's own ingress.
 
+import type { BrowserApprovalTarget } from "../browser/approval.js";
 import { randomUUID } from "node:crypto";
 import type { Context, JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -142,6 +143,7 @@ export interface BotRuleHandoff {
   why: string;
   /** The page where the person can do it (the Bot browser's tab): the card's Open. */
   open?: { url: string };
+  browserTarget?: Readonly<BrowserApprovalTarget>;
 }
 
 export type BotPolicyDecision =
@@ -160,6 +162,7 @@ export interface BotRuleHandoffRequest {
   rule: BotHandoffRule;
   /** The page where the person can do it: the card's Open. */
   open?: { url: string };
+  browserTarget?: Readonly<BrowserApprovalTarget>;
   /** Aborted when the turn is stopped; the card is withdrawn. */
   signal: AbortSignal | undefined;
 }
@@ -559,12 +562,18 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           const handoff = decision.handoff;
           // Nobody can answer a card here: block with what is needed.
           if (deps.requestHandoff === undefined) return { block: ruleUnattendedBlock(handoff.rule.label) };
+          const target = handoff.browserTarget;
+          // A resumed tool can probe a different current tab. Keep the first
+          // document identity with its wait, without persisting the page URL.
+          const browserDocument = target && JSON.stringify([target.workspaceId, target.tabId, target.documentRevision]);
           const memo = await api.memo<ApprovalMemo>(
             APPROVAL_MEMO,
-            { waitId: randomUUID(), toolCallId: call.id, summary: handoff.summary, kind: "handoff", rule: handoff.rule.id },
+            {
+              waitId: randomUUID(), toolCallId: call.id, summary: handoff.summary, kind: "handoff", rule: handoff.rule.id,
+              ...(browserDocument && { browserDocument }),
+            },
             context,
           );
-          // The current decision wins; only the wait id carries over from an earlier ask.
           const answer = await deps.requestHandoff({
             botId,
             waitId: memo.waitId,
@@ -573,6 +582,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
             action: handoff.action,
             why: handoff.why,
             rule: handoff.rule,
+            ...(target && memo.browserDocument === browserDocument && { browserTarget: target }),
             ...(handoff.open === undefined ? {} : { open: handoff.open }),
             signal: context.abortSignal,
           });

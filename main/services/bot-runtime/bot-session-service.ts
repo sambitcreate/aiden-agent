@@ -28,6 +28,7 @@ import type { AssistantMessage, ImageContent, Models, TextContent } from "@earen
 import {
   AssistantEntry,
   type Conversation,
+  type Cursor,
   type Harness,
   HarnessInspection,
   HarnessSettings,
@@ -185,6 +186,7 @@ function defaultMessage(reason: BotSessionErrorReason): string {
 export type BotWithdrawResult = "withdrawn" | "started" | "gone";
 
 export interface BotSessionService {
+  canRetryRoutineRequest(botId: string, requestId: string): Promise<boolean>;
   submissionForRequest(botId: string, requestId: string): Promise<string | undefined>;
   send(botId: string, input: BotSendInput): Promise<{ submissionId: string; deduped: boolean }>;
   resume(botId: string, requestId: string): Promise<BotSessionState>;
@@ -683,6 +685,31 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
     state(botId) {
       return currentState(botId);
+    },
+
+    canRetryRoutineRequest(botId, requestId) {
+      return serialize(botId, async () => {
+        const { conversation } = await openBot(botId);
+        return conversation.commit(async (tx) => {
+          const record = await tx.submissionByRequest(conversation.id, requestId);
+          if (record?.type !== "input" || record.status !== "unanswered") return false;
+          if (record.entry === undefined) return true; // Settled before placement.
+          // Pi commits the assistant's tool call before its tool task can run.
+          // Scan raw entries so compaction cannot hide a possible side effect.
+          const query = { conversationId: conversation.id, minEntryId: record.entry, order: "ascending" as const };
+          let cursor: Cursor | undefined;
+          do {
+            const page = await tx.scanEntries(query, 64, cursor);
+            if (!cursor && page.items[0]?.id !== record.entry) return false;
+            for (const entry of page.items) {
+              if (entry.model?.some((message) => message.role === "assistant" &&
+                message.content.some((part) => part.type === "toolCall"))) return false;
+            }
+            cursor = page.next;
+          } while (cursor);
+          return true;
+        }, ctx);
+      });
     },
 
     submissionForRequest(botId, requestId) {

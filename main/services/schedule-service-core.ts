@@ -18,7 +18,7 @@ export type ScheduledRunTrigger =
   | { kind: "manual"; key: string }
   | { kind: "catch_up"; missedRunId: string; missedAt: number }
   /** A delayed retry of a failed Bot routine fire, replayed from its pending entry. */
-  | { kind: "retry"; requestId: string; failedRunId: string; attempt: 1 | 2 }
+  | { kind: "retry"; requestId: string; failedRunId: string; attempt: 1 | 2; verifiedToolFree?: true }
   /** An event routine's run: what happened, as untrusted data for the Bot. */
   | { kind: "event"; eventId: string; source: "file_change" | "webhook" | "watch"; payload: string };
 
@@ -806,6 +806,13 @@ export function createScheduleServiceCore(
         }
         dependencies.broadcast({ taskId: id, removed: true });
       });
+    },
+
+    // Called by the active run itself. User-facing edits wait for that run to settle.
+    async pauseAfterFailedRun(id: string): Promise<void> {
+      await store.setEnabled(id, false, { clearRoutineRetries: true });
+      stopJob(id);
+      dependencies.broadcast({ taskId: id });
     },
 
     async pause(
