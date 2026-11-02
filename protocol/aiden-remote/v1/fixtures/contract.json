@@ -3418,5 +3418,34 @@
         "retryable": false
       }
     }
+  },
+  "rawUploads": {
+    "capability": "attachments:raw",
+    "request": {
+      "method": "POST",
+      "path": "/chats/chat_fixture_01/attachments",
+      "contentType": "image/png",
+      "contentLength": 70,
+      "nameHeader": "Aiden-Attachment-Name",
+      "name": "Café photo.png",
+      "encodedName": "Caf%C3%A9%20photo.png",
+      "bodyBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAgIBUKX1cwAAAABJRU5ErkJggg=="
+    },
+    "response": {
+      "id": "att_RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR",
+      "name": "Café photo.png",
+      "mimeType": "image/png",
+      "kind": "image",
+      "size": 70,
+      "expiresAt": "2026-11-02T07:10:00.000Z"
+    },
+    "withoutGrant": {
+      "error": {
+        "code": "capability_denied",
+        "message": "This device does not have access to that Aiden capability.",
+        "requestId": "request_fixture_50",
+        "retryable": false
+      }
+    }
   }
 }

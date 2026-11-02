@@ -1324,7 +1324,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
             .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues,
-            .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs,
+            .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
@@ -1767,11 +1767,23 @@ final class AidenRemoteClient: @unchecked Sendable {
         chatId: String,
         upload: AidenAttachmentUpload
     ) async throws -> AidenAttachmentReference {
-        try await send(
-            method: "POST",
+        try await uploadAttachment(chatId: chatId, upload: upload, rawImages: false, progress: nil)
+    }
+
+    /// Stages one upload for the chat's next turn. With `rawImages` (the device
+    /// holds `attachments:raw`, revision 50) a PNG or JPEG picture goes as its
+    /// own bytes. `progress` hears the share of the request body sent, 0 to 1.
+    func uploadAttachment(
+        chatId: String,
+        upload: AidenAttachmentUpload,
+        rawImages: Bool,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws -> AidenAttachmentReference {
+        try await stageUpload(
             path: ["chats", chatId, "attachments"],
-            body: upload,
-            acceptedStatus: [201]
+            upload: upload,
+            rawImages: rawImages,
+            progress: progress
         )
     }
 
@@ -2089,13 +2101,68 @@ final class AidenRemoteClient: @unchecked Sendable {
     /// Revision 33 (`bot-attachments-v1`): stages one image or text file for
     /// this device's next message to the Bot. The reference is single-use.
     func uploadBotAttachment(botId: String, upload: AidenAttachmentUpload) async throws -> AidenAttachmentReference {
+        try await uploadBotAttachment(botId: botId, upload: upload, rawImages: false, progress: nil)
+    }
+
+    /// Revision 50: as above, with a picture sent as its own bytes while the
+    /// device holds `attachments:raw`, and the upload's progress.
+    func uploadBotAttachment(
+        botId: String,
+        upload: AidenAttachmentUpload,
+        rawImages: Bool,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws -> AidenAttachmentReference {
         try validateBotIdentifier(botId)
-        return try await send(
-            method: "POST",
+        return try await stageUpload(
             path: ["bots", botId, "attachments"],
-            body: upload,
-            acceptedStatus: [201]
+            upload: upload,
+            rawImages: rawImages,
+            progress: progress
         )
+    }
+
+    /// One `POST …/attachments`: a picture as raw bytes when allowed (revision
+    /// 50), otherwise the JSON envelope every Mac takes. The reply is the same.
+    private func stageUpload(
+        path: [String],
+        upload: AidenAttachmentUpload,
+        rawImages: Bool,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws -> AidenAttachmentReference {
+        let body: Data
+        var headers: [String: String] = [:]
+        if rawImages, let raw = AidenRawAttachmentUpload(upload) {
+            body = raw.data
+            headers["Content-Type"] = raw.mimeType
+            headers[AidenRawAttachmentUpload.nameHeader] = raw.encodedName
+        } else {
+            body = try JSONEncoder().encode(upload)
+        }
+        let request = try makeRequest(
+            method: "POST",
+            path: path,
+            query: [],
+            body: body,
+            headers: headers,
+            authenticated: true
+        )
+        let delegate = progress.map(AidenUploadProgressDelegate.init(onProgress:))
+        let (data, response) = try await boundedData(
+            for: request,
+            maximumBytes: AidenRemoteProtocol.maxJSONBodyBytes,
+            delegate: delegate
+        )
+        try validate(response: response, data: data, acceptedStatus: [201])
+        do {
+            return try AidenRemoteJSONDecoder.decode(
+                AidenAttachmentReference.self,
+                from: data,
+                maximumBytes: AidenRemoteProtocol.maxJSONBodyBytes
+            )
+        } catch {
+            AidenDiagnostics.record(.contract, event: .contractRejected, outcome: .failed, code: .invalidResponse)
+            throw AidenRemoteClientError.invalidResponse
+        }
     }
 
     /// Drops a staged upload the person removed before sending.
@@ -3447,12 +3514,13 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     private func boundedData(
         for request: URLRequest,
-        maximumBytes: Int
+        maximumBytes: Int,
+        delegate: (any URLSessionTaskDelegate)? = nil
     ) async throws -> (Data, URLResponse) {
         let bytes: URLSession.AsyncBytes
         let response: URLResponse
         do {
-            (bytes, response) = try await session.bytes(for: request)
+            (bytes, response) = try await session.bytes(for: request, delegate: delegate)
         } catch is CancellationError {
             AidenDiagnostics.record(.connection, event: .requestFailed, outcome: .cancelled, code: .network)
             throw CancellationError()
@@ -3875,5 +3943,57 @@ private final class AidenRunStreamIdentity: @unchecked Sendable {
         defer { lock.unlock() }
         if let runId, runId != event.runId { throw AidenRemoteClientError.invalidResponse }
         runId = event.runId
+    }
+}
+
+/// Revision 50 (`attachments:raw`): a PNG or JPEG picture sent to an upload
+/// route as its own bytes. The name travels percent-encoded in
+/// `Aiden-Attachment-Name`; anything else keeps the JSON envelope.
+struct AidenRawAttachmentUpload: Equatable, Sendable {
+    static let nameHeader = "Aiden-Attachment-Name"
+    static let mimeTypes: Set<String> = ["image/png", "image/jpeg"]
+    /// The largest picture a Mac takes (`MAX_IMAGE_BYTES`, 8 MiB).
+    static let maxBytes = 8 * 1024 * 1024
+    static let maxEncodedNameLength = 2_048
+    /// RFC 3986 unreserved characters, the only ones left as they are.
+    private static let unreserved = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+    )
+
+    let mimeType: String
+    let encodedName: String
+    let data: Data
+
+    /// Nil when the upload is not a picture the raw route takes.
+    init?(_ upload: AidenAttachmentUpload) {
+        guard case let .image(name, mimeType, data) = upload,
+              Self.mimeTypes.contains(mimeType),
+              !data.isEmpty, data.count <= Self.maxBytes,
+              let encoded = name.addingPercentEncoding(withAllowedCharacters: Self.unreserved),
+              !encoded.isEmpty, encoded.count <= Self.maxEncodedNameLength else { return nil }
+        self.mimeType = mimeType
+        self.encodedName = encoded
+        self.data = data
+    }
+}
+
+/// Hears how much of one request's body has gone, for an upload's progress
+/// bar. Everything else, trust included, stays with the session's delegate.
+final class AidenUploadProgressDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    let onProgress: @Sendable (Double) -> Void
+
+    init(onProgress: @escaping @Sendable (Double) -> Void) {
+        self.onProgress = onProgress
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        guard totalBytesExpectedToSend > 0 else { return }
+        onProgress(min(1, max(0, Double(totalBytesSent) / Double(totalBytesExpectedToSend))))
     }
 }

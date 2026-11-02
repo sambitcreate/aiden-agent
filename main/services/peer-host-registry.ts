@@ -121,7 +121,7 @@ export interface PeerClient {
  * sends a Bot's shared images as entries whose bytes this Mac reads on demand,
  * instead of the line that tells the person to open the chat on the host.
  */
-const NEGOTIATED_GRANTS: ReadonlyArray<readonly [grant: string, feature: string, call?: "own_call"]> = [
+const NEGOTIATED_GRANTS: ReadonlyArray<readonly [grant: string, feature: string | null, call?: "own_call"]> = [
   ["tasks:read", AIDEN_REMOTE_CHAT_TASKS_FEATURE],
   ["agents:read", AIDEN_REMOTE_CHAT_AGENTS_FEATURE],
   ["questions:respond", AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE],
@@ -134,6 +134,8 @@ const NEGOTIATED_GRANTS: ReadonlyArray<readonly [grant: string, feature: string,
   ["bot:handoff-notes", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE, "own_call"],
   ["bot:handoff-on-mac", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE, "own_call"],
   ["bot:images", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE, "own_call"],
+  // Revision 50: no feature token; the host's own list is the whole signal.
+  ["attachments:raw", null, "own_call"],
 ];
 
 /** Unary requests and streams (feed plus live runs) have separate budgets. */
@@ -489,7 +491,7 @@ export class PeerHostRegistry {
     const wanted = NEGOTIATED_GRANTS.filter(
       ([grant, feature, call]) =>
         !capabilities.includes(grant) &&
-        features.includes(feature) &&
+        (feature === null || features.includes(feature)) &&
         // A grant asked for alone has no feature token: only the host's own list names it.
         (call === "own_call"
           ? advertised?.includes(grant) === true

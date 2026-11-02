@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Contract revision 50 (`attachments:raw`): sending photos shows a bar over the composer, in workspace and Bot chats, with "Sending 2 of 3" and how far it has got, and a **Stop** button. When the paired Mac offers it, the iPhone asks for it in a call of its own and then sends PNG and JPEG photos as their own bytes instead of base64 text, about a quarter less data. Older Macs get the same bar and the upload they always took.
 - Contract revision 49 (`chat:jobs`): when the paired Mac offers it, the iPhone asks for it in a call of its own, and a workspace chat shows "2 in background" beside the composer while the agent has something running for it on the Mac (a dev server, a watcher, a long test run, or a server a command left running). The list says how long each has run or how it ended, the addresses a server listens on ("localhost:5173 on your Mac"), and offers **Stop**, which ends the job and everything it started. The list refreshes after each reply and every few seconds while something runs. Older Macs show nothing new.
 - The disconnected recovery panel now offers **Switch connection**, so an unavailable computer no longer leaves you with only Retry. Open the saved-computer list or pair another Aiden Agent directly, including when a secure-identity failure prevents retrying.
 

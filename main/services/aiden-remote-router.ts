@@ -52,6 +52,8 @@ import {
   AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
+  AIDEN_REMOTE_RAW_UPLOAD_MIME_TYPES,
+  AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   AIDEN_REMOTE_CHAT_TASKS_FEATURE,
@@ -892,7 +894,6 @@ async function readRawBody(request: IncomingMessage, maximumBytes: number): Prom
   return Buffer.concat(chunks);
 }
 
-const RAW_UPLOAD_MIME_TYPES = new Set(["image/png", "image/jpeg"]);
 
 /**
  * An attachment upload body (revision 50): the JSON envelope, or one picture's
@@ -907,7 +908,7 @@ async function readAttachmentUploadBody(
   const mimeType = typeof contentType === "string"
     ? contentType.toLowerCase().split(";", 1)[0]?.trim()
     : undefined;
-  if (!mimeType || !RAW_UPLOAD_MIME_TYPES.has(mimeType)) {
+  if (!mimeType || !AIDEN_REMOTE_RAW_UPLOAD_MIME_TYPES.has(mimeType)) {
     return { body: await readJsonBody(request, MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES), raw: false };
   }
   const declared = request.headers["content-length"];
@@ -924,7 +925,7 @@ async function readAttachmentUploadBody(
   const encodedName = request.headers["aiden-attachment-name"];
   let name: string;
   try {
-    if (typeof encodedName !== "string" || encodedName.length === 0 || encodedName.length > 2_048) {
+    if (typeof encodedName !== "string" || encodedName.length === 0 || encodedName.length > AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME) {
       throw new Error("missing name");
     }
     name = decodeURIComponent(encodedName);

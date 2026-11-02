@@ -1030,19 +1030,21 @@ Revision 47 is provisional and is re-claimed at merge, after whatever `main` hol
 
 ## Raw picture uploads, revision 50 (`attachments:raw`, provisional)
 
-Revision 50 is provisional and is re-claimed at merge, after whatever `main` holds then. The host keeps it in one constant (`AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION`). It lets a device send a picture as its raw bytes instead of base64 inside JSON, so the upload is about a third smaller and the client can show how many bytes have gone.
+Revision 50 is provisional and is re-claimed at merge, after whatever `main` holds then. The host keeps it in one constant (`AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION`). It lets a device send a picture as its raw bytes instead of base64 inside JSON, so the upload is about a quarter smaller (base64 adds a third) and the client can show how many bytes have gone.
 
 **Negotiation.** Like `chat:jobs`, this revision adds no `/server` feature token. The host lists `attachments:raw` in `serverCapabilities` whenever it serves chat or Bot uploads (the Mac and Linux desktop app, and `aiden serve`). A device asks for it with `POST /device/capabilities {accepts: ["attachments:raw"]}` in a call of its **own**: a host older than revision 50 refuses the unknown name with `400 invalid_request`. Any device type may hold it; pairing never issues it.
 
 **Request.** `POST /chats/{chatId}/attachments` (`chat:write`) and `POST /bots/{botId}/attachments` (`bot:write`, `bot:read`, `chat:write`) keep the JSON upload and also accept:
 - `Content-Type: image/png` or `image/jpeg`, the picture's own type.
 - `Content-Length`: required and exact, at most 8 MiB (`8388608`). A missing one is `411`; a larger one is `413 payload_too_large` before any byte is read; a body that ends short is `400 invalid_request`.
-- `Aiden-Attachment-Name`: the file name, percent-encoded UTF-8 (as `encodeURIComponent` writes it), at most 2048 characters encoded. It must decode to the same names the JSON upload allows (no slash, no control characters, at most 255 characters); otherwise `400 invalid_request`.
+- `Aiden-Attachment-Name`: the file name, percent-encoded UTF-8, at most 2048 characters encoded. Clients leave only the RFC 3986 unreserved characters (letters, digits, `-._~`) as they are, so `it's (1).png` is `it%27s%20%281%29.png` on every client; the host decodes any valid percent-encoding. It must decode to the same names the JSON upload allows (no slash, no control characters, at most 255 characters); otherwise `400 invalid_request`.
 - The body: the picture's bytes, nothing else.
 
 The host checks the bytes, type and dimensions exactly as for a JSON image upload and answers `201` with the same `AttachmentReference`: single-use, ten minutes, spent by the next turn or Bot message. Without `attachments:raw` a raw upload is `403 capability_denied`. Any other `Content-Type` is still read as the JSON upload, so `image/gif` and others stay `415`.
 
-**Clients.** Aiden On The Go for iOS and Android, and a Mac sending to a paired Mac, ask for `attachments:raw` once the host offers it and then upload pictures raw, showing a progress bar while the bytes go and a cancel button on the attachment. Against an older host they keep the JSON upload. Text attachments always use JSON.
+**Clients.** Aiden On The Go for iOS and Android, and a Mac sending to a paired computer, ask for `attachments:raw` alone, after their other opt-ins, once the host offers it, and then upload PNG and JPEG pictures raw. Against an older host they keep the JSON upload; text attachments, and anything the raw route would refuse, always use JSON. The phones show a bar over the composer while attachments upload ("Sending 2 of 3", with the percent) and a **Stop** button, for raw and JSON uploads alike: on iPhone in workspace and Bot chats, on Android in workspace chats. Stop drops the upload in flight and the ones still waiting; pictures that already reached the host stay ready to send. A Mac sending to a paired computer shows no bar.
+
+**Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `rawUploads`: one picture's request (route, type, exact length, the name and its encoded form, the bytes in base64), the staged reference the host answers, and the `capability_denied` refusal without the grant. Each client checks its own name encoding against it. The desktop parser reads the section only when `contractRevision` is 50 or newer.
 
 ## Background jobs on phones, revision 49 (`chat:jobs`, provisional)
 

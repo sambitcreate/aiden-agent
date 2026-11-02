@@ -2706,6 +2706,122 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(step, 3)
     }
 
+    /// Contract revision 50: with `attachments:raw` a PNG or JPEG goes to the
+    /// chat and Bot upload routes as its own bytes, its name percent-encoded;
+    /// text, and every upload without the grant, keep the JSON envelope.
+    func testRawPictureUploadsSendTheBytesAndOtherUploadsKeepJSON() async throws {
+        let client = makeClient()
+        let attachmentID = "att_\(String(repeating: "R", count: 43))"
+        let imageData = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).pngData { context in
+            UIColor.systemTeal.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+        var seen: [(path: String?, contentType: String?, name: String?, body: Data)] = []
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            seen.append((
+                request.url?.path,
+                request.value(forHTTPHeaderField: "Content-Type"),
+                request.value(forHTTPHeaderField: "Aiden-Attachment-Name"),
+                try Self.bodyData(request)
+            ))
+            return Self.response(
+                for: request,
+                status: 201,
+                json: """
+                {"id":"\(attachmentID)","name":"Café photo.png","mimeType":"image/png",
+                "kind":"image","size":\(imageData.count),"expiresAt":"2026-11-02T07:10:00.000Z"}
+                """
+            )
+        }
+        let picture = AidenAttachmentUpload.image(name: "Café photo.png", mimeType: "image/png", data: imageData)
+
+        let chatReference = try await client.uploadAttachment(chatId: "chat-1", upload: picture, rawImages: true, progress: nil)
+        _ = try await client.uploadBotAttachment(botId: "bot-1", upload: picture, rawImages: true, progress: nil)
+        _ = try await client.uploadAttachment(chatId: "chat-1", upload: picture, rawImages: false, progress: nil)
+        _ = try await client.uploadAttachment(
+            chatId: "chat-1",
+            upload: .text(name: "notes.md", mimeType: "text/markdown", text: "# Notes"),
+            rawImages: true,
+            progress: nil
+        )
+
+        XCTAssertEqual(chatReference.id, attachmentID)
+        XCTAssertEqual(seen.map(\.path), [
+            "/api/aiden/v1/chats/chat-1/attachments",
+            "/api/aiden/v1/bots/bot-1/attachments",
+            "/api/aiden/v1/chats/chat-1/attachments",
+            "/api/aiden/v1/chats/chat-1/attachments",
+        ])
+        for raw in seen.prefix(2) {
+            XCTAssertEqual(raw.contentType, "image/png")
+            XCTAssertEqual(raw.name, "Caf%C3%A9%20photo.png")
+            XCTAssertEqual(raw.name?.removingPercentEncoding, "Café photo.png")
+            XCTAssertEqual(raw.body, imageData)
+        }
+        XCTAssertEqual(seen[2].contentType, "application/json")
+        XCTAssertNil(seen[2].name)
+        let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: seen[2].body) as? [String: Any])
+        XCTAssertEqual(envelope["data"] as? String, imageData.base64EncodedString())
+        XCTAssertEqual(envelope["kind"] as? String, "image")
+        XCTAssertEqual(seen[3].contentType, "application/json")
+        XCTAssertNil(seen[3].name)
+    }
+
+    /// A picture the raw route would refuse (a GIF, or over 8 MiB) keeps the
+    /// JSON envelope, so the Mac answers it as it always has.
+    func testRawPictureUploadLeavesOutWhatTheRouteRefuses() {
+        let png = Data([0x89, 0x50, 0x4e, 0x47])
+        XCTAssertNotNil(AidenRawAttachmentUpload(.image(name: "a.png", mimeType: "image/png", data: png)))
+        XCTAssertNotNil(AidenRawAttachmentUpload(.image(name: "a.jpg", mimeType: "image/jpeg", data: png)))
+        XCTAssertNil(AidenRawAttachmentUpload(.image(name: "a.gif", mimeType: "image/gif", data: png)))
+        XCTAssertNil(AidenRawAttachmentUpload(.image(name: "a.png", mimeType: "image/png", data: Data())))
+        XCTAssertNil(AidenRawAttachmentUpload(.image(
+            name: "big.png",
+            mimeType: "image/png",
+            data: Data(count: AidenRawAttachmentUpload.maxBytes + 1)
+        )))
+        XCTAssertNil(AidenRawAttachmentUpload(.text(name: "a.txt", mimeType: "text/plain", text: "a")))
+        XCTAssertNil(AidenRawAttachmentUpload(.image(
+            name: String(repeating: "é", count: 400),
+            mimeType: "image/png",
+            data: png
+        )), "a name longer than 2,048 encoded characters")
+    }
+
+    /// The shared revision 50 fixture: the iPhone spells a name exactly as the
+    /// Mac and Android do, and sends the fixture's bytes as they are.
+    func testRawPictureUploadMatchesTheSharedFixture() throws {
+        let request = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["rawUploads", "request"])) as? [String: Any]
+        )
+        let name = try XCTUnwrap(request["name"] as? String)
+        let contentType = try XCTUnwrap(request["contentType"] as? String)
+        let body = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(request["bodyBase64"] as? String)))
+        let raw = try XCTUnwrap(AidenRawAttachmentUpload(.image(name: name, mimeType: contentType, data: body)))
+        XCTAssertEqual(raw.encodedName, request["encodedName"] as? String)
+        XCTAssertEqual(raw.mimeType, contentType)
+        XCTAssertEqual(raw.data.count, request["contentLength"] as? Int)
+        XCTAssertEqual(AidenRawAttachmentUpload.nameHeader, request["nameHeader"] as? String)
+        // Only RFC 3986 unreserved characters stay as they are, as on the Mac.
+        let quoted = try XCTUnwrap(AidenRawAttachmentUpload(.image(name: "it's (1)*!.png", mimeType: "image/png", data: body)))
+        XCTAssertEqual(quoted.encodedName, "it%27s%20%281%29%2A%21.png")
+    }
+
+    /// The bar covers the whole batch and moves only forward, a whole percent at a time.
+    func testUploadProgressCoversTheBatch() throws {
+        let start = AidenUploadProgress(index: 1, count: 4, fraction: 0)
+        XCTAssertEqual(start.percent, 25)
+        XCTAssertEqual(start.title, "Sending 2 of 4")
+        XCTAssertNil(start.advanced(to: 0.02), "half a percent of the batch does not redraw")
+        let half = try XCTUnwrap(start.advanced(to: 0.5))
+        XCTAssertEqual(half.percent, 37)
+        XCTAssertNil(half.advanced(to: 0.4), "a late report never moves the bar back")
+        XCTAssertEqual(try XCTUnwrap(half.advanced(to: 1)).percent, 50)
+        XCTAssertEqual(AidenUploadProgress(index: 0, count: 1, fraction: 0).title, "Sending")
+        XCTAssertEqual(AidenUploadProgress(index: 0, count: 1, fraction: 3).overall, 1)
+    }
+
     func testAttachmentContentUsesAuthenticatedBoundedRawImageRoute() async throws {
         let client = makeClient()
         let attachmentID = "att_\(String(repeating: "I", count: 43))"
@@ -4975,6 +5091,67 @@ final class AidenRemoteClientTests: XCTestCase {
             let installation = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
             XCTAssertEqual(installation.hasNegotiatedAccess(to: .chatJobs), offered)
             XCTAssertEqual(coordinator.server?.capabilities.contains(.chatJobs), offered)
+        }
+    }
+
+    /// Contract revision 50: `attachments:raw` is asked for alone, after the other
+    /// opt-ins, only from a Mac that offers it, and the phone keeps the grant.
+    @MainActor
+    func testCoordinatorAsksForRawUploadsAloneFromAMacThatOffersThem() async throws {
+        for offered in [false, true] {
+            let keychain = AidenRemoteMemoryKeychain()
+            let store = AidenInstallationStore(keychain: keychain)
+            _ = try store.savePairing(
+                makeExchange(instanceId: "instance-raw", deviceId: "device-raw", credential: "credential-raw"),
+                trust: makeSystemTrust(),
+                name: "Raw Mac"
+            )
+            let session = makeSession()
+            var granted = ["server:read", "workspace:read"]
+            var accepts: [[String]] = []
+            AidenRemoteMockURLProtocol.handler = { request in
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/aiden/v1/server"):
+                    let serverObject: [String: Any] = [
+                        "protocolVersion": 1,
+                        "instanceId": "instance-raw",
+                        "name": "Raw Mac",
+                        "appVersion": "1.0.0",
+                        "capabilities": granted,
+                        "serverCapabilities": ["server:read", "workspace:read", "tasks:read"]
+                            + (offered ? ["attachments:raw"] : []),
+                        "features": ["chat-tasks-v1"],
+                        "connectionMode": "lan",
+                        "serverTime": "2026-10-27T12:00:00.000Z",
+                    ]
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: serverObject))
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+                case ("PATCH", "/api/aiden/v1/device/identity"):
+                    let name = try XCTUnwrap(try Self.jsonBody(request)["name"] as? String)
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["name": name]))
+                case ("POST", "/api/aiden/v1/device/capabilities"):
+                    let asked = try XCTUnwrap(try Self.jsonBody(request)["accepts"] as? [String])
+                    accepts.append(asked)
+                    granted += asked.filter { !granted.contains($0) }
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["capabilities": granted]))
+                default:
+                    XCTFail("Unexpected request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                    return Self.response(for: request, status: 500, json: "{}")
+                }
+            }
+            let coordinator = AidenRemoteCoordinator(
+                installationStore: store,
+                clientFactory: { installation, credential in
+                    AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+                }
+            )
+            await coordinator.start()
+            XCTAssertEqual(coordinator.connectionState, .connected, "offered: \(offered)")
+            XCTAssertEqual(accepts, offered ? [["tasks:read"], ["attachments:raw"]] : [["tasks:read"]])
+            let installation = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+            XCTAssertEqual(installation.hasNegotiatedAccess(to: .attachmentsRaw), offered)
+            XCTAssertEqual(coordinator.server?.capabilities.contains(.attachmentsRaw), offered)
         }
     }
 

@@ -44,4 +44,26 @@ fun aidenComposerSelectedThinkingLevel(model: AidenModel, selected: String?): St
 }
 
 /** A pending composer attachment, identified by its durable reference id (names may repeat). */
+/**
+ * How far the attachments being sent to the Mac have got: which one of the batch is going
+ * ([index] of [count], from 0) and the share of its bytes already sent.
+ */
+data class AidenUploadProgress(val index: Int, val count: Int, val fraction: Float) {
+    /** The whole batch, 0 to 1. */
+    val overall: Float
+        get() = if (count <= 0) 0f else ((index + fraction.coerceIn(0f, 1f)) / count).coerceIn(0f, 1f)
+
+    val percent: Int
+        get() = (overall * 100).toInt()
+
+    /**
+     * The same batch with the current upload at [fraction], or null when that would not move
+     * the bar by a whole percent (the body reports often) or would move it back.
+     */
+    fun advancedTo(fraction: Float): AidenUploadProgress? {
+        val next = copy(fraction = fraction)
+        return if (next.percent > percent || (fraction >= 1f && this.fraction < 1f)) next else null
+    }
+}
+
 data class AidenComposerPendingAttachment(val id: String, val name: String, val isImage: Boolean)

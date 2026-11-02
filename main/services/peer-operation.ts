@@ -11,8 +11,11 @@ import {
   MAX_PEER_UPLOAD_BYTES,
   type PeerRequest,
 } from "./peer-transport.js";
+import { MAX_INLINE_IMAGE_BYTES } from "../../renderer/shared/attachment-contract.js";
 import {
   AIDEN_REMOTE_CONTEXT_MODEL_ID,
+  AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME,
+  encodeAidenRemoteAttachmentName,
   parseAidenRemoteBotConnectionRequestReceipt,
   parseAidenRemoteBotHandoffAnswerReceipt,
   parseAidenRemoteBotHandoffAnswerRequest,
@@ -210,6 +213,32 @@ function query(entries: [string, string | undefined][]): string {
 }
 
 /** Renderer selects a closed operation, never an arbitrary URL, header or credential. */
+/**
+ * Revision 50 (`attachments:raw`): a chat or Bot picture upload sent to a host
+ * that granted this Mac raw uploads goes as the picture's own bytes, about a
+ * quarter fewer than the base64 envelope. Anything else, text included, keeps
+ * the JSON request `peerOperationRequest` built.
+ */
+export function peerRawUploadRequest(
+  operation: unknown,
+  request: Omit<PeerRequest, "credential">,
+): Omit<PeerRequest, "credential"> {
+  const input = peerRecord(operation);
+  if (input.operation !== "uploadAttachment" && input.operation !== "uploadBotAttachment") return request;
+  const body = request.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return request;
+  const { kind, mimeType, name, data } = body as Record<string, unknown>;
+  if (kind !== "image" || (mimeType !== "image/png" && mimeType !== "image/jpeg")) return request;
+  if (typeof name !== "string" || typeof data !== "string") return request;
+  const bytes = Buffer.from(data, "base64");
+  // A body that is not exact base64 keeps the envelope, so the host refuses it as before.
+  if (bytes.length === 0 || bytes.length > MAX_INLINE_IMAGE_BYTES || bytes.toString("base64") !== data) return request;
+  const encodedName = encodeAidenRemoteAttachmentName(name);
+  if (encodedName.length === 0 || encodedName.length > AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME) return request;
+  const { body: _json, ...rest } = request;
+  return { ...rest, rawBody: { contentType: mimeType, encodedName, data: bytes } };
+}
+
 export function peerOperationRequest(
   value: unknown,
 ): Omit<PeerRequest, "credential"> {

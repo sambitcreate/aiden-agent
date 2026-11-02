@@ -122,6 +122,14 @@ protocol AidenBotSessionTransport: Sendable {
     ) async throws -> AidenBotRoutineProposalRespondResult
     /// Revision 33 (`bot-attachments-v1`): stage one upload for the next message.
     func uploadBotAttachment(botId: String, upload: AidenAttachmentUpload) async throws -> AidenAttachmentReference
+    /// Revision 50: a picture as its own bytes while the phone holds
+    /// `attachments:raw`, and how much of the upload has gone (0 to 1).
+    func uploadBotAttachment(
+        botId: String,
+        upload: AidenAttachmentUpload,
+        rawImages: Bool,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws -> AidenAttachmentReference
     func removeBotAttachment(botId: String, attachmentId: String) async throws
     /// Revision 37 (`bot:handoffs`): Done or Skip for the waiting hand-off.
     func answerBotHandoff(
@@ -151,6 +159,16 @@ extension AidenBotSessionTransport {
     /// A transport without Bot uploads refuses them, as a Mac without the feature does.
     func uploadBotAttachment(botId: String, upload: AidenAttachmentUpload) async throws -> AidenAttachmentReference {
         throw AidenRemoteClientError.invalidResponse
+    }
+
+    /// A transport without raw uploads or progress sends the JSON envelope.
+    func uploadBotAttachment(
+        botId: String,
+        upload: AidenAttachmentUpload,
+        rawImages: Bool,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws -> AidenAttachmentReference {
+        try await uploadBotAttachment(botId: botId, upload: upload)
     }
 
     func removeBotAttachment(botId: String, attachmentId: String) async throws {}
@@ -1195,6 +1213,12 @@ final class AidenBotSessionModel {
     private(set) var pendingAttachments: [AidenAttachmentReference] = []
     /// Attachments are being prepared or uploaded; the + and Send wait for them.
     private(set) var isAttaching = false
+    /// Revision 50: the phone holds `attachments:raw`, so pictures go as their own bytes.
+    var rawImageUploads = false
+    /// How far the attachments being uploaded have got; nil while none are.
+    private(set) var uploadProgress: AidenUploadProgress?
+    @ObservationIgnored private var uploadProgressID: UUID?
+    @ObservationIgnored private var attachTask: Task<Int, Never>?
     /// The bytes of each staged photo, for its thumbnail; never written to disk.
     @ObservationIgnored private var attachmentImages: [String: Data] = [:]
     /// Revision 45: images the Bot shared, kept in memory within a budget while this chat is open; never written to disk.
@@ -2389,15 +2413,62 @@ final class AidenBotSessionModel {
     func attach(_ items: [@MainActor () async throws -> AidenAttachmentUpload]) async -> Int {
         guard canAttach, !items.isEmpty else { return items.count }
         isAttaching = true
-        defer { isAttaching = false }
+        let task = Task { await performAttach(items) }
+        attachTask = task
+        let failures = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        attachTask = nil
+        isAttaching = false
+        return failures
+    }
+
+    /// Stop on the progress bar: the upload in flight is dropped; what already
+    /// reached the Mac stays ready to send.
+    func cancelUploads() {
+        attachTask?.cancel()
+    }
+
+    /// A late report from an earlier upload or batch never moves the bar back.
+    private func recordUploadProgress(_ fraction: Double, index: Int, id: UUID) {
+        guard uploadProgressID == id, let current = uploadProgress, current.index == index,
+              let next = current.advanced(to: fraction) else { return }
+        uploadProgress = next
+    }
+
+    private func performAttach(_ items: [@MainActor () async throws -> AidenAttachmentUpload]) async -> Int {
+        let progressID = UUID()
+        uploadProgressID = progressID
+        defer {
+            if uploadProgressID == progressID {
+                uploadProgressID = nil
+                uploadProgress = nil
+            }
+        }
+        let batch = Array(items.prefix(attachmentCapacity))
+        let rawImages = rawImageUploads
         var failures = max(0, items.count - attachmentCapacity)
-        for prepare in items.prefix(attachmentCapacity) {
+        for (index, prepare) in batch.enumerated() {
             if Task.isCancelled || released { return items.count }
             do {
                 let upload = try await prepare()
+                if Task.isCancelled || released { return items.count }
+                uploadProgress = AidenUploadProgress(index: index, count: batch.count, fraction: 0)
+                let progress: @Sendable (Double) -> Void = { [weak self] fraction in
+                    Task { @MainActor in
+                        self?.recordUploadProgress(fraction, index: index, id: progressID)
+                    }
+                }
                 // A photo can take longer than a message on a slow connection.
                 let reference = try await aidenBotWithin(max(requestLimit, .seconds(60))) { [transport, botID] in
-                    try await transport.uploadBotAttachment(botId: botID, upload: upload)
+                    try await transport.uploadBotAttachment(
+                        botId: botID,
+                        upload: upload,
+                        rawImages: rawImages,
+                        progress: progress
+                    )
                 }
                 guard reference.isValid(now: now()) else { throw AidenRemoteClientError.invalidResponse }
                 if case let .image(_, _, data) = upload { attachmentImages[reference.id] = data }

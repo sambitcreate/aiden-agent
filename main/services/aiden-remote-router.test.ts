@@ -5768,7 +5768,7 @@ test("attachments:raw is offered with uploads, and a holder uploads a picture as
     fetch(`${base}${route}`, {
       method: "POST",
       headers: { ...headers, "content-type": "image/png", "aiden-attachment-name": encodeURIComponent("Café photo.png"), ...extra },
-      body,
+      body: new Uint8Array(body),
     });
 
   const before = await fixture({ capabilities: grants, acceptsBotCapabilities: true, deviceType: "iphone", botSessions: sessions });
@@ -5816,7 +5816,7 @@ test("attachments:raw is offered with uploads, and a holder uploads a picture as
     const unnamed = await fetch(`${holder.base}/bots/bot-1/attachments`, {
       method: "POST",
       headers: { ...headers, "content-type": "image/png" },
-      body: png,
+      body: new Uint8Array(png),
     });
     assert.equal(unnamed.status, 400);
     const oversized = await raw(holder.base, "/bots/bot-1/attachments", Buffer.alloc(8 * 1024 * 1024 + 1));
