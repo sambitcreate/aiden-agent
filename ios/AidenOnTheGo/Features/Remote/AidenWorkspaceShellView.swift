@@ -192,7 +192,10 @@ final class AidenHomeModel {
     private var summaryCacheGeneration: UInt64 = 0
     private var latestSummaryRequestToken: UInt64 = 0
     private var persistedLocalGeneration: UInt64 = 0
-    private var localSummaryEdits: [String: (generation: UInt64, token: UInt64, summary: AidenChatSummary?, activityOnly: Bool)] = [:]
+    /// Rows changed here and not yet on a page. `readThrough` is set for a
+    /// Mark read: the newest reply it covers. A page row with a newer reply
+    /// is not covered by it, so that page row is shown instead.
+    private var localSummaryEdits: [String: (generation: UInt64, token: UInt64, summary: AidenChatSummary?, activityOnly: Bool, readThrough: Date?)] = [:]
     private var prefetchTask: Task<Void, Never>?
     /// Changes each time a chat is viewed: a chat viewed while a swipe's
     /// write was out has been read, so a refusal never brings its dot back.
@@ -266,7 +269,7 @@ final class AidenHomeModel {
         chats[index].unread = false
         chats[index].inbox.invalidateHostPlacement()
         let optimistic = chats[index]
-        persistCurrentSummaries(changedID: chatID)
+        persistCurrentSummaries(changedID: chatID, readThrough: optimistic.inbox.lastAssistantAt ?? .distantPast)
         do {
             try await coordinator.remoteClient(for: context).markChatRead(id: chatID)
         } catch {
@@ -286,6 +289,7 @@ final class AidenHomeModel {
     private func settleRead(
         chatID: String,
         readThrough: AidenChatSummary,
+        onlyRead: Bool = true,
         context: AidenRemoteRequestContext,
         coordinator: AidenRemoteCoordinator
     ) {
@@ -297,7 +301,18 @@ final class AidenHomeModel {
             chats[index].unread = false
             chats[index].inbox.invalidateHostPlacement()
         }
-        persistCurrentSummaries(changedID: chatID)
+        let boundary = readThrough.inbox.lastAssistantAt ?? .distantPast
+        if !onlyRead {
+            // Done or Snooze's read: the row's whole edit keeps its authority.
+            persistCurrentSummaries(changedID: chatID)
+        } else if loadingAttempt == nil {
+            persistCurrentSummaries(changedID: chatID, readThrough: boundary)
+        } else {
+            // A list page is on its way. Saving now would take the cache's
+            // authority from that page and lose its other rows, so the read
+            // is only recorded here and `load` lays it over the page's row.
+            localSummaryEdits[chatID] = (nextSummaryCacheGeneration(), localSummaryEdits[chatID]?.token ?? 0, chats[index], false, boundary)
+        }
     }
 
     /// Done, Snooze or their undo. The row moves at once; a refusal puts back
@@ -388,7 +403,7 @@ final class AidenHomeModel {
             // should also take the read, whichever Mac is shown now.
             do {
                 try await client.markChatRead(id: chatID)
-                settleRead(chatID: chatID, readThrough: optimistic, context: context, coordinator: coordinator)
+                settleRead(chatID: chatID, readThrough: optimistic, onlyRead: false, context: context, coordinator: coordinator)
             } catch {
                 if viewStamp(chatID) == viewed {
                     let wasUnread = before.unread
@@ -470,14 +485,14 @@ final class AidenHomeModel {
         persistCurrentSummaries(changedID: id)
     }
 
-    private func persistCurrentSummaries(changedID: String, activityOnly: Bool = false) {
+    private func persistCurrentSummaries(changedID: String, activityOnly: Bool = false, readThrough: Date? = nil) {
         guard let context = contentContext else { return }
         let snapshot = AidenChatCache.SummarySnapshot(summaries: chats, nextCursor: nextChatCursor)
         let generation = nextSummaryCacheGeneration()
         let writeToken = chatCache.reserveSummaryWrite(instanceId: context.instanceId)
         let pending = localSummaryEdits[changedID]
         let onlyActivity = activityOnly && !(pending.map { $0.generation > persistedLocalGeneration && !$0.activityOnly } ?? false)
-        localSummaryEdits[changedID] = (generation, writeToken, chats.first(where: { $0.id == changedID }), onlyActivity)
+        localSummaryEdits[changedID] = (generation, writeToken, chats.first(where: { $0.id == changedID }), onlyActivity, readThrough)
         let editTokens = localSummaryEdits.filter { $0.value.generation > persistedLocalGeneration }.mapValues(\.token)
         let changedIDs = Set(editTokens.keys)
         let activityOnlyIDs = Set(localSummaryEdits.filter { $0.value.activityOnly && changedIDs.contains($0.key) }.keys)
@@ -665,7 +680,32 @@ final class AidenHomeModel {
                         chats = admitted?.summaries ?? []
                         nextChatCursor = admitted?.nextCursor
                         paginationState = .idle
-                        for (id, edit) in localSummaryEdits where edit.generation > requestEditGeneration && edit.token > max(state.fullToken, state.rowTokens[id] ?? 0) {
+                        // A Mark read made since this page was asked for clears the
+                        // page row's dot only for the reply it read through: a
+                        // newer reply on the page keeps its dot and the rest of
+                        // the page row.
+                        var readOverPage: [String] = []
+                        for (id, edit) in localSummaryEdits where edit.generation > requestEditGeneration {
+                            let editIsNewer = edit.token > max(state.fullToken, state.rowTokens[id] ?? 0)
+                            if let readThrough = edit.readThrough {
+                                if let pageRow = loadedPage.summaries.first(where: { $0.id == id }),
+                                   (pageRow.inbox.lastAssistantAt ?? .distantPast) > readThrough {
+                                    // The cache may have kept the read row over this page.
+                                    if editIsNewer {
+                                        chats.removeAll { $0.id == id }
+                                        chats.append(pageRow)
+                                        readOverPage.append(id)
+                                    }
+                                    continue
+                                }
+                                if let index = chats.firstIndex(where: { $0.id == id }), chats[index].unread {
+                                    chats[index].unread = false
+                                    chats[index].inbox.invalidateHostPlacement()
+                                    readOverPage.append(id)
+                                }
+                                continue
+                            }
+                            guard editIsNewer else { continue }
                             if edit.activityOnly {
                                 if let index = chats.firstIndex(where: { $0.id == id }), let row = edit.summary { chats[index].activity = row.activity }
                             } else {
@@ -674,6 +714,11 @@ final class AidenHomeModel {
                             }
                         }
                         chats.sort(by: AidenChatSummaryPage.areInCanonicalOrder)
+                        for id in readOverPage {
+                            let readThrough = localSummaryEdits[id]?.readThrough
+                            let coversRow = (chats.first(where: { $0.id == id })?.inbox.lastAssistantAt ?? .distantPast) <= (readThrough ?? .distantPast)
+                            persistCurrentSummaries(changedID: id, readThrough: coversRow ? readThrough : nil)
+                        }
                         chatListLoadState = .loaded
                         prefetchRecentTranscripts(client: client, context: context, coordinator: coordinator)
                     } catch {

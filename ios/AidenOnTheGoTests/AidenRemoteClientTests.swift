@@ -7100,8 +7100,85 @@ extension AidenRemoteClientTests {
 
         XCTAssertFalse(inbox.home.chats[0].unread, "A page asked for before the Mac took the read doesn't bring the dot back.")
         XCTAssertNil(inbox.home.inboxNotice)
-        let saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+        // The read is saved in the background once the page is reconciled.
+        var saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+        for _ in 0..<100 where saved?.unread != false {
+            try await Task.sleep(for: .milliseconds(20))
+            saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+        }
         XCTAssertEqual(saved?.unread, false, "The saved list keeps the read too.")
+    }
+
+    @MainActor
+    func testInboxMarkReadKeepsAReplyNewerThanTheReadFromARefreshInEitherOrder() async throws {
+        let newerReply = "2026-08-18T19:04:00.000Z"
+        let newerPage = """
+        {"summaries":[{"id":"\(Self.inboxChatID)","workspaceId":"alpha","title":"Reply","titlePending":false,
+        "createdAt":"2026-08-18T18:30:00.000Z","updatedAt":"\(newerReply)",
+        "revision":"rev_FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF","activity":"idle","rowState":"idle",
+        "unread":true,"lastRunFailed":false,"lastAssistantAt":"\(newerReply)",
+        "pinnedAt":"2026-08-18T18:45:00.000Z","triageRevision":3,
+        "inboxBucket":"pinned","inboxSortAt":"\(newerReply)"}]}
+        """
+        for readLandsFirst in [true, false] {
+            var answerNewer = false
+            let inbox = try await makeInboxHome(
+                triage: { _, _ in (500, Self.inboxError("internal_error")) },
+                summaryOverride: { answerNewer ? newerPage : nil }
+            )
+            defer { try? FileManager.default.removeItem(at: inbox.root) }
+            XCTAssertTrue(inbox.home.chats[0].unread)
+            let readArrived = expectation(description: "read sent")
+            let refreshArrived = expectation(description: "refresh asked")
+            let releaseRead = DispatchSemaphore(value: 0)
+            let releaseRefresh = DispatchSemaphore(value: 0)
+            AidenRemoteMockURLProtocol.hold = { request in
+                switch request.url?.path ?? "" {
+                case "/api/aiden/v1/chats/\(Self.inboxChatID)/read":
+                    readArrived.fulfill()
+                    return releaseRead
+                case "/api/aiden/v1/chat-summaries":
+                    refreshArrived.fulfill()
+                    return releaseRefresh
+                default:
+                    return nil
+                }
+            }
+            defer { AidenRemoteMockURLProtocol.hold = nil }
+
+            let read = Task { await inbox.home.markRead(chatID: Self.inboxChatID, coordinator: inbox.coordinator) }
+            await fulfillment(of: [readArrived], timeout: 5)
+            // A reply the person hasn't seen arrives while the read is out,
+            // and a refresh asked for then carries it.
+            answerNewer = true
+            let refresh = Task { await inbox.home.load(coordinator: inbox.coordinator) }
+            await fulfillment(of: [refreshArrived], timeout: 5)
+            if readLandsFirst {
+                releaseRead.signal()
+                await read.value
+                XCTAssertFalse(inbox.home.chats[0].unread)
+                releaseRefresh.signal()
+                await refresh.value
+            } else {
+                releaseRefresh.signal()
+                await refresh.value
+                releaseRead.signal()
+                await read.value
+            }
+
+            let order = readLandsFirst ? "read first" : "page first"
+            let row = try XCTUnwrap(inbox.home.chats.first)
+            XCTAssertTrue(row.unread, "The read didn't cover the newer reply (\(order)).")
+            XCTAssertEqual(row.inbox.lastAssistantAt, try Self.remoteDate(newerReply), order)
+            // The row is saved in the background once the page is reconciled.
+            var saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+            for _ in 0..<100 where saved?.unread != true {
+                try await Task.sleep(for: .milliseconds(20))
+                saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+            }
+            XCTAssertEqual(saved?.unread, true, "The saved list keeps the newer reply's dot (\(order)).")
+            XCTAssertEqual(saved?.inbox.lastAssistantAt, try Self.remoteDate(newerReply), order)
+        }
     }
 
     @MainActor
