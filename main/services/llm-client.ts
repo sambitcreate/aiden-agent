@@ -3753,16 +3753,12 @@ export const llmClient = {
           tools: [...runtimeTools],
           messages: initialMessages,
         },
-        finishTurn: async (turn) => {
-          if (attendedAssistant) {
-            const decision = endRunAfterIgnoredToolRecovery(() => attendedToolRecoveryRequested)(turn);
-            if (decision) return decision;
-          }
-          // The step that crossed the spending limit has finished: end here, so
-          // the chat shows its limit notice rather than a failed reply.
-          if (harnessProvider) return undefined;
+        finishTurn: attendedAssistant
+          ? endRunAfterIgnoredToolRecovery(() => attendedToolRecoveryRequested)
+          : undefined,
+        spendingLimitReached: harnessProvider ? undefined : async () => {
           await spendingMeter.settled();
-          return (await spending.block(spendingOwner).catch(() => undefined)) ? { action: "end" } : undefined;
+          return Boolean(await spending.block(spendingOwner).catch(() => undefined));
         },
         prepareNextTurnWithContext: createPiTurnContextPreparation({
           generationOptions: generationContextOptions,

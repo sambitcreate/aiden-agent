@@ -147,6 +147,8 @@ export interface PiAgentRuntimeExtension {
  * host to `AIDEN_PI_CLIENT_IDENTITY`; `identity` here is the runtime identity.
  */
 export interface PiAgentRuntimeHarnessOptions extends Omit<AgentOptions, "toolExecution" | "identity"> {
+  /** A settled spending stop ends both Pi tool turns and managed provider recovery. */
+  spendingLimitReached?: () => Promise<boolean>;
   extensions?: readonly PiAgentRuntimeExtension[];
   /** Fully resolved immutable contributions for one foreground operation. */
   contributions?: PiRuntimeContributionSnapshot;
@@ -901,7 +903,7 @@ export class PiAgentRuntimeHarness {
   private cancelledQueuedProjectionSettlements: Array<Promise<void>> = [];
   private capturedTurnMessages: AgentMessage[] = [];
   private turnHadToolExecution = false;
-  private turnRequestedEnd = false;
+  private stoppedAtSpendingLimit = false;
   private activeEffectOperation:
     | {
         operationId: string;
@@ -952,6 +954,7 @@ export class PiAgentRuntimeHarness {
       resources: requestedResources = {},
       identity,
       onContextProjection,
+      spendingLimitReached,
       contextPromptSections,
       ...agentOptions
     } = options;
@@ -1221,11 +1224,13 @@ export class PiAgentRuntimeHarness {
         };
       },
       identity: AIDEN_PI_CLIENT_IDENTITY,
-      finishTurn: finishTurn && (async (turn, signal) => {
-        const decision = await finishTurn(turn, signal);
-        this.turnRequestedEnd = decision?.action === "end";
-        return decision ?? undefined;
-      }),
+      finishTurn: spendingLimitReached
+        ? async (turn, signal) => {
+            const decision = await finishTurn?.(turn, signal);
+            this.stoppedAtSpendingLimit = await spendingLimitReached();
+            return this.stoppedAtSpendingLimit ? { action: "end" } : decision ?? undefined;
+          }
+        : finishTurn,
       transformContext:
         options.transformContext || extensions.some((extension) => extension.transformContext)
           ? async (messages, signal) => {
@@ -2242,7 +2247,7 @@ export class PiAgentRuntimeHarness {
           });
         }
         attempts += 1;
-        this.turnRequestedEnd = false;
+        this.stoppedAtSpendingLimit = false;
         this.runtimeEvents?.setAttempt(attempts);
         this.lastAssistantMessage = undefined;
         try {
@@ -2322,9 +2327,9 @@ export class PiAgentRuntimeHarness {
           );
         }
 
-        // Pi has ended this step at the host's request (e.g. the spending cap).
+        // Pi has ended this step because the owner reached its spending cap.
         // Its outer recovery loop must not start another request or paid summary.
-        if (this.turnRequestedEnd) {
+        if (this.stoppedAtSpendingLimit) {
           if (cancelled()) return await finish({ kind: "app_cancelled", finalMessage: assistant, attempts });
           if (assistant.stopReason === "error" || assistant.stopReason === "aborted") {
             return await finish({
@@ -2337,7 +2342,7 @@ export class PiAgentRuntimeHarness {
           if (assistant.stopReason === "length" && !keptCutOffReply(assistant, "output-limit")) {
             return await finish({ kind: "provider_failed", reason: "output-limit", finalMessage: assistant, attempts });
           }
-          // The end vote also rules out paid checkpoint recovery. A reply based
+          // The spending limit also rules out paid checkpoint recovery. A reply based
           // on removed history cannot complete until that checkpoint is durable.
           if (this.pendingEmergencyCheckpoint) {
             return await finish({ kind: "host_failed", faultKind: "compaction", finalMessage: assistant, attempts });

@@ -24,4 +24,4 @@ Retries (#595, merged first): a give-up, a too-long hold and a refusal carry `ma
 
 ## November 2, 2026
 
-The managed Pi recovery loop honors a turn-end decision after the response and tool results are durable, before automatic compaction, retry, or cut-off continuation. If reduced history still requires a durable checkpoint, stopping reports a compaction failure without buying a summary. Otherwise a priced length stop keeps its visible text. A paid failed response still reports the provider failure. Foreground chats check the ledger again at provider dispatch, including after a rate-limit wait.
+The managed Pi recovery loop honors the foreground spending stop after the response and tool results are durable, before automatic compaction, retry, or cut-off continuation. If reduced history still requires a durable checkpoint, stopping reports a compaction failure without buying a summary. Otherwise a priced length stop keeps its visible text. A paid failed response still reports the provider failure. Foreground chats check the ledger again at provider dispatch, including after a rate-limit wait.

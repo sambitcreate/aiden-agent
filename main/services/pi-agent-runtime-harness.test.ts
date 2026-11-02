@@ -90,6 +90,7 @@ async function managedTestHarness(
     appendInput?: (session: PiSessionPort, message: AgentMessage) => Promise<void>;
     beforeQueuedUser?: PiRuntimeSessionBinding["beforeQueuedUser"];
     finishTurn?: PiAgentRuntimeHarnessOptions["finishTurn"];
+    spendingLimitReached?: PiAgentRuntimeHarnessOptions["spendingLimitReached"];
     beforeToolCall?: PiAgentRuntimeHarnessOptions["beforeToolCall"];
     prepareNextTurnWithContext?: PiAgentRuntimeHarnessOptions["prepareNextTurnWithContext"];
     initialSystemPrompt?: string;
@@ -172,6 +173,7 @@ async function managedTestHarness(
       model,
     },
     finishTurn: options.finishTurn,
+    spendingLimitReached: options.spendingLimitReached,
     beforeToolCall: options.beforeToolCall,
     prepareNextTurnWithContext: options.prepareNextTurnWithContext,
     ...(options.onContextProjection ? { onContextProjection: options.onContextProjection } : {}),
@@ -1418,7 +1420,8 @@ test("managed runs retry transient provider failures with growing waits until on
     fauxAssistantMessage("", { stopReason: "error", errorMessage: "502 Bad Gateway" });
   const { core, harness } = await managedTestHarness(
     [failure(), failure(), failure(), fauxAssistantMessage("Recovered answer")],
-    { retryDelayMs: 1, maxRetries: 5 },
+    // Report-only helpers end each Pi turn, including unsuccessful attempts.
+    { retryDelayMs: 1, maxRetries: 5, finishTurn: () => ({ action: "end" }) },
   );
   const retries: Array<[number, number, number]> = [];
   const outcome = await harness.runManaged(
@@ -1555,9 +1558,9 @@ for (const stopReason of ["length", "error"] as const) {
         else stream.push({ type: "done", reason: requests === 1 ? "length" : "stop", message });
         return stream;
       }),
-      finishTurn: async () => {
+      spendingLimitReached: async () => {
         await meter.settled();
-        return (await spending.block(owner)) ? { action: "end" } : undefined;
+        return Boolean(await spending.block(owner));
       },
       retryDelayMs: 1,
     });
@@ -2370,12 +2373,12 @@ test("an irreducible active tool result uses bounded projection without a no-op 
   assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), false);
 });
 
-for (const hostEnds of [false, true]) {
-  test(`hidden history removal fails closed without a durable checkpoint (${hostEnds ? "host stop" : "normal finish"})`, async () => {
+for (const overCap of [false, true]) {
+  test(`hidden history removal fails closed without a durable checkpoint (${overCap ? "spending stop" : "normal finish"})`, async () => {
     const { harness, session, core } = await managedTestHarness(
       [fauxAssistantMessage("provider answered the bounded projection")],
       {
-        finishTurn: hostEnds ? () => ({ action: "end" }) : undefined,
+        spendingLimitReached: async () => overCap,
         contextWindow: 4_096,
         generationContextTransform: true,
         extensions: [
