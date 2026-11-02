@@ -70,7 +70,13 @@ class AidenInboxHomeTriageTest {
         /** The page the desktop answers with; read when a request arrives. */
         @Volatile var page: List<AidenChatSummary> = emptyList()
 
-        /** When set, the next list read is answered only once it opens. */
+        /**
+         * When set, every list read is answered only once it opens. Not just
+         * the next one: a load the home started on its own (connecting can
+         * start a second one once the workspaces arrive) may be cancelled by
+         * the forced reload after its request already reached us, and the
+         * forced reload's page must still be the held one.
+         */
         @Volatile var heldPage: CountDownLatch? = null
         val pageArrived = AtomicInteger()
         val pagesServed = AtomicInteger()
@@ -96,9 +102,8 @@ class AidenInboxHomeTriageTest {
                             """{"workspaces":[{"id":"workspace-1","name":"Workspace","permission":"ask","revision":"rev-1"}]}""")
                         path.endsWith("/chat-summaries") -> {
                             val answer = page
-                            val hold = heldPage
+                            val hold = heldPage?.takeIf { it.count > 0 }
                             if (hold != null) {
-                                heldPage = null
                                 pageArrived.incrementAndGet()
                                 check(hold.await(8, TimeUnit.SECONDS))
                             }

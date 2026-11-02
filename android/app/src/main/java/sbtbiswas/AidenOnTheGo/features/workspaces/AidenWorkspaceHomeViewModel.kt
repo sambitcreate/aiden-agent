@@ -26,6 +26,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenChatTriageChange
 import sbtbiswas.AidenOnTheGo.models.AidenScheduledTask
 import sbtbiswas.AidenOnTheGo.models.AidenModelCatalog
 import sbtbiswas.AidenOnTheGo.models.AidenUsageSummary
+import sbtbiswas.AidenOnTheGo.models.AidenServer
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
@@ -148,11 +149,15 @@ class AidenWorkspaceHomeViewModel(
             combine(
                 coordinator.workspaces,
                 coordinator.client,
-                coordinator.connectionState
-            ) { workspaces, client, connectionState -> Triple(workspaces, client, connectionState) }
-                .collect { (workspaces, client, connectionState) ->
+                coordinator.connectionState,
+                coordinator.serverInfo
+            ) { workspaces, client, connectionState, server -> HomeLoadInputs(workspaces, client, connectionState, server) }
+                .collect { (workspaces, client, connectionState, server) ->
                     hydrate(workspaces)
-                    if (client != null && connectionState == AidenConnectionState.CONNECTED) load()
+                    // Wait for /server too: CONNECTED is published before the
+                    // capability negotiation, and a list read without it falls
+                    // back to the legacy full-chat list with no Inbox signals.
+                    if (client != null && connectionState == AidenConnectionState.CONNECTED && server != null) load()
                 }
         }
     }
@@ -675,3 +680,10 @@ fun aidenRelativeTimestamp(updatedAt: Instant, now: Instant = Instant.now()): St
         else -> "${seconds / 86_400}d"
     }
 }
+
+private data class HomeLoadInputs(
+    val workspaces: List<AidenWorkspace>,
+    val client: AidenRemoteClient?,
+    val connectionState: AidenConnectionState,
+    val server: AidenServer?
+)
