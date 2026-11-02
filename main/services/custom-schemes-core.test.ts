@@ -6,8 +6,11 @@ import {
   type CustomSchemeDefinition,
 } from "./custom-schemes-core.js";
 
-test("only aiden-genui is privileged with both flags off", () => {
-  assert.deepEqual(customSchemePrivileges({ studioAssets: false }).map(({ scheme }) => scheme), ["aiden-genui"]);
+test("only aiden-genui and aiden-attachment are privileged with both flags off", () => {
+  assert.deepEqual(
+    customSchemePrivileges({ studioAssets: false }).map(({ scheme }) => scheme),
+    ["aiden-genui", "aiden-attachment"],
+  );
 });
 
 test("one registration call covers both schemes and later calls are ignored", () => {
@@ -20,7 +23,7 @@ test("one registration call covers both schemes and later calls are ignored", ()
   assert.equal(register({ studioAssets: true }), true);
   assert.equal(register({ studioAssets: true }), false);
   assert.equal(register({ studioAssets: false }), false);
-  assert.deepEqual(calls, [["aiden-genui", "aiden-asset"]]);
+  assert.deepEqual(calls, [["aiden-genui", "aiden-attachment", "aiden-asset"]]);
 });
 
 test("no custom scheme can bypass CSP, run service workers, or be fetched cross-origin", () => {

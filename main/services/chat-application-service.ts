@@ -52,7 +52,7 @@ export interface ChatApplicationDependencies {
     | "setChatModelSelection"
     | "moveEmptyChatToWorkspace"
     | "remove"
-  > & Partial<Pick<typeof chatStore, "listSummaryMetadata">>;
+  > & Partial<Pick<typeof chatStore, "listSummaryMetadata" | "getWithImageReferences">>;
   configStore: Pick<typeof configStore, "getWorkspace">;
   llmClient: Pick<
     typeof llmClient,
@@ -171,7 +171,10 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       const imageArtifactRecoveryUnavailable =
         !imageArtifactAvailability.available || !htmlArtifactAvailability.available;
       const [chat, stagedImageArtifact, stagedHtmlArtifact] = await Promise.all([
-        deps.chatStore.get(chatId),
+        // The window loads stored images itself, so their bytes are not read here.
+        deps.chatStore.getWithImageReferences
+          ? deps.chatStore.getWithImageReferences(chatId)
+          : deps.chatStore.get(chatId),
         !imageArtifactAvailability.available
           ? Promise.resolve(false)
           : deps.displayImageArtifactStore.hasPending(chatId),
