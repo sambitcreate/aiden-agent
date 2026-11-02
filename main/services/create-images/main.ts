@@ -10,6 +10,7 @@ import {
 import { imageGeneration } from "../image-generation/runtime-main.js";
 import { studioAssetStore } from "../studio-assets/main.js";
 import { usageStore } from "../usage-store.js";
+import { SAVE_FOLDER_SEGMENTS } from "./image-export.js";
 import { createWiredImagePort } from "./port-wiring-core.js";
 import { CreateImagesRuntime } from "./runtime.js";
 
@@ -31,5 +32,8 @@ export const createImagesRuntime = new CreateImagesRuntime({
       recordUsage: (record) => usageStore.record(record),
     }),
   notify: (snapshot) => ipcMain.broadcast(IMAGE_RUN_CHANGED_CHANNEL, snapshot),
+  // Every generated image is auto-saved here (macOS ~/Pictures, Linux the XDG pictures folder).
+  // Read lazily: E2E's bootstrap points "pictures" inside its temporary home before Aiden starts.
+  saveRoot: () => path.join(app.getPath("pictures"), ...SAVE_FOLDER_SEGMENTS),
   reportIssue: (message, error) => logger.warn("create-images", message, error),
 });

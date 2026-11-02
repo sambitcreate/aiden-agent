@@ -13,8 +13,9 @@ import { IMAGE_WORKFLOW_LIMITS, type WorkflowDocV1 } from "../../../renderer/sha
 import { createThrottledTrigger } from "../portable-config-watch-core.js";
 import type { StudioAssetStore } from "../studio-assets/store.js";
 import { RunConsentStore } from "./consent-core.js";
+import type { CreateImagesExports } from "./image-export.js";
 import { executeRun } from "./run-executor.js";
-import { RUN_RETENTION, type ImageRunLedger } from "./run-ledger.js";
+import { RUN_RETENTION, type GeneratedAttempt, type ImageRunLedger } from "./run-ledger.js";
 import { clampRunConcurrency, planDigest, planRun, staleNodeIds, type PlanIssue, type RunPlan } from "./scheduler-core.js";
 import type { ImageWorkflowStore } from "./workflow-store.js";
 
@@ -29,6 +30,8 @@ export interface RunCoordinatorDependencies {
     Partial<Pick<StudioAssetStore, "usage" | "release">>;
   workflows: Pick<ImageWorkflowStore, "get" | "delete" | "imageInputAssets">;
   notify(snapshot: RunSnapshot): void;
+  /** Auto-saves each stored Generate output, in the background. Without it nothing is saved to a folder. */
+  exports?: Pick<CreateImagesExports, "autoSave" | "whenIdle">;
   /** Receives failures that have no caller to throw to: a run that crashed, a ledger that would not close. */
   reportIssue?(message: string, error: unknown): void;
   now?: () => number;
@@ -39,6 +42,8 @@ export interface RunCoordinatorDependencies {
   maxActiveRuns?: number;
   /** How long quit waits for in-flight requests to settle, so provider-side cancels can go out. */
   shutdownSettleMs?: number;
+  /** How long quit waits for background auto-saves to finish and be recorded before the ledger closes. */
+  shutdownSaveWaitMs?: number;
   retainRuns?: number;
 }
 
@@ -75,8 +80,13 @@ const MAX_REQUESTS = IMAGE_WORKFLOW_LIMITS.maxRequestsPerRun;
  * each run is already capped at 4 requests and one per workflow, and this bounds the total.
  */
 export const MAX_ACTIVE_RUNS = 4;
-/** Inside main/index.ts's 2 s image-runs quit budget, leaving room to record the end and close. */
+/** Inside main/index.ts's 5 s image-runs quit budget, with the auto-save wait below. */
 const DEFAULT_SHUTDOWN_SETTLE_MS = 1_500;
+/**
+ * Quit waits this long for pending auto-saves. Main's "Image runs" shutdown budget covers the
+ * settle wait plus this one, so the asset store never closes under a save still reading it.
+ */
+const DEFAULT_SHUTDOWN_SAVE_WAIT_MS = 3_000;
 const TOO_MANY_RUNS = `Aiden is already running ${MAX_ACTIVE_RUNS} image runs. Wait for one to finish or stop one, then try again.`;
 
 function refused(code: string, message: string): PrepareRunResult {
@@ -218,6 +228,21 @@ export class ImageRunCoordinator {
     return this.deps.ledger.latestOutputs(workflowId);
   }
 
+  /** Succeeded Generate attempts, newest first, for the gallery. */
+  generatedAttempts(workflowId: string | undefined, limit: number): GeneratedAttempt[] {
+    return this.deps.ledger.generatedAttempts(workflowId, limit);
+  }
+
+  /** The newest Generate attempt that produced this asset, or undefined if the ledger never generated it. */
+  generatedAsset(assetId: string): { attempt: GeneratedAttempt; ref: OutputRef } | undefined {
+    return this.deps.ledger.generatedAsset(assetId);
+  }
+
+  /** `generatedAsset` for many assets in one pass; assets the ledger never generated are absent. */
+  generatedAssets(assetIds: Iterable<string>): Map<string, { attempt: GeneratedAttempt; ref: OutputRef }> {
+    return this.deps.ledger.generatedAssets(assetIds);
+  }
+
   /** Nodes whose output is older than a newer upstream Generate result, e.g. after a node-only run. */
   staleNodeIds(doc: WorkflowDocV1): string[] {
     return staleNodeIds(doc, this.deps.ledger.latestOutputSequence(doc.id));
@@ -272,7 +297,9 @@ export class ImageRunCoordinator {
   /**
    * Quit: abort everything, give in-flight requests a bounded moment to settle (fal and Replicate
    * send their provider-side cancel while settling), then record the end of whatever is still
-   * running. Requests already sent may still be billed.
+   * running. Requests already sent may still be billed. Then wait, bounded, for the auto-saves
+   * those runs started, so each file is finished and recorded before the ledger (and after it the
+   * asset store) closes; one still running past the wait finds the ledger closed and records nothing.
    */
   async shutdown(reason = "app-quit"): Promise<void> {
     if (this.closed) return;
@@ -295,14 +322,16 @@ export class ImageRunCoordinator {
         }
       }
       this.active.clear();
+      await this.deps.exports?.whenIdle(this.deps.shutdownSaveWaitMs ?? DEFAULT_SHUTDOWN_SAVE_WAIT_MS);
     } finally {
       this.deps.ledger.close();
     }
   }
 
-  /** Resolves once every active run has settled. Used by tests and by the perf lane. */
+  /** Resolves once every active run, and every auto-save it started, has settled. Used by tests and by the perf lane. */
   async whenIdle(): Promise<void> {
     while (this.active.size > 0) await Promise.all([...this.active.values()].map((run) => run.done));
+    await this.deps.exports?.whenIdle();
   }
 
   private launch(doc: WorkflowDocV1, plan: RunPlan, requestLimit: number): string {
@@ -338,6 +367,7 @@ export class ImageRunCoordinator {
           this.inFlight -= 1;
         },
         ...(this.deps.reportIssue ? { reportIssue: (error: unknown) => this.deps.reportIssue!("An image run hit a secondary failure.", error) } : {}),
+        ...(this.deps.exports ? { onImagesStored: (_step: unknown, output: readonly OutputRef[]) => this.deps.exports!.autoSave(output, doc.title) } : {}),
       },
       { runId, plan, concurrency: clampRunConcurrency(doc.settings.concurrency), signal: controller.signal },
     )

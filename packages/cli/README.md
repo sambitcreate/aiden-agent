@@ -59,7 +59,7 @@ When `aiden serve` runs in the foreground in an interactive terminal, it prints 
 | `aiden serve stop` | Stop the running server; one still running 15 seconds later is force-killed |
 | `aiden remote pair lan\|tailscale` | Open a new ~5-minute pairing window and print its QR and manual code |
 | `aiden remote pair-status`, `remote pair-cancel <session-id>` | Inspect or cancel the pairing window |
-| `aiden remote devices`, `remote revoke <id>` | List or revoke paired devices |
+| `aiden remote devices`, `remote revoke <id>` | List or revoke paired devices. Revoking a device closes its open Bot session streams before the command returns. |
 | `aiden remote roots`, `remote approve-root <path>` | Folders that paired devices may open |
 
 **Stopping.** Once shutdown starts, the server takes no new connections, requests or chat turns, cancels running ones and drains. `aiden serve stop` force-kills a server still running 15 seconds after SIGTERM, after checking the PID is still that server: a `--daemon` server together with its process group (its Remote advertiser), a foreground `aiden serve` on its own so the rest of its shell job (`aiden serve | tee`) survives. Either way, its stdio MCP servers (each in a process group of its own, recorded in the lease directory) are killed too, but only groups that still contain a process the server started. A foreground server logs a stray unhandled rejection instead of exiting. Aiden commands exit 0 quietly when their reader closes early (`aiden schedule list | head -1`).

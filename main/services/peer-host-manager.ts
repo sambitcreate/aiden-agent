@@ -32,6 +32,7 @@ import {
   PEER_CHAT_MUTATIONS,
   PEER_RUN_OPERATIONS,
   peerOperationRequest,
+  peerRawUploadRequest,
   peerOperationResult,
 } from "./peer-operation.js";
 import {
@@ -370,6 +371,8 @@ export class PeerHostManager {
       const code = BLOCKED_CODES[sup.state.reason];
       return { ok: false, error: { code, message: new PeerTransportError(code).message } };
     }
+    // Revision 50: a host that granted `attachments:raw` takes a picture as its own bytes.
+    if (sup?.view.capabilities.includes("attachments:raw")) request = peerRawUploadRequest(operation, request);
     // Only the connection that admitted the request may be blocked by its failure.
     const admitted = sup?.controller;
     const record = operation as Record<string, unknown>;

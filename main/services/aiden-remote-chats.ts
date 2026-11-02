@@ -269,19 +269,19 @@ export interface AidenRemoteChatSummaryProjection {
   /** Additive (protocol revision 21): fork lineage, without its summary. */
   forkedFrom?: Omit<AidenRemoteChatForkLineageProjection, "summary">;
   /**
-   * Additive (protocol revision 50, `inbox-signals-v1`): when the live run's
+   * Additive (protocol revision 51, `inbox-signals-v1`): when the live run's
    * oldest pending approval was raised, or else its oldest question. Absent
    * without one.
    */
   attentionSince?: string;
-  /** Additive (protocol revision 50): when the chat's live run started. Absent without a live run. */
+  /** Additive (protocol revision 51): when the chat's live run started. Absent without a live run. */
   runStartedAt?: string;
-  /** Additive (protocol revision 50): when the newest assistant output arrived. */
+  /** Additive (protocol revision 51): when the newest assistant output arrived. */
   lastAssistantAt?: string;
   /** Exact reply a read from this summary may acknowledge. */
   lastAssistantMessageId?: string;
   /**
-   * Additive (protocol revision 50): the chat's triage revision, which a
+   * Additive (protocol revision 51): the chat's triage revision, which a
    * client compares with its own writes. Present whenever the chat has a
    * triage entry, with `pinnedAt`, `doneAt` and `snoozedUntil` as set.
    */
@@ -290,7 +290,7 @@ export interface AidenRemoteChatSummaryProjection {
   doneAt?: string;
   snoozedUntil?: string;
   /**
-   * Additive (protocol revision 50, `inbox-signals-v1`): the Inbox bucket the
+   * Additive (protocol revision 51, `inbox-signals-v1`): the Inbox bucket the
    * host's own placement rules give the row (`hostInboxPlacement`), with the
    * time it orders by within that bucket. Computed from state as the host
    * knows it: the row counts as not open, no recent window applies (an old
@@ -343,7 +343,7 @@ export interface AidenRemoteChatTriageProjection {
   snoozedUntil?: string;
 }
 
-/** A chat's live-run times (revision 50), epoch milliseconds. */
+/** A chat's live-run times (revision 51), epoch milliseconds. */
 export interface AidenRemoteChatRunTimes {
   /** When the run's oldest pending approval was raised, or else its oldest question. */
   attentionSince?: number;
@@ -1481,7 +1481,7 @@ export class AidenRemoteChatService {
       /** Enables `POST /chats/{chatId}/triage` (`chat-triage-v1`) and the summaries' triage fields. */
       triage?: AidenRemoteChatTriage;
       /**
-       * Revision 50: a chat's live-run times, epoch milliseconds, for the
+       * Revision 51: a chat's live-run times, epoch milliseconds, for the
        * summaries' `attentionSince` and `runStartedAt`. Undefined without a live run.
        */
       runTimes?: (chatId: string) => AidenRemoteChatRunTimes | undefined;

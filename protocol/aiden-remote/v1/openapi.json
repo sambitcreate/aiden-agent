@@ -1551,6 +1551,7 @@
       ],
       "post": {
         "operationId": "uploadChatAttachment",
+      "description": "Stages one image or text file for this device's next turn in the chat. Since contract revision 50, a device holding attachments:raw may instead send one picture as its raw image/png or image/jpeg bytes, with an exact Content-Length (at most 8 MiB) and the file name, percent-encoded UTF-8, in Aiden-Attachment-Name. Both return the same single-use reference; without attachments:raw a raw upload is 403 capability_denied.",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "chat:write",
         "parameters": [
@@ -1564,6 +1565,16 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AttachmentUpload"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "$ref": "#/components/schemas/RawAttachmentUpload"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "$ref": "#/components/schemas/RawAttachmentUpload"
               }
             }
           }
@@ -2286,7 +2297,7 @@
       ],
       "post": {
         "operationId": "uploadBotAttachment",
-        "description": "Contract revision 33, only on hosts announcing bot-attachments-v1. Stages one image or text file for this device's next message to the Bot. The reference is single-use, expires after ten minutes and is spent only by POST /bots/{botId}/messages for the same Bot and device.",
+        "description": "Contract revision 33, only on hosts announcing bot-attachments-v1. Stages one image or text file for this device's next message to the Bot. Since contract revision 50, a device holding attachments:raw may send one picture as its raw bytes instead, as on POST /chats/{chatId}/attachments. The reference is single-use, expires after ten minutes and is spent only by POST /bots/{botId}/messages for the same Bot and device.",
         "x-aiden-capability": "bot:write",
         "x-aiden-capabilities": [
           "bot:read",
@@ -2299,6 +2310,16 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AttachmentUpload"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "$ref": "#/components/schemas/RawAttachmentUpload"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "$ref": "#/components/schemas/RawAttachmentUpload"
               }
             }
           }
@@ -6309,7 +6330,7 @@
       ],
       "get": {
         "operationId": "hostEvents",
-        "description": "Contract revision 19 host feed (host-events-v1), granted to paired mac and linux devices only. The first event is a snapshot of every chat summary, workspace (with an optional credential-free repository identity) and, for bot:read devices, Bot. Later events upsert or remove one chat, workspace or Bot, or report a run.state change. Event ids are <epoch>:<sequence>; a missing, foreign-epoch or expired cursor (more than 1,000 events or 8 MiB behind) receives a fresh snapshot instead of a replay. A snapshot larger than 256 KiB arrives as consecutive snapshot frames: every frame but the last carries partial: true and no SSE id, and only the final frame carries the id, so an interrupted snapshot is retried whole on resume. A heartbeat comment is sent every 15 seconds. The feed never reads transcripts. Since revision 50, right after a runs:observe device's snapshot the host also sends that device a run.state (with attentionSummary) for each run still waiting; those entries take sequences every other device skips, and each pass uses at most half the journal's event and byte retention.",
+        "description": "Contract revision 19 host feed (host-events-v1), granted to paired mac and linux devices only. The first event is a snapshot of every chat summary, workspace (with an optional credential-free repository identity) and, for bot:read devices, Bot. Later events upsert or remove one chat, workspace or Bot, or report a run.state change. Event ids are <epoch>:<sequence>; a missing, foreign-epoch or expired cursor (more than 1,000 events or 8 MiB behind) receives a fresh snapshot instead of a replay. A snapshot larger than 256 KiB arrives as consecutive snapshot frames: every frame but the last carries partial: true and no SSE id, and only the final frame carries the id, so an interrupted snapshot is retried whole on resume. A heartbeat comment is sent every 15 seconds. The feed never reads transcripts. Since revision 51, right after a runs:observe device's snapshot the host also sends that device a run.state (with attentionSummary) for each run still waiting; those entries take sequences every other device skips, and each pass uses at most half the journal's event and byte retention.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "host:events",
         "parameters": [
@@ -7868,7 +7889,8 @@
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
-                "chat:jobs"
+                "chat:jobs",
+                "attachments:raw"
               ]
             },
             "uniqueItems": true
@@ -7912,7 +7934,8 @@
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
-                "chat:jobs"
+                "chat:jobs",
+                "attachments:raw"
               ]
             },
             "uniqueItems": true
@@ -8059,7 +8082,8 @@
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
-                "chat:jobs"
+                "chat:jobs",
+                "attachments:raw"
               ]
             },
             "uniqueItems": true
@@ -8112,7 +8136,8 @@
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
-                "chat:jobs"
+                "chat:jobs",
+                "attachments:raw"
               ]
             },
             "uniqueItems": true
@@ -9168,6 +9193,12 @@
           }
         },
         "additionalProperties": false
+      },
+      "RawAttachmentUpload": {
+        "description": "Contract revision 50 (attachments:raw): one picture's raw bytes, at most 8 MiB, with an exact Content-Length and the file name, percent-encoded UTF-8, in the Aiden-Attachment-Name header. The host checks the bytes, type and dimensions exactly as for the JSON upload.",
+        "type": "string",
+        "format": "binary",
+        "maxLength": 8388608
       },
       "AttachmentUpload": {
         "oneOf": [
@@ -11421,12 +11452,12 @@
             ]
           },
           "attentionSince": {
-            "description": "Additive in contract revision 50 (inbox-signals-v1). While a live run waits on an approval or question, when the oldest pending approval was raised, or else the oldest question. Absent otherwise.",
+            "description": "Additive in contract revision 51 (inbox-signals-v1). While a live run waits on an approval or question, when the oldest pending approval was raised, or else the oldest question. Absent otherwise.",
             "type": "string",
             "format": "date-time"
           },
           "runStartedAt": {
-            "description": "Additive in contract revision 50. While a run is live, when it started. Absent otherwise.",
+            "description": "Additive in contract revision 51. While a run is live, when it started. Absent otherwise.",
             "type": "string",
             "format": "date-time"
           },
@@ -11436,32 +11467,32 @@
             "description": "Message boundary for read actions on this Inbox row."
           },
           "lastAssistantAt": {
-            "description": "Additive in contract revision 50. When the chat's newest assistant output (or failed turn) was persisted. Absent before the first reply.",
+            "description": "Additive in contract revision 51. When the chat's newest assistant output (or failed turn) was persisted. Absent before the first reply.",
             "type": "string",
             "format": "date-time"
           },
           "pinnedAt": {
-            "description": "Additive in contract revision 50. When the chat was pinned in the Inbox. Present only with triageRevision.",
+            "description": "Additive in contract revision 51. When the chat was pinned in the Inbox. Present only with triageRevision.",
             "type": "string",
             "format": "date-time"
           },
           "doneAt": {
-            "description": "Additive in contract revision 50. When the chat was marked done. Newer output brings it back. Present only with triageRevision.",
+            "description": "Additive in contract revision 51. When the chat was marked done. Newer output brings it back. Present only with triageRevision.",
             "type": "string",
             "format": "date-time"
           },
           "snoozedUntil": {
-            "description": "Additive in contract revision 50. When the chat's snooze ends. Present only with triageRevision.",
+            "description": "Additive in contract revision 51. When the chat's snooze ends. Present only with triageRevision.",
             "type": "string",
             "format": "date-time"
           },
           "triageRevision": {
-            "description": "Additive in contract revision 50. The revision of the chat's triage entry (chat-triage-v1); absent when the chat has never been triaged. Clients send it as ifRevision and drop their own pending write once the host reports it.",
+            "description": "Additive in contract revision 51. The revision of the chat's triage entry (chat-triage-v1); absent when the chat has never been triaged. Clients send it as ifRevision and drop their own pending write once the host reports it.",
             "type": "integer",
             "minimum": 1
           },
           "inboxBucket": {
-            "description": "Additive in contract revision 50 (inbox-signals-v1). The Inbox bucket the host's own placement rules give the row, computed from the state the host holds: needs_you (a pending approval or question, or unread output from a failed run), working, done (marked done with no newer output), snoozed, pinned, updates (unread), or earlier (read and idle, however old). The host can't know which chat a device has open, so the row counts as not open, and it applies no recent window. Clients recheck the time-based parts against their own clock: a snoozed row past its snoozedUntil is awake, and an earlier row older than the client's recent window ages out. Needs you rows order by tier from rowState (approval, question, then failed). Later hosts may send values outside this list; a client places those rows itself, as it does a bucket without an inboxSortAt. Present only with inboxSortAt.",
+            "description": "Additive in contract revision 51 (inbox-signals-v1). The Inbox bucket the host's own placement rules give the row, computed from the state the host holds: needs_you (a pending approval or question, or unread output from a failed run), working, done (marked done with no newer output), snoozed, pinned, updates (unread), or earlier (read and idle, however old). The host can't know which chat a device has open, so the row counts as not open, and it applies no recent window. Clients recheck the time-based parts against their own clock: a snoozed row past its snoozedUntil is awake, and an earlier row older than the client's recent window ages out. Needs you rows order by tier from rowState (approval, question, then failed). Later hosts may send values outside this list; a client places those rows itself, as it does a bucket without an inboxSortAt. Present only with inboxSortAt.",
             "enum": [
               "needs_you",
               "pinned",
@@ -11473,7 +11504,7 @@
             ]
           },
           "inboxSortAt": {
-            "description": "Additive in contract revision 50. The time the row orders by within its inboxBucket: needs_you by attentionSince (else updatedAt), oldest first; pinned by pinnedAt and updates by lastAssistantAt (else updatedAt), newest first; earlier by updatedAt, newest first; working by runStartedAt (else updatedAt), oldest first. A done or snoozed row carries the time it orders by in the bucket it returns to. Present only with inboxBucket.",
+            "description": "Additive in contract revision 51. The time the row orders by within its inboxBucket: needs_you by attentionSince (else updatedAt), oldest first; pinned by pinnedAt and updates by lastAssistantAt (else updatedAt), newest first; earlier by updatedAt, newest first; working by runStartedAt (else updatedAt), oldest first. A done or snoozed row carries the time it orders by in the bucket it returns to. Present only with inboxBucket.",
             "type": "string",
             "format": "date-time"
           }

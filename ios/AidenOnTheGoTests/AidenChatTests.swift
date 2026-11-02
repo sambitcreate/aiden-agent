@@ -5466,6 +5466,51 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testStopDropsTheUploadInFlightButKeepsWhatAlreadyReachedTheMac() async throws {
+        let model = try await makeProgressLifecycleModel(mode: .denied)
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        await model.load(observeProgress: false)
+        let secondArrived = expectation(description: "the second upload reached the Mac")
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            guard request.httpMethod == "POST", request.url?.path.hasSuffix("/attachments") == true else { return nil }
+            let count = AidenChatProgressLifecycleURLProtocol.uploadRequestCount
+            // The first upload is staged; the second waits on the Mac until Stop.
+            if count == 2 {
+                AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/attachments") { secondArrived.fulfill() }
+            }
+            return (201, "application/json", try! JSONSerialization.data(withJSONObject: [
+                "id": "att_" + String(repeating: count == 1 ? "a" : "b", count: 43),
+                "name": "file-\(count).txt", "mimeType": "text/plain", "kind": "text", "size": 1,
+                "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(3_600)),
+            ]))
+        }
+        defer { AidenChatProgressLifecycleURLProtocol.releaseHeldRequest() }
+
+        let uploading = Task {
+            await model.upload([
+                .text(name: "file-1.txt", mimeType: "text/plain", text: "1"),
+                .text(name: "file-2.txt", mimeType: "text/plain", text: "2"),
+                .text(name: "file-3.txt", mimeType: "text/plain", text: "3"),
+            ])
+        }
+        await fulfillment(of: [secondArrived], timeout: 5)
+        XCTAssertEqual(model.uploadProgress?.title, "Sending 2 of 3")
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["file-1.txt"])
+
+        model.cancelUploads()
+        _ = await uploading.value
+
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["file-1.txt"], "what reached the Mac stays ready to send")
+        XCTAssertNil(model.uploadProgress, "the bar goes away")
+        XCTAssertFalse(model.isUploadingAttachment)
+        XCTAssertNil(model.presentedError, "Stop is not a failure")
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.uploadRequestCount, 2, "the third file never left the phone")
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 0, "Stop doesn't take the staged file off the Mac")
+        XCTAssertTrue(model.canSend, "the staged file can still be sent")
+        model.setAllowsMutations(false)
+    }
+
+    @MainActor
     func testRemovalCancelsOwnedUploadAndRejectsHeldImageCompletion() async throws {
         try await assertRemovalJoinsUploadCleanup()
     }

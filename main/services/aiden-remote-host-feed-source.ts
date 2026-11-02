@@ -24,7 +24,7 @@ export interface AidenRemoteHostFeedSourceInputs {
   /** Undefined when the host serves no Bots. */
   listBots?(): Promise<Pick<AidenRemoteBotList, "bots">>;
   /**
-   * Revision 50: each Bot's Needs you, Failed and last reply. A Bot missing
+   * Revision 51: each Bot's Needs you, Failed and last reply. A Bot missing
    * from the map (or a host without this) sends its row without them.
    */
   botSignals?(

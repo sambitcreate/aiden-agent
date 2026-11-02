@@ -396,3 +396,108 @@ test("a file-safety refusal is never quarantined", async (t) => {
   assert.ok((await lstat(path.join(root, "runs-v1.sqlite"))).isSymbolicLink());
   assert.deepEqual((await readdir(root)).sort(), ["elsewhere.sqlite", "runs-v1.sqlite"]);
 });
+
+test("the prompt a claimed request sends is kept with its attempt and goes away with the run", async (t) => {
+  const root = await directory(t);
+  const ledger = open(root, t);
+  ledger.createRun(run({ runId: "r1" }));
+  assert.equal(ledger.claimProviderRequest("r1", "g1", 0, "A red bicycle at dusk"), true);
+  ledger.finishAttempts([{ runId: "r1", nodeId: "g1", variant: 0, state: "succeeded", output: [out("a")] }]);
+  ledger.finishRun("r1", "partial");
+  const prompts = Object.fromEntries(ledger.snapshot("r1")!.attempts.map((attempt) => [attempt.nodeId, attempt.prompt]));
+  // Only the request that was sent has a prompt; the unsent Generate and the local Prompt node have none.
+  assert.deepEqual(prompts, { p: undefined, g1: "A red bicycle at dusk", g2: undefined });
+  assert.equal(ledger.generatedAttempts("wf", 10)[0]?.prompt, "A red bicycle at dusk");
+
+  // A newer run replaces g1's latest output, so pruning may drop r1 and its prompt with it.
+  ledger.createRun(run({ runId: "r2" }));
+  ledger.claimProviderRequest("r2", "g1", 0, "A blue bicycle");
+  ledger.finishAttempts([{ runId: "r2", nodeId: "g1", variant: 0, state: "succeeded", output: [out("b")] }]);
+  ledger.finishRun("r2", "partial");
+  assert.deepEqual(ledger.pruneRuns(1), ["r1"]);
+  const raw = new DatabaseSync(path.join(root, "runs-v1.sqlite"));
+  t.after(() => raw.close());
+  assert.deepEqual(
+    (raw.prepare("SELECT prompt FROM attempts WHERE prompt IS NOT NULL").all() as { prompt: string }[]).map((row) => row.prompt),
+    ["A blue bicycle"],
+  );
+});
+
+test("a ledger written before prompts and exports existed gains both on open and keeps its history", async (t) => {
+  const root = await directory(t);
+  const first = ImageRunLedger.open({ directory: root });
+  first.createRun(run({ runId: "old" }));
+  first.finishAttempts([{ runId: "old", nodeId: "g1", variant: 0, state: "succeeded", output: [out("a")] }]);
+  first.close();
+  // Reproduce the file an earlier build left: no prompt column and no exports table, still user_version 1.
+  const raw = new DatabaseSync(path.join(root, "runs-v1.sqlite"));
+  raw.exec("ALTER TABLE attempts DROP COLUMN prompt; DROP TABLE exports;");
+  raw.close();
+
+  const ledger = open(root, t);
+  assert.deepEqual(ledger.latestOutputs("wf"), { g1: [out("a")] });
+  ledger.createRun(run({ runId: "new" }));
+  assert.equal(ledger.claimProviderRequest("new", "g1", 0, "Fresh prompt"), true);
+  assert.equal(ledger.snapshot("new")!.attempts.find((attempt) => attempt.nodeId === "g1")?.prompt, "Fresh prompt");
+  ledger.recordExport(out("a").assetId, "/pictures/a.png");
+  assert.equal(ledger.exportPath(out("a").assetId), "/pictures/a.png");
+  const check = new DatabaseSync(path.join(root, "runs-v1.sqlite"));
+  t.after(() => check.close());
+  assert.equal(check.prepare("PRAGMA user_version").get()?.user_version, 1);
+});
+
+test("generated attempts list Generate outputs newest first, per workflow or across all of them", async (t) => {
+  const ledger = open(await directory(t), t);
+  ledger.createRun(run({ runId: "a1", workflowId: "wf-a" }));
+  ledger.createRun(run({ runId: "b1", workflowId: "wf-b" }));
+  // b1 finishes first even though a1 started first; the Prompt node's forwarded text never counts.
+  ledger.finishAttempts([{ runId: "b1", nodeId: "g1", variant: 0, state: "succeeded", output: [out("b")] }]);
+  ledger.finishAttempts([
+    { runId: "a1", nodeId: "g1", variant: 0, state: "succeeded", output: [out("a"), out("c")] },
+    { runId: "a1", nodeId: "g2", variant: 0, state: "failed", errorCode: "provider-error" },
+    { runId: "a1", nodeId: "p", variant: 0, state: "succeeded", output: [out("d")] },
+  ]);
+  const all = ledger.generatedAttempts(undefined, 10);
+  assert.deepEqual(all.map((attempt) => [attempt.runId, attempt.nodeId, attempt.output.length]), [["a1", "g1", 2], ["b1", "g1", 1]]);
+  assert.ok(all[0]!.finishedAt > all[1]!.finishedAt);
+  assert.deepEqual(all[0]!.provider, "openrouter");
+  assert.deepEqual(ledger.generatedAttempts("wf-b", 10).map((attempt) => attempt.runId), ["b1"]);
+  assert.deepEqual(ledger.generatedAttempts(undefined, 1).map((attempt) => attempt.runId), ["a1"]);
+  assert.equal(ledger.generatedAsset(out("c").assetId)?.attempt.runId, "a1");
+  assert.equal(ledger.generatedAsset(out("c").assetId)?.ref.assetId, out("c").assetId);
+  // Forwarded by a local node only: not something the ledger generated.
+  assert.equal(ledger.generatedAsset(out("d").assetId), undefined);
+  // Only a whole asset id matches, never a fragment of one.
+  assert.equal(ledger.generatedAsset(out("c").assetId.slice(0, 8)), undefined);
+  assert.equal(ledger.generatedAsset(""), undefined);
+
+  // Generated again by a later run: the newest attempt answers, one at a time or in a batch.
+  ledger.createRun(run({ runId: "a2", workflowId: "wf-a" }));
+  ledger.finishAttempts([{ runId: "a2", nodeId: "g1", variant: 0, state: "succeeded", output: [out("c")] }]);
+  assert.equal(ledger.generatedAsset(out("c").assetId)?.attempt.runId, "a2");
+  const batch = ledger.generatedAssets([out("c").assetId, out("b").assetId, out("d").assetId, "f".repeat(64)]);
+  assert.deepEqual(
+    [...batch].map(([assetId, found]) => [assetId[0], found.attempt.runId, found.ref.assetId === assetId]).sort(),
+    [["b", "b1", true], ["c", "a2", true]],
+  );
+  assert.equal(ledger.generatedAssets([]).size, 0);
+});
+
+test("export records round-trip and are forgotten once no remaining run names their image", async (t) => {
+  const ledger = open(await directory(t), t);
+  ledger.createRun(run({ runId: "r1", workflowId: "wf-a" }));
+  ledger.finishAttempts([{ runId: "r1", nodeId: "g1", variant: 0, state: "succeeded", output: [out("a")] }]);
+  ledger.finishRun("r1", "partial");
+  ledger.createRun(run({ runId: "r2", workflowId: "wf-b" }));
+  ledger.finishAttempts([{ runId: "r2", nodeId: "g1", variant: 0, state: "succeeded", output: [out("b")] }]);
+  ledger.finishRun("r2", "partial");
+  ledger.recordExport(out("a").assetId, "/p/a.png");
+  ledger.recordExport(out("b").assetId, "/p/b.png");
+  ledger.recordExport(out("b").assetId, "/p/b (1).png");
+  assert.deepEqual([...ledger.exportPaths()].sort(), [[out("a").assetId, "/p/a.png"], [out("b").assetId, "/p/b (1).png"]]);
+  assert.equal(ledger.exportPath(out("c").assetId), undefined);
+
+  ledger.deleteWorkflowRuns("wf-a");
+  assert.equal(ledger.exportPath(out("a").assetId), undefined);
+  assert.equal(ledger.exportPath(out("b").assetId), "/p/b (1).png");
+});

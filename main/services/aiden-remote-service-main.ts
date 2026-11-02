@@ -665,7 +665,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               markRead: (chatId, throughMessageId) => markChatRead(chatId, throughMessageId),
             },
             triage: chatTriage,
-            // Revision 50: live-run times for the summaries' Inbox signals.
+            // Revision 51: live-run times for the summaries' Inbox signals.
             runTimes: (chatId) => liveRunAttention(chatId, hostRunRegistry),
             forks: {
               service: chatForkService,
@@ -1037,7 +1037,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               listWorkspaces: () => workspaceApplicationService.list(),
               repositoryIdentity: gitCachedRepositoryIdentity,
               ...(bots ? { listBots: () => bots.list() } : {}),
-              // Revision 50: each Bot's Needs you, Failed and last reply, from the
+              // Revision 51: each Bot's Needs you, Failed and last reply, from the
               // same live summaries this Mac's sidebar reads. A failed read leaves them out.
               botSignals: async (botRows) => {
                 const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
@@ -1058,7 +1058,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             "chats:fork-summary-changed",
             "workspaces:changed",
             "bots:changed",
-            // A Bot's wait began or ended: its row's `needsYou` changed (revision 50).
+            // A Bot's wait began or ended: its row's `needsYou` changed (revision 51).
             "bots:attention",
           ]);
           const detachers = [

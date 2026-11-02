@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { parseWorkflowDocV1 } from "../../main/services/create-images/workflow-schema";
 import { IMAGE_WORKFLOW_LIMITS, type WorkflowDocV1 } from "../shared/images/schema";
+import { imageInputNodeForAsset } from "./node-dimensions-core";
 import {
   applyEditorOp,
   createAutosave,
@@ -232,4 +234,26 @@ test("a far pan or zoom is saved inside the bounds the workflow schema accepts",
   assert.deepEqual(documentToSave(session).viewport, { x: -limit, y: limit, zoom: IMAGE_WORKFLOW_LIMITS.maxZoom });
   session = sessionReducer(session, { type: "viewport", viewport: { x: Number.NaN, y: 12, zoom: 0.001 } });
   assert.deepEqual(documentToSave(session).viewport, { x: 0, y: 12, zoom: IMAGE_WORKFLOW_LIMITS.minZoom });
+});
+
+test("Use as Input adds an Image Input holding the image at the middle of the view, as one undo step the store accepts", () => {
+  const generated = { assetId: "c".repeat(64), width: 1600, height: 900 };
+  const viewport = { x: -200, y: 100, zoom: 0.5 };
+  const pane = { width: 1000, height: 600 };
+  const node = imageInputNodeForAsset(generated, "use-as-input", viewport, pane);
+  const session = sessionReducer(createSession(base), { type: "op", op: { type: "add-node", node } });
+  const added = session.history.present.nodes.find((candidate) => candidate.id === "use-as-input");
+  assert.ok(added?.type === "image-input");
+  assert.equal(added.data.assetId, generated.assetId);
+  // The node's centre, mapped back to screen pixels, is the canvas pane's centre.
+  const size = added.dimensions!;
+  const screen = (flow: number, offset: number) => flow * viewport.zoom + offset;
+  assert.ok(Math.abs(screen(added.position.x + size.width / 2, viewport.x) - pane.width / 2) <= 1);
+  assert.ok(Math.abs(screen(added.position.y + size.height / 2, viewport.y) - pane.height / 2) <= 1);
+  // Sized to the image's landscape aspect.
+  assert.ok(size.height < size.width);
+  // The main process's schema accepts the saved document with the generated asset in it.
+  assert.equal(parseWorkflowDocV1(documentToSave(session)).ok, true);
+  // One Undo removes it.
+  assert.equal(sessionReducer(session, { type: "undo" }).history.present, base);
 });

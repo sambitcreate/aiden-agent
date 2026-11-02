@@ -40,6 +40,8 @@ import {
   AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION,
   parseAidenRemoteSpendingStatus,
   AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION,
+  AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION,
+  encodeAidenRemoteAttachmentName,
   parseAidenRemoteBackgroundJobs,
   AIDEN_REMOTE_BOT_ISSUE_MAX,
   AIDEN_REMOTE_HOST_CAPABILITIES,
@@ -451,6 +453,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   delete revision19.chatFork;
   delete revision19.spending;
   delete revision19.backgroundJobs;
+  delete revision19.rawUploads;
   // Bot chat activity is revision 30.
   delete revision19.botActivity;
   delete revision19.botActivityPrivacy;
@@ -2874,6 +2877,7 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   delete older.botHandoffs;
   delete older.spending;
   delete older.backgroundJobs;
+  delete older.rawUploads;
   assert.equal(parseAidenRemoteContractFixture(older).botHandoffs, undefined);
 
   // The fixture guards its own invariants: a legacy view may not leak a holder word.
@@ -2905,6 +2909,7 @@ test("spending fixtures need their own revision, parse strictly, and refuse with
   );
   delete older.spending;
   delete older.backgroundJobs;
+  delete older.rawUploads;
   assert.equal(parseAidenRemoteContractFixture(older).spending, undefined);
 
   const status = raw.spending.bot;
@@ -2927,6 +2932,41 @@ test("spending fixtures need their own revision, parse strictly, and refuse with
   assert.throws(() => parseAidenRemoteContractFixture(wrongCode));
 });
 
+test("raw upload fixtures need their own revision, and every client spells a picture's name the same way", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const fixture = parseAidenRemoteContractFixture(raw).rawUploads!;
+  assert.equal(fixture.request.encodedName, "Caf%C3%A9%20photo.png");
+  assert.equal(fixture.response.size, Buffer.from(fixture.request.bodyBase64, "base64").length);
+  assert.equal(fixture.withoutGrant.error.code, "capability_denied");
+
+  // Only RFC 3986 unreserved characters stay as they are, so a name like
+  // "it's (1)!.png" is spelled alike by the Mac, iOS and Android.
+  assert.equal(encodeAidenRemoteAttachmentName("it's (1)*!.png"), "it%27s%20%281%29%2A%21.png");
+  assert.equal(encodeAidenRemoteAttachmentName("a-b_c.d~e.jpg"), "a-b_c.d~e.jpg");
+  assert.equal(decodeURIComponent(encodeAidenRemoteAttachmentName("写真 📷.jpeg")), "写真 📷.jpeg");
+
+  const older = structuredClone(raw);
+  older.contractRevision = AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION - 1;
+  assert.throws(
+    () => parseAidenRemoteContractFixture(older),
+    new RegExp(`require contract revision ${AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION}\\b`, "u"),
+  );
+  delete older.rawUploads;
+  assert.equal(parseAidenRemoteContractFixture(older).rawUploads, undefined);
+
+  const bad = (change: (copy: any) => void) => {
+    const copy = structuredClone(raw);
+    change(copy.rawUploads);
+    return () => parseAidenRemoteContractFixture(copy);
+  };
+  assert.throws(bad((copy) => { copy.request.encodedName = encodeURIComponent("Café photo.png").replace("%20", "+"); }), /percent-encoded/u);
+  assert.throws(bad((copy) => { copy.request.contentLength += 1; }), /exact length/u);
+  assert.throws(bad((copy) => { copy.request.contentType = "image/gif"; }), /PNG or JPEG/u);
+  assert.throws(bad((copy) => { copy.response.size += 1; }), /describes the picture/u);
+  assert.throws(bad((copy) => { copy.withoutGrant.error.code = "forbidden"; }));
+});
+
 test("background job fixtures need their own revision, and the parser and schema refuse what a phone cannot show", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
   const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
@@ -2944,6 +2984,7 @@ test("background job fixtures need their own revision, and the parser and schema
     new RegExp(`require contract revision ${AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION}\\b`, "u"),
   );
   delete older.backgroundJobs;
+  delete older.rawUploads;
   assert.equal(parseAidenRemoteContractFixture(older).backgroundJobs, undefined);
 
   const ajv = new Ajv2020({ strict: false });
@@ -3035,6 +3076,7 @@ test("Bot shared images need their own revision, and the schema and parser accep
   delete older.botImages;
   delete older.spending;
   delete older.backgroundJobs;
+  delete older.rawUploads;
   assert.equal(parseAidenRemoteContractFixture(older).botImages, undefined);
 
   const ajv = new Ajv2020({ strict: false });
@@ -3071,6 +3113,7 @@ test("browser recordings need their own revision, and a recording step carries o
   delete older.browserRecordings;
   delete older.spending;
   delete older.backgroundJobs;
+  delete older.rawUploads;
   assert.equal(parseAidenRemoteContractFixture(older).browserRecordings, undefined);
 
   const ajv = new Ajv2020({ strict: false });
@@ -3316,7 +3359,7 @@ test("the host's full context projection is reduced to the documented counts", (
   assert.throws(() => projectAidenRemoteContextPressure(partial));
 });
 
-test("revision 50 fixtures carry Inbox signals, and a stray or malformed signal fails closed", async () => {
+test("revision 51 fixtures carry Inbox signals, and a stray or malformed signal fails closed", async () => {
   const raw = (await json("fixtures/contract.json")) as Record<string, unknown>;
   const fixture = parseAidenRemoteContractFixture(raw);
   const byId = new Map(fixture.chatSummaries.summaries.map((summary) => [summary.id, summary]));
