@@ -558,7 +558,7 @@ export interface ScheduledTask {
      * Set when this entry is a delayed retry of a failed fire rather than a
      * scheduled fire. `fireTime` is when the retry becomes due.
      */
-    retry?: { failedRunId: string; attempt: 1 | 2 };
+    retry?: { failedRunId: string; attempt: 1 | 2; verifiedToolFree?: true };
   }>;
   /** When a Bot routine was last turned back on; failure streaks count only runs after it. */
   enabledAt?: number;
