@@ -154,13 +154,13 @@ struct AidenStreamNetworkRecovery {
     private(set) var policy = AidenStreamRecoveryPolicy()
     private let sleep: @MainActor (Int) async throws -> Void
     private let delayMilliseconds: (Int) -> Int
-    private let nowMilliseconds: @MainActor () -> Int
+    private let nowMilliseconds: @MainActor () -> Double
 
     init(
         path: AidenNetworkPathSource,
         sleep: @escaping @MainActor (Int) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
         delayMilliseconds: @escaping (Int) -> Int = { AidenTerminalReconciliation.retryDelayMilliseconds(attempt: $0) },
-        nowMilliseconds: @escaping @MainActor () -> Int = { Int(ProcessInfo.processInfo.systemUptime * 1_000) }
+        nowMilliseconds: @escaping @MainActor () -> Double = { ProcessInfo.processInfo.systemUptime * 1_000 }
     ) {
         self.path = path
         self.sleep = sleep
@@ -197,7 +197,7 @@ struct AidenStreamNetworkRecovery {
         onBackoff: () async -> Void,
         onWaiting: (Bool) async -> Void
     ) async throws -> ProbeFailureOutcome {
-        let deadline = nowMilliseconds() + max(0, minimumDelayMilliseconds)
+        let deadline = nowMilliseconds() + Double(max(0, minimumDelayMilliseconds))
         switch policy.afterProbeFailure(isNetworkAvailable: path.isNetworkAvailable) {
         case .waitForNetwork, .probeStatus:
             try await park(onWaiting: onWaiting)
@@ -216,9 +216,13 @@ struct AidenStreamNetworkRecovery {
         }
     }
 
-    private func waitForServerDeadline(_ deadline: Int, onWaiting: (Bool) async -> Void) async throws {
-        let remaining = max(0, deadline - nowMilliseconds())
-        if remaining > 0 { try await sleep(remaining) }
+    private func waitForServerDeadline(_ deadline: Double, onWaiting: (Bool) async -> Void) async throws {
+        while true {
+            let remaining = Int(ceil(max(0, deadline - nowMilliseconds())))
+            if remaining == 0 { break }
+            if try await sleepUnlessNetworkLost(milliseconds: remaining) { break }
+            try await park(onWaiting: onWaiting)
+        }
         if !path.isNetworkAvailable { try await park(onWaiting: onWaiting) }
     }
 

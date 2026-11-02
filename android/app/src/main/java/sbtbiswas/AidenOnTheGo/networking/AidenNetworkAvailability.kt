@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeoutOrNull
 import sbtbiswas.AidenOnTheGo.models.AidenTerminalReconciliation
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
@@ -199,7 +200,15 @@ class AidenStreamNetworkRecovery(
                     ProbeFailureOutcome.NETWORK_RETURNED
                 }
             }
-            serverDelay.await()
+            while (!serverDelay.isCompleted) {
+                val networkLoss = async { availability.isAvailable.first { !it } }
+                val lost = select {
+                    serverDelay.onAwait { false }
+                    networkLoss.onAwait { true }
+                }
+                networkLoss.cancel()
+                if (lost) park(onWaiting)
+            }
             if (!availability.isAvailable.value) park(onWaiting)
             outcome
         }

@@ -160,7 +160,7 @@ final class AidenNetworkPathTests: XCTestCase {
             path: path,
             sleep: sleeper.sleep,
             delayMilliseconds: { _ in 1_000 },
-            nowMilliseconds: { clock.value }
+            nowMilliseconds: { Double(clock.value) }
         )
         let task = Task { [recovery] in
             var recovery = recovery
@@ -181,6 +181,66 @@ final class AidenNetworkPathTests: XCTestCase {
             XCTFail("The server delay must still be awaited after the network returns")
         } catch is CancellationError {}
         XCTAssertEqual(recorder.states, [true, false])
+    }
+
+    func testOfflineTimeCountsTowardServerDelay() async throws {
+        let path = AidenNetworkAvailability(isNetworkAvailable: false)
+        let sleeper = ManualSleeper()
+        sleeper.completesImmediately = true
+        let recorder = WaitRecorder()
+        let clock = Counter()
+        let recovery = AidenStreamNetworkRecovery(path: path, sleep: sleeper.sleep, nowMilliseconds: { Double(clock.value) })
+        let task = Task { [recovery] in
+            var recovery = recovery
+            return try await recovery.recoverAfterProbeFailure(
+                minimumDelayMilliseconds: 5_000, onBackoff: {}, onWaiting: recorder.record
+            )
+        }
+        try await eventually { recorder.states == [true] }
+        clock.value = 1_000
+        path.setAvailable(true)
+        let outcome = try await task.value
+        XCTAssertEqual(outcome, .networkReturned)
+        XCTAssertEqual(sleeper.requests, [4_000])
+
+        path.setAvailable(false)
+        let second = Task { [recovery] in
+            var recovery = recovery
+            return try await recovery.recoverAfterProbeFailure(
+                minimumDelayMilliseconds: 5_000, onBackoff: {}, onWaiting: recorder.record
+            )
+        }
+        try await eventually { recorder.states == [true, false, true] }
+        clock.value = 7_000
+        path.setAvailable(true)
+        let secondOutcome = try await second.value
+        XCTAssertEqual(secondOutcome, .networkReturned)
+        XCTAssertEqual(sleeper.requests, [4_000], "a long offline period consumes the server delay")
+    }
+
+    func testNetworkLossDuringRemainingServerDelayParksAgain() async throws {
+        let path = AidenNetworkAvailability(isNetworkAvailable: false)
+        let recorder = WaitRecorder()
+        let clock = Counter()
+        let recovery = AidenStreamNetworkRecovery(
+            path: path,
+            sleep: { _ in path.setAvailable(false) },
+            nowMilliseconds: { Double(clock.value) }
+        )
+        let task = Task { [recovery] in
+            var recovery = recovery
+            return try await recovery.recoverAfterProbeFailure(
+                minimumDelayMilliseconds: 5_000, onBackoff: {}, onWaiting: recorder.record
+            )
+        }
+        try await eventually { recorder.states == [true] }
+        clock.value = 1_000
+        path.setAvailable(true)
+        try await eventually { recorder.states == [true, false, true] }
+        path.setAvailable(true)
+        let outcome = try await task.value
+        XCTAssertEqual(outcome, .networkReturned)
+        XCTAssertEqual(recorder.states, [true, false, true, false])
     }
 
     func testOnlyARateLimitAsksForAServerDelay() throws {

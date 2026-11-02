@@ -2,6 +2,7 @@ package sbtbiswas.AidenOnTheGo.networking
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.advanceTimeBy
@@ -218,6 +219,39 @@ class AidenStreamNetworkRecoveryTest {
         network.state.value = true
         runCurrent()
         assertTrue(second.isCompleted)
+    }
+
+    @Test
+    fun repeatedLossDuringServerDelayWaitsForNetworkAndCancellationStopsIt() = runTest {
+        val network = FakeNetwork(initial = true)
+        val recovery = AidenStreamNetworkRecovery(network) { 1_000L }
+        val waiting = mutableListOf<Boolean>()
+        val first = async { recovery.recoverAfterProbeFailure(5_000, {}, { waiting += it }) }
+        advanceTimeBy(400)
+        network.state.value = false
+        runCurrent()
+        network.state.value = true
+        runCurrent()
+        advanceTimeBy(1_000)
+        network.state.value = false
+        runCurrent()
+        assertEquals("the second loss is reported before the delay expires", listOf(true, false, true), waiting)
+        advanceTimeBy(3_600)
+        runCurrent()
+        assertFalse(first.isCompleted)
+        network.state.value = true
+        runCurrent()
+        assertEquals(AidenStreamNetworkRecovery.ProbeFailureOutcome.NETWORK_RETURNED, first.await())
+        assertEquals(listOf(true, false, true, false), waiting)
+
+        val cancelled = async { recovery.recoverAfterProbeFailure(5_000, {}, {}) }
+        runCurrent()
+        network.state.value = false
+        runCurrent()
+        network.state.value = true
+        runCurrent()
+        cancelled.cancelAndJoin()
+        assertTrue(cancelled.isCancelled)
     }
 
     @Test
