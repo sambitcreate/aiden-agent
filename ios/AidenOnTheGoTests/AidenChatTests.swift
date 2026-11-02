@@ -1242,20 +1242,25 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNotEqual(AidenBrowserRecordingLoad.missingMessage, AidenBrowserRecordingLoad.failedMessage)
     }
 
-    func testBrowserRecordingFileIsNamedByItsIdAndTypeAndIsRemovedAfterPlaying() throws {
+    func testBrowserRecordingFilesAreIndependentForEachPlayAndRemovedSeparately() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-recording-file-\(UUID())", directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: root) }
         let video = Data([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6F, 0x6D])
         let mp4 = AidenBrowserRecordingRecap(id: Self.fixtureRecordingID, mimeType: .mp4, durationMs: 1_000, sizeBytes: video.count)
         let file = try AidenBrowserRecordingFile.write(video, for: mp4, in: root)
-        XCTAssertEqual(file.lastPathComponent, "\(Self.fixtureRecordingID).mp4")
         XCTAssertEqual(file.deletingLastPathComponent().path, AidenBrowserRecordingFile.directory(in: root).path)
+        XCTAssertEqual(file.pathExtension, "mp4")
         XCTAssertEqual(try Data(contentsOf: file), video)
+        let otherBytes = video + Data([7])
+        let other = try AidenBrowserRecordingFile.write(otherBytes, for: mp4, in: root)
+        XCTAssertNotEqual(file, other, "two Plays of the same recording must never share a player file")
+        XCTAssertEqual(try Data(contentsOf: file), video, "the second Play does not overwrite the first")
         AidenBrowserRecordingFile.remove(file)
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertEqual(try Data(contentsOf: other), otherBytes, "closing one player preserves the other")
 
         let webm = AidenBrowserRecordingRecap(id: Self.fixtureRecordingID, mimeType: .webm, durationMs: 1_000, sizeBytes: 4)
-        XCTAssertEqual(AidenBrowserRecordingFile.url(for: webm, in: root).lastPathComponent, "\(Self.fixtureRecordingID).webm")
+        XCTAssertEqual(AidenBrowserRecordingFile.url(for: webm, in: root).pathExtension, "webm")
 
         // An id the recorder never names is never written.
         let escaping = AidenBrowserRecordingRecap(id: "../recording", mimeType: .mp4, durationMs: 1_000, sizeBytes: video.count)
@@ -2383,7 +2388,7 @@ final class AidenChatTests: XCTestCase {
             return XCTFail("The Mac's recording should be saved for the player, got \(played).")
         }
         defer { AidenBrowserRecordingFile.remove(file) }
-        XCTAssertEqual(file.lastPathComponent, "\(presentID).mp4")
+        XCTAssertEqual(file.pathExtension, "mp4")
         XCTAssertEqual(try Data(contentsOf: file), video)
 
         let gone = AidenBrowserRecordingRecap(id: goneID, mimeType: .mp4, durationMs: 1_000, sizeBytes: 1_024)
@@ -15650,5 +15655,176 @@ private final class AidenGatedSleep: @unchecked Sendable {
             return waiter
         }
         continuation?.resume()
+    }
+}
+
+/// The real card's owner and lifecycle, with a controlled download handoff.
+@MainActor
+final class AidenBrowserRecordingOwnershipTests: XCTestCase {
+    private let recording = AidenBrowserRecordingRecap(
+        id: "recording-0f1e2d3c-4b5a-4678-9abc-def012345678", mimeType: .mp4, durationMs: 1000, sizeBytes: 40
+    )
+    private let video = Data([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70] + Array(repeating: UInt8(7), count: 32))
+    private var root: URL!
+
+    override func setUp() {
+        root = FileManager.default.temporaryDirectory.appending(path: "recording-ownership-\(UUID())")
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private func save() throws -> URL { try AidenBrowserRecordingFile.write(video, for: recording, in: root) }
+
+    private func waitUntil(_ message: String, _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(condition(), message)
+    }
+
+    private func host(_ presentation: AidenRecordingTestPresentation) throws -> (UIWindow, UIHostingController<AidenRecordingTestCard>) {
+        let host = UIHostingController(rootView: AidenRecordingTestCard(presentation: presentation, recording: recording))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        return (window, host)
+    }
+
+    func testNavigationAfterDeliveryBeforePlayerPresentationReleasesFile() async throws {
+        let other = try save()
+        let presentation = AidenRecordingTestPresentation()
+        let (window, host) = try host(presentation)
+        defer { window.isHidden = true }
+        try await waitUntil("card appeared") { presentation.appeared }
+        let file = try save()
+        // No suspension in this load: Ready and navigation happen on the same
+        // main-actor turn, before SwiftUI can present the full-screen player.
+        await presentation.state.play(recording, using: { _ in .ready(file) })
+        presentation.visible = false
+        try await waitUntil("card disposal releases its delivered file") { !FileManager.default.fileExists(atPath: file.path) }
+        XCTAssertNil(host.presentedViewController)
+        XCTAssertEqual(try Data(contentsOf: other), video)
+    }
+
+    func testNavigationDuringLoadRejectsLateFileEvenAfterCardReappears() async throws {
+        let other = try save()
+        let gate = AidenRecordingTestLoad()
+        let presentation = AidenRecordingTestPresentation()
+        let (window, host) = try host(presentation)
+        defer { window.isHidden = true }
+        try await waitUntil("card appeared") { presentation.appeared }
+        let play = Task { await presentation.state.play(recording, using: { _ in await gate.load() }) }
+        try await waitUntil("download started") { gate.continuation != nil }
+        presentation.visible = false
+        try await waitUntil("actual card onDisappear ended its pending Play") { !presentation.state.isLoading }
+        presentation.appeared = false
+        presentation.visible = true
+        try await waitUntil("card reappeared") { presentation.appeared }
+        let file = try save()
+        gate.continuation?.resume(returning: .ready(file))
+        await play.value
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "the old generation cannot adopt into a reactivated card")
+        XCTAssertNil(presentation.state.playback)
+        XCTAssertNil(host.presentedViewController)
+        XCTAssertEqual(try Data(contentsOf: other), video)
+    }
+
+    func testPresentedPlayerSurvivesUntilDismissalThenDeletesOnlyItsFile() async throws {
+        let other = try save()
+        let presentation = AidenRecordingTestPresentation()
+        let (window, host) = try host(presentation)
+        defer { window.isHidden = true }
+        try await waitUntil("card appeared") { presentation.appeared }
+        let file = try save()
+        await presentation.state.play(recording, using: { _ in .ready(file) })
+        try await waitUntil("full-screen player appeared") {
+            host.presentedViewController != nil && host.presentedViewController?.isBeingPresented == false
+        }
+        XCTAssertEqual(try Data(contentsOf: file), video, "the player still owns its video")
+        host.dismiss(animated: false)
+        try await waitUntil("actual player disappearance removes its file") { !FileManager.default.fileExists(atPath: file.path) }
+        XCTAssertEqual(try Data(contentsOf: other), video)
+        presentation.visible = false
+        try await waitUntil("card disappeared") { !presentation.appeared }
+        XCTAssertEqual(try Data(contentsOf: other), video, "dismissal followed by disposal remains local to one Play")
+    }
+
+    func testReplacementAndRepeatedReleasePreserveTheNewPlayer() async throws {
+        let other = try save()
+        let state = AidenBrowserRecordingCardState()
+        let first = try save()
+        let next = try save()
+        await state.play(recording, using: { _ in .ready(first) })
+        await state.play(recording, using: { _ in .ready(next) })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
+        XCTAssertEqual(try Data(contentsOf: next), video)
+        state.release(first) // The replaced player's disappearance can arrive later.
+        XCTAssertEqual(state.playback?.url, next)
+        XCTAssertEqual(try Data(contentsOf: next), video)
+        state.release(next)
+        state.release(next)
+        state.dispose()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: next.path))
+        XCTAssertEqual(try Data(contentsOf: other), video)
+    }
+
+    func testRecordingReplacementRejectsPendingDelivery() async throws {
+        let other = try save()
+        let gate = AidenRecordingTestLoad()
+        let presentation = AidenRecordingTestPresentation()
+        let (window, _) = try host(presentation)
+        defer { window.isHidden = true }
+        try await waitUntil("card appeared") { presentation.appeared }
+        let play = Task { await presentation.state.play(recording, using: { _ in await gate.load() }) }
+        try await waitUntil("download started") { gate.continuation != nil }
+        presentation.recordingID = "recording-11111111-2222-4333-8444-555555555555"
+        try await waitUntil("recording change invalidated the old request") { !presentation.state.isLoading }
+        let file = try save()
+        gate.continuation?.resume(returning: .ready(file))
+        await play.value
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertNil(presentation.state.playback)
+        XCTAssertEqual(try Data(contentsOf: other), video)
+    }
+}
+
+@MainActor @Observable
+private final class AidenRecordingTestLoad {
+    var continuation: CheckedContinuation<AidenBrowserRecordingLoad, Never>?
+    func load() async -> AidenBrowserRecordingLoad {
+        await withCheckedContinuation { continuation = $0 }
+    }
+}
+
+@MainActor @Observable
+private final class AidenRecordingTestPresentation {
+    let state = AidenBrowserRecordingCardState()
+    var visible = true
+    var appeared = false
+    var recordingID: String?
+}
+
+@MainActor
+private struct AidenRecordingTestCard: View {
+    let presentation: AidenRecordingTestPresentation
+    let recording: AidenBrowserRecordingRecap
+    var body: some View {
+        if presentation.visible {
+            AidenBrowserRecordingCardView(
+                recording: AidenBrowserRecordingRecap(
+                    id: presentation.recordingID ?? recording.id,
+                    mimeType: recording.mimeType, durationMs: recording.durationMs, sizeBytes: recording.sizeBytes
+                ),
+                load: { _ in .failed }, state: presentation.state
+            )
+            .onAppear { presentation.appeared = true }
+            .onDisappear { presentation.appeared = false }
+        } else {
+            Text("Another conversation")
+        }
     }
 }
