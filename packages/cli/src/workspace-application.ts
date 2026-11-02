@@ -19,6 +19,8 @@ export function createCliWorkspaceApplication(agentDir: string, operations: {
   const records = new JsonStore<CliWorkspace[]>(join(agentDir, "workspaces.json"), []);
   const project = (record: CliWorkspace): Workspace => ({ id: record.id, name: record.name, folderPath: record.folderPath || undefined, permission: record.access,
     createdAt: record.createdAt ?? 0, updatedAt: record.updatedAt ?? 0, memoryEnabled: record.memoryEnabled, managedWorktree: record.managedWorktree });
+  const changeListeners = new Set<() => void>();
+  const changed = () => { for (const listener of changeListeners) listener(); };
   const configStore = {
     async listWorkspaces() { return (await records.load()).map(project); },
     async getWorkspace(id: string) { const record = (await records.load()).find((record) => record.id === id); return record ? project(record) : undefined; },
@@ -28,9 +30,11 @@ export function createCliWorkspaceApplication(agentDir: string, operations: {
         const record = { ...workspace, folderPath: workspace.folderPath ?? "", access: workspace.permission };
         if (index === -1) entries.push(record); else entries[index] = record;
         return workspace;
-      });
+      }).finally(changed);
     },
-    async removeWorkspace(id: string) { await records.update((entries) => { const index = entries.findIndex((entry) => entry.id === id); if (index >= 0) entries.splice(index, 1); }); },
+    async removeWorkspace(id: string) { await records.update((entries) => { const index = entries.findIndex((entry) => entry.id === id); if (index >= 0) entries.splice(index, 1); }).finally(changed); },
+    /** A workspace was saved or removed (the paired desktops' `/host/events` feed listens). */
+    onWorkspacesChanged(listener: () => void) { changeListeners.add(listener); return () => { changeListeners.delete(listener); }; },
   };
   const mutationGate = new WorkspaceMutationGate(), operationRegistry = new WorkspaceOperationRegistry();
   const application = createWorkspaceApplicationService({ configStore,

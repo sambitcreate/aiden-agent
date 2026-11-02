@@ -92,5 +92,9 @@ export function useRemoteBots(): {
     }
   };
 
-  return { groups, opening, open: (hostId, botId) => void open(hostId, botId) };
+  // `open` keeps one identity, so callers can depend on it without re-running each render.
+  const openRef = React.useRef(open);
+  openRef.current = open;
+  const stableOpen = React.useCallback((hostId: string, botId: string) => void openRef.current(hostId, botId), []);
+  return { groups, opening, open: stableOpen };
 }

@@ -106,6 +106,10 @@ data class AidenServer(
     val supportsChatReadState: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_READ_STATE_FEATURE)
 
+    /** Inbox triage writes (`POST /chats/{chatId}/triage`); Done and Snooze appear only with it. */
+    val supportsChatTriage: Boolean
+        get() = features.contains(AidenRemoteProtocol.CHAT_TRIAGE_FEATURE)
+
     /**
      * `GET /chats/{chatId}/messages` pages that also carry the chat's metadata
      * (revisions 19 and 23). A revision-19 to 22 page has no title or model, so

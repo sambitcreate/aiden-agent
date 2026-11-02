@@ -36,6 +36,9 @@ export const FEATURES = [
   "host-events-v1",
   "run-streams-v1",
   "run-control-v1",
+  // A desktop host always wires run input and questions alongside run control.
+  "chat-run-input-v1",
+  "chat-question-prompts-v1",
   "chat-messages-window-v1",
   "chat-read-state-v1",
 ];
@@ -605,15 +608,18 @@ export async function setup(host: FakeHost, deviceId = "desktop", options: { fra
     };
     return { session: otherSession, read, dispose };
   };
+  const extraAdapters: RemoteHostAdapter[] = [];
   const close = () => {
     session.dispose();
     adapter.dispose();
+    for (const extra of extraAdapters) extra.dispose();
     manager.close();
     host.close();
   };
   /** Another adapter for the same host, as a reopened pane builds one. */
   const adapterFor = async () => {
     const next = new RemoteHostAdapter(view!, transport);
+    extraAdapters.push(next);
     await next.ready();
     return next;
   };

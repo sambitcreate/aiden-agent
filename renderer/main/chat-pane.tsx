@@ -323,6 +323,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
     : persistedChat;
   React.useEffect(() => retainChatDraft(chatId), [chatId]);
   useMarkChatRead(draft ? undefined : chatId, draft ? undefined : persistedChat.data?.messages);
+  // Opening a chat clears its Unavailable prompts (the run that raised them is
+  // gone). A dismissal that drops any broadcasts a new activity revision, which
+  // the Inbox's waits query keys on.
+  const openedDraft = Boolean(draft);
+  React.useEffect(() => {
+    if (openedDraft) return;
+    void Promise.resolve()
+      .then(() => chatsApi.dismissDetachedAttention(chatId))
+      .catch(() => {
+        // The row keeps reading Unavailable until the next change event.
+      });
+  }, [chatId, openedDraft]);
   // A Bot's conversation lives at its own route, rendered from the live projection.
   const botChatId = chat.data?.botId;
   React.useEffect(() => {
@@ -3208,7 +3220,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     const frame = requestAnimationFrame(() => approvalDenyRef.current?.focus());
     return () => {
       cancelAnimationFrame(frame);
-      if (previousFocus?.isConnected) requestAnimationFrame(() => previousFocus.focus());
+      // A chat opened from the sidebar (an Inbox row, ⌘1–9) answers in the chat:
+      // once the prompt resolves, focus stays with the composer.
+      if (previousFocus?.isConnected && !previousFocus.closest("[data-sidebar]")) {
+        requestAnimationFrame(() => previousFocus.focus());
+      }
     };
   }, [pending?.approvalId]);
 

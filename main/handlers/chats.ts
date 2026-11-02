@@ -57,6 +57,8 @@ import {
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { chatActivityRegistry } from "../services/chat-activity.js";
 import { chatReadMarkers, markChatRead } from "../services/chat-read-markers-main.js";
+import { chatTriage } from "../services/chat-triage-main.js";
+import { setChatTriageFromRenderer } from "./chat-triage-params.js";
 import { contextLifecycleService } from "../services/context-lifecycle-service-main.js";
 import { forkSummaryService } from "../services/fork-summary-service-main.js";
 import { chatForkService } from "../services/chat-fork-service-main.js";
@@ -88,7 +90,7 @@ export function registerChatHistoryHandlers(): void {
     },
     hostPlatformCapabilities,
     closeDeviceSessionsForChat,
-    chatReadMarkers,
+    chatTriage,
     rendererDocumentOwner,
     llmClient,
     unresolvedGuiArtifactMessage,
@@ -174,6 +176,16 @@ export function registerChatHistoryHandlers(): void {
   let chatExportActive = false;
   ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
   ipcMain.handle("chats:readMarkers", () => chatReadMarkers.snapshot());
+  ipcMain.handle("chats:triage", () => chatTriage.snapshot());
+  ipcMain.handle("chats:setTriage", async (_event, id: unknown, patch: unknown, ifRevision?: unknown) =>
+    setChatTriageFromRenderer(
+      // The reconciled list the Remote triage route classifies chats from.
+      { chats: () => chatApplicationService.list(), triage: chatTriage },
+      id,
+      patch,
+      ifRevision,
+    ),
+  );
   ipcMain.handle("chats:markRead", async (_event, id: unknown, throughMessageId?: unknown) => {
     const chatId = asString(id, "id");
     if (throughMessageId !== undefined && (typeof throughMessageId !== "string" || !throughMessageId)) {
@@ -220,7 +232,8 @@ export function registerChatHistoryHandlers(): void {
   });
 
   ipcMain.handle("chats:dismissInterruptedWait", async (_event, id: unknown, waitId: unknown) => {
-    await interruptedWaits.forget(asString(waitId, "waitId"), asString(id, "id"));
+    // The Inbox's Interrupted row and the Dock badge recount on a new activity revision.
+    if (await interruptedWaits.forget(asString(waitId, "waitId"), asString(id, "id"))) chatActivityRegistry.touch();
   });
 
   ipcMain.handle("chats:todoSnapshot", async (event, id: unknown) => {

@@ -9,11 +9,13 @@ final class AidenRemoteClientTests: XCTestCase {
     override func setUp() {
         super.setUp()
         AidenRemoteMockURLProtocol.handler = nil
+        AidenRemoteMockURLProtocol.hold = nil
         AidenRemoteMockURLProtocol.epoch = UUID().uuidString
     }
 
     override func tearDown() {
         AidenRemoteMockURLProtocol.handler = nil
+        AidenRemoteMockURLProtocol.hold = nil
         super.tearDown()
     }
 
@@ -580,10 +582,11 @@ final class AidenRemoteClientTests: XCTestCase {
             AidenBotHostFeature.memory,
             AidenBotHostFeature.proactive,
             AidenServer.speechRequestGzipFeature,
-            "chat-ui-panels-v1",
+            AidenServer.chatTriageFeature,
         ])
         XCTAssertTrue(server.supportsChatAgentInterrupt)
         XCTAssertTrue(server.supportsChatReadState)
+        XCTAssertTrue(server.supportsChatTriage)
 
         let page = fixture.chatSummaries
         XCTAssertEqual(page.summaries.map(\.id), [
@@ -624,6 +627,114 @@ final class AidenRemoteClientTests: XCTestCase {
         failed.unread = false
         XCTAssertTrue(failed.lastRunFailed)
         XCTAssertFalse(failed.showsFailed)
+    }
+
+    func testChatSummaryInboxSignalsDecodeAndAMalformedOrUnknownBucketFallsBackToLocalPlacement() throws {
+        // Revision 50 summaries carry the host's Inbox placement and triage.
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]
+        )
+        let withSignals = try XCTUnwrap(object["summaries"] as? [[String: Any]])
+        let decode = { (summaries: [[String: Any]]) throws -> [AidenChatSummary] in
+            object["summaries"] = summaries
+            let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            return try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: data).summaries
+        }
+        func timestamp(_ value: Any?) throws -> Date {
+            try Self.remoteDate(XCTUnwrap(value as? String))
+        }
+
+        let current = try decode(withSignals)
+        let approval = try XCTUnwrap(current.first { $0.id == "chat_fixture_summary_02" })
+        let failed = try XCTUnwrap(current.first { $0.id == "chat_fixture_summary_01" })
+        let approvalJSON = try XCTUnwrap(withSignals.first { $0["id"] as? String == "chat_fixture_summary_02" })
+        let failedJSON = try XCTUnwrap(withSignals.first { $0["id"] as? String == "chat_fixture_summary_01" })
+        XCTAssertEqual(approval.inbox.bucket, .needsYou)
+        XCTAssertEqual(approval.inbox.sortAt, try timestamp(approvalJSON["inboxSortAt"]))
+        XCTAssertEqual(approval.inbox.attentionSince, try timestamp(approvalJSON["attentionSince"]))
+        XCTAssertEqual(failed.inbox.bucket, .needsYou)
+        XCTAssertEqual(failed.inbox.pinnedAt, try timestamp(failedJSON["pinnedAt"]))
+        XCTAssertEqual(failed.inbox.snoozedUntil, try timestamp(failedJSON["snoozedUntil"]))
+        XCTAssertEqual(failed.inbox.triageRevision, failedJSON["triageRevision"] as? Int)
+
+        // A bucket this build does not know, or a broken field from a buggy
+        // host, leaves the row without host placement but still decodes.
+        var malformed = withSignals
+        let approvalIndex = try XCTUnwrap(malformed.firstIndex { $0["id"] as? String == "chat_fixture_summary_02" })
+        let failedIndex = try XCTUnwrap(malformed.firstIndex { $0["id"] as? String == "chat_fixture_summary_01" })
+        malformed[approvalIndex]["inboxBucket"] = "later_maybe"
+        malformed[approvalIndex]["attentionSince"] = 7
+        malformed[failedIndex]["inboxSortAt"] = false
+        malformed[failedIndex]["triageRevision"] = "three"
+        let degraded = try decode(malformed)
+        let unknown = try XCTUnwrap(degraded.first { $0.id == "chat_fixture_summary_02" })
+        let unsorted = try XCTUnwrap(degraded.first { $0.id == "chat_fixture_summary_01" })
+        XCTAssertNil(unknown.inbox.bucket)
+        XCTAssertNil(unknown.inbox.sortAt)
+        XCTAssertNil(unknown.inbox.attentionSince)
+        XCTAssertNil(unsorted.inbox.bucket, "A bucket without its sort time is not used.")
+        XCTAssertNil(unsorted.inbox.triageRevision)
+        XCTAssertEqual(unsorted.inbox.pinnedAt, failed.inbox.pinnedAt)
+        XCTAssertEqual(degraded.map(\.displayRowState), current.map(\.displayRowState))
+
+        // With no host bucket the phone places the row itself; with one it
+        // agrees with the host for a closed chat.
+        let now = try timestamp(failedJSON["updatedAt"]).addingTimeInterval(60)
+        XCTAssertEqual(AidenInbox.placement(for: unknown, isOpen: false, now: now).section, .needsYou)
+        XCTAssertEqual(AidenInbox.placement(for: approval, isOpen: false, now: now).section, .needsYou)
+    }
+
+    func testChatSummaryInboxSignalsSurviveTheSummaryCacheAndADetailReconcile() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-inbox-cache-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let page = try AidenRemoteJSONDecoder.decode(
+            AidenChatSummaryPage.self,
+            from: botFixtureData(at: ["chatSummaries"])
+        )
+        var summaries = page.summaries
+        // The host sends milliseconds; the cache keeps them, so a cached
+        // snooze wakes and a cached pin orders exactly as the Mac's do.
+        // `.002` is stored as a double just under it, which a truncating
+        // formatter would write back as `.001`.
+        let snoozed = try Self.remoteDate("2026-09-10T09:00:00.002Z")
+        let pinned = try Self.remoteDate("2026-09-10T09:00:00.123Z")
+        summaries[0].inbox.snoozedUntil = snoozed
+        summaries[0].inbox.pinnedAt = pinned
+        try await cache.saveChatSummaries(
+            .init(summaries: summaries, nextCursor: nil),
+            instanceId: "inbox", writeToken: cache.reserveChatWrite()
+        )
+        let restored = await cache.loadChatSummaries(instanceId: "inbox")
+        XCTAssertEqual(restored?.summaries.map(\.inbox), summaries.map(\.inbox))
+        XCTAssertEqual(restored?.summaries.first?.inbox.snoozedUntil, snoozed)
+        XCTAssertEqual(restored?.summaries.first?.inbox.pinnedAt, pinned)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = AidenChatCacheDates.encoding
+        XCTAssertEqual(
+            String(decoding: try encoder.encode([snoozed, pinned]), as: UTF8.self),
+            #"["2026-09-10T09:00:00.002Z","2026-09-10T09:00:00.123Z"]"#
+        )
+
+        // Files written by earlier builds kept whole seconds and still load.
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = AidenChatCacheDates.decoding
+        let legacy = try decoder.decode([Date].self, from: Data(#"["2026-09-10T09:00:00Z","2026-09-10T09:00:00.250Z"]"#.utf8))
+        XCTAssertEqual(legacy.map(\.timeIntervalSince1970), [1_789_030_800, 1_789_030_800.25])
+
+        // A detail update rebuilds the row from the chat; its triage stays,
+        // and the host placement it no longer describes is dropped.
+        let failed = try XCTUnwrap(summaries.first { $0.id == "chat_fixture_summary_01" })
+        var detail = sampleChatForInbox(id: failed.id, workspaceId: failed.workspaceId)
+        detail.updatedAt = failed.updatedAt.addingTimeInterval(5)
+        try await cache.reconcileChatSummary(detail, instanceId: "inbox", writeToken: cache.reserveChatWrite())
+        let reloaded = await cache.loadChatSummaries(instanceId: "inbox")
+        let reconciled = try XCTUnwrap(reloaded?.summaries.first { $0.id == failed.id })
+        XCTAssertEqual(reconciled.inbox.pinnedAt, failed.inbox.pinnedAt)
+        XCTAssertEqual(reconciled.inbox.snoozedUntil, failed.inbox.snoozedUntil)
+        XCTAssertEqual(reconciled.inbox.triageRevision, 3)
+        XCTAssertNil(reconciled.inbox.bucket)
     }
 
     func testChatSummaryRowStateIsAdditiveAndLocalActivityOutranksAStaleServerState() throws {
@@ -683,6 +794,107 @@ final class AidenRemoteClientTests: XCTestCase {
         try await client.markChatRead(id: "chat_fixture_summary_01")
         try await client.markChatRead(id: "chat_fixture_summary_01", throughMessageId: "message-7")
         XCTAssertEqual(bodies, ["{}", #"{"throughMessageId":"message-7"}"#])
+    }
+
+    func testLegacyInboxReadUsesBoundedWindowAndRejectsChangedSummary() async throws {
+        let client = makeClient()
+        let page = try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: botFixtureData(at: ["chatSummaries"]))
+        var row = try XCTUnwrap(page.summaries.first)
+        row.inbox.lastAssistantMessageId = nil
+        var changed = false
+        var reads: [String] = []
+        AidenRemoteMockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/messages") {
+                XCTAssertEqual(request.url?.query, "limit=1")
+                let json = """
+                {"chatId":"\(row.id)","revision":"\(row.revision)",
+                "messages":[{"id":"last-shown","role":"assistant","text":"reply","createdAt":"2026-08-18T19:01:00.000Z"}],"hasOlder":true}
+                """
+                return Self.response(for: request, status: 200, json: json)
+            }
+            if path.hasSuffix("/chat-summaries") {
+                var object = try! JSONSerialization.jsonObject(with: self.botFixtureData(at: ["chatSummaries"])) as! [String: Any]
+                var rows = object["summaries"] as! [[String: Any]]
+                if changed { rows[0]["revision"] = "rev_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" }
+                object["summaries"] = rows
+                return Self.response(for: request, status: 200, data: try! JSONSerialization.data(withJSONObject: object))
+            }
+            if path.hasSuffix("/read") {
+                reads.append((try? Self.jsonBody(request))?["throughMessageId"] as? String ?? "")
+                return Self.response(for: request, status: 204, data: Data())
+            }
+            XCTFail("A full transcript was requested: \(path)")
+            return Self.response(for: request, status: 413, data: Data())
+        }
+        try await client.markInboxRead(through: row, supportsMessagesWindow: true)
+        XCTAssertEqual(reads, ["last-shown"])
+        changed = true
+        do {
+            try await client.markInboxRead(through: row, supportsMessagesWindow: true)
+            XCTFail("A changed row must not be marked read")
+        } catch { }
+        XCTAssertEqual(reads, ["last-shown"])
+    }
+
+    func testSetChatTriageSendsOnlyTheChangedFieldsWithAnIdempotencyKeyAndReadsAConflict() async throws {
+        let client = makeClient()
+        var bodies: [[String: Any]] = []
+        var keys: [String] = []
+        var conflict = false
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_summary_01/triage")
+            keys.append(request.value(forHTTPHeaderField: "Idempotency-Key") ?? "")
+            let body = (try? Self.bodyData(request)).flatMap { try? JSONSerialization.jsonObject(with: $0) }
+            bodies.append(body as? [String: Any] ?? [:])
+            if conflict {
+                return Self.response(for: request, status: 409, json: #"{"error":{"code":"revision_conflict","message":"Triage changed.","requestId":"r1","retryable":false,"details":{"currentRevision":"5"}}}"#)
+            }
+            return Self.response(for: request, status: 200, json: #"{"chatId":"chat_fixture_summary_01","revision":4,"updatedAt":"2026-08-18T19:05:00.000Z","doneAt":"2026-08-18T19:05:00.000Z","snoozedUntil":"2026-08-19T09:00:00.000Z"}"#)
+        }
+
+        let done = try await client.setChatTriage(chatId: "chat_fixture_summary_01", change: .done(true), ifRevision: 3)
+        XCTAssertEqual(done.revision, 4)
+        XCTAssertEqual(done.doneAt, try Self.remoteDate("2026-08-18T19:05:00.000Z"))
+        XCTAssertNil(done.pinnedAt)
+        let until = try Self.remoteDate("2026-08-19T09:00:00.000Z")
+        _ = try await client.setChatTriage(chatId: "chat_fixture_summary_01", change: .snooze(until: until), ifRevision: nil)
+        _ = try await client.setChatTriage(chatId: "chat_fixture_summary_01", change: .wake, ifRevision: 0)
+
+        XCTAssertEqual(bodies[0] as NSDictionary, ["done": true, "ifRevision": 3])
+        XCTAssertEqual(bodies[1] as NSDictionary, ["snoozeUntil": "2026-08-19T09:00:00.000Z"])
+        XCTAssertEqual(bodies[2] as NSDictionary, ["snoozeUntil": NSNull(), "ifRevision": 0])
+        let historicalDone = try Self.remoteDate("2026-08-18T18:00:00.000Z")
+        _ = try await client.setChatTriage(chatId: "chat_fixture_summary_01", change: AidenChatTriageChange(done: true, restoreDoneAt: historicalDone), ifRevision: 4)
+        XCTAssertEqual(bodies[3] as NSDictionary, ["done": true, "restoreDoneAt": "2026-08-18T18:00:00.000Z", "ifRevision": 4])
+        // Each write is its own idempotent request, in the host's key alphabet.
+        XCTAssertEqual(Set(keys).count, 4)
+        for key in keys {
+            XCTAssertNotNil(key.range(of: #"^[\x21-\x7e]{16,128}$"#, options: .regularExpression))
+        }
+
+        conflict = true
+        do {
+            _ = try await client.setChatTriage(chatId: "chat_fixture_summary_01", change: .done(true), ifRevision: 3)
+            XCTFail("A stale revision must throw.")
+        } catch let error as AidenRemoteClientError {
+            XCTAssertTrue(error.isRevisionConflict)
+        }
+    }
+
+    func testATriageAnswerBelowRevisionOneIsRefused() throws {
+        // A write always leaves revision 1 or later, so an answer at 0 is not
+        // one the phone can base its next ifRevision or Undo on.
+        func decode(_ revision: Int) throws -> AidenChatTriageResult {
+            try AidenRemoteJSONDecoder.decode(
+                AidenChatTriageResult.self,
+                from: Data(#"{"chatId":"chat_fixture_summary_01","revision":\#(revision),"updatedAt":"2026-08-18T19:05:00.000Z"}"#.utf8)
+            )
+        }
+        XCTAssertEqual(try decode(1).revision, 1)
+        XCTAssertThrowsError(try decode(0))
+        XCTAssertThrowsError(try decode(-2))
     }
 
     func testChatSummaryDecoderToleratesAdditiveFieldsButRejectsMissingRequiredFields() throws {
@@ -6301,6 +6513,24 @@ final class AidenRemoteClientTests: XCTestCase {
         return URLSession(configuration: configuration)
     }
 
+    private static func remoteDate(_ text: String) throws -> Date {
+        try AidenRemoteJSONDecoder.decode(AidenRemoteTimestamp.self, from: Data("\"\(text)\"".utf8)).date
+    }
+
+    private func sampleChatForInbox(id: String, workspaceId: String) -> AidenChat {
+        AidenChat(
+            id: id,
+            workspaceId: workspaceId,
+            title: "Idle fixture chat",
+            providerId: "openai",
+            modelId: "gpt-5.6",
+            messages: [],
+            createdAt: Date(timeIntervalSince1970: 1_787_078_000),
+            updatedAt: Date(timeIntervalSince1970: 1_787_079_000),
+            revision: "revision-inbox"
+        )
+    }
+
     private func botFixtureData(at keyPath: [String]) throws -> Data {
         let fixtureURL = try XCTUnwrap(
             Bundle(for: Self.self).url(forResource: "contract", withExtension: "json")
@@ -6619,6 +6849,10 @@ private actor AidenInstallationDataRaceProbe {
 
 private final class AidenRemoteMockURLProtocol: URLProtocol, @unchecked Sendable {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+    /// A request this returns a semaphore for is answered off the loading
+    /// thread once the semaphore is signalled, so the session's other
+    /// requests keep being answered while it is held.
+    static var hold: ((URLRequest) -> DispatchSemaphore?)?
     /// Sessions carry the epoch of the test that made them. A request an
     /// earlier test left behind (a cancelled `async let` can still reach
     /// `startLoading`) fails instead of answering from a later test's handler.
@@ -6637,6 +6871,23 @@ private final class AidenRemoteMockURLProtocol: URLProtocol, @unchecked Sendable
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
         }
+        if let gate = Self.hold?(request) {
+            let request = request
+            DispatchQueue.global().async {
+                // A gate never opened is a test that went wrong: fail the
+                // request rather than answer as if it had been let go.
+                guard gate.wait(timeout: .now() + 5) == .success else {
+                    self.client?.urlProtocol(self, didFailWithError: URLError(.timedOut))
+                    return
+                }
+                self.answer(request, with: handler)
+            }
+            return
+        }
+        answer(request, with: handler)
+    }
+
+    private func answer(_ request: URLRequest, with handler: (URLRequest) throws -> (HTTPURLResponse, Data)) {
         do {
             let (response, data) = try handler(request)
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -6679,5 +6930,691 @@ private final class AidenRemoteMemoryKeychain: KeychainStoring {
     func delete(_ key: KeychainStore.Key, scope: String) throws {
         if failingScopedDeleteScopes.contains(scope) { throw CocoaError(.fileWriteUnknown) }
         scoped[KeychainStore.scopedKey(key, scope: scope)] = nil
+    }
+}
+
+// MARK: Inbox swipe writes (AidenHomeModel)
+
+extension AidenRemoteClientTests {
+    private struct InboxHome {
+        let home: AidenHomeModel
+        let coordinator: AidenRemoteCoordinator
+        let cache: AidenChatCache
+        let root: URL
+    }
+
+    private static let otherMacID = "instance-inbox-other"
+
+    private static let inboxChatID = "chat_inbox_triage_01"
+
+    /// One idle row on a connected Mac, loaded through the real Home load.
+    /// `triage` answers each `POST …/triage` (its body and Idempotency-Key);
+    /// `markRead` answers each `POST …/read`. With `otherMac` a second,
+    /// empty Mac is paired too, to switch to.
+    @MainActor
+    private func makeInboxHome(
+        features: [String] = [AidenServer.chatTriageFeature, AidenServer.chatReadStateFeature],
+        failed: Bool = false,
+        otherMac: Bool = false,
+        triage: @escaping (URLRequest, [String: Any]) -> (Int, String),
+        markRead: @escaping () -> Int = { 204 },
+        summaryReads: @escaping () -> Void = {},
+        summaryOverride: @escaping () -> String? = { nil }
+    ) async throws -> InboxHome {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-inbox-home-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let cache = AidenChatCache(root: root)
+        let store = AidenInstallationStore(keychain: AidenRemoteMemoryKeychain())
+        let otherCredential = String(repeating: "O", count: 43)
+        if otherMac {
+            _ = try store.savePairing(makeExchange(
+                instanceId: Self.otherMacID,
+                deviceId: "device-inbox-other",
+                credential: otherCredential,
+                capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite]
+            ), trust: makeSystemTrust(), name: "Other Mac")
+        }
+        let exchange = makeExchange(
+            instanceId: "instance-inbox",
+            deviceId: "device-inbox",
+            credential: String(repeating: "I", count: 43),
+            capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite]
+        )
+        _ = try store.savePairing(exchange, trust: makeSystemTrust(), name: "Inbox Mac")
+        let session = makeSession()
+        let featureList = (features + [AidenServer.chatSummariesFeature]).map { "\"\($0)\"" }.joined(separator: ",")
+        let row = """
+        {"summaries":[{"id":"\(Self.inboxChatID)","workspaceId":"alpha","title":"Reply","titlePending":false,
+        "createdAt":"2026-08-18T18:30:00.000Z","updatedAt":"2026-08-18T19:01:00.000Z",
+        "revision":"rev_EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE","activity":"idle","rowState":"idle",
+        "unread":true,"lastRunFailed":\(failed),"lastAssistantMessageId":"shown-reply","lastAssistantAt":"2026-08-18T19:01:00.000Z",
+        "pinnedAt":"2026-08-18T18:45:00.000Z","triageRevision":3,
+        "inboxBucket":"\(failed ? "needs_you" : "pinned")","inboxSortAt":"2026-08-18T19:01:00.000Z"}]}
+        """
+        AidenRemoteMockURLProtocol.handler = { request in
+            if request.value(forHTTPHeaderField: "Authorization")?.contains(otherCredential) == true {
+                switch (request.httpMethod, request.url?.path ?? "") {
+                case ("GET", "/api/aiden/v1/server"):
+                    return Self.response(for: request, status: 200, json: """
+                    {"protocolVersion":1,"instanceId":"\(Self.otherMacID)","name":"Other Mac","appVersion":"1.0.0",
+                    "capabilities":["server:read","workspace:read","chat:read","chat:write"],
+                    "serverCapabilities":["server:read","workspace:read","chat:read","chat:write"],
+                    "features":[\(featureList)],"connectionMode":"lan","serverTime":"2026-08-18T19:05:00.000Z"}
+                    """)
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: #"{"workspaces":[]}"#)
+                case ("GET", "/api/aiden/v1/chat-summaries"):
+                    return Self.response(for: request, status: 200, json: #"{"summaries":[]}"#)
+                default:
+                    return Self.response(for: request, status: 404, json: Self.inboxError("not_found"))
+                }
+            }
+            switch (request.httpMethod, request.url?.path ?? "") {
+            case ("GET", "/api/aiden/v1/server"):
+                return Self.response(for: request, status: 200, json: """
+                {"protocolVersion":1,"instanceId":"instance-inbox","name":"Inbox Mac","appVersion":"1.0.0",
+                "capabilities":["server:read","workspace:read","chat:read","chat:write"],
+                "serverCapabilities":["server:read","workspace:read","chat:read","chat:write"],
+                "features":[\(featureList)],"connectionMode":"lan","serverTime":"2026-08-18T19:05:00.000Z"}
+                """)
+            case ("GET", "/api/aiden/v1/workspaces"):
+                return Self.response(for: request, status: 200, json: #"{"workspaces":[]}"#)
+            case ("GET", "/api/aiden/v1/chat-summaries"):
+                summaryReads()
+                return Self.response(for: request, status: 200, json: summaryOverride() ?? row)
+            case ("POST", "/api/aiden/v1/chats/\(Self.inboxChatID)/triage"):
+                let (status, json) = triage(request, (try? Self.jsonBody(request)) ?? [:])
+                return Self.response(for: request, status: status, json: json)
+            case ("POST", "/api/aiden/v1/chats/\(Self.inboxChatID)/read"):
+                XCTAssertEqual((try? Self.jsonBody(request))?["throughMessageId"] as? String, "shown-reply")
+                let status = markRead()
+                return Self.response(for: request, status: status, json: status < 300 ? "{}" : Self.inboxError("internal_error", retryable: true))
+            default:
+                return Self.response(for: request, status: 404, json: Self.inboxError("not_found"))
+            }
+        }
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            clientFactory: { installation, credential in
+                AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+            }
+        )
+        await coordinator.start()
+        XCTAssertEqual(coordinator.connectionState, .connected)
+        let home = AidenHomeModel(chatCache: cache)
+        await home.load(coordinator: coordinator)
+        XCTAssertEqual(home.chats.map(\.id), [Self.inboxChatID])
+        return InboxHome(home: home, coordinator: coordinator, cache: cache, root: root)
+    }
+
+    private static func inboxError(_ code: String, retryable: Bool = false, currentRevision: String? = nil) -> String {
+        let details = currentRevision.map { #","details":{"currentRevision":"\#($0)"}"# } ?? ""
+        return #"{"error":{"code":"\#(code)","message":"No.","requestId":"r1","retryable":\#(retryable)\#(details)}}"#
+    }
+
+    private static func triageResult(revision: Int, doneAt: String? = nil) -> String {
+        let done = doneAt.map { #","doneAt":"\#($0)""# } ?? ""
+        return #"{"chatId":"\#(inboxChatID)","revision":\#(revision),"updatedAt":"2026-08-18T19:06:00.000Z","pinnedAt":"2026-08-18T18:45:00.000Z"\#(done)}"#
+    }
+
+    @MainActor
+    func testInboxDoneLandsWithTheHostsTriageAndItsUndoSendsTheBumpedRevision() async throws {
+        var bodies: [[String: Any]] = []
+        let inbox = try await makeInboxHome(triage: { _, body in
+            bodies.append(body)
+            return body["done"] as? Bool == true
+                ? (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z"))
+                : (200, Self.triageResult(revision: 5))
+        })
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        let home = inbox.home
+        XCTAssertEqual(home.chats[0].inbox.bucket, .pinned)
+
+        let landed = await home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+
+        XCTAssertTrue(landed)
+        XCTAssertEqual(bodies.first as NSDictionary?, ["done": true, "ifRevision": 3])
+        XCTAssertEqual(home.chats[0].inbox.triageRevision, 4)
+        XCTAssertEqual(home.chats[0].inbox.doneAt, try Self.remoteDate("2026-08-18T19:06:00.000Z"))
+        // The host's Pinned bucket predates the write, so the phone places the row itself.
+        XCTAssertNil(home.chats[0].inbox.bucket)
+        XCTAssertNil(home.chats[0].inbox.sortAt)
+        XCTAssertNil(AidenInbox.placement(for: home.chats[0], isOpen: false, now: Date()).section, "Done hides the row.")
+        let notice = try XCTUnwrap(home.inboxNotice)
+        XCTAssertEqual(notice.undo, .done(false))
+
+        XCTAssertEqual(notice.revision, 4, "The banner keeps the revision its swipe left.")
+        let undone = await home.setTriage(
+            try XCTUnwrap(notice.undo), chatID: Self.inboxChatID, coordinator: inbox.coordinator, undoRevision: notice.revision
+        )
+
+        XCTAssertTrue(undone)
+        XCTAssertEqual(bodies.last as NSDictionary?, ["done": false, "ifRevision": 4], "Undo writes from the revision the first write returned.")
+        XCTAssertNil(home.chats[0].inbox.doneAt)
+        XCTAssertEqual(home.chats[0].inbox.triageRevision, 5)
+        XCTAssertEqual(AidenInbox.placement(for: home.chats[0], isOpen: false, now: Date()).section, .pinned)
+    }
+
+    @MainActor
+    func testInboxUndoThatConflictsIsNeverRetriedAndLeavesTheChatAsItIs() async throws {
+        var bodies: [[String: Any]] = []
+        var summaryReads = 0
+        let inbox = try await makeInboxHome(
+            triage: { _, body in
+                bodies.append(body)
+                if body["done"] as? Bool == true {
+                    return (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z"))
+                }
+                // Another device changed the chat after the Done landed.
+                return (409, Self.inboxError("revision_conflict", currentRevision: "6"))
+            },
+            summaryReads: { summaryReads += 1 }
+        )
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        let home = inbox.home
+        let landed = await home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertTrue(landed)
+        let undo = try XCTUnwrap(home.inboxNotice?.undo)
+        let revision = home.inboxNotice?.revision
+        let readsBeforeUndo = summaryReads
+        bodies = []
+
+        let undone = await home.setTriage(undo, chatID: Self.inboxChatID, coordinator: inbox.coordinator, undoRevision: revision)
+
+        XCTAssertFalse(undone)
+        XCTAssertEqual(bodies.count, 1, "Retrying from the host's revision would write over the other device's change.")
+        XCTAssertEqual(bodies.first as NSDictionary?, ["done": false, "ifRevision": 4])
+        XCTAssertEqual(home.inboxNotice?.message, "That chat changed since, so Undo left it as it is.")
+        XCTAssertNil(home.inboxNotice?.undo)
+        XCTAssertGreaterThan(summaryReads, readsBeforeUndo, "The Inbox reloads to show what the other device wrote.")
+    }
+
+    @MainActor
+    func testInboxUndoIsSentAgainstTheSwipesRevisionNotOneAReloadBroughtIn() async throws {
+        var bodies: [[String: Any]] = []
+        var reloaded: String?
+        let inbox = try await makeInboxHome(
+            triage: { _, body in
+                bodies.append(body)
+                if body["done"] as? Bool == true {
+                    return (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z"))
+                }
+                // The host is at revision 5 now, so an Undo from 4 is refused.
+                return body["ifRevision"] as? Int == 5
+                    ? (200, Self.triageResult(revision: 6))
+                    : (409, Self.inboxError("revision_conflict", currentRevision: "5"))
+            },
+            summaryOverride: { reloaded }
+        )
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        let home = inbox.home
+        let landed = await home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertTrue(landed)
+        let notice = try XCTUnwrap(home.inboxNotice)
+
+        // Another device snoozed the chat after the Done; a reload brings
+        // the row in at revision 5 while the banner is still up.
+        reloaded = """
+        {"summaries":[{"id":"\(Self.inboxChatID)","workspaceId":"alpha","title":"Reply","titlePending":false,
+        "createdAt":"2026-08-18T18:30:00.000Z","updatedAt":"2026-08-18T19:07:00.000Z",
+        "revision":"rev_EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE","activity":"idle","rowState":"idle",
+        "unread":false,"lastRunFailed":false,"lastAssistantAt":"2026-08-18T19:01:00.000Z",
+        "pinnedAt":"2026-08-18T18:45:00.000Z","snoozedUntil":"2099-01-01T09:00:00.000Z","triageRevision":5}]}
+        """
+        await home.load(coordinator: inbox.coordinator)
+        XCTAssertEqual(home.chats.first?.inbox.triageRevision, 5)
+        bodies = []
+
+        let undone = await home.setTriage(
+            try XCTUnwrap(notice.undo), chatID: Self.inboxChatID, coordinator: inbox.coordinator, undoRevision: notice.revision
+        )
+
+        XCTAssertFalse(undone)
+        XCTAssertEqual(bodies.map { $0 as NSDictionary }, [["done": false, "ifRevision": 4] as NSDictionary], "Sent once, at the swipe's revision.")
+        XCTAssertEqual(home.inboxNotice?.message, "That chat changed since, so Undo left it as it is.")
+        XCTAssertEqual(home.chats.first?.inbox.triageRevision, 5, "The other device's write stands.")
+        XCTAssertEqual(home.chats.first?.inbox.snoozedUntil, try Self.remoteDate("2099-01-01T09:00:00.000Z"))
+    }
+
+    @MainActor
+    func testInboxTriageConflictIsSentOnceMoreFromTheHostsRevisionWithANewKey() async throws {
+        var bodies: [[String: Any]] = []
+        var keys: [String] = []
+        var conflicts = 1
+        var summaryReads = 0
+        let inbox = try await makeInboxHome(
+            triage: { request, body in
+                bodies.append(body)
+                keys.append(request.value(forHTTPHeaderField: "Idempotency-Key") ?? "")
+                if conflicts > 0 {
+                    conflicts -= 1
+                    return (409, Self.inboxError("revision_conflict", currentRevision: "7"))
+                }
+                return (200, Self.triageResult(revision: 8, doneAt: "2026-08-18T19:06:00.000Z"))
+            },
+            summaryReads: { summaryReads += 1 }
+        )
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        let readsAfterLoad = summaryReads
+
+        let landed = await inbox.home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+
+        XCTAssertTrue(landed)
+        XCTAssertEqual(bodies.map { $0["ifRevision"] as? Int }, [3, 7])
+        XCTAssertEqual(Set(keys).count, 2, "The retry is a new request, not a replay of the refused one.")
+        XCTAssertEqual(inbox.home.chats[0].inbox.triageRevision, 8)
+        XCTAssertNil(inbox.home.inboxNotice, "The retry wrote over another device's change; Undo could put back a state the Mac no longer had.")
+        XCTAssertEqual(summaryReads, readsAfterLoad, "A retry that lands needs no reload.")
+
+        // A second conflict in a row is a refusal: one retry only, the row
+        // goes back, and the Inbox reloads from the Mac.
+        conflicts = 2
+        bodies = []
+        let refused = await inbox.home.setTriage(.wake, chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertFalse(refused)
+        XCTAssertEqual(bodies.count, 2)
+        XCTAssertNil(inbox.home.inboxNotice?.undo)
+        XCTAssertGreaterThan(summaryReads, readsAfterLoad)
+    }
+
+    @MainActor
+    func testInboxTriageRefusalPutsBackOnlyWhatTheWriteChanged() async throws {
+        var home: AidenHomeModel?
+        let newerReply = Date(timeIntervalSince1970: 1_787_100_500)
+        let inbox = try await makeInboxHome(failed: true, triage: { _, _ in
+            // Newer output arrives while the write is in flight.
+            DispatchQueue.main.sync {
+                MainActor.assumeIsolated {
+                    home?.chats[0].inbox.lastAssistantAt = newerReply
+                    home?.chats[0].inbox.attentionSince = newerReply
+                }
+            }
+            return (500, Self.inboxError("internal_error", retryable: true))
+        })
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        home = inbox.home
+        let before = inbox.home.chats[0]
+        XCTAssertTrue(before.showsFailed)
+
+        let landed = await inbox.home.setTriage(.snooze(until: Date().addingTimeInterval(3600)), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+
+        XCTAssertFalse(landed)
+        let row = inbox.home.chats[0]
+        XCTAssertNil(row.inbox.snoozedUntil)
+        XCTAssertTrue(row.unread, "Snooze on unseen failed output read it; the refusal unreads it again.")
+        XCTAssertEqual(row.inbox.pinnedAt, before.inbox.pinnedAt)
+        XCTAssertEqual(row.inbox.lastAssistantAt, newerReply, "Output that arrived meanwhile stays.")
+        XCTAssertEqual(row.inbox.attentionSince, newerReply)
+        XCTAssertNil(row.inbox.bucket, "The old host bucket isn't put back over newer signals.")
+        XCTAssertNotNil(inbox.home.inboxNotice)
+        XCTAssertNil(inbox.home.inboxNotice?.undo)
+    }
+
+    @MainActor
+    func testInboxDoneOnUnseenFailedOutputNeedsTheMacsReadMarkers() async throws {
+        var triageWrites = 0
+        let inbox = try await makeInboxHome(
+            features: [AidenServer.chatTriageFeature],
+            failed: true,
+            triage: { _, _ in
+                triageWrites += 1
+                return (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z"))
+            }
+        )
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        let before = inbox.home.chats[0]
+
+        let landed = await inbox.home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+
+        XCTAssertFalse(landed)
+        XCTAssertEqual(triageWrites, 0, "Done would hide unseen failed output the Mac can't mark read.")
+        XCTAssertEqual(inbox.home.chats[0], before)
+    }
+
+    @MainActor
+    func testInboxChatViewedWhileItsWriteWasOutStaysReadWhenTheMacRefuses() async throws {
+        var home: AidenHomeModel?
+        var viewsDuringWrite = true
+        let viewDuringWrite = {
+            guard viewsDuringWrite else { return }
+            DispatchQueue.main.sync { MainActor.assumeIsolated { home?.markViewed(chatID: Self.inboxChatID) } }
+        }
+        let readStatus = 500
+        let inbox = try await makeInboxHome(
+            failed: true,
+            triage: { _, body in
+                viewDuringWrite()
+                return body["snoozeUntil"] != nil
+                    ? (500, Self.inboxError("internal_error", retryable: true))
+                    : (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z"))
+            },
+            markRead: { viewDuringWrite(); return readStatus }
+        )
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        home = inbox.home
+        func unread() { inbox.home.chats[0].unread = true }
+
+        // A refused Mark read.
+        await inbox.home.markRead(chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertFalse(inbox.home.chats[0].unread, "The chat was opened meanwhile, so it has been read.")
+        XCTAssertNotNil(inbox.home.inboxNotice)
+
+        // A refused Snooze that also read unseen failed output.
+        unread()
+        let snoozed = await inbox.home.setTriage(.snooze(until: Date().addingTimeInterval(3600)), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertFalse(snoozed)
+        XCTAssertNil(inbox.home.chats[0].inbox.snoozedUntil)
+        XCTAssertFalse(inbox.home.chats[0].unread)
+
+        // Done landed but its read marker was refused.
+        unread()
+        let done = await inbox.home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertTrue(done)
+        XCTAssertFalse(inbox.home.chats[0].unread)
+
+        // Unviewed, the same refusal brings the dot back.
+        viewsDuringWrite = false
+        unread()
+        await inbox.home.markRead(chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertTrue(inbox.home.chats[0].unread)
+    }
+
+    @MainActor
+    func testInboxMarkReadStaysReadWhenARefreshRequestedWhileItWasOutLandsAfterIt() async throws {
+        let inbox = try await makeInboxHome(triage: { _, _ in (500, Self.inboxError("internal_error")) })
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        XCTAssertTrue(inbox.home.chats[0].unread)
+        let readArrived = expectation(description: "read sent")
+        let refreshArrived = expectation(description: "refresh asked")
+        let releaseRead = DispatchSemaphore(value: 0)
+        let releaseRefresh = DispatchSemaphore(value: 0)
+        AidenRemoteMockURLProtocol.hold = { request in
+            switch request.url?.path ?? "" {
+            case "/api/aiden/v1/chats/\(Self.inboxChatID)/read":
+                readArrived.fulfill()
+                return releaseRead
+            case "/api/aiden/v1/chat-summaries":
+                refreshArrived.fulfill()
+                return releaseRefresh
+            default:
+                return nil
+            }
+        }
+        defer { AidenRemoteMockURLProtocol.hold = nil }
+
+        let read = Task { await inbox.home.markRead(chatID: Self.inboxChatID, coordinator: inbox.coordinator) }
+        await fulfillment(of: [readArrived], timeout: 5)
+        // A refresh asked for while the read is out: the Mac answers it as
+        // it stood then, still unread, after the read has landed.
+        let refresh = Task { await inbox.home.load(coordinator: inbox.coordinator) }
+        await fulfillment(of: [refreshArrived], timeout: 5)
+        releaseRead.signal()
+        await read.value
+        XCTAssertFalse(inbox.home.chats[0].unread)
+        releaseRefresh.signal()
+        await refresh.value
+
+        XCTAssertFalse(inbox.home.chats[0].unread, "A page asked for before the Mac took the read doesn't bring the dot back.")
+        XCTAssertNil(inbox.home.inboxNotice)
+        // The read is saved in the background once the page is reconciled.
+        var saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+        for _ in 0..<100 where saved?.unread != false {
+            try await Task.sleep(for: .milliseconds(20))
+            saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+        }
+        XCTAssertEqual(saved?.unread, false, "The saved list keeps the read too.")
+    }
+
+    @MainActor
+    func testInboxMarkReadKeepsAReplyNewerThanTheReadFromARefreshInEitherOrder() async throws {
+        try await checkNewerInboxReply(alsoDone: false)
+        try await checkNewerInboxReply(alsoDone: true)
+    }
+
+    @MainActor
+    private func checkNewerInboxReply(alsoDone: Bool) async throws {
+        let newerReply = "2026-08-18T19:04:00.000Z"
+        let newerPage = """
+        {"summaries":[{"id":"\(Self.inboxChatID)","workspaceId":"alpha","title":"Reply","titlePending":false,
+        "createdAt":"2026-08-18T18:30:00.000Z","updatedAt":"\(newerReply)",
+        "revision":"rev_FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF","activity":"idle","rowState":"idle",
+        "unread":true,"lastRunFailed":false,"lastAssistantAt":"\(newerReply)",
+        "pinnedAt":"2026-08-18T18:45:00.000Z","triageRevision":3,
+        "inboxBucket":"pinned","inboxSortAt":"\(newerReply)"}]}
+        """
+        for readLandsFirst in [true, false] {
+            var answerNewer = false
+            let inbox = try await makeInboxHome(
+                failed: alsoDone,
+                triage: { _, _ in (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:02:00.000Z")) },
+                summaryOverride: { answerNewer ? newerPage : nil }
+            )
+            defer { try? FileManager.default.removeItem(at: inbox.root) }
+            XCTAssertTrue(inbox.home.chats[0].unread)
+            let readArrived = expectation(description: "read sent")
+            let refreshArrived = expectation(description: "refresh asked")
+            let releaseRead = DispatchSemaphore(value: 0)
+            let releaseRefresh = DispatchSemaphore(value: 0)
+            AidenRemoteMockURLProtocol.hold = { request in
+                switch request.url?.path ?? "" {
+                case "/api/aiden/v1/chats/\(Self.inboxChatID)/read":
+                    readArrived.fulfill()
+                    return releaseRead
+                case "/api/aiden/v1/chat-summaries":
+                    refreshArrived.fulfill()
+                    return releaseRefresh
+                default:
+                    return nil
+                }
+            }
+            defer { AidenRemoteMockURLProtocol.hold = nil }
+
+            let read = Task {
+                if alsoDone {
+                    await inbox.home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+                } else {
+                    await inbox.home.markRead(chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+                }
+            }
+            await fulfillment(of: [readArrived], timeout: 5)
+            // A reply the person hasn't seen arrives while the read is out,
+            // and a refresh asked for then carries it.
+            answerNewer = true
+            let refresh = Task { await inbox.home.load(coordinator: inbox.coordinator) }
+            await fulfillment(of: [refreshArrived], timeout: 5)
+            if readLandsFirst {
+                releaseRead.signal()
+                await read.value
+                XCTAssertFalse(inbox.home.chats[0].unread)
+                releaseRefresh.signal()
+                await refresh.value
+            } else {
+                releaseRefresh.signal()
+                await refresh.value
+                releaseRead.signal()
+                await read.value
+            }
+
+            let order = readLandsFirst ? "read first" : "page first"
+            let row = try XCTUnwrap(inbox.home.chats.first)
+            XCTAssertTrue(row.unread, "The read didn't cover the newer reply (\(order)).")
+            XCTAssertEqual(row.inbox.lastAssistantAt, try Self.remoteDate(newerReply), order)
+            if alsoDone { XCTAssertEqual(row.inbox.triageRevision, 4, order) }
+            // The row is saved in the background once the page is reconciled.
+            var saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+            for _ in 0..<100 where saved?.unread != true {
+                try await Task.sleep(for: .milliseconds(20))
+                saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+            }
+            XCTAssertEqual(saved?.unread, true, "The saved list keeps the newer reply's dot (\(order)).")
+            XCTAssertEqual(saved?.inbox.lastAssistantAt, try Self.remoteDate(newerReply), order)
+        }
+    }
+
+    @MainActor
+    func testInboxPlainTriagePreservesNewReplyFromAnInflightRefresh() async throws {
+        try await checkInboxTriageRefresh(.newPage)
+    }
+
+    @MainActor
+    func testInboxDetailViewedBeforeTriageSurvivesAnInflightStaleRefresh() async throws {
+        try await checkInboxTriageRefresh(.stalePageAfterDetail)
+    }
+
+    @MainActor
+    func testInboxDistinctEqualTimeReplySurvivesDetailAdmissionAndTriage() async throws {
+        try await checkInboxTriageRefresh(.equalTimePageAfterDetail)
+    }
+
+    @MainActor
+    func testInboxNewerPageReplySurvivesDetailAdmissionAndTriage() async throws {
+        try await checkInboxTriageRefresh(.newerPageAfterDetail)
+    }
+
+    private enum InboxTriageRefreshScenario {
+        case newPage, stalePageAfterDetail, equalTimePageAfterDetail, newerPageAfterDetail
+    }
+
+    @MainActor
+    private func checkInboxTriageRefresh(_ scenario: InboxTriageRefreshScenario) async throws {
+        let admitDetail = scenario != .newPage
+        let admissionWins = scenario == .stalePageAfterDetail
+        let newerReply = "2026-08-18T19:10:00.000Z"
+        let detailReply = scenario == .newerPageAfterDetail ? "2026-08-18T19:09:00.000Z" : newerReply
+        let expectedID = admissionWins ? "viewed-reply" : "new-reply"
+        let expectedTitle = admissionWins ? "Viewed reply" : "New reply"
+        let snoozeUntil = try Self.remoteDate("2099-01-01T09:00:00.000Z")
+        let page = """
+        {"summaries":[{"id":"\(Self.inboxChatID)","workspaceId":"alpha","title":"New reply","titlePending":false,
+        "createdAt":"2026-08-18T18:30:00.000Z","updatedAt":"\(newerReply)",
+        "revision":"rev_FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF","activity":"idle","rowState":"idle",
+        "unread":true,"lastAssistantMessageId":"new-reply","lastAssistantAt":"\(newerReply)",
+        "triageRevision":3,"pinnedAt":"2026-08-18T18:45:00.000Z"}]}
+        """
+        for done in [true, false] {
+            for writeFirst in [true, false] {
+                var answerNewer = false
+                let inbox = try await makeInboxHome(
+                    failed: false,
+                    triage: { _, _ in
+                        (200, done ? Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z") :
+                            """
+                            {"chatId":"\(Self.inboxChatID)","revision":4,"updatedAt":"2026-08-18T19:06:00.000Z","snoozedUntil":"2099-01-01T09:00:00.000Z"}
+                            """)
+                    },
+                    summaryOverride: { answerNewer ? page : nil }
+                )
+                defer { try? FileManager.default.removeItem(at: inbox.root) }
+                let refreshArrived = expectation(description: "refresh")
+                let writeArrived = expectation(description: "triage")
+                let releaseRefresh = DispatchSemaphore(value: 0)
+                let releaseWrite = DispatchSemaphore(value: 0)
+                AidenRemoteMockURLProtocol.hold = { request in
+                    if request.url?.path.hasSuffix("/chat-summaries") == true { refreshArrived.fulfill(); return releaseRefresh }
+                    if request.url?.path.hasSuffix("/triage") == true { writeArrived.fulfill(); return releaseWrite }
+                    return nil
+                }
+                defer { AidenRemoteMockURLProtocol.hold = nil }
+                answerNewer = !admissionWins
+                let refresh = Task { await inbox.home.load(coordinator: inbox.coordinator) }
+                await fulfillment(of: [refreshArrived], timeout: 5)
+                if admitDetail {
+                    let date = try Self.remoteDate(detailReply)
+                    inbox.home.accept(AidenChat(
+                        id: Self.inboxChatID, workspaceId: "alpha", title: "Viewed reply", providerId: "p", modelId: "m",
+                        messages: [AidenChatMessage(id: "viewed-reply", role: .assistant, text: "Finished", createdAt: date)],
+                        createdAt: date.addingTimeInterval(-3600), updatedAt: date,
+                        revision: "rev_FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+                    ))
+                    inbox.home.markViewed(chatID: Self.inboxChatID)
+                }
+                let write = Task { await inbox.home.setTriage(
+                    done ? .done(true) : .snooze(until: snoozeUntil),
+                    chatID: Self.inboxChatID, coordinator: inbox.coordinator
+                ) }
+                await fulfillment(of: [writeArrived], timeout: 5)
+                if writeFirst {
+                    releaseWrite.signal()
+                    _ = await write.value
+                    releaseRefresh.signal()
+                    await refresh.value
+                } else {
+                    releaseRefresh.signal()
+                    await refresh.value
+                    releaseWrite.signal()
+                    _ = await write.value
+                }
+                let row = try XCTUnwrap(inbox.home.chats.first)
+                XCTAssertEqual(row.title, expectedTitle)
+                XCTAssertEqual(row.inbox.lastAssistantAt, try Self.remoteDate(newerReply))
+                XCTAssertEqual(row.inbox.lastAssistantMessageId, expectedID)
+                XCTAssertEqual(row.unread, !admissionWins)
+                XCTAssertEqual(row.inbox.triageRevision, 4)
+                XCTAssertEqual(row.inbox.doneAt != nil, done)
+                XCTAssertEqual(row.inbox.snoozedUntil != nil, !done)
+                var saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+                for _ in 0..<100 where saved?.inbox.lastAssistantMessageId != expectedID || saved?.inbox.triageRevision != 4 || saved?.unread != !admissionWins || saved?.title != expectedTitle {
+                    try await Task.sleep(for: .milliseconds(20))
+                    saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+                }
+                XCTAssertEqual(saved?.title, expectedTitle)
+                XCTAssertEqual(saved?.inbox.lastAssistantAt, try Self.remoteDate(newerReply))
+                XCTAssertEqual(saved?.inbox.lastAssistantMessageId, expectedID)
+                XCTAssertEqual(saved?.inbox.triageRevision, 4)
+                XCTAssertEqual(saved?.unread, !admissionWins)
+            }
+        }
+    }
+
+    @MainActor
+    func testInboxWriteOutDuringASwitchToAnotherMacSettlesOnTheMacItWasSentTo() async throws {
+        for (refused, readRefused) in [(true, false), (false, false), (false, true)] {
+            let arrived = expectation(description: "triage sent")
+            let release = DispatchSemaphore(value: 0)
+            var readMarks = 0
+            let inbox = try await makeInboxHome(
+                failed: true,
+                otherMac: true,
+                triage: { _, _ in
+                    refused
+                        ? (500, Self.inboxError("internal_error", retryable: true))
+                        : (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z"))
+                },
+                markRead: { readMarks += 1; return readRefused ? 500 : 204 }
+            )
+            defer { try? FileManager.default.removeItem(at: inbox.root) }
+            XCTAssertEqual(inbox.coordinator.activeInstanceId, "instance-inbox")
+            AidenRemoteMockURLProtocol.hold = { request in
+                guard request.url?.path.hasSuffix("/triage") == true else { return nil }
+                arrived.fulfill()
+                return release
+            }
+            defer { AidenRemoteMockURLProtocol.hold = nil }
+
+            let write = Task { await inbox.home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator) }
+            await fulfillment(of: [arrived], timeout: 5)
+            await inbox.coordinator.switchInstallation(to: Self.otherMacID)
+            XCTAssertEqual(inbox.coordinator.activeInstanceId, Self.otherMacID)
+            let saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+            XCTAssertNotNil(saved?.inbox.doneAt, "The optimistic Done was saved for the first Mac.")
+            release.signal()
+            let landed = await write.value
+
+            XCTAssertEqual(landed, !refused)
+            XCTAssertNil(inbox.home.inboxNotice, "A late answer shows nothing over the other Mac.")
+            let settled = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+            let row = try XCTUnwrap(settled)
+            if refused {
+                XCTAssertNil(row.inbox.doneAt, "The first Mac's saved row is put back.")
+                XCTAssertTrue(row.unread)
+                XCTAssertEqual(readMarks, 0)
+            } else {
+                XCTAssertEqual(readMarks, 1, "The Mac that took Done is still sent the read marker.")
+                XCTAssertEqual(row.inbox.triageRevision, 4, "The first Mac's saved row takes its answer.")
+                XCTAssertEqual(row.inbox.doneAt, try Self.remoteDate("2026-08-18T19:06:00.000Z"))
+                XCTAssertEqual(row.inbox.pinnedAt, try Self.remoteDate("2026-08-18T18:45:00.000Z"))
+                XCTAssertEqual(row.unread, readRefused, "A refused read marker brings the saved dot back.")
+            }
+        }
     }
 }

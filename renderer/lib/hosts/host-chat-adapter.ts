@@ -46,6 +46,13 @@ export type HostChatCapability =
   | "forkSummary"
   /** Read the chat's next-request context pressure for the composer meter. */
   | "contextPressure"
+  /** Pin, mark done and snooze the chat in the Inbox (`chat-triage-v1`). */
+  | "triage"
+  /**
+   * The host's summaries report triage and live-run times (`inbox-signals-v1`),
+   * so a summary without a triage revision means the chat is untriaged.
+   */
+  | "inboxSignals"
   // Host-wide: starting new work on the host.
   | "createChat"
   | "browseFolders"
@@ -270,6 +277,11 @@ export function hostResultValue<T>(result: HostChatResult<T>): T {
 
 export function isOutcomeUnknown(error: unknown): error is HostChatControlError {
   return error instanceof HostChatControlError && error.code === "outcome_unknown";
+}
+
+/** The host refused a guarded change because the chat moved past the named revision. */
+export function isRevisionConflict(error: unknown): error is HostChatControlError {
+  return error instanceof HostChatControlError && (error.remoteCode === "revision_conflict" || (error.remoteCode === undefined && error.status === 409));
 }
 
 export interface HostChatAdapter {

@@ -8,6 +8,7 @@ import {
 } from "./aiden-remote-host-feed.js";
 import type { AidenRemoteChatSummaryProjection } from "./aiden-remote-chats.js";
 import type { HostRunSummary } from "./host-run-registry.js";
+import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import { sseFrame } from "./aiden-remote-sse.js";
 import { PeerEventFrames, PeerTransportError } from "./peer-transport.js";
 import { parsePeerSseFrame, parsePeerStreamEnvelope } from "./peer-sse.js";
@@ -76,7 +77,11 @@ function run(runId: string, chatId: string, state: HostRunSummary["state"] = "wo
   };
 }
 
-function host(epoch: string, current: AidenRemoteHostFeedState, options: { maxEvents?: number; snapshotChunkBytes?: number } = {}) {
+function host(
+  epoch: string,
+  current: AidenRemoteHostFeedState,
+  options: { maxEvents?: number; snapshotChunkBytes?: number; attentionSummary?: (runId: string) => string | undefined } = {},
+) {
   const state = { current };
   const feed = new AidenRemoteHostFeedService({
     source: { read: async () => state.current },
@@ -88,10 +93,10 @@ function host(epoch: string, current: AidenRemoteHostFeedState, options: { maxEv
   return { feed, state };
 }
 
-async function subscribe(feed: AidenRemoteHostFeedService, cursor?: string) {
+async function subscribe(feed: AidenRemoteHostFeedService, cursor?: string, extra: AidenRemoteCapability[] = []) {
   const wire = new Wire();
   await feed.open(
-    { id: "desktop", capabilities: new Set(["host:events"]) },
+    { id: "desktop", capabilities: new Set<AidenRemoteCapability>(["host:events", ...extra]) },
     cursor,
     wire as unknown as ServerResponse,
   );
@@ -374,4 +379,46 @@ test("future vocabulary is skipped in place and a different protocol version blo
   assert.throws(() =>
     parsePeerStreamEnvelope(parsePeerSseFrame('data: {"protocolVersion":1,"authorization":"x"}'), "host feed"),
   );
+});
+
+test("a waiting run keeps the ask its host sent, and a malformed ask is dropped rather than refusing the frame", async () => {
+  const { feed } = host("epoch_a", initial(), { attentionSummary: (runId) => (runId === "run-ask" ? "Allow writing to notes.md" : undefined) });
+  const wire = await subscribe(feed, undefined, ["runs:observe"]);
+  try {
+    const cache = new PeerHostFeedCache("host-1");
+    feedInto(cache, wire.drain());
+    feed.noteRun(run("run-ask", "chat-1", "needs_approval"), false);
+    feed.noteRun(run("run-busy", "chat-2", "working"), false);
+    await feed.refresh();
+    feedInto(cache, wire.drain());
+    assert.equal(cache.run("run-ask")?.attentionSummary, "Allow writing to notes.md");
+    assert.equal(cache.run("run-busy")?.attentionSummary, undefined);
+  } finally {
+    feed.close();
+  }
+
+  const cache = new PeerHostFeedCache("host-1");
+  const envelope = (sequence: number, type: string, payload: unknown) =>
+    parsePeerStreamEnvelope(
+      parsePeerSseFrame(
+        sseFrame(`epoch_b:${sequence}`, type, {
+          protocolVersion: 1,
+          streamId: "host",
+          sequence,
+          timestamp: new Date(0).toISOString(),
+          type,
+          terminal: false,
+          payload,
+        }),
+      ),
+      "host feed",
+    );
+  cache.apply(envelope(0, "snapshot", { epoch: "epoch_b", sequence: 0, summaries: [], workspaces: [], bots: [] }));
+  const base = { chatId: "chat-1", state: "needs_input", unread: false };
+  cache.apply(envelope(1, "run.state", { ...base, runId: "run-odd", attentionSummary: { text: "x" } }));
+  cache.apply(envelope(2, "run.state", { ...base, runId: "run-long", attentionSummary: `Pick\n${"y".repeat(500)}` }));
+  assert.equal(cache.run("run-odd")?.state, "needs_input");
+  assert.equal(cache.run("run-odd")?.attentionSummary, undefined);
+  const long = cache.run("run-long")?.attentionSummary ?? "";
+  assert.ok(Array.from(long).length <= 200 && long.startsWith("Pick y"), "a long ask is clipped to one line");
 });

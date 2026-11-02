@@ -29,6 +29,7 @@ The integrated plan therefore used A's low-risk Phase 1 data path and C's iPad d
 - Reserved Assistant records, Bot homes, archived workspaces, and chats whose workspace is no longer registered are excluded.
 - Organization and disclosure state are device-local. Native clients scope it to the paired Aiden installation.
 - Bots remain a separate product area and do not enter the workspace outline.
+  - Amendment (2026-10-31, [Inbox sidebar plan](inbox-sidebar-plan.md)): the opt-in Inbox view may list a Bot while it needs the person, has an unseen failed run or has an unread reply. The By workspace and Recent only views still exclude Bots.
 
 ## Phase 1 implementation
 
