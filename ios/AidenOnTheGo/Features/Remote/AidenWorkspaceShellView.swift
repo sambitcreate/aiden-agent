@@ -1007,6 +1007,9 @@ struct AidenWorkspaceShellView: View {
     @State private var isShowingUsage = false
     @State private var selectedSidebarChat: AidenChat?
     @State private var selectedSidebarChatStartsVoice = false
+    /// A chat under Chats waiting on the Delete confirmation. Those chats have no
+    /// workspace page, so their sidebar row carries the Delete action.
+    @State private var chatPendingDelete: AidenChatSummary?
     @State private var sidebarChatNavigationTask: Task<Void, Never>?
     @State private var sidebarChatNavigationRequestID: UUID?
     @State private var homeModel = AidenHomeModel()
@@ -1643,7 +1646,7 @@ struct AidenWorkspaceShellView: View {
 
                                 if expanded {
                                     ForEach(visibleChats) { chat in
-                                        chatRow(chat)
+                                        noWorkspaceChatActions(chatRow(chat), chat: chat)
                                             .padding(.leading, 30)
                                     }
                                     if section.chats.isEmpty {
@@ -1709,7 +1712,7 @@ struct AidenWorkspaceShellView: View {
                             .listRowBackground(palette.canvas)
                     } else {
                         ForEach(sidebarProjection.recents) { chat in
-                            chatRow(chat)
+                            noWorkspaceChatActions(chatRow(chat), chat: chat)
                                 .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
                                 .listRowSeparator(.hidden)
                                 .listRowBackground(palette.canvas)
@@ -1768,6 +1771,23 @@ struct AidenWorkspaceShellView: View {
         .refreshable {
             await coordinator.refreshWorkspaces()
             await homeModel.load(coordinator: coordinator)
+        }
+        .confirmationDialog(
+            "Delete this chat?",
+            isPresented: Binding(
+                get: { chatPendingDelete != nil },
+                set: { if !$0 { chatPendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Chat", role: .destructive) {
+                guard let chat = chatPendingDelete else { return }
+                chatPendingDelete = nil
+                Task { await deleteNoWorkspaceChat(chat) }
+            }
+            Button("Cancel", role: .cancel) { chatPendingDelete = nil }
+        } message: {
+            Text("This permanently removes the chat from Aiden Agent.")
         }
     }
 
@@ -2382,6 +2402,57 @@ struct AidenWorkspaceShellView: View {
             current: compactWorkspacePath,
             workspaceIDs: workspaceIDs
         )
+    }
+
+    /// Chats under Chats have no workspace page (where other chats are deleted),
+    /// so their row's menu offers Delete. Other rows are unchanged.
+    @ViewBuilder
+    private func noWorkspaceChatActions<Row: View>(_ row: Row, chat: AidenChatSummary) -> some View {
+        if coordinator.workspaces.first(where: { $0.id == chat.workspaceId })?.noWorkspace == true {
+            row
+                .contextMenu {
+                    Button(role: .destructive) { chatPendingDelete = chat } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    .disabled(coordinator.connectionState != .connected)
+                }
+                .accessibilityAction(named: Text("Delete chat")) {
+                    guard coordinator.connectionState == .connected else { return }
+                    chatPendingDelete = chat
+                }
+        } else {
+            row
+        }
+    }
+
+    @MainActor
+    private func deleteNoWorkspaceChat(_ summary: AidenChatSummary) async {
+        guard let context = try? coordinator.requestContext() else { return }
+        if selectedSidebarChat?.id == summary.id { clearSelectedSidebarChat() }
+        // The row leaves the sidebar at once; a failed delete reloads the list, which puts it back.
+        homeModel.removeChat(id: summary.id)
+        do {
+            let client = try coordinator.remoteClient(for: context)
+            // The row's revision can lag a rename, so delete the chat as the Mac has it now.
+            let current = try await client.chat(id: summary.id)
+            guard coordinator.isCurrent(context) else { return }
+            try await client.removeChat(id: current.id, revision: current.revision)
+            guard coordinator.isCurrent(context) else { return }
+            await AidenChatCache.shared.removeChat(instanceId: context.instanceId, chatId: summary.id)
+            await AidenChatDraftStore.shared.remove(instanceId: context.instanceId, chatId: summary.id)
+            coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-remove:\(summary.id)")
+            // The Mac releases the chat's hidden folder with it; drop it from the list too.
+            await coordinator.refreshWorkspaces()
+        } catch let error where aidenIsCancellation(error) {
+            guard coordinator.isCurrent(context) else { return }
+            await homeModel.load(coordinator: coordinator)
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            guard coordinator.isCurrent(context) else { return }
+            coordinator.presentedError = error.localizedDescription
+            coordinator.haptics.play(.error, scope: hapticScope)
+            await homeModel.load(coordinator: coordinator)
+        }
     }
 
     private func clearSelectedSidebarChat() {

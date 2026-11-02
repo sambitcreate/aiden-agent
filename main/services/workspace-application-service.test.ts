@@ -435,4 +435,10 @@ test("a paired device's chat in a No workspace folder that holds another chat ge
 
   app.chatsIn.set("project", ["a", "b"]);
   assert.equal(await app.service.workspaceForNoWorkspaceChat("project"), "project", "a real workspace is shared");
+
+  // A phone still aims at a hidden home that was released with its last chat.
+  const replacement = await app.service.workspaceForNoWorkspaceChat("released-home");
+  assert.notEqual(replacement, "released-home");
+  assert.equal(app.registry.get(replacement)?.noWorkspace, true, "a gone home gets a fresh hidden folder");
+  assert.equal(app.registry.has("released-home"), false);
 });

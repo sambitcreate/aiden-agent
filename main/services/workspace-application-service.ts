@@ -296,12 +296,16 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
     /**
      * A paired device's new chat aimed at a hidden No workspace that already
      * holds another chat gets a fresh one, so each chat keeps its own folder.
-     * Returns the workspace to use; any other workspace is unchanged.
+     * A hidden record that is gone (its last chat was deleted, so it was
+     * released) also gets a fresh one: the device asked for No workspace and
+     * still lists the old record as the group's home. Returns the workspace
+     * to use; any other workspace is unchanged.
      */
     async workspaceForNoWorkspaceChat(workspaceId: string) {
       if (!deps.noWorkspace) return workspaceId;
       const workspace = await deps.configStore.getWorkspace(workspaceId);
-      if (!workspace?.noWorkspace) return workspaceId;
+      if (!workspace) return (await service.createNoWorkspace()).id;
+      if (!workspace.noWorkspace) return workspaceId;
       if ((await deps.noWorkspace.chatIdsIn(workspaceId)).length === 0) return workspaceId;
       return (await service.createNoWorkspace()).id;
     },
