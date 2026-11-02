@@ -86,3 +86,35 @@ legacy settings). It uses the normal live-preview/save path. This is separate
 from `autoHideComposerContext`, which controls the workspace strip. Hiding the
 meter changes only presentation; Context remains in the workspace launcher and
 the runtime continues context accounting and compaction.
+
+## Work details and busy sends
+
+Appearance → Chat has **Work details** (Compact, Standard, Detailed, Verbose),
+**When to collapse work details** (On completion / On next message), **Open chat
+links in**, and **Send behavior while busy** (Queue / Steer). The work and send
+preferences use `AppearanceConfig.workDetails`, `workDetailsCollapseTiming`, and
+`busySendBehavior`, defaulting to `standard`, `completion`, and `queue` for new and
+legacy v1 settings. They follow live preview and the normal debounced save path.
+
+Compact keeps work behind summary headers. Standard shows a three-row activity
+preview; Detailed opens eligible tool trails; Verbose keeps automatic details
+open in history. On next message retains the latest exchange's work until the
+next committed ordinary prompt, including across reopening the chat. Reasoning is
+not part of these modes: it stays the steady one-line Thinking row that only the
+reader opens, so the transcript does not jump while a model thinks. Manual
+opens/closes win over automatic timing. Completed work never keeps live shimmer or announcements.
+Answers, visuals, approvals and question recaps keep their normal placement.
+Bot activity availability still follows each Bot's Quiet/Summary/Detailed level;
+the global mode and timing adjust Detailed recaps without adding hidden steps.
+
+The link row edits the same browser-service preference as Settings → Links,
+including Ask each time, Aiden browser and System browser. Local-file checks,
+loopback rules, modifier-click and restricted-content confirmation still apply.
+This preference remains separate from Appearance import/reset.
+
+While busy, Enter and the send pill use the chosen Queue/Steer default, and
+Cmd/Ctrl+Enter uses the other action. The pill's menu can override the default
+for that run; the next idle transition restores the saved default. Unsupported
+Steer uses the Queue affordance. Shift+Enter and idle sends are unchanged. These
+preferences apply to desktop viewers/composers; native phones and the CLI keep
+their existing local behavior, with no Remote wire change.

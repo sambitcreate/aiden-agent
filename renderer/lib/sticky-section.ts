@@ -17,11 +17,29 @@ export function useStickySectionCollapse<
   const sectionRef = React.useRef<Section>(null);
   const headerRef = React.useRef<Header>(null);
   const restorePendingRef = React.useRef(false);
+  const focusedRef = React.useRef<HTMLElement | null>(null);
+  const onFocusCapture = React.useCallback((event: React.FocusEvent<Section>) => {
+    if (event.target instanceof HTMLElement) focusedRef.current = event.target;
+  }, []);
 
   /** Call just before a collapse; remembers whether the header was stuck. */
-  const noteCollapse = React.useCallback(() => {
+  const noteCollapse = React.useCallback((automatic = false) => {
     const section = sectionRef.current;
     const header = headerRef.current;
+    // Following a new message owns the scroll destination. A history reader
+    // instead keeps the closing section's sticky header in view.
+    if (automatic) {
+      const viewport = section?.closest<HTMLElement>("[data-follow]");
+      if (!viewport || !header || viewport.dataset.follow === "true") return;
+      const bounds = viewport.getBoundingClientRect();
+      const position = header.getBoundingClientRect();
+      const toolbarInset = Number.parseFloat(getComputedStyle(viewport).getPropertyValue("--scroll-area-sticky-top")) || 0;
+      const readingTop = bounds.top + Math.max(0, toolbarInset);
+      // A sticky header can remain displaced inside a section entirely above
+      // the viewport or behind its toolbar. Only a header the person can see
+      // may restore their place.
+      if (position.bottom <= readingTop || position.top >= bounds.bottom) return;
+    }
     restorePendingRef.current = Boolean(
       section &&
         header &&
@@ -31,13 +49,23 @@ export function useStickySectionCollapse<
         ),
     );
   }, []);
+  const noteAutomaticCollapse = React.useCallback(() => noteCollapse(true), [noteCollapse]);
 
   /** Call once the collapsed layout is committed. Instant, so no motion. */
   const restoreAfterCollapse = React.useCallback(() => {
+    const focused = focusedRef.current;
+    const active = document.activeElement;
+    if (focused && focused !== headerRef.current && (
+      (active === focused && sectionRef.current?.contains(focused)) ||
+      (!focused.isConnected && active === document.body)
+    )) {
+      headerRef.current?.focus({ preventScroll: true });
+      focusedRef.current = null;
+    }
     if (!restorePendingRef.current) return;
     restorePendingRef.current = false;
     sectionRef.current?.scrollIntoView({ block: "start", behavior: "auto" });
   }, []);
 
-  return { sectionRef, headerRef, noteCollapse, restoreAfterCollapse };
+  return { sectionRef, headerRef, noteCollapse, noteAutomaticCollapse, restoreAfterCollapse, onFocusCapture };
 }

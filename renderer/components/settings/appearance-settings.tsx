@@ -1,6 +1,7 @@
 import { AppControlSettings } from "./app-control-settings";
 import { handleRadioNavigation } from "./radio-navigation";
 import { InboxDockBadgeSetting, SidebarViewPicker } from "./sidebar-view-picker";
+import { LinksSettings } from "./links-settings";
 import * as React from "react";
 import {
   Check,
@@ -35,6 +36,9 @@ import {
 } from "../../lib/appearance-runtime";
 import {
   CHAT_WIDTH_OPTIONS,
+  WORK_DETAILS_LABELS,
+  COLLAPSE_TIMING_LABELS,
+  BUSY_SEND_LABELS,
   THEME_PRESETS,
   createDefaultAppearanceConfig,
   getPresetVariant,
@@ -55,6 +59,25 @@ const INLINE_VISUALS_LABELS: Record<InlineVisualsMode, string> = {
   on_request: "Only when I ask",
   off: "Off",
 };
+
+function ChatPreferenceField<Value extends string>({ label, description, value, labels, onChange }: {
+  label: string;
+  description: string;
+  value: Value;
+  labels: Record<Value, string>;
+  onChange(value: Value): void;
+}) {
+  return (
+    <Field label={label} description={description}>
+      <Select value={value} onValueChange={(next) => {
+        if (Object.prototype.hasOwnProperty.call(labels, next)) onChange(next as Value);
+      }}>
+        <SelectTrigger size="small" aria-label={label}><SelectValue>{labels[value]}</SelectValue></SelectTrigger>
+        <SelectContent>{Object.entries<string>(labels).map(([id, text]) => <SelectItem key={id} value={id}>{text}</SelectItem>)}</SelectContent>
+      </Select>
+    </Field>
+  );
+}
 
 type CssProperties = React.CSSProperties & Record<`--${string}`, string>;
 
@@ -524,6 +547,25 @@ export function AppearanceSettings() {
       </section>
 
       <FieldSet title="Chat">
+        <ChatPreferenceField
+          label="Work details"
+          description="Choose how much tool activity to show. Verbose keeps it open in history. Thinking always stays one line until you open it."
+          value={config.workDetails} labels={WORK_DETAILS_LABELS}
+          onChange={(workDetails) => update((current) => ({ ...current, workDetails }))}
+        />
+        <ChatPreferenceField
+          label="When to collapse work details"
+          description="Choose when to automatically collapse work previews. Verbose keeps them open; manual choices always take priority."
+          value={config.workDetailsCollapseTiming} labels={COLLAPSE_TIMING_LABELS}
+          onChange={(workDetailsCollapseTiming) => update((current) => ({ ...current, workDetailsCollapseTiming }))}
+        />
+        <LinksSettings embedded />
+        <ChatPreferenceField
+          label="Send behavior while busy"
+          description="Enter and the Send button use this default while a response runs. Cmd/Ctrl+Enter uses the other action. Steer accepts text only."
+          value={config.busySendBehavior} labels={BUSY_SEND_LABELS}
+          onChange={(busySendBehavior) => update((current) => ({ ...current, busySendBehavior }))}
+        />
         <Field label="Show context usage in composer" description="Show the token meter beside your message. Context details remain available in the workspace panel.">
           <Switch checked={config.showComposerContextUsage} onCheckedChange={(checked) => update((current) => ({ ...current, showComposerContextUsage: checked }))} aria-label="Show context usage in composer" />
         </Field>

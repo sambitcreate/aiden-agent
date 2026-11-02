@@ -1,3 +1,10 @@
+import type { BusySendPreference } from "../shared/appearance";
+
+/** Unsupported text steering falls back to the safe follow-up action. */
+export function effectiveBusySendMode(mode: BusySendPreference, steerAvailable: boolean): BusySendPreference {
+  return mode === "steer" && !steerAvailable ? "queue" : mode;
+}
+
 export interface ComposerSubmissionStateInput {
   ready: boolean;
   isGenerating: boolean;
