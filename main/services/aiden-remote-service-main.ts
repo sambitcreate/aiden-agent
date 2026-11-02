@@ -455,6 +455,35 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       logger.warn("aiden-remote", `Connection request notification ${stage} failed.`);
     },
   });
+  const revokeDevice = async (deviceId: string): Promise<boolean> => {
+    activeReadAloud?.revokeDevice(deviceId);
+    activeProgress?.revokeDevice(deviceId);
+    simulatorShareRelay.revokeDevice(deviceId);
+    // Revocation drains host-wide subscriptions; it never cancels a run.
+    activeHostFeed?.revokeDevice(deviceId);
+    activeHostRuns?.revokeDevice(deviceId);
+    activeBotSessions?.revokeDevice(deviceId);
+    const revoked = await revokeAidenRemoteRuntimeDevice({
+      state,
+      streams: activeStreams,
+      chats: activeChats,
+      workspaceOwners,
+    }, deviceId);
+    // A stream or relay admitted between the first close and the revocation
+    // fence is closed here.
+    activeReadAloud?.revokeDevice(deviceId);
+    activeProgress?.revokeDevice(deviceId);
+    simulatorShareRelay.revokeDevice(deviceId);
+    activeHostFeed?.revokeDevice(deviceId);
+    activeHostRuns?.revokeDevice(deviceId);
+    activeBotSessions?.revokeDevice(deviceId);
+    // Cleanup is intentionally idempotent: a retry after a crash between the
+    // device tombstone and notice removal must still remove the acceptance.
+    if (hostPlatformCapabilities().bots) {
+      await botApplicationService.revokeNoticeAudience(deviceId);
+    }
+    return revoked;
+  };
   const service = new AidenRemoteService({
     state,
     appVersion: app.getVersion(),
@@ -467,7 +496,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     ),
     bonjour: createAidenRemoteBonjourPublisher(writeRemoteLog),
     notifyPairingChanged: () => ipcMain.broadcast("remote:changed", {}),
-    pairingRequestSettings: createAidenPairingRequestSettingsStore(() => userData),
+    pairingRequestSettings: {
+      ...createAidenPairingRequestSettingsStore(() => userData),
+      revokeDevice,
+    },
     notifyPairingRequestsChanged,
     simulators: simulatorShareRelay,
     hostPlatform: aidenRemoteHostPlatform(process.platform),
@@ -1167,35 +1199,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     service,
     state,
     approvedRoots: new AidenRemoteApprovedRootService(state),
-    revokeDevice: async (deviceId) => {
-      activeReadAloud?.revokeDevice(deviceId);
-      activeProgress?.revokeDevice(deviceId);
-      simulatorShareRelay.revokeDevice(deviceId);
-      // Revocation drains host-wide subscriptions; it never cancels a run.
-      activeHostFeed?.revokeDevice(deviceId);
-      activeHostRuns?.revokeDevice(deviceId);
-      activeBotSessions?.revokeDevice(deviceId);
-      const revoked = await revokeAidenRemoteRuntimeDevice({
-        state,
-        streams: activeStreams,
-        chats: activeChats,
-        workspaceOwners,
-      }, deviceId);
-      // A stream or relay admitted between the first close and the revocation
-      // fence is closed here.
-      activeReadAloud?.revokeDevice(deviceId);
-      activeProgress?.revokeDevice(deviceId);
-      simulatorShareRelay.revokeDevice(deviceId);
-      activeHostFeed?.revokeDevice(deviceId);
-      activeHostRuns?.revokeDevice(deviceId);
-      activeBotSessions?.revokeDevice(deviceId);
-      // Cleanup is intentionally idempotent: a retry after a crash between the
-      // device tombstone and notice removal must still remove the acceptance.
-      if (hostPlatformCapabilities().bots) {
-        await botApplicationService.revokeNoticeAudience(deviceId);
-      }
-      return revoked;
-    },
+    revokeDevice,
     pendingApprovalForChat: (chatId) => activeStreams?.pendingApprovalForChat(chatId) ?? null,
     pendingQuestionForChat: (chatId) => activeStreams?.pendingQuestionForChat(chatId) ?? null,
     respondQuestionFromHost: (chatId, promptId, response) =>

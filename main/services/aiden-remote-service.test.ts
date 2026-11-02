@@ -26,6 +26,7 @@ import {
 import { loadOrCreateAidenRemoteTlsIdentity, AidenRemoteTlsEndpointError } from "./aiden-remote-tls-identity.js";
 import type { AidenTailscaleStatus } from "./aiden-remote-tailscale-route.js";
 import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
+import { AidenRemoteHostFeedService } from "./aiden-remote-host-feed.js";
 import {
   generatePairingRequestKeyPair,
   pairingRequestMatchCode,
@@ -154,6 +155,7 @@ interface FixtureOptions {
   /** Wire the persisted "Accept connection requests" setting (in memory). */
   pairingRequests?: { accept?: boolean };
   workspaceApi?: AidenRemoteServiceOptions["workspaceApi"];
+  revokeDevice?: (deviceId: string) => Promise<boolean>;
   /** Clock the TLS identity loader renews against. */
   identityNow?: () => Date;
   tlsRefreshIntervalMs?: number;
@@ -328,6 +330,7 @@ async function fixture(
     ...(options.pairingRequests
       ? {
           pairingRequestSettings: {
+            revokeDevice: options.revokeDevice ?? ((deviceId) => state.revokeDevice(deviceId)),
             load: async () => acceptPairingRequests,
             save: async (accept: boolean) => {
               acceptPairingRequests = accept;
@@ -2241,6 +2244,106 @@ test("an approved LAN connection request seals a pinned credential that authenti
   }
 });
 
+test("withdrawing an approved pairing closes its host feed while another peer continues", async () => {
+  let bots: Array<{ id: string; name: string }> = [];
+  const feed = new AidenRemoteHostFeedService({
+    source: { read: async () => ({ summaries: [], botChatIds: new Set(), workspaces: [], bots }) },
+    now: Date.now,
+  });
+  let revokeDevice: (deviceId: string) => Promise<boolean> = async () => false;
+  const app = await fixture({
+    pairingRequests: {},
+    workspaceApi: () => ({
+      workspaces: {}, workspaceBrowser: {}, chats: {}, hostRuns: {}, hostFeed: feed,
+    }) as never,
+    revokeDevice: (deviceId) => revokeDevice(deviceId),
+  });
+  revokeDevice = async (deviceId) => {
+    feed.revokeDevice(deviceId);
+    const result = await revokeAidenRemoteRuntimeDevice({
+      state: app.state,
+      workspaceOwners: { revokeDevice: () => undefined },
+    }, deviceId);
+    feed.revokeDevice(deviceId);
+    return result;
+  };
+  const responses: http.IncomingMessage[] = [];
+  try {
+    await app.service.setEnabled(true);
+    await app.service.beginPairing("lan");
+    const port = app.persisted().lanPort;
+    const identity = await loadOrCreateAidenRemoteTlsIdentity({
+      directory: path.join(app.directory, "identity"),
+      hostnames: ["aiden-test", "aiden-test.local"],
+    });
+    const pair = async (name: string) => {
+      const request = await requestConnection(insecureJson, port, name);
+      await app.service.respondPairingRequest(request.created.requestId, "allow");
+      const polled = await insecureJson<{ envelope: unknown }>(
+        port, `/api/aiden/v1/pairing/requests/${request.created.requestId}`, { headers: request.secret },
+      );
+      const grant = openPeerPairingRequestGrant(polled.body.envelope, {
+        requestId: request.created.requestId,
+        publicKey: request.keys.publicKey,
+        privateKey: request.keys.privateKey,
+        endpoint: `https://aiden-test.local:${port}/api/aiden/v1`,
+        serverSpkiSha256: identity.serverSpkiSha256,
+      });
+      return { request, grant };
+    };
+    const first = await pair("First Mac");
+    const second = await pair("Second Mac");
+    const openFeed = (credential: string) => new Promise<{ response: http.IncomingMessage; data: string[] }>((resolve, reject) => {
+      const request = https.get({
+        host: "127.0.0.1", port, path: "/api/aiden/v1/host/events", rejectUnauthorized: false,
+        headers: { authorization: `Bearer ${credential}`, "aiden-protocol-version": "1" },
+      }, (response) => {
+        const data: string[] = [];
+        response.on("data", (chunk) => data.push(String(chunk)));
+        response.once("data", () => resolve({ response, data }));
+      });
+      request.on("error", reject);
+    });
+    const revoked = await openFeed(first.grant.credential);
+    const retained = await openFeed(second.grant.credential);
+    responses.push(revoked.response, retained.response);
+    assert.equal(revoked.response.statusCode, 200);
+    assert.equal(retained.response.statusCode, 200);
+    const closed = new Promise<void>((resolve) => {
+      revoked.response.on("error", () => undefined);
+      revoked.response.once("close", resolve);
+    });
+    const cancelled = await insecureJson<{ state: string }>(
+      port, `/api/aiden/v1/pairing/requests/${first.request.created.requestId}`,
+      { method: "DELETE", headers: first.request.secret },
+    );
+    assert.equal(cancelled.body.state, "cancelled");
+    bots = [{ id: "bot-after-withdrawal", name: "After withdrawal" }];
+    feed.invalidate();
+    await feed.refresh();
+    const received = new Promise<void>((resolve) => {
+      const check = () => {
+        if (!retained.data.join("").includes("bot-after-withdrawal")) return;
+        retained.response.off("data", check);
+        resolve();
+      };
+      retained.response.on("data", check);
+      check();
+    });
+    await within(received);
+    assert.equal(revoked.data.join("").includes("bot-after-withdrawal"), false);
+    await within(closed);
+    const rejected = await insecureJson<{ error: { code: string } }>(port, "/api/aiden/v1/server", {
+      headers: { authorization: `Bearer ${first.grant.credential}`, "aiden-protocol-version": "1" },
+    });
+    assert.equal(rejected.body.error.code, "credential_revoked");
+  } finally {
+    for (const response of responses) response.destroy();
+    feed.close();
+    await app.cleanup();
+  }
+});
+
 test("turning connection requests off persists, cancels open requests and refuses new ones", async () => {
   const app = await fixture({ pairingRequests: {} });
   try {
@@ -2401,7 +2504,10 @@ for (const stalledStage of ["inspection", "pin"] as const) {
       assert.equal(throughTailnet.body.peerRoutes.length, 1);
       assert.equal(app.tailscale.inspectionCalls, 1, "concurrent identity reads share one optional refresh");
 
-      const identity = await loadOrCreateAidenRemoteTlsIdentity({ directory: path.join(app.directory, "identity"), hostnames: ["aiden-test", "aiden-test.local"] });
+      const identity = await loadOrCreateAidenRemoteTlsIdentity({
+      directory: path.join(app.directory, "identity"),
+      hostnames: ["aiden-test", "aiden-test.local"],
+    });
       registry = new PeerHostRegistry({
         storage: { load: async () => [{ id: app.persisted().instanceId, name: "Host", enabled: true, deviceId: issued.device.id, credential: issued.credential, capabilities: [...issued.device.capabilities], features: [], endpoint: `https://aiden-test.local:${app.persisted().lanPort}/api/aiden/v1`, serverSpkiSha256: identity.serverSpkiSha256, caCertificateDerBase64: new X509Certificate(identity.caCertificate).raw.toString("base64") }], save: async () => {} },
         localInstanceId: async () => "viewer", clientVersion: "1", deviceName: "Viewer", platform: "mac",
