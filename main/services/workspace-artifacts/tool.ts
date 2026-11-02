@@ -21,6 +21,7 @@ import {
   type WorkspaceArtifactView,
 } from "../../../renderer/shared/workspace-artifacts.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
+import { checkWorkspaceArtifactPage, describeWorkspaceArtifactPageCheck } from "./check.js";
 import { workspaceArtifactDigest, type WorkspaceArtifactContent, type WorkspaceArtifactStore } from "./store.js";
 
 export { WORKSPACE_ARTIFACT_TOOL_NAME };
@@ -359,16 +360,19 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           : await store.create(workspaceId, content, { approved, chatId });
         options.onChanged({ workspaceId, artifactId: artifact.id, reason: previous ? "updated" : "created", chatId });
         let firstRefresh = "";
+        let results: Record<string, WorkspaceArtifactSourceResultV1> | undefined;
         if (options.refresh && artifact.sources.length > 0) {
           try {
-            firstRefresh = describeSources(await options.refresh(artifact, signal));
+            results = await options.refresh(artifact, signal);
+            firstRefresh = describeSources(results);
           } catch (error) {
             firstRefresh = `\nFirst refresh failed: ${error instanceof Error ? error.message : String(error)}`;
           }
         }
+        const pageCheck = describeWorkspaceArtifactPageCheck(checkWorkspaceArtifactPage(artifact, results));
         const verb = previous ? "Updated" : "Created";
         return text(
-          `${verb} the artifact "${artifact.visual.title}" (id ${artifact.id}, revision ${artifact.revision}). It is shown in this workspace's Artifacts tab.${firstRefresh}${describeDiagnostics(diagnostics)}`,
+          `${verb} the artifact "${artifact.visual.title}" (id ${artifact.id}, revision ${artifact.revision}). It is shown in this workspace's Artifacts tab.${firstRefresh}${pageCheck}${describeDiagnostics(diagnostics)}`,
         );
       },
     },

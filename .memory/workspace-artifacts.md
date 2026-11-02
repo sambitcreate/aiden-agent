@@ -19,3 +19,11 @@ Invariants to keep:
 - Removing a workspace, including through the worktree path, removes its artifact files.
 
 Tests: `npm run test:workspace-artifacts`. Each of the five build phases had an Opus medium review, and the blocking findings were fixed with behavioral tests.
+
+## Build-and-check loop (2026-11-02)
+
+Adopted from a review of DeepSeek Creator Mode's plugin skill (Notion: "DeepSeek Creator Mode → Aiden"). The skill teaches list, save a small working page, read the save result, fix, stop. It says not to make mock previews and not to test a button that changes something.
+
+- Each create/update result now ends with a page check (`main/services/workspace-artifacts/check.ts`). It draws the page with the first refresh's data, mirroring `renderNode` in `aiden-ui-block.tsx` (If, Each, node budgets), and reports field reads that miss on every row, member reads on a list (including `.length`), `<Each>` over an object, unknown `$name`s, `run()` calls naming no action or passing the wrong number of values, and sources the page never reads. Reads rooted in a source that did not load, and rows of an empty list, are reported as not checked rather than passing.
+- The evaluator gained an optional `scope.onRead` hook, set only by the check. If `renderNode` changes how it walks the tree, update the check's walker too.
+- Planned next: add `operation: "run"` to `workspace_artifact` with a per-call approval card (the per-press confirm under Ask lives in the renderer, not in `runner.runAction`); then revision history with Restore.

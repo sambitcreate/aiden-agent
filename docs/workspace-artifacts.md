@@ -8,6 +8,14 @@ They are a desktop feature on macOS and Linux. The CLI, Bots, Telegram and the i
 
 Ask in any chat in a workspace, for example "make me an artifact that shows the open PRs for this repo". Aiden uses the built-in **aiden-artifacts** skill and the `workspace_artifact` tool. It lists the workspace's pages first, so it updates an existing page rather than making a near-duplicate. The Artifacts tab opens on the new page beside the chat that made it.
 
+Aiden builds a small working page first and checks it before adding more. Each save refreshes the page's sources once and draws the page with that data, the way the tab would. The result tells Aiden about:
+
+- reads that come back empty, such as a misspelled field, `.length` on a list (pages use `len()`), or `<Each>` over an object;
+- `run()` calls that name no action or pass the wrong number of values;
+- sources the page never reads.
+
+Aiden fixes those with another update. It doesn't press a button that changes something just to test it. It tells you what the check couldn't cover, such as a source that didn't load or a list that was empty.
+
 The tab exists only once the workspace has a page. It appears in the tools launcher next to the terminal, files and browser, and it closes when the last page is deleted.
 
 ## How pages get their data
@@ -53,7 +61,7 @@ Pages and their saved data are stored on the device under Aiden's user data fold
 ## For developers
 
 - Shared contract and parsers: `renderer/shared/workspace-artifacts.ts`.
-- Store, tool, runner and skill: `main/services/workspace-artifacts/`.
+- Store, tool, runner, page check and skill: `main/services/workspace-artifacts/`. The page check (`check.ts`) uses the evaluator's `onRead` hook, which only the check sets, to record each `$name` and member read the page actually takes.
 - IPC: `workspaces:artifacts:list`, `rename`, `delete`, `saveState`, `approve`, `refresh` and `run`, plus the `workspaces:artifacts-changed` notification (`main/handlers/workspace-artifacts.ts`).
 - Tab: `renderer/components/artifacts-panel.tsx`, wired into the Environment panel.
 - Tests: `npm run test:workspace-artifacts`.

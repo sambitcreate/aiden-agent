@@ -12,9 +12,13 @@ export const AIDEN_ARTIFACTS_SKILL = Object.freeze({
   instructions: [
     `Use ${WORKSPACE_ARTIFACT_TOOL_NAME} when the person wants a page they will come back to in this workspace, such as open pull requests, CI status, a release checklist or a TODO board. For a one-off answer, chart or form, use render_ui in the chat instead. If ${WORKSPACE_ARTIFACT_TOOL_NAME} is not among your tools, artifacts are not available here (they live in the Aiden desktop app), so use render_ui.`,
     "",
-    "Before you write a page:",
+    "Build and check, in this order:",
     `1. Call ${WORKSPACE_ARTIFACT_TOOL_NAME} with operation "list". If a page already covers the request, update it by id instead of creating a near-duplicate. A workspace holds at most ${WORKSPACE_ARTIFACT_LIMITS.perWorkspace} pages.`,
     '2. Call visualize_guide with the "catalog" module (and "interactive" for buttons and state) for the markup components. Pages use the same Aiden UI Markup as render_ui and start with <Visual title="…">.',
+    "3. Save a small working page first: the sources and the main view the person asked for. The saved page is the preview; do not draft it with render_ui, mock data or design variants first.",
+    "4. Read what the save returns: each source's first refresh, the page check, and any markup repairs. The page check draws the page with the real data and lists reads that come back empty (a misspelled field, .length on a list, <Each> over an object), run() calls that match no action, and sources the page never reads. Fix every finding and failed source with an update, then read the new result.",
+    "5. Never press or run a button's command to test it when it changes something (merging, closing, writing files). Check those commands by reading them.",
+    "6. Stop once the page check is clean and the request is met. Do not add unrequested features or variants. Tell the person what the page shows and anything the check could not cover, such as a source that did not load or an empty list.",
     "",
     "Live data comes from named sources, re-read each time the page refreshes:",
     `- kind "shell": a read-only command run in the workspace folder, for example \`gh pr list --json number,title,author,url,isDraft\`. Prefer commands that print JSON and set parse "json". Each run has ${WORKSPACE_ARTIFACT_LIMITS.sourceTimeoutMs / 1000} seconds and ${WORKSPACE_ARTIFACT_LIMITS.sourceOutputBytes / 1024} KiB of output.`,
@@ -30,7 +34,7 @@ export const AIDEN_ARTIFACTS_SKILL = Object.freeze({
     "",
     "Access follows the workspace, like chat: with No access nothing runs; under Ask, the person approves the page's commands when you save it, and any change to its commands needs approval again; with Full access everything runs. File sources run under Ask without approval.",
     "",
-    "Delete a page only when the person asks. After creating or updating one, say in a sentence what it shows; the Artifacts tab opens on it.",
+    "Delete a page only when the person asks. The Artifacts tab opens on a page after you create or update it.",
   ].join("\n"),
 });
 

@@ -179,3 +179,20 @@ test("the first refresh's results go back to the model", async (t) => {
   const text = await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] });
   assert.match(text, /First refresh:\n- pulls: failed: gh: not logged in/u);
 });
+
+test("the save checks the page against the first refresh's data", async (t) => {
+  const rows = [{ number: 12, title: "Fix login" }];
+  const { call } = await harness(t, {
+    permission: "full",
+    refresh: async () => ({ pulls: { status: "ok", at: 1, dataJson: JSON.stringify(rows) } }),
+  });
+  const typo = `<Visual title="Open PRs"><Each in={$pulls} as="pr"><Text>{$pr.titel}</Text></Each></Visual>`;
+  const created = await call("c1", { operation: "create", title: "Open PRs", markup: typo, sources: [PULLS] });
+  assert.match(
+    created,
+    /Page check \(fix these, then update the page\):\n- \$pr\.titel is always empty: the data has no "titel" field \(it has number, title\)/u,
+  );
+
+  const updated = await call("c2", { operation: "update", id: "art1", markup: typo.replace("titel", "title") });
+  assert.match(updated, /Page check: every value the page reads was found\./u);
+});
