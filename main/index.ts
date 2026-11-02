@@ -188,7 +188,7 @@ import {
 import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { destroyPill } from "./windows/pill-window.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
-import { shutdownFollowThrough, startFollowThrough } from "./services/follow-through/follow-through-main.js";
+import { reapFollowThroughProcesses, shutdownFollowThrough, startFollowThrough } from "./services/follow-through/follow-through-main.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 import { removeWorkspaceArtifacts } from "./services/workspace-artifacts/main.js";
 
@@ -2423,6 +2423,8 @@ if (!ownsSingleInstanceLock) {
         });
       }, 60 * 60 * 1_000);
       toolOutputCleanup.unref();
+      // Stop prior-session shells before startup removes chats or worktrees.
+      await reapFollowThroughProcesses();
       await reconcilePendingChatDeletions(subagentRunStore, async (chatId) => {
         await toolOutputStore.deleteByChat(chatId);
         if (displayImageArtifactAvailability.available) {
@@ -2701,6 +2703,10 @@ if (!ownsSingleInstanceLock) {
       app.on("browser-window-focus", () => focusConfigRefresh.trigger());
       powerMonitor.on("resume", () => void portableConfigWatcher.refresh());
 
+      // Restore follows and checks before any local or
+      // remote caller can start work and write this launch’s records.
+      if (shutdownHasBegun()) return;
+      await startFollowThrough();
       try {
         if (!shutdownHasBegun()) await initializeAidenRemoteService();
       } catch (error) {
@@ -2745,10 +2751,6 @@ if (!ownsSingleInstanceLock) {
         );
       }
       if (shutdownHasBegun()) return;
-      // Followed pull requests and done-when checks resume; jobs a crash left behind stop.
-      await startFollowThrough().catch((error: unknown) =>
-        logger.error("follow-through", "Follow-through state could not be restored.", error),
-      );
       // Telegram restoration is optional to desktop availability. Bot-bound
       // routes independently revalidate their exact managed home and access
       // policy before queue admission whenever the binding store is healthy.

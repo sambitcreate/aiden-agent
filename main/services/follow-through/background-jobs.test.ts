@@ -564,6 +564,7 @@ test("deleting a chat whose job could not be confirmed stopped keeps owning that
   });
   assert.ok(await jobs.adopt({ id, chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "x &", processGroup: group }));
   lookupsFail = true;
+  await assert.rejects(jobs.stopWorkspace("ws-1", "access-changed"), /confirm.*stopped/u);
   await jobs.stopChat("chat-1", "chat-deleted", true);
   const groupRuns = () => {
     try {
@@ -713,4 +714,19 @@ test("a straggler that exits right after the command is not listed as a job", { 
     undefined,
   );
   assert.deepEqual(jobs.list("chat-1"), []);
+});
+
+test("a check whose recovery record cannot be saved never evaluates its command", { skip }, async (t) => {
+  const dir = await tempDir();
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  // A file at the ledger directory path forces the actual persistence step to fail.
+  const logDir = path.join(dir, "ledger");
+  await fs.writeFile(logDir, "");
+  const jobs = new BackgroundJobs({ logDir });
+  const id = newBackgroundJobId();
+  await assert.rejects(runBoundedShellCommand({
+    command: "touch unexpected", cwd: dir, env: { ...process.env, AIDEN_BACKGROUND_JOB: id },
+    timeoutMs: 10_000, maxOutputBytes: 1024, recordGroup: (pid) => jobs.recordCheckGroup(id, pid),
+  }), { code: "EEXIST" });
+  await assert.rejects(fs.access(path.join(dir, "unexpected")), { code: "ENOENT" });
 });

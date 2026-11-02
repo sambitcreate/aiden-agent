@@ -77,8 +77,9 @@ function outcomeLine(result: DoneWhenRunResult): string {
 }
 
 export class DoneWhenChecks {
+  private closed = false;
   private readonly records = new Map<string, DoneWhenRecord>();
-  private readonly running = new Map<string, AbortController>();
+  private readonly running = new Map<string, { controller: AbortController; workspaceId: string; settled: Promise<void> }>();
   /** Chats whose new check should run as soon as the replaced one has stopped. */
   private readonly runWhenFree = new Set<string>();
 
@@ -88,7 +89,7 @@ export class DoneWhenChecks {
   restore(records: readonly DoneWhenRecord[]): void {
     for (const record of records) {
       if (record?.version !== 1 || typeof record.chatId !== "string" || typeof record.command !== "string") continue;
-      this.records.set(record.chatId, record.state === "running" ? { ...record, state: "waiting" } : { ...record });
+      this.records.set(record.chatId, record.state === "running" ? { ...record, state: "waiting", checksRun: Math.max(0, record.checksRun - 1) } : { ...record });
     }
   }
 
@@ -103,8 +104,9 @@ export class DoneWhenChecks {
 
   /** Set (or replace) a chat's check. With `runNow` it runs once right away. */
   set(input: { chatId: string; workspaceId: string; command: string; runNow: boolean }): DoneWhenRecord {
+    if (this.closed) throw new Error("Aiden is closing.");
     const command = validateDoneWhenCommand(input.command);
-    this.running.get(input.chatId)?.abort();
+    this.running.get(input.chatId)?.controller.abort();
     const record: DoneWhenRecord = {
       version: 1,
       chatId: input.chatId,
@@ -128,36 +130,51 @@ export class DoneWhenChecks {
   clear(chatId: string): boolean {
     const had = this.records.delete(chatId);
     this.runWhenFree.delete(chatId);
-    this.running.get(chatId)?.abort();
+    this.running.get(chatId)?.controller.abort();
     if (had) this.changed(chatId);
     return had;
   }
 
-  clearWorkspace(workspaceId: string): void {
+  isActive(chatId: string): boolean {
+    return this.running.has(chatId) || this.records.get(chatId)?.state === "waiting";
+  }
+
+  async clearAndSettle(chatId: string): Promise<void> {
+    this.clear(chatId);
+    await this.running.get(chatId)?.settled;
+  }
+
+  async clearWorkspace(workspaceId: string): Promise<void> {
     for (const record of [...this.records.values()]) {
       if (record.workspaceId === workspaceId) this.clear(record.chatId);
     }
+    await Promise.all([...this.running.values()].filter((run) => run.workspaceId === workspaceId).map((run) => run.settled));
   }
 
   /** An answer in the chat finished. Runs a waiting check; returns whether it started. */
   answerFinished(chatId: string): boolean {
     const record = this.records.get(chatId);
-    if (!record || record.state !== "waiting" || this.running.has(chatId)) return false;
+    if (this.closed || !record || record.state !== "waiting" || this.running.has(chatId)) return false;
     void this.runCheck(chatId);
     return true;
   }
 
   /** Stop any check that is running, for quit. */
-  shutdown(): void {
+  async shutdown(): Promise<void> {
+    this.closed = true;
     this.runWhenFree.clear();
-    for (const controller of this.running.values()) controller.abort();
+    const runs = [...this.running.values()];
+    for (const run of runs) run.controller.abort();
+    await Promise.all(runs.map((run) => run.settled));
   }
 
   private async runCheck(chatId: string): Promise<void> {
     const record = this.records.get(chatId);
     if (!record || this.running.has(chatId)) return;
     const controller = new AbortController();
-    this.running.set(chatId, controller);
+    let resolve!: () => void;
+    const settled = new Promise<void>((done) => { resolve = done; });
+    this.running.set(chatId, { controller, workspaceId: record.workspaceId, settled });
     const started: DoneWhenRecord = {
       ...record,
       state: "running",
@@ -177,12 +194,13 @@ export class DoneWhenChecks {
         output: error instanceof Error ? error.message : String(error),
       };
     } finally {
-      if (this.running.get(chatId) === controller) this.running.delete(chatId);
+      resolve();
+      if (this.running.get(chatId)?.controller === controller) this.running.delete(chatId);
       if (this.runWhenFree.delete(chatId)) void this.runCheck(chatId);
     }
     // Cleared or replaced while it ran: that record is no longer this check.
     if (this.records.get(chatId) !== started) return;
-    if (result.aborted) {
+    if (result.aborted || controller.signal.aborted) {
       this.records.set(chatId, { ...started, state: "waiting", checksRun: record.checksRun });
       this.changed(chatId);
       return;

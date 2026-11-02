@@ -85,10 +85,6 @@ export interface WorkspaceFolderCreationOptions {
 }
 
 export function createWorkspaceApplicationService(deps: WorkspaceApplicationDependencies) {
-  const closeFollowThrough = (workspaceId: string) =>
-    deps.followThrough?.closeForWorkspace(workspaceId).catch((error: unknown) => {
-      deps.logError("follow-through", "Could not stop the workspace's background jobs.", error);
-    });
   let folderCreationTail: Promise<void> = Promise.resolve();
 
   const serializeFolderCreation = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -366,8 +362,8 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           async ({ ensureResumedOnExit, keepPaused }) => {
             deps.terminalService.closeForWorkspace(existing.id);
             deps.browserService?.closeForWorkspace(existing.id);
-            if (next.permission !== existing.permission) await closeFollowThrough(existing.id);
             await deps.llmClient.cancelWorkspaceAndSettle(existing.id);
+            if (next.permission !== existing.permission) await deps.followThrough?.closeForWorkspace(existing.id);
             await deps.scheduleService.cancelWorkspace(existing.id);
             options.assertCurrent?.(await deps.configStore.getWorkspace(id) ?? existing);
             const saved = await deps.configStore.saveWorkspace(next, options.beforeSave);
@@ -398,7 +394,6 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         deps.terminalService.closeForWorkspace(id);
         deps.browserService?.closeForWorkspace(id);
         assertWorkspaceRecordRemovalAllowed(existing);
-        await closeFollowThrough(id);
         await withWorkspaceScheduleRestoration(
           {
             restoreOnExit: existing?.permission !== "none",
@@ -413,6 +408,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           },
           async ({ keepPaused }) => {
             await deps.llmClient.cancelWorkspaceAndSettle(id);
+            await deps.followThrough?.closeForWorkspace(id);
             await deps.scheduleService.cancelWorkspace(id);
             await deps.configStore.removeWorkspace(id);
             await deps.workspaceArtifacts?.removeWorkspace(id).catch((error: unknown) => {

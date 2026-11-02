@@ -156,6 +156,7 @@ export interface WorkspaceWorktreeApplicationDependencies {
   /** Closes the worktree's Git metadata watcher; a later display read re-observes. */
   closeWorkspaceGitWatcher?(workspaceId: string): void;
   cancelWorkspaceGeneration(workspaceId: string): Promise<void>;
+  closeWorkspaceFollowThrough?(workspaceId: string): Promise<void>;
   cancelWorkspaceSchedules(workspaceId: string): Promise<void>;
   resumeWorkspaceSchedules(workspaceId: string): Promise<void>;
   createWorkspaceId(): string;
@@ -488,6 +489,7 @@ export function createWorkspaceWorktreeApplicationService(
           async ({ keepPaused }) => {
             await dependencies.closeWorkspaceTerminals(workspaceId);
             await dependencies.cancelWorkspaceGeneration(workspaceId);
+            await dependencies.closeWorkspaceFollowThrough?.(workspaceId);
             await dependencies.cancelWorkspaceSchedules(workspaceId);
 
             // Deletion policy classification. This advisory read happens before

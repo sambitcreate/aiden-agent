@@ -2064,6 +2064,8 @@ export interface CodingToolOptions {
 export interface RunCommandLeftovers {
   /** Called before each command: `env` marks its processes, `adopt` runs when the shell exits leaving some. */
   begin(): {
+    signal?: AbortSignal;
+    release?(): void;
     env: Record<string, string>;
     /**
      * Returns a line for the tool result, if any. `output` is what they still
@@ -2151,50 +2153,55 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
       }
       await verifyWorkspaceRoot(workspace, signal);
       const leftovers = options.leftovers?.begin();
-      const result = await runBoundedShellCommand({
-        command,
-        cwd: root,
-        env: { ...runCommandEnv(options, agentShellCommandEnvironment()), ...leftovers?.env },
-        timeoutMs: options.commandTimeoutMs ?? COMMAND_TIMEOUT_MS,
-        maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
-        signal,
-        ...(leftovers ? { releaseLeftoversAfterMs: LEFTOVER_RELEASE_MS } : {}),
-      });
-      if (result.aborted) {
-        throw signal?.reason instanceof Error ? signal.reason : new Error("Command cancelled.");
+      try {
+        if (leftovers?.signal) signal = signal ? AbortSignal.any([signal, leftovers.signal]) : leftovers.signal;
+        const result = await runBoundedShellCommand({
+          command,
+          cwd: root,
+          env: { ...runCommandEnv(options, agentShellCommandEnvironment()), ...leftovers?.env },
+          timeoutMs: options.commandTimeoutMs ?? COMMAND_TIMEOUT_MS,
+          maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
+          signal,
+          ...(leftovers ? { releaseLeftoversAfterMs: LEFTOVER_RELEASE_MS } : {}),
+        });
+        if (result.aborted) {
+          throw signal?.reason instanceof Error ? signal.reason : new Error("Command cancelled.");
+        }
+        const handoff =
+          leftovers && result.leftoverProcessGroup !== undefined
+            ? await leftovers
+                .adopt(result.leftoverProcessGroup, command, description, result.leftoverOutput)
+                .catch(() => undefined)
+            : undefined;
+        if (!handoff?.adopted && result.leftoverOutput) {
+          // Not tracked (a refused handoff too): keep their output flowing so a full pipe never stalls them.
+          result.leftoverOutput.stdout.resume();
+          result.leftoverOutput.stderr.resume();
+        }
+        // Leftovers no job took (refused, unconfirmed, or a failed look) still run: say how to stop them.
+        const untracked =
+          !handoff?.adopted && result.leftoverProcessGroup !== undefined && (await processGroupStillRuns(result.leftoverProcessGroup))
+            ? handoff
+              ? `[To stop them: kill -- -${result.leftoverProcessGroup}]`
+              : untrackedLeftoversNote(result.leftoverProcessGroup)
+            : undefined;
+        const output = [result.stdout, result.stderr, handoff?.note, untracked].filter(Boolean).join("\n").trim();
+        const combined = result.backgroundStopped ? [output, BACKGROUND_STOPPED_NOTE].filter(Boolean).join("\n\n") : output;
+        if (result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded) {
+          return markHostCommandObservation(textResult(await boundedToolOutput(combined || "[no output]", MAX_OUTPUT_CHARS)), result);
+        }
+        const reason = result.timedOut
+          ? "Command timed out."
+          : result.outputLimitExceeded
+            ? "Command exceeded the output limit."
+            : `Command exited with error (code ${result.exitCode ?? "?"}).`;
+        return markHostCommandObservation({
+          ...textResult(await boundedToolOutput(`${reason}${combined ? `\n${combined}` : ""}`, MAX_OUTPUT_CHARS)),
+          isError: true,
+        }, result);
+      } finally {
+        leftovers?.release?.();
       }
-      const handoff =
-        leftovers && result.leftoverProcessGroup !== undefined
-          ? await leftovers
-              .adopt(result.leftoverProcessGroup, command, description, result.leftoverOutput)
-              .catch(() => undefined)
-          : undefined;
-      if (!handoff?.adopted && result.leftoverOutput) {
-        // Not tracked (a refused handoff too): keep their output flowing so a full pipe never stalls them.
-        result.leftoverOutput.stdout.resume();
-        result.leftoverOutput.stderr.resume();
-      }
-      // Leftovers no job took (refused, unconfirmed, or a failed look) still run: say how to stop them.
-      const untracked =
-        !handoff?.adopted && result.leftoverProcessGroup !== undefined && (await processGroupStillRuns(result.leftoverProcessGroup))
-          ? handoff
-            ? `[To stop them: kill -- -${result.leftoverProcessGroup}]`
-            : untrackedLeftoversNote(result.leftoverProcessGroup)
-          : undefined;
-      const output = [result.stdout, result.stderr, handoff?.note, untracked].filter(Boolean).join("\n").trim();
-      const combined = result.backgroundStopped ? [output, BACKGROUND_STOPPED_NOTE].filter(Boolean).join("\n\n") : output;
-      if (result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded) {
-        return markHostCommandObservation(textResult(await boundedToolOutput(combined || "[no output]", MAX_OUTPUT_CHARS)), result);
-      }
-      const reason = result.timedOut
-        ? "Command timed out."
-        : result.outputLimitExceeded
-          ? "Command exceeded the output limit."
-          : `Command exited with error (code ${result.exitCode ?? "?"}).`;
-      return markHostCommandObservation({
-        ...textResult(await boundedToolOutput(`${reason}${combined ? `\n${combined}` : ""}`, MAX_OUTPUT_CHARS)),
-        isError: true,
-      }, result);
     },
   };
 }

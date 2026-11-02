@@ -293,6 +293,7 @@ export class BackgroundJobs {
   private recordWrite: Promise<void> = Promise.resolve();
   /** Last launch's jobs whose marked processes outlived cleanup; kept in the record so the next launch tries again. */
   private carriedOver: RunningRecordFile["jobs"] = [];
+  private readonly checkGroups = new Map<string, RunningRecordFile["jobs"][number]>();
   private closed = false;
 
   constructor(private readonly options: BackgroundJobsOptions) {
@@ -570,6 +571,9 @@ export class BackgroundJobs {
   async stopWorkspace(workspaceId: string, reason: BackgroundJobEndReason): Promise<void> {
     const jobs = [...this.jobs.values()].filter((job) => job.view.workspaceId === workspaceId);
     await Promise.all(jobs.map((job) => this.stopRecord(job, reason)));
+    if (jobs.some((job) => job.view.state === "running")) {
+      throw new Error("Could not confirm the workspace’s background jobs stopped. Try again.");
+    }
   }
 
   /** Stop everything for quit; no new jobs start afterwards. */
@@ -907,25 +911,44 @@ export class BackgroundJobs {
     for (const other of otherChats) this.options.onChange?.(other);
   }
 
-  private writeRecord(): void {
+  /** The caller holds the shell behind a pipe until this write commits. */
+  async recordCheckGroup(id: string, pid: number): Promise<() => Promise<void>> {
+    const processStart = await this.processStartTime(pid);
+    if (!processStart) throw new Error("Could not verify the check process.");
+    this.checkGroups.set(id, { id, pid, processStart });
+    try {
+      await this.writeRecord();
+    } catch (error) {
+      this.checkGroups.delete(id);
+      throw error;
+    }
+    return async () => {
+      this.checkGroups.delete(id);
+      await this.writeRecord();
+    };
+  }
+
+  private writeRecord(): Promise<void> {
     const file: RunningRecordFile = {
       version: 1,
       jobs: [
         ...this.carriedOver,
+        ...this.checkGroups.values(),
         ...[...this.jobs.values()]
           .filter((job) => job.view.state === "running" && job.view.pid)
           .map((job) => ({ id: job.view.id, pid: job.view.pid!, ...(job.processStart ? { processStart: job.processStart } : {}) })),
       ],
     };
     const target = path.join(this.options.logDir, RECORD_FILE);
-    this.recordWrite = this.recordWrite
+    const write = this.recordWrite
       .then(async () => {
         await fsp.mkdir(this.options.logDir, { recursive: true, mode: 0o700 });
         const temporary = `${target}.${process.pid}.tmp`;
         await fsp.writeFile(temporary, JSON.stringify(file), { mode: 0o600 });
         await fsp.rename(temporary, target);
-      })
-      .catch((error: unknown) => this.options.log?.("The background job record could not be saved.", error));
+      });
+    this.recordWrite = write.catch((error: unknown) => this.options.log?.("The background job record could not be saved.", error));
+    return write;
   }
 }
 
