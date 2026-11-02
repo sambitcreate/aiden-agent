@@ -18,6 +18,7 @@ import {
   isProviderAliasMap,
   splitStoredProvider,
 } from "./portable-config-core.js";
+import { withoutWorkspaceDisabledMcpServers } from "./workspace-capabilities.js";
 import { freshWebSearchSettings } from "./web-search-provider-registry-core.js";
 import { defaultWebFetchSettings } from "../../renderer/shared/web-fetch-settings.js";
 import type { AssistantConfig, StoredProvider, Workspace } from "./types.js";
@@ -537,7 +538,7 @@ test("a workspace keeps only a literal scratch mark across saves and reloads", a
 test("workspace skill and connector off-lists survive restarts, and a damaged list never loses the workspace", async (t) => {
   const h = await harness(t);
   const base = { permission: "ask" as const, createdAt: 1, updatedAt: 1 };
-  await h.store.saveWorkspace({ ...base, id: "client", name: "Client", disabledSkills: ["Deploy"], disabledMcpServerIds: ["gmail"] });
+  await h.store.saveWorkspace({ ...base, id: "client", name: "Client", disabledSkills: ["Deploy"], disabledMcpServerIds: [" gmail ", "\tgithub"] });
   await h.store.saveWorkspace({ ...base, id: "damaged", name: "Damaged" });
   const local = await readJson<{ workspaces: Array<Record<string, unknown>> }>(h.localFile);
   for (const entry of local.workspaces) {
@@ -554,7 +555,9 @@ test("workspace skill and connector off-lists survive restarts, and a damaged li
   );
   const client = await next.getWorkspace("client");
   assert.deepEqual(client?.disabledSkills, ["deploy"]);
-  assert.deepEqual(client?.disabledMcpServerIds, ["gmail"]);
+  assert.deepEqual(withoutWorkspaceDisabledMcpServers(
+    [" gmail ", "gmail", "\tgithub", "github"].map(id => ({ id })), client?.disabledMcpServerIds,
+  ).map(server => server.id), ["gmail", "github"]);
   const damaged = await next.getWorkspace("damaged");
   assert.equal(damaged?.name, "Damaged");
   assert.equal("disabledSkills" in (damaged ?? {}), false);

@@ -18,6 +18,7 @@ interface RequestOptions {
 
 /** One isolated MCP client connection, as the main process drives it. */
 export interface IsolatedSubagentMcpClient {
+  readonly inventoryRevision?: number;
   connect(transport: unknown, options: RequestOptions): Promise<void>;
   close(): Promise<void>;
   /** One raw tools/list page. */
@@ -187,9 +188,16 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
           redactCredentialText,
           listTools: async (requestSignal) => {
             if (requestSignal.aborted) throw abortReason(requestSignal);
+            const revision = client.inventoryRevision;
+            const assertInventoryCurrent = () => {
+              if (client.inventoryRevision !== revision) throw new Error("MCP tool inventory changed.");
+            };
             const tools = await listMcpToolInventory({
               signal: AbortSignal.any([requestSignal, input.signal, input.configurationLease.signal]),
-              assertCurrent: () => assertRawRequestCurrent(input.configurationLease, requestSignal),
+              assertCurrent: () => {
+                assertInventoryCurrent();
+                assertRawRequestCurrent(input.configurationLease, requestSignal);
+              },
               listPage: async (cursor, pageSignal) => {
                 // Exact synchronous fence immediately before each raw MCP request.
                 assertRawRequestCurrent(input.configurationLease, pageSignal);
@@ -198,7 +206,7 @@ export async function withIsolatedSubagentMcpClientCore<T>(input: {
                 return result;
               },
             });
-            callGuard = createMcpToolCallGuard(tools);
+            callGuard = createMcpToolCallGuard(tools, assertInventoryCurrent);
             return tools.map(
               ({ name, description, inputSchema, outputSchema, annotations, execution }) => ({
                 name,

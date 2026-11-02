@@ -540,6 +540,25 @@ test("isolated child inventory follows pages and rejects credential revocation b
   }
 });
 
+test("child reads and mutations stop before spending authority on a withdrawn tool", async () => {
+  const h = harness();
+  let revision = 0;
+  const original = h.dependencies.createClient;
+  h.dependencies.createClient = () => ({ ...original(), get inventoryRevision() { return revision; } });
+  const signal = new AbortController().signal;
+  await withIsolatedSubagentMcpClientCore({ server, signal, configurationLease: h.configurationLease, dependencies: h.dependencies,
+    operation: async (client) => {
+      await client.listTools(signal);
+      revision++;
+      const spend = () => h.events.push("spend");
+      await assert.rejects(client.callTool("lookup", {}, signal, spend), /inventory changed/u);
+      assert.throws(() => client.callToolRaw!("lookup", {}, signal, spend), /inventory changed/u);
+      assert.ok(!h.events.includes("spend"));
+      assert.ok(!h.events.includes("call"));
+    },
+  });
+});
+
 test("child regular and raw calls validate success, preserve server errors and block required tasks", async () => {
   for (const raw of [false, true]) {
     const h = harness(); let dispatches = 0;

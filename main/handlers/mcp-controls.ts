@@ -66,7 +66,7 @@ export interface McpControlDependencies<Event> {
   /** Where a Mac app connector's app is installed and whether it is open. Read-only. */
   macAppStatus(preset: MacAppMcpPreset): Promise<McpMacAppStatus>;
   /** Open the installed app: only because the person chose Open in Settings. */
-  openMacApp(preset: MacAppMcpPreset): Promise<void>;
+  openMacApp(preset: MacAppMcpPreset, isCurrent: () => boolean): Promise<void>;
 }
 
 const INACTIVE = "MCP changes must come from the active application document.";
@@ -231,7 +231,7 @@ export function registerMcpControlHandlers<Event>(deps: McpControlDependencies<E
   deps.handle("mcp:openMacApp", async (event, presetId: unknown) => {
     const isCurrent = live(event);
     const preset = macAppPreset(presetId);
-    await deps.openMacApp(preset);
+    await deps.openMacApp(preset, isCurrent);
     if (!isCurrent()) throw new Error(INACTIVE);
     return { opened: true };
   });

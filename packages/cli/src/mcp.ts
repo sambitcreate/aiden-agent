@@ -490,7 +490,7 @@ export function createCliMcpPool(agentDir: string, options: { child?: boolean } 
     const assertCurrent = () => { if (closed || clients.get(server.id)?.client !== client) throw new Error("MCP connection changed or was closed."); };
     // A shared (cached) read is bounded by the inventory deadline, not one caller's signal.
     const shared = client.serverCapabilities?.tools?.listChanged === true;
-    const read = async (): Promise<McpInventory> => {
+    const read = async (assertInventoryCurrent: () => void): Promise<McpInventory> => {
       // Each page is transport-bounded; this bounds what the whole inventory retains.
       let retained = 0;
       const tools = client.serverCapabilities?.tools ? await listMcpToolInventory({
@@ -502,7 +502,7 @@ export function createCliMcpPool(agentDir: string, options: { child?: boolean } 
           return page;
         },
       }) : [];
-      return { tools, guard: createMcpToolCallGuard(tools) };
+      return { tools, guard: createMcpToolCallGuard(tools, () => { assertCurrent(); assertInventoryCurrent(); }) };
     };
     const loaded = await inventories.load(client, read, signal);
     assertCurrent();
