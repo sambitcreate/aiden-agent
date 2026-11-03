@@ -3,6 +3,8 @@ import https from "node:https";
 import type { Page } from "@playwright/test";
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
+test.use({ appEnvironment: { AIDEN_ANALYTICS: "0" } });
+
 type RemoteRuntimeStatus = {
   enabled: boolean;
   running: boolean;
@@ -261,6 +263,11 @@ test("paired-computer load and removal failures preserve context and offer recov
   await page.getByRole("tab", { name: "Control other devices", exact: true }).click();
   await expect(page.getByText("Couldn't load paired computers. Your saved connections have not been removed.")).toBeVisible();
   await expect(page.getByText("No computers yet", { exact: true })).toBeHidden();
+  const retry = page.getByRole("button", { name: "Try again", exact: true });
+  // Settings can show the sidebar's cached error while its mount refetch is
+  // still running. Keep the fault installed until that read (and its retry)
+  // settles; otherwise it can recover and remove this button before the click.
+  await expect(retry).toBeEnabled();
   await app.evaluate(({ ipcMain }) => {
     let hosts = [{ id: "recovery_host", name: "Recovery computer", enabled: false, state: "disabled", features: [], capabilities: [] }];
     let removals = 0;
@@ -273,7 +280,7 @@ test("paired-computer load and removal failures preserve context and offer recov
       event.sender.send("remote:peers-changed", {});
     });
   });
-  await page.getByRole("button", { name: "Try again", exact: true }).click();
+  await retry.click();
   await expect(page.getByText("Recovery computer", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "More for Recovery computer" }).click();
   await page.getByRole("menuitem", { name: "Forget…", exact: true }).click();

@@ -28,3 +28,13 @@ Branch `ux/settings-sidebar-devices`. Fixes from the renderer UX audit (UI-33..3
 - **UI-60 and the chat-sidebar half of UI-62:** belong on PR #311.
 - **UI-61:** making it the default needs onboarding and the composer to call `preventDefault` first.
 - **UI-66:** "Open with default app" needs a new path-contained IPC.
+
+## 2026-11-02: paired-computer recovery E2E readiness
+
+Hosted #715 run [41553713235 / Electron E2E (1/3)](https://github.com/sambitcreate/aiden-agent/actions/runs/41553713235/job/125672657942), head `2a8f39680f21cb7a74bf686dfe3a3ae4d5a65dd9`: `remote-access-lifecycle.spec.ts:251` timed out clicking Try again at line 276. The button was disabled, then detached; built-in retry passed (73 passed, 5 skipped, 1 flaky), so `--fail-on-flaky-tests` correctly failed the job. #715 records the flake even after later passes.
+
+A deterministic rendering probe with the real `usePeerHostSidebar`, `PeerHostsSettings` and `createAppQueryClient` reproduces the lifecycle: the sidebar caches an error with prior `[]` data; mounting Settings starts an automatic refetch while the cached error and disabled retry action remain visible. Switching the IPC handler to healthy at that point lets the in-flight refetch replace the button with the host row without any click. The control keeps the fault through the settled refetch, then changes the response and clicks the enabled action: one manual read loads the host. Production recovery is correct; the test changed its fault too early.
+
+The scoped test follow-up on `feature/paired-computer-recovery-e2e`, based on fresh main `c975f6e77760d183e4fa548785ffde49423b5cb5`, waits for Try again to be enabled **before** replacing the failing handler. It retains the real manual read and failed-removal/retry assertions. This spec also sets child `AIDEN_ANALYTICS=0`. No production retry, timeout or UI changes.
+
+Validation: the unchanged query/settings/spec sources are byte-identical between #715 head and fresh main (spec blob `2898ab96273e6502626a80c89a16e1e586dc4775`). The corrected E2E passed three independent Cua Space Linux-arm64 runs with `--retries=0` and the existing `--fail-on-flaky-tests` gate; both failure/removal recovery paths remain asserted. Connections/sidebar suites passed 15/15; E2E type-check, scoped ESLint and whitespace checks pass. Cua artifacts are under the worktree’s `test-results/cua-space-aiden-e2e-pr694/`; diagnostic probe output is `/tmp/aiden-715-recovery-probe.S9OeUm/results.log`. No native macOS rerun, hosted rerun or physical-device acceptance is claimed. #715 extraction stays untouched on its own branch; coordinator owns hosted CI.
