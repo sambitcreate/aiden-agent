@@ -967,8 +967,8 @@ test("a preset with a stored sign-in offers Sign out even when it is not flagged
   assert.ok(within(dialog).getByRole("button", { name: "Sign out" }));
 });
 
-test("a local server added outside Aiden shows exactly what it runs and is approved only from Settings", async () => {
-  const pending = { serverId: localServer.id, fingerprint: "d".repeat(64), command: "npx", args: localServer.args!, env: [{ name: "NODE_OPTIONS", value: "--require /tmp/p.js" }, { name: "TOKEN" }, { name: "EXTRA", unavailable: true as const }] };
+test("a pending connector keeps values masked and requires the explicit launch review action", async () => {
+  const pending = { serverId: localServer.id, fingerprint: "d".repeat(64), command: "npx", args: localServer.args!, env: [{ name: "NODE_OPTIONS" }, { name: "TOKEN" }, { name: "EXTRA", unavailable: true as const }] };
   let approvals = [pending];
   const calls = mount({
     "mcp:launchApprovals": () => approvals,
@@ -978,9 +978,9 @@ test("a local server added outside Aiden shows exactly what it runs and is appro
   const group = await screen.findByRole("group", { name: "Files needs approval" });
   assert.match(group.textContent ?? "", /Added outside Aiden — Approve to run/u);
   assert.match(group.textContent ?? "", /npx\s*-y\s*@modelcontextprotocol\/server-filesystem\s*\/Users\/me\/My Docs/u);
-  // The environment is shown with its values: they change what the command does.
+  // Generic previews mask values; the foreground action opens exact native review.
   const env = within(group).getByLabelText("Files environment");
-  assert.match(env.textContent ?? "", /NODE_OPTIONS=--require \/tmp\/p\.js/u);
+  assert.match(env.textContent ?? "", /NODE_OPTIONS=\(saved value, not shown\)/u);
   assert.match(env.textContent ?? "", /TOKEN=\(saved value, not shown\)/u);
   // A stored value moved under another name outside Aiden is not presented as saved.
   assert.match(env.textContent ?? "", /EXTRA=\(not available — enter it again in Edit\)/u);
@@ -991,7 +991,7 @@ test("a local server added outside Aiden shows exactly what it runs and is appro
   await waitFor(() => assert.equal(savedServers(calls).length, 1));
   assert.equal(channelCalls(calls, "mcp:save")[0]!.args[1], undefined);
 
-  fireEvent.click(within(group).getByRole("button", { name: "Approve Files to run" }));
+  fireEvent.click(within(group).getByRole("button", { name: "Review and approve Files to run" }));
   await waitFor(() => assert.deepEqual(channelCalls(calls, "mcp:approveLaunch").map((call) => call.args), [["mcp-files", "d".repeat(64)]]));
   assert.ok(await screen.findByRole("radiogroup", { name: "Model access for Files" }));
 });

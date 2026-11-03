@@ -12,7 +12,7 @@ import type {
   WorkspaceArtifactSourceV1,
 } from "../../../renderer/shared/workspace-artifacts.js";
 import { runBoundedShellCommand, type BoundedShellCommandOptions } from "../bounded-shell-command.js";
-import { readWorkspaceFile } from "../workspace-files.js";
+import { readWorkspaceArtifactFile, artifactFileAllowed } from "./file-policy.js";
 import { createWorkspaceArtifactRunner } from "./runner.js";
 import { WorkspaceArtifactStore } from "./store.js";
 
@@ -36,7 +36,7 @@ async function setup(t: test.TestContext, options: { sources?: WorkspaceArtifact
     },
     readFile: async (root, file, signal) => {
       if (options.readDelayMs) await new Promise((resolve) => setTimeout(resolve, options.readDelayMs));
-      return (await readWorkspaceFile(root, file, signal)).content;
+      return readWorkspaceArtifactFile(root, file, signal);
     },
     env: () => process.env,
     store,
@@ -279,4 +279,31 @@ test("the same folder reached through a link shares one refresh", async (t) => {
     runner.refresh("ws1", "art1", { folderPath: link, permission: "full" }),
   ]);
   assert.equal(commands.length, 1);
+});
+
+test("artifact reads deny canonical credential aliases and inode/path replacement before reading", async (t) => {
+  const { folder } = await setup(t);
+  await fs.writeFile(path.join(folder, ".env"), "PRIVATE_FIXTURE_VALUE");
+  await fs.symlink(".env", path.join(folder, "ordinary.txt"));
+  await assert.rejects(readWorkspaceArtifactFile(folder, "ordinary.txt"), /Credential files/u);
+  assert.equal(await artifactFileAllowed(folder, "ordinary.txt"), false);
+  assert.equal(await readWorkspaceArtifactFile(folder, "TODO.md"), "ship it\n\nreview #12\n");
+  await fs.mkdir(path.join(folder, "safe")); await fs.writeFile(path.join(folder, "safe", "data.txt"), "ordinary");
+  await fs.mkdir(path.join(folder, ".private")); await fs.writeFile(path.join(folder, ".private", "data.txt"), "PRIVATE_FIXTURE_VALUE");
+  await assert.rejects(readWorkspaceArtifactFile(folder, "safe/data.txt", undefined, {
+    beforeRead: async () => {
+      await fs.rename(path.join(folder, "safe"), path.join(folder, "held"));
+      await fs.symlink(".private", path.join(folder, "safe"));
+    },
+  }), /Credential files|unsafe_source/u);
+});
+
+test("denied file refreshes erase cached good data instead of preserving it as a transient failure", async (t) => {
+  const source: WorkspaceArtifactSourceV1 = { name: "private", kind: "file", file: ".env", parse: "text" };
+  const { store, runner, context } = await setup(t, { sources: [source] });
+  const artifact = (await store.get("ws1", "art1"))!.artifact;
+  await store.saveSnapshot("ws1", artifact, { private: { status: "ok", at: 1, dataJson: '"PRIVATE_FIXTURE_VALUE"' } });
+  const result = await runner.refresh("ws1", "art1", context("full"));
+  assert.equal(result.private!.policyDenied, true);
+  assert.equal(JSON.stringify(await store.list("ws1")).includes("PRIVATE_FIXTURE_VALUE"), false);
 });

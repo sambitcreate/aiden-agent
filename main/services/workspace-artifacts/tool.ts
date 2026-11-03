@@ -1,3 +1,4 @@
+import { assertArtifactFilePath } from "./file-policy.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import { compileAum } from "../../../renderer/shared/aiden-ui/compile.js";
@@ -117,6 +118,7 @@ function assertSourcesRunnable(
   content: Pick<WorkspaceArtifactContent, "sources" | "actions">,
   options: Pick<WorkspaceArtifactToolOptions, "permission" | "hasFolder">,
 ): void {
+  for (const source of content.sources) if (source.kind === "file") assertArtifactFilePath(source.file);
   if (content.sources.length === 0 && content.actions.length === 0) return;
   if (options.permission === "none" || !options.hasFolder) {
     throw new Error(
