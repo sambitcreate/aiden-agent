@@ -1,3 +1,4 @@
+import { BARE_CREDENTIAL_TOKEN } from "../../renderer/shared/credential-tokens.js";
 import { createHash, randomUUID } from "node:crypto";
 import { types as utilTypes } from "node:util";
 import { normalizeDiagnosticErrorType } from "../../renderer/shared/diagnostics.js";
@@ -231,8 +232,6 @@ export interface DiagnosticErrorProjection {
 const CREDENTIAL_ASSIGNMENT =
   /((?<![A-Za-z0-9_-])(?:access[._ -]?token|api[._ -]?key|authorization|aws[._ -]?(?:access[._ -]?key[._ -]?id|secret[._ -]?access[._ -]?key|session[._ -]?token)|client[._ -]?secret|connection[._ -]?string|cookie|credential(?:s)?|database[._ -]?url|db[._ -]?url|encryption[._ -]?key|github[._ -]?token|id[._ -]?token|passwd|password|private[._ -]?token|pwd|refresh[._ -]?token|secret(?:[._ -]?(?:key|token))?|session[._ -]?id|set[._ -]?cookie|signing[._ -]?key|token)\s*(?:["']?\s*:\s*|=\s*))(?:(?:Basic|Bearer)\s+[^\s,;]+|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;]+)/giu;
 const AUTHORIZATION_VALUE = /(?<![A-Za-z0-9])(?:Basic|Bearer)\s+[A-Za-z0-9._~+/=-]+/giu;
-const KNOWN_TOKEN =
-  /(?<![A-Za-z0-9])(?:AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{20,}|eyJ[0-9A-Za-z_-]{10,}\.[0-9A-Za-z_-]{10,}\.[0-9A-Za-z_-]{10,}|gh[pousr]_[0-9A-Za-z]{20,}|github_pat_[0-9A-Za-z_]{20,}|glpat-[0-9A-Za-z_-]{10,}|hf_[0-9A-Za-z]{10,}|npm_[0-9A-Za-z]{10,}|pypi-[0-9A-Za-z_-]{10,}|sk-[0-9A-Za-z_-]{8,}|xox[baprs]-[0-9A-Za-z-]{8,}|ya29\.[0-9A-Za-z_-]{10,})(?![A-Za-z0-9])/gu;
 const CREDENTIAL_URL = /([a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/giu;
 const URL_VALUE = /\b(?:https?|wss?|file):\/\/[^\s"'`<>]+/giu;
 const WINDOWS_PATH = /(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\r\n"'`<>;,]+/gu;
@@ -406,7 +405,7 @@ export function sanitizeDiagnosticText(value: string, maxLength = MAX_DIAGNOSTIC
     .replace(CONTROL_CHARACTERS, " ")
     .replace(CREDENTIAL_ASSIGNMENT, "$1[REDACTED]")
     .replace(AUTHORIZATION_VALUE, "[REDACTED AUTHORIZATION]")
-    .replace(KNOWN_TOKEN, "[REDACTED TOKEN]")
+    .replace(BARE_CREDENTIAL_TOKEN, "[REDACTED TOKEN]")
     .replace(CREDENTIAL_URL, "$1[REDACTED]@")
     .replace(URL_VALUE, "[REDACTED URL]")
     .replace(WINDOWS_PATH, "[REDACTED PATH]")
