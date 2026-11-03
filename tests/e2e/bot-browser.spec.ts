@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { build } from "esbuild";
 import playwrightTest from "@playwright/test";
+import { tableLeaks } from "./bot-browser-leak-check";
 import type * as PlaywrightTestModule from "@playwright/test";
 
 const { expect, test } =
@@ -162,4 +163,24 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
 
   // Delete clears the Bot's sign-ins and tabs and leaves the person's alone.
   expect(result.cleared).toEqual({ botCookies: [], personCookies: ["sid=person"], botTabs: 0, personTabs: 1 });
+});
+
+test("the table leak check discounts only its document URL's fixture origin", () => {
+  const origin = "http://127.0.0.1:49737";
+  const url = (value: string) => ({ name: "url", value: { type: "string", value } });
+  const document = (value: string) => ({ role: { value: "RootWebArea" }, properties: [url(value)] });
+  const scan = (nodes: unknown[], text = "", elements: unknown[] = []) =>
+    tableLeaks(["737"], { text, elements, accessibilityTree: { nodes } }, origin);
+  const root = document(origin + "/card-table");
+  expect(scan([root])).toEqual([]);
+  for (const suffix of ["/737", "/form?code=737", "/form#737"]) {
+    expect(scan([document(origin + suffix)])).toEqual(["737"]);
+  }
+  expect(scan([document("https://example.test/737")])).toEqual(["737"]);
+  expect(scan([document(origin + "@example.test/form")])).toEqual(["737"]);
+  expect(scan([root], "Visible code 737")).toEqual(["737"]);
+  expect(scan([root], "", [{ selector: "text=737" }])).toEqual(["737"]);
+  expect(scan([root, { role: { value: "textbox" }, value: { value: "737" } }])).toEqual(["737"]);
+  expect(scan([{ ...root, name: { value: origin } }])).toEqual(["737"]);
+  expect(scan([{ role: { value: "link" }, properties: [url(origin + "/card-table")] }])).toEqual(["737"]);
 });
