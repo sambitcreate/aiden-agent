@@ -1,3 +1,4 @@
+import { McpToolCallNotSentError } from "./subagent-effect-v2.js";
 import { isDeepStrictEqual, TextDecoder } from "node:util";
 import {
   isSafeSubagentIdentifier,
@@ -1086,7 +1087,7 @@ export function createSubagentRunStoreV2(
       return transitionEffect(value, "authorized", "dispatch_started", "consumed");
     },
 
-    async cancelEffectBeforeDispatch(value: unknown): Promise<DurableSubagentEffectV2> {
+    async cancelEffectBeforeDispatch(value: unknown, unsent?: McpToolCallNotSentError): Promise<DurableSubagentEffectV2> {
       const owner = parseDurableSubagentEffectOwnerV2(value);
       if (!owner) throw new Error("Invalid durable subagent V2 effect owner.");
       return serialized(async () => {
@@ -1097,7 +1098,9 @@ export function createSubagentRunStoreV2(
           const effectIndex = database.effects.findIndex(({ effectId }) => effectId === owner.effectId);
           const effect = database.effects[effectIndex];
           if (!effect || !effectOwnerMatches(effect, owner)) throw new Error("Durable subagent V2 effect ownership mismatch.");
-          if (effect.state !== "prepared" && effect.state !== "authorized") {
+          const provenUnsent = effect.state === "dispatch_started" && effect.effectKind === "mcp_mutation" &&
+            unsent instanceof McpToolCallNotSentError;
+          if (effect.state !== "prepared" && effect.state !== "authorized" && !provenUnsent) {
             throw new Error("Durable subagent V2 effect cannot be cancelled after dispatch.");
           }
           cancelled = {

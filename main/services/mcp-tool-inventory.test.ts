@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
+import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage, readGuardedMcpInventory } from "./mcp-tool-inventory.js";
 import { executeMcpAgentTool } from "./mcp-tool-result.js";
 import { LATEST_PROTOCOL_VERSION, McpClient, McpTimeoutError, type JsonRpcMessage } from "@earendil-works/pi-mcp";
 import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
@@ -444,6 +444,53 @@ test("a server without listChanged reuses its inventory for the TTL, then re-lis
   }
 });
 
+test("a list change revokes a published tool and a list response still in flight", async (t) => {
+  let offered = ["stable", "changed", "renamed", "retired"];
+  let readOnlyHint = true;
+  let change = () => {};
+  let calls = 0;
+  const server = new Server({ name: "withdrawal", version: "1" }, { capabilities: { tools: { listChanged: true } } });
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: offered.map(name => ({
+      name,
+      title: name === "renamed" && !readOnlyHint ? "Confirm deletion" : "Preview",
+      inputSchema: { type: "object" as const },
+      annotations: { readOnlyHint: name === "changed" ? readOnlyHint : true },
+    })),
+  }));
+  server.setRequestHandler(CallToolRequestSchema, async () => { calls++; return { content: [] }; });
+  const client = new McpClient({ name: "test", version: "1" });
+  const cache = createMcpToolInventoryCache<{ guard: ReturnType<typeof createMcpToolCallGuard> }>();
+  cache.watch(client);
+  client.onNotification("notifications/tools/list_changed", () => change());
+  await client.connect(await connectSdkServer(server));
+  t.after(async () => { await client.close(); await server.close(); });
+  const read = () => cache.load(client, async (assertCurrent) => ({
+    guard: createMcpToolCallGuard((await listMcpToolPage(client, undefined)).tools, assertCurrent),
+  }));
+  const discovered = (await read()).guard;
+  await callMcpToolOnLiveClient(discovered, client, read, { name: "retired" });
+  const changed = new Promise<void>(resolve => { change = resolve; });
+  offered = ["stable", "changed", "renamed"];
+  readOnlyHint = false;
+  await server.sendToolListChanged();
+  await changed;
+  await assert.rejects(callMcpToolOnLiveClient(discovered, client, read, { name: "retired" }), /no longer offered/u);
+  await assert.rejects(callMcpToolOnLiveClient(discovered, client, read, { name: "changed" }), /effects changed/u);
+  await assert.rejects(callMcpToolOnLiveClient(discovered, client, read, { name: "renamed" }), /changed/u);
+  await callMcpToolOnLiveClient(discovered, client, read, { name: "stable" });
+  assert.equal(calls, 2);
+
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const pending = cache.load(client, async () => { await gate; return { guard: discovered }; }, undefined, true);
+  const changedAgain = new Promise<void>(resolve => { change = resolve; });
+  await server.sendToolListChanged();
+  await changedAgain;
+  release();
+  await assert.rejects(pending, /inventory changed/u);
+});
+
 test("after a reconnect, calls are checked against the live client's inventory, not the one the tools were built from", async (t) => {
   const serve = async (tools: { name: string; outputSchema?: Record<string, unknown> }[]) => {
     const server = new Server({ name: "reconnect-fixture", version: "1" }, { capabilities: { tools: {} } });
@@ -463,7 +510,7 @@ test("after a reconnect, calls are checked against the live client's inventory, 
   const before = await serve([{ name: "lookup" }, { name: "retired" }]);
   // The restarted server dropped one tool and now declares an output schema for the other.
   const after = await serve([{ name: "lookup", outputSchema: { type: "object", properties: { count: { type: "number" } } } }]);
-  const discovered = { client: before.client, guard: (await before.inventory()).guard };
+  const discovered = (await before.inventory()).guard;
 
   const ok = await callMcpToolOnLiveClient(discovered, before.client, before.inventory, { name: "retired", arguments: {} });
   assert.equal(ok.isError, undefined);
@@ -474,6 +521,12 @@ test("after a reconnect, calls are checked against the live client's inventory, 
   assert.equal(after.calls(), 0, "a tool the live server no longer offers is never dispatched");
   await assert.rejects(
     callMcpToolOnLiveClient(discovered, after.client, after.inventory, { name: "lookup", arguments: {} }),
+    /schema or effects changed/u,
+  );
+  assert.equal(after.calls(), 0, "an old handle cannot dispatch a newly declared output contract");
+  const refreshed = (await after.inventory()).guard;
+  await assert.rejects(
+    callMcpToolOnLiveClient(refreshed, after.client, after.inventory, { name: "lookup", arguments: {} }),
     /does not match the tool's output schema/u,
   );
 });
@@ -495,4 +548,21 @@ test("tools whose input schema root is unusable are left out and reported, the r
   assert.deepEqual(skipped.map((entry) => entry.split(":")[0]), ["array-root", "untyped-root", "bad-properties", "bad-required"]);
   await assert.rejects(listMcpToolPage({ request: async () => ({ tools: [{ inputSchema: { type: "object" } }] }) } as never, undefined),
     /Invalid entry/u, "a tool without a name still invalidates the page");
+});
+
+test("identical re-listings preserve active guards and conflicting concurrent listings require a fresh read", async () => {
+  const client = {};
+  const list = (names: string[]) => readGuardedMcpInventory(client, async () => names.map(name => ({ name })), () => {});
+  const initial = await list(["one", "two"]);
+  await list(["two", "one"]);
+  initial.guard.assertCallable("one");
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const slow = readGuardedMcpInventory(client, async () => { await gate; return [{ name: "old" }]; }, () => {});
+  const removed = await list(["two"]);
+  release();
+  await assert.rejects(slow, /inventory changed/u);
+  assert.throws(() => initial.guard.assertCallable("one"), /inventory changed/u);
+  assert.throws(() => removed.guard.assertCallable("two"), /inventory changed/u);
+  (await list(["two"])).guard.assertCallable("two");
 });

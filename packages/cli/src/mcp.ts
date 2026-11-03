@@ -32,7 +32,7 @@ import type { PiToolDiscoveryMetadata } from "../../../main/services/pi-tool-dis
 import { executeMcpAgentTool } from "../../../main/services/mcp-tool-result.js";
 import { normalizeMcpToolInputSchema } from "../../../main/services/mcp-tool-schema.js";
 import { tagMcpAgentTool } from "../../../main/services/mcp-agent-tool-descriptor.js";
-import { callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage } from "../../../main/services/mcp-tool-inventory.js";
+import { callMcpTool, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage, readGuardedMcpInventory } from "../../../main/services/mcp-tool-inventory.js";
 import { JsonStore, readJson } from "./state.ts";
 import { insightCredentials } from "./credentials.ts";
 
@@ -490,10 +490,10 @@ export function createCliMcpPool(agentDir: string, options: { child?: boolean } 
     const assertCurrent = () => { if (closed || clients.get(server.id)?.client !== client) throw new Error("MCP connection changed or was closed."); };
     // A shared (cached) read is bounded by the inventory deadline, not one caller's signal.
     const shared = client.serverCapabilities?.tools?.listChanged === true;
-    const read = async (): Promise<McpInventory> => {
+    const read = async (assertInventoryCurrent: () => void): Promise<McpInventory> => {
       // Each page is transport-bounded; this bounds what the whole inventory retains.
       let retained = 0;
-      const tools = client.serverCapabilities?.tools ? await listMcpToolInventory({
+      return readGuardedMcpInventory(client, async () => client.serverCapabilities?.tools ? await listMcpToolInventory({
         signal: shared ? undefined : signal, assertCurrent,
         listPage: async (cursor, pageSignal) => {
           const page = await listMcpToolPage(client, cursor, { signal: pageSignal, timeoutMs: 10_000 });
@@ -501,8 +501,7 @@ export function createCliMcpPool(agentDir: string, options: { child?: boolean } 
           if (retained > CLI_MCP_INVENTORY_MAX_BYTES) throw new Error("MCP tool inventory exceeds its schema byte budget.");
           return page;
         },
-      }) : [];
-      return { tools, guard: createMcpToolCallGuard(tools) };
+      }) : [], () => { assertCurrent(); assertInventoryCurrent(); });
     };
     const loaded = await inventories.load(client, read, signal);
     assertCurrent();
@@ -536,7 +535,7 @@ export function createCliMcpPool(agentDir: string, options: { child?: boolean } 
         if (JSON.stringify(fresh) !== JSON.stringify(tool)) throw new Error("MCP tool schema or effects changed. Refresh the connection before using it.");
         current.guard.assertCallable(tool.name);
         return executeMcpAgentTool(async () => {
-          const result = await callMcpTool(current.client, { name: tool.name, arguments: input as Record<string, unknown> }, { signal, timeoutMs: 60_000 });
+          const result = await callMcpTool(current.client, { name: tool.name, arguments: input as Record<string, unknown> }, { signal, timeoutMs: 60_000, beforeSend: () => current.guard.assertCallable(tool.name) });
           current.guard.validateResult(tool.name, result);
           return result;
         });

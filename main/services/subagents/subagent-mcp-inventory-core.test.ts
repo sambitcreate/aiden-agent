@@ -132,6 +132,7 @@ test("negative discovery cache advances exponential backoff across retries", () 
 
 test("child inventories omit servers switched off for the model and their hidden tools", async () => {
   const listed: string[] = [];
+  const resolved: string[] = [];
   const port = (id: string): SubagentMcpClientPort => ({
     ...client([]),
     listTools: async () => {
@@ -141,15 +142,18 @@ test("child inventories omit servers switched off for the model and their hidden
   });
   const scopes = await resolveBoundedSubagentMcpInventory(new AbortController().signal, {
     listServers: async () => [
+      { ...server, id: "workspace-off" },
       { ...server, id: "off", exposure: "hidden" },
       { ...server, id: "partly", hiddenTools: ["search"] },
       { ...server, id: "all-hidden", hiddenTools: ["lookup", "search"] },
     ],
+    disabledMcpServerIds: ["workspace-off"],
     withClient: async <T>(target: McpServer, _signal: AbortSignal, operation: (value: SubagentMcpClientPort) => Promise<T>) => operation(port(target.id)),
-    resolveCredentialRevision: async () => revisions.current,
+    resolveCredentialRevision: async (target) => { resolved.push(target.id); return revisions.current; },
     cache: new SubagentMcpInventoryCache(),
     now: () => 1_000,
   });
   assert.deepEqual(scopes.map(({ serverId, tools }) => [serverId, tools.map(({ toolName }) => toolName)]), [["partly", ["lookup"]]]);
-  assert.ok(!listed.includes("off"));
+  assert.deepEqual(listed.sort(), ["all-hidden", "partly"]);
+  assert.deepEqual(resolved.sort(), ["all-hidden", "partly"]);
 });

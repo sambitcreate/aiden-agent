@@ -1,6 +1,7 @@
 // Thin Aiden conventions over Pi's MCP client (`@earendil-works/pi-mcp`).
 // Every desktop MCP client connection goes through these helpers so request
 // bounds, cancellation and connection deadlines behave the same everywhere.
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   McpAbortError,
   McpClient,
@@ -14,6 +15,8 @@ import {
  * it, each progress notification restarts the timeout.
  */
 export interface McpCallOptions {
+  /** Recheck tool authority immediately before each remote HTTP attempt. */
+  beforeSend?: () => void;
   signal?: AbortSignal;
   timeoutMs?: number;
   onProgress?: McpRequestOptions["onProgress"];
@@ -41,6 +44,10 @@ export function withMcpAbortReason<T>(pending: Promise<T>, signal: AbortSignal |
   });
 }
 
+// Pi allocates the RPC id inside request(). Its transport binds this guard
+// to that id, so unrelated calls and shared authorization work keep their own authority.
+export const mcpToolSendGuard = new AsyncLocalStorage<(() => void) | undefined>();
+
 /** One raw request, with Aiden's bounds and abort-reason convention. */
 export function mcpRequest<T>(
   client: McpRequester,
@@ -48,14 +55,15 @@ export function mcpRequest<T>(
   params: Record<string, unknown> | undefined,
   options: McpCallOptions = {},
 ): Promise<T> {
-  return withMcpAbortReason(
-    client.request<T>(method, params, {
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-      ...(options.onProgress ? { onProgress: options.onProgress } : {}),
-    }),
-    options.signal,
-  );
+  const request = () => client.request<T>(method, params, {
+    ...(options.signal ? { signal: options.signal } : {}),
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+  });
+  const pending = method === "tools/call"
+    ? mcpToolSendGuard.run(options.beforeSend, request)
+    : request();
+  return withMcpAbortReason(pending, options.signal);
 }
 
 function abortReason(signal: AbortSignal): unknown {

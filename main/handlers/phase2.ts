@@ -621,7 +621,7 @@ export function registerPhase2Handlers(): void {
     },
     launchApproved: (server) => mcpStdioApprovals.isApproved(server),
     macAppStatus: (preset) => mcpMacAppStatus(preset),
-    openMacApp: (preset) => openMcpMacApp(preset),
+    openMacApp: (preset, isCurrent) => openMcpMacApp(preset, undefined, isCurrent),
   });
   mcpLiveStatus.subscribe((status) => ipcMain.broadcast("mcp:statusChanged", status));
   // Force-drop all cached MCP connections so the next message reconnects fresh.
