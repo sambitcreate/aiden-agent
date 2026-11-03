@@ -1022,6 +1022,22 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(fields[2].notFound, "A value too long to cite is not a missing value")
     }
 
+    func testWebExtractCitationBudgetCountsUnicodeScalars() throws {
+        for (source, accepted) in [
+            (String(repeating: "😀", count: 200), true),
+            (String(repeating: "😀", count: 201), false),
+            (String(repeating: "e\u{0301}", count: 101), false),
+        ] {
+            let recap = extractRecapJSON([
+                #"{"name":"symbols","status":"extracted","value":"shown","confidence":0.99,"sourceLine":"\#(source)"}"#,
+            ])
+            let step = try decodeQuestionnaireStep(extractStepJSON(id: 1, extraction: recap))
+            let cached = try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(step))
+            XCTAssertEqual(cached.extraction != nil, accepted)
+            if accepted { XCTAssertEqual(cached.extraction?.fields[0].sourceLine, source) }
+        }
+    }
+
     func testMalformedOrMisplacedWebExtractRecapIsDroppedButTheStepStillDecodes() throws {
         let invalidRecaps: [(String, String)] = [
             ("no fields and no error", extractRecapJSON([])),

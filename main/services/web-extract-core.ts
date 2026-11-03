@@ -256,23 +256,21 @@ export class WebExtractPage {
 export function citeLine(line: string, start: number, end: number): string | undefined {
   const flat = (text: string) => text.replace(/\s+/gu, " ").trim();
   const text = flat(line);
-  if (text.length <= WEB_EXTRACT_MAX_SOURCE_LINE_CHARS) return text;
-  // Flatten before sizing the window: line breaks and repeated spaces consume
-  // one display character, while combining marks and surrogate pairs stay intact.
-  const before = (at: number) => line.slice(0, at).replace(/\s+/gu, " ").trimStart().length;
+  const characters = Array.from(text);
+  if (characters.length <= WEB_EXTRACT_MAX_SOURCE_LINE_CHARS) return text;
+  // Match offsets are raw UTF-16 indices. Translate their flattened prefixes
+  // to code-point indices before budgeting or slicing, as the recap validator does.
+  const before = (at: number) => Array.from(line.slice(0, at).replace(/\s+/gu, " ").trimStart()).length;
   const first = before(start);
   const last = before(end);
-  const room = WEB_EXTRACT_MAX_SOURCE_LINE_CHARS - (last - first) - Number(first > 0) - Number(last < text.length);
+  const room = WEB_EXTRACT_MAX_SOURCE_LINE_CHARS - (last - first) - Number(first > 0) - Number(last < characters.length);
   if (room < 0) return undefined;
   let beforeContext = Math.min(first, Math.floor(room / 2));
-  const afterContext = Math.min(text.length - last, room - beforeContext);
+  const afterContext = Math.min(characters.length - last, room - beforeContext);
   beforeContext = Math.min(first, room - afterContext);
-  let from = first - beforeContext;
-  let to = last + afterContext;
-  // Never start or end inside a surrogate pair.
-  if (from > 0 && /[\udc00-\udfff]/u.test(text[from] ?? "")) from += 1;
-  if (to < text.length && /[\udc00-\udfff]/u.test(text[to] ?? "")) to -= 1;
-  return `${from > 0 ? "…" : ""}${flat(text.slice(from, to))}${to < text.length ? "…" : ""}`;
+  const from = first - beforeContext;
+  const to = last + afterContext;
+  return `${from > 0 ? "…" : ""}${flat(characters.slice(from, to).join(""))}${to < characters.length ? "…" : ""}`;
 }
 
 interface Folded {

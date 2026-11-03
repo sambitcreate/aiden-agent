@@ -221,6 +221,26 @@ test("extraction checks reach structured output, model text and the bounded phon
   }
 });
 
+test("Unicode citation limits agree through extraction, structured output and the wire recap", async () => {
+  for (const [count, status] of [[101, "extracted"], [200, "extracted"], [201, "uncertain"]] as const) {
+    const value = "😀".repeat(count);
+    const h = harness({
+      settings: extractOn(), page: { mediaType: "text/plain", body: value },
+      clairic: () => ({ status: 200, body: { success: true, result: { answers: { symbols: { value, confidence: 0.99 } } } } }),
+    });
+    const result = await (await toolOf(h)).execute("unicode", { url: "https://acme.example", mode: "extract", fields: { symbols: "text" } });
+    const structured = result.structuredContent as WebFetchStructuredResult;
+    assert.ok(structured.mode === "extract" && "fields" in structured);
+    assert.deepEqual(structured.fields.symbols, status === "extracted"
+      ? { status, value, confidence: 0.99, sourceLine: value }
+      : { status, guess: value, confidence: 0.99 });
+    const recap = parseWebExtractRecap(JSON.parse(JSON.stringify(result.details)));
+    assert.ok(recap);
+    assert.equal(recap.fields[0]!.status, status);
+    assert.equal(recap.fields[0]!.sourceLine, status === "extracted" ? value : undefined);
+  }
+});
+
 test("a rejected or rate-limited key cools down and the next key is tried", async () => {
   const h = harness({
     settings: extractOn(),

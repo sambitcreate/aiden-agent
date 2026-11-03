@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { buildWebExtractRecap, parseWebExtractRecap } from "../../renderer/shared/web-extract.js";
 
 import {
   WebExtractError,
@@ -244,6 +245,58 @@ test("a bounded citation must retain all supporting text or leave the value unce
   );
   assert.equal(combining.name!.status, "extracted");
   assert.equal(sourceLineOf(combining.name), "…" + "a".repeat(197) + "e\u0301");
+});
+
+test("complete astral-character support uses the recap's Unicode code-point budget", async () => {
+  for (const [page, value, source] of [
+    ["😀".repeat(101), "😀".repeat(101), "😀".repeat(101)],
+    ["😀".repeat(200), "😀".repeat(200), "😀".repeat(200)],
+    ["😀".repeat(50) + "\r\n\r\n" + "😀".repeat(51), "😀".repeat(50) + " " + "😀".repeat(51), "😀".repeat(50) + " " + "😀".repeat(51)],
+  ]) {
+    const fields = await extract({ symbols: "text" }, { symbols: { value, confidence: 0.99 } }, page);
+    assert.equal(fields.symbols!.status, "extracted");
+    assert.equal(sourceLineOf(fields.symbols), source);
+    const recap = buildWebExtractRecap({ url: "https://example.com", fields });
+    assert.ok(recap && parseWebExtractRecap(recap), "the complete source fits the real wire validator");
+    assert.equal(recap.fields[0]!.sourceLine, source, "the recap must not clip supporting characters");
+  }
+});
+
+test("astral citation windows count omission markers and translate raw UTF-16 offsets", async () => {
+  for (const [page, value, expectedSource] of [
+    ["xxx" + "😀".repeat(198) + "yyy", "😀".repeat(198), "…" + "😀".repeat(198) + "…"],
+    ["xxx" + "😀".repeat(199), "😀".repeat(199), "…" + "😀".repeat(199)],
+    ["😀".repeat(199) + "yyy", "😀".repeat(199), "😀".repeat(199) + "…"],
+  ]) {
+    const fields = await extract({ symbols: "text" }, { symbols: { value, confidence: 0.99 } }, page);
+    assert.equal(fields.symbols!.status, "extracted");
+    assert.equal(sourceLineOf(fields.symbols), expectedSource);
+    assert.equal(Array.from(sourceLineOf(fields.symbols)!).length, 200);
+  }
+  const value = "A😀".repeat(50);
+  const fields = await extract(
+    { symbols: "text" }, { symbols: { value, confidence: 0.99 } },
+    "🪶".repeat(120) + "START " + value + " END" + "🪶".repeat(120),
+  );
+  assert.equal(fields.symbols!.status, "extracted");
+  const source = sourceLineOf(fields.symbols)!;
+  assert.ok(source.includes(value), "raw UTF-16 offsets still identify the complete mixed span");
+  assert.ok(source.startsWith("…") && source.endsWith("…"));
+  assert.ok(Array.from(source).length <= 200);
+  assert.doesNotMatch(source, /[\ud800-\udfff]/u, "no unpaired surrogate at a window boundary");
+  assert.ok(buildWebExtractRecap({ url: "https://example.com", fields }));
+});
+
+test("actual code-point overflow stays uncertain even when glyphs look shorter", async () => {
+  for (const [page, value] of [
+    ["😀".repeat(201), "😀".repeat(201)],
+    ["xxx" + "😀".repeat(199) + "yyy", "😀".repeat(199)],
+    ["😀".repeat(100) + "\n" + "😀".repeat(100), "😀".repeat(100) + " " + "😀".repeat(100)],
+    ["e\u0301".repeat(101), "é".repeat(101)],
+  ]) {
+    const fields = await extract({ symbols: "text" }, { symbols: { value, confidence: 0.99 } }, page);
+    assert.deepEqual(fields.symbols, { status: "uncertain", guess: value, confidence: 0.99 });
+  }
 });
 
 test("dates, times and datetimes match the forms pages write them in", async () => {
