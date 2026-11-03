@@ -1,4 +1,7 @@
 import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
+import { queryKeys } from "./queries";
+import type { ChatMeta } from "./types";
 import { chatsApi, onNotification } from "./ipc";
 import {
   applyChatActivitySnapshot,
@@ -10,14 +13,34 @@ import { parseChatActivitySnapshot } from "../shared/chat-activity";
 import { parseChatReadMarkersSnapshot, type ChatReadMarkersSnapshot } from "../shared/chat-row-state";
 import { parseChatTriageSnapshot, type ChatTriageSnapshot } from "../shared/chat-triage";
 
+function selectChatIds(chats: ChatMeta[]): string[] {
+  return chats.map((chat) => chat.id);
+}
+
+/** A host-listed chat may have an older UUID that trips the child privacy filter. */
+function useLocalChatActivityParser(paneChatId?: string) {
+  const { data: ids } = useQuery({
+    queryKey: queryKeys.chatsIn(undefined),
+    queryFn: () => chatsApi.list(),
+    enabled: false, // Observe the sidebar's local index, including its initial load.
+    select: selectChatIds,
+  });
+  return React.useMemo(() => {
+    const known = new Set(ids);
+    if (paneChatId) known.add(paneChatId);
+    return (payload: unknown) => parseChatActivitySnapshot(payload, known);
+  }, [ids, paneChatId]);
+}
+
 /** Event-driven activity state: no polling and no animation clock. */
-export function useChatActivityState(): ChatActivityState {
+export function useChatActivityState(paneChatId?: string): ChatActivityState {
+  const parseActivity = useLocalChatActivityParser(paneChatId);
   const [state, setState] = React.useState(EMPTY_CHAT_ACTIVITY_STATE);
 
   React.useEffect(() => {
     let disposed = false;
     const unsubscribe = onNotification("chats:activity-changed", (payload) => {
-      const snapshot = parseChatActivitySnapshot(payload);
+      const snapshot = parseActivity(payload);
       if (snapshot) setState((current) => applyChatActivitySnapshot(current, snapshot));
     });
 
@@ -25,7 +48,7 @@ export function useChatActivityState(): ChatActivityState {
       .activitySnapshot()
       .then((payload) => {
         if (disposed) return;
-        const snapshot = parseChatActivitySnapshot(payload);
+        const snapshot = parseActivity(payload);
         if (snapshot) setState((current) => applyChatActivitySnapshot(current, snapshot));
       })
       .catch(() => {
@@ -37,13 +60,13 @@ export function useChatActivityState(): ChatActivityState {
       disposed = true;
       unsubscribe();
     };
-  }, []);
+  }, [parseActivity]);
 
   return state;
 }
 
-export function useActiveChatIds(): ReadonlySet<string> {
-  return useChatActivityState().activeChatIds;
+export function useActiveChatIds(paneChatId?: string): ReadonlySet<string> {
+  return useChatActivityState(paneChatId).activeChatIds;
 }
 
 /**

@@ -30,6 +30,19 @@ test("chat activity snapshots are validated and deduplicated without dropping ac
   });
 });
 
+test("activity recognizes only independently listed chat UUIDs when the privacy filter refuses an id", () => {
+  const saved = "d2492706-6417-42f1-974d-0c12a2fad0b4";
+  const privateId = "550e8400-e29b-41d4-a716-2f612f622f63";
+  const known = new Set([saved, "/private/path"]);
+  const activity = { revision: 4, activeChatIds: [saved], approvalChatIds: [saved], inputChatIds: [saved] };
+  assert.equal(parseChatActivitySnapshot(activity), null);
+  assert.deepEqual(parseChatActivitySnapshot(activity, known), activity);
+  for (const key of ["activeChatIds", "approvalChatIds", "inputChatIds"]) {
+    assert.equal(parseChatActivitySnapshot({ ...activity, [key]: ["/private/path"] }, known), null);
+    assert.deepEqual(parseChatActivitySnapshot({ ...activity, [key]: [saved, privateId] }, known), activity);
+  }
+});
+
 test("late activity snapshots cannot overwrite newer sidebar state", () => {
   const newer = applyChatActivitySnapshot(EMPTY_CHAT_ACTIVITY_STATE, {
     revision: 3,

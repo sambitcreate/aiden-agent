@@ -270,6 +270,27 @@ test("unknown chats are left out and malformed requests are refused", async () =
   await assert.rejects(invoke("chats:dismissDetachedAttention", { id: "chat-a" }), /Invalid chat identifier/);
 });
 
+test("only stored UUIDs can read and dismiss waits for a privacy-filtered id", async () => {
+  const saved = "d2492706-6417-42f1-974d-0c12a2fad0b4";
+  const unknown = "550e8400-e29b-41d4-a716-2f612f622f63";
+  const chats = [saved];
+  const { registry, recorder, pending, invoke, dismissals } = harness({ chats });
+  for (const [run, id] of [["run-1", saved], ["run-2", unknown]]) {
+    registry.begin({ runId: run, chatId: id, origin: "renderer" });
+    registry.publish(run, "chat:approval", approval(run));
+    recorder.runDetached(run);
+    registry.resolveAttention(run);
+    registry.publish(run, "chat:done", {});
+  }
+  assert.deepEqual((await pending([saved, unknown])).map(row => row.chatId), [saved]);
+  await invoke("chats:dismissDetachedAttention", unknown);
+  assert.equal(dismissals.count, 0);
+  await invoke("chats:dismissDetachedAttention", saved);
+  assert.equal(dismissals.count, 1);
+  chats.push(unknown);
+  assert.deepEqual((await pending([saved, unknown])).map(row => row.chatId), [unknown]);
+});
+
 function memoryWaits(now: () => number, reads = { count: 0 }) {
   let database: InterruptedWaitDatabase = emptyInterruptedWaits();
   return createInterruptedWaitStore(

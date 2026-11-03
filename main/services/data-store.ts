@@ -24,6 +24,8 @@ export function isDataStoreRecoveryFile(
 }
 
 export interface DataStoreOptions<T> {
+  /** Validate dedicated storage before reads/writes; failures must never become defaults. */
+  beforeAccess?: (ownedPublicationPaths: readonly string[]) => Promise<void>;
   /** Refuse descriptor reads larger than this byte ceiling, including files that grow mid-read. */
   maxBytes?: number;
   /** POSIX mode applied to every atomically staged replacement. */
@@ -111,6 +113,8 @@ export class DataStore<T> {
   private mutationTail: Promise<void> = Promise.resolve();
   /** Predecessor names created by this process remain live until next startup. */
   private readonly liveHeldFiles = new Set<string>();
+  /** Only this store’s active atomic publication may temporarily give its inode two names. */
+  private ownedPublicationPaths: string[] = [];
   /** Exact bytes observed by the last load; null means the file was absent. */
   private diskSnapshot: Buffer | null | undefined;
   /** True when load() fell back to defaults because the file would not parse. */
@@ -143,6 +147,7 @@ export class DataStore<T> {
   }
 
   async load(): Promise<T> {
+    await this.options.beforeAccess?.(this.ownedPublicationPaths);
     if (this.cache !== null) return this.cache;
     if (!this.loadPromise) {
       this.loadPromise = (async () => {
@@ -505,6 +510,7 @@ export class DataStore<T> {
     ) {
       throw new DataStoreUnsafeWriteError();
     }
+    await this.options.beforeAccess?.(this.ownedPublicationPaths);
     const destination = await this.getFilePath();
     if (this.options.preserveCorruptFile !== false) {
       // `corrupt` is only assessed by load(). update() always loads first, but a
@@ -517,6 +523,7 @@ export class DataStore<T> {
       path.dirname(destination),
       `.${path.basename(destination)}.${randomUUID()}.tmp`,
     );
+    this.ownedPublicationPaths = [destination, staged];
     try {
       await fs.writeFile(staged, serialized, {
         encoding: "utf-8",
@@ -563,6 +570,7 @@ export class DataStore<T> {
       this.options.afterWritePublish?.(previous, data);
     } finally {
       await fs.rm(staged, { force: true }).catch(() => undefined);
+      this.ownedPublicationPaths = [];
     }
   }
 

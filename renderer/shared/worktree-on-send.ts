@@ -1,3 +1,4 @@
+import { isDraftChatId } from "./chat-identity.js";
 // Contract for creating a managed worktree when a draft's first message is sent.
 //
 // Shared by main (which validates everything again) and the renderer draft and
@@ -213,7 +214,6 @@ export function uniqueBranchName(
   return undefined;
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const WORKSPACE_ID = /^[A-Za-z0-9_-]{1,128}$/u;
 const REQUEST_KEYS = new Set(["sourceWorkspaceId", "baseRef", "fromOrigin", "branchName", "idempotencyKey"]);
 
@@ -239,7 +239,7 @@ export function parseFirstMessageWorktreeRequest(value: unknown): FirstMessageWo
   if (branchName !== undefined && (typeof branchName !== "string" || !isValidBranchName(branchName))) {
     throw new Error("Enter a valid Git branch name.");
   }
-  if (typeof idempotencyKey !== "string" || !UUID.test(idempotencyKey)) {
+  if (!isDraftChatId(idempotencyKey)) {
     throw new Error("Invalid worktree idempotency key.");
   }
   return {

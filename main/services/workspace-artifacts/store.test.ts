@@ -142,3 +142,28 @@ test("ids from outside are checked before they reach the file system", async (t)
   await assert.rejects(store.list("../escape"), /workspace identifier/u);
   await assert.rejects(store.delete("ws1", "../x"), /artifact identifier/u);
 });
+
+test("legacy file-source snapshots are purged before the first list and remain absent on disk", async (t) => {
+  const { dir, store, reopen } = await openStore(t);
+  const artifact = await store.create("ws1", content({ sources: [{ name: "old", kind: "file", file: "alias.txt", parse: "text" }] }));
+  await fs.writeFile(path.join(dir, "ws1.snapshots.json"), JSON.stringify({ version: 1, snapshots: {
+    [artifact.id]: { revision: 1, refreshedAt: 1, sources: { old: { status: "ok", at: 1, dataJson: '"LEGACY_PRIVATE_VALUE"' } } },
+  } }));
+  const listed = await reopen().list("ws1");
+  assert.equal(listed[0]!.artifact.sources.length, 1, "legacy definition remains editable");
+  assert.equal(listed[0]!.snapshot!.sources.old!.dataJson, undefined);
+  assert.equal(JSON.stringify(listed).includes("LEGACY_PRIVATE_VALUE"), false);
+  assert.equal((await fs.readFile(path.join(dir, "ws1.snapshots.json"), "utf8")).includes("LEGACY_PRIVATE_VALUE"), false);
+});
+
+test("canonical policy changes invalidate validated caches before get while transient IO preserves ordinary data", async (t) => {
+  const { dir, store } = await openStore(t);
+  const artifact = await store.create("ws1", content({ sources: [{ name: "data", kind: "file", file: "alias.txt", parse: "text" }] }));
+  await store.saveSnapshot("ws1", artifact, { data: { status: "ok", at: 1, dataJson: '"previous-data"' } });
+  const transient = new WorkspaceArtifactStore({ root: () => dir, fileSourceAllowed: async () => { throw Object.assign(new Error("missing"), { code: "ENOENT" }); } });
+  assert.equal((await transient.get("ws1", artifact.id))!.snapshot!.sources.data!.dataJson, '"previous-data"');
+  const denied = new WorkspaceArtifactStore({ root: () => dir, fileSourceAllowed: async () => false });
+  assert.equal((await denied.get("ws1", artifact.id))!.snapshot!.sources.data!.dataJson, undefined);
+  await denied.saveSnapshot("ws1", artifact, { data: { status: "error", at: 2, policyDenied: true, error: "denied" } });
+  assert.equal((await denied.get("ws1", artifact.id))!.snapshot!.sources.data!.dataJson, undefined);
+});
