@@ -305,6 +305,8 @@ Each PR runs the narrow suites locally before CI; PR 2 onwards also checks a pac
 
 Done 2026-10-30: project "aiden" (id 619947) in the US cloud with client IP discarded; session replay, autocapture, heatmaps, surveys, console log capture and performance capture off; the `AIDEN_POSTHOG_PROJECT_KEY` repository secret added. Dashboards and the privacy policy remain.
 
+Done 2026-11-03: the privacy policy at chatwithaiden.com/privacy describes app analytics ([aiden-website#12](https://github.com/sambitcreate/aiden-website/pull/12)). The keyed packaged check passed on a `npm run package` build of the 0.64.0 release branch with `AIDEN_DISTRIBUTION_BUILD=1` and the project key, in a throwaway profile: nothing was sent before onboarding; `app_opened`, `app_active` and `onboarding_finished` arrived through `posthog-node` with a random install ID, `$process_person_profile: false`, no IP and only registry properties; turning Usage data off sent one `analytics_disabled`, deleted the install ID, and nothing followed after a relaunch. Dashboards remain.
+
 ## Cost
 
 PostHog's free tier currently covers 1M product events and 100k exceptions per month, which is far beyond what a small group generates. `chat_message_sent` is the highest-volume event; if volume ever matters it can be sampled.
