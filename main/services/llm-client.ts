@@ -2234,6 +2234,16 @@ async function prepareGeneration(
           takeApprovedDigest: (toolCallId) => takeApprovedWorkspaceArtifactCall(streamId, toolCallId),
           refresh: (artifact, refreshSignal) =>
             workspaceArtifactRunner.refresh(workspace.id, artifact.id, { folderPath, permission }, refreshSignal),
+          runAction: (artifactId, actionName, args, expectedDigest, runSignal) =>
+            workspaceArtifactRunner.runAction(
+              workspace.id,
+              artifactId,
+              actionName,
+              args,
+              { folderPath, permission },
+              runSignal,
+              expectedDigest,
+            ),
           workspaceExists: async () => Boolean(await configStore.getWorkspace(workspace.id)),
           onChanged: notifyWorkspaceArtifactsChanged,
         }),

@@ -42,6 +42,8 @@ Page buttons can:
 
 Action values from the page never become shell syntax. Each `{{param}}` must be its own unquoted argument in the template: not inside quotes, `$(…)`, a heredoc or a comment, not the command itself, and not an argument a command runs as code or as a program: after `eval`, `sudo`, `env` or `xargs`, the script of `sh -c` or `python -c`, or an `awk` or `sed` program. Redirections, assignments and comments before a command do not hide it. Text values cannot appear inside `[[ ]]`, `(( ))`, `let`, `read`, `declare` or `printf -v`, where bash evaluates names and arithmetic; number values can. The list of programs that run code covers common ones, not every program, so under Ask each press still shows the exact command before it runs. The value is bound to a read-only variable and passed as one quoted argument, so it is exactly what the confirmation showed. Values may not start with `-`, number values may not be negative, and control or invisible characters are refused. The command that runs is always the one saved with the page, never text from the page itself. A page has at most 16 actions, each with a 2-minute limit.
 
+Aiden can also run a page's action when you ask it in chat, for example "merge PR 12" with a pull request board open. It uses the `workspace_artifact` tool's `run` operation, which goes through the same checks as a button press: under Ask the approval card shows the exact command and nothing runs until you allow it, a page whose commands changed after you allowed the card does not run, and the page refreshes afterwards. Aiden doesn't run an action you didn't ask for, and it doesn't press buttons to test a page.
+
 ## Access
 
 Pages follow the workspace's access setting, the same way chats do:

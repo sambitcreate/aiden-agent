@@ -11,12 +11,14 @@ import {
   parseWorkspaceArtifactDescription,
   parseWorkspaceArtifactRefresh,
   parseWorkspaceArtifactSources,
+  resolveWorkspaceArtifactCommand,
   WORKSPACE_ARTIFACT_LIMITS,
   WORKSPACE_ARTIFACT_TOOL_NAME,
   workspaceArtifactHasCommands,
   type WorkspaceArtifactPermission,
   type WorkspaceArtifactSourceResultV1,
   type WorkspaceArtifactsChangedEvent,
+  workspaceArtifactCommandAccess,
   type WorkspaceArtifactV1,
   type WorkspaceArtifactView,
 } from "../../../renderer/shared/workspace-artifacts.js";
@@ -29,7 +31,7 @@ export { WORKSPACE_ARTIFACT_TOOL_NAME };
 const MAX_MARKUP_CHARS = 400_000;
 const MAX_REPORTED_DIAGNOSTICS = 12;
 
-type Operation = "create" | "update" | "list" | "delete";
+type Operation = "create" | "update" | "list" | "delete" | "run";
 
 interface ArtifactToolInput {
   operation?: unknown;
@@ -41,6 +43,8 @@ interface ArtifactToolInput {
   sources?: unknown;
   actions?: unknown;
   refresh?: unknown;
+  action?: unknown;
+  args?: unknown;
 }
 
 export interface WorkspaceArtifactToolOptions {
@@ -62,18 +66,44 @@ export interface WorkspaceArtifactToolOptions {
     artifact: WorkspaceArtifactV1,
     signal: AbortSignal | undefined,
   ) => Promise<Record<string, WorkspaceArtifactSourceResultV1>>;
+  /**
+   * Runs one of a saved page's actions, as its button would. `expectedDigest`
+   * is the page the person confirmed; a page changed since then does not run.
+   */
+  runAction?: (
+    artifactId: string,
+    actionName: string,
+    args: readonly unknown[],
+    expectedDigest: string,
+    signal: AbortSignal | undefined,
+  ) => Promise<{ ok: boolean; output: string }>;
   onChanged: (event: WorkspaceArtifactsChangedEvent) => void;
 }
 
 function operationOf(input: ArtifactToolInput): Operation {
   const value = input.operation;
-  if (value === "create" || value === "update" || value === "list" || value === "delete") return value;
-  throw new Error('operation must be "create", "update", "list" or "delete".');
+  if (value === "create" || value === "update" || value === "list" || value === "delete" || value === "run") return value;
+  throw new Error('operation must be "create", "update", "list", "delete" or "run".');
 }
 
 function idOf(input: ArtifactToolInput): string {
   if (!isWorkspaceArtifactId(input.id)) throw new Error("Give the artifact id from workspace_artifact list.");
   return input.id;
+}
+
+/** The action a run call names on a page, and the values it passes. */
+function runTarget(input: ArtifactToolInput, artifact: WorkspaceArtifactV1) {
+  if (typeof input.action !== "string" || !input.action) throw new Error("action is required: the name of one of the page's actions.");
+  const action = artifact.actions.find((entry) => entry.name === input.action);
+  if (!action) {
+    const names = artifact.actions.map((entry) => entry.name).join(", ");
+    throw new Error(`This page has no action named "${input.action}"${names ? ` (its actions: ${names})` : ""}.`);
+  }
+  if (input.args !== undefined && !Array.isArray(input.args)) throw new Error("args must be a list of values, one per param.");
+  const args: unknown[] = input.args ?? [];
+  // Throws with the reason when the values do not fit the action's params.
+  const { preview } = resolveWorkspaceArtifactCommand(action, args);
+  return { action, args, preview };
 }
 
 function titleOf(value: unknown): string {
@@ -190,6 +220,25 @@ export async function workspaceArtifactCallApproval(
     return { required: false };
   }
   if (operation === "list") return { required: false };
+  if (operation === "run") {
+    // Under Ask the person confirms each run with the exact command, as they
+    // would a button press. Elsewhere, or for a call that cannot run, there is
+    // nothing to confirm: execute runs it or fails with the reason.
+    if (options.permission !== "ask" || !isWorkspaceArtifactId(input.id)) return { required: false };
+    const view = await options.store.get(options.workspaceId, input.id);
+    if (!view || view.artifact.approvedDigest !== view.digest) return { required: false };
+    let target: ReturnType<typeof runTarget>;
+    try {
+      target = runTarget(input, view.artifact);
+    } catch {
+      return { required: false };
+    }
+    return {
+      required: true,
+      digest: view.digest,
+      summary: `Run "${target.action.label}" from the artifact "${view.artifact.visual.title}":\n${target.preview}`,
+    };
+  }
   if (operation === "delete") {
     if (!isWorkspaceArtifactId(input.id)) return { required: false };
     const existing = await options.store.get(options.workspaceId, input.id);
@@ -270,15 +319,57 @@ function text(value: string): AgentToolResult<null> {
  * `takeApprovedDigest`, and only those record an approval for the commands they showed.
  */
 export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOptions): AgentTool {
+  async function runPageAction(input: ArtifactToolInput, shownDigest: string | undefined, signal: AbortSignal | undefined) {
+    const view = await options.store.get(options.workspaceId, idOf(input));
+    if (!view) throw new Error("No artifact with that id exists in this workspace.");
+    if (!options.runAction) throw new Error("This chat cannot run artifact actions.");
+    const { action, args } = runTarget(input, view.artifact);
+    const approved = view.artifact.approvedDigest === view.digest;
+    const access = workspaceArtifactCommandAccess(options.permission, options.hasFolder, approved);
+    if (access === "blocked") throw new Error("Workspace access is off, so this page's actions can't run.");
+    if (access === "needs-approval") {
+      throw new Error("The person has not allowed this page's commands yet; they can allow them in the Artifacts tab.");
+    }
+    // Under Ask only a confirmed card runs, and only for the page it showed.
+    if (options.permission === "ask") {
+      if (shownDigest === undefined) throw new Error("The person did not confirm this run.");
+      if (shownDigest !== view.digest) throw new Error("This page changed after the person confirmed the run. Try again.");
+    }
+    const result = await options.runAction(view.artifact.id, action.name, args, shownDigest ?? view.digest, signal);
+    let refreshed = "";
+    if (options.refresh && view.artifact.sources.length > 0) {
+      try {
+        refreshed = describeSources(await options.refresh(view.artifact, signal)).replace("First refresh:", "Refresh after the run:");
+      } catch (error) {
+        refreshed = `\nRefresh after the run failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+    const status = result.ok ? `Ran "${action.label}".` : `"${action.label}" failed.`;
+    return `${status}${result.output ? `\nOutput:\n${result.output}` : ""}${refreshed}`;
+  }
+
   return declarePiRuntimeReplay(
     {
       name: WORKSPACE_ARTIFACT_TOOL_NAME,
       label: "Artifact",
       description:
-        "Keep an interactive page in this workspace's Artifacts tab (beside the chat), for status the person will come back to: open pull requests, a release checklist, a TODO board. Unlike render_ui, the page persists for every chat in the workspace and re-reads live data from named sources (a shell command or a workspace file, bound in markup as $name) each time it refreshes. Always list first and update an existing artifact instead of creating a near-duplicate. Delete only when the person asks. Read the aiden-artifacts skill before the first call.",
+        "Keep an interactive page in this workspace's Artifacts tab (beside the chat), for status the person will come back to: open pull requests, a release checklist, a TODO board. Unlike render_ui, the page persists for every chat in the workspace and re-reads live data from named sources (a shell command or a workspace file, bound in markup as $name) each time it refreshes. Always list first and update an existing artifact instead of creating a near-duplicate. Delete only when the person asks. run performs one of a page's actions exactly as its button would; use it only when the person asks for that action. Read the aiden-artifacts skill before the first call.",
       parameters: Type.Object({
-        operation: Type.Union([Type.Literal("create"), Type.Literal("update"), Type.Literal("list"), Type.Literal("delete")]),
-        id: Type.Optional(Type.String({ description: "The artifact id from list; required for update and delete." })),
+        operation: Type.Union([
+          Type.Literal("create"),
+          Type.Literal("update"),
+          Type.Literal("list"),
+          Type.Literal("delete"),
+          Type.Literal("run"),
+        ]),
+        id: Type.Optional(Type.String({ description: "The artifact id from list; required for update, delete and run." })),
+        action: Type.Optional(Type.String({ description: "run: the name of the page's action, from list." })),
+        args: Type.Optional(
+          Type.Array(Type.Union([Type.String(), Type.Number()]), {
+            description: "run: one value per param of the action, in order.",
+            maxItems: WORKSPACE_ARTIFACT_LIMITS.params,
+          }),
+        ),
         title: Type.Optional(Type.String({ description: "Short visible name; required for create.", maxLength: WORKSPACE_ARTIFACT_LIMITS.titleChars })),
         description: Type.Optional(Type.String({ description: "One line on what the page is for.", maxLength: WORKSPACE_ARTIFACT_LIMITS.descriptionChars })),
         markup: Type.Optional(
@@ -338,6 +429,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           throw new Error("This workspace no longer exists.");
         }
         if (operation === "list") return text(listing(await store.list(workspaceId)));
+        if (operation === "run") return text(await runPageAction(input, shownDigest, signal));
         if (operation === "delete") {
           const id = idOf(input);
           const existing = await store.get(workspaceId, id);
