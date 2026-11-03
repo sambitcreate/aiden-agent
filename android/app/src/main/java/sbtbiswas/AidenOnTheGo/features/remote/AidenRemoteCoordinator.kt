@@ -144,6 +144,13 @@ internal fun aidenShouldRequestChatJobs(server: AidenServer, installation: Aiden
 internal fun aidenShouldRequestRawUploads(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.ATTACHMENTS_RAW, server, installation)
 
+/**
+ * Revision 53: a Mac that offers `chat:new-worktree` in `serverCapabilities` is asked for it, in a
+ * call of its own after `attachments:raw`, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestChatNewWorktree(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.CHAT_NEW_WORKTREE, server, installation)
+
 private fun aidenShouldRequestSoloCapability(
     capability: AidenRemoteCapability,
     server: AidenServer,
@@ -251,6 +258,23 @@ internal suspend fun aidenRequestRawUploads(
 ): AidenSoloCapabilityNegotiation? =
     aidenRequestCapabilitiesAlone(
         if (aidenShouldRequestRawUploads(server, installation)) listOf(AidenRemoteCapability.ATTACHMENTS_RAW) else emptyList(),
+        client,
+        stillCurrent
+    )
+
+/**
+ * Revision 53: asks [server] for `chat:new-worktree` alone, exactly as [aidenRequestScheduleCards]
+ * asks for `schedule:cards`. A Mac that refuses it (400 or 404) leaves the pairing as it was; its
+ * new chats then show no New worktree chip on this phone.
+ */
+internal suspend fun aidenRequestChatNewWorktree(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestChatNewWorktree(server, installation)) listOf(AidenRemoteCapability.CHAT_NEW_WORKTREE) else emptyList(),
         client,
         stillCurrent
     )
@@ -609,13 +633,21 @@ class AidenRemoteCoordinator(
                     server = issuesServer,
                     request = ::aidenRequestChatJobs
                 )
-                // Revision 50: `attachments:raw` goes alone too, last.
-                val negotiatedServer = negotiateSoloCapability(
+                // Revision 50: `attachments:raw` goes alone too.
+                val rawUploadsServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
                     server = jobsServer,
                     request = ::aidenRequestRawUploads
+                )
+                // Revision 53: `chat:new-worktree` goes alone too, last.
+                val negotiatedServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = rawUploadsServer,
+                    request = ::aidenRequestChatNewWorktree
                 )
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(
