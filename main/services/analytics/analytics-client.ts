@@ -10,6 +10,7 @@ export const ANALYTICS_HOST = "https://us.i.posthog.com";
 export const ANALYTICS_SHUTDOWN_TIMEOUT_MS = 1_500;
 
 export interface PostHogTransport extends AnalyticsTransport {
+  revokeQueue(): void;
   // Revokes the normal queue and sends only the final opt-out on a separate client.
   captureOptOut(message: AnalyticsMessage): Promise<void>;
   flush(): Promise<void>;
@@ -42,7 +43,9 @@ class AidenPostHog extends PostHog {
     const signal = options.signal
       ? AbortSignal.any([options.signal, this.revocation.signal])
       : this.revocation.signal;
-    return super.fetch(url, { ...options, signal });
+    if (new URL(url).origin !== ANALYTICS_HOST) return Promise.reject(new Error("Invalid analytics destination."));
+    const request = { ...options, signal, redirect: "error" as const };
+    return super.fetch(url, request);
   }
 
   // `disabled` short-circuits capture, flush and shutdown in the SDK, so
@@ -104,6 +107,7 @@ export function createPostHogTransport(options: PostHogTransportOptions): PostHo
   };
 
   return {
+    revokeQueue: () => client.stopWithoutFlushing(),
     capture(message) {
       if (!stopped) client.capture(toEvent(message));
     },

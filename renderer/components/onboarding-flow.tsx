@@ -19,7 +19,7 @@ import { CodexProviderSettings } from "./settings/codex-provider-settings";
 import { OnboardingOpenAiLogin } from "./onboarding-openai-login";
 import { Button, Dialog, Field, Input, Text, toast } from "./ui";
 import { UsageDataNotice, UsageDataOnboardingRow } from "./usage-data";
-import { appApi, botsApi, profileApi, providersApi } from "../lib/ipc";
+import { analyticsApi, appApi, botsApi, profileApi, providersApi } from "../lib/ipc";
 import { useBrowserSurfaceBlocker } from "../lib/link-opener";
 import {
   clearLegacyOnboardingCompletion,
@@ -191,6 +191,7 @@ export function OnboardingFlow({
   const onboardingSnapshotRef = React.useRef<OnboardingSnapshot | null>(null);
   const readyProviderIdRef = React.useRef<string | null>(null);
   const savingRef = React.useRef(false);
+  const [usageShownEnabled, setUsageShownEnabled] = React.useState(false);
   const scrollContainerRef = React.useRef<HTMLElement>(null);
   const profileInitializedRef = React.useRef(false);
   const loadGenerationRef = React.useRef(0);
@@ -525,6 +526,7 @@ export function OnboardingFlow({
       const selectedProviderId = providerSkipped
         ? undefined
         : (readyProviderIdRef.current ?? onboardingSnapshotRef.current?.selectedProviderId);
+      if (usageShownEnabled) await analyticsApi.markNoticeShown("ok").catch(() => undefined);
       const snapshot = await appApi.setOnboardingOutcome(
         providerSkipped || !selectedProviderId ? "deferred" : "completed",
         selectedProviderId,
@@ -1017,7 +1019,7 @@ export function OnboardingFlow({
                     </Text>
                   </div>
                 </div>
-                <UsageDataOnboardingRow />
+                <UsageDataOnboardingRow onDisplay={setUsageShownEnabled} />
                 <OnboardingFeatureGallery features={visibleFeatureBentos} platform={capabilities.platform} />
               </div>
             ) : null}

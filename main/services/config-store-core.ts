@@ -919,12 +919,12 @@ export function createConfigStore(
       return parseAnalyticsState((await settingsStore.load()).analytics);
     },
 
-    async updateAnalyticsState(mutate: (state: AnalyticsState) => AnalyticsState): Promise<AnalyticsState> {
+    async updateAnalyticsState(mutate: (state: AnalyticsState) => AnalyticsState, isCurrent?: () => boolean): Promise<AnalyticsState> {
       return mutateSettings((config) => {
         const next = mutate(parseAnalyticsState(config.analytics));
         config.analytics = { ...next };
         return next;
-      });
+      }, isCurrent);
     },
 
     async getSettings(): Promise<AppSettings> {
