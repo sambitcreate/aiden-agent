@@ -1,3 +1,4 @@
+import { isBotInputEntryKind } from "./bot-input-entry.js";
 // The one-time self-intro a Bot posts when it is genuinely created (spec §4.3).
 //
 // It is a hidden-prompt turn: the person sees only the Bot's reply. The turn
@@ -39,7 +40,7 @@ export async function sendBotIntro(
   const state = await service.state(botId);
   if (state.kind !== "idle") return false;
   const view = await (await service.conversation(botId)).context(BACKGROUND_CONTEXT);
-  if (view.entries.some((entry) => entry.kind === "pi.user" || entry.kind === "pi.assistant")) return false;
+  if (view.entries.some((entry) => isBotInputEntryKind(entry.kind) || entry.kind === "pi.assistant")) return false;
   await service.send(botId, { text: BOT_INTRO_PROMPT, requestId: botIntroRequestId(botId), hidden: true });
   return true;
 }

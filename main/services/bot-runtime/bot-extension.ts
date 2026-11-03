@@ -1,3 +1,4 @@
+import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
 // The `aiden-bot` Pi Durable extension: everything a Bot turn needs from
 // Aiden, installed in a Bot harness's registry before anything can run.
 //
@@ -191,6 +192,7 @@ export interface BotToolCallCheck {
   signal: AbortSignal | undefined;
   /** Request ids of the inputs the calling run serves (one per input; `undefined` when it has none). */
   requestIds?: readonly (string | undefined)[];
+  hasRoutineInputs?(): Promise<boolean>;
 }
 
 export type BotReadmission = { ok: true } | { ok: false; reason: "access_changed" | "bot_missing" };
@@ -554,6 +556,19 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           args: call.arguments,
           signal: context.abortSignal,
           requestIds,
+          hasRoutineInputs: async () => {
+            const conversation = await harness!.conversation(api.conversationId, context);
+            if (!conversation) return false;
+            return conversation.commit(async (tx) => {
+              for (const key of requestIds) {
+                if (!key) return false;
+                const input = await tx.submissionByRequest(api.conversationId, key);
+                if (input?.type !== "input" || input.entry === undefined ||
+                    (await tx.entry(input.entry))?.kind !== BOT_ROUTINE_INPUT_KIND) return false;
+              }
+              return requestIds.length > 0;
+            }, context);
+          },
         });
         if (!decision.allowed) return { block: decision.reason };
         // A hand-off card belongs to a call in the transcript, which a script's call is not.
