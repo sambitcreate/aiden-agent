@@ -629,7 +629,8 @@ test("a firing routine submits to its Bot with a stable routine request id", asy
       requestId: `routine:${routine.id}:${due}`,
       text: "Plan this week's dinners.\n\nIf there is nothing new to report, reply exactly [SILENT].",
       // A routine never dismisses a paused turn, and its turn carries the routine's name.
-      ifNotInterrupted: true,
+      routineOrigin: { version: 1, botId: "bot-chef", routineId: routine.id, runId: `routine:${routine.id}:${due}`, kind: "scheduled" },
+    ifNotInterrupted: true,
       label: "Weekly meal prep",
     },
   ]);

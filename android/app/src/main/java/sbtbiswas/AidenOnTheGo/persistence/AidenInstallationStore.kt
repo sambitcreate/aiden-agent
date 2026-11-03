@@ -83,6 +83,7 @@ class AidenInstallationStore(
 
         _installations.value.firstOrNull { it.id == installation.id }?.let { replaced ->
             AidenBotWatchJournalStore(secureStore).purge(replaced.instanceId, replaced.deviceId, replaced.createdAt)
+            AidenBotWatchJournalStore(secureStore, "bot-open-work").purge(replaced.instanceId, replaced.deviceId, replaced.createdAt)
         }
         secureStore.setCredential(installation.credentialScope, exchange.credential)
 
@@ -103,6 +104,7 @@ class AidenInstallationStore(
     fun removeInstallation(id: String) {
         val target = _installations.value.firstOrNull { it.id == id } ?: return
         AidenBotWatchJournalStore(secureStore).purge(target.instanceId, target.deviceId, target.createdAt)
+        AidenBotWatchJournalStore(secureStore, "bot-open-work").purge(target.instanceId, target.deviceId, target.createdAt)
         secureStore.removeCredential(target.credentialScope)
         _installations.value = _installations.value.filter { it.id != id }
         if (_activeInstallationId.value == id) {

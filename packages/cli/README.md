@@ -235,3 +235,5 @@ packages/cli/
 From this directory, after the root install: `npm install && npm run build`. `npm test` builds nothing; run `npm run build` first, because the tests exercise the built bundle. From the repository root, `npm run test:cli` installs, builds and tests in one step.
 
 History: the CLI started as a rebranded Pi terminal app ([`docs/plans/aiden-cli-plan.md`](../../docs/plans/aiden-cli-plan.md), [parity checklist](../../docs/plans/aiden-cli-parity-checklist.md)) and became serve-only on 2026-10-30 ([`docs/plans/aiden-serve-only-cli.md`](../../docs/plans/aiden-serve-only-cli.md)).
+
+The optional Open work management API is currently wired by the Electron desktop host, not `aiden serve`. The CLI does not advertise `bot:open-work`; paired clients keep that management surface unavailable for this host. The shared runtime’s request-scoped Stop and evidence helpers remain portable. See [Open work](../../docs/bot-open-work.md).

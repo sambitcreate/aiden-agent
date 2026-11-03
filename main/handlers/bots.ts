@@ -31,6 +31,7 @@ import { registerBotHandoffHandlers } from "./bot-handoffs.js";
 import { registerBotIssueHandlers } from "./bot-issues.js";
 import { registerBotHealthHandlers } from "./bot-health.js";
 import { registerBotConnectorWatchHandlers } from "./bot-connector-watches.js";
+import { registerBotOpenWorkHandlers } from "./bot-open-work.js";
 import { registerBotEventRoutineHandlers } from "./bot-event-routines.js";
 import { registerBotLearningHandlers } from "./bot-learning.js";
 import { botHealthReports } from "../services/bot-health/health-main.js";
@@ -234,6 +235,11 @@ export function registerBotHandlers(): void {
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     owner: (event) => rendererDocumentOwner(event, () => new Error("This watch request came from an inactive renderer.")),
     service: async () => (await import("../services/bot-routine-events/sources-main.js")).botConnectorWatches,
+  });
+  registerBotOpenWorkHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => rendererDocumentOwner(event, () => new Error("This Open work request came from an inactive application document.")),
+    service: async () => (await import("../services/bot-open-work/service-main.js")).botOpenWork,
   });
   // Profile → When something happens: event routines and their links.
   registerBotEventRoutineHandlers<Electron.IpcMainInvokeEvent>({

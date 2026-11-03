@@ -1183,6 +1183,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   botFiles,
                   bots,
                   botSessions,
+                  botOpenWork: (await import("./bot-open-work/service-main.js")).botOpenWork,
                   ...(process.platform === "darwin" ? { botWatches: (await import("./bot-routine-events/sources-main.js")).botConnectorWatches } : {}),
                 }
               : {}),

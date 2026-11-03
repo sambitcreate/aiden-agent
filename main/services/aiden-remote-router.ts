@@ -1,3 +1,4 @@
+import { parseBotOpenWorkMutation, type BotOpenWorkMutation, type BotOpenWorkSnapshot, type BotOpenWorkResult, type BotOpenWorkEvidence } from "../../renderer/shared/bot-open-work.js";
 import type { BotConnectorWatchService } from "./bot-routine-events/connector-service.js";
 import { BotConnectorWatchError, connectorFields } from "./bot-routine-events/connector-service.js";
 import { PEER_PROJECT_CLONE_FEATURE } from "../../renderer/shared/peer-project-clone.js";
@@ -51,6 +52,7 @@ import {
   AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
+  AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
   AIDEN_REMOTE_BOT_ACTIVITY_FEATURE,
   AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE,
   AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
@@ -276,6 +278,7 @@ export interface AidenRemoteRouterDependencies {
     >;
   files?: Pick<AidenRemoteFileService, "list" | "read" | "write"> & Partial<Pick<AidenRemoteFileService, "children">>;
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
+  botOpenWork?: { snapshot(botId: string): Promise<BotOpenWorkSnapshot>; mutateByPerson(botId: string, mutation: BotOpenWorkMutation): Promise<BotOpenWorkResult>; evidence(botId: string, id: string, kind: "source" | "result"): Promise<BotOpenWorkEvidence | undefined> };
   botWatches?: Pick<BotConnectorWatchService, "list" | "discoverSources" | "create" | "update" | "setEnabled" | "remove" | "testCheck" | "runNow">;
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
   schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
@@ -440,6 +443,7 @@ export type AidenRemoteRouteLabel =
   | "botPause"
   | "botIssueAct"
   | "botWatches"
+  | "botOpenWork"
   | "botRoutines"
   | "botConnectionRequests"
   | "botMemory"
@@ -540,6 +544,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   botHandoffOpenOnMac: ["/bots/:botId/handoffs/:waitId/open-on-mac"],
   botPause: ["/bots/:botId/pause"],
   botIssueAct: ["/bots/:botId/issues/:issueId/act"],
+  botOpenWork: ["/bots/:botId/open-work", "/bots/:botId/open-work/:itemId/evidence/:kind"],
   botWatches: ["/bots/:botId/watches", "/bots/:botId/watches/sources", "/bots/:botId/watches/test", "/bots/:botId/watches/:watchId", "/bots/:botId/watches/:watchId/enabled", "/bots/:botId/watches/:watchId/run"],
   botRoutines: ["/bots/:botId/routines", "/bots/:botId/routines/:routineId"],
   botConnectionRequests: ["/bots/:botId/connection-requests"],
@@ -2089,6 +2094,9 @@ function writeBotDetail(
   writeJson(response, status, visible);
 }
 
+function botOpenWorkWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return typeof dependencies.botOpenWork?.snapshot === "function" && typeof dependencies.botOpenWork?.mutateByPerson === "function" && typeof dependencies.botOpenWork?.evidence === "function";
+}
 function botWatchesWired(dependencies: AidenRemoteRouterDependencies): boolean {
   const port = dependencies.botWatches;
   return !!port && (["list", "discoverSources", "create", "update", "setEnabled", "remove", "testCheck", "runNow"] as const).every((key) => typeof port[key] === "function");
@@ -2128,6 +2136,7 @@ function advertisedServerCapabilities(
     ...(device.acceptsBotCapabilities === true && botImagesWired(dependencies)
       ? AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES
       : []),
+    ...(device.acceptsBotCapabilities === true && botOpenWorkWired(dependencies) ? AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES : []),
     ...(device.acceptsBotCapabilities === true && botWatchesWired(dependencies) ? AIDEN_REMOTE_BOT_WATCH_CAPABILITIES : []),
     // Revision 42: offered only while the issue act route is wired.
     ...(device.acceptsBotCapabilities === true && botIssuesWired(dependencies)
@@ -3122,6 +3131,32 @@ export function createAidenRemoteRequestHandler(
           handoffs: holdsBotHandoffs(device, dependencies),
         }));
         return;
+      }
+      const openWorkEvidenceMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/open-work\/([A-Za-z0-9._:-]{1,160})\/evidence\/(source|result)$/u.exec(path);
+      if (openWorkEvidenceMatch && request.method === "GET") {
+        requireNoQuery(query); route = "botOpenWork";
+        if (!botOpenWorkWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Open work is not served by this host.", 404);
+        const device = await authenticate(request, dependencies.devices, "bot:read"); deviceIdSuffix = device.id.slice(-8);
+        requireDeviceCapabilities(device, ["chat:read", "bot:open-work"]);
+        if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
+        const evidence = await dependencies.botOpenWork!.evidence(openWorkEvidenceMatch[1]!, openWorkEvidenceMatch[2]!, openWorkEvidenceMatch[3] as "source" | "result");
+        if (!evidence) throw new AidenRemoteServiceError("not_found", "This work item has no retained evidence of that kind.", 404);
+        writeJson(response, 200, evidence); return;
+      }
+      const openWorkMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/open-work$/u.exec(path);
+      if (openWorkMatch && (request.method === "GET" || request.method === "POST")) {
+        requireNoQuery(query); route = "botOpenWork";
+        if (!botOpenWorkWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Open work is not served by this host.", 404);
+        const device = await authenticate(request, dependencies.devices, request.method === "GET" ? "bot:read" : "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        requireDeviceCapabilities(device, ["bot:read", "chat:read", "bot:open-work"]);
+        if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
+        if (request.method === "GET") { writeJson(response, 200, await dependencies.botOpenWork!.snapshot(openWorkMatch[1]!)); return; }
+        let mutation: BotOpenWorkMutation;
+        try { mutation = parseBotOpenWorkMutation(await readJsonBody(request)); }
+        catch { throw new AidenRemoteServiceError("invalid_request", "Invalid Open work change.", 400); }
+        // An accepted mutation keeps its durable identity across disconnects.
+        writeJson(response, 200, await dependencies.botOpenWork!.mutateByPerson(openWorkMatch[1]!, mutation)); return;
       }
       const watchListMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches$/u.exec(path);
       const watchSourcesMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches\/sources$/u.exec(path);

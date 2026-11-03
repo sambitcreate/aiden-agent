@@ -780,8 +780,18 @@
         "main/services/bot-routine-events/connector-watch-composio-probe.test.ts",
         "main/services/bot-routine-events/composio-inspection-file.test.ts",
         "main/services/bot-routine-events/composio-source-inspection.test.ts",
+        "main/services/bot-routine-events/composio-settings-inspection.test.ts",
         "main/services/composio-service-tool.test.ts",
-        "main/services/mcp-connector-client-boundary.test.ts"
+        "main/services/mcp-connector-client-boundary.test.ts",
+        "main/services/bot-open-work/store.test.ts",
+        "main/services/bot-open-work/service.test.ts",
+        "main/services/bot-open-work/stop.test.ts",
+        "main/services/bot-open-work/provenance.test.ts",
+        "main/services/bot-open-work/tool.test.ts",
+        "renderer/shared/bot-open-work.test.ts",
+        "main/handlers/bot-open-work.test.ts",
+        "main/services/aiden-remote-bot-open-work.test.ts",
+        "main/services/bot-open-work-host-origin.test.ts"
       ],
       "preserved": [
         "worktree-remover-native",
@@ -1298,7 +1308,8 @@
         "main/handlers/transcript-images.test.ts",
         "renderer/components/transcript-image.test.tsx",
         "renderer/lib/work-details.test.ts",
-        "renderer/components/chat-preferences.test.tsx"
+        "renderer/components/chat-preferences.test.tsx",
+        "renderer/main/bots/bot-open-work-page.test.tsx"
       ],
       "preserved": [
         "generative-ui-chromium",

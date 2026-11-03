@@ -10,6 +10,7 @@
 // Exact joins (MCP tools, skills) are computed on demand from a fresh catalog,
 // so a connection or skill whose fingerprint changed is refused at call time.
 
+import { BOT_OPEN_WORK_TOOL } from "../bot-open-work/tool.js";
 import { BOT_ROUTINES_TOOL_NAME } from "../../../renderer/shared/bot-routine-proposals.js";
 import { composioServiceCallRequiresForeground, isComposioServiceToolDescriptor } from "../composio-service-tool.js";
 import { BOT_FILE_TOOL_NAMES } from "../bot-file-tool-router.js";
@@ -146,6 +147,7 @@ export async function botToolVerdict(
   if (name === INSPECT_IMAGE_TOOL_NAME) {
     return verdict(!facts.supportsImages && authority.visionProvider !== undefined, "Image understanding is off for this Bot.");
   }
+  if (name === BOT_OPEN_WORK_TOOL) return verdict(hasCapability(facts, "tasks"), "Task tracking is off for this Bot.");
   if (name === WEB_SEARCH_TOOL) return verdict(hasCapability(facts, "web"), "Web search is off for this Bot.");
   if (isComputerUseCapabilityTool(name)) {
     return verdict(hasCapability(facts, "computer_use"), "Computer Use is off for this Bot.");
@@ -230,7 +232,7 @@ export async function botToolApprovalSummary(
   facts: BotToolFacts,
 ): Promise<string | undefined> {
   if (name === SHARE_IMAGE_TOOL_NAME) return summarizeToolCall(name, args);
-  if (FILE_TOOLS.has(name) || name === "run_command" || name === WEB_SEARCH_TOOL) return undefined;
+  if (FILE_TOOLS.has(name) || name === "run_command" || name === WEB_SEARCH_TOOL || name === BOT_OPEN_WORK_TOOL) return undefined;
   // The browser asks through its live tab and page (`bot-browser-approval.ts`).
   if (name === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(name)) return undefined;
   // Inside the Bot's own computer the baseline is allowed; rules read the intent (§8.7).

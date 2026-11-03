@@ -487,6 +487,11 @@ struct AidenServer: Codable, Equatable, Sendable {
             && capabilities.contains(.botWatches) && capabilities.contains(.botRead)
     }
 
+    var supportsBotOpenWork: Bool {
+        let required: Set<AidenRemoteCapability> = [.botRead, .chatRead, .botOpenWork]
+        return required.isSubset(of: Set(capabilities)) && required.isSubset(of: Set(serverCapabilities ?? []))
+    }
+
     /// The Mac announces `bot-activity-v1`, whatever this device holds.
     var announcesBotActivity: Bool {
         features.contains(Self.botActivityFeature)
@@ -1569,7 +1574,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
-            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues, .botWatches,
+            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues, .botWatches, .botOpenWork,
             .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw, .chatNewWorktree,
         ])
         guard !accepts.isEmpty,
@@ -2633,6 +2638,41 @@ final class AidenRemoteClient: @unchecked Sendable {
             headers: idempotencyHeaders(idempotencyKey),
             acceptedStatus: [200, 202]
         )
+    }
+
+    // MARK: Open work (`bot:open-work`)
+
+    func botOpenWork(botId: String) async throws -> AidenOpenWorkSnapshot {
+        try AidenOpenWorkWire.id(botId)
+        let snapshot: AidenOpenWorkSnapshot = try await send(method: "GET", path: ["bots", botId, "open-work"],
+            maximumResponseBytes: 900 * 1024)
+        guard snapshot.botId == botId else { throw AidenRemoteClientError.invalidResponse }
+        return snapshot
+    }
+
+    func mutateBotOpenWork(botId: String, mutation: AidenOpenWorkMutation) async throws -> AidenOpenWorkResult {
+        try AidenOpenWorkWire.id(botId)
+        try mutation.validate()
+        let data = try JSONEncoder().encode(mutation)
+        guard data.count <= 16 * 1024 else { throw AidenRemoteContractError.payloadTooLarge }
+        let result: AidenOpenWorkResult = try await send(method: "POST", path: ["bots", botId, "open-work"], encodedBody: data,
+            maximumResponseBytes: 900 * 1024)
+        guard result.snapshot == nil || result.snapshot?.botId == botId else { throw AidenRemoteClientError.invalidResponse }
+        if case let .accepted(receipt) = result {
+            guard receipt.mutationId == mutation.mutationId,
+                  receipt.itemId == nil || mutation.id == nil || receipt.itemId == mutation.id,
+                  receipt.stop == nil || mutation.action.isStop else { throw AidenRemoteClientError.invalidResponse }
+        }
+        return result
+    }
+
+    func botOpenWorkEvidence(botId: String, itemId: String, kind: AidenOpenWorkEvidenceKind) async throws -> AidenOpenWorkEvidence {
+        try AidenOpenWorkWire.id(botId)
+        try AidenOpenWorkWire.id(itemId)
+        let evidence: AidenOpenWorkEvidence = try await send(method: "GET",
+            path: ["bots", botId, "open-work", itemId, "evidence", kind.rawValue], maximumResponseBytes: 256 * 1024)
+        guard evidence.itemId == itemId, evidence.kind == kind else { throw AidenRemoteClientError.invalidResponse }
+        return evidence
     }
 
     // MARK: Connector watches (`bot:watches`)

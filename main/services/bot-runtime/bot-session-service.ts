@@ -1,4 +1,4 @@
-import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
+import { BOT_ROUTINE_INPUT_KIND, isIssuedBotRoutineInputOrigin, type BotRoutineInputOrigin } from "./bot-input-entry.js";
 // The Bot turn path: every ingress (desktop, Remote, Telegram, routines)
 // reaches a Bot's one durable conversation through this service.
 //
@@ -63,6 +63,8 @@ import {
   type BotHarnessHost,
 } from "./harness-host.js";
 
+import { inspectLinkedBotWork, stopLinkedBotWork, readLinkedBotWorkEvidence, type BotLinkedWorkEvidence, type BotLinkedWorkInspection, type BotLinkedWorkStopOutcome } from "../bot-open-work/stop.js";
+
 export const BOT_NOTICE_ENTRY_KIND = "aiden.bot-notice";
 export const BOTS_HELD_ELSEWHERE_MESSAGE = "Bots are open in another Aiden window.";
 
@@ -126,6 +128,8 @@ export interface BotSendInput {
    * paused turn first.
    */
   ifNotInterrupted?: boolean;
+  /** Internal host-issued accepted routine provenance; never accepted from IPC or Remote. */
+  routineOrigin?: BotRoutineInputOrigin;
   /** Label shown on the turn, such as the routine name. */
   label?: string;
   /** An Aiden-written prompt (the self-intro): its reply shows, the prompt does not. */
@@ -201,6 +205,9 @@ export interface BotSessionService {
    * paused (interrupted) turn is left for Resume or Dismiss.
    */
   stop(botId: string): Promise<BotSessionState>;
+  inspectLinkedWork(botId: string, submissionId: string): Promise<BotLinkedWorkInspection>;
+  readLinkedWorkEvidence(botId: string, submissionId: string, kind: "source" | "result"): Promise<BotLinkedWorkEvidence | undefined>;
+  stopLinkedWork(botId: string, submissionId: string, intentId?: string): Promise<BotLinkedWorkStopOutcome>;
   /**
    * Withdraw one queued message before its turn starts (Pi's
    * `abortSubmission`). A message already placed in a turn keeps running.
@@ -282,6 +289,7 @@ export interface BotSessionServiceDeps {
    * record). Runs after the session is aborted and removed. Each effect must
    * be idempotent: a failed or interrupted delete is retried from the start.
    */
+  beforeDelete?(botId: string): Promise<void>;
   deleteEffects?: ReadonlyArray<(botId: string) => Promise<void>>;
   /**
    * A harness opened for this Bot (first use, or after the idle close): a new
@@ -376,6 +384,7 @@ function createKeyedQueue() {
 
 export async function createBotSessionService(deps: BotSessionServiceDeps): Promise<BotSessionRuntime> {
   const registries = new Map<string, BotRegistry>();
+  let shuttingDown = false;
   const hostOrUnavailable = await createBotHarnessHost({
     profileDir: deps.profileDir,
     leaseHelperPath: deps.leaseHelperPath,
@@ -736,6 +745,10 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     },
 
     send(botId, input) {
+      const routineOrigin = input.routineOrigin;
+      if (routineOrigin && (!isIssuedBotRoutineInputOrigin(routineOrigin) || routineOrigin.botId !== botId || routineOrigin.runId !== input.requestId || input.hidden === true)) {
+        return Promise.reject(new BotSessionError("access_changed", "The routine input origin could not be verified."));
+      }
       return serialize(botId, async () => {
         const { conversation, registry } = await openBot(botId);
         const existing = await lookupRequest(conversation, input.requestId);
@@ -762,7 +775,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
           {
             type: "input",
             content: userContent(input),
-            ...(input.label !== undefined && { entry: { kind: BOT_ROUTINE_INPUT_KIND } }),
+            ...((routineOrigin || input.label !== undefined) && { entry: { kind: BOT_ROUTINE_INPUT_KIND, ...(routineOrigin ? { data: { routineOrigin: { ...routineOrigin } } } : {}) } }),
             requestId: input.requestId,
             whenBusy: input.whenBusy ?? "followUp",
           },
@@ -827,6 +840,29 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       });
     },
 
+    async inspectLinkedWork(botId, submissionId) {
+      const opened = await openBot(botId);
+      const host = await requireHost().open(botId);
+      return inspectLinkedBotWork(host.harness, opened.conversation.id, submissionId);
+    },
+
+    async readLinkedWorkEvidence(botId, submissionId, kind) {
+      const opened = await openBot(botId);
+      const host = await requireHost().open(botId);
+      return readLinkedBotWorkEvidence(host.harness, opened.conversation.id, submissionId, kind);
+    },
+
+    stopLinkedWork(botId, submissionId, intentId) {
+      return serialize(botId, async () => {
+        const opened = await openBot(botId);
+        const host = await requireHost().open(botId);
+        return stopLinkedBotWork(host.harness, opened.conversation.id, submissionId, { intentId, mayContinue: async () => {
+          const paused = await pauses.get(botId);
+          return !shuttingDown && !paused && !deleted.has(botId) && !suspending.has(botId);
+        } });
+      });
+    },
+
     withdraw(botId, submissionId) {
       return serialize(botId, async () => {
         const id = Number(submissionId);
@@ -854,6 +890,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         // Durable before the first destructive step, so a crash anywhere below
         // is finished at the next start instead of leaving a Bot half deleted.
         await recordPendingDelete(botId, true);
+        await deps.beforeDelete?.(botId);
         await owner.destroy(botId);
         registries.delete(botId);
         for (const effect of deps.deleteEffects ?? []) await effect(botId);
@@ -960,6 +997,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     },
 
     async shutdown() {
+      shuttingDown = true;
       await host?.shutdown();
     },
   };

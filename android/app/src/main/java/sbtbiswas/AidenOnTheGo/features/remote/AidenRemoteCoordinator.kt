@@ -212,6 +212,12 @@ internal suspend fun aidenRequestBotImages(
         stillCurrent
     )
 
+/** Revision 55: task text is exposed only after this isolated capability negotiation. */
+internal suspend fun aidenRequestBotOpenWork(client: AidenRemoteClient, server: AidenServer,
+    installation: AidenInstallation, stillCurrent: () -> Boolean = { true }): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_OPEN_WORK, server, installation))
+        listOf(AidenRemoteCapability.BOT_OPEN_WORK) else emptyList(), client, stillCurrent)
+
 /** Revision 54: watches are negotiated alone only when the host offers them. */
 internal suspend fun aidenRequestBotWatches(
     client: AidenRemoteClient,
@@ -357,6 +363,7 @@ class AidenRemoteCoordinator(
     val usageCache = AidenUsageCache(File(storageDir, "usage_cache"))
     val botCache = AidenBotCache(storageDir)
     val botWatchJournals = sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournalStore(installationStore.secureStore)
+    val botOpenWorkJournals = sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournalStore(installationStore.secureStore, "bot-open-work")
     /** Bot chats' last transcripts and unsent messages (R14, R17), purged with the pairing. */
     val botSessionStore = File(botOutboxDir, "BotOutbox-v1").let { dir ->
         botOutboxIo?.let { AidenBotSessionStore(dir, io = it) } ?: AidenBotSessionStore(dir)
@@ -662,10 +669,12 @@ class AidenRemoteCoordinator(
                     request = ::aidenRequestChatNewWorktree
                 )
                 // Revision 54: `bot:watches` goes alone, without another feature token.
-                val negotiatedServer = negotiateSoloCapability(
+                val watchesServer = negotiateSoloCapability(
                     generation = generation, installation = installation, client = newClient,
                     server = worktreeServer, request = ::aidenRequestBotWatches
                 )
+                val negotiatedServer = negotiateSoloCapability(generation = generation, installation = installation,
+                    client = newClient, server = watchesServer, request = ::aidenRequestBotOpenWork)
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(
                     instanceId = installation.instanceId,
@@ -828,6 +837,7 @@ class AidenRemoteCoordinator(
         usageCache.purge(installation.instanceId)
         readSnapshotCache.purge(installation.instanceId)
         botWatchJournals.purge(installation.instanceId, installation.deviceId, installation.createdAt)
+        botOpenWorkJournals.purge(installation.instanceId, installation.deviceId, installation.createdAt)
         botCache.purge(installation.instanceId, installation.deviceId)
         botSessionStore.purgeInstance(installation.instanceId)
         chatCache.purge(installation.instanceId)

@@ -109,6 +109,7 @@ fun AidenBotProfileScreen(
     onNavigateToEditBot: (String) -> Unit,
     onNavigateToMemory: (String) -> Unit = {},
     onNavigateToWatches: (String) -> Unit = {},
+    onNavigateToOpenWork: (String) -> Unit = {},
     onBotMutated: () -> Unit = {},
     botDeleter: AidenBotDeleter? = null,
     onBotDeleted: () -> Unit = onNavigateBack
@@ -528,6 +529,18 @@ fun AidenBotProfileScreen(
                                 )
                                 Spacer(Modifier.width(4.dp))
                             }
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = palette.secondary)
+                        }
+                    }
+                }
+
+                if (serverInfo?.supportsBotOpenWork == true) {
+                    Surface(onClick = { onNavigateToOpenWork(current.id) }, color = palette.raised,
+                        shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.heightIn(min = 56.dp).padding(horizontal = 16.dp)) {
+                            Text(stringResource(R.string.bot_open_work_title), style = MaterialTheme.typography.bodyLarge,
+                                color = palette.foreground, modifier = Modifier.weight(1f))
                             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = palette.secondary)
                         }
                     }

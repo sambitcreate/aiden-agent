@@ -289,3 +289,5 @@ export function proposeSkillCandidate(
     bind: (call) => build((kind, data) => call.appendEntry(kind, data as JsonValue)),
   };
 }
+
+export { botOpenWorkCandidate } from "../bot-open-work/tool.js";

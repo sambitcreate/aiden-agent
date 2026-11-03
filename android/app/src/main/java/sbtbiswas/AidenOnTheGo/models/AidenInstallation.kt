@@ -204,6 +204,11 @@ data class AidenServer(
     val supportsBotImages: Boolean
         get() = offersBotImages && capabilities.contains(AidenRemoteCapability.BOT_IMAGES)
 
+    /** Open-work text requires both Bot visibility and chat visibility, plus negotiation. */
+    val supportsBotOpenWork: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_OPEN_WORK) == true &&
+            capabilities.containsAll(listOf(AidenRemoteCapability.BOT_OPEN_WORK, AidenRemoteCapability.BOT_READ, AidenRemoteCapability.CHAT_READ))
+
     /** Offered and held (revision 54): this phone can inspect connector watches. */
     val supportsBotWatches: Boolean
         get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_WATCHES) == true &&

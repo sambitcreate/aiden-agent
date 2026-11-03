@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Contract revision 55 (`bot:open-work`): a supporting paired host adds **Open work** to Bot profiles. Add and edit responsibilities, record Waiting reasons, mark Done, Reopen, Dismiss and Undo a recent metadata change. View owned source/result transcript excerpts and host-derived execution. Stop targets only safely linked work, and Stop and dismiss waits for acknowledgement. Protected local drafts and frozen requests survive disconnect and restart; Add never starts or schedules a run.
+
 - Contract revision 54 (`bot:watches`): a supporting paired host adds **Watches** to Bot profiles. Discover safe account/resource choices, create and edit typed watches, pause or resume, preview a test check, delete, or explicitly Run now. Polling and execution stay on the host. Calendar remains unavailable until exact-account and occurrence guarantees are available. Protected device-only drafts and frozen unresolved requests survive disconnect and restart, with stale-revision review and the original mutation identity retained for an explicit retry.
 
 - Stream recovery keeps a host-requested retry delay across a temporary network loss, counting time asleep toward the wait.

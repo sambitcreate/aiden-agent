@@ -287,7 +287,8 @@ export const AIDEN_REMOTE_INBOX_SIGNALS_CONTRACT_REVISION = 52 as const;
 export const AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION = 53 as const;
 /** Revision54: negotiated connector-watch management; no feature-token expansion. */
 export const AIDEN_REMOTE_BOT_WATCHES_CONTRACT_REVISION = 54 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_WATCHES_CONTRACT_REVISION;
+export const AIDEN_REMOTE_BOT_OPEN_WORK_CONTRACT_REVISION = 55 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_OPEN_WORK_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -510,6 +511,7 @@ export const AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES = ["bot:images"] as const;
  */
 export const AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES = ["bot:issues"] as const;
 export const AIDEN_REMOTE_BOT_WATCH_CAPABILITIES = ["bot:watches"] as const;
+export const AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES = ["bot:open-work"] as const;
 
 export type AidenRemoteBotIssueCapability = (typeof AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES)[number];
 
@@ -521,6 +523,7 @@ export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
 ] as const;
 
 /**
@@ -584,6 +587,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
@@ -606,6 +610,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
@@ -9357,3 +9362,6 @@ export function reconcileAidenSseFrames(
 }
 
 export type { BotConnectorWatchList, BotConnectorWatchView, BotConnectorWatchSourceList, BotConnectorWatchTestResult } from "../../renderer/shared/bot-connector-watches.js";
+
+export type { BotOpenWorkSnapshot, BotOpenWorkItem, BotOpenWorkMutation, BotOpenWorkResult, BotOpenWorkEvidence } from "../../renderer/shared/bot-open-work.js";
+export { parseBotOpenWorkSnapshot, parseBotOpenWorkResult, parseBotOpenWorkMutation, parseBotOpenWorkEvidence } from "../../renderer/shared/bot-open-work.js";

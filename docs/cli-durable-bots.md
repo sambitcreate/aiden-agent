@@ -48,3 +48,9 @@ The Bot CLI additionally exposes `session`, `send`, `resume`, `dismiss`, `stop`,
 ## Acceptance
 
 The bundled parity suite exercises preservation, failed-backup recovery, duplicate requests, memory persistence, routine deduplication, process-death Resume/Dismiss, paused routine refusal, pausing and unpausing from the CLI (a running turn stopped and left for Resume, the pause surviving a restart, and an open session stream hearing it), and revocation. Shared desktop runtime tests cover the same core. macOS and Linux bundle/runtime acceptance, native capability fallback, and physical pairing/background behavior are separate gates; passing local storage tests does not establish physical-device acceptance.
+
+## Optional desktop management
+
+Accepted scheduled inputs retain host-issued routine provenance verified against the CLI scheduler’s task/run store; a public send cannot claim that origin.
+
+Open work’s protected store/tool and linked execution helpers are shared-core code, but the Electron host owns the current Open work management integration. The standalone CLI does not advertise `bot:open-work` or serve its optional routes. This does not add an interactive CLI or a second scheduler.

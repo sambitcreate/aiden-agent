@@ -432,7 +432,7 @@ final class AidenBotWatchTests: XCTestCase {
         XCTAssertFalse(try server(support: ["bot:read", "bot:watches"], grants: ["bot:read"]).supportsBotWatches)
         XCTAssertFalse(try server(support: ["bot:read", "bot:watches"], grants: ["bot:watches"]).supportsBotWatches)
         XCTAssertTrue(try server(support: ["bot:read", "bot:watches"], grants: ["bot:read", "bot:watches"]).supportsBotWatches)
-        XCTAssertEqual(AidenRemoteCoordinator.capabilitiesAskedForAlone.last, [.botWatches])
+        XCTAssertTrue(AidenRemoteCoordinator.capabilitiesAskedForAlone.contains([.botWatches]))
     }
 
     func testUTF16BoundsMatchHostAndRepairReasonsStayBounded() throws {

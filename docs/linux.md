@@ -144,6 +144,8 @@ never fall back to files or plaintext. If the helper or keyring is unavailable,
 Bot operations fail closed while ordinary workspace chat remains available;
 unlock or configure the keyring and restart Aiden to restore Bot access.
 
+[Open work](bot-open-work.md) is available on the Linux desktop and its paired phones, with the same records, Undo and linked Stop controls as macOS. Connected-app watches currently use trusted iMCP Mail on a Mac; their setup and tour tile are unavailable on Linux. Calendar remains gated pending a verified exact-account adapter.
+
 Computer Use and Apple Foundation Models are not included in the Linux
 build. Their settings, navigation, onboarding promises, helper bundles, and
 chat controls are omitted. Bot computers (a macOS VM per Bot) need a Mac with

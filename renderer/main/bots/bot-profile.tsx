@@ -26,6 +26,7 @@ import { BotComputerSection } from "./bot-computer-section";
 import { BotHealthSection } from "./bot-health-section";
 import { BotEventRoutines } from "./bot-event-routines";
 import { BotConnectorWatches } from "./bot-connector-watches";
+import { BotOpenWorkRow } from "./bot-open-work-page";
 import { updateBotIdentity, type BotIdentityPatch } from "./bot-identity";
 import { BotPageShell } from "./bot-page-shell";
 import { setBotPaused } from "./bot-menu";
@@ -160,6 +161,7 @@ export function BotProfile({
   onOpenAdvanced,
   onOpenMemory,
   onOpenLearning,
+  onOpenWork,
   onDelete,
 }: {
   bot: BotDefinition;
@@ -169,6 +171,7 @@ export function BotProfile({
   onOpenAdvanced(): void;
   onOpenMemory(): void;
   onOpenLearning?(): void;
+  onOpenWork?(): void;
   onDelete(): void;
 }) {
   const qc = useQueryClient();
@@ -315,6 +318,7 @@ export function BotProfile({
           <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
         </button>
         <MemoryRow botId={bot.id} onOpen={onOpenMemory} />
+        {onOpenWork && <BotOpenWorkRow botId={bot.id} onOpen={onOpenWork} />}
         {onOpenLearning ? (
           <button type="button" aria-label="What I've learned" className={PROFILE_ROW_CLASS} onClick={onOpenLearning}>
             <span className="min-w-0 flex-1">

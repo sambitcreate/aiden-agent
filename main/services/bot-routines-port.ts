@@ -8,6 +8,7 @@
  */
 
 import type { BotReplyOutcome, BotSessionState } from "./bot-runtime/bot-session-service.js";
+import type { BotRoutineInputOrigin } from "./bot-runtime/bot-input-entry.js";
 
 export type { BotSessionState };
 
@@ -23,6 +24,8 @@ export interface BotRoutineSessionPort {
       ifNotInterrupted?: boolean;
       /** The routine name, shown on the turn. */
       label?: string;
+      /** Internal executor facts; production validates and issues these before send. */
+      routineOrigin?: BotRoutineInputOrigin;
     },
   ): Promise<{ submissionId: string; deduped: boolean }>;
   state(botId: string): Promise<BotSessionState>;

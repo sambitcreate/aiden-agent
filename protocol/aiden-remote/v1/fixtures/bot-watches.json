@@ -1,5 +1,5 @@
 {
-  "contractRevision": 54,
+  "contractRevision": 55,
   "capability": "bot:watches",
   "list": {
     "supported": true,

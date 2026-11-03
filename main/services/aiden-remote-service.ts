@@ -195,6 +195,7 @@ export interface AidenRemoteServiceOptions {
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
         botSessions?: AidenRemoteRouterDependencies["botSessions"];
         botWatches?: AidenRemoteRouterDependencies["botWatches"];
+        botOpenWork?: AidenRemoteRouterDependencies["botOpenWork"];
         bots?: Pick<
           AidenRemoteBotService,
           | "list"
@@ -236,6 +237,7 @@ export interface AidenRemoteServiceOptions {
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
         botSessions?: AidenRemoteRouterDependencies["botSessions"];
         botWatches?: AidenRemoteRouterDependencies["botWatches"];
+        botOpenWork?: AidenRemoteRouterDependencies["botOpenWork"];
         bots?: Pick<
           AidenRemoteBotService,
           | "list"

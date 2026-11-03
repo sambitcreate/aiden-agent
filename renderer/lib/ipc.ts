@@ -1,6 +1,7 @@
 import type { PeerProjectSource } from "../shared/peer-project-clone";
 import { BOT_CONNECTOR_WATCH_CHANNELS as watchChannels } from "../shared/bot-connector-watches";
 import type * as ConnectorWatch from "../shared/bot-connector-watches";
+import { BOT_OPEN_WORK_CHANNELS as openWorkChannels, parseBotOpenWorkSnapshot, parseBotOpenWorkResult, parseBotOpenWorkEvidence, type BotOpenWorkMutation } from "../shared/bot-open-work";
 import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
 import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
 import type { ChatPendingAttention } from "../shared/chat-pending-attention";
@@ -720,6 +721,8 @@ export const skillsApi = {
 
 // ── MCP servers ───────────────────────────────────────────────────────
 export const mcpApi = {
+  /** Explicit Settings metadata check; never changes a Bot's grants. */
+  inspectComposioWatch: () => invoke<import("../../main/services/bot-routine-events/connector-watch-composio-probe").ComposioWatchProbePublicResult>("mcp:composioWatch:inspect"),
   list: () => invoke<McpServer[]>("mcp:list"),
   /** Built-in provider catalog plus per-preset connection state. */
   presets: () => invoke<McpPresetState[]>("mcp:presets"),
@@ -1905,6 +1908,18 @@ export const botsApi = {
     /** Calls `listener` with the Bot's id when its routines change or a watch saves a check. */
     onChanged: (listener: (botId: string) => void) =>
       onNotification<{ botId?: unknown }>("bots:eventRoutines:changed", (payload) => {
+        if (typeof payload?.botId === "string") listener(payload.botId);
+      }),
+  },
+  openWork: {
+    snapshot: async (botId: string) => parseBotOpenWorkSnapshot(await invoke<unknown>(openWorkChannels.snapshot, { botId })),
+    mutate: async (botId: string, mutation: BotOpenWorkMutation) => parseBotOpenWorkResult(await invoke<unknown>(openWorkChannels.mutate, { botId, mutation })),
+    evidence: async (botId: string, id: string, kind: "source" | "result") => {
+      const result = await invoke<unknown>(openWorkChannels.evidence, { botId, id, kind });
+      return result === null ? null : parseBotOpenWorkEvidence(result);
+    },
+    onChanged: (listener: (botId: string) => void) =>
+      onNotification<{ botId?: unknown }>(openWorkChannels.changed, (payload) => {
         if (typeof payload?.botId === "string") listener(payload.botId);
       }),
   },

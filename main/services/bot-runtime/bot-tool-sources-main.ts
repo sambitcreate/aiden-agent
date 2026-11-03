@@ -54,6 +54,7 @@ import type { BotTurnContext } from "./bot-extension.js";
 import type { BotAdmission, BotCandidateSet, BotToolCandidate, BotToolSources } from "./bot-tool-assembly.js";
 import {
   routineNotesCandidate,
+  botOpenWorkCandidate,
   eventRoutinesToolSource,
   routinesCandidate,
   proposeSkillCandidate,
@@ -452,6 +453,8 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       tools.push(proposeSkillCandidate(botId, async (id, input, append) =>
         (await import("../bot-skills/skill-proposals-main.js")).botSkillProposals.propose(id, input, append)));
       tools.push(routineNotesCandidate(botId, { notes: lazyRoutineNotes, taskIdOf: routineTaskIdOfCall }));
+      const openWork = await import("../bot-open-work/service-main.js");
+      tools.push(botOpenWorkCandidate(botId, { service: openWork.botOpenWork, routineOrigin: openWork.resolveBotOpenWorkRoutineOrigin }));
       // This turn's own authority: Custom access (and any chat reduction) that leaves the app out.
       const turnLacksConnection = (sourceId: string) =>
         authority.accessMode === "custom" &&

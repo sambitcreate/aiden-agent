@@ -95,6 +95,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   /** A Bot's event routines changed, or a watch saved a check: `{botId}`. Its profile re-reads the list. */
   "bots:eventRoutines:changed",
   "bots:connectorWatches:changed",
+  "bots:openWork:changed",
   /** A paired phone asked to finish connecting an app for a Bot: `{botId, pluginId}`. */
   "bots:live:event",
   "bots:connections:setup",

@@ -2044,6 +2044,40 @@ class AidenRemoteClient(
         ) { }
     }
 
+    private fun openWorkPath(botId: String): String {
+        AidenOpenWorkWire.id(botId)
+        return "/bots/$botId/open-work"
+    }
+    suspend fun botOpenWork(botId: String): AidenOpenWorkSnapshot = executeRequest(
+        openWorkPath(botId), maximumResponseBytes = 900 * 1024,
+        botScope = AidenBotPrivateResponseScope.Root("botOpenWork")
+    ) { bytes -> decodeBotWire(AidenOpenWorkSnapshot.serializer(), String(bytes, Charsets.UTF_8)).also {
+        if (it.botId != botId) throw AidenRemoteClientException.InvalidResponse()
+    } }
+    suspend fun mutateBotOpenWork(botId: String, mutation: AidenOpenWorkMutation): AidenOpenWorkResult {
+        val body = botJson.encodeToString(AidenOpenWorkMutation.serializer(), mutation)
+        AidenOpenWorkWire.check(body.toByteArray(Charsets.UTF_8).size <= 16 * 1024)
+        return executeRequest(openWorkPath(botId), method = "POST", bodyJson = body,
+            retryConnectionFailure = false, maximumResponseBytes = 900 * 1024,
+            botScope = AidenBotPrivateResponseScope.Root("botOpenWorkResult")) { bytes ->
+            decodeBotWire(AidenOpenWorkResult.serializer(), String(bytes, Charsets.UTF_8)).also {
+                if (it.snapshot?.botId?.let { id -> id != botId } == true || it.ok &&
+                    (it.mutationId != mutation.mutationId || it.stop?.mutationId?.let { id -> id != mutation.mutationId } == true ||
+                        mutation.id != null && it.itemId?.let { id -> id != mutation.id } == true)) throw AidenRemoteClientException.InvalidResponse()
+            }
+        }
+    }
+    suspend fun botOpenWorkEvidence(botId: String, itemId: String, kind: AidenOpenWorkEvidenceKind): AidenOpenWorkEvidence {
+        AidenOpenWorkWire.id(itemId)
+        val token = if (kind == AidenOpenWorkEvidenceKind.SOURCE) "source" else "result"
+        return executeRequest(openWorkPath(botId) + "/$itemId/evidence/$token", maximumResponseBytes = 256 * 1024,
+            botScope = AidenBotPrivateResponseScope.Root("botOpenWorkEvidence")) { bytes ->
+            decodeBotWire(AidenOpenWorkEvidence.serializer(), String(bytes, Charsets.UTF_8)).also {
+                if (it.itemId != itemId || it.kind != kind) throw AidenRemoteClientException.InvalidResponse()
+            }
+        }
+    }
+
     // Connector watches: all bodies are bounded person-facing DTOs, never connector arguments.
     private fun botWatchPath(botId: String, id: String? = null): String {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)

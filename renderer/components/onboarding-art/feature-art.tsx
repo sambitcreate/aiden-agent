@@ -3,6 +3,7 @@ import type { BotAvatarColor } from "../../shared/bots";
 import type { KeyboardPlatform } from "../../shared/keybindings";
 import type { ArtProps } from "./art-kit";
 import { BotWatchesArt } from "./bot-watches-art";
+import { BotOpenWorkArt } from "./bot-open-work-art";
 import {
   BrowserArt,
   ComputerUseArt,
@@ -77,6 +78,7 @@ export const FEATURE_ART = {
   geminiLive: { tint: "lilac", Art: AidenLiveArt },
   bots: { tint: "peach", Art: BotsArt },
   botWatches: { tint: "rose", Art: BotWatchesArt },
+  botOpenWork: { tint: "lilac", Art: BotOpenWorkArt },
   botComputers: { tint: "aqua", Art: BotComputersArt },
   schedules: { tint: "mint", Art: ScheduledAutomationsArt },
   voice: { tint: "coral", Art: VoiceDictationArt },

@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { getMcpPreset, serverFromPreset } from "../../main/services/mcp-presets";
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 const FAKE_SERVER = fileURLToPath(new URL("./mcp-stdio-fake.mjs", import.meta.url));
@@ -98,4 +99,39 @@ test.describe("Settings → Connectors", () => {
     await expect(page.getByLabel("E2E Tools status")).toContainText("Connected", { timeout: 20_000 });
     await expect(docs).toHaveAttribute("data-state", "checked");
   });
+});
+
+test("Composio watch schema check is an explicit Settings action with one service allowance", async ({ aiden }) => {
+  await finishLmStudioOnboarding(aiden.page);
+  const server = serverFromPreset(getMcpPreset("composio")!);
+  await aiden.app.evaluate(({ ipcMain }, saved) => {
+    const state = globalThis as { composioChecks?: number; composioSaves?: number };
+    state.composioChecks = 0; state.composioSaves = 0;
+    const handlers: Record<string, () => unknown> = {
+      "mcp:list": () => [saved],
+      "mcp:toolList": () => [{ name: "COMPOSIO_SEARCH_TOOLS" }, { name: "COMPOSIO_MULTI_EXECUTE_TOOL" }],
+      "mcp:liveStatus": () => [{ serverId: saved.id, state: "connected", toolCount: 1 }],
+      "mcp:save": () => { state.composioSaves!++; return saved; },
+      "mcp:composioWatch:inspect": () => { state.composioChecks!++; return { available: false, checkedAt: 1, status: "inspected", code: "account_routing_unverified", message: "Composio’s watch schemas were inspected. Exact account routing is not verified, so these watches remain unavailable." }; },
+    };
+    for (const [channel, handler] of Object.entries(handlers)) { ipcMain.removeHandler(channel); ipcMain.handle(channel, handler); }
+  }, server);
+  const { page } = aiden;
+  // Onboarding caches the original empty connector list. Reload after installing
+  // the deterministic fixture so Settings reads that fixture on its first mount.
+  await page.reload();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Connectors", exact: true }).click();
+  await page.getByRole("button", { name: "Tools", exact: true }).click();
+  const tools = page.getByRole("list", { name: "Composio tools" });
+  await expect(tools.getByRole("switch")).toHaveCount(1);
+  expect(await aiden.app.evaluate(() => (globalThis as { composioChecks?: number }).composioChecks)).toBe(0);
+  await page.getByRole("button", { name: "Check watch support", exact: true }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Exact account routing is not verified" })).toBeVisible();
+  expect(await aiden.app.evaluate(() => (globalThis as { composioChecks?: number }).composioChecks)).toBe(1);
+  expect(await aiden.app.evaluate(() => (globalThis as { composioSaves?: number }).composioSaves)).toBe(0);
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(600, 900));
+  await page.getByRole("button", { name: "Check watch support", exact: true }).scrollIntoViewIfNeeded();
+  await expect(page.getByRole("button", { name: "Check watch support", exact: true })).toBeInViewport();
+  await page.screenshot({ path: test.info().outputPath("composio-watch-support.png"), fullPage: true });
 });

@@ -7215,6 +7215,168 @@
         }
       }
     },
+    "/bots/{botId}/open-work": {
+      "get": {
+        "operationId": "botOpenWorkSnapshot",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:open-work"
+        ],
+        "responses": {
+          "200": {
+            "description": "Open work response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotOpenWorkSnapshot"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-aiden-capability": "bot:read"
+      },
+      "post": {
+        "operationId": "botOpenWorkMutate",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:write",
+          "bot:open-work"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotOpenWorkMutation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Open work response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotOpenWorkResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-aiden-capability": "bot:write"
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/open-work/{itemId}/evidence/{kind}": {
+      "get": {
+        "operationId": "botOpenWorkEvidence",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "itemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "source",
+                "result"
+              ]
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:open-work"
+        ],
+        "responses": {
+          "200": {
+            "description": "Open work response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotOpenWorkEvidence"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No retained evidence belongs to this work item"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-aiden-capability": "bot:read"
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
     "/bots/{botId}/watches": {
       "parameters": [
         {
@@ -8339,6 +8501,7 @@
                 "bot:images",
                 "bot:issues",
                 "bot:watches",
+                "bot:open-work",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -8386,6 +8549,7 @@
                 "bot:images",
                 "bot:issues",
                 "bot:watches",
+                "bot:open-work",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -8536,6 +8700,7 @@
                 "bot:images",
                 "bot:issues",
                 "bot:watches",
+                "bot:open-work",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -8592,6 +8757,7 @@
                 "bot:images",
                 "bot:issues",
                 "bot:watches",
+                "bot:open-work",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -19152,6 +19318,822 @@
           "providerLabel",
           "accountLabel",
           "resourceLabel"
+        ]
+      },
+      "BotOpenWorkSource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "person"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "person"
+              },
+              "submissionId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "maxLength": 32
+              },
+              "entryId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "maxLength": 32
+              }
+            },
+            "required": [
+              "kind",
+              "submissionId",
+              "entryId"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "routine"
+              },
+              "submissionId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "maxLength": 32
+              },
+              "entryId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "maxLength": 32
+              },
+              "routineId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "runId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "kind",
+              "submissionId",
+              "entryId",
+              "routineId",
+              "runId"
+            ]
+          }
+        ]
+      },
+      "BotOpenWorkLink": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "source",
+                  "result"
+                ]
+              },
+              "submissionId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "maxLength": 32
+              },
+              "entryId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "maxLength": 32
+              }
+            },
+            "required": [
+              "kind",
+              "submissionId",
+              "entryId"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "routine"
+              },
+              "routineId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "runId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "kind",
+              "routineId",
+              "runId"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "issue"
+              },
+              "issueId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "kind",
+              "issueId"
+            ]
+          }
+        ]
+      },
+      "BotOpenWorkExecution": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "queued",
+              "running",
+              "interrupted",
+              "stopping"
+            ]
+          },
+          "canStop": {
+            "type": "boolean"
+          },
+          "blockedReason": {
+            "type": "string",
+            "enum": [
+              "mixed_inputs",
+              "not_linked",
+              "host_unavailable"
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "canStop"
+        ]
+      },
+      "BotOpenWorkStopReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mutationId": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+            "minLength": 36,
+            "maxLength": 36
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "requested",
+              "stopped",
+              "already_finished",
+              "not_running",
+              "uncertain",
+              "blocked"
+            ]
+          },
+          "requestedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "finishedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "mixed_inputs",
+              "host_unavailable",
+              "deadline",
+              "source_missing"
+            ]
+          }
+        },
+        "required": [
+          "mutationId",
+          "state",
+          "requestedAt"
+        ]
+      },
+      "BotOpenWorkUndoOption": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mutationId": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+            "minLength": 36,
+            "maxLength": 36
+          },
+          "itemId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "expiresAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "mutationId",
+          "itemId",
+          "expectedRevision",
+          "expiresAt"
+        ]
+      },
+      "BotOpenWorkItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "description": "At most160 Unicode scalars and640 UTF-8 bytes; well-formed Unicode."
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "At most1000 Unicode scalars and2048 UTF-8 bytes; may be empty."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "waiting",
+              "done",
+              "dismissed"
+            ]
+          },
+          "waitingReason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "description": "At most160 Unicode scalars and640 UTF-8 bytes; well-formed Unicode."
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "updatedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "source": {
+            "$ref": "#/components/schemas/BotOpenWorkSource"
+          },
+          "links": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "$ref": "#/components/schemas/BotOpenWorkLink"
+            }
+          },
+          "completion": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "by": {
+                "type": "string",
+                "enum": [
+                  "person",
+                  "bot"
+                ]
+              },
+              "at": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "result": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "submissionId": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,31}$",
+                    "maxLength": 32
+                  },
+                  "entryId": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,31}$",
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "submissionId",
+                  "entryId"
+                ]
+              }
+            },
+            "required": [
+              "by",
+              "at"
+            ]
+          },
+          "execution": {
+            "$ref": "#/components/schemas/BotOpenWorkExecution"
+          },
+          "lastStop": {
+            "$ref": "#/components/schemas/BotOpenWorkStopReceipt"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "title",
+          "note",
+          "state",
+          "createdAt",
+          "updatedAt",
+          "source",
+          "links",
+          "execution"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "waiting"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "waitingReason"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "waitingReason"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "BotOpenWorkSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 192,
+            "items": {
+              "$ref": "#/components/schemas/BotOpenWorkItem"
+            }
+          },
+          "undo": {
+            "type": "array",
+            "maxItems": 192,
+            "items": {
+              "$ref": "#/components/schemas/BotOpenWorkUndoOption"
+            }
+          }
+        },
+        "required": [
+          "botId",
+          "revision",
+          "items",
+          "undo"
+        ],
+        "description": "Complete serialized response is at most900 KiB. At most64 active and128 terminal items; revisions are opaque strings and live execution may change at equal revision."
+      },
+      "BotOpenWorkMutation": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+                "minLength": 36,
+                "maxLength": 36
+              },
+              "expectedRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "action": {
+                "const": "add"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "description": "At most160 Unicode scalars and640 UTF-8 bytes; well-formed Unicode."
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 1000,
+                "description": "At most1000 Unicode scalars and2048 UTF-8 bytes; may be empty."
+              }
+            },
+            "required": [
+              "mutationId",
+              "expectedRevision",
+              "action",
+              "title"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+                "minLength": 36,
+                "maxLength": 36
+              },
+              "expectedRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "action": {
+                "const": "edit"
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "patch": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160,
+                    "description": "At most160 Unicode scalars and640 UTF-8 bytes; well-formed Unicode."
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000,
+                    "description": "At most1000 Unicode scalars and2048 UTF-8 bytes; may be empty."
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "waiting",
+                      "done",
+                      "dismissed"
+                    ]
+                  },
+                  "waitingReason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160,
+                    "description": "At most160 Unicode scalars and640 UTF-8 bytes; well-formed Unicode."
+                  }
+                },
+                "required": [],
+                "minProperties": 1,
+                "allOf": [
+                  {
+                    "if": {
+                      "required": [
+                        "state"
+                      ],
+                      "properties": {
+                        "state": {
+                          "const": "waiting"
+                        }
+                      }
+                    },
+                    "then": {
+                      "required": [
+                        "waitingReason"
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "required": [
+                        "state"
+                      ],
+                      "properties": {
+                        "state": {
+                          "enum": [
+                            "open",
+                            "done",
+                            "dismissed"
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "not": {
+                        "required": [
+                          "waitingReason"
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "required": [
+              "mutationId",
+              "expectedRevision",
+              "action",
+              "id",
+              "patch"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+                "minLength": 36,
+                "maxLength": 36
+              },
+              "expectedRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "dismiss",
+                  "stop",
+                  "stop_and_dismiss"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "mutationId",
+              "expectedRevision",
+              "action",
+              "id"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+                "minLength": 36,
+                "maxLength": 36
+              },
+              "expectedRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "action": {
+                "const": "undo"
+              },
+              "undoOf": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+                "minLength": 36,
+                "maxLength": 36
+              }
+            },
+            "required": [
+              "mutationId",
+              "expectedRevision",
+              "action",
+              "undoOf"
+            ]
+          }
+        ]
+      },
+      "BotOpenWorkResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+                "minLength": 36,
+                "maxLength": 36
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "itemId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "snapshot": {
+                "$ref": "#/components/schemas/BotOpenWorkSnapshot"
+              },
+              "undo": {
+                "$ref": "#/components/schemas/BotOpenWorkUndoOption"
+              },
+              "stop": {
+                "$ref": "#/components/schemas/BotOpenWorkStopReceipt"
+              }
+            },
+            "required": [
+              "ok",
+              "mutationId",
+              "replayed",
+              "snapshot"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "code": {
+                "type": "string",
+                "enum": [
+                  "invalid",
+                  "not_found",
+                  "stale",
+                  "active_full",
+                  "history_full",
+                  "receipts_full",
+                  "mutation_conflict",
+                  "undo_conflict",
+                  "undo_expired",
+                  "mixed_inputs",
+                  "unavailable",
+                  "deleted"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 280
+              },
+              "snapshot": {
+                "$ref": "#/components/schemas/BotOpenWorkSnapshot"
+              }
+            },
+            "required": [
+              "ok",
+              "code",
+              "error"
+            ]
+          }
+        ]
+      },
+      "BotOpenWorkEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "itemId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "source",
+              "result"
+            ]
+          },
+          "submissionId": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,31}$",
+            "maxLength": 32
+          },
+          "entryId": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,31}$",
+            "maxLength": 32
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "description": "At most160 Unicode scalars and640 UTF-8 bytes; well-formed Unicode."
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 32768,
+            "description": "At most32768 UTF-8 bytes; truncated explicitly identifies an excerpt."
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "itemId",
+          "kind",
+          "submissionId",
+          "entryId",
+          "title",
+          "text",
+          "truncated"
         ]
       },
       "BotConnectorWatch": {

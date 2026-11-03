@@ -12,6 +12,10 @@ Watches execute on the paired host while Aiden is open and the host is awake. A 
 
 In a Bot’s Advanced → Custom access, Composio has one service allow choice. Manage its enabled apps and tools in Composio; the Bot’s Aiden rules and a watch’s selected account still apply. An older partial Composio selection requires explicit review and replacement with the host’s current service choice. Other MCP connections keep their host-projected choices.
 
+On hosts that offer and grant `bot:open-work` alongside Bot and chat read access, Profile → **Open work** manages unfinished responsibilities. Add a title and note, edit an item, record a waiting reason, mark it done, reopen or dismiss it, and use the host’s per-item **Undo last change** within 24 hours. Add records metadata only; it does not start a Bot run or schedule work. The host’s current source and result links open retained transcript text, with truncated excerpts labelled explicitly.
+
+**Stop linked run** and **Stop and dismiss** appear only when the host can safely stop that item’s linked work. Mixed-input runs explain why Stop is unavailable. A requested or uncertain Stop stays unfinished until an acknowledgement arrives; Stop and dismiss waits for that acknowledgement before dismissing. Protected, backup-excluded drafts and exact pending requests survive disconnect and restart and are scoped to the host, paired device and Bot. Lost responses and typed `unavailable` outcomes keep their original UUID and payload, including after a later denied retry. Ordinary expired unknown requests are never issued under a fresh identity; pending Stop checks can keep using their protected original request beyond 24 hours. Pairing removal, revocation or replacement purges local Open work drafts and attempts. Older or ungranted hosts keep their existing profile.
+
 The product and protocol sources of truth are:
 
 - [`PROJECT_SPEC.md`](PROJECT_SPEC.md)

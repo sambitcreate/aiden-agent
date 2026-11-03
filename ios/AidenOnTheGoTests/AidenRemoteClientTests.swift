@@ -6656,6 +6656,91 @@ final class AidenRemoteClientTests: XCTestCase {
         return result
     }
 
+    func testOpenWorkRoutesUseBareBodiesAndPreserveTypedBusinessRefusals() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-open-work", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let snapshot = try AidenRemoteJSONDecoder.decode(AidenOpenWorkSnapshot.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(fixture["snapshot"])))
+        let item = try XCTUnwrap(snapshot.items.first)
+        let mutations = try XCTUnwrap(fixture["mutations"] as? [String: Any])
+        let mutation = try AidenRemoteJSONDecoder.decode(AidenOpenWorkMutation.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(mutations["add"])))
+        var posts = 0
+        var routes: [String] = []
+        AidenRemoteMockURLProtocol.handler = { request in
+            routes.append(request.url!.path)
+            XCTAssertNil(request.url?.query)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-credential")
+            let key: String
+            if request.httpMethod == "POST" {
+                posts += 1
+                let bytes = try XCTUnwrap(request.httpBody ?? self.readBodyStream(request.httpBodyStream))
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+                XCTAssertEqual(Set(body.keys), ["action", "mutationId", "expectedRevision", "title", "note"])
+                XCTAssertEqual(body["mutationId"] as? String, mutation.mutationId.uuidString)
+                XCTAssertEqual(body["expectedRevision"] as? String, mutation.expectedRevision)
+                XCTAssertNil(request.value(forHTTPHeaderField: "If-Match"))
+                key = posts == 1 ? "result" : "stale"
+            } else if request.url!.path.hasSuffix("/evidence/source") { key = "evidenceSource" }
+            else if request.url!.path.hasSuffix("/evidence/result") { key = "evidenceResult" }
+            else { key = "snapshot" }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                try JSONSerialization.data(withJSONObject: XCTUnwrap(fixture[key])))
+        }
+        let client = makeClient()
+        let loaded = try await client.botOpenWork(botId: snapshot.botId)
+        XCTAssertEqual(loaded.items.first?.id, item.id)
+        guard case let .accepted(accepted) = try await client.mutateBotOpenWork(botId: snapshot.botId, mutation: mutation) else { return XCTFail("Accepted bare result") }
+        XCTAssertEqual(accepted.mutationId, mutation.mutationId)
+        guard case let .rejected(rejected) = try await client.mutateBotOpenWork(botId: snapshot.botId, mutation: mutation) else { return XCTFail("HTTP200 typed business refusal") }
+        XCTAssertEqual(rejected.code, .stale)
+        let source = try await client.botOpenWorkEvidence(botId: snapshot.botId, itemId: item.id, kind: .source)
+        let result = try await client.botOpenWorkEvidence(botId: snapshot.botId, itemId: item.id, kind: .result)
+        XCTAssertEqual(source.text, "Review the project brief and note any open questions.")
+        XCTAssertEqual(result.kind, .result)
+        XCTAssertEqual(routes, ["/api/aiden/v1/bots/\(snapshot.botId)/open-work", "/api/aiden/v1/bots/\(snapshot.botId)/open-work",
+            "/api/aiden/v1/bots/\(snapshot.botId)/open-work", "/api/aiden/v1/bots/\(snapshot.botId)/open-work/\(item.id)/evidence/source",
+            "/api/aiden/v1/bots/\(snapshot.botId)/open-work/\(item.id)/evidence/result"])
+    }
+
+    func testOpenWorkClientRejectsCrossBotReceiptsAndCrossItemEvidence() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-open-work", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let snapshot = try AidenRemoteJSONDecoder.decode(AidenOpenWorkSnapshot.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(fixture["snapshot"])))
+        let item = try XCTUnwrap(snapshot.items.first)
+        let mutation = try AidenOpenWorkMutation(action: .add, expectedRevision: snapshot.revision, title: "Metadata only")
+        var body = try XCTUnwrap(fixture["snapshot"] as? [String: Any])
+        body["botId"] = "other-bot"
+        AidenRemoteMockURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, try JSONSerialization.data(withJSONObject: body))
+        }
+        do { _ = try await makeClient().botOpenWork(botId: snapshot.botId); XCTFail("Cross-Bot snapshot") } catch {}
+        body = try XCTUnwrap(fixture["result"] as? [String: Any])
+        do { _ = try await makeClient().mutateBotOpenWork(botId: snapshot.botId, mutation: mutation); XCTFail("Wrong mutation receipt") } catch {}
+        body = try XCTUnwrap(fixture["evidenceSource"] as? [String: Any])
+        body["itemId"] = "other-item"
+        do { _ = try await makeClient().botOpenWorkEvidence(botId: snapshot.botId, itemId: item.id, kind: .source); XCTFail("Cross-item evidence") } catch {}
+        body["itemId"] = item.id
+        body["text"] = String(repeating: "a", count: 32769)
+        do { _ = try await makeClient().botOpenWorkEvidence(botId: snapshot.botId, itemId: item.id, kind: .source); XCTFail("Oversized retained text") } catch {}
+        body = try XCTUnwrap(fixture["evidenceSource"] as? [String: Any])
+        body["safeFutureMetadata"] = String(repeating: "a", count: 256 * 1024)
+        do { _ = try await makeClient().botOpenWorkEvidence(botId: snapshot.botId, itemId: item.id, kind: .source); XCTFail("Evidence aggregate budget") } catch {}
+        body = try XCTUnwrap(fixture["snapshot"] as? [String: Any])
+        body["safeFutureMetadata"] = String(repeating: "a", count: 900 * 1024)
+        do { _ = try await makeClient().botOpenWork(botId: snapshot.botId); XCTFail("Snapshot aggregate budget") } catch {}
+    }
+
+    func testOpenWorkCapabilityIsNegotiatedAlone() async throws {
+        AidenRemoteMockURLProtocol.handler = { request in
+            let data = try XCTUnwrap(request.httpBody ?? self.readBodyStream(request.httpBodyStream))
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            XCTAssertEqual(body["accepts"] as? [String], ["bot:open-work"])
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                Data(#"{"capabilities":["server:read","chat:read","bot:read","bot:write","bot:open-work"]}"#.utf8))
+        }
+        let grants = try await makeClient().updateDeviceCapabilities(accepts: [.botOpenWork])
+        XCTAssertTrue(grants.contains(.botOpenWork))
+    }
+
     private func makeClient() -> AidenRemoteClient {
         AidenRemoteClient(
             endpoint: URL(string: "https://aiden.test/api/aiden/v1")!,

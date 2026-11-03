@@ -42,12 +42,30 @@ class AidenBotWatchJournalStoreTest {
                 installations.activeInstallation?.createdAt == pairing.createdAt
             }
             oldHandle.write("saved draft and exact request")
+            val work = AidenBotWatchJournalStore(secure,"bot-open-work").journal(pairing.instanceId,pairing.deviceId,pairing.createdAt,"bot-a"){ installations.activeInstallation?.createdAt == pairing.createdAt }
+            work.write("Open work attempt")
             installations.removeInstallation(pairing.id)
             assertNull(AidenBotWatchJournalStore(secure).journal(pairing.instanceId, pairing.deviceId, pairing.createdAt, "bot-a") { true }.read())
             assertNull(secure.getCredential(pairing.credentialScope))
+            assertNull(work.read())
+            assertNull(AidenBotWatchJournalStore(secure,"bot-open-work").journal(pairing.instanceId,pairing.deviceId,pairing.createdAt,"bot-a"){true}.read())
             assertTrue(runCatching { oldHandle.write("late request") }.isFailure)
         } finally { dir.deleteRecursively() }
     }
+    @Test fun openWorkNamespaceIsIsolatedAndCompareAndReplaceFencesAnotherWindow() {
+        val secure=InMemoryAidenSecureStore()
+        val watches=AidenBotWatchJournalStore(secure).journal("host","device",Instant.EPOCH,"bot-a"){true}
+        val work=AidenBotWatchJournalStore(secure,"bot-open-work").journal("host","device",Instant.EPOCH,"bot-a"){true}
+        val other=AidenBotWatchJournalStore(secure,"bot-open-work").journal("host","device",Instant.EPOCH,"bot-a"){true}
+        watches.write("watch request")
+        assertTrue(work.replace(null,"frozen Open work request"))
+        assertFalse(other.replace(null,"replacement UUID"))
+        assertEquals("frozen Open work request",other.read())
+        AidenBotWatchJournalStore(secure,"bot-open-work").purge("host","device",Instant.EPOCH)
+        assertNull(other.read());assertEquals("watch request",watches.read())
+        assertTrue("another window cannot resurrect a purged scope",runCatching { other.write("late callback") }.isFailure)
+    }
+
     @Test fun aggregateCapacityRefusesInsteadOfEvictingExistingPendingIdentity() {
         val secure = InMemoryAidenSecureStore(); val store = AidenBotWatchJournalStore(secure)
         repeat(64) { store.journal("host", "device", Instant.EPOCH, "bot-$it") { true }.write("identity-$it") }

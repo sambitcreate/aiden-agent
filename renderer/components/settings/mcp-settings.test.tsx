@@ -846,6 +846,29 @@ test("Composio has one service switch; explicit allowance replaces old individua
   assert.deepEqual(server.hiddenTools, ["composio"]);
 });
 
+test("Composio watch support inspection is explicit and never changes Bot or service access", async () => {
+  const server = serverFromPreset(MCP_PRESETS.find((entry) => entry.id === "composio")!);
+  const message = "Composio’s watch schemas were inspected. Exact account routing is not verified, so these watches remain unavailable.";
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const calls = mount({
+    "mcp:list": () => [server],
+    "mcp:toolList": () => [{ name: "COMPOSIO_SEARCH_TOOLS" }],
+    "mcp:composioWatch:inspect": async () => { await pending; return { available: false, checkedAt: 1, status: "inspected", code: "account_routing_unverified", message }; },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Tools" }));
+  const check = await screen.findByRole("button", { name: "Check watch support" });
+  assert.equal(channelCalls(calls, "mcp:composioWatch:inspect").length, 0);
+  fireEvent.click(check);
+  assert.ok((screen.getByRole("button", { name: "Checking watch support…" }) as HTMLButtonElement).disabled);
+  assert.equal(channelCalls(calls, "mcp:composioWatch:inspect").length, 1);
+  await act(async () => release());
+  await screen.findByText(message);
+  assert.equal(savedServers(calls).length, 0);
+  assert.ok(!calls.some((call) => call.channel.startsWith("bots:")));
+  assert.equal(screen.getByRole("switch", { name: "Let the model use Composio" }).getAttribute("aria-checked"), "true");
+});
+
 test("changing Composio visibility preserves old restrictions until its service switch is allowed", async () => {
   const preset = MCP_PRESETS.find((entry) => entry.id === "composio")!;
   const legacy = ["COMPOSIO_REMOTE_BASH_TOOL"];

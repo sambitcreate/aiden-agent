@@ -4,6 +4,7 @@ import { createBotRoutineNotesStore } from "./bot-routine-notes.js";
 import { scheduleService } from "./schedule-service.js";
 import { scheduleStore, systemTimezone } from "./schedule-store.js";
 import { botRunStalls } from "./bot-runtime/bot-run-watchdog.js";
+import { createBotRoutineOriginSender } from "./bot-open-work-host-origin.js";
 import {
   createBotRoutineCatchUp,
   createBotRoutineCatchUpTrigger,
@@ -29,7 +30,7 @@ export async function botRoutinePorts(): Promise<BotRoutineExecutorPorts> {
     },
     canRetryRoutineRequest: (botId, requestId) => runtime.canRetryRoutineRequest(botId, requestId),
     submissionForRequest: (botId, requestId) => runtime.submissionForRequest(botId, requestId),
-    send: (botId, input) => runtime.send(botId, input),
+    send: createBotRoutineOriginSender({ send: (botId, input) => runtime.send(botId, input), resolveOrigin: async (...args) => (await import("./bot-open-work/service-main.js")).resolveBotOpenWorkRoutineOrigin(...args) }),
     state: (botId) => runtime.state(botId),
     awaitReply: (botId, submissionId, signal) => runtime.awaitReply(botId, submissionId, signal),
     markSilent: (botId, submissionId) => runtime.markSilent(botId, submissionId),

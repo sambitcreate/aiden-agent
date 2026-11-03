@@ -847,7 +847,7 @@ final class AidenRemoteCoordinator {
     /// `schedule:cards` (revision 39), then `bot:images` (revision 45), then
     /// `bot:issues` (revision 42), then `chat:jobs` (revision 49), then
     /// `attachments:raw` (revision 50), then `chat:new-worktree` (revision 53),
-    /// then `bot:watches` (revision 54).
+    /// then `bot:watches` (revision 54) and `bot:open-work` (revision 55).
     static let capabilitiesAskedForAlone: [[AidenRemoteCapability]] = [
         [.botHandoffs, .botHandoffNotes, .botHandoffOnMac],
         [.scheduleCards],
@@ -857,6 +857,7 @@ final class AidenRemoteCoordinator {
         [.attachmentsRaw],
         [.chatNewWorktree],
         [.botWatches],
+        [.botOpenWork],
     ]
 
     /// Existing pairings predate the progress opt-in field. Upgrade them only
@@ -1156,6 +1157,7 @@ final class AidenRemoteCoordinator {
         await AidenBotCache.shared.purge(instanceId: installationId)
         await AidenChatDraftStore.shared.purge(instanceId: installationId)
         AidenBotWatchDraftStore.shared.purge(instanceID: installationId)
+        AidenBotOpenWorkDraftStore.shared.purge(instanceID: installationId)
         await AidenVisualDocumentCache.shared.purge(instanceId: installationId)
         AidenBotSessionCache.shared.purge(instanceId: installationId)
         await AidenBotOutboxStore.shared.purge(instanceId: installationId)

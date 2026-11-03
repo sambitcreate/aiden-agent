@@ -32,6 +32,8 @@ import { blockingUntilAborted, countingTool, recordingDeps } from "./test-suppor
 import { QUESTION_ARGS, QUESTION_TOOL_NAME } from "./test-support/question-fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
 
+import { issueBotRoutineInputOrigin } from "./bot-input-entry.js";
+
 const ctx = BACKGROUND_CONTEXT;
 const roots: string[] = [];
 function tempProfile(): string {
@@ -451,7 +453,7 @@ function routineExecutor(service: BotSessionRuntime) {
       get: async () => undefined,
       settleRoutineFire: async () => undefined,
     },
-    ports: () => service,
+    ports: () => ({ ...service, send: (botId, input) => service.send(botId, { ...input, ...(input.routineOrigin ? { routineOrigin: issueBotRoutineInputOrigin(input.routineOrigin) } : {}) }) }),
     broadcast: () => undefined,
   });
 }
@@ -808,4 +810,21 @@ test("an open session keeps its memory snapshot; reopening after the idle close 
   } finally {
     await service.shutdown();
   }
+});
+
+
+test("only host-issued routine origins reach the actual durable input; copied origins are refused before model preparation", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage("routine done")]);
+  let prepared = 0;
+  const service = await serviceFor(tempProfile(), fauxModels, { resolveModel: async () => { prepared++; return FAUX_MODEL_REF; } });
+  const origin = issueBotRoutineInputOrigin({ version: 1, botId: "bot:a", routineId: "routine-one", runId: "routine:routine-one:manual-one", kind: "manual" });
+  try {
+    await assert.rejects(service.send("bot:a", { text: "fake", requestId: origin.runId, routineOrigin: { ...origin } }), /origin/u);
+    assert.equal(prepared, 0);
+    const admitted = await service.send("bot:a", { text: "Do the accepted routine", requestId: origin.runId, routineOrigin: origin });
+    await service.awaitReply("bot:a", admitted.submissionId, new AbortController().signal);
+    const entry = (await (await service.conversation("bot:a")).context(ctx)).entries.find((item) => item.kind === "aiden.routine-input");
+    assert.deepEqual(entry?.data, { routineOrigin: { ...origin } });
+    assert.equal(fauxModels.calls(), 1);
+  } finally { await service.shutdown(); }
 });

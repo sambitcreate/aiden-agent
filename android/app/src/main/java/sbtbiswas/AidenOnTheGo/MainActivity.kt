@@ -16,6 +16,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotEditorScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotMemoryScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotWatchesScreen
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotOpenWorkScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotProfileScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotsViewModel
 import sbtbiswas.AidenOnTheGo.features.bots.AidenRemoteBotDeleter
@@ -414,6 +415,10 @@ class MainActivity : ComponentActivity() {
                                     onNavigateToBotMemory = { botId -> push(AidenScreen.BotMemory(botId)) }
                                 )
                             }
+                            is AidenScreen.BotOpenWork -> {
+                                AidenBotOpenWorkScreen(screen.botId,coordinator,navigator::back,
+                                    onOpenBotChat = { push(AidenScreen.BotChat(screen.botId)) })
+                            }
                             is AidenScreen.BotWatches -> {
                                 AidenBotWatchesScreen(screen.botId, coordinator, navigator::back,
                                     onOpenBotChat = { push(AidenScreen.BotChat(screen.botId)) })
@@ -434,6 +439,7 @@ class MainActivity : ComponentActivity() {
                                     onNavigateToEditBot = { botId -> push(AidenScreen.BotEditor(botId)) },
                                     onNavigateToMemory = { botId -> push(AidenScreen.BotMemory(botId)) },
                                     onNavigateToWatches = { botId -> push(AidenScreen.BotWatches(botId)) },
+                                    onNavigateToOpenWork = { botId -> push(AidenScreen.BotOpenWork(botId)) },
                                     onBotMutated = { botsViewModel.loadBots(force = true) },
                                     botDeleter = AidenRemoteBotDeleter,
                                     onBotDeleted = {

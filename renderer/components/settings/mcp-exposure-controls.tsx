@@ -116,6 +116,14 @@ function McpToolSwitches({
   const inventory = list.data ?? loaded;
   const composio = isComposioServiceConnection(server);
   const requiresReview = composio && composioServiceRequiresReview(hidden);
+  const [checkingWatch, setCheckingWatch] = React.useState(false);
+  const [watchSupport, setWatchSupport] = React.useState<string | null>(null);
+  const checkWatch = async () => {
+    setCheckingWatch(true); setWatchSupport(null);
+    try { setWatchSupport((await mcpApi.inspectComposioWatch()).message); }
+    catch { setWatchSupport("The check could not finish. Review the existing Composio connection and try again."); }
+    finally { setCheckingWatch(false); }
+  };
 
   // Nothing discovered in this session yet: list the tools through the same
   // connection test Settings already offers (it never changes saved state).
@@ -186,6 +194,11 @@ function McpToolSwitches({
         );
       })}
     </ul>
+    {composio && <div className="mt-2 flex flex-col items-start gap-2">
+      <Text variant="small" color="tertiary">Check whether this connection exposes the information connected-app watches need. This only inspects setup metadata.</Text>
+      <Button size="small" variant="filled" disabled={disabled || checkingWatch || requiresReview || hidden.includes(COMPOSIO_SERVICE_TOOL_NAME)} onClick={() => void checkWatch()}>{checkingWatch ? "Checking watch support…" : "Check watch support"}</Button>
+      {watchSupport && <Text variant="small" color="secondary" role="status">{watchSupport}</Text>}
+    </div>}
     </>
   );
 }

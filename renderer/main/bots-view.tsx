@@ -15,6 +15,7 @@ import { BotDeleteDialog } from "./bots/bot-delete-dialog";
 import { BotInstructionsEditor } from "./bots/bot-instructions-editor";
 import { useBotRows } from "./bots/bot-sidebar-rows";
 import { BotMemoryPage } from "./bots/bot-memory-page";
+import { BotOpenWorkPage } from "./bots/bot-open-work-page";
 import { BotPageShell, BotPageSkeleton } from "./bots/bot-page-shell";
 import { parseBotPageSearch, type BotSubpage } from "./bots/bot-page-search";
 import { BotProfile } from "./bots/bot-profile";
@@ -161,6 +162,8 @@ function BotPage({ botId }: { botId: string }) {
         <BotInterruptionsPage key={`${current.id}:interruptions`} bot={current} onClose={() => openPage("advanced")} />
       ) : page === "chat-activity" ? (
         <BotChatActivityPage key={`${current.id}:chat-activity`} bot={current} onClose={() => openPage("advanced")} />
+      ) : page === "open-work" ? (
+        <BotOpenWorkPage key={current.id + ":open-work"} bot={current} onClose={back} />
       ) : page === "learning" ? (
         <BotLearningPage key={`${current.id}:learning`} bot={current} onClose={back} />
       ) : page === "memory" ? (
@@ -174,6 +177,7 @@ function BotPage({ botId }: { botId: string }) {
           onOpenAdvanced={() => openPage("advanced")}
           onOpenMemory={() => openPage("memory")}
           onOpenLearning={() => openPage("learning")}
+          onOpenWork={() => openPage("open-work")}
           onDelete={() => setDeleting(true)}
         />
       )}

@@ -337,6 +337,8 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
               trigger.kind === "event" ? botRoutineEventBlock(trigger.source, trigger.payload) : "",
             ),
             requestId,
+            ...(!task.wakeUp ? { routineOrigin: { version: 1 as const, botId: task.botId, routineId: task.id, runId: requestId,
+              kind: trigger.kind === "automatic" ? "scheduled" as const : trigger.kind === "manual" ? "manual" as const : trigger.kind === "event" ? "event" as const : trigger.kind === "retry" ? "retry" as const : "catch_up" as const } } : {}),
             ifNotInterrupted: true,
             ...(label ? { label } : {}),
           }),

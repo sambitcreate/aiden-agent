@@ -481,6 +481,9 @@ object AidenBotPrivateResponseValidator {
             (parentPath == listOf("messages", "[]") ||
                 parentPath == listOf("chats", "[]", "messages", "[]")) && regularChat) return true
         if (root == "botWatchTest" && key == "result" && parentPath.isEmpty()) return true
+        // Open-work completion result is an owned pair of opaque numeric transcript IDs.
+        if (key == "result" && root in listOf("botOpenWork", "botOpenWorkResult") &&
+            parentPath in listOf(listOf("items", "[]", "completion"), listOf("snapshot", "items", "[]", "completion"))) return true
         // Revision 42: the issue act route's receipt is `{ result: ... }`, not a tool result.
         if (root == "botIssues" && key == "result") {
             return parentPath.isEmpty() ||
@@ -537,6 +540,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         val BOT_READ = AidenRemoteCapability("bot:read")
         val BOT_WRITE = AidenRemoteCapability("bot:write")
         val BOT_WATCHES = AidenRemoteCapability("bot:watches")
+        val BOT_OPEN_WORK = AidenRemoteCapability("bot:open-work")
         val TASKS_READ = AidenRemoteCapability("tasks:read")
         val AGENTS_READ = AidenRemoteCapability("agents:read")
         val QUESTIONS_RESPOND = AidenRemoteCapability("questions:respond")
@@ -675,12 +679,12 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
-            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + listOf(BOT_WATCHES)
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + listOf(BOT_WATCHES, BOT_OPEN_WORK)
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
         val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
-            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + listOf(BOT_WATCHES)
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + listOf(BOT_WATCHES, BOT_OPEN_WORK)
     }
 }
 

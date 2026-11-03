@@ -1,6 +1,6 @@
 # Bot continuity: watches, Open work, routine models and messaging
 
-Status: In progress, 2026-11-03; seven original owner decisions plus Composio amendments D8/D9 confirmed. W0 and W1a (iMCP Mail, reliable delivery, full desktop/iOS/Android watch management) are implemented and clear after GPT-6.1 Sol high review/fix loops. W1b’s single Composio tool/allowance and legacy-grant migration passed high review. Its foreground schema inspection passed high review after fixing lifetime, transport-budget and admission-ordering gaps; authenticated account-routing proof and the restricted read executor remain pending. Calendar stays gated. O/M/P have not started.
+Status: In progress, 2026-11-03; seven original owner decisions plus Composio amendments D8/D9 confirmed. W0 and W1a (iMCP Mail, reliable delivery, full desktop/iOS/Android watch management) are implemented and clear after GPT-6.1 Sol high review/fix loops. W1b’s single Composio tool/allowance and legacy-grant migration passed high review. Its foreground schema inspection passed high review after fixing lifetime, transport-budget and admission-ordering gaps; authenticated account-routing proof and the restricted read executor remain pending. Calendar stays gated; the owner agreed to run the prepared foreground check. Phase O is implemented on desktop, iOS and Android and is clear after the requested core and cross-client review/fix loops. Its local runtime, contract and native checks pass; packaged/physical acceptance remains with the final journey. Phase M’s public-API design proof is clear with implementation conditions; M/P implementation has not started.
 
 ## Outcome
 
@@ -115,6 +115,8 @@ Acceptance: unfinished work and evidence survive restart; repeated tool executio
 - Under D3, the default response to an unavailable explicit choice is Needs you. No default-model substitution. Support an optional owner-selected fallback only as a separately visible exact choice under the same grants, with its use recorded. Fallback never bypasses revoked authority, spending limits or the existing usage-limit waiting policy.
 - Show chosen and actual model/thinking in the run detail on desktop and phones. All three clients can set, clear and edit routine choices. Reuse model controls and label behavior rather than adding a second provider catalog.
 
+The Sol high design review accepted a pin-specific public `RegistryReader` composition with conditions. Stamp new generations from final staged `LiveDoc.run.inputs` after the delegated transaction callback returns; do not rely on the non-public `TaskOptions.submissionIds` extra field. Bind tool/compaction children and abort handlers, including production summary helpers, to their source. Introduce exact private routine grants separately from the default-model ceiling, durable record-once provider spending, and durable watch connector restrictions. Fallback is limited to eligible typed failures before any provider/tool/deferred effects; prepared work keeps its persisted actual selection.
+
 Include late-run context here: record the scheduled occurrence, actual start and timezone for claimed scheduled work; supply those facts to the Bot and show the delay when material. Preserve the original values on resume. Use latest relevant missed occurrence for recurring catch-up, with deterministic DST/sleep tests.
 
 Acceptance: interleaved different-model routines and person turns retain their own choices before and after restart; edits do not mutate claimed fires; invalid thinking/model/image combinations fail clearly; missing credentials raise one fitting issue; default failure, configured fallback and budget refusal are distinct. Current Bot defaults, provider credentials and other Bots remain isolated.
@@ -202,7 +204,7 @@ Progress (2026-11-03): W0 is complete for source research and offline acceptance
 - [x] D6/D7 answered and all owner decisions reconciled (2026-11-03).
 - [x] W0 source evidence, offline connector acceptance and persistent hand-off tests; both high-review scopes clear. Live account/provider admission gates remain with W1.
 - [ ] W1 watches complete on desktop, iOS and Android.
-- [ ] Open work complete on desktop, iOS and Android.
+- [x] Open work implemented on desktop, iOS and Android; core and client Sol high reviews clear after fixes, with packaged/physical checks retained in final acceptance.
 - [ ] Routine models/thinking/fallback complete on all clients; runtime proof accepted.
 - [ ] Approved Bot pairs, peer delivery/results and budgets complete on all clients.
 - [ ] Docs, onboarding/gallery and focused suites complete in each feature PR.

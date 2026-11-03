@@ -15,6 +15,7 @@ import {
   Globe2,
   LayoutDashboard,
   Lightbulb,
+  ListTodo,
   Mail,
   MessageSquare,
   Mic2,
@@ -257,6 +258,14 @@ export const onboardingFeatures: OnboardingFeature[] = [
     title: "Connected-app watches",
     description: "Choose a supported connected source in a Bot’s Profile, test its matching metadata, and tell the Bot what to do when it changes. Checks continue while Aiden is running and the owning computer is awake. Manage them from desktop or a paired phone.",
     icon: Mail,
+    size: "standard",
+  },
+  {
+    id: "botOpenWork",
+    group: "control",
+    title: "Open work",
+    description: "Bots keep track of tasks they accept. See what is open or waiting, edit a note, mark work done, dismiss it or undo a change from desktop or a paired phone.",
+    icon: ListTodo,
     size: "standard",
   },
   {

@@ -698,6 +698,8 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/controls/{panelId}",
     "/bots/{botId}/session/images/{entryId}",
     "/chats/{chatId}/recordings/{recordingId}",
+    "/bots/{botId}/open-work",
+    "/bots/{botId}/open-work/{itemId}/evidence/{kind}",
     "/bots/{botId}/watches",
     "/bots/{botId}/watches/sources",
     "/bots/{botId}/watches/test",

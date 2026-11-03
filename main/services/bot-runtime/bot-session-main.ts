@@ -91,6 +91,7 @@ import { createBotHandoffNotifier, watchBotHandoffs } from "./bot-handoff-notifi
 import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
+import { renderBotOpenWork } from "../bot-open-work/prompt.js";
 import { createBotRuntimeModels, type BotModelRuntime } from "./bot-models.js";
 import type { Models } from "@earendil-works/pi-ai";
 import {
@@ -385,6 +386,11 @@ const extension: BotExtensionDeps = {
         tools.skillSnapshot(bot.id),
         toolNames,
       );
+      let openWorkSummary = "";
+      if (toolNames.has("open_work")) {
+        try { openWorkSummary = renderBotOpenWork(await (await import("../bot-open-work/service-main.js")).botOpenWork.toolSnapshot(bot.id)); }
+        catch { openWorkSummary = "Open work could not be read. Keep its existing records intact and report that the list is unavailable."; }
+      }
       return [
         base,
         withBotPersona("", bot).trim(),
@@ -393,6 +399,7 @@ const extension: BotExtensionDeps = {
           .join("\n\n"),
         [
           botRoutineGuidance(toolNames),
+          openWorkSummary,
           tools.guidance(bot.id, offered.toolNames),
           // How-to lessons from the person's corrections: below authority, as data.
           renderBotLessons(await botLessons.list(bot.id, { scope: { kind: "bot" }, status: "active" })),
@@ -808,6 +815,7 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     },
     afterPaused: afterBotPaused,
     onUnpaused: afterBotUnpaused,
+    beforeDelete: async (botId) => (await import("../bot-open-work/service-main.js")).botOpenWork.forgetBot(botId),
     deleteEffects: [
       // Open chats of the deleted Bot stop receiving its live view.
       async (botId) => liveProjection?.close(botId),

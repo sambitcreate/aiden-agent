@@ -4,6 +4,7 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import sbtbiswas.AidenOnTheGo.auth.AidenSecureStore
+import sbtbiswas.AidenOnTheGo.auth.AndroidAidenSecureStore
 import java.security.MessageDigest
 import java.time.Instant
 
@@ -12,21 +13,29 @@ interface AidenBotWatchJournal {
     fun read(): String?
     /** Must finish durable storage before returning; failures forbid network transmission. */
     fun write(record: String?)
+    fun replace(expected: String?, record: String?): Boolean {
+        if (read() != expected) return false
+        write(record); return true
+    }
 }
 
 /** Encrypted preferences are already excluded from cloud backups and device transfer. */
-class AidenBotWatchJournalStore(private val secureStore: AidenSecureStore) {
+class AidenBotWatchJournalStore(private val secureStore: AidenSecureStore, private val namespace: String = "bot-watches") {
     private val codec = MapSerializer(String.serializer(), String.serializer())
     private val json = Json { ignoreUnknownKeys = false }
-    private val purged = mutableSetOf<String>()
+    private val storeKey: Any = if (secureStore is AndroidAidenSecureStore) AndroidAidenSecureStore::class.java else secureStore
+    private val purged: MutableSet<String> get() = purgedScopes.getOrPut(storeKey) { mutableSetOf() }
 
     fun journal(instanceId: String, deviceId: String, pairedAt: Instant, botId: String, stillPaired: () -> Boolean): AidenBotWatchJournal {
         val scope = scope(instanceId, deviceId, pairedAt)
         return object : AidenBotWatchJournal {
-            override fun read(): String? = synchronized(this@AidenBotWatchJournalStore) {
+            override fun read(): String? = synchronized(journalLock) {
                 if (!stillPaired() || scope in purged) null else records(scope)[botId]
             }
-            override fun write(record: String?) = synchronized(this@AidenBotWatchJournalStore) {
+            override fun replace(expected: String?, record: String?): Boolean = synchronized(journalLock) {
+                if (read() != expected) false else { write(record); true }
+            }
+            override fun write(record: String?) = synchronized(journalLock) {
                 check(stillPaired() && scope !in purged) { "Pairing no longer exists" }
                 val records = records(scope).toMutableMap()
                 if (record == null) records.remove(botId) else {
@@ -42,8 +51,7 @@ class AidenBotWatchJournalStore(private val secureStore: AidenSecureStore) {
         }
     }
 
-    @Synchronized
-    fun purge(instanceId: String, deviceId: String, pairedAt: Instant) {
+    fun purge(instanceId: String, deviceId: String, pairedAt: Instant) = synchronized(journalLock) {
         val scope = scope(instanceId, deviceId, pairedAt)
         purged += scope
         secureStore.removeCredentialDurably(scope)
@@ -58,11 +66,13 @@ class AidenBotWatchJournalStore(private val secureStore: AidenSecureStore) {
         }
     }
 
-    companion object {
-        private fun scope(instanceId: String, deviceId: String, pairedAt: Instant): String {
+    private fun scope(instanceId: String, deviceId: String, pairedAt: Instant): String {
             val identity = "$instanceId\u001f$deviceId\u001f$pairedAt"
             val digest = MessageDigest.getInstance("SHA-256").digest(identity.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
-            return "aiden:bot-watches:v1:$digest"
+            return "aiden:$namespace:v1:$digest"
         }
+    companion object {
+        private val journalLock = Any()
+        private val purgedScopes = java.util.WeakHashMap<Any,MutableSet<String>>()
     }
 }

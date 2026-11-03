@@ -169,3 +169,13 @@ test("a Bot sets its own wake-ups only in turns a person started, and never from
     "a wake-up needs no approval card",
   );
 });
+
+
+test("Open work needs the existing Tasks capability on both person and routine turns", async () => {
+  const facts = bareFacts();
+  assert.equal((await botToolVerdict("open_work", facts, {})).allowed, false);
+  const allowed = { ...facts, authority: { ...facts.authority, otherCapabilities: [{ kind: "tasks" }] } as unknown as BotRuntimeEffectiveAuthority };
+  assert.equal((await botToolVerdict("open_work", allowed, {})).allowed, true);
+  assert.equal((await botToolVerdict("open_work", allowed, { routine: true })).allowed, true);
+  assert.equal(await botToolApprovalSummary("open_work", { action: "add", title: "Explicit task" }, { ...allowed, mcpTools: async () => { throw new Error("Task tracking must not inspect unrelated connectors for approval."); } }), undefined);
+});
