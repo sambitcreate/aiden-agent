@@ -1124,7 +1124,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // A run this pane did not start (a paired phone's turn) streams in live
   // once main reports the chat busy, and stays until its saved reply lands.
   // A draft or this pane's own turn stops it; an idle chat holds nothing.
-  const activeChatIds = useActiveChatIds();
+  const activeChatIds = useActiveChatIds(chat.data?.id);
   useObservedLocalRun(
     draft || isGenerating || isStartingGeneration ? null : chatId,
     effectiveWorkspaceId,
