@@ -237,7 +237,7 @@
     "test:ci:renderer-other": "node scripts/run-ci-tests.mjs --lane renderer-other",
     "test:ci:preserved": "node scripts/run-ci-tests.mjs --preserved",
     "test:ci:registry": "node --test scripts/ci-test-registry.test.mjs",
-    "test:ci-policy": "node --test scripts/ci-changes.test.mjs scripts/ci-required.test.mjs scripts/safe-test-reporter.test.mjs scripts/ci-e2e-shards.test.mjs scripts/ci-test-registry.test.mjs scripts/check-ci-policy.test.mjs scripts/ci-timings.test.mjs scripts/run-ci-tests.test.mjs",
+    "test:ci-policy": "node --test scripts/ci-changes.test.mjs scripts/ci-required.test.mjs scripts/safe-test-reporter.test.mjs scripts/ci-e2e-shards.test.mjs scripts/ci-test-registry.test.mjs scripts/check-ci-policy.test.mjs scripts/ci-timings.test.mjs scripts/run-ci-tests.test.mjs scripts/pullfrog-locked-runtime.test.mjs",
     "test:e2e:diagnostics:production:run": "AIDEN_E2E_RUNTIME_PROFILE=production playwright test tests/e2e/diagnostics-production.spec.ts --config=playwright.config.ts --fail-on-flaky-tests",
     "test:durable-jobs": "tsx --test main/services/sqlite-reclamation.test.ts main/services/durable-jobs/store.test.ts main/services/durable-jobs/service.test.ts main/services/durable-jobs/worker.test.ts",
     "test:transcript-polish": "tsx --test renderer/lib/sticky-section.test.ts renderer/shared/assistant-turn-stats.test.ts",
