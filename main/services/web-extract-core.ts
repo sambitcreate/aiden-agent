@@ -239,27 +239,48 @@ export class WebExtractPage {
     }
     return { line: this.lines[low] ?? "", start: this.starts[low] ?? 0 };
   }
+
+  /** Keep every line touched by a text match, with offsets in that full context. */
+  location(start: number, end: number): Located {
+    const first = this.lineAt(start);
+    const last = this.lineAt(end - 1);
+    return {
+      line: this.text.slice(first.start, last.start + last.line.length),
+      start: start - first.start,
+      end: end - first.start,
+    };
+  }
 }
 
-/** The line, or a window of it around raw [start, end), at most 200 characters with ellipses. */
-export function citeLine(line: string, start: number, end: number): string {
+/** A flattened window containing all of raw [start, end), or no citation if it cannot fit. */
+export function citeLine(line: string, start: number, end: number): string | undefined {
   const flat = (text: string) => text.replace(/\s+/gu, " ").trim();
-  if (line.length <= WEB_EXTRACT_MAX_SOURCE_LINE_CHARS) return flat(line);
-  const size = WEB_EXTRACT_MAX_SOURCE_LINE_CHARS - 2;
-  const span = Math.max(0, end - start);
-  let from = span >= size ? start : start - Math.floor((size - span) / 2);
-  from = Math.max(0, Math.min(line.length - size, from));
+  const text = flat(line);
+  if (text.length <= WEB_EXTRACT_MAX_SOURCE_LINE_CHARS) return text;
+  // Flatten before sizing the window: line breaks and repeated spaces consume
+  // one display character, while combining marks and surrogate pairs stay intact.
+  const before = (at: number) => line.slice(0, at).replace(/\s+/gu, " ").trimStart().length;
+  const first = before(start);
+  const last = before(end);
+  const room = WEB_EXTRACT_MAX_SOURCE_LINE_CHARS - (last - first) - Number(first > 0) - Number(last < text.length);
+  if (room < 0) return undefined;
+  let beforeContext = Math.min(first, Math.floor(room / 2));
+  const afterContext = Math.min(text.length - last, room - beforeContext);
+  beforeContext = Math.min(first, room - afterContext);
+  let from = first - beforeContext;
+  let to = last + afterContext;
   // Never start or end inside a surrogate pair.
-  if (from > 0 && /[\udc00-\udfff]/u.test(line[from] ?? "")) from -= 1;
-  let to = from + size;
-  if (to < line.length && /[\udc00-\udfff]/u.test(line[to] ?? "")) to -= 1;
-  return `${from > 0 ? "…" : ""}${flat(line.slice(from, to))}${to < line.length ? "…" : ""}`;
+  if (from > 0 && /[\udc00-\udfff]/u.test(text[from] ?? "")) from += 1;
+  if (to < text.length && /[\udc00-\udfff]/u.test(text[to] ?? "")) to -= 1;
+  return `${from > 0 ? "…" : ""}${flat(text.slice(from, to))}${to < text.length ? "…" : ""}`;
 }
 
 interface Folded {
   readonly text: string;
   /** Raw UTF-16 offset each folded unit came from. */
   readonly map: readonly number[];
+  /** Exclusive raw end, including a whole normalized character and its marks. */
+  readonly ends: readonly number[];
 }
 
 /**
@@ -270,6 +291,7 @@ interface Folded {
 function fold(raw: string): Folded {
   let text = "";
   const map: number[] = [];
+  const ends: number[] = [];
   let space = false;
   for (let index = 0; index < raw.length; ) {
     // A character with its combining marks normalizes as one unit.
@@ -298,15 +320,19 @@ function fold(raw: string): Folded {
       if (space) {
         text += " ";
         map.push(index);
+        ends.push(index);
         space = false;
       }
       const lower = plain.toLowerCase();
       text += lower;
-      for (let unitIndex = 0; unitIndex < lower.length; unitIndex++) map.push(index);
+      for (let unitIndex = 0; unitIndex < lower.length; unitIndex++) {
+        map.push(index);
+        ends.push(next);
+      }
     }
     index = next;
   }
-  return { text, map };
+  return { text, map, ends };
 }
 
 const WORD = /[\p{L}\p{N}]/u;
@@ -325,16 +351,15 @@ function cited(located: Located | undefined): string | undefined {
 function locateText(value: string, page: WebExtractPage): Located | undefined {
   const wanted = fold(value).text;
   if (!wanted) return undefined;
-  const { text, map } = page.folded;
+  const { text, map, ends } = page.folded;
   const wordStart = WORD.test(wanted[0]!);
   const wordEnd = WORD.test(wanted[wanted.length - 1]!);
   for (let at = text.indexOf(wanted); at !== -1; at = text.indexOf(wanted, at + 1)) {
     if (wordStart && WORD.test(text[at - 1] ?? "")) continue;
     if (wordEnd && WORD.test(text[at + wanted.length] ?? "")) continue;
     const rawStart = map[at]!;
-    const rawEnd = map[at + wanted.length - 1]! + 1;
-    const { line, start } = page.lineAt(rawStart);
-    return { line, start: rawStart - start, end: Math.min(rawEnd - start, line.length) };
+    const rawEnd = ends[at + wanted.length - 1]!;
+    return page.location(rawStart, rawEnd);
   }
   return undefined;
 }
@@ -391,7 +416,7 @@ function locateNumber(value: number, page: WebExtractPage): Located | undefined 
         separators.push(line[end]!);
         end++;
       }
-      const suffix = /^(?:([kKmMbB]|bn)(?![\p{L}])|\s(thousand|million|billion)\b)/u.exec(line.slice(end));
+      const suffix = /^(?:([kmb]|bn)(?![\p{L}\p{N}])|\s+(thousand|million|billion)\b)/iu.exec(line.slice(end));
       const multiplier = suffix ? MULTIPLIERS[(suffix[1] ?? suffix[2] ?? "").toLowerCase()] : undefined;
       // A minus, optionally before a currency sign, that does not join two words or numbers ("2026-11").
       let sign = index - 1;
@@ -399,9 +424,9 @@ function locateNumber(value: number, page: WebExtractPage): Located | undefined 
       const negative = (line[sign] === "-" || line[sign] === "−") && !/[\p{L}\p{N}]/u.test(line[sign - 1] ?? "");
       const signed = (reading: number) => (negative ? -reading : reading);
       const matches = (reading: number) =>
-        sameNumber(signed(reading), value) || (multiplier !== undefined && sameNumber(signed(reading * multiplier), value));
+        sameNumber(signed(reading * (multiplier ?? 1)), value);
       const readings = groupReadings(groups, separators);
-      if (readings.some(matches)) return { line, start: negative ? sign : index, end };
+      if (readings.some(matches)) return { line, start: negative ? sign : index, end: end + (suffix?.[0].length ?? 0) };
       if (readings.length === 0) {
         for (const [groupIndex, group] of groups.entries()) {
           if (sameNumber(groupIndex === 0 ? signed(Number(group)) : Number(group), value)) {
@@ -556,7 +581,13 @@ function locateDateTime(value: string, page: WebExtractPage): Located | undefine
   const zone = match[6] === undefined ? undefined : zonePattern(match[6]);
   for (const line of page.lines) {
     const date = dateInLine(wanted, line);
-    if (date && timeInLine(hours, minutes, seconds, line) && (!zone || zone.test(line))) return date;
+    const time = date && timeInLine(hours, minutes, seconds, line);
+    const offset = zone?.exec(line);
+    if (date && time && (!zone || offset)) return {
+      line,
+      start: Math.min(date.start, time.start, offset?.index ?? Infinity),
+      end: Math.max(date.end, time.end, offset ? offset.index + offset[0].length : 0),
+    };
   }
   return undefined;
 }
@@ -646,13 +677,26 @@ function locateTyped(spec: WebExtractFieldSpec, value: unknown, page: WebExtract
       return typeof value === "string" ? locateDateTime(value, page) : undefined;
     case "list": {
       if (!Array.isArray(value) || value.length === 0) return undefined;
-      let first: Located | undefined;
+      const locations: Located[] = [];
       for (const item of value) {
         const located = locateItem(spec.items ?? "text", item, page);
         if (!located) return undefined;
-        first ??= located;
+        locations.push(located);
       }
-      return first;
+      const first = locations[0]!;
+      if (locations.every((located) => located.line === first.line)) {
+        let start = first.start;
+        let end = first.end;
+        for (const located of locations) {
+          start = Math.min(start, located.start);
+          end = Math.max(end, located.end);
+        }
+        return { line: first.line, start, end };
+      }
+      // Separate source spans are joined with an explicit omission marker.
+      // Every item's support must fit, rather than citing only the first item.
+      const line = locations.map((located) => located.line.slice(located.start, located.end)).join(" … ");
+      return { line, start: 0, end: line.length };
     }
   }
 }
@@ -678,7 +722,7 @@ function checkedAgainstPage(spec: WebExtractFieldSpec, verdict: Verdict, page: W
     status: "uncertain",
     guess: value,
     ...(verdict.confidence === undefined ? {} : { confidence: verdict.confidence }),
-    ...(sourceLine ? { sourceLine } : { notFound: true as const }),
+    ...(sourceLine ? { sourceLine } : located ? {} : { notFound: true as const }),
   };
 }
 

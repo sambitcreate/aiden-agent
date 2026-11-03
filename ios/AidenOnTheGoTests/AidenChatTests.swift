@@ -1006,6 +1006,22 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(roundTripped.extraction, extraction)
     }
 
+    func testWebExtractCompleteSupportAndUncitableGuessSurviveCache() throws {
+        let recap = extractRecapJSON([
+            #"{"name":"destination","status":"extracted","value":"New York","confidence":0.99,"sourceLine":"Ship: New York"}"#,
+            #"{"name":"cities","status":"extracted","value":"[\"New York\",\"Paris\"]","confidence":0.99,"sourceLine":"New York … Paris"}"#,
+            #"{"name":"oversized","status":"uncertain","value":"A long matched value…","confidence":0.99}"#,
+        ])
+        let step = try decodeQuestionnaireStep(extractStepJSON(id: 1, extraction: recap))
+        let cached = try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(step))
+        let fields = try XCTUnwrap(cached.extraction).fields
+        XCTAssertEqual(fields.map(\.status), [.extracted, .extracted, .uncertain])
+        XCTAssertEqual(fields[0].sourceLine, "Ship: New York")
+        XCTAssertEqual(fields[1].sourceLine, "New York … Paris")
+        XCTAssertNil(fields[2].sourceLine)
+        XCTAssertNil(fields[2].notFound, "A value too long to cite is not a missing value")
+    }
+
     func testMalformedOrMisplacedWebExtractRecapIsDroppedButTheStepStillDecodes() throws {
         let invalidRecaps: [(String, String)] = [
             ("no fields and no error", extractRecapJSON([])),

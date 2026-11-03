@@ -1623,6 +1623,23 @@ class AidenChatTest {
     }
 
     @Test
+    fun completeExtractSupportAndUncitableGuessSurviveCache() {
+        val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(extractTimelineJson(extractRecapJson(
+            """{"name":"destination","status":"extracted","value":"New York","confidence":0.99,"sourceLine":"Ship: New York"}""",
+            """{"name":"cities","status":"extracted","value":"[\"New York\",\"Paris\"]","confidence":0.99,"sourceLine":"New York … Paris"}""",
+            """{"name":"oversized","status":"uncertain","value":"A long matched value…","confidence":0.99}"""
+        )))
+        val cached = json.decodeFromString<AidenGenerationTimeline>(json.encodeToString(timeline))
+        val fields = cached.steps[1].extractionRecap!!.fields
+        assertEquals(listOf(AidenWebExtractRecap.Status.EXTRACTED, AidenWebExtractRecap.Status.EXTRACTED,
+            AidenWebExtractRecap.Status.UNCERTAIN), fields.map { it.status })
+        assertEquals("Ship: New York", fields[0].sourceLine)
+        assertEquals("New York … Paris", fields[1].sourceLine)
+        assertNull(fields[2].sourceLine)
+        assertNull(fields[2].notFound)
+    }
+
+    @Test
     fun malformedOrMisplacedExtractRecapIsDroppedButThePageStaysAnActivityLine() {
         val malformed = listOf(
             "no fields and no error" to extractRecapJson(),
