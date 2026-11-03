@@ -1,6 +1,6 @@
 # Security remediation plan
 
-Status: In progress. Implementation and stacked PR delivery authorized October 27, 2026.
+Status: Merged. Implementation and stacked PR delivery authorized October 27, 2026. #604 and #606 to #614 merged by November 3, 2026 (#605 closed); #604, #606 and #607 shipped in 0.63.0, the rest is unreleased. Release and device acceptance remain separate.
 
 Owner decisions, October 29, 2026, after a review of the draft stack:
 
