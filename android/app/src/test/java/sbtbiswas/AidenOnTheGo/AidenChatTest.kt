@@ -67,6 +67,36 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 
 class AidenChatTest {
     @Test
+    fun adjacentRecordingAndImageKeepCallOrder() {
+        for (imageFirst in listOf(false, true)) {
+            val imageCall = if (imageFirst) 1 else 2
+            val recordingCall = if (imageFirst) 2 else 1
+            fun step(call: Int, name: String) = AidenAgentStep(
+                id = "tool-$call", order = call - 1, kind = AidenAgentStep.Kind.TOOL, toolCallId = "call-$call", toolName = name,
+                label = name, status = AidenAgentStepStatus.COMPLETED, startedAt = 1000.0, updatedAt = 2000.0,
+                finishedAt = 2000.0, contentOffset = 0
+            )
+            val image = step(imageCall, "display_image")
+            val recording = step(recordingCall, "browser_recording_stop").copy(recording = AidenBrowserRecordingRecap(
+                id = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678", mimeType = "video/mp4", durationMs = 2000, sizeBytes = 100
+            ))
+            val timeline = AidenGenerationTimeline(
+                version = 3, generationId = "g", status = AidenGenerationTimelineStatus.COMPLETED, startedAt = 1000.0,
+                finishedAt = 2000.0, steps = if (imageFirst) listOf(image, recording) else listOf(recording, image)
+            )
+            val photo = AidenMessageAttachment(id = "photo", name = "Photo.png", mimeType = "image/png", kind = AidenAttachmentKind.IMAGE, size = 10, toolCallId = "call-$imageCall")
+            val rows = AidenChronologicalProjection.rows("After.", "", timeline, images = listOf(photo))!!
+            val media = rows.mapNotNull { row -> when (row.kind) {
+                AidenChronologicalRow.Kind.IMAGES -> "photo"
+                AidenChronologicalRow.Kind.RECORDING -> "recording"
+                else -> null
+            } }
+            assertEquals(if (imageFirst) listOf("photo", "recording") else listOf("recording", "photo"), media)
+            assertEquals(setOf("photo"), AidenChronologicalProjection.placedImageIds(rows))
+        }
+    }
+
+    @Test
     fun repeatedFailedRetryKeepsTheOriginalAndLaterDraftExactlyOnce() {
         assertEquals("First\n\nLater", AidenDraftSendReconciliation.failedDraft("First", "First\n\nLater"))
         assertEquals("First", AidenDraftSendReconciliation.failedDraft("First", "First"))
