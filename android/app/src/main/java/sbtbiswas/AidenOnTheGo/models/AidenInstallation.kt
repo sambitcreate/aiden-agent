@@ -226,6 +226,16 @@ data class AidenServer(
             capabilities.contains(AidenRemoteCapability.ATTACHMENTS_RAW)
 
     /**
+     * Offered and held (revision 53), with `git:write` and `chat:write`: an empty Workspace chat
+     * may start in a new worktree on the Mac.
+     */
+    val supportsNewWorktrees: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.CHAT_NEW_WORKTREE) == true &&
+            capabilities.contains(AidenRemoteCapability.CHAT_NEW_WORKTREE) &&
+            capabilities.contains(AidenRemoteCapability.GIT_WRITE) &&
+            capabilities.contains(AidenRemoteCapability.CHAT_WRITE)
+
+    /**
      * Chat messages may carry inline `visuals` (revision 28). Informational:
      * the transcript renders whatever visuals a message carries.
      */
