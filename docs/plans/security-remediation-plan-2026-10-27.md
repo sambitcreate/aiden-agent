@@ -419,6 +419,23 @@ After a slice lands, update this plan and its index row with the PR/head and out
 
 - W8 implementation candidate: desktop Markdown images render an alt/site placeholder and a Load image action. Exact URL and transcript message identity scope in-memory permission, including streaming; reload resets it. A document-owned, concurrency-bounded main request uses the existing SSRF socket/DNS/redirect policy and returns validated PNG/JPEG/WebP bytes only, bounded to 8 MB, 20 seconds, five redirects and existing decoder limits. Relative sources, private addresses and active SVG are blocked. Generated attachments and authenticated asset grants retain their independent paths. Native consumers were inspected: iOS suppresses Markdown network images, Android formats text without image fetches; no Remote contract changed. Local validation is recorded in `.memory/security-transcript-image-consent-20261027.md`; fresh independent review and packaged acceptance remain pending.
 
+- Merge record, November 3, 2026. The entries above are pre-merge snapshots from October 27 to 29. Every slice below merged with a merge commit after hosted CI passed on the exact head named here, so the "hosted CI pending" and "exact-head CI" notes above are closed. #605 (W1 Telegram pairing) was closed without merging.
+
+  | PR | Slice | Exact head | Merge commit | Merged |
+  | --- | --- | --- | --- | --- |
+  | #604 | Plan and acceptance tracking | 934d8633b | 68a1c675 | 2026-10-29 |
+  | #606 | W2 CLI schedule consent | ffea5a21d | f65b02ff | 2026-10-30 |
+  | #607 | W5 host-opened Remote admission | 0d0889d15 | 68789d5f | 2026-10-30 |
+  | #608 | W4 mobile link consent, drafts kept on the device | 4e5dbfdf1 | 876d006f | 2026-10-31 |
+  | #609 | W3a/W3b private config and sealed pending credentials, W7 artifact file boundaries | 9f881f3fb | cad91dc2 | 2026-11-03 |
+  | #610 | W9 review chain pins and main-only release gates | 8d137fbb9 | 440fa4e7 | 2026-11-03 |
+  | #611 | W10 bounded dependency updates | 18ad393ba | c45e8ead | 2026-11-03 |
+  | #612 | W8 consent before loading outside transcript images | 62fba5f33 | a9b0cd83 | 2026-11-03 |
+  | #613 | W11 diagnostic credential redaction | 5882b8299 | 4b43dd8d | 2026-11-03 |
+  | #614 | W12 production renderer CSP | 388c21c6e | 49497480 | 2026-11-03 |
+
+  #604, #606 and #607 shipped in 0.63.0; #608 to #614 are unreleased. Still open for every slice that changes the app: packaged-app acceptance, physical-device acceptance (#607, #608), live-network and proxy/custom-TLS acceptance (#611, #612), and the release itself. The W12 renderer custom-protocol work stays deferred in [its own plan](renderer-protocol-compatibility-plan.md), and publisher verification in the AppImage updater stays an open design question. The checklist below stays unticked until those gates are recorded.
+
 ## Completion checklist
 
 - [ ] Refresh source/configuration baselines and retain the original audit as history.
