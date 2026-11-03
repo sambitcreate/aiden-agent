@@ -19,6 +19,8 @@ import { assembleAgentTools, type AgentToolSources } from "../agent-tool-assembl
 import { desktopChatExecutionOptions } from "../chat-generation-start.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import { appendPiMessages } from "../pi-compaction-session-store.js";
+import { SpendingService } from "../spending-service.js";
+import { UsageLimitGate } from "../usage-limit-core.js";
 import { SubagentApprovalLedgerV2 } from "./approval-v2.js";
 import { createSubagentAuthorityV2 } from "./authority-v2.js";
 import {
@@ -271,6 +273,70 @@ function child(
     thinkingLevel: "high",
     systemPrompt: "Complete one bounded child task.",
     tools,
+  });
+}
+
+for (const change of ["shared spending", "lowered cap", "allowed more"] as const) {
+  test(`a helper rechecks its chat cap after a provider wait: ${change}`, async () => {
+    await within(`helper spending after wait: ${change}`, async () => {
+      const settings = { chatUsd: 1 };
+      const spending = new SpendingService({
+        persistence: { load: async () => undefined, save: async () => {} },
+        settings: async () => settings,
+        broadcast: () => {},
+      });
+      const owner = { kind: "chat", id: "compatibility-chat" } as const;
+      if (change === "lowered cap") await spending.record(owner, 0.5);
+      const core = createFauxCore({ provider: "helper-cap-wait", models: [{ id: "bounded" }] });
+      core.setResponses([
+        async (_context, options) => {
+          await options?.onResponse?.({ status: 429, headers: { "retry-after": "60" } }, core.getModel() as Model<Api>);
+          return {
+            ...fauxAssistantMessage("", {
+              stopReason: "error",
+              errorMessage: '429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}',
+            }),
+            content: [],
+          };
+        },
+        fauxAssistantMessage("Finished after the provider wait."),
+      ]);
+      const gate = new UsageLimitGate();
+      const waiting = deferred();
+      const registry = new SubagentRuntimeRegistry(undefined, undefined, {
+        spending,
+        usageLimits: (waitOwner, providerLabel) => ({
+          gate,
+          owner: waitOwner,
+          providerLabel,
+          maxWaitMs: () => 60_000,
+          random: () => 0,
+          onWait: () => waiting.resolve(),
+        }),
+      });
+      const running = child(registry, runtimeFrom(core.getModel() as Model<Api>, core.streamSimple));
+      try {
+        const result = running.prompt("Finish the bounded task.");
+        const beforeWait = await Promise.race([waiting.promise.then(() => undefined), result]);
+        assert.equal(beforeWait, undefined, `the provider rejection must enter the wait: ${JSON.stringify(beforeWait)}`);
+        assert.equal(core.state.callCount, 1, "the rejected request is the only provider call before Retry now");
+        if (change === "lowered cap") settings.chatUsd = 0.5;
+        else await spending.record(owner, 1);
+        if (change === "allowed more") await spending.allowMore("chat", owner.id);
+        assert.equal(gate.retryNow(owner), true, "the helper is actually held by the provider limit");
+        const outcome = await result;
+        if (change === "allowed more") {
+          assert.equal(core.state.callCount, 2);
+          assert.equal(outcome.kind, "completed");
+        } else {
+          assert.equal(core.state.callCount, 1, "releasing the provider wait must not dispatch another request at the chat cap");
+          assert.notEqual(outcome.kind, "completed");
+        }
+      } finally {
+        await registry.shutdown();
+        await spending.flush();
+      }
+    });
   });
 }
 
@@ -1341,12 +1407,12 @@ test("main-process shutdown continues to application quit after the subagent dea
   const source = await readFile(new URL("../../index.ts", import.meta.url), "utf-8");
   const parentAbortStart = source.indexOf(
     "llmClient.abortAll();",
-    source.indexOf("async function shutdownAndQuit"),
+    source.indexOf("async function runShutdownAndQuit"),
   );
   const settlementStart = source.indexOf(
-    "const subagentsSettled = await subagentRuntimeRegistry.shutdown();",
+    "subagentRuntimeRegistry.shutdown(),",
   );
-  const parentSettlementStart = source.indexOf("await llmClient.shutdown();", parentAbortStart);
+  const parentSettlementStart = source.indexOf("llmClient.shutdown(),", parentAbortStart);
   const cleanupStart = source.indexOf("cleanupApplication();", settlementStart);
   const receiptFinalizationStart = source.indexOf(
     "await tryFinalizeSubagentPackagedSoakQuitReceipt(",

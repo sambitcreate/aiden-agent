@@ -1,3 +1,4 @@
+import { createSpendingMeter, SpendingService } from "./spending-service.js";
 import { buildCodingTools } from "./coding-tools.js";
 import { toolOutputScope } from "./tool-output-store.js";
 import { InMemorySessionRepo } from "./pi-session-repository-port.js";
@@ -34,6 +35,7 @@ import {
   PiAgentRuntimeHarness,
   PiAgentRuntimeHostError,
   resolvePiAgentRuntimeContributionSnapshot,
+  type PiAgentRuntimeExtension,
   type PiAgentRuntimeHarnessOptions,
   type PiHarnessFault,
   type PiRuntimeSessionBinding,
@@ -43,6 +45,7 @@ import { markPiRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { McpConfigurationLeaseRegistry } from "./mcp-config-lease.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
+import { LOAD_TOOLS_TOOL_NAME, createOnDemandTools } from "./on-demand-tools.js";
 import { executeMcpAgentTool } from "./mcp-tool-result.js";
 import { chatContextPressureFromProjection, createGenerationContextTransform } from "./generation-context.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
@@ -87,6 +90,8 @@ async function managedTestHarness(
     appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[]) => Promise<void>;
     appendInput?: (session: PiSessionPort, message: AgentMessage) => Promise<void>;
     beforeQueuedUser?: PiRuntimeSessionBinding["beforeQueuedUser"];
+    finishTurn?: PiAgentRuntimeHarnessOptions["finishTurn"];
+    spendingLimitReached?: PiAgentRuntimeHarnessOptions["spendingLimitReached"];
     beforeToolCall?: PiAgentRuntimeHarnessOptions["beforeToolCall"];
     prepareNextTurnWithContext?: PiAgentRuntimeHarnessOptions["prepareNextTurnWithContext"];
     initialSystemPrompt?: string;
@@ -98,6 +103,7 @@ async function managedTestHarness(
     effects?: PiRuntimeSessionBinding["effects"];
     signal?: AbortSignal;
     streamFn?: PiAgentRuntimeHarnessOptions["streamFn"];
+    compactionEngine?: PiRuntimeSessionBinding["compaction"]["engine"];
     summaryResponses?: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0];
     generationContextTransform?: boolean;
     onContextProjection?: PiAgentRuntimeHarnessOptions["onContextProjection"];
@@ -168,6 +174,8 @@ async function managedTestHarness(
       messages: options.initialMessages ?? [],
       model,
     },
+    finishTurn: options.finishTurn,
+    spendingLimitReached: options.spendingLimitReached,
     beforeToolCall: options.beforeToolCall,
     prepareNextTurnWithContext: options.prepareNextTurnWithContext,
     ...(options.onContextProjection ? { onContextProjection: options.onContextProjection } : {}),
@@ -178,6 +186,7 @@ async function managedTestHarness(
       appendInput: options.appendInput,
       beforeQueuedUser: options.beforeQueuedUser,
       compaction: {
+        engine: options.compactionEngine,
         models: compactionModels,
         model,
         thinkingLevel: "off",
@@ -1414,7 +1423,8 @@ test("managed runs retry transient provider failures with growing waits until on
     fauxAssistantMessage("", { stopReason: "error", errorMessage: "502 Bad Gateway" });
   const { core, harness } = await managedTestHarness(
     [failure(), failure(), failure(), fauxAssistantMessage("Recovered answer")],
-    { retryDelayMs: 1, maxRetries: 5 },
+    // Report-only helpers end each Pi turn, including unsuccessful attempts.
+    { retryDelayMs: 1, maxRetries: 5, finishTurn: () => ({ action: "end" }) },
   );
   const retries: Array<[number, number, number]> = [];
   const outcome = await harness.runManaged(
@@ -1524,6 +1534,51 @@ test("a reply cut off by the output limit continues from its text, at most twice
     " and the end.",
   ]);
 });
+
+for (const stopReason of ["length", "error"] as const) {
+  test(`a priced ${stopReason} reply that reaches the chat cap sends no recovery request`, async () => {
+    const owner = { kind: "chat", id: "limited-chat" } as const;
+    const spending = new SpendingService({
+      persistence: { load: async () => undefined, save: async () => {} },
+      settings: async () => ({ chatUsd: 1 }),
+      broadcast: () => {},
+    });
+    const meter = createSpendingMeter({ owner, spending, counts: async () => true });
+    let requests = 0;
+    const { harness, session } = await managedTestHarness([], {
+      streamFn: meter.wrap((model) => {
+        requests++;
+        const message = {
+          ...fauxAssistantMessage("Part of the answer", {
+            stopReason: requests === 1 ? stopReason : "stop",
+            ...(stopReason === "error" ? { errorMessage: "terminated" } : {}),
+          }),
+          provider: model.provider, model: model.id, api: model.api,
+        };
+        message.usage = { ...message.usage, cost: { ...message.usage.cost, total: 1 } };
+        const stream = createAssistantMessageEventStream();
+        if (message.stopReason === "error") stream.push({ type: "error", reason: "error", error: message });
+        else stream.push({ type: "done", reason: requests === 1 ? "length" : "stop", message });
+        return stream;
+      }),
+      spendingLimitReached: async () => {
+        await meter.settled();
+        return Boolean(await spending.block(owner));
+      },
+      retryDelayMs: 1,
+    });
+    const outcome = await harness.runManaged(
+      { kind: "append-and-run", message: cutOffPrompt("Write the answer") },
+      { maxCutOffContinuations: 2 },
+    );
+    assert.equal(requests, 1);
+    assert.equal((await spending.status("chat", owner.id))?.spentUsd, 1);
+    assert.equal(outcome.kind, stopReason === "length" ? "completed" : "provider_failed");
+    const history = (await session.buildContext()).messages;
+    assert.deepEqual(history.filter((message) => message.role === "user").map(messageText), ["Write the answer"]);
+    if (stopReason === "length") assert.equal(messageText(history[history.length - 1]), "Part of the answer");
+  });
+}
 
 test("a third cut-off ends the reply at the output limit, and replies without text never continue", async () => {
   const cut = (text: string) => fauxAssistantMessage(text, { stopReason: "length" });
@@ -2321,38 +2376,99 @@ test("an irreducible active tool result uses bounded projection without a no-op 
   assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), false);
 });
 
-test("hidden history removal fails closed when no durable checkpoint can be written", async () => {
-  const { harness, session } = await managedTestHarness(
-    [fauxAssistantMessage("provider answered the bounded projection")],
-    {
-      contextWindow: 4_096,
-      generationContextTransform: true,
-      extensions: [
-        {
-          id: "oversized-ephemeral-history",
-          transformContext: async (messages) => [
-            { role: "user", content: `old-${"u".repeat(60_000)}`, timestamp: 1 },
-            {
-              ...fauxAssistantMessage(`old-${"a".repeat(60_000)}`),
-              timestamp: 2,
-            },
-            ...messages,
-          ],
-        },
-      ],
-    },
-  );
+const oversizedHistory: PiAgentRuntimeExtension = {
+  id: "oversized-ephemeral-history",
+  transformContext: async (messages) => [
+    { role: "user", content: `old-${"u".repeat(60_000)}`, timestamp: 1 },
+    { ...fauxAssistantMessage(`old-${"a".repeat(60_000)}`), timestamp: 2 },
+    ...messages,
+  ],
+};
 
-  const outcome = await harness.runManaged({
-    kind: "append-and-run",
-    message: { role: "user", content: "current request", timestamp: 3 },
+for (const [engine, overCap, writeFails] of [
+  ["vcc", false, false],
+  ["vcc", true, false],
+  ["vcc", true, true],
+  ["llm", false, false],
+  ["llm", true, false],
+] as const) {
+  test(`emergency checkpoint with durable history (${engine}, ${overCap ? "at cap" : "under cap"}${writeFails ? ", write fails" : ""})`, async () => {
+    let summaries = 0;
+    const { harness, session, core } = await managedTestHarness(
+      [fauxAssistantMessage("Final answer from the bounded context")],
+      {
+        compactionEngine: engine,
+        contextWindow: 4_096,
+        generationContextTransform: true,
+        extensions: [oversizedHistory],
+        spendingLimitReached: async () => overCap,
+        summaryResponses: Array.from({ length: 2 }, () => () => {
+          summaries++;
+          return fauxAssistantMessage("## Goal\nFinish the task.\n## Progress\nReviewed earlier steps.\n## Next Steps\nRespond.");
+        }),
+      },
+    );
+    for (let i = 0; i < 10; i++) {
+      await appendPiMessages(session, [
+        { role: "user", content: `Explain step ${i}`, timestamp: 10 + i * 2 },
+        fauxAssistantMessage(`Step ${i}. ${"Earlier detail. ".repeat(48)}`, { timestamp: 11 + i * 2 }),
+      ]);
+    }
+    let failedWrites = 0;
+    if (writeFails) {
+      session.appendCompaction = async () => {
+        failedWrites++;
+        throw new Error("Checkpoint storage unavailable");
+      };
+    }
+    const outcome = await harness.runManaged({
+      kind: "append-and-run",
+      message: { role: "user", content: "Finish the task", timestamp: 100 },
+    });
+
+    assert.equal(outcome.emergencyProjection?.kind, "history_removed");
+    assert.equal(core.state.callCount, 1);
+    const checkpoints = (await session.getBranch()).filter((entry) => entry.type === "compaction");
+    assert.equal(failedWrites, writeFails ? 1 : 0);
+    if (writeFails || (engine === "llm" && overCap)) {
+      assert.equal(outcome.kind, "host_failed");
+      assert.equal(outcome.faultKind, "compaction");
+      assert.equal(checkpoints.length, 0);
+      assert.equal(summaries, 0);
+    } else {
+      assert.equal(outcome.kind, "completed");
+      assert.equal(messageText(outcome.finalMessage), "Final answer from the bounded context");
+      assert.equal(checkpoints.length, 1);
+      if (engine === "vcc") assert.equal(summaries, 0);
+      else assert.ok(summaries > 0);
+    }
   });
+}
 
-  assert.equal(outcome.emergencyProjection?.kind, "history_removed");
-  assert.equal(outcome.kind, "host_failed");
-  assert.equal(outcome.kind === "host_failed" ? outcome.faultKind : undefined, "compaction");
-  assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), false);
-});
+for (const overCap of [false, true]) {
+  test(`hidden history removal fails closed without a durable checkpoint (${overCap ? "spending stop" : "normal finish"})`, async () => {
+    const { harness, session, core } = await managedTestHarness(
+      [fauxAssistantMessage("provider answered the bounded projection")],
+      {
+        spendingLimitReached: async () => overCap,
+        contextWindow: 4_096,
+        generationContextTransform: true,
+        extensions: [oversizedHistory],
+      },
+    );
+
+    const outcome = await harness.runManaged({
+      kind: "append-and-run",
+      message: { role: "user", content: "current request", timestamp: 3 },
+    });
+
+    assert.equal(outcome.emergencyProjection?.kind, "history_removed");
+    assert.equal(core.state.callCount, 1);
+    assert.equal(outcome.kind, "host_failed");
+    assert.equal(outcome.kind === "host_failed" ? outcome.faultKind : undefined, "compaction");
+    assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), false);
+  });
+}
 
 test("provider hooks receive curated options and compose payload/response hooks in Pi order", async () => {
   const trace: string[] = [];
@@ -4242,6 +4358,51 @@ test("an MCP server that finished discovery after the turn started is searchable
   assert.deepEqual(outputs[0].tools.map((entry: { name: string }) => entry.name), ["late_docs"]);
   assert.equal(outputs[1].isError, false);
   assert.match(JSON.stringify(outputs[1]), /late document/u);
+});
+
+test("a loaded held-back tool a script can call runs and the reply finishes", async () => {
+  let ran = 0;
+  const classify = Object.assign<AgentTool, object>({
+    name: "classify", label: "Classify", description: "Classify text.", replay: "safe",
+    parameters: Type.Object({ text: Type.String() }),
+    async execute() {
+      ran += 1;
+      return { content: [{ type: "text", text: "positive" }], details: null };
+    },
+  }, { codemode: true });
+  const read = Object.assign<AgentTool, object>({
+    name: "read_file", label: "Read", description: "Read a file.", replay: "safe",
+    parameters: Type.Object({}),
+    async execute() {
+      return { content: [{ type: "text", text: "" }], details: null };
+    },
+  }, {});
+  const loading = createOnDemandTools([read, classify], new Set(["classify"]))!;
+  let harness!: PiAgentRuntimeHarness;
+  const callable: string[][] = [];
+  const prepared = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall(LOAD_TOOLS_TOOL_NAME, { names: ["classify"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("classify", { text: "great" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("It reads as positive."),
+  ], {
+    tools: loading.initialTools([]),
+    // Callable held-back tools join the inventory late, as llm-client wires them.
+    lateDeferredTools: () => loading.onDemand,
+    prepareNextTurnWithContext: async ({ context }) => {
+      // The MCP section refresher reads the callable inventory on every step.
+      callable.push(harness.getCallableTools().map(({ name }) => name));
+      return { context: await loading.prepare(context) };
+    },
+  });
+  harness = prepared.harness;
+  const outcome = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Classify great", timestamp: 1 } });
+  assert.equal(outcome.kind, "completed");
+  assert.equal(ran, 1);
+  assert.deepEqual(harness.getCallableTools().map(({ name }) => name), ["read_file", LOAD_TOOLS_TOOL_NAME, "classify"]);
+  assert.ok(callable.every((names) => names.filter((name) => name === "classify").length === 1));
+  const last = harness.state.messages[harness.state.messages.length - 1];
+  assert.equal(last?.role, "assistant");
+  assert.match(JSON.stringify(last?.content), /positive/u);
 });
 
 test("real command process receipts never promote tool success or model claims to task acceptance", async (t) => {

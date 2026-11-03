@@ -9,6 +9,7 @@ import {
 } from "../../renderer/shared/generative-ui-bridge.js";
 import { GENERATIVE_UI_GUEST_CSP, GENERATIVE_UI_IFRAME_SANDBOX } from "../../renderer/shared/generative-ui.js";
 import {
+  abortableSleep,
   createVisualSnapshotQueue,
   snapshotAttachment,
   type CapturedImage,
@@ -39,16 +40,6 @@ const MAX_PNG_BYTES = 2 * 1024 * 1024;
 const IDLE_CLOSE_MS = 10_000;
 
 const LIGHT_THEME = { colorScheme: "light" as const, canvas: CANVAS, foreground: "#181817", secondary: "#6b6b68", accent: "#0b7de5" };
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => {
-      clearTimeout(timer);
-      reject(new Error("Snapshot cancelled."));
-    }, { once: true });
-  });
-}
 
 /**
  * The guest document is inlined as `srcdoc`, not loaded from its own
@@ -162,7 +153,7 @@ export function createElectronVisualSnapshotCapture(deps: {
         if (png.length <= MAX_PNG_BYTES) return { bytes: png, mimeType: "image/png" };
         return { bytes: image.toJPEG(88), mimeType: "image/jpeg" };
       }
-      await sleep(150, signal);
+      await abortableSleep(150, signal);
     }
     return null;
   };
@@ -188,7 +179,7 @@ export function createElectronVisualSnapshotCapture(deps: {
         height = snap.height;
         break;
       }
-      await sleep(100, signal);
+      await abortableSleep(100, signal);
     }
     return height > 0 ? captureSized(target, width, height, signal) : null;
   };
@@ -205,7 +196,7 @@ export function createElectronVisualSnapshotCapture(deps: {
       const ready = await target.webContents.executeJavaScript("typeof window.__aidenSnapshot === 'function'");
       if (signal.aborted) return null;
       if (ready) break;
-      await sleep(50, signal);
+      await abortableSleep(50, signal);
     }
     if (signal.aborted) return null;
     // Only the images this visual shows travel to the page: id, type, and data.

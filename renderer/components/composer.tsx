@@ -18,6 +18,7 @@ import {
   Text,
   toast,
 } from "./ui";
+import { ProviderIcon } from "./provider-icon";
 import { cn } from "../lib/ui-utils";
 import {
   ArrowUp,
@@ -26,6 +27,7 @@ import {
   ListPlus,
   Loader2,
   Lock,
+  MessageCircle,
   Mic,
   OctagonAlert,
   Paperclip,
@@ -36,6 +38,7 @@ import {
 } from "lucide-react";
 import { AidenIcon } from "./aiden-icon";
 import { BusySendButton, type BusySendMode } from "./busy-send-button";
+import { useAppearancePreference } from "../lib/use-appearance-preference";
 import { ComposerContextBar, useAutoHideComposerContext } from "./composer-context-bar";
 import { useComposerContextChips } from "./use-composer-context-chips";
 import { FollowThroughChips } from "./follow-through-chips";
@@ -58,7 +61,7 @@ import type { BrowserAnnotation } from "../shared/browser";
 import { applyDictationDictionary, parseDictationDictionary } from "../shared/dictation-dictionary";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
 import type { Attachment, Chat, GitInfo, Workspace, WorkspacePermission } from "../lib/types";
-import { composerSubmissionAllowed } from "../lib/composer-submission";
+import { composerSubmissionAllowed, effectiveBusySendMode } from "../lib/composer-submission";
 import {
   ComposerAttachmentOperation,
   acceptComposerAttachments,
@@ -132,6 +135,7 @@ import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../shared/chat-message-contract"
 import { LOCAL_COMPOSER_SURFACES, type ComposerSurfaces } from "../lib/hosts/composer-surfaces";
 import { CONNECT_PROVIDER_ACTION } from "../lib/provider-setup-copy";
 import { escapeStopsGeneration } from "../lib/composer-type-focus";
+import { isNoWorkspace, NO_WORKSPACE_LABEL } from "../lib/no-workspace";
 
 const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/png",
@@ -213,6 +217,8 @@ interface ComposerProps {
   workspaces?: Workspace[];
   onSelectWorkspace?: (workspaceId: string) => Promise<void>;
   onCreateScratchWorkspace?: () => Promise<void>;
+  /** Workspace menu's No workspace: the draft joins the Chats group (global settings, hidden folder). */
+  onChooseNoWorkspace?: () => Promise<void>;
   /** Workspace menu's Open folder…: native picker, then move the draft there. */
   onOpenFolderAsWorkspace?: () => Promise<void>;
   /** Opens the draft's workspace menu from outside (the headline name, the palette's Clone row). */
@@ -401,6 +407,7 @@ export function Composer({
   workspaces = [],
   onSelectWorkspace,
   onCreateScratchWorkspace,
+  onChooseNoWorkspace,
   onOpenFolderAsWorkspace,
   workspaceMenuRequest,
   onCreateGitWorktree,
@@ -450,9 +457,10 @@ export function Composer({
     slashTracker: updateSlashSessionTracker({ epoch: 0, active: false }, restoredText),
   });
   const { text, slashTracker } = draft;
-  const [busyMode, setBusyMode] = React.useState<BusySendMode>("queue");
+  const busyDefault = useAppearancePreference("busySendBehavior");
+  const [busyChoice, setBusyMode] = React.useState<BusySendMode | null>(null);
   React.useEffect(() => {
-    if (!isGenerating) setBusyMode("queue");
+    if (!isGenerating) setBusyMode(null);
   }, [isGenerating]);
   const draftRef = React.useRef(draft);
   React.useLayoutEffect(() => {
@@ -537,6 +545,7 @@ export function Composer({
     revision: 0,
   });
   const selectedSkill = skillSelection.selected;
+  const busyMode = effectiveBusySendMode(busyChoice ?? busyDefault, Boolean(onSteer) && attachments.length === 0 && !selectedSkill);
   // A blocked send explains itself beside the composer, not in a toast, and the
   // hint lasts only while the draft, attachments, skill, and send mode are unchanged.
   const [blockedSend, setBlockedSend] = React.useState<{
@@ -755,6 +764,13 @@ export function Composer({
     return forkTurnEligibility(sessionChat.messages, { editInFork: !sessionChat.botId });
   }, [sessionChat]);
   const completedForkTurns = forkEligibility.turns;
+  // The latest prompt, when it has a finished reply and can be edited in a fork.
+  const lastPromptForkId = React.useMemo(() => {
+    if (!onForkChat || !sessionChat) return null;
+    const lastPrompt = [...sessionChat.messages].reverse().find((message) => message.role === "user");
+    const lastTurn = completedForkTurns[completedForkTurns.length - 1];
+    return lastPrompt && lastTurn?.userMessageId === lastPrompt.id ? lastPrompt.id : null;
+  }, [completedForkTurns, onForkChat, sessionChat]);
   const forkSummaryTurnIds = React.useMemo(
     () => (sessionChat && onForkWithSummary ? forkSummaryRows(sessionChat.messages) : null),
     [onForkWithSummary, sessionChat],
@@ -2019,6 +2035,25 @@ export function Composer({
         }
       }
     }
+    // ↑ in an empty message box brings the last prompt back in a fork, to fix and send again.
+    if (
+      event.key === "ArrowUp" &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.shiftKey &&
+      !event.repeat &&
+      !event.nativeEvent.isComposing &&
+      text === "" &&
+      attachments.length === 0 &&
+      !selectedSkill &&
+      !isGenerating &&
+      lastPromptForkId
+    ) {
+      event.preventDefault();
+      void forkFromTurn(lastPromptForkId, "before");
+      return;
+    }
     if (
       escapeStopsGeneration({
         key: event.key,
@@ -2036,15 +2071,19 @@ export function Composer({
     }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      void submit();
+      void submit(isGenerating && (event.metaKey || event.ctrlKey) ? (busyMode === "queue" ? "steer" : "queue") : undefined);
     }
   };
 
   const permission = workspace?.permission ?? "ask";
   const PermissionIcon = PERMISSION_META[permission].icon;
-  const folderName = workspace?.folderPath
-    ? workspace.folderPath.split("/").filter(Boolean).pop()
-    : workspace?.name;
+  const noWorkspace = isNoWorkspace(workspace);
+  const folderName = noWorkspace
+    ? NO_WORKSPACE_LABEL
+    : workspace?.folderPath
+      ? workspace.folderPath.split("/").filter(Boolean).pop()
+      : workspace?.name;
+  const WorkspaceChipIcon = noWorkspace ? MessageCircle : Folder;
   const hasUserMessages =
     sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages;
   const { chips: contextChips, pullRequestAnnouncement } = useComposerContextChips({
@@ -2106,7 +2145,7 @@ export function Composer({
     <>
       <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
         {firstSendPending ? <Text as="p" variant="small" color="secondary" role="status" className="px-4 pb-1">{firstSendStatus ?? "Sending…"}</Text> : null}
-        <div className="composer-responsive pointer-events-auto relative isolate" inert={firstSendPending || undefined} aria-busy={firstSendPending || undefined}>
+        <div data-focus-region="composer" className="composer-responsive pointer-events-auto relative isolate" inert={firstSendPending || undefined} aria-busy={firstSendPending || undefined}>
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
             immediate={
@@ -2152,6 +2191,7 @@ export function Composer({
                 activeWorkspaceId={workspace?.id}
                 onSelectWorkspace={onSelectWorkspace}
                 onCreateScratchWorkspace={onCreateScratchWorkspace}
+                onChooseNoWorkspace={onChooseNoWorkspace}
                 onOpenFolder={onOpenFolderAsWorkspace}
                 busyReason={workspaceChangeBusyReason({
                   sending: sending || firstSendPending,
@@ -2178,7 +2218,7 @@ export function Composer({
                         : "Choose a workspace"
                     }
                   >
-                    <Folder className="size-4 shrink-0" />
+                    <WorkspaceChipIcon className="size-4 shrink-0" />
                     <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
                   </Button>
                 }
@@ -2192,7 +2232,7 @@ export function Composer({
                 disabled={!workspace?.folderPath}
                 aria-label={workspace?.folderPath ? "Open folder in file manager" : "Workspace"}
               >
-                <Folder className="size-4 shrink-0" />
+                <WorkspaceChipIcon className="size-4 shrink-0" />
                 <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
               </Button>
             )}
@@ -2356,6 +2396,7 @@ export function Composer({
               // Approval keys stay off while this holds a draft, wherever focus is; the
               // value marks staged attachments or a skill that the text alone doesn't show.
               data-message-draft={attachments.length > 0 || selectedSkill ? "attached" : ""}
+              data-focus-region-entry
               value={composerValue}
               readOnly={composerInputLocked || firstSendPending || dictationPreviewing}
               aria-busy={composerInputLocked || firstSendPending || dictationPreviewing || undefined}
@@ -2754,9 +2795,10 @@ export function Composer({
         title="Enable Full Access?"
         description={
           <Text variant="small" color="secondary">
-            Aiden will be able to read and edit files, and run commands in “
-            {folderName ?? "this workspace"}” without asking each time. You can change this any time
-            from the composer.
+            {noWorkspace
+              ? "Aiden will be able to read and edit files, and run commands in this chat’s own folder without asking each time. "
+              : <>Aiden will be able to read and edit files, and run commands in “{folderName ?? "this workspace"}” without asking each time. </>}
+            You can change this any time from the composer.
           </Text>
         }
         confirmLabel="Enable Full Access"
@@ -2943,6 +2985,7 @@ export function Composer({
                   setLogoutConfirmOpen(true);
                 }}
               >
+                <ProviderIcon providerId={provider.id} providerLabel={provider.label} className="size-4 text-secondary" />
                 <span>
                   <span className="block text-small-strong">{provider.label}</span>
                   <span className="block text-small text-tertiary">{provider.detail}</span>

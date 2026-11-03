@@ -6,6 +6,7 @@ import {
   NOTIFICATION_CHANNELS,
 } from "./preload-channels.js";
 import { createAttachmentPreloadBridge } from "./preload-attachments.js";
+import { windowChromeFromArgv, type WindowChrome } from "./shared/window-chrome.js";
 
 // Re-exported so the contract test can assert coverage without importing this
 // Electron-bound module.
@@ -35,7 +36,12 @@ function subscribe(channel: string, callback: NotificationHandler): () => void {
   return () => ipcRenderer.removeListener(channel, listener);
 }
 
+const windowChrome: WindowChrome =
+  windowChromeFromArgv(process.argv) ?? (process.platform === "darwin" ? "mac" : "system");
+
 const aidenAPI = {
+  /** Which window controls this window has, fixed for its lifetime. */
+  window: { chrome: windowChrome },
   ipc: {
     invoke: <T = unknown>(channel: string, ...args: unknown[]): Promise<T> => {
       assertInvokeChannel(channel);

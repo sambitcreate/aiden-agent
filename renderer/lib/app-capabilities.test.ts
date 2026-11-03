@@ -33,3 +33,11 @@ test("Bot computers fail closed and stand apart from Computer Use", () => {
   }
   assert.deepEqual(parseAppCapabilities({ botComputers: true }), { ...DISABLED_APP_CAPABILITIES, botComputers: true });
 });
+
+test("the app icon badge fails closed until main reports a literal true", () => {
+  assert.equal(DISABLED_APP_CAPABILITIES.badgeCount, false);
+  for (const value of ["true", 1, {}, null, undefined]) {
+    assert.equal(parseAppCapabilities({ badgeCount: value, dockIcon: true }).badgeCount, false, JSON.stringify(value));
+  }
+  assert.deepEqual(parseAppCapabilities({ badgeCount: true }), { ...DISABLED_APP_CAPABILITIES, badgeCount: true });
+});

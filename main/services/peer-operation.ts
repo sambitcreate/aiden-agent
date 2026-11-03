@@ -11,8 +11,11 @@ import {
   MAX_PEER_UPLOAD_BYTES,
   type PeerRequest,
 } from "./peer-transport.js";
+import { MAX_INLINE_IMAGE_BYTES } from "../../renderer/shared/attachment-contract.js";
 import {
   AIDEN_REMOTE_CONTEXT_MODEL_ID,
+  AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME,
+  encodeAidenRemoteAttachmentName,
   parseAidenRemoteBotConnectionRequestReceipt,
   parseAidenRemoteBotHandoffAnswerReceipt,
   parseAidenRemoteBotHandoffAnswerRequest,
@@ -53,6 +56,9 @@ const PUBLIC_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 const STAGED_ATTACHMENT_ID = /^att_[A-Za-z0-9_-]{43}$/u;
 /** A Bot question's or hand-off's durable wait id, as the host's answer routes accept it. */
 const BOT_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
+
+/** Operations whose answer is bounded image bytes, not JSON. */
+export const PEER_BINARY_OPERATIONS: ReadonlySet<string> = new Set(["attachmentContent", "botSessionImage"]);
 
 /** Run-control operations reconcile from the host feed's run state. */
 export const PEER_RUN_OPERATIONS: ReadonlySet<string> = new Set([
@@ -143,7 +149,7 @@ export async function peerOperationResult(
 ): Promise<unknown> {
   const input = peerRecord(operation);
   const name = peerText(input.operation, 40);
-  if (name === "attachmentContent") return binaryContent(value);
+  if (PEER_BINARY_OPERATIONS.has(name)) return binaryContent(value);
   if (name === "server") {
     const { peerRoutes: _mainOnlyRoutes, ...projection } = peerRecord(value);
     await validatePeerResponse(name, projection);
@@ -204,6 +210,38 @@ function query(entries: [string, string | undefined][]): string {
   return present.length === 0
     ? ""
     : `?${present.map(([key, value]) => `${key}=${hostQueryValue(value)}`).join("&")}`;
+}
+
+/**
+ * Revision 50 (`attachments:raw`): a chat or Bot picture upload sent to a host
+ * that granted this Mac raw uploads goes as the picture's own bytes, about a
+ * quarter fewer than the base64 envelope. Anything else, text included, keeps
+ * the JSON request `peerOperationRequest` built.
+ */
+export function peerRawUploadRequest(
+  operation: unknown,
+  request: Omit<PeerRequest, "credential">,
+): Omit<PeerRequest, "credential"> {
+  const input = peerRecord(operation);
+  if (input.operation !== "uploadAttachment" && input.operation !== "uploadBotAttachment") return request;
+  const body = request.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return request;
+  const { kind, mimeType, name, data } = body as Record<string, unknown>;
+  if (kind !== "image" || (mimeType !== "image/png" && mimeType !== "image/jpeg")) return request;
+  if (typeof name !== "string" || typeof data !== "string") return request;
+  const bytes = Buffer.from(data, "base64");
+  // A body that is not exact base64 keeps the envelope, so the host refuses it as before.
+  if (bytes.length === 0 || bytes.length > MAX_INLINE_IMAGE_BYTES || bytes.toString("base64") !== data) return request;
+  let encodedName: string;
+  try {
+    encodedName = encodeAidenRemoteAttachmentName(name);
+  } catch {
+    // A lone surrogate cannot be percent-encoded; the envelope lets the host refuse it as before.
+    return request;
+  }
+  if (encodedName.length === 0 || encodedName.length > AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME) return request;
+  const { body: _json, ...rest } = request;
+  return { ...rest, rawBody: { contentType: mimeType, encodedName, data: bytes } };
 }
 
 /** Renderer selects a closed operation, never an arbitrary URL, header or credential. */
@@ -342,6 +380,9 @@ export function peerOperationRequest(
     case "botSession":
       path = `/bots/${id()}/session`;
       break;
+    case "botSessionImage":
+      path = `/bots/${id()}/session/images/${item()}`;
+      break;
     case "createChat":
       path = "/chats";
       method = "POST";
@@ -376,6 +417,11 @@ export function peerOperationRequest(
       path = "/workspace-browser/selections";
       method = "POST";
       break;
+    case "cloneWorkspace":
+      path = "/workspaces";
+      method = "POST";
+      needsKey = true;
+      break;
     case "createWorkspace":
       path = "/workspaces";
       method = "POST";
@@ -383,6 +429,11 @@ export function peerOperationRequest(
       break;
     case "markRead":
       path = `/chats/${id()}/read`;
+      method = "POST";
+      needsKey = true;
+      break;
+    case "setTriage":
+      path = `/chats/${id()}/triage`;
       method = "POST";
       needsKey = true;
       break;
@@ -533,5 +584,6 @@ export function peerOperationRequest(
     ...(needsKey ? { idempotencyKey: token(input.idempotencyKey, 16) } : {}),
     ...(needsRevision ? { revision: token(input.revision, 1) } : {}),
     ...(maxBodyBytes !== undefined ? { maxBodyBytes } : {}),
+    ...(operation === "cloneWorkspace" ? { timeoutMs: 115_000 } : {}),
   };
 }

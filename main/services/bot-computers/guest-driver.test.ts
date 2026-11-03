@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -70,6 +71,39 @@ test("a bridge whose daemon never came up fails to connect, with the guest's own
   await assert.rejects((await host(t, "--exit", "69")).createSession(), (error: unknown) => {
     return error instanceof CuaDriverError && error.code === "connection_failed" && /no Cua Driver daemon/u.test(error.message);
   });
+});
+
+test("a host shut down while a session's bridge is still resolving starts no bridge child", async () => {
+  const abort = new AbortController();
+  let resolveBridge!: (command: GuestDriverBridgeCommand) => void;
+  let spawned = 0;
+  const driverHost = await createGuestCuaDriverHostFactory({
+    bridge: () => new Promise<GuestDriverBridgeCommand>((resolve) => (resolveBridge = resolve)),
+    spawnImpl: ((...args: Parameters<typeof spawn>) => {
+      spawned += 1;
+      return spawn(...args);
+    }) as typeof spawn,
+  })(abort.signal);
+  const creating = driverHost.createSession(new AbortController().signal);
+  await driverHost.shutdown();
+  resolveBridge(fixtureBridge());
+  await assert.rejects(creating, /shut down/u);
+  assert.equal(spawned, 0, "no ssh child outlives the host");
+});
+
+test("a host stopping mid-connect ends the connect even while the caller still waits", { timeout: 10_000 }, async (t) => {
+  const log = path.join(scratch(t), "calls.jsonl");
+  const abort = new AbortController();
+  const driverHost = await createGuestCuaDriverHostFactory({ bridge: () => fixtureBridge("--hang-on", "start_session", "--log", log) })(
+    abort.signal,
+  );
+  t.after(() => driverHost.shutdown());
+  const caller = new AbortController();
+  const creating = driverHost.createSession(caller.signal);
+  while (!existsSync(log) || !readFileSync(log, "utf8").includes("start_session")) await new Promise((resolve) => setTimeout(resolve, 20));
+  abort.abort();
+  await assert.rejects(creating);
+  assert.equal(caller.signal.aborted, false);
 });
 
 test("the Computer Use controller drives a guest window through the guest host", async (t) => {

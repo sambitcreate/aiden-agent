@@ -140,7 +140,7 @@ Tests:
 - Reject attachment count, per-file bytes, aggregate raw bytes, and aggregate encoded bytes before allocation.
 - Read only a bounded text prefix; detect binary data in the prefix; use concurrency 2–4 instead of `Promise.all` over arbitrary selection.
 - Validate the attachment DTO again in main before persistence or generation.
-- Store attachment bodies as content-addressed files under `userData`; store references and metadata in chat JSON. Use bounded thumbnails/blob URLs in the renderer and garbage-collect unreferenced blobs transactionally.
+- Store attachment bodies as content-addressed files under `userData`; store references and metadata in chat JSON. Use bounded thumbnails/blob URLs in the renderer and garbage-collect unreferenced blobs transactionally. **Images done 2026-10-31** (`chat-image-store.ts`, `aiden-attachment:` links, sweep after delete/clear); text attachments and thumbnails are not.
 - Send `chatId + current turn` to main and load authoritative history there. Do not clone renderer-supplied base64 history before compaction.
 - Add recording duration/sample/encoded-byte limits. Prefer transferable binary buffers over base64 for voice IPC.
 - Bound MCP/tool/terminal results before JSON/string conversion.

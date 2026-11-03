@@ -437,15 +437,9 @@ test("a configured model that fails to resolve shows its real error, not 'needs 
   }
 });
 
-test("a routine whose model was refused by runtime authority records access_changed with the typed code", async () => {
-  const fauxModels = createFauxModels([fauxAssistantMessage("hi")]);
-  const service = await serviceFor(tempProfile(), fauxModels, {
-    resolveModel: async () => {
-      throw new BotRuntimeAuthorityError("model_changed");
-    },
-  });
+function routineExecutor(service: BotSessionRuntime) {
   const runs: ScheduledRun[] = [];
-  const executor = createBotRoutineExecutor({
+  return createBotRoutineExecutor({
     store: {
       recordRun: async (run) => {
         const recorded = { ...run, id: run.id ?? `run-${runs.length + 1}` } as ScheduledRun;
@@ -459,6 +453,97 @@ test("a routine whose model was refused by runtime authority records access_chan
     ports: () => service,
     broadcast: () => undefined,
   });
+}
+
+test("a tool-free failed routine can retry between unrelated chat turns that use tools", async () => {
+  const lookup = countingTool("lookup");
+  const models = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("lookup", { text: "calendar" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("No appointments."),
+    fauxAssistantMessage("", { stopReason: "error", errorMessage: "503 Service Unavailable" }),
+    fauxAssistantMessage([fauxToolCall("lookup", { text: "weather" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Sunny."),
+    fauxAssistantMessage("Briefing ready."),
+  ]);
+  const service = await serviceFor(tempProfile(), models, {
+    extension: recordingDeps({ tools: [{ tool: lookup, replay: "safe" }] }),
+    settings: { retry: { enabled: false } },
+  });
+  try {
+    const executor = routineExecutor(service);
+    const task = { id: "briefing", botId: "bot:a", prompt: "Brief me.", enabled: true } as ScheduledTask;
+    const signal = new AbortController().signal;
+    const earlier = await service.send("bot:a", { requestId: "desktop-calendar", text: "Check the calendar." });
+    assert.equal((await service.awaitReply("bot:a", earlier.submissionId, signal)).kind, "completed");
+    assert.equal(lookup.executions.length, 1);
+    const original = await executor.run(task, { trigger: { kind: "automatic", fireTime: 42 }, signal });
+    assert.equal(original.failure?.kind, "temporary");
+    const chat = await service.send("bot:a", { requestId: "desktop-weather", text: "Check the weather." });
+    assert.equal((await service.awaitReply("bot:a", chat.submissionId, signal)).kind, "completed");
+    assert.equal(lookup.executions.length, 2);
+    const requestId = `${original.id}:retry-1`;
+    const retry = await executor.run(task, { runId: requestId, trigger: { kind: "retry", requestId, failedRunId: original.id, attempt: 1 }, signal });
+    assert.equal(retry.output, "Briefing ready.");
+    assert.equal(models.calls(), 6);
+  } finally {
+    await service.shutdown();
+  }
+});
+
+test("a delayed routine retry cannot repeat a tool after the next model call fails", async () => {
+  const send = countingTool("send_email");
+  const sendMessage = () => fauxAssistantMessage([fauxToolCall("send_email", { text: "briefing" })], { stopReason: "toolUse" });
+  const failed = fauxAssistantMessage("", { stopReason: "error", errorMessage: "503 Service Unavailable" });
+  const models = createFauxModels([failed, sendMessage(), failed, sendMessage(), fauxAssistantMessage("Sent.")]);
+  const service = await serviceFor(tempProfile(), models, {
+    extension: recordingDeps({ tools: [{ tool: send, replay: "unsafe" }] }),
+    settings: { retry: { enabled: false } },
+  });
+  try {
+    const executor = routineExecutor(service);
+    const task = { id: "email", botId: "bot:a", prompt: "Email the briefing.", enabled: true } as ScheduledTask;
+    const signal = new AbortController().signal;
+    const greeting = await service.send("bot:a", { requestId: "desktop-greeting", text: "Hello." });
+    assert.equal((await service.awaitReply("bot:a", greeting.submissionId, signal)).kind, "failed");
+    const original = await executor.run(task, { trigger: { kind: "automatic", fireTime: 42 }, signal });
+    assert.equal(original.failure?.kind, "temporary");
+    assert.equal(send.executions.length, 1);
+    const requestId = `${original.id}:retry-1`;
+    await executor.run(task, { runId: requestId, trigger: { kind: "retry", requestId, failedRunId: original.id, attempt: 1 }, signal });
+    assert.equal(send.executions.length, 1, "sending the same message twice is externally observable");
+    assert.equal(await service.submissionForRequest("bot:a", requestId), undefined);
+  } finally {
+    await service.shutdown();
+  }
+});
+
+test("a watchdog stop while a routine tool is running cannot authorize a fresh submission", async () => {
+  const send = countingTool("send_email", (_params, signal) => blockingUntilAborted(signal));
+  const models = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("send_email", { text: "briefing" })], { stopReason: "toolUse" }),
+  ]);
+  const service = await serviceFor(tempProfile(), models, {
+    extension: recordingDeps({ tools: [{ tool: send, replay: "unsafe" }] }),
+  });
+  const requestId = "routine:email:42";
+  try {
+    await service.send("bot:a", { requestId, text: "Email the briefing." });
+    await waitFor(() => send.executions.length === 1, { what: "the email tool to start" });
+    await service.stop("bot:a");
+    assert.equal(await service.canRetryRoutineRequest("bot:a", requestId), false);
+  } finally {
+    await service.shutdown();
+  }
+});
+
+test("a routine whose model was refused by runtime authority records access_changed with the typed code", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage("hi")]);
+  const service = await serviceFor(tempProfile(), fauxModels, {
+    resolveModel: async () => {
+      throw new BotRuntimeAuthorityError("model_changed");
+    },
+  });
+  const executor = routineExecutor(service);
   try {
     const task = { id: "routine-1", name: "Briefing", enabled: true, mode: "llm", cron: "0 9 * * *", timezone: "UTC", permission: "read-only", botId: "bot:a", prompt: "Brief me.", notify: true, createdAt: 1, updatedAt: 1 } as ScheduledTask;
     const run = await executor.run(task, { trigger: { kind: "manual", key: "k1" }, signal: new AbortController().signal });

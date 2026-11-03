@@ -7,6 +7,7 @@ import { getCurrentSystemPrompt, Type, type AssistantMessage, type Message, type
 
 import { createAgentsInstructionRefresher } from "../agents-instructions.js";
 import { AcpHostRegistry } from "./host.js";
+import { AcpProcess } from "./process.js";
 import { AcpHarnessRuntime } from "./runtime.js";
 import { AcpSessionStore } from "./session-store.js";
 import { GenerationTimelineProjector } from "../generation-timeline.js";
@@ -719,6 +720,19 @@ test("after a clean Stop the same agent session continues", async () => {
   await h.runtime.close();
 });
 
+test("sessions started at the same time evict an idle one instead of exceeding the limit", async (t) => {
+  const h = harness(undefined, undefined, { maxLiveSessions: 2 });
+  t.after(() => h.runtime.close());
+  for (const chat of ["chat-a", "chat-b", "chat-c"]) h.hosts.register(new RecordingHost(chat, h.dir));
+  await turn(h, [userMessage("echo:a")], { chatId: "chat-a" });
+  await Promise.all([
+    turn(h, [userMessage("echo:b")], { chatId: "chat-b" }),
+    turn(h, [userMessage("echo:c")], { chatId: "chat-c" }),
+  ]);
+  assert.equal(h.runtime.liveCount, 2);
+  assert.equal(h.launcher.processes.filter((process) => process.alive).length, 2);
+});
+
 test("eviction never closes a session that is mid-turn", async () => {
   const h = harness(undefined, undefined, { maxLiveSessions: 1 });
   h.hosts.register(new RecordingHost("chat-a", h.dir));
@@ -854,6 +868,41 @@ test("sign-out waits for a catalog launch that was still starting and stops it",
   assert.match(String(await discovery), /signing out/u);
   reopen();
   await runtime.close();
+});
+
+test("closing the runtime at quit stops a catalog run whose agent never answers", async () => {
+  const dir = tempDir();
+  const processes: AcpProcess[] = [];
+  // An agent that starts but never answers initialize.
+  const silentLauncher = {
+    async launch(_purpose: string, cwd: string) {
+      const process = new AcpProcess({
+        command: globalThis.process.execPath,
+        args: ["-e", "setInterval(() => {}, 1000)"],
+        cwd,
+        env: { PATH: globalThis.process.env.PATH ?? "" },
+      });
+      processes.push(process);
+      return { process, dispose: () => process.close() };
+    },
+  };
+  const runtime = new AcpHarnessRuntime(fakeDefinition, silentLauncher, new AcpHostRegistry(), new AcpSessionStore(path.join(dir, "s.json")));
+  const discovery = runtime.discoverModels(dir).then(
+    () => "resolved",
+    (error: unknown) => error,
+  );
+  // Let the launch finish so the catalog run is waiting on the agent.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await runtime.close();
+  assert.ok(processes.length === 1 && !processes[0]!.alive, "the catalog agent stopped with the runtime");
+  let timer: NodeJS.Timeout | undefined;
+  const settled = await Promise.race([
+    discovery,
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve("still waiting"), 3_000);
+    }),
+  ]).finally(() => clearTimeout(timer));
+  assert.ok(settled instanceof Error, String(settled));
 });
 
 test("an idle agent between turns cannot read the chat's files", async () => {

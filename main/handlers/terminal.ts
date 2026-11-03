@@ -9,6 +9,7 @@ import {
   workspaceMutationGate,
 } from "../services/workspace-mutation-gate.js";
 import { assertManagedWorktreeAdmission } from "../services/managed-worktree-admission.js";
+import { assertWorkspaceFolderPresent } from "../services/workspace-folder-presence.js";
 import {
   rendererDocumentOwner,
   type RendererDocumentOwner,
@@ -29,6 +30,7 @@ async function workspaceFolder(workspaceId: unknown): Promise<{ id: string; fold
     throw new Error("Open a folder workspace before starting a terminal.");
   if (workspace.permission === "none")
     throw new Error("Enable workspace access before starting a terminal.");
+  await assertWorkspaceFolderPresent(workspace);
   await assertManagedWorktreeAdmission(workspace);
   const stat = await fs.stat(workspace.folderPath);
   if (!stat.isDirectory()) throw new Error("The workspace folder is no longer available.");

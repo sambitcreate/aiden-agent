@@ -85,6 +85,8 @@ fun AidenComposerView(
     onToggleVoice: () -> Unit,
     pendingAttachments: List<AidenComposerPendingAttachment> = emptyList(),
     onRemoveAttachment: (AidenComposerPendingAttachment) -> Unit = {},
+    uploadProgress: AidenUploadProgress? = null,
+    onCancelUpload: () -> Unit = {},
     onAddImage: () -> Unit = {},
     onAddFile: () -> Unit = {},
     selectedSkill: AidenRemoteSkillCatalogEntry? = null,
@@ -132,6 +134,11 @@ fun AidenComposerView(
                 .fillMaxWidth()
                 .padding(horizontal = 10.dp, vertical = 8.dp)
         ) {
+            // 0. The bar while attachments go to the Mac, with a Stop.
+            AidenComposerReveal(value = uploadProgress) { progress ->
+                AidenUploadProgressRow(progress = progress, onCancel = onCancelUpload)
+            }
+
             // 1. Pending Attachments Carousel
             AidenComposerReveal(value = pendingAttachments.takeIf { it.isNotEmpty() }) { attachments ->
                 LazyRow(
@@ -906,6 +913,71 @@ private fun AidenComposerSuggestionList(
                 if (index != visible.lastIndex) {
                     HorizontalDivider(color = palette.secondary.copy(alpha = 0.15f))
                 }
+            }
+        }
+    }
+}
+
+/** The bar over the composer while attachments go to the Mac, with a Stop. */
+@Composable
+internal fun AidenUploadProgressRow(progress: AidenUploadProgress, onCancel: () -> Unit) {
+    val palette = AidenTheme.palette
+    val title = if (progress.count > 1) {
+        stringResource(R.string.chat_composer_uploading_of, progress.index + 1, progress.count)
+    } else {
+        stringResource(R.string.chat_composer_uploading)
+    }
+    val percent = stringResource(R.string.chat_composer_upload_percent, progress.percent)
+    Surface(
+        color = palette.canvas.copy(alpha = 0.7f),
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 12.dp)
+        ) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .clearAndSetSemantics { contentDescription = "$title, $percent" }
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.foreground,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = percent,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.secondary
+                    )
+                }
+                LinearProgressIndicator(
+                    progress = { progress.overall },
+                    color = palette.accent,
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    drawStopIndicator = {},
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(MaterialTheme.shapes.extraSmall)
+                )
+            }
+            IconButton(onClick = onCancel, modifier = Modifier.size(48.dp)) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = stringResource(R.string.chat_composer_stop_upload),
+                    tint = palette.secondary,
+                    modifier = Modifier.size(16.dp)
+                )
             }
         }
     }

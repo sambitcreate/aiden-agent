@@ -460,7 +460,8 @@ data class AidenBotSessionUiState(
     val queued: List<AidenBotQueuedMessage> get() = session?.queued.orEmpty()
 
     /** The outgoing messages to draw after the transcript and the Mac's Queued bubbles. */
-    val outgoing: List<AidenBotOutgoingMessage> get() = outbox.filter { !it.echoed && !isShownAsQueued(it) }
+    val outgoing: List<AidenBotOutgoingMessage>
+        get() = outbox.filter { !it.echoed && !isShownAsQueued(it) && !(it.takenBeforeVisit && it.unheld) }
 
     private fun isShownAsQueued(message: AidenBotOutgoingMessage): Boolean =
         message.queuedId != null && queued.any { it.submissionId == message.queuedId }
@@ -1042,7 +1043,8 @@ class AidenBotSessionController(
             echoEntryId = null,
             echoSubmissionId = null,
             queuedId = null,
-            unheld = false
+            unheld = false,
+            takenBeforeVisit = false
         )
         setOutbox(_state.value.outbox.map { if (it.id == id) again else it })
         flushNow()

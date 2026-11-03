@@ -1,8 +1,12 @@
 import type {
   CreateWorkflowRequest,
+  GalleryRequest,
+  GalleryResponse,
   GetRunRequest,
   GetRunResponse,
   GetWorkflowResponse,
+  ImageActionRequest,
+  ImageActionResponse,
   ImportImageRequest,
   ImportImageResponse,
   ListModelsResponse,
@@ -34,6 +38,8 @@ export const createImagesIpc = {
   getRun: (request: GetRunRequest) => invoke<GetRunResponse>("imageWorkflows:get-run", request),
   listRuns: (workflowId: string, limit = 20) =>
     invoke<ListRunsResponse>("imageWorkflows:list-runs", { workflowId, limit }),
+  gallery: (request: GalleryRequest = {}) => invoke<GalleryResponse>("imageWorkflows:gallery", request),
+  imageAction: (request: ImageActionRequest) => invoke<ImageActionResponse>("imageWorkflows:image-action", request),
   onRunChanged: (handler: (snapshot: RunSnapshot) => void) =>
     onNotification<RunSnapshot>("imageWorkflows:run-changed", handler),
 };

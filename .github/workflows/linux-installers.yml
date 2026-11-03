@@ -43,6 +43,9 @@ jobs:
         run: npm run type-check && npm run lint && npm run test:linux-contracts && node --test scripts/install.test.mjs
 
       - name: Build and verify Linux installers
+        env:
+          # dist:linux is a distribution build and the checks below launch it.
+          AIDEN_ANALYTICS: "0"
         run: |
           set -euo pipefail
           npm run models:refresh

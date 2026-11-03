@@ -6,6 +6,7 @@ import { agentShellCommandEnvironment } from "../agent-command-environment.js";
 import { chatPullRequestService } from "../chat-pull-request-service-main.js";
 import { runCommandEnv } from "../coding-tools.js";
 import { configStore } from "../config-store.js";
+import { workspaceMutationGate } from "../workspace-mutation-gate.js";
 import type { WorkspacePermission } from "../types.js";
 import { createBackgroundJobTool } from "./background-job-tool.js";
 import { backgroundJobs, pullRequestFollows, resolvePullRequestTarget } from "./follow-through-main.js";
@@ -36,6 +37,8 @@ export function createFollowThroughTools(context: FollowThroughToolContext): Age
         const current = await configStore.getWorkspace(context.workspaceId);
         signal?.throwIfAborted();
         if (
+          workspaceMutationGate.isChanging(context.workspaceId) ||
+          !context.isCurrent() ||
           !current ||
           current.permission === "none" ||
           current.permission !== context.permission ||

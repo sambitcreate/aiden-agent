@@ -107,7 +107,7 @@ function fakeIssues() {
  * The real store, scheduler and executor with a scripted Bot session, so a
  * test can drive fires and see what recovery did to durable state.
  */
-function harness() {
+function harness(checkRetrySafety?: (requestId: string) => Promise<boolean>) {
   const store = createScheduleStore(new MemoryPersistence<unknown[]>([]), new MemoryPersistence<unknown[]>([]));
   const replies: BotRoutineSubmissionOutcome[] = [];
   const sends: string[] = [];
@@ -115,9 +115,11 @@ function harness() {
   const stalled = new Set<string>();
   const claims: Array<{ stepIds: string[]; toolNames: string[] } | undefined> = [];
   const session: BotRoutinePorts & {
+    canRetryRoutineRequest(botId: string, requestId: string): Promise<boolean>;
     consumeStall(botId: string): boolean;
     checkClaims(botId: string): Promise<{ stepIds: string[]; toolNames: string[] } | undefined>;
   } = {
+    canRetryRoutineRequest: async (_botId, requestId) => submissions.has(requestId) && (checkRetrySafety ? await checkRetrySafety(requestId) : true),
     consumeStall: (botId) => stalled.delete(botId),
     checkClaims: async () => claims.shift(),
     async state() { return { kind: "idle" }; },
@@ -134,25 +136,28 @@ function harness() {
     async markSilent() {},
   };
   const { open, resolved, issues } = fakeIssues();
-  let routines: ReturnType<typeof createBotRoutineService> | undefined;
+  let scheduler: ReturnType<typeof createScheduleServiceCore>;
   const recovery = createBotRoutineRecovery({
     store,
-    routines: { pause: (botId, id) => routines!.pause(botId, id) },
+    canRetryRoutineRequest: session.canRetryRoutineRequest,
+    pauseAfterFailedRun: (id, activeRunId) => scheduler.pauseAfterFailedRun(id, activeRunId),
     issues,
     now: () => Date.now(),
   });
   const deliveries: string[] = [];
+  const failDelivery = new Set<string>();
   const executor = createBotRoutineExecutor({
     store,
     ports: () => session,
     deliver: async (input) => {
+      if (failDelivery.has(input.dedupeKey)) throw new Error("Delivery unavailable.");
       deliveries.push(input.dedupeKey);
       return "sent";
     },
     broadcast: () => undefined,
     afterRun: (task, recorded, trigger) => recovery.afterRun(task, recorded, trigger),
   });
-  const scheduler = createScheduleServiceCore({
+  scheduler = createScheduleServiceCore({
     store,
     execution: {
       run: (task: ScheduledTask, runId?: string, trigger?: ScheduledRunTrigger) =>
@@ -167,7 +172,7 @@ function harness() {
     pendingRetryIntervalMs: 5,
     catchUp: { staggerMs: 0 },
   });
-  routines = createBotRoutineService({
+  const routines = createBotRoutineService({
     store,
     service: scheduler,
     botExists: async () => true,
@@ -175,7 +180,7 @@ function harness() {
     defaultTimezone: () => "UTC",
     notifyChanged: () => undefined,
   });
-  return { store, scheduler, routines, executor, replies, sends, open, resolved, stalled, claims, deliveries, recovery };
+  return { store, scheduler, routines, executor, replies, sends, open, resolved, stalled, claims, deliveries, failDelivery, recovery };
 }
 
 const TIMEOUT: BotRoutineSubmissionOutcome = { kind: "failed", error: "model_error", reason: "model_error", detail: "503 Service Unavailable" };
@@ -203,6 +208,24 @@ test("a temporary failure queues one durable retry 5 minutes later", async () =>
   assert.equal(h.open.size, 0, "a passing failure does not bother the person");
 });
 
+for (const evidence of ["tool requested", "session unreadable"] as const) {
+  test(`a temporary failure is delivered without scheduling a retry when ${evidence}`, async () => {
+    const toolsByRequest = new Map<string, string[]>();
+    const h = harness(async (requestId) => {
+      if (evidence === "session unreadable") throw new Error("Cannot read the durable session");
+      return !toolsByRequest.get(requestId)?.length;
+    });
+    const routine = await h.routines.create({ botId: "bot-1", name: "Mail", schedule: { kind: "daily", time: "09:00" }, prompt: "Send the update." });
+    const at = Date.now() - 1_000;
+    toolsByRequest.set(`routine:${routine.id}:${at}`, ["send_email"]);
+    h.replies.push(TIMEOUT);
+    const failed = await fire(h, routine.id, at);
+    assert.equal(failed.failure?.kind, "temporary");
+    assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.some((entry) => entry.retry) ?? false, false);
+    assert.equal(h.deliveries.length, 1);
+  });
+}
+
 test("a sign-in failure raises one issue at once and is not retried", async () => {
   const h = harness();
   const routine = await h.routines.create({ botId: "bot-1", name: "Briefing", schedule: { kind: "daily", time: "09:00" }, prompt: "Brief me." });
@@ -217,10 +240,10 @@ test("a sign-in failure raises one issue at once and is not retried", async () =
 test("pauses after three failed fires of the same kind and raises one issue", async () => {
   const h = harness();
   const routine = await h.routines.create({ botId: "bot-1", name: "Briefing", schedule: { kind: "daily", time: "09:00" }, prompt: "Brief me." });
-  const base = Date.now() - 10 * 86_400_000;
-  for (let day = 0; day < 3; day += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     h.replies.push(SIGNED_OUT);
-    await fire(h, routine.id, base + day * 86_400_000);
+    const run = await h.scheduler.runNow(routine.id, { runId: `attempt-${attempt}` });
+    assert.equal(run.failure?.kind, "sign_in");
   }
   const task = await h.store.get(routine.id);
   assert.equal(task?.enabled, false);
@@ -228,6 +251,45 @@ test("pauses after three failed fires of the same kind and raises one issue", as
   assert.equal(paused?.title, "Paused Briefing");
   assert.equal(paused?.body, "It failed 3 times in a row. Its AI provider needs signing in again.");
   assert.equal(h.open.has(`routine_failed:${routine.id}`), false, "the pause card replaces the earlier card");
+  await h.routines.update({ botId: "bot-1", id: routine.id, expectedUpdatedAt: task!.updatedAt, enabled: true });
+  assert.equal((await h.scheduler.runNow(routine.id)).result, "success");
+});
+
+test("auto-pause preserves a failed retry's receipt until startup delivers its result", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({ botId: "bot-1", name: "Mail", schedule: { kind: "daily", time: "09:00" }, prompt: "Send the update." });
+  const base = Date.now() - 4 * 86_400_000;
+  for (const day of [0, 1]) {
+    h.replies.push(SIGNED_OUT);
+    await fire(h, routine.id, base + day * 86_400_000);
+  }
+  h.replies.push(TIMEOUT);
+  const third = await fire(h, routine.id, base + 2 * 86_400_000);
+  const requestId = `${third.id}:retry-1`;
+  await h.store.clearRoutineRetries(routine.id);
+  await h.store.addRoutineRetry(routine.id, { failedRunId: third.id, attempt: 1, at: Date.now() - 1 });
+  await h.store.addRoutineRetry(routine.id, { failedRunId: `routine:${routine.id}:${base}`, attempt: 1, at: Date.now() + 300_000 });
+  const task = (await h.store.get(routine.id))!;
+  h.replies.push(SIGNED_OUT);
+  h.failDelivery.add(requestId);
+  await h.executor.run(task, {
+    runId: requestId, trigger: { kind: "retry", requestId, failedRunId: third.id, attempt: 1 },
+    signal: new AbortController().signal,
+  });
+  const paused = (await h.store.get(routine.id))!;
+  assert.equal(paused.enabled, false);
+  assert.deepEqual(paused.pendingRoutineFires?.map((entry) => entry.requestId), [requestId]);
+  assert.equal(h.deliveries.includes(requestId), false);
+
+  h.failDelivery.delete(requestId);
+  await h.scheduler.start();
+  for (let i = 0; i < 100 && (await h.store.get(routine.id))?.pendingRoutineFires?.length; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.deepEqual(h.sends.filter((key) => key === requestId), [requestId], "startup must only deliver the saved failure");
+  assert.deepEqual(h.deliveries.filter((key) => key === requestId), [requestId]);
+  assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.length ?? 0, 0);
 });
 
 test("different kinds do not pause", async () => {

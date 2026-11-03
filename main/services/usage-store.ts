@@ -8,11 +8,29 @@ import {
   type UsageRequestRecord,
 } from "./usage-store-core.js";
 
-const persistence = new DataStore<UsageDatabase>("usage.json", createEmptyUsageDatabase());
-const store = createUsageStore({
-  load: () => persistence.load(),
-  save: (data) => persistence.save(data),
-});
+/**
+ * Model requests arrive in bursts (streams, subagents, title and cache-warm
+ * calls), so aggregates are coalesced for a short window instead of rewriting
+ * and fsyncing the whole ledger on every request. Quit flushes the window.
+ */
+const USAGE_SAVE_DELAY_MS = 2_000;
+
+const persistence = new DataStore<UsageDatabase>("usage.json", createEmptyUsageDatabase(), undefined, { compact: true });
+const store = createUsageStore(
+  {
+    load: () => persistence.load(),
+    save: (data) => persistence.save(data),
+  },
+  Date.now,
+  {
+    saveDelayMs: USAGE_SAVE_DELAY_MS,
+    onSaveError: (error) => {
+      logger.warn("usage", "Could not persist local model usage", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  },
+);
 
 export const usageStore = {
   /** Persist one privacy-safe aggregate mutation without failing the model workflow. */
@@ -28,5 +46,14 @@ export const usageStore = {
 
   summary(range: UsageDateRange): Promise<UsageSummary> {
     return store.summary(range);
+  },
+
+  /** Write the coalesced usage aggregate before quit; never rejects. */
+  flush(): Promise<void> {
+    return store.flush().catch((error: unknown) => {
+      logger.warn("usage", "Could not persist local model usage", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   },
 };

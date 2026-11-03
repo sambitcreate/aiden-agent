@@ -152,3 +152,6 @@ export async function cancelWorkspaceGenerationsAndSettle(
 }
 
 export const workspaceMutationGate = new WorkspaceMutationGate();
+
+/** Ends suspended checks and follows only after the workspace change commits. */
+export type FinishWorkspaceFollowThrough = (committed: boolean) => Promise<void>;

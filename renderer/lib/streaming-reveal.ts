@@ -593,7 +593,8 @@ export const INITIAL_STREAMING_REVEAL_GATE: StreamingRevealGate = {
  * One step of the release gate. New text joins the transcript only at whole
  * block boundaries and at most once per `STREAMING_REVEAL_RELEASE_MS`; a tail
  * without a boundary is released after `STREAMING_REVEAL_MAX_WAIT_MS`. The end
- * of the turn and reduced motion release everything at once. `nextAt` is when
+ * of the turn releases everything at once; reduced motion releases everything
+ * too, but still at most once per `STREAMING_REVEAL_RELEASE_MS`. `nextAt` is when
  * calling again can release more, or null when nothing is waiting. Boundaries
  * are only looked for once a release is allowed, and the scan resumes where
  * the last one stopped.
@@ -611,7 +612,7 @@ export function advanceStreamingRevealGate(
     const settled = current.waitingSince === null ? current : { ...current, waitingSince: null };
     return { gate: settled, nextAt: null };
   }
-  if (complete || reducedMotion) {
+  if (complete) {
     return {
       gate: { ...current, text: content, releasedAt: now, waitingSince: null },
       nextAt: null,
@@ -620,6 +621,14 @@ export function advanceStreamingRevealGate(
   const waitingSince = current.waitingSince ?? now;
   const earliest =
     current.releasedAt === null ? now : current.releasedAt + STREAMING_REVEAL_RELEASE_MS;
+  // Reduced motion skips block boundaries and shows all the text, but keeps the
+  // release cadence so a fast stream does not re-parse markdown on every token.
+  if (reducedMotion && now >= earliest) {
+    return {
+      gate: { ...current, text: content, releasedAt: now, waitingSince: null },
+      nextAt: null,
+    };
+  }
   if (now < earliest) {
     const waiting = waitingSince === current.waitingSince ? current : { ...current, waitingSince };
     return { gate: waiting, nextAt: earliest };

@@ -27,7 +27,24 @@ export interface McpStdioTransportOptions {
 
 const DEFAULT_CLOSE_GRACE_MS = 2_000;
 const liveGroups = new Set<number>();
+const groupListeners = new Set<(groups: readonly number[]) => void>();
 let exitHookInstalled = false;
+
+function groupsChanged(): void {
+  const groups = [...liveGroups];
+  for (const listener of groupListeners) listener(groups);
+}
+
+/**
+ * Reports the process groups of this process's live stdio servers now and on
+ * every change, so an owner that can be SIGKILLed (which skips the exit hook)
+ * can publish them for whoever force-stops it. Returns an unsubscribe.
+ */
+export function watchMcpProcessGroups(listener: (groups: readonly number[]) => void): () => void {
+  groupListeners.add(listener);
+  listener([...liveGroups]);
+  return () => { groupListeners.delete(listener); };
+}
 
 /** The environment every stdio server may see, matching the MCP SDK's default set. */
 const DEFAULT_INHERITED_ENV_VARS = process.platform === "win32"
@@ -113,6 +130,7 @@ class AidenStdioTransport extends StdioTransport {
     this.groupPid = pid;
     installExitHook();
     liveGroups.add(pid);
+    groupsChanged();
   }
 
   /**
@@ -145,7 +163,7 @@ class AidenStdioTransport extends StdioTransport {
     signalGroup(pid, "SIGTERM");
     const straggler = setTimeout(() => {
       signalGroup(pid, "SIGKILL");
-      liveGroups.delete(pid);
+      if (liveGroups.delete(pid)) groupsChanged();
     }, this.graceMs);
     straggler.unref?.();
   }

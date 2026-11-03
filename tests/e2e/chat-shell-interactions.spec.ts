@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { colorContrastRatio, getPresetVariant, resolveThemeTokens } from "../../renderer/shared/appearance";
-import { expect, expectSquircleButtons, finishLmStudioOnboarding, test, type AidenE2e } from "./fixtures";
+import { chooseFolderlessWorkspace, expect, expectSquircleButtons, finishLmStudioOnboarding, test, type AidenE2e } from "./fixtures";
 
 const PASTED_IMAGE_NAME = "Pasted image.png";
 const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
@@ -27,6 +27,7 @@ async function pasteImage(page: Parameters<typeof finishLmStudioOnboarding>[0]):
 test("chat shell keeps local interactions isolated and keyboard-accessible", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
+  await chooseFolderlessWorkspace(page);
 
   const composer = page.locator("textarea");
   const modelPicker = page.getByRole("button", { name: /^Selected model:/u });
@@ -435,13 +436,13 @@ test.describe("with a workspace", () => {
     }
   });
 
-  test("needs attention view orders chats by what is waiting on the user", async ({ aiden }) => {
+  test("Inbox view orders chats by what is waiting on the user", async ({ aiden }) => {
     const { app, page } = aiden;
     await finishLmStudioOnboarding(page);
     const workspaceId = await page.evaluate(() => localStorage.getItem("aiden-agent.workspaceId"));
     expect(workspaceId).toBeTruthy();
     await app.evaluate(({ ipcMain }, workspaceId) => {
-      // Newest first by activity, so the attention order differs from recency.
+      // Newest first by activity, so the Inbox order differs from recency.
       const chats = [
         ["attention-idle", "Idle chat", 1_800_000_400_000],
         ["attention-working", "Working chat", 1_800_000_300_000],
@@ -462,8 +463,17 @@ test.describe("with a workspace", () => {
     await expect(page.locator("textarea")).toBeVisible();
 
     await page.getByRole("button", { name: "Organize sidebar" }).click();
-    await page.getByRole("menuitemradio", { name: "Needs attention" }).click();
+    await page.getByRole("menuitemradio", { name: "Inbox (Beta)" }).click();
     await expect(page.getByRole("menu")).toBeHidden();
+    const sidebar = page.locator("[data-sidebar]");
+    const earlier = sidebar.getByRole("group", { name: "Earlier" });
+    await expect(earlier.getByText("Approval chat")).toBeVisible();
+    // The pointer over the list freezes it. Hover needs the window focused.
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.focus());
+    await expect.poll(() => page.evaluate(() => document.hasFocus())).toBe(true);
+    const inboxView = sidebar.locator("[data-inbox-view]");
+    await inboxView.hover();
+    await expect(inboxView).toHaveAttribute("data-inbox-frozen", "true");
 
     await app.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.webContents.send("chats:activity-changed", {
@@ -474,16 +484,25 @@ test.describe("with a workspace", () => {
       });
     });
 
-    const sidebar = page.locator("[data-sidebar]");
+    // While frozen, rows show their new status but hold their places.
+    await expect(earlier.locator("[data-inbox-status]", { hasText: /^Approval/u })).toBeVisible();
+    await expect(sidebar.getByRole("group", { name: "Needs you" })).toHaveCount(0);
+
+    // Released, they move: approvals before questions in Needs you, then
+    // Earlier, then the Working shelf.
+    const pane = await page.getByRole("main").first().boundingBox();
+    await page.mouse.move(pane!.x + pane!.width / 2, pane!.y + pane!.height / 2);
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    const needsYou = sidebar.getByRole("group", { name: "Needs you" });
+    await expect(needsYou.locator("[data-inbox-status]")).toHaveText(["Approval", "Question"].map((label) => new RegExp(`^${label}`, "u")));
     const expected = [
-      "Needs approval",
+      "Needs you",
       "Approval chat",
-      "Needs input",
       "Input chat",
+      "Earlier",
+      "Idle chat",
       "Working",
       "Working chat",
-      "Other chats",
-      "Idle chat",
     ];
     await expect
       .poll(async () => {
@@ -493,11 +512,45 @@ test.describe("with a workspace", () => {
       })
       .toBe(true);
 
+    // The Working shelf's header toggle and first row leave room for the 2px +
+    // 2px focus ring inside whatever clips them, and a blurred window dims the
+    // shelf exactly as much as the list.
+    const shelf = sidebar.getByRole("group", { name: "Working" });
+    const shelfGeometry = await shelf.evaluate((section) => {
+      const ringRoom = (element: Element) => {
+        const box = element.getBoundingClientRect();
+        let clip = element.parentElement;
+        while (clip && getComputedStyle(clip).overflowY === "visible" && getComputedStyle(clip).overflowX === "visible") {
+          clip = clip.parentElement;
+        }
+        const bounds = clip!.getBoundingClientRect();
+        return Math.min(box.top - bounds.top, bounds.bottom - box.bottom, box.left - bounds.left, bounds.right - box.right);
+      };
+      const opacity = (element: Element) => {
+        let product = 1;
+        for (let node: Element | null = element; node; node = node.parentElement) {
+          product *= Number(getComputedStyle(node).opacity);
+        }
+        return product;
+      };
+      const toggle = section.querySelector("button[aria-expanded]")!;
+      const firstRow = section.querySelector("[data-inbox-row] [data-roving-item]")!;
+      const listRow = document.querySelector("[data-inbox-view] [data-inbox-row] [data-roving-item]")!;
+      document.documentElement.classList.add("window-blurred");
+      const blurred = { shelf: opacity(firstRow), list: opacity(listRow) };
+      document.documentElement.classList.remove("window-blurred");
+      return { toggle: ringRoom(toggle), firstRow: ringRoom(firstRow), blurred };
+    });
+    expect(shelfGeometry.toggle).toBeGreaterThanOrEqual(4);
+    expect(shelfGeometry.firstRow).toBeGreaterThanOrEqual(4);
+    expect(shelfGeometry.blurred.shelf).toBeLessThan(1);
+    expect(shelfGeometry.blurred.shelf).toBeCloseTo(shelfGeometry.blurred.list, 3);
+
     // The view is a local preference and survives a reload.
     await page.reload();
     await expect(page.locator("textarea")).toBeVisible();
     await page.getByRole("button", { name: "Organize sidebar" }).click();
-    await expect(page.getByRole("menuitemradio", { name: "Needs attention" })).toHaveAttribute(
+    await expect(page.getByRole("menuitemradio", { name: "Inbox (Beta)" })).toHaveAttribute(
       "aria-checked",
       "true",
     );
@@ -989,6 +1042,160 @@ test("chats can be moved between, opened from their menu and deleted from the ke
   await expect(second).toBeVisible();
 });
 
+test("F6 moves between areas, arrows move through the chat list, and Command+F finds text in the chat", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await seedPaletteChats(aiden);
+  const first = page.getByText("Opened palette-chat-first", { exact: true });
+  const second = page.getByText("Opened palette-chat-second", { exact: true });
+  // Chat keys work from the message box, where focus usually is.
+  await page.locator("textarea").focus();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+1`);
+  await expect(first).toBeVisible();
+
+  // ⇧F6 from the message box goes back to the conversation, then the sidebar's open chat.
+  const message = page.locator("textarea");
+  await message.focus();
+  await page.keyboard.press("Shift+F6");
+  await expect(page.getByRole("region", { name: "Conversation" })).toBeFocused();
+  await page.keyboard.press("Shift+F6");
+  const openRow = page.locator('aside button[aria-current="page"]', { hasText: "Repeated palette title" });
+  await expect(openRow).toBeFocused();
+
+  // The chat list is one Tab stop; ↓ moves to the next chat and ↩ opens it.
+  await page.keyboard.press("ArrowDown");
+  const nextRow = page.locator("aside button[data-roving-item]:focus", { hasText: "Repeated palette title" });
+  await expect(nextRow).toHaveCount(1);
+  await expect(nextRow).not.toHaveAttribute("aria-current", "page");
+  await page.keyboard.press("Enter");
+  await expect(second).toBeVisible();
+
+  // F6 from the sidebar reaches the conversation, and then the message box.
+  await openRow.focus();
+  await page.keyboard.press("F6");
+  await expect(page.getByRole("region", { name: "Conversation" })).toBeFocused();
+  await page.keyboard.press("F6");
+  await expect(message).toBeFocused();
+
+  // Command+F opens Find in chat; Esc closes it and the message box has focus again.
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+f`);
+  const find = page.getByRole("searchbox", { name: "Find in chat" });
+  await expect(find).toBeFocused();
+  await find.fill("palette-chat");
+  await expect(page.getByRole("search", { name: "Find in chat" }).getByRole("status")).toHaveText("1 of 1");
+  await find.fill("nothing like this");
+  await expect(page.getByRole("search", { name: "Find in chat" }).getByRole("status")).toHaveText("No matches");
+  await page.keyboard.press("Escape");
+  await expect(find).toBeHidden();
+  await expect(message).toBeFocused();
+});
+
+test("Command+/ lists every key, and the menu bar's Help, Go and Chat items show keys and grey out what can't run", async ({ aiden }) => {
+  const { app, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  // Setup finishes with the message box ready to type in.
+  const message = page.locator('[data-focus-region="composer"] textarea');
+  await expect(message).toBeFocused();
+
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+/`);
+  const sheet = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  await expect(sheet.getByRole("heading", { name: "Moving around" })).toBeVisible();
+  await expect(sheet.getByRole("searchbox", { name: "Search keyboard shortcuts" })).toBeFocused();
+  await page.keyboard.type("F6");
+  await expect(sheet.getByRole("listitem")).toHaveText([/Next \/ previous area/u]);
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await expect(message).toBeFocused();
+
+  const menuItem = (menu: string, label: string) =>
+    app.evaluate(
+      ({ Menu }, [menuLabel, itemLabel]) => {
+        const top = Menu.getApplicationMenu()?.items.find((item) => item.label === menuLabel);
+        const item = top?.submenu?.items.find((entry) => entry.label === itemLabel);
+        return item ? { enabled: item.enabled, accelerator: item.accelerator ?? null } : null;
+      },
+      [menu, label] as const,
+    );
+  // The menu shows Aiden's ⌘/ (Ctrl+/ off a Mac).
+  expect(await menuItem("Help", "Keyboard Shortcuts")).toEqual({
+    enabled: true,
+    accelerator: process.platform === "darwin" ? "Command+/" : "CommandOrControl+/",
+  });
+  expect(await menuItem("Go", "Back")).not.toBeNull();
+  await expect.poll(async () => (await menuItem("Chat", "Find in Chat"))?.enabled).toBe(true);
+  // No reply is coming, so there's nothing to stop.
+  await expect.poll(async () => (await menuItem("Chat", "Stop Reply"))?.enabled).toBe(false);
+
+  // Choosing the menu item opens the same list.
+  await app.evaluate(({ Menu }) => {
+    const help = Menu.getApplicationMenu()?.items.find((item) => item.label === "Help");
+    help?.submenu?.items.find((entry) => entry.label === "Keyboard Shortcuts")?.click();
+  });
+  await expect(sheet).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+});
+
+test("Find in chat brings each match into view, even far apart in one tall code block", async ({ aiden }) => {
+  const { app, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  const workspaceId = await page.evaluate(() => localStorage.getItem("aiden-agent.workspaceId"));
+  await app.evaluate(({ ipcMain }, workspaceId) => {
+    const lines = Array.from({ length: 150 }, (_, index) => `line ${index + 1}`);
+    lines[1] = "needle near the top";
+    lines[148] = "needle near the bottom";
+    const chat = {
+      id: "find-tall-block",
+      workspaceId,
+      title: "Tall code block",
+      createdAt: 1_800_000_000_000,
+      updatedAt: 1_800_000_000_000,
+      messages: [
+        { id: "find-u1", role: "user", content: "Show the log", createdAt: 1_800_000_000_000 },
+        { id: "find-a1", role: "assistant", content: `Here it is:\n\n\`\`\`\n${lines.join("\n")}\n\`\`\``, createdAt: 1_800_000_000_001 },
+      ],
+    };
+    ipcMain.removeHandler("chats:list");
+    ipcMain.handle("chats:list", () => [chat]);
+    ipcMain.removeHandler("chats:get");
+    ipcMain.handle("chats:get", () => ({
+      chat,
+      imageArtifactRecoveryPending: false,
+      imageArtifactRecoveryUnavailable: false,
+      reconciliation: null,
+    }));
+  }, workspaceId);
+  await page.reload();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+1`);
+  await expect(page.getByText("line 75", { exact: false }).first()).toBeAttached();
+
+  // True when the painted current match sits inside the visible conversation.
+  const currentMatchVisible = () =>
+    page.evaluate(() => {
+      const highlight = (CSS as unknown as { highlights: Map<string, Set<Range>> }).highlights.get("aiden-find-current");
+      const range = highlight ? [...highlight][0] : undefined;
+      const scrollport = document.querySelector<HTMLElement>('[data-focus-region="chat"]');
+      if (!range || !scrollport) return false;
+      const match = range.getBoundingClientRect();
+      const box = scrollport.getBoundingClientRect();
+      return match.height > 0 && match.top >= box.top && match.bottom <= box.bottom;
+    });
+
+  await page.locator("textarea").focus();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+f`);
+  const find = page.getByRole("searchbox", { name: "Find in chat" });
+  await find.fill("needle");
+  const status = page.getByRole("search", { name: "Find in chat" }).getByRole("status");
+  await expect(status).toHaveText("1 of 2");
+  await expect.poll(currentMatchVisible).toBe(true);
+  await find.press("Enter");
+  await expect(status).toHaveText("2 of 2");
+  await expect.poll(currentMatchVisible).toBe(true);
+  await find.press("Shift+Enter");
+  await expect(status).toHaveText("1 of 2");
+  await expect.poll(currentMatchVisible).toBe(true);
+});
+
 // Human-readable palette labels may legitimately collide. Keyboard selection
 // must target the underlying chat/model identity, not the label string.
 test("command palette selects each chat with identical labels independently", async ({ aiden }) => {
@@ -1124,6 +1331,57 @@ test("command palette selects same-named models from distinct provider identitie
   await expect.poll(() => page.evaluate(() => localStorage.getItem("aiden-agent.model"))).toBe("repeated-model");
 });
 
+test("command palette shows each model's and provider's own logo", async ({ aiden }) => {
+  const { app, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await app.evaluate(({ ipcMain }) => {
+    // A 1x1 PNG stands in for a custom connection's own picture.
+    const artwork = {
+      mimeType: "image/png",
+      dataBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    };
+    const providers = [
+      { id: "zai", kind: "openai", label: "Z.AI", models: ["glm-5.3"], needsKey: true, hasKey: true, isBuiltin: true },
+      { id: "anthropic", kind: "openai", label: "Anthropic", models: ["claude-opus-4-1"], needsKey: true, hasKey: true, isBuiltin: true },
+      { id: "deepseek", kind: "openai", label: "DeepSeek", models: ["deepseek-chat"], needsKey: true, hasKey: false, isBuiltin: true },
+      {
+        id: "custom:studio-box",
+        kind: "openai",
+        label: "Studio Box",
+        baseUrl: "http://127.0.0.1:1234/v1",
+        models: ["box-model"],
+        needsKey: false,
+        hasKey: false,
+        artwork,
+      },
+    ];
+    ipcMain.removeHandler("providers:list");
+    ipcMain.handle("providers:list", () => providers);
+    ipcMain.removeHandler("providers:refreshIfStale");
+    ipcMain.handle("providers:refreshIfStale", () => ({ providers, errors: [] }));
+  });
+  await page.reload();
+  await expect(page.locator("textarea")).toBeVisible();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
+  const palette = page.locator("[data-command-palette-content]");
+  await palette.getByRole("option", { name: "Change model" }).click();
+  await expect(palette.getByRole("combobox", { name: "Search models" })).toBeVisible();
+  const row = (name: RegExp) => palette.getByRole("option", { name });
+  await expect(row(/^GLM.5\.3/u).locator('[data-provider-icon="zai"]')).toBeVisible();
+  // A Claude model wears Claude's mark, as in the chat's own model picker.
+  await expect(row(/^Claude Opus/u).locator('[data-provider-icon="claude"]')).toBeVisible();
+  await expect(row(/^Box Model/u).locator('[data-provider-icon="custom"]')).toBeVisible();
+  // A provider that still needs setup is listed with its own logo too.
+  await expect(row(/^DeepSeek models/u).locator('[data-provider-icon="deepseek"]')).toBeVisible();
+
+  // Escape steps back to the command list.
+  await page.keyboard.press("Escape");
+  await palette.getByRole("option", { name: "Manage providers" }).click();
+  await expect(palette.getByRole("combobox", { name: "Search providers" })).toBeVisible();
+  await expect(row(/^Z\.AI/u).locator('[data-provider-icon="zai"]')).toBeVisible();
+  await expect(row(/^Studio Box/u).locator('[data-provider-icon="custom"]')).toBeVisible();
+});
+
 for (const field of ["title", "timestamp"] as const) {
   test(`command palette preserves selected chat on live ${field} change`, async ({ aiden }) => {
     const { app, page } = aiden;
@@ -1203,6 +1461,7 @@ for (const mode of [
 test("command palette clears hidden and disabled selection and reselects across back navigation", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
+  await chooseFolderlessWorkspace(page);
   await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
   const palette = page.locator("[data-command-palette-content]");
   const search = palette.getByRole("combobox");

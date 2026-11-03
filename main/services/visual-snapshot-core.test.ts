@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { getEventListeners } from "node:events";
 import {
+  abortableSleep,
   createVisualSnapshotQueue,
   snapshotAttachment,
   visualSnapshotAttachmentId,
@@ -183,4 +185,18 @@ test("a disposed queue refuses new work", async () => {
   queue.enqueue(job("a", ["a1"]));
   await queue.idle();
   assert.equal(captures, 0);
+});
+
+test("finished snapshot waits leave no abort listeners behind", async () => {
+  const controller = new AbortController();
+  for (let index = 0; index < 20; index += 1) await abortableSleep(1, controller.signal);
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+});
+
+test("a snapshot wait rejects when its capture is cancelled, even after the fact", async () => {
+  const controller = new AbortController();
+  const pending = abortableSleep(60_000, controller.signal);
+  controller.abort();
+  await assert.rejects(pending, /Snapshot cancelled/u);
+  await assert.rejects(abortableSleep(60_000, controller.signal), /Snapshot cancelled/u);
 });

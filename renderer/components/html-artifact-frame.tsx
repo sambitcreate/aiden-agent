@@ -38,6 +38,14 @@ interface CachedPreview {
  * and height without another round trip or a layout jump.
  */
 const previewCache = new Map<string, CachedPreview>();
+/** Enough for the visuals a session revisits; an evicted one is fetched again. */
+const MAX_CACHED_PREVIEWS = 64;
+
+function storePreview(key: string, preview: CachedPreview): void {
+  previewCache.delete(key);
+  previewCache.set(key, preview);
+  if (previewCache.size > MAX_CACHED_PREVIEWS) previewCache.delete(previewCache.keys().next().value!);
+}
 
 function cacheKey(chatId: string, mediaId: string): string {
   return `${chatId}\u0000${mediaId}`;
@@ -69,14 +77,21 @@ export function primeInlineVisualPreview(
 ): void {
   const key = cacheKey(chatId, artifact.mediaId);
   const height = previewCache.get(key)?.height;
-  previewCache.set(key, { id: artifact.id, src, fetchedAt: Date.now(), ...(height ? { height } : {}) });
+  storePreview(key, { id: artifact.id, src, fetchedAt: Date.now(), ...(height ? { height } : {}) });
 }
 
 function cachedPreview(chatId: string, artifact: ChatHtmlArtifactV1): CachedPreview | undefined {
-  const cached = previewCache.get(cacheKey(chatId, artifact.mediaId));
-  if (!cached || cached.id !== artifact.id || Date.now() - cached.fetchedAt > PREVIEW_REUSE_MS) {
+  const key = cacheKey(chatId, artifact.mediaId);
+  const cached = previewCache.get(key);
+  if (!cached) return undefined;
+  if (Date.now() - cached.fetchedAt > PREVIEW_REUSE_MS) {
+    previewCache.delete(key);
     return undefined;
   }
+  if (cached.id !== artifact.id) return undefined;
+  // Most recently used last, so eviction drops the visual unseen the longest.
+  previewCache.delete(key);
+  previewCache.set(key, cached);
   return cached;
 }
 
@@ -330,7 +345,7 @@ function HtmlArtifactFrameImpl({
           setError({ kind: "preview", message: "This visualization is no longer available." });
           return;
         }
-        previewCache.set(cacheKey(chatId, artifact.mediaId), {
+        storePreview(cacheKey(chatId, artifact.mediaId), {
           id: artifact.id,
           src: result.src,
           fetchedAt: Date.now(),

@@ -9,9 +9,11 @@ import {
   FolderDown,
   FolderPlus,
   Loader2,
+  MessageCircle,
   MessageSquare,
 } from "lucide-react";
 import type { Workspace } from "../lib/types";
+import { isNoWorkspace, NO_WORKSPACE_LABEL } from "../lib/no-workspace";
 import { workspaceDisplayName } from "../lib/workspace-path-display";
 import { WorkspacePathLabel } from "./workspace-path-label";
 import { useWorkspacePathPreferences } from "../lib/use-workspace-path-preferences";
@@ -61,6 +63,8 @@ interface WorkspacePickerProps {
   activeWorkspaceId?: string;
   onSelectWorkspace: (workspaceId: string) => Promise<void>;
   onCreateScratchWorkspace: () => Promise<void>;
+  /** Move the draft to the Chats group: no project, global settings, a folder Aiden hides. */
+  onChooseNoWorkspace?: () => Promise<void>;
   /** Register a folder through the native dialog and move the draft there. */
   onOpenFolder?: () => Promise<void>;
   blockedReason?: string;
@@ -82,6 +86,7 @@ export function WorkspacePicker({
   activeWorkspaceId,
   onSelectWorkspace,
   onCreateScratchWorkspace,
+  onChooseNoWorkspace,
   onOpenFolder,
   blockedReason,
   busyReason,
@@ -94,6 +99,7 @@ export function WorkspacePicker({
   const [cloning, setCloning] = React.useState(false);
   const blockedReasonId = React.useId();
   const cloneRef = React.useRef<CloneViewHandle | null>(null);
+  const noWorkspaceActive = isNoWorkspace(workspaces.find((entry) => entry.id === activeWorkspaceId));
 
   // A programmatic request (headline name, ⌘⇧O palette Clone) opens the menu.
   const handledRequest = React.useRef(openRequest?.nonce ?? 0);
@@ -218,6 +224,14 @@ export function WorkspacePicker({
               onOpenFolder={onOpenFolder ? () => void perform("open-folder", onOpenFolder) : undefined}
               onClone={() => setView("clone")}
               onScratch={() => void perform("scratch", onCreateScratchWorkspace)}
+              noWorkspaceActive={noWorkspaceActive}
+              onNoWorkspace={
+                !onChooseNoWorkspace
+                  ? undefined
+                  : noWorkspaceActive
+                    ? close
+                    : () => void perform("no-workspace", onChooseNoWorkspace)
+              }
             />
           )}
         </PopoverContent>
@@ -242,6 +256,8 @@ function WorkspaceListView({
   onOpenFolder,
   onClone,
   onScratch,
+  noWorkspaceActive,
+  onNoWorkspace,
 }: {
   workspaces: Workspace[];
   activeWorkspaceId?: string;
@@ -252,6 +268,8 @@ function WorkspaceListView({
   onOpenFolder?: () => void;
   onClone: () => void;
   onScratch: () => void;
+  noWorkspaceActive: boolean;
+  onNoWorkspace?: () => void;
 }) {
   const pathPreferences = useWorkspacePathPreferences();
   const openFolderShortcut = useShortcutLabel("workspace.openFolder");
@@ -387,6 +405,25 @@ function WorkspaceListView({
           </span>
           <PendingMark active={pending === "scratch"} />
         </CommandItem>
+        {onNoWorkspace ? (
+          <CommandItem
+            value="action:no-workspace"
+            disabled={disabled}
+            onSelect={onNoWorkspace}
+            className={ROW_CLASS}
+          >
+            <MessageCircle className="size-4.5 shrink-0 text-secondary" />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="text-regular">{NO_WORKSPACE_LABEL}</span>
+              <span className="truncate text-small text-tertiary">Just chat, with your global settings</span>
+            </span>
+            {pending === "no-workspace" ? (
+              <PendingMark active />
+            ) : noWorkspaceActive ? (
+              <Check className="size-4 shrink-0 text-secondary" aria-label="Current workspace" />
+            ) : null}
+          </CommandItem>
+        ) : null}
       </CommandList>
     </Command>
   );

@@ -43,6 +43,7 @@
 //   the flush by the current run; the compacted conversation is handed over
 //   too, so the flush also reads each historical entry's own ingress.
 
+import type { BrowserApprovalTarget } from "../browser/approval.js";
 import { randomUUID } from "node:crypto";
 import type { Context, JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -85,6 +86,7 @@ import {
 } from "./bot-images.js";
 import { BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
 import { withheldUntilDisclosed } from "./bot-tool-disclosure.js";
+import { LOAD_TOOLS_TOOL_NAME, createOnDemandTools, withheldUntilLoaded } from "../on-demand-tools.js";
 import { adaptAidenTool, type BotToolCall, type DurableTool, type ToolReplay } from "./tool-adapter.js";
 import { isPiCodemodeCallable } from "../pi-runtime-tool.js";
 
@@ -124,6 +126,11 @@ export interface BotApprovalRequirement {
   onAllow?(): void | Promise<void>;
   /** The rule that made (or also covers) this ask. */
   rule?: BotHandoffRule;
+  /**
+   * The person's Settings → Bots lets this routine run go ahead: no card,
+   * `onAllow` still runs before the tool.
+   */
+  preapproved?: true;
 }
 
 /** A rule handed this call to the person: the call never runs. */
@@ -136,6 +143,7 @@ export interface BotRuleHandoff {
   why: string;
   /** The page where the person can do it (the Bot browser's tab): the card's Open. */
   open?: { url: string };
+  browserTarget?: Readonly<BrowserApprovalTarget>;
 }
 
 export type BotPolicyDecision =
@@ -154,6 +162,7 @@ export interface BotRuleHandoffRequest {
   rule: BotHandoffRule;
   /** The page where the person can do it: the card's Open. */
   open?: { url: string };
+  browserTarget?: Readonly<BrowserApprovalTarget>;
   /** Aborted when the turn is stopped; the card is withdrawn. */
   signal: AbortSignal | undefined;
 }
@@ -386,6 +395,8 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   }
 
   let installedToolNames = new Set<string>();
+  /** Offered tools whose declarations wait until the model loads or calls them. */
+  let onDemandNames: ReadonlySet<string> = new Set();
 
   /** A conversation as a rule hand-off row target: read and appended through this harness, never the host. */
   function rowTarget(conversation: Conversation, context: Context): BotRuleHandoffRowTarget {
@@ -485,6 +496,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           messages = withoutTools(messages, (name) => !turnAllows(name, requestIds));
         }
         messages = withoutTools(messages, withheldUntilDisclosed(messages));
+        if (onDemandNames.size > 0) messages = withoutTools(messages, withheldUntilLoaded(messages, onDemandNames));
         messages = withNewestToolImages(messages, "browser_snapshot", BOT_BROWSER_SNAPSHOT_IMAGES_KEPT);
         messages = withNewestToolImages(messages, BOT_COMPUTER_TOOL_NAME, BOT_COMPUTER_CAPTURE_IMAGES_KEPT, BOT_OLDER_COMPUTER_CAPTURE_NOTE);
         if (deps.imageInput !== undefined && !(await deps.imageInput(botId))) messages = withImageReferences(messages);
@@ -535,6 +547,8 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         }
         // Codemode itself does nothing; every call its script makes is checked on its own.
         if (call.name === BOT_CODEMODE_TOOL_NAME && scriptable.length > 0) return undefined;
+        // Loading only declares installed tools; each loaded tool is checked when called.
+        if (call.name === LOAD_TOOLS_TOOL_NAME && onDemandNames.size > 0) return undefined;
         const decision = await deps.checkPolicy(botId, call.name, {
           callId: call.id,
           args: call.arguments,
@@ -548,12 +562,18 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           const handoff = decision.handoff;
           // Nobody can answer a card here: block with what is needed.
           if (deps.requestHandoff === undefined) return { block: ruleUnattendedBlock(handoff.rule.label) };
+          const target = handoff.browserTarget;
+          // A resumed tool can probe a different current tab. Keep the first
+          // document identity with its wait, without persisting the page URL.
+          const browserDocument = target && JSON.stringify([target.workspaceId, target.tabId, target.documentRevision]);
           const memo = await api.memo<ApprovalMemo>(
             APPROVAL_MEMO,
-            { waitId: randomUUID(), toolCallId: call.id, summary: handoff.summary, kind: "handoff", rule: handoff.rule.id },
+            {
+              waitId: randomUUID(), toolCallId: call.id, summary: handoff.summary, kind: "handoff", rule: handoff.rule.id,
+              ...(browserDocument && { browserDocument }),
+            },
             context,
           );
-          // The current decision wins; only the wait id carries over from an earlier ask.
           const answer = await deps.requestHandoff({
             botId,
             waitId: memo.waitId,
@@ -562,6 +582,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
             action: handoff.action,
             why: handoff.why,
             rule: handoff.rule,
+            ...(target && memo.browserDocument === browserDocument && { browserTarget: target }),
             ...(handoff.open === undefined ? {} : { open: handoff.open }),
             signal: context.abortSignal,
           });
@@ -579,6 +600,14 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           return applyHandoffAnswer(api, context, call.id, stored);
         }
         if (decision.approval === undefined) return undefined;
+        if (decision.approval.preapproved === true) {
+          try {
+            await decision.approval.onAllow?.();
+          } catch (error) {
+            return { block: error instanceof Error ? error.message : "This action can no longer run." };
+          }
+          return undefined;
+        }
         const memo = await api.memo<ApprovalMemo>(
           APPROVAL_MEMO,
           {
@@ -657,7 +686,11 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   return Object.assign(registry, {
     async refresh(turn: BotTurnContext = {}) {
       const bot = await deps.loadBot(botId);
-      const offered = await deps.currentTools(bot, turn);
+      const current = await deps.currentTools(bot, turn);
+      // Rarely used tools are installed but declared only once loaded (see `on-demand-tools.ts`).
+      const loading = createOnDemandTools(current.map(({ tool }) => tool));
+      onDemandNames = new Set(loading?.onDemand.map(({ name }) => name) ?? []);
+      const offered: BotToolEntry[] = loading ? [...current, { tool: loading.loader, replay: "safe" }] : [...current];
       // The sections describe the Bot's own tools; connection tools stay declared, so their guidance stays in the prompt.
       const nextSections = await deps.systemSections(bot, { toolNames: offered.map(({ tool }) => tool.name) });
       // The memory section renders per request; the rest are fixed per refresh.

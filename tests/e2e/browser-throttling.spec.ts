@@ -70,5 +70,7 @@ test("hidden browser scheduling is owned by active automation and capture", asyn
       afterRecordingPolicies: [true, true, true],
       stayedBackgrounded: true, preservedAttachments: true, automaticStopDelayMs: 300_000,
     },
+    // Linux keeps the capture loop for Picture in Picture; elsewhere it paints from the screencast.
+    ...(process.platform === "linux" ? {} : { pictureInPicture: { paintedWhileMinimized: 0, captures: 1 } }),
   });
 });

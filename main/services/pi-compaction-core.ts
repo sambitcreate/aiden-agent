@@ -342,8 +342,9 @@ export class PiCompactionCoordinator {
     this.resetProviderRetries();
   }
 
-  /** Run the same Pi-owned compaction path on an explicit operator request. */
-  compact(): Promise<PiCompactionCheckResult> {
+  /** Compact the durable branch. A local-only checkpoint must never invoke a summary model. */
+  async compact({ localOnly = false } = {}): Promise<PiCompactionCheckResult> {
+    if (localOnly && this.options.engine !== "vcc") return { compacted: false, shouldRetry: false };
     return this.run("manual", false);
   }
 

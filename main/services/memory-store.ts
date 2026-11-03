@@ -1,8 +1,9 @@
+import { initializeSqliteReclamation, reclaimSqlitePages } from "./sqlite-reclamation.js";
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { chmod, mkdir, open, stat } from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 
 /**
  * Workspace memory. Bots no longer use this store: each Bot keeps its own
@@ -203,6 +204,8 @@ export class MemoryStore {
   private databaseFile?: string;
   private opening?: Promise<DatabaseSync>;
   private openGeneration = 0;
+  /** Compiled queries per open handle; a closed handle takes its cache with it. */
+  private readonly statements = new WeakMap<DatabaseSync, Map<string, StatementSync>>();
 
   constructor(
     private readonly options: {
@@ -230,10 +233,11 @@ export class MemoryStore {
   }
 
   private async db(): Promise<DatabaseSync> {
-    if (this.database) {
-      await this.repairPrivateModes();
-      return this.database;
-    }
+    // Modes are repaired when the handle opens, after every write and on
+    // close. SQLite creates any WAL or SHM file (a read can recreate them in
+    // WAL mode) with the database file's mode, so a cached handle needs no
+    // chmod round trip per query.
+    if (this.database) return this.database;
     // Concurrent cold opens would each build a handle and race the schema;
     // share a single in-flight open instead.
     this.opening ??= this.openDatabase();
@@ -254,8 +258,10 @@ export class MemoryStore {
     await handle.close();
     await chmod(file, 0o600);
     const database = new DatabaseSync(file);
+    // Wait for a concurrent opener before the first write (auto_vacuum on a new file).
+    database.exec("PRAGMA busy_timeout = 5000;");
+    initializeSqliteReclamation(database);
     database.exec(`
-      PRAGMA busy_timeout = 5000;
       PRAGMA foreign_keys = ON;
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS memory_facts (
@@ -344,6 +350,7 @@ export class MemoryStore {
     try {
       await this.applyMigrations(database);
       purgeLegacyBotRows(database);
+      reclaimSqlitePages(database);
     } catch (error) {
       // Don't cache an unmigrated handle — the next db() call must retry.
       database.close();
@@ -581,6 +588,21 @@ export class MemoryStore {
     }
   }
 
+  /** Reuse one compiled statement per query text on this handle. */
+  private statement(database: DatabaseSync, sql: string): StatementSync {
+    let cache = this.statements.get(database);
+    if (!cache) {
+      cache = new Map();
+      this.statements.set(database, cache);
+    }
+    let statement = cache.get(sql);
+    if (!statement) {
+      statement = database.prepare(sql);
+      cache.set(sql, statement);
+    }
+    return statement;
+  }
+
   private async repairPrivateModes(): Promise<void> {
     if (!this.databaseFile) return;
     await Promise.all(
@@ -618,14 +640,14 @@ export class MemoryStore {
         throw new Error("Memory expiry must be a future millisecond timestamp.");
       }
       const prior = supersedesId
-        ? database.prepare(`
+        ? this.statement(database, `
             SELECT * FROM memory_facts WHERE id = ? AND scope_kind = ? AND scope_id = ? AND state = 'active'
           `).get(supersedesId, scope.kind, scope.id) as unknown as FactRow | undefined
         : undefined;
       if (supersedesId && !prior) {
         throw new Error("The superseded memory fact is unavailable in this scope.");
       }
-      const existing = database.prepare(`
+      const existing = this.statement(database, `
         SELECT * FROM memory_facts
         WHERE scope_kind = ? AND scope_id = ? AND normalized_text = ? AND state = 'active'
       `).get(scope.kind, scope.id, text) as unknown as FactRow | undefined;
@@ -638,7 +660,7 @@ export class MemoryStore {
       if (existing && !existingExpired && existing.id !== supersedesId) {
         throw new Error("The replacement duplicates another active fact in this scope.");
       }
-      const count = database.prepare(`
+      const count = this.statement(database, `
         SELECT count(*) AS count FROM memory_facts
         WHERE scope_kind = ? AND scope_id = ? AND state = 'active'
           AND (expires_at IS NULL OR expires_at > ?)
@@ -646,7 +668,7 @@ export class MemoryStore {
       `).get(scope.kind, scope.id, now, supersedesId ?? null, supersedesId ?? null) as { count: number };
       if (Number(count.count) >= MAX_SCOPE_FACTS) throw new Error("This memory scope is full.");
       if (input.alwaysOn) {
-        const alwaysOn = database.prepare(`
+        const alwaysOn = this.statement(database, `
           SELECT count(*) AS count FROM memory_facts
           WHERE scope_kind = ? AND scope_id = ? AND state = 'active' AND always_on = 1
             AND (expires_at IS NULL OR expires_at > ?)
@@ -659,17 +681,17 @@ export class MemoryStore {
       // Expired rows still occupy the active-text unique index. Keep their
       // history, but free the text atomically with the newly approved insert.
       if (existing && existingExpired) {
-        database.prepare(`
+        this.statement(database, `
           UPDATE memory_facts SET state = 'superseded', updated_at = ?
           WHERE id = ? AND scope_kind = ? AND scope_id = ? AND normalized_text = ?
             AND state = 'active' AND expires_at <= ?
         `).run(now, existing.id, scope.kind, scope.id, text, now);
       }
       if (supersedesId) {
-        database.prepare("UPDATE memory_facts SET state = 'superseded', updated_at = ? WHERE id = ?")
+        this.statement(database, "UPDATE memory_facts SET state = 'superseded', updated_at = ? WHERE id = ?")
           .run(now, supersedesId);
       }
-      database.prepare(`
+      this.statement(database, `
         INSERT INTO memory_facts (
           id, scope_kind, scope_id, normalized_text, provenance_kind,
           source_id, source_chat_id, source_message_id, source_turn_id, created_at, updated_at,
@@ -700,7 +722,7 @@ export class MemoryStore {
       throw error;
     }
     await this.repairPrivateModes();
-    return factFromRow(database.prepare("SELECT * FROM memory_facts WHERE id = ?").get(id) as unknown as FactRow);
+    return factFromRow(this.statement(database, "SELECT * FROM memory_facts WHERE id = ?").get(id) as unknown as FactRow);
   }
 
   async alwaysOn(scope: MemoryScope, limit = 6): Promise<MemoryFact[]> {
@@ -708,7 +730,7 @@ export class MemoryStore {
     const valid = validateScope(scope);
     const now = this.now();
     const capped = Math.max(0, Math.min(MAX_ALWAYS_ON, Math.trunc(limit)));
-    return (database.prepare(`
+    return (this.statement(database, `
       SELECT * FROM memory_facts
       WHERE scope_kind = ? AND scope_id = ? AND state = 'active' AND always_on = 1
         AND (expires_at IS NULL OR expires_at > ?)
@@ -722,7 +744,7 @@ export class MemoryStore {
     const match = ftsQuery(query);
     if (!match) return [];
     const capped = Math.max(1, Math.min(8, Math.trunc(limit)));
-    const rows = database.prepare(`
+    const rows = this.statement(database, `
       SELECT memory_facts.*, bm25(memory_facts_fts) AS rank
       FROM memory_facts_fts
       JOIN memory_facts ON memory_facts.rowid = memory_facts_fts.rowid
@@ -770,27 +792,27 @@ export class MemoryStore {
     let atCapacity = false;
     try {
       const now = this.now();
-      const previousAges = new Map((database.prepare(`
+      const previousAges = new Map((this.statement(database, `
         SELECT id, updated_at FROM memory_documents
         WHERE source_chat_id = ? AND scope_kind = ? AND scope_id = ?
       `).all(sourceChatId, valid.kind, valid.id) as Array<{ id: string; updated_at: number }>).
         map((row) => [row.id, row.updated_at]));
       // Scoped delete: legacy-scope copies of this chat's documents (imported
       // for downgrade compatibility) must not be wiped by a new-scope write.
-      database.prepare("DELETE FROM memory_documents WHERE source_chat_id = ? AND scope_kind = ? AND scope_id = ?")
+      this.statement(database, "DELETE FROM memory_documents WHERE source_chat_id = ? AND scope_kind = ? AND scope_id = ?")
         .run(sourceChatId, valid.kind, valid.id);
-      const existing = database.prepare(`
+      const existing = this.statement(database, `
         SELECT count(*) AS count FROM memory_documents WHERE scope_kind = ? AND scope_id = ?
       `).get(valid.kind, valid.id) as { count: number };
       const excess = Math.max(0, Number(existing.count) + prepared.length - MAX_SCOPE_DOCUMENTS);
-      evicted = Number(database.prepare(`
+      evicted = Number(this.statement(database, `
         DELETE FROM memory_documents WHERE rowid IN (
           SELECT rowid FROM memory_documents WHERE scope_kind = ? AND scope_id = ?
           ORDER BY updated_at ASC, source_chat_id ASC, id ASC LIMIT ?
         )
       `).run(valid.kind, valid.id, excess).changes);
       atCapacity = Number(existing.count) - evicted + prepared.length >= MAX_SCOPE_DOCUMENTS;
-      const insert = database.prepare(`
+      const insert = this.statement(database, `
         INSERT INTO memory_documents (
           id, scope_kind, scope_id, kind, normalized_text, source_chat_id, source_id, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -827,7 +849,7 @@ export class MemoryStore {
     if (facts.length >= capped) {
       return facts.map(({ text, citation, rank }) => ({ kind: "fact", text, citation, rank }));
     }
-    const rows = database.prepare(`
+    const rows = this.statement(database, `
       SELECT memory_documents.*, bm25(memory_documents_fts) AS rank
       FROM memory_documents_fts
       JOIN memory_documents ON memory_documents.rowid = memory_documents_fts.rowid
@@ -856,7 +878,7 @@ export class MemoryStore {
   async list(scope: MemoryScope): Promise<MemoryFact[]> {
     const database = await this.db();
     const valid = validateScope(scope);
-    return (database.prepare(`
+    return (this.statement(database, `
       SELECT * FROM memory_facts WHERE scope_kind = ? AND scope_id = ?
       ORDER BY state ASC, updated_at DESC, id ASC
     `).all(valid.kind, valid.id) as unknown as FactRow[]).map(factFromRow);
@@ -869,13 +891,13 @@ export class MemoryStore {
     database.exec("BEGIN IMMEDIATE");
     let removed = false;
     try {
-      database.prepare(`
+      this.statement(database, `
         UPDATE memory_facts SET supersedes_id = NULL
         WHERE supersedes_id IN (
           SELECT id FROM memory_facts WHERE id = ? AND scope_kind = ? AND scope_id = ?
         )
       `).run(factId, valid.kind, valid.id);
-      const result = database.prepare(
+      const result = this.statement(database, 
         "DELETE FROM memory_facts WHERE id = ? AND scope_kind = ? AND scope_id = ?",
       ).run(factId, valid.kind, valid.id);
       removed = Number(result.changes) === 1;
@@ -894,17 +916,17 @@ export class MemoryStore {
     database.exec("BEGIN IMMEDIATE");
     let removed = 0;
     try {
-      database.prepare(`
+      this.statement(database, `
         UPDATE memory_facts SET supersedes_id = NULL
         WHERE supersedes_id IN (
           SELECT id FROM memory_facts WHERE provenance_kind = 'chat_message' AND source_chat_id = ?
         )
       `).run(sourceChatId);
-      const facts = database.prepare(
+      const facts = this.statement(database, 
         "DELETE FROM memory_facts WHERE provenance_kind = 'chat_message' AND source_chat_id = ?",
       ).run(sourceChatId);
       removed = Number(facts.changes);
-      database.prepare("DELETE FROM memory_documents WHERE source_chat_id = ?").run(sourceChatId);
+      this.statement(database, "DELETE FROM memory_documents WHERE source_chat_id = ?").run(sourceChatId);
       database.exec("COMMIT");
     } catch (error) {
       database.exec("ROLLBACK");
@@ -920,17 +942,17 @@ export class MemoryStore {
     database.exec("BEGIN IMMEDIATE");
     let removed = 0;
     try {
-      database.prepare(`
+      this.statement(database, `
         UPDATE memory_facts SET supersedes_id = NULL
         WHERE supersedes_id IN (
           SELECT id FROM memory_facts WHERE scope_kind = ? AND scope_id = ?
         )
       `).run(valid.kind, valid.id);
-      const facts = database.prepare(
+      const facts = this.statement(database, 
         "DELETE FROM memory_facts WHERE scope_kind = ? AND scope_id = ?",
       ).run(valid.kind, valid.id);
       removed = Number(facts.changes);
-      database.prepare("DELETE FROM memory_documents WHERE scope_kind = ? AND scope_id = ?")
+      this.statement(database, "DELETE FROM memory_documents WHERE scope_kind = ? AND scope_id = ?")
         .run(valid.kind, valid.id);
       database.exec("COMMIT");
     } catch (error) {
@@ -943,6 +965,7 @@ export class MemoryStore {
 
   async close(): Promise<void> {
     this.openGeneration += 1;
+    if (this.database) reclaimSqlitePages(this.database);
     this.database?.close();
     this.database = undefined;
     await this.repairPrivateModes();

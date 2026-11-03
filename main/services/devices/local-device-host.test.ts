@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,6 +24,9 @@ import {
   findAndroidSdk,
   findAndroidStudioJava,
   findDeviceHostHelpers,
+  resetDeviceCommandCancellationForTests,
+  runChildCommand,
+  terminateRunningDeviceCommands,
   nextHubRestartDelay,
   xcodeUnavailableReason,
   type HostChildProcess,
@@ -122,6 +126,7 @@ async function withHost(
     now: () => clock,
     isProcessAlive: () => false,
     kill: (pid, signal) => harness.kills.push({ pid, signal }),
+    readProcessField: () => null,
     resolveNpmRunner: async () => null,
     ...overrides,
   };
@@ -952,4 +957,133 @@ test("missing Node after relaunch cannot block revocation or removal of leftover
       }
     });
   }
+});
+
+test("quit ends a helper command still running before its own timeout, and only running ones", async () => {
+  const finished = await runChildCommand(process.execPath, ["-e", ""], { env: process.env, timeoutMs: 60_000 });
+  assert.equal(finished.code, 0);
+  const startedAt = Date.now();
+  const held = runChildCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    env: process.env,
+    timeoutMs: 60_000,
+  });
+  try {
+    // Give the child a moment to spawn so the signal reaches a live process.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(terminateRunningDeviceCommands(), 1);
+    const result = await held;
+    assert.notEqual(result.code, 0);
+    assert.ok(Date.now() - startedAt < 10_000, "the held command ended long before its 60 s timeout");
+    assert.equal(terminateRunningDeviceCommands(), 0);
+  } finally {
+    resetDeviceCommandCancellationForTests();
+  }
+});
+
+test("after quit's deadline cleanup, a helper command the shutdown chain starts later never runs", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "aiden-device-quit-"));
+  try {
+    terminateRunningDeviceCommands();
+    const marker = path.join(dir, "daemon-stop-ran");
+    const startedAt = Date.now();
+    // Stands in for the `daemon stop` that device-service reaches only after the recordings and SSH waits.
+    const late = await runChildCommand(
+      process.execPath,
+      ["-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ran"); setInterval(() => {}, 1000)`],
+      { env: process.env, timeoutMs: 60_000 },
+    );
+    assert.notEqual(late.code, 0);
+    assert.ok(Date.now() - startedAt < 5_000, "the late command was refused rather than left running until its timeout");
+    // Wait past a process start so a spawned child would have written the marker.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await assert.rejects(readFile(marker), { code: "ENOENT" });
+    assert.equal(terminateRunningDeviceCommands(), 0);
+  } finally {
+    resetDeviceCommandCancellationForTests();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/** A long-running process standing in for the agent-device daemon, its command line naming `script`. */
+async function startDaemonFixture(script: string) {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", script], { stdio: "ignore" });
+  const exited = new Promise<NodeJS.Signals | null>((resolve) => child.once("exit", (_code, signal) => resolve(signal)));
+  await new Promise<void>((resolve, reject) => {
+    child.once("spawn", () => resolve());
+    child.once("error", reject);
+  });
+  const startTime = execFileSync("/bin/ps", ["-p", String(child.pid), "-o", "lstart="], { encoding: "utf8" }).trim();
+  return { child, pid: child.pid!, startTime, exited };
+}
+
+const isAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+test("after quit refuses `daemon stop`, the recorded daemon is still terminated, and only while its pid is that daemon", async () => {
+  await withHost(async ({ baseDir }) => {
+    const stateDir = path.join(baseDir, "agent-state");
+    await mkdir(stateDir, { recursive: true });
+    const daemonScript = path.join(
+      path.dirname(path.dirname(deviceToolPaths(baseDir, AGENT_DEVICE).entryPath)),
+      "dist",
+      "src",
+      "internal",
+      "daemon.js",
+    );
+    const daemon = await startDaemonFixture(daemonScript);
+    const stranger = await startDaemonFixture(path.join(baseDir, "elsewhere", "daemon.js"));
+    const reused = await startDaemonFixture(daemonScript);
+    const unrecorded = await startDaemonFixture(daemonScript);
+    const cli = await startDaemonFixture(deviceToolPaths(baseDir, AGENT_DEVICE).entryPath);
+    const record = (pid: number, processStartTime?: string) =>
+      writeFile(
+        path.join(stateDir, "daemon.json"),
+        JSON.stringify({ httpPort: 61_700, token: "live", pid, processStartTime, stateDir }),
+      );
+    const stopHost = async () => {
+      const deps = defaultLocalDeviceHostDeps({
+        baseDir, platform: "darwin", resolveNpmRunner: async () => null,
+        resolveNodePath: async () => process.execPath, env: process.env,
+      });
+      await createLocalDeviceHost(deps).stop();
+    };
+    try {
+      terminateRunningDeviceCommands();
+
+      // A pid that runs something other than Aiden's agent-device is not signalled.
+      await record(stranger.pid, stranger.startTime);
+      await stopHost();
+      // A pid whose start time differs from the recorded one was reused, so it is not signalled.
+      await record(reused.pid, "Thu Jan  1 00:00:00 1970");
+      await stopHost();
+      // Without a recorded start time the pid cannot be proven to be the daemon, so it is not signalled.
+      await record(unrecorded.pid);
+      await stopHost();
+      // agent-device's CLI runs from the same install but is not the daemon, so it is not signalled.
+      await record(cli.pid, cli.startTime);
+      await stopHost();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assert.ok(isAlive(stranger.pid), "a process that is not the daemon survives");
+      assert.ok(isAlive(reused.pid), "a reused pid survives");
+      assert.ok(isAlive(unrecorded.pid), "a daemon recorded without a start time survives");
+      assert.ok(isAlive(cli.pid), "the agent-device CLI survives");
+
+      await record(daemon.pid, daemon.startTime);
+      await stopHost();
+      const ended = await Promise.race([
+        daemon.exited,
+        new Promise<"still running">((resolve) => setTimeout(() => resolve("still running"), 5_000)),
+      ]);
+      assert.equal(ended, "SIGTERM", "the daemon ended at quit");
+    } finally {
+      resetDeviceCommandCancellationForTests();
+      for (const fixture of [daemon, stranger, reused, unrecorded, cli]) fixture.child.kill("SIGKILL");
+    }
+  });
 });

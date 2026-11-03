@@ -26,7 +26,8 @@ interface Encoded {
 function fakeEncoder() {
   const calls: Encoded[] = [];
   const encode: BotComputerImageEncoder = async (bgra, width, height, format, quality, maxWidth) => {
-    calls.push({ bgra, width, height, format, quality, maxWidth });
+    // Takes the pixels before it yields, as Electron's createFromBitmap does: the screen hands over its live framebuffer.
+    calls.push({ bgra: Buffer.from(bgra), width, height, format, quality, maxWidth });
     const scale = Math.min(1, maxWidth / width);
     return { image: Buffer.from(`${format}#${calls.length}`), width: Math.round(width * scale), height: Math.round(height * scale) };
   };
@@ -72,7 +73,7 @@ async function setup(
 
 const pixelAt = (bgra: Buffer, width: number, x: number, y: number) => [...bgra.subarray((y * width + x) * 4, (y * width + x) * 4 + 4)];
 
-test("a capture asks for the whole screen, waits for it, and encodes a copy of it", async () => {
+test("a capture asks for the whole screen, waits for it, and encodes it", async () => {
   const { server, screen, encoder } = await setup();
   try {
     const first = server.connections[0].updateRequests.length;
@@ -85,11 +86,8 @@ test("a capture asks for the whole screen, waits for it, and encodes a copy of i
     const call = encoder.calls[0];
     assert.deepEqual([call.width, call.height, call.format, call.quality, call.maxWidth], [40, 30, "jpeg", 70, 20]);
     assert.deepEqual(pixelAt(call.bgra, 40, 6, 7), [20, 10, 250, 255], "the server's painted pixel, as BGRA");
-    // The encoder got a copy: later updates never change a picture already taken.
-    const kept = Buffer.from(call.bgra);
     server.paint({ x: 0, y: 0, width: 40, height: 30 }, [1, 1, 1]);
     await screen.capture({ format: "png", maxWidth: 40 });
-    assert.deepEqual(call.bgra, kept);
     assert.equal(encoder.calls[1].format, "png");
   } finally {
     await screen.close();

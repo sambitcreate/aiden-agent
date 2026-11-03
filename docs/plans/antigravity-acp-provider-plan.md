@@ -132,6 +132,7 @@ The desktop app cannot load Pi extensions, so a port is required in either case.
    - It injects `GEMINI_HOME`, `AGY_ACP_FORCE_FILE_STORAGE=1`, `ANTIGRAVITY_HARNESS_PATH`, `PYTHONUNBUFFERED=1` and a per-process `TMPDIR=userData/antigravity/tmp/run-*`. Choose a path with no spaces or colons, because Python splits `BROWSER` on `:` and shell-splits its contents.
    - The process runs in a detached group and is stopped with SIGTERM, then SIGKILL after 1 s.
    - Aiden adds what T3 lacks: a pid ledger and a startup sweep of orphaned processes and `run-*` directories.
+   - Each launch carries a random `AIDEN_ACP_RUN` marker that its tools inherit, so the sweep also stops a crashed agent's leftover tools after the agent itself is gone (2026-10-29). Quit stops every agent the launcher started, including sign-in and validation agents, within a 4 s budget, and an exit hook kills any that remain.
    - Aiden's packaged fuses set `runAsNode: false`, so T3's `ELECTRON_RUN_AS_NODE` helpers cannot run. The `BROWSER` hook is a tiny `/bin/sh` script; Aiden ships on macOS and Linux only.
 4. **Isolate the profile.**
    - `GEMINI_HOME=userData/antigravity/profile` (mode 0700), with `settings.json` rewritten on each launch and no credentials in it.

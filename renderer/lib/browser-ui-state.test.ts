@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { acceptBrowserState, BROWSER_DEVICE_PRESETS, BROWSER_NATIVE_OCCLUDER_SELECTOR, browserAnnotationRegion, browserBoundsFromRect, browserElementAtPoint, browserNativeViewObstructed, enqueueBrowserPresentation, resizeBrowserViewport, savedBrowserScreenshotPath, validBrowserViewport, visibleBrowserNativeOccluders } from "./browser-ui-state.js";
+import { Window } from "happy-dom";
+import { acceptBrowserState, BROWSER_DEVICE_PRESETS, BROWSER_NATIVE_OCCLUDER_SELECTOR, browserAnnotationRegion, browserOcclusionMutated, browserOcclusionScrolled, browserBoundsFromRect, browserElementAtPoint, browserNativeViewObstructed, enqueueBrowserPresentation, resizeBrowserViewport, savedBrowserScreenshotPath, validBrowserViewport, visibleBrowserNativeOccluders } from "./browser-ui-state.js";
 import type { BrowserElement, BrowserState } from "../shared/browser.js";
 import { browserAnnotationCropBounds } from "./browser-annotation-capture.js";
 
@@ -91,6 +92,55 @@ test("a modal's aria-hidden full-window overlay still occludes a browser outside
   const occluders = visibleBrowserNativeOccluders(body as unknown as ParentNode) as unknown as FakeElement[];
   assert.deepEqual(occluders.map((element) => element.attrs["data-slot"]), ["dialog-overlay", "dialog-content"]);
   assert.equal(browserNativeViewObstructed(browserSlot, occluders.map((element) => element.getBoundingClientRect())), true);
+});
+
+test("only mutations near the browser slot or its occluders ask for a new presentation", async () => {
+  const window = new Window();
+  const { document } = window;
+  document.body.innerHTML = `
+    <main id="split">
+      <section id="chat"><div id="transcript"><p id="reply">Hello</p></div></section>
+      <aside id="panel"><div id="host"></div></aside>
+    </main>
+    <div id="portal"><div role="menu" data-state="open" id="menu"><div id="item">One</div></div></div>`;
+  const byId = (id: string) => document.getElementById(id)!;
+  const host = byId("host") as unknown as Node;
+  const menu = byId("menu") as unknown as Node;
+  const records: MutationRecord[] = [];
+  const observer = new window.MutationObserver((batch) => { records.push(...(batch as unknown as MutationRecord[])); });
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-state", "aria-hidden", "inert", "style"] });
+  const mutated = async (change: () => void, occluders: Node[] = [menu]) => {
+    records.length = 0;
+    change();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.ok(records.length > 0, "the change should be observed");
+    return browserOcclusionMutated(records, host, occluders);
+  };
+
+  // A streaming reply grows and its reveal styles change: no occlusion can follow.
+  assert.equal(await mutated(() => { byId("reply").appendChild(document.createElement("span")).textContent = "token"; }), false);
+  assert.equal(await mutated(() => { byId("reply").setAttribute("style", "opacity: .5"); }), false);
+  // Things that move the slot or change what covers it still do.
+  assert.equal(await mutated(() => { byId("panel").setAttribute("style", "width: 300px"); }), true);
+  assert.equal(await mutated(() => { byId("chat").setAttribute("style", "width: 300px"); }), true);
+  assert.equal(await mutated(() => { byId("menu").setAttribute("data-state", "closed"); }), true);
+  assert.equal(await mutated(() => { byId("item").setAttribute("style", "height: 400px"); }), true);
+  assert.equal(await mutated(() => { byId("portal").setAttribute("aria-hidden", "true"); }), true);
+  assert.equal(await mutated(() => { byId("portal").remove(); }), true);
+  const dialog = document.createElement("div");
+  dialog.innerHTML = `<div role="dialog"></div>`;
+  assert.equal(await mutated(() => { document.body.appendChild(dialog); }), true);
+  // A previously visible occluder without a matching selector any more (popover removed).
+  const popover = document.createElement("div");
+  byId("transcript").appendChild(popover);
+  assert.equal(await mutated(() => { popover.setAttribute("style", "top: 10px"); }, [menu, popover as unknown as Node]), true);
+  observer.disconnect();
+
+  // Scrolling the transcript beside the browser cannot move either; the page or the panel can.
+  assert.equal(browserOcclusionScrolled(byId("transcript") as unknown as EventTarget, host, [menu]), false);
+  assert.equal(browserOcclusionScrolled(byId("panel") as unknown as EventTarget, host, [menu]), true);
+  assert.equal(browserOcclusionScrolled(document as unknown as EventTarget, host, [menu]), true);
+  await window.happyDOM.close();
 });
 
 test("native presentation never receives empty or nonfinite geometry", () => {

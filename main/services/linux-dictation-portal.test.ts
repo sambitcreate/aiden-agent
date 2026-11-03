@@ -63,6 +63,16 @@ test("unbound events and oversized protocol messages fail closed", async () => {
     assert.equal(h.portal.active, false); assert.deepEqual(h.events, []);
   }
 });
+test("an unknown informational event keeps the bound shortcut, and an explicit error or close ends it", async () => {
+  const h = setup(); const bound = h.portal.bind();
+  h.send("progress"); h.send("bound"); await bound;
+  h.send("shortcuts-changed"); h.send("activated");
+  assert.equal(h.portal.active, true); assert.deepEqual(h.events, ["down"]);
+  h.children[0].stdout.write('{"type":"error","code":"session-closed"}\n');
+  assert.equal(h.portal.active, false); assert.deepEqual(h.events, ["down", "lost"]);
+  const second = setup(); const pending = second.portal.bind(); const rejection = assert.rejects(pending, /ended or became unavailable/);
+  second.send("closed"); await rejection;
+});
 test("permission request timeout kills its owner", async () => {
   const h = setup(5); await assert.rejects(h.portal.bind(), /timed out/);
   assert.equal(h.children[0].killed, true); assert.equal(h.portal.active, false);

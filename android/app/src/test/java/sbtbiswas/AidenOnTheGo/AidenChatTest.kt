@@ -52,6 +52,7 @@ import sbtbiswas.AidenOnTheGo.features.chat.AidenChatViewModel
 import sbtbiswas.AidenOnTheGo.features.chat.AidenForeignRunAttachPolicy
 import sbtbiswas.AidenOnTheGo.features.chat.AidenVisualSnapshotRefreshPolicy
 import sbtbiswas.AidenOnTheGo.features.chat.aidenEligibleImageAttachments
+import sbtbiswas.AidenOnTheGo.features.chat.aidenSendRecoveryMessage
 import sbtbiswas.AidenOnTheGo.features.chat.aidenUnsupportedHtmlArtifacts
 import sbtbiswas.AidenOnTheGo.features.chat.aidenVisibleMessageAttachments
 import sbtbiswas.AidenOnTheGo.features.chat.aidenVisualDisplay
@@ -2556,6 +2557,180 @@ class AidenChatTest {
     @Test fun selectedAttachmentPreparationKeepsMainResponsiveAndSendReservedThroughCancellation() =
         assertFailedSendDraft(checkPreparation = true)
 
+    @Test
+    fun missingFolderRefusalShowsTheMacsReasonAndTheSameMessageSendsOnceItIsBack() {
+        val directory = kotlin.io.path.createTempDirectory("aiden-missing-folder-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val sendKeys = java.util.concurrent.CopyOnWriteArrayList<String?>()
+        val folderBack = java.util.concurrent.atomic.AtomicBoolean(false)
+        val refusal = "The folder for this workspace was moved or deleted. Restore it on your Mac, then send again."
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val initialChat = AidenChat(
+            id = "chat-folder", workspaceId = "workspace-folder", title = "Missing folder",
+            messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH,
+            revision = "revision-folder"
+        )
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
+                "/api/aiden/v1/chats/chat-folder/turns" -> {
+                    sendKeys.add(request.getHeader("Idempotency-Key"))
+                    if (folderBack.get()) {
+                        MockResponse().setResponseCode(503).setBody("""{"error":{"code":"internal_error","message":"Try again","requestId":"request-folder-2","retryable":true}}""")
+                    } else {
+                        MockResponse().setResponseCode(409).setBody("""{"error":{"code":"workspace_unavailable","message":"$refusal","requestId":"request-folder","retryable":false}}""")
+                    }
+                }
+                "/api/aiden/v1/chats/chat-folder" -> MockResponse().setBody(json.encodeToString(initialChat))
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(
+                    AidenPairingExchange(
+                        instanceId = "instance-folder", deviceId = "device-folder",
+                        endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test",
+                        credential = "synthetic-credential",
+                        capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
+                    ), null
+                )
+                val drafts = AidenChatDraftStore(directory)
+                val cache = AidenChatCache(directory)
+                val coordinator = AidenRemoteCoordinator(
+                    installations, directory, cache, drafts,
+                    scope = CoroutineScope(dispatcher + Job().apply { cancel() })
+                )
+                coordinator.refreshClient()
+                val model = AidenChatViewModel(initialChat.id, coordinator, cache, drafts, initialChat)
+                viewModels.put("chat", model)
+                yield()
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                model.updateDraft("Fix the header")
+                model.send()
+                withTimeout(5_000) { model.isStarting.first { !it } }
+                // Nothing ran on the Mac, so this is a refusal, not an unknown delivery.
+                assertEquals(refusal, model.presentedError.value)
+                assertNull(model.pendingSend.value)
+                assertEquals("Fix the header", model.draft.value)
+                assertTrue(model.chat.value!!.messages.isEmpty())
+                assertTrue(model.canSend)
+                folderBack.set(true)
+                model.send()
+                withTimeout(5_000) { model.isStarting.first { !it } }
+                assertEquals(2, sendKeys.size)
+            }
+        } finally {
+            runBlocking(dispatcher) { viewModels.clearAndJoin() }
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun stopDropsTheUploadInFlightAndWaitingBatchesButKeepsWhatReachedTheMac() {
+        val directory = kotlin.io.path.createTempDirectory("aiden-upload-stop-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val secondArrived = CountDownLatch(1)
+        val releaseSecond = CountDownLatch(1)
+        val uploadedNames = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val initialChat = AidenChat(
+            id = "chat-stop", workspaceId = "workspace-stop", title = "Stop uploads",
+            messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH,
+            revision = "revision-stop"
+        )
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
+                "/api/aiden/v1/chats/chat-stop/attachments" -> {
+                    val name = json.parseToJsonElement(request.body.readUtf8()).jsonObject["name"]!!.jsonPrimitive.content
+                    uploadedNames.add(name)
+                    if (name == "second") {
+                        // Hold the second upload so Stop lands while it is in flight.
+                        secondArrived.countDown()
+                        releaseSecond.await(5, TimeUnit.SECONDS)
+                    }
+                    MockResponse().setResponseCode(201).setBody(json.encodeToString(AidenAttachmentReference(
+                        id = "att_" + name.padEnd(43, 'x'), name = name, mimeType = "text/plain",
+                        kind = AidenAttachmentKind.TEXT, size = 1, expiresAt = Instant.now().plusSeconds(600)
+                    )))
+                }
+                "/api/aiden/v1/chats/chat-stop" -> MockResponse().setBody(json.encodeToString(initialChat))
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(
+                    AidenPairingExchange(
+                        instanceId = "instance-stop", deviceId = "device-stop",
+                        endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test",
+                        credential = "synthetic-credential",
+                        capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
+                    ), null
+                )
+                val drafts = AidenChatDraftStore(directory)
+                val cache = AidenChatCache(directory)
+                val coordinator = AidenRemoteCoordinator(
+                    installations, directory, cache, drafts,
+                    scope = CoroutineScope(dispatcher + Job().apply { cancel() })
+                )
+                coordinator.refreshClient()
+                val model = AidenChatViewModel(initialChat.id, coordinator, cache, drafts, initialChat)
+                viewModels.put("chat", model)
+                yield()
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                val text = { name: String -> AidenAttachmentUpload.Text(name = name, mimeType = "text/plain", text = "x") }
+                val picked = launch(start = CoroutineStart.UNDISPATCHED) {
+                    model.prepareAndUpload(listOf("first", "second")) { text(it) }
+                }
+                val waiting = launch(start = CoroutineStart.UNDISPATCHED) {
+                    model.prepareAndUpload(listOf("third")) { text(it) }
+                }
+                try {
+                    withContext(Dispatchers.IO) { assertTrue(secondArrived.await(5, TimeUnit.SECONDS)) }
+                    val sending = withTimeout(5_000) { model.uploadProgress.first { it?.index == 1 } }!!
+                    assertEquals(2, sending.count)
+                    assertTrue(sending.percent >= 50)
+                    assertEquals(listOf("first"), model.pendingAttachments.value.map { it.name })
+
+                    model.cancelUploads()
+                    withTimeout(5_000) { picked.join(); waiting.join() }
+
+                    assertTrue(picked.isCancelled)
+                    assertTrue(waiting.isCancelled)
+                    // The picture that reached the Mac stays ready to send; the bar is gone.
+                    assertEquals(listOf("first"), model.pendingAttachments.value.map { it.name })
+                    assertNull(model.uploadProgress.value)
+                    assertEquals(0, model.preparingAttachmentBatches.value)
+                    assertFalse(model.isUploadingAttachment.value)
+                    // The batch waiting its turn never reached the Mac.
+                    assertEquals(listOf("first", "second"), uploadedNames.toList())
+                } finally {
+                    releaseSecond.countDown()
+                    picked.cancelAndJoin()
+                    waiting.cancelAndJoin()
+                }
+            }
+        } finally {
+            releaseSecond.countDown()
+            runBlocking(dispatcher) { viewModels.clearAndJoin() }
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
     private fun assertFailedSendDraft(newerText: String = "", purgeWhileSending: Boolean = false, checkPreparation: Boolean = false) {
         val directory = kotlin.io.path.createTempDirectory("aiden-failed-send-").toFile()
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
@@ -4703,6 +4878,149 @@ class AidenChatTest {
             io.close()
         }
     }
+
+    private fun rateLimitedTurn(retryable: Boolean, message: String = "Aiden Agent is busy.", retryAfterSeconds: Int? = null) =
+        MockResponse().setResponseCode(429).setBody(
+            """{"error":{"code":"rate_limited","message":"$message","requestId":"req-busy","retryable":$retryable""" +
+                (retryAfterSeconds?.let { ""","details":{"retryAfterSeconds":$it}""" } ?: "") + "}}"
+        )
+
+    private fun acceptedTurn(n: Int) = MockResponse().setResponseCode(202).setBody(
+        """{"turnId":"turn-$n","streamId":"stream-$n","status":"queued","message":${forkWireJson.encodeToString(
+            AidenChatMessage("accepted-$n", AidenChatRole.USER, "Hello", createdAt = Instant.EPOCH.plusSeconds(10))
+        )}}"""
+    )
+
+    /** Routes the send endpoints, answering each turn POST with [answer] by its 1-based count. */
+    private fun withTurnHarness(
+        answer: (Int) -> MockResponse,
+        block: suspend CoroutineScope.(AidenChatViewModel, java.util.concurrent.LinkedBlockingQueue<RecordedRequest>, CountDownLatch) -> Unit,
+        expectedTurns: Int
+    ) {
+        val turns = java.util.concurrent.LinkedBlockingQueue<RecordedRequest>()
+        val arrived = CountDownLatch(expectedTurns)
+        val count = java.util.concurrent.atomic.AtomicInteger(0)
+        withForkHarness(emptyList(), { request ->
+            val path = request.requestUrl!!.encodedPath
+            when {
+                path == "/api/aiden/v1/chats/${forkSource.id}/turns" -> {
+                    turns.add(request)
+                    answer(count.incrementAndGet()).also { arrived.countDown() }
+                }
+                path == "/api/aiden/v1/chats/${forkSource.id}" -> MockResponse().setBody(forkWireJson.encodeToString(forkSource))
+                path.endsWith("/events") -> MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE)
+                else -> null
+            }
+        }) { harness ->
+            val model = harness.open(forkSource.id, forkSource)
+            block(model, turns, arrived)
+        }
+    }
+
+    @Test
+    fun aBusyMacSendIsResentAfterTheServerDelayUnderAFreshKey() = withTurnHarness(
+        answer = { n -> if (n == 1) rateLimitedTurn(retryable = true, retryAfterSeconds = 4) else acceptedTurn(n) },
+        expectedTurns = 2,
+        block = { model, turns, _ ->
+            val waits = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            model.rateLimitedSendRetryDelay = { waits += it; yield() }
+            model.updateDraft("Hello")
+            model.send()
+            withTimeout(5_000) { model.chat.first { chat -> chat?.messages?.any { it.id == "accepted-2" } == true } }
+
+            assertEquals("the resend waits the server's Retry-After", listOf(4_000L), waits)
+            val refused = turns.poll()!!
+            val resent = turns.poll()!!
+            assertNull(turns.poll())
+            // The Mac settled the refused key as rejected, so only a fresh key can carry the resend.
+            assertNotEquals(refused.getHeader("Idempotency-Key"), resent.getHeader("Idempotency-Key"))
+            assertEquals(refused.body.readUtf8(), resent.body.readUtf8())
+            assertNull("a busy Mac is not reported as a failed send", model.presentedError.value)
+            assertNull(model.pendingSend.value)
+            assertFalse(model.isWaitingToRetryRateLimitedSend.value)
+            assertEquals("", model.draft.value)
+        }
+    )
+
+    private fun sendRecoveryNotice(model: AidenChatViewModel) = aidenSendRecoveryMessage(
+        model.sendRecoveryError.value,
+        model.pendingSend.value,
+        model.isWaitingToRetryRateLimitedSend.value,
+        model.isPendingSendRefusedBecauseBusy.value
+    )
+
+    private val dropTurnAnswers = java.util.concurrent.atomic.AtomicBoolean(true)
+
+    @Test
+    fun busyMacResendsStopAfterTheirLimitAndLeaveRetryToThePerson() = withTurnHarness(
+        answer = { n ->
+            when {
+                n <= 1 + AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES -> rateLimitedTurn(retryable = true)
+                dropTurnAnswers.get() -> MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                else -> acceptedTurn(n)
+            }
+        },
+        expectedTurns = 1 + AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES,
+        block = { model, turns, arrived ->
+            val refusals = 1 + AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES
+            val waits = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            model.rateLimitedSendRetryDelay = { waits += it; yield() }
+            model.updateDraft("Hello")
+            model.send()
+            withContext(Dispatchers.IO) { check(arrived.await(5, TimeUnit.SECONDS)) }
+            withTimeout(5_000) { model.isStarting.first { !it } }
+
+            assertEquals(AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES, waits.size)
+            assertFalse(model.isWaitingToRetryRateLimitedSend.value)
+            assertNull(model.presentedError.value)
+            assertTrue("the send stays saved for the person's Retry", model.pendingSend.value?.canRetry() == true)
+            assertTrue(model.canRetrySend)
+            assertEquals(
+                "the Mac refused every attempt, so the notice says it is busy rather than that delivery is unknown",
+                "Aiden Agent is still busy. Your message wasn’t sent; try again in a moment.",
+                sendRecoveryNotice(model)
+            )
+
+            // The person's Retry clears the busy notice; this time the answer is lost.
+            model.send(retry = true)
+            assertFalse(model.isPendingSendRefusedBecauseBusy.value)
+            withTimeout(5_000) {
+                while (turns.size < refusals + 1) yield()
+                model.isStarting.first { !it }
+            }
+            assertNotNull("an unconfirmed send stays saved", model.pendingSend.value)
+            assertEquals(
+                "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window.",
+                sendRecoveryNotice(model)
+            )
+
+            dropTurnAnswers.set(false)
+            model.send(retry = true)
+            withTimeout(5_000) { model.chat.first { chat -> chat?.messages?.any { it.id.startsWith("accepted-") } == true } }
+            val keys = turns.map { it.getHeader("Idempotency-Key") }
+            assertEquals("every refused attempt was replaced by a fresh key", refusals + 1, keys.toSet().size)
+            assertEquals("a send whose answer was lost replays its key", keys[refusals], keys.last())
+            assertNull(model.pendingSend.value)
+        }
+    )
+
+    @Test
+    fun aRateLimitTheMacMarksFinalStillFailsTheSend() = withTurnHarness(
+        answer = { rateLimitedTurn(retryable = false, message = "Daily limit reached", retryAfterSeconds = 5) },
+        expectedTurns = 1,
+        block = { model, turns, _ ->
+            val waits = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            model.rateLimitedSendRetryDelay = { waits += it; yield() }
+            model.updateDraft("Hello")
+            model.send()
+            assertEquals("Daily limit reached", withTimeout(5_000) { model.presentedError.first { it != null } })
+            withTimeout(5_000) { model.isStarting.first { !it } }
+            assertNull(model.pendingSend.value)
+            assertTrue(waits.isEmpty())
+            assertEquals(1, turns.size)
+            assertEquals("the refused text returns to the composer", "Hello", model.draft.value)
+        }
+    )
 
     @Test
     fun aForkTheMacRejectedRetriesWithAFreshIdempotencyKey() {

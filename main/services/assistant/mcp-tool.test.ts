@@ -99,3 +99,14 @@ test("Assistant MCP inventory never reports unsafe enabled identities as no serv
       "One or more enabled MCP servers have identities that cannot be shown safely. Use only exact shown server ids and ask the user to repair the omitted server names or IDs in Settings → Connectors.",
   });
 });
+
+test("Assistant MCP inventory never lists a connector the chat's workspace switched off", async () => {
+  const servers: McpServer[] = [
+    { id: "gmail", name: "Gmail", transport: "http", url: "https://example.test", enabled: true },
+    { id: "notion", name: "Notion", transport: "http", url: "https://example.test", enabled: true },
+  ];
+  const tool = createAssistantMcpServerTool(async () => servers, ["notion"]);
+  const listed = resultJson(await tool.execute("list", {})) as { servers: unknown; totalEnabledServers: number };
+  assert.deepEqual(listed.servers, [{ id: "gmail", name: "Gmail" }]);
+  assert.equal(listed.totalEnabledServers, 1);
+});

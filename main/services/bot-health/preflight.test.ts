@@ -35,7 +35,7 @@ const ALL_OK = report([
 ]);
 
 /** A clock and a timer queue the test advances by hand. */
-function setup(tasks: ScheduledTask[], reports: BotHealthReport[]) {
+function setup(tasks: ScheduledTask[], reports: BotHealthReport[], loadRoutines: () => Promise<ScheduledTask[]> = async () => tasks) {
   let now = 0;
   const timers: Array<{ at: number; fn: () => void; cancelled: boolean }> = [];
   const runs: string[] = [];
@@ -53,7 +53,7 @@ function setup(tasks: ScheduledTask[], reports: BotHealthReport[]) {
     },
   };
   const preflight = createBotRoutinePreflight({
-    routines: async () => tasks,
+    routines: loadRoutines,
     run: async (_botId, routineId) => {
       runs.push(routineId);
       return reports.shift() ?? ALL_OK;
@@ -76,7 +76,11 @@ function setup(tasks: ScheduledTask[], reports: BotHealthReport[]) {
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
   }
-  return { preflight, advance, runs, open, resolved, setNow: (value: number) => { now = value; } };
+  return {
+    preflight, advance, runs, open, resolved,
+    setNow: (value: number) => { now = value; },
+    liveTimers: () => timers.filter((entry) => !entry.cancelled).length,
+  };
 }
 
 test("checks once 30 minutes before a fire", async () => {
@@ -161,4 +165,37 @@ test("a disabled routine is never checked", async () => {
   await h.preflight.rearm();
   await h.advance(10 * 60_000);
   assert.deepEqual(h.runs, []);
+});
+
+test("overlapping rearms (the interval and a wake from sleep) leave one live timer per fire", async () => {
+  const fire = 80 * 60_000;
+  const h = setup([routine("r1", fire), routine("r2", fire + 60_000)], []);
+  await Promise.all([h.preflight.rearm(), h.preflight.rearm()]);
+  assert.equal(h.liveTimers(), 2, "every timer the first rearm armed was cancelled by the second");
+});
+
+test("a rearm still loading routines when health checks stop arms nothing", async () => {
+  const h = setup([routine("r1", 80 * 60_000)], []);
+  const rearm = h.preflight.rearm();
+  h.preflight.dispose();
+  await rearm;
+  assert.equal(h.liveTimers(), 0);
+});
+
+test("an older rearm whose routine read finishes last does not bring back the old time", async () => {
+  // The routine moved from 40 to 60 minutes; the first rearm read it before the edit.
+  let releaseStale!: () => void;
+  const reads = [
+    new Promise<ScheduledTask[]>((resolve) => { releaseStale = () => resolve([routine("r1", 40 * 60_000)]); }),
+    Promise.resolve([routine("r1", 60 * 60_000)]),
+  ];
+  const h = setup([], [], () => reads.shift()!);
+  const stale = h.preflight.rearm();
+  await h.preflight.rearm();
+  releaseStale();
+  await stale;
+  await h.advance(10 * 60_000);
+  assert.deepEqual(h.runs, [], "nothing checks at the old time");
+  await h.advance(30 * 60_000);
+  assert.deepEqual(h.runs, ["r1"]);
 });
