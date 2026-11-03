@@ -6,7 +6,12 @@ import test from "node:test";
 import { compileAum } from "../../../renderer/shared/aiden-ui/compile.js";
 import { AIDEN_UI_CATALOG_VERSION, type ChatUiVisualV1 } from "../../../renderer/shared/aiden-ui/types.js";
 import { WORKSPACE_ARTIFACT_LIMITS, type WorkspaceArtifactSourceV1 } from "../../../renderer/shared/workspace-artifacts.js";
-import { WorkspaceArtifactStore, workspaceArtifactDigest, type WorkspaceArtifactContent } from "./store.js";
+import {
+  freeWorkspaceArtifactTitle,
+  WorkspaceArtifactStore,
+  workspaceArtifactDigest,
+  type WorkspaceArtifactContent,
+} from "./store.js";
 
 async function openStore(t: test.TestContext) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
@@ -145,6 +150,33 @@ test("page state is saved only while it stays small and wire-safe", async (t) =>
   assert.deepEqual((await store.get("ws1", artifact.id))!.artifact.visual.state, { tab: "mine" });
   await assert.rejects(store.saveState("ws1", artifact.id, { blob: "x".repeat(5_000) }), /too large/u);
   await assert.rejects(store.saveState("ws1", artifact.id, { token: "x" }), /reserved/u);
+});
+
+test("the state the markup declared is kept apart from the state the person saves", async (t) => {
+  const { store, reopen } = await openStore(t);
+  const declared = { tab: "all" };
+  const created = await store.create("ws1", content({ visual: { ...page(), state: declared }, initialState: declared }));
+  await store.saveState("ws1", created.id, { tab: "mine" });
+  let saved = (await reopen().get("ws1", created.id))!.artifact;
+  assert.deepEqual(saved.visual.state, { tab: "mine" });
+  assert.deepEqual(saved.initialState, declared);
+
+  // An update sets it from the new markup, and a restore brings the old one back.
+  await store.replace("ws1", created.id, content({ visual: { ...page(), state: { tab: "open" } }, initialState: { tab: "open" } }));
+  assert.deepEqual((await store.get("ws1", created.id))!.artifact.initialState, { tab: "open" });
+  await store.replace("ws1", created.id, content());
+  assert.equal((await store.get("ws1", created.id))!.artifact.initialState, undefined);
+  saved = await store.restore("ws1", created.id, 1);
+  assert.deepEqual(saved.initialState, declared);
+});
+
+test("a colliding title takes the first free number, staying within the title limit", () => {
+  assert.equal(freeWorkspaceArtifactTitle("PRs", new Set(["Other"])), "PRs");
+  assert.equal(freeWorkspaceArtifactTitle("PRs", new Set(["PRs", "PRs (2)"])), "PRs (3)");
+  const long = "x".repeat(WORKSPACE_ARTIFACT_LIMITS.titleChars);
+  const free = freeWorkspaceArtifactTitle(long, new Set([long]));
+  assert.equal(free.length, WORKSPACE_ARTIFACT_LIMITS.titleChars);
+  assert.ok(free.endsWith(" (2)"));
 });
 
 function heading(text: string): ChatUiVisualV1 {

@@ -202,8 +202,10 @@ function contentFor(input: ArtifactToolInput, previous: WorkspaceArtifactV1 | un
   const { sources, actions } = commandsFor(input, previous);
   const refresh = input.refresh === undefined && previous ? previous.refresh : parseWorkspaceArtifactRefresh(input.refresh);
   let visual: ChatUiVisualV1;
+  let initialState: Record<string, unknown> | undefined;
   let diagnostics: AidenUiDiagnostic[] = [];
   if (input.markup === undefined && previous) {
+    initialState = previous.initialState;
     if (input.layout !== undefined && input.layout !== "column" && input.layout !== "wide") {
       throw new Error('layout must be "column" or "wide".');
     }
@@ -212,9 +214,19 @@ function contentFor(input: ArtifactToolInput, previous: WorkspaceArtifactV1 | un
     visual = { ...rest, ...(layout === "wide" ? { layout } : {}) };
   } else {
     ({ visual, diagnostics } = compilePage(input.markup, input.layout ?? previous?.visual.layout, title));
+    // A fresh compile's state is what the markup declared.
+    initialState = visual.state;
   }
   return {
-    content: { title, ...(description ? { description } : {}), visual, sources, actions, refresh },
+    content: {
+      title,
+      ...(description ? { description } : {}),
+      visual,
+      ...(initialState ? { initialState } : {}),
+      sources,
+      actions,
+      refresh,
+    },
     diagnostics,
   };
 }

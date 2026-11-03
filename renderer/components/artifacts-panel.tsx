@@ -265,8 +265,9 @@ function useArtifactImport(workspace: Workspace | null, onSelect: (artifactId: s
         if (held) discard(held);
       }}
       title={preview ? `Import “${preview.title}”?` : ""}
-      description={preview?.description ?? (workspace ? `Adds this page to ${workspace.name}.` : undefined)}
-      confirmLabel="Import"
+      // Aiden's own words; the file's description is shown as the file's, below.
+      description={workspace ? `Adds this page to ${workspace.name}.` : undefined}
+      confirmLabel={preview && workspace && importRunsAtOnce(preview, workspace) ? "Import and run" : "Import"}
       busy={busy}
       size={preview?.commands.length ? "large" : undefined}
       onConfirm={confirm}
@@ -278,18 +279,68 @@ function useArtifactImport(workspace: Workspace | null, onSelect: (artifactId: s
   return { start, dialog };
 }
 
+/** Whether confirming would run commands straight away: Full access, and command sources read as the page opens. */
+function importRunsAtOnce(preview: ReadyImport, workspace: Workspace): boolean {
+  return workspaceArtifactImportAccess(workspace) === "run" && preview.shellSources && preview.refresh?.onOpen === true;
+}
+
+/** "every 5 minutes", "every minute", or "every 90 seconds". */
+function everyInterval(seconds: number): string {
+  if (seconds % 60 !== 0) return `every ${seconds} seconds`;
+  const minutes = seconds / 60;
+  return minutes === 1 ? "every minute" : `every ${minutes} minutes`;
+}
+
+/** Under Full access, when this page's commands run once it is imported. */
+function fullAccessCommandNote(preview: ReadyImport): string {
+  const interval = preview.shellSources ? preview.refresh?.intervalSeconds : undefined;
+  if (preview.shellSources && preview.refresh?.onOpen) {
+    return interval ? `These run as soon as you import it, then ${everyInterval(interval)}.` : "These run as soon as you import it.";
+  }
+  if (interval) return `These run ${everyInterval(interval)} once you import it, and its buttons run theirs when pressed.`;
+  return preview.shellSources
+    ? "These run when you refresh the page or press its buttons."
+    : "These run when you press the page’s buttons.";
+}
+
 /** What an imported page can run and read here, and what happens to it under this workspace's access. */
 function ArtifactImportDetails({ preview, workspace }: { preview: ReadyImport; workspace: Workspace }) {
   const access = workspaceArtifactImportAccess(workspace);
+  const described = preview.description ? (
+    <Text variant="small" as="p">
+      The file describes it as: {preview.description}
+    </Text>
+  ) : null;
   if (preview.commands.length === 0 && preview.files.length === 0) {
     return (
-      <Text variant="small" color="secondary" as="p">
-        It runs no commands and reads no workspace files.
-      </Text>
+      <div className="flex flex-col gap-3">
+        {described}
+        <Text variant="small" color="secondary" as="p">
+          It runs no commands and reads no workspace files.
+        </Text>
+      </div>
     );
   }
+  const commandNote =
+    access === "needs-approval"
+      ? "You’ll be asked to allow these before they run."
+      : access === "run"
+        ? fullAccessCommandNote(preview)
+        : access === "no-folder"
+          ? "This workspace has no folder, so these won’t run."
+          : "These won’t run while workspace access is off.";
+  // Files are read under Ask too: only commands wait to be allowed.
+  const fileNote =
+    access === "no-folder"
+      ? "This workspace has no folder, so Aiden won’t read these files."
+      : access === "off"
+        ? "Aiden won’t read these files while workspace access is off."
+        : preview.refresh?.onOpen
+          ? "Aiden reads these files as soon as the page opens."
+          : "Aiden reads these files when the page refreshes.";
   return (
     <div className="flex flex-col gap-3">
+      {described}
       {preview.commands.length > 0 ? (
         <>
           <Text variant="small" as="p">
@@ -297,13 +348,7 @@ function ArtifactImportDetails({ preview, workspace }: { preview: ReadyImport; w
           </Text>
           <ArtifactCommandList commands={preview.commands} />
           <Callout color={access === "run" ? "warning" : undefined}>
-            <Text variant="small">
-              {access === "needs-approval"
-                ? "You’ll be asked to allow these before they run."
-                : access === "run"
-                  ? "With Full access these run whenever the page refreshes or you press its buttons."
-                  : "These won’t run while workspace access is off."}
-            </Text>
+            <Text variant="small">{commandNote}</Text>
           </Callout>
         </>
       ) : null}
@@ -313,12 +358,15 @@ function ArtifactImportDetails({ preview, workspace }: { preview: ReadyImport; w
             It reads these files in {workspace.name}:
           </Text>
           <ul className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Files">
-            {preview.files.map((file) => (
-              <li key={file} className="rounded-card bg-well p-3">
+            {preview.files.map((file, index) => (
+              <li key={index} className="rounded-card bg-well p-3">
                 <pre className="m-0 whitespace-pre-wrap break-words font-mono text-small">{file}</pre>
               </li>
             ))}
           </ul>
+          <Callout>
+            <Text variant="small">{fileNote}</Text>
+          </Callout>
         </>
       ) : null}
     </div>

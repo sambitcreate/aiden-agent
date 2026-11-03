@@ -58,6 +58,7 @@ export interface WorkspaceArtifactRevisionV1 {
   savedAt: number;
   description?: string;
   visual: ChatUiVisualV1;
+  initialState?: Record<string, unknown>;
   sources: WorkspaceArtifactSourceV1[];
   actions: WorkspaceArtifactActionV1[];
   refresh: WorkspaceArtifactRefreshV1;
@@ -99,6 +100,7 @@ function parseRevision(workspaceId: string, artifactId: string, value: unknown):
     workspaceId,
     ...(value.description !== undefined ? { description: value.description } : {}),
     visual: value.visual,
+    ...(value.initialState !== undefined ? { initialState: value.initialState } : {}),
     sources: value.sources,
     actions: value.actions,
     refresh: value.refresh,
@@ -116,6 +118,7 @@ function historyEntryOf(artifact: WorkspaceArtifactV1, savedAt: number): Workspa
     savedAt,
     ...(artifact.description ? { description: artifact.description } : {}),
     visual: artifact.visual,
+    ...(artifact.initialState ? { initialState: artifact.initialState } : {}),
     sources: artifact.sources,
     actions: artifact.actions,
     refresh: artifact.refresh,
@@ -211,6 +214,8 @@ export interface WorkspaceArtifactContent {
   description?: string;
   /** Compiled page; its id and title are replaced by the store. */
   visual: ChatUiVisualV1;
+  /** The state the markup declared; `saveState` never changes it. */
+  initialState?: Record<string, unknown>;
   sources: WorkspaceArtifactSourceV1[];
   actions: WorkspaceArtifactActionV1[];
   refresh: WorkspaceArtifactRefreshV1;
@@ -437,6 +442,7 @@ export class WorkspaceArtifactStore {
         title: previous.visual.title,
         ...(entry.description ? { description: entry.description } : {}),
         visual: entry.visual,
+        ...(entry.initialState ? { initialState: entry.initialState } : {}),
         sources: entry.sources,
         actions: entry.actions,
         refresh: entry.refresh,
@@ -488,6 +494,7 @@ export class WorkspaceArtifactStore {
         workspaceId,
         ...(content.description ? { description: content.description } : {}),
         visual: { ...content.visual, id, title },
+        ...(content.initialState ? { initialState: content.initialState } : {}),
         sources: content.sources,
         actions: content.actions,
         refresh: content.refresh,
@@ -549,6 +556,7 @@ export class WorkspaceArtifactStore {
         workspaceId,
         ...(content.description ? { description: content.description } : {}),
         visual: { ...content.visual, id, title: content.title },
+        ...(content.initialState ? { initialState: content.initialState } : {}),
         sources: content.sources,
         actions: content.actions,
         refresh: content.refresh,

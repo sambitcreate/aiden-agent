@@ -42,12 +42,17 @@ export function workspaceArtifactRevisionWaitsForApproval(
 
 /**
  * What an imported page's commands would do once added here. An import is
- * never approved, so under Ask they wait to be allowed; Full runs them and
- * Off, or a workspace without a folder, runs nothing.
+ * never approved, so under Ask they wait to be allowed and Full runs them.
+ * Nothing runs when access is off or the workspace has no folder; the two
+ * are told apart because the person fixes them differently.
  */
-export function workspaceArtifactImportAccess(workspace: ArtifactWorkspace): WorkspaceArtifactSourceAccess {
+export type WorkspaceArtifactImportAccess = "needs-approval" | "run" | "off" | "no-folder";
+
+export function workspaceArtifactImportAccess(workspace: ArtifactWorkspace): WorkspaceArtifactImportAccess {
   const { permission, hasFolder } = workspaceAccess(workspace);
-  return workspaceArtifactCommandAccess(permission, hasFolder, false);
+  if (!hasFolder) return "no-folder";
+  if (permission === "none") return "off";
+  return workspaceArtifactCommandAccess(permission, hasFolder, false) === "run" ? "run" : "needs-approval";
 }
 
 /**

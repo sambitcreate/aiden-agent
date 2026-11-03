@@ -1,6 +1,6 @@
 import { isHtmlArtifactTitle } from "./generative-ui.js";
 import { AIDEN_UI_LIMITS, type ChatUiVisualV1 } from "./aiden-ui/types.js";
-import { isWireSafeKey, parseChatUiVisualV1 } from "./aiden-ui/visual.js";
+import { isWireSafeKey, parseAidenUiState, parseChatUiVisualV1 } from "./aiden-ui/visual.js";
 
 /**
  * Workspace artifacts: persistent Aiden UI pages a workspace owns and the
@@ -74,6 +74,12 @@ export interface WorkspaceArtifactV1 {
   description?: string;
   /** The page: a compiled render_ui visual whose id is the artifact id. */
   visual: ChatUiVisualV1;
+  /**
+   * The state the markup declared (`<Visual state={{…}}>`), kept apart from
+   * `visual.state`, which the person's own choices overwrite. Export writes
+   * this, never the person's state.
+   */
+  initialState?: Record<string, unknown>;
   sources: WorkspaceArtifactSourceV1[];
   actions: WorkspaceArtifactActionV1[];
   refresh: WorkspaceArtifactRefreshV1;
@@ -139,9 +145,17 @@ export type WorkspaceArtifactImportPreview =
       commands: { label: string; command: string }[];
       /** Workspace files its sources read. */
       files: string[];
+      /**
+       * When the page's sources are read by themselves: as it opens (and an
+       * imported page opens at once) and on a timer. Absent when it has no
+       * sources.
+       */
+      refresh?: { onOpen: boolean; intervalSeconds?: number };
+      /** Whether any source is a command, so refreshing the page runs commands rather than only reading files. */
+      shellSources: boolean;
     };
 
-export type WorkspaceArtifactChangeReason ="created" | "updated" | "deleted" | "refreshed";
+export type WorkspaceArtifactChangeReason = "created" | "updated" | "deleted" | "refreshed";
 
 export interface WorkspaceArtifactsChangedEvent {
   workspaceId: string;
@@ -163,34 +177,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Format, default-ignorable and bidi-control characters: zero-width marks, joiners, overrides, BOM. */
+const INVISIBLE = /[\p{Cf}\p{Default_Ignorable_Code_Point}\p{Bidi_Control}]/u;
 /**
- * Control characters, plus the invisible ones (zero-width, bidi overrides,
- * line separators, BOM) that could make text on an approval card read
- * differently from what runs.
+ * The invisible characters that are part of a visible emoji: a variation
+ * selector right after an emoji or keycap base ("❤️", "1️⃣"), and a joiner
+ * between two emoji ("👨‍👩‍👧"). Anywhere else they hide, so they are refused.
+ */
+const EMOJI_PARTS = /(?<=[\p{Extended_Pictographic}#*0-9])[︎️]|(?<=\p{Extended_Pictographic}[\p{Emoji_Modifier}️]?)‍(?=\p{Extended_Pictographic})/gu;
+
+/**
+ * Whether text holds a C0 or C1 control character (other than `\n` and `\t`
+ * when `allowLineBreaks`), a line or paragraph separator, or an invisible
+ * character (see `INVISIBLE`) that isn't part of an emoji (see `EMOJI_PARTS`). These are refused in commands, labels, titles,
+ * descriptions, file paths and button values, so text shown for review can't
+ * hide characters or reorder itself. Visible look-alike letters (homoglyphs)
+ * are not caught.
  */
 function hasControlCharacter(value: string, allowLineBreaks: boolean): boolean {
   for (const char of value) {
     const code = char.codePointAt(0)!;
     if (code < 0x20 || code === 0x7f) {
-      if (allowLineBreaks && (code === 0x09 || code === 0x0a || code === 0x0d)) continue;
+      if (allowLineBreaks && (code === 0x09 || code === 0x0a)) continue;
       return true;
     }
-    if (
-      (code >= 0x80 && code <= 0x9f) ||
-      (code >= 0x200b && code <= 0x200f) ||
-      (code >= 0x2028 && code <= 0x202e) ||
-      (code >= 0x2060 && code <= 0x2069) ||
-      code === 0xfeff
-    ) {
-      return true;
-    }
+    if ((code >= 0x80 && code <= 0x9f) || code === 0x2028 || code === 0x2029) return true;
   }
-  return false;
-}
-
-/** One line with no control or invisible characters (zero-width, bidi overrides), as labels must be. */
-export function isWorkspaceArtifactPlainLine(value: string): boolean {
-  return !hasControlCharacter(value, false);
+  return INVISIBLE.test(value.replace(EMOJI_PARTS, ""));
 }
 
 const WORD_BREAK_AFTER = /[\s;&|)]/u;
@@ -557,7 +570,7 @@ export function isWorkspaceArtifactName(value: unknown): value is string {
 }
 
 export function isWorkspaceArtifactTitle(value: unknown): value is string {
-  return isHtmlArtifactTitle(value) && value.length <= WORKSPACE_ARTIFACT_LIMITS.titleChars;
+  return isHtmlArtifactTitle(value) && value.length <= WORKSPACE_ARTIFACT_LIMITS.titleChars && !hasControlCharacter(value, false);
 }
 
 function invalid(message: string): never {
@@ -588,7 +601,11 @@ function command(value: unknown, where: string): string {
   if (!trimmed || trimmed.length > WORKSPACE_ARTIFACT_LIMITS.commandChars) {
     return invalid(`${where}: command must be 1–${WORKSPACE_ARTIFACT_LIMITS.commandChars} characters.`);
   }
-  if (hasControlCharacter(trimmed, true)) return invalid(`${where}: command contains control characters.`);
+  if (hasControlCharacter(trimmed, true)) {
+    return invalid(`${where}: command contains control or invisible characters (line breaks must be \\n, not \\r).`);
+  }
+  // Blank lines could push the rest of a command out of an approval card's view.
+  if (/\n(?:[ \t]*\n){2,}/u.test(trimmed)) return invalid(`${where}: command has more than one blank line in a row.`);
   return trimmed;
 }
 
@@ -716,6 +733,8 @@ export function parseWorkspaceArtifactV1(value: unknown): WorkspaceArtifactV1 | 
   const refresh = tryParse(() => parseWorkspaceArtifactRefresh(value.refresh));
   const description = tryParse(() => parseWorkspaceArtifactDescription(value.description));
   if (!sources || !actions || !refresh || (value.description !== undefined && description === undefined)) return undefined;
+  const initialState = value.initialState === undefined ? undefined : parseAidenUiState(value.initialState);
+  if (value.initialState !== undefined && !initialState) return undefined;
   const revision = value.revision;
   const createdAt = finiteTime(value.createdAt);
   const updatedAt = finiteTime(value.updatedAt);
@@ -731,6 +750,7 @@ export function parseWorkspaceArtifactV1(value: unknown): WorkspaceArtifactV1 | 
     workspaceId: value.workspaceId,
     ...(description ? { description } : {}),
     visual,
+    ...(initialState ? { initialState } : {}),
     sources,
     actions,
     refresh,

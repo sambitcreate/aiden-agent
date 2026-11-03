@@ -5,7 +5,11 @@ import * as path from "node:path";
 import test from "node:test";
 import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
 import { AIDEN_UI_CATALOG_VERSION } from "../../renderer/shared/aiden-ui/types.js";
-import type { WorkspaceArtifactsChangedEvent, WorkspaceArtifactView } from "../../renderer/shared/workspace-artifacts.js";
+import type {
+  WorkspaceArtifactImportPreview,
+  WorkspaceArtifactsChangedEvent,
+  WorkspaceArtifactView,
+} from "../../renderer/shared/workspace-artifacts.js";
 import { WorkspaceArtifactStore, workspaceArtifactDigest } from "../services/workspace-artifacts/store.js";
 import { registerWorkspaceArtifactHandlers, WORKSPACE_ARTIFACT_CHANNELS } from "./workspace-artifacts.js";
 
@@ -194,11 +198,14 @@ test("an exported page imports back as the same page, unapproved, under a free n
   disk.set("/imports/page.json", disk.get("/exports/prs.aiden-page.json")!);
   events.length = 0;
 
-  const preview = (await invoke(C.importPreview, "ws1")) as { status: string; token: string; title: string; commands: unknown[]; files: unknown[] };
+  const preview = (await invoke(C.importPreview, "ws1")) as WorkspaceArtifactImportPreview & { status: "ready" };
   assert.equal(preview.status, "ready");
   assert.equal(preview.title, "PRs");
   assert.deepEqual(preview.commands, [{ label: "Source pulls", command: "gh pr list --json number" }]);
   assert.deepEqual(preview.files, []);
+  // Its command source runs as the page opens, so the dialog can say it runs at once.
+  assert.equal(preview.shellSources, true);
+  assert.deepEqual(preview.refresh, (await store.get("ws1", "art1"))!.artifact.refresh);
   // A preview saves nothing, so nothing can refresh or run yet.
   assert.equal((await store.list("ws1")).length, 1);
   assert.deepEqual(events, []);

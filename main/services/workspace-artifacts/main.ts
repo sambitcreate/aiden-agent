@@ -1,18 +1,16 @@
 /** Electron-main binding for workspace artifacts. */
 
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { IpcMainInvokeEvent } from "electron";
 import { app, BrowserWindow, dialog, ipcMain, logger } from "../../platform.js";
 import type { WorkspaceArtifactsChangedEvent } from "../../../renderer/shared/workspace-artifacts.js";
-import type { WorkspaceArtifactFiles } from "../../handlers/workspace-artifacts.js";
 import { agentShellCommandEnvironment } from "../agent-command-environment.js";
 import { runBoundedShellCommand } from "../bounded-shell-command.js";
 import { writeFileAtomic } from "../durable-fs.js";
-import { readRegularFile } from "../regular-file-read.js";
 import { readWorkspaceFile } from "../workspace-files.js";
 import { createWorkspaceArtifactRunner } from "./runner.js";
 import { WorkspaceArtifactStore } from "./store.js";
+import { readWorkspaceArtifactPageFile, type WorkspaceArtifactFiles } from "./transfer.js";
 
 /** Device-local and never portable: artifacts can run commands in a local folder. */
 export const workspaceArtifactStore = new WorkspaceArtifactStore({
@@ -67,11 +65,10 @@ export const workspaceArtifactFiles: WorkspaceArtifactFiles = {
     return result.canceled ? null : (result.filePaths[0] ?? null);
   },
   writeFile: (filePath, text) => writeFileAtomic(filePath, text, { mode: 0o600 }),
-  // The picked path may be an alias; the bytes come from the file it names, capped.
-  readFile: async (filePath, maxBytes) => readRegularFile(await fs.realpath(filePath), maxBytes),
+  readFile: readWorkspaceArtifactPageFile,
 };
 
-export const workspaceArtifactRunner =createWorkspaceArtifactRunner({
+export const workspaceArtifactRunner = createWorkspaceArtifactRunner({
   runShell: runBoundedShellCommand,
   readFile: async (root, file, signal) => (await readWorkspaceFile(root, file, signal)).content,
   env: agentShellCommandEnvironment,

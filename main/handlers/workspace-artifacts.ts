@@ -19,19 +19,9 @@ import {
   WorkspaceArtifactImports,
   workspaceArtifactPageFile,
   workspaceArtifactPageFileName,
+  type WorkspaceArtifactFiles,
 } from "../services/workspace-artifacts/transfer.js";
 import { parseUiVisualState } from "./chat-ui-visual-state.js";
-
-/** The native file dialogs and file access behind Export page and Import page. */
-export interface WorkspaceArtifactFiles {
-  /** Asks where to save the page file; null when the person cancels. */
-  chooseExportPath: (event: unknown, defaultName: string) => Promise<string | null>;
-  /** Asks for a page file to import; null when the person cancels. */
-  chooseImportFile: (event: unknown) => Promise<string | null>;
-  writeFile: (filePath: string, text: string) => Promise<void>;
-  /** Reads a regular file, failing with code EFBIG past `maxBytes`. */
-  readFile: (filePath: string, maxBytes: number) => Promise<Uint8Array>;
-}
 
 export const WORKSPACE_ARTIFACT_CHANNELS = {
   list: "workspaces:artifacts:list",
@@ -194,6 +184,7 @@ export function registerWorkspaceArtifactHandlers(dependencies: WorkspaceArtifac
     const content = parseWorkspaceArtifactPageFileText(new TextDecoder().decode(bytes));
     // Nothing is saved yet: the page waits here until the person confirms.
     const token = imports.hold(workspace, owner, content);
+    const { onOpen, intervalSeconds } = content.refresh;
     return {
       status: "ready",
       token,
@@ -201,6 +192,8 @@ export function registerWorkspaceArtifactHandlers(dependencies: WorkspaceArtifac
       ...(content.description ? { description: content.description } : {}),
       commands: workspaceArtifactCommandList(content.sources, content.actions),
       files: content.sources.flatMap((source) => (source.kind === "file" ? [source.file] : [])),
+      ...(content.sources.length > 0 ? { refresh: { onOpen, ...(intervalSeconds ? { intervalSeconds } : {}) } } : {}),
+      shellSources: content.sources.some((source) => source.kind === "shell"),
     };
   });
 

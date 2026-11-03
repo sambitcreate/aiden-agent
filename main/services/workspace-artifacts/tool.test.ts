@@ -66,6 +66,7 @@ test("create saves a page the Artifacts tab can show and tells that chat's windo
   const [view] = await store.list("ws1");
   assert.equal(view!.artifact.visual.title, "Open PRs");
   assert.deepEqual(view!.artifact.visual.state, { filter: "all" });
+  assert.deepEqual(view!.artifact.initialState, { filter: "all" });
   assert.equal(view!.artifact.approvedDigest, view!.digest);
   assert.deepEqual(events, [{ workspaceId: "ws1", artifactId: "art1", reason: "created", chatId: "chat-1" }]);
 });
@@ -73,9 +74,17 @@ test("create saves a page the Artifacts tab can show and tells that chat's windo
 test("update keeps what the call leaves out and bumps the revision", async (t) => {
   const { store, call } = await harness(t, { permission: "full" });
   await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] });
+  await store.saveState("ws1", "art1", { filter: "mine" });
   await call("c2", { operation: "update", id: "art1", description: "PRs waiting on review", layout: "wide" });
-  const artifact = (await store.get("ws1", "art1"))!.artifact;
-  assert.equal(artifact.revision, 2);
+  let artifact = (await store.get("ws1", "art1"))!.artifact;
+  // Without new markup, the declared state stays what the markup declared.
+  assert.deepEqual(artifact.initialState, { filter: "all" });
+  await call("c3", { operation: "update", id: "art1", markup: PAGE.replace('filter: "all"', 'filter: "open"') });
+  assert.deepEqual((await store.get("ws1", "art1"))!.artifact.initialState, { filter: "open" });
+  await store.restore("ws1", "art1", 2);
+  artifact = (await store.get("ws1", "art1"))!.artifact;
+  assert.deepEqual(artifact.initialState, { filter: "all" });
+  assert.equal(artifact.revision, 4);
   assert.equal(artifact.description, "PRs waiting on review");
   assert.equal(artifact.visual.layout, "wide");
   assert.deepEqual(artifact.sources.map((source) => source.name), ["pulls"]);

@@ -506,19 +506,57 @@ const IMPORT_PREVIEW = {
     { label: "Button “Merge”", command: "gh pr merge {{number}} --squash" },
   ],
   files: ["TODO.md"],
+  refresh: { onOpen: true },
+  shellSources: true,
 };
 const { folderPath: _folder, ...WORKSPACE_WITHOUT_FOLDER } = WORKSPACE;
 
 test("Import page previews everything the page can run, and says what happens under this workspace's access", async () => {
-  const cases: [Workspace, RegExp][] = [
-    [WORKSPACE, /^You’ll be asked to allow these before they run\.$/u],
-    [{ ...WORKSPACE, permission: "full" }, /^With Full access these run whenever the page refreshes or you press its buttons\.$/u],
-    [{ ...WORKSPACE, permission: "none" }, /^These won’t run while workspace access is off\.$/u],
-    [WORKSPACE_WITHOUT_FOLDER, /^These won’t run while workspace access is off\.$/u],
+  const cases: { workspace: Workspace; preview?: Partial<typeof IMPORT_PREVIEW>; commands: string; files: string; confirm: string }[] = [
+    {
+      workspace: WORKSPACE,
+      commands: "You’ll be asked to allow these before they run.",
+      files: "Aiden reads these files as soon as the page opens.",
+      confirm: "Import",
+    },
+    {
+      workspace: { ...WORKSPACE, permission: "full" },
+      commands: "These run as soon as you import it.",
+      files: "Aiden reads these files as soon as the page opens.",
+      confirm: "Import and run",
+    },
+    {
+      workspace: { ...WORKSPACE, permission: "full" },
+      preview: { refresh: { onOpen: true, intervalSeconds: 300 } as typeof IMPORT_PREVIEW.refresh },
+      commands: "These run as soon as you import it, then every 5 minutes.",
+      files: "Aiden reads these files as soon as the page opens.",
+      confirm: "Import and run",
+    },
+    {
+      // Only buttons run commands: nothing runs until the person presses one.
+      workspace: { ...WORKSPACE, permission: "full" },
+      preview: { shellSources: false, commands: [IMPORT_PREVIEW.commands[1]!] },
+      commands: "These run when you press the page’s buttons.",
+      files: "Aiden reads these files as soon as the page opens.",
+      confirm: "Import",
+    },
+    {
+      workspace: { ...WORKSPACE, permission: "none" },
+      commands: "These won’t run while workspace access is off.",
+      files: "Aiden won’t read these files while workspace access is off.",
+      confirm: "Import",
+    },
+    {
+      workspace: WORKSPACE_WITHOUT_FOLDER,
+      commands: "This workspace has no folder, so these won’t run.",
+      files: "This workspace has no folder, so Aiden won’t read these files.",
+      confirm: "Import",
+    },
   ];
-  for (const [workspace, line] of cases) {
+  for (const { workspace, preview, commands: commandNote, files: fileNote, confirm } of cases) {
+    const ready = { ...IMPORT_PREVIEW, ...preview };
     const calls = installBotTestIpc({
-      "workspaces:artifacts:importPreview": () => IMPORT_PREVIEW,
+      "workspaces:artifacts:importPreview": () => ready,
       "workspaces:artifacts:importDiscard": () => ({ discarded: true }),
     });
     const { unmount } = renderPanel({ workspace, artifacts: state([]) });
@@ -527,14 +565,19 @@ test("Import page previews everything the page can run, and says what happens un
     // The name in the file is text, never markup.
     const dialog = await screen.findByRole("dialog", { name: "Import “Open PRs <b>now</b>”?" });
     assert.equal(dialog.querySelector("b"), null);
-    within(dialog).getByText("Pull requests from a teammate");
+    // Aiden's own line describes the dialog; the file's words are quoted as the file's.
+    within(dialog).getByText(`Adds this page to ${workspace.name}.`);
+    assert.equal(within(dialog).queryByText("Pull requests from a teammate"), null);
+    within(dialog).getByText("The file describes it as: Pull requests from a teammate");
     const commands = within(dialog).getByRole("list", { name: "Commands" });
     assert.deepEqual(
       within(commands).getAllByRole("listitem").map((item) => item.textContent),
-      ["Source pullsgh pr list --json number", "Button “Merge”gh pr merge {{number}} --squash"],
+      ready.commands.map((entry) => `${entry.label}${entry.command}`),
     );
     within(within(dialog).getByRole("list", { name: "Files" })).getByText("TODO.md");
-    within(dialog).getByText(line);
+    within(dialog).getByText(commandNote);
+    within(dialog).getByText(fileNote);
+    within(dialog).getByRole("button", { name: confirm });
     assert.deepEqual(calls.find((call) => call.channel === "workspaces:artifacts:importPreview")!.args, [WORKSPACE.id]);
 
     // Cancel adds nothing and lets main forget the file.
@@ -546,6 +589,28 @@ test("Import page previews everything the page can run, and says what happens un
     assert.equal(document.activeElement, opener);
     unmount();
   }
+});
+
+test("a page that only reads files still says what access means for them", async () => {
+  installBotTestIpc({
+    "workspaces:artifacts:importPreview": () => ({
+      ...IMPORT_PREVIEW,
+      commands: [],
+      files: ["notes/a.md", "notes/a.md"],
+      shellSources: false,
+      description: undefined,
+    }),
+    "workspaces:artifacts:importDiscard": () => ({ discarded: true }),
+  });
+  renderPanel({ workspace: { ...WORKSPACE, permission: "none" }, artifacts: state([]) });
+  fireEvent.click(screen.getByRole("button", { name: "Import page…" }));
+  const dialog = await screen.findByRole("dialog", { name: /Import/u });
+  assert.equal(within(dialog).queryByRole("list", { name: "Commands" }), null);
+  // The same file twice is listed twice.
+  assert.equal(within(within(dialog).getByRole("list", { name: "Files" })).getAllByText("notes/a.md").length, 2);
+  within(dialog).getByText("Aiden won’t read these files while workspace access is off.");
+  assert.equal(within(dialog).queryByText(/The file describes it as/u), null);
+  within(dialog).getByRole("button", { name: "Import" });
 });
 
 test("a file dialog the person cancels opens no preview", async () => {

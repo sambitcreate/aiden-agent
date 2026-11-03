@@ -37,6 +37,8 @@ export const AIDEN_ARTIFACTS_SKILL = Object.freeze({
     "",
     `Undo: Aiden keeps each page's last few versions. When the person asks to undo a change or go back to an earlier version, read the page's earlierRevisions from list and call ${WORKSPACE_ARTIFACT_TOOL_NAME} with operation "restore", the id and the revision, rather than rewriting the page by hand. A restore keeps the page's current title.`,
     "",
+    "Sharing: to share a page or bring one in, the person uses Export page… or Import page… in the page's menu in the Artifacts tab. You can't export or import pages.",
+    "",
     "Delete a page only when the person asks. The Artifacts tab opens on a page after you create or update it.",
   ].join("\n"),
 });

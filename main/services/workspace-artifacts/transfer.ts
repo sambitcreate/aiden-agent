@@ -1,10 +1,9 @@
 import { randomBytes } from "node:crypto";
-import { AIDEN_UI_CATALOG } from "../../../renderer/shared/aiden-ui/catalog.js";
-import { ownEntry } from "../../../renderer/shared/aiden-ui/own.js";
+import { promises as fs } from "node:fs";
 import { AIDEN_UI_CATALOG_VERSION, type AidenUiNodeV1 } from "../../../renderer/shared/aiden-ui/types.js";
+import { validateCompiledAum } from "../../../renderer/shared/aiden-ui/validate.js";
 import { parseChatUiVisualV1 } from "../../../renderer/shared/aiden-ui/visual.js";
 import {
-  isWorkspaceArtifactPlainLine,
   isWorkspaceArtifactTitle,
   parseWorkspaceArtifactActions,
   parseWorkspaceArtifactDescription,
@@ -17,16 +16,40 @@ import {
   type WorkspaceArtifactSourceV1,
   type WorkspaceArtifactV1,
 } from "../../../renderer/shared/workspace-artifacts.js";
+import { safeExportFileName } from "../chat-export.js";
+import { readRegularFile } from "../regular-file-read.js";
 import type { WorkspaceArtifactContent } from "./store.js";
 
 /**
  * Export and import of one workspace artifact page as a file the person keeps
  * or shares. The file carries only what makes the page: never an approval,
- * ids, the workspace, the chat that made it, timestamps, saved data or
- * history. An imported file is untrusted input, so it is read back through
- * the same parsers and limits as a page Aiden saves, and always saved
- * without an approval.
+ * ids, the workspace, the chat that made it, timestamps, the person's saved
+ * page state, data its sources read, or history. An imported file is
+ * untrusted input, so its page is checked the way the compiler builds one,
+ * read back through the same parsers and limits as a page Aiden saves, and
+ * always saved without an approval.
  */
+
+/** The native file dialogs and file access behind Export page and Import page. */
+export interface WorkspaceArtifactFiles {
+  /** Asks where to save the page file; null when the person cancels. */
+  chooseExportPath: (event: unknown, defaultName: string) => Promise<string | null>;
+  /** Asks for a page file to import; null when the person cancels. */
+  chooseImportFile: (event: unknown) => Promise<string | null>;
+  writeFile: (filePath: string, text: string) => Promise<void>;
+  /** Reads a regular file, failing with code EFBIG past `maxBytes`. */
+  readFile: (filePath: string, maxBytes: number) => Promise<Uint8Array>;
+}
+
+/**
+ * Reads the file the person picked. The path may be a symlink or alias, so
+ * the bytes come from the file it names; anything but a regular file (a
+ * FIFO, a device, a directory) is refused without blocking, and the read
+ * fails with EFBIG past `maxBytes`.
+ */
+export async function readWorkspaceArtifactPageFile(filePath: string, maxBytes: number): Promise<Uint8Array> {
+  return readRegularFile(await fs.realpath(filePath), maxBytes);
+}
 
 export const WORKSPACE_ARTIFACT_FILE_FORMAT = "aiden-artifact-page";
 export const WORKSPACE_ARTIFACT_FILE_VERSION = 1;
@@ -42,9 +65,9 @@ export interface WorkspaceArtifactPageFileV1 {
   title: string;
   description?: string;
   /**
-   * The compiled page. Saved page state is the person's own (a tab they
-   * picked, text they typed), so an export leaves it out; a file may still
-   * carry an initial `state`, which import checks like any other.
+   * The compiled page. `state` is the state its markup declared, never what
+   * the person saved since (a tab they picked, text they typed); a page
+   * saved before Aiden kept the declared state apart exports none.
    */
   visual: {
     catalogVersion: number;
@@ -71,6 +94,7 @@ export function workspaceArtifactPageFile(artifact: WorkspaceArtifactV1): Worksp
       catalogVersion,
       tree,
       ...(dataJson !== undefined ? { dataJson } : {}),
+      ...(artifact.initialState ? { state: artifact.initialState } : {}),
       ...(layout === "wide" ? { layout } : {}),
       fallbackText,
     },
@@ -82,15 +106,7 @@ export function workspaceArtifactPageFile(artifact: WorkspaceArtifactV1): Worksp
 
 /** `<title>.aiden-page.json`, with characters file systems reject or hide replaced. */
 export function workspaceArtifactPageFileName(title: string): string {
-  const normalized = title
-    .normalize("NFKC")
-    .replace(/[\\/:*?"<>|\p{Cc}\p{Cf}]+/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim()
-    // A title starting with a dot must not make a hidden file.
-    .replace(/^[.\s]+/u, "");
-  const base = Array.from(normalized).slice(0, 80).join("").trim();
-  return `${base || "Aiden page"}.aiden-page.json`;
+  return safeExportFileName(title, { fallback: "Aiden page", extension: ".aiden-page.json" });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -99,39 +115,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function cannotImport(reason: string): never {
   throw new Error(`This page can’t be imported: ${reason}`);
-}
-
-/** A component name from the file, shown only when it reads as one. */
-function shownName(name: string): string {
-  return /^[A-Za-z][A-Za-z0-9]{0,39}$/u.test(name) ? `<${name}>` : "a component";
-}
-
-/**
- * Checks a compiled tree against the catalog the way the compiler builds it:
- * `<Visual>` at the root only, catalog components with their own props, and
- * inline text and expressions. Returns what is wrong, or undefined.
- */
-function treeProblem(node: AidenUiNodeV1, root: boolean): string | undefined {
-  if (root && node.t !== "Visual") return "the page must start with <Visual>.";
-  if (node.t === "#text" || node.t === "#expr") {
-    if (node.p !== undefined || node.c !== undefined) return "inline text cannot hold settings or children.";
-    if (node.t === "#text" ? typeof node.s !== "string" : node.e === undefined) return "it has an empty inline value.";
-    return undefined;
-  }
-  const entry = ownEntry(AIDEN_UI_CATALOG, node.t);
-  // The compiler folds <Data> into the page's data and allows one <Visual>.
-  if (!entry || node.t === "Data" || (!root && node.t === "Visual")) {
-    return `it uses ${shownName(node.t)}, which isn’t one of Aiden’s components.`;
-  }
-  for (const prop of Object.keys(node.p ?? {})) {
-    if (!ownEntry(entry.props, prop)) return `${shownName(node.t)} has a setting Aiden doesn’t know.`;
-  }
-  if (node.c?.length && entry.children === "none") return `${shownName(node.t)} cannot hold other components.`;
-  for (const child of node.c ?? []) {
-    const problem = treeProblem(child, false);
-    if (problem) return problem;
-  }
-  return undefined;
 }
 
 function strictly<T>(parse: () => T): T {
@@ -159,8 +142,8 @@ export function parseWorkspaceArtifactPageFile(value: unknown): WorkspaceArtifac
     );
   }
   const title = typeof value.title === "string" ? value.title.trim() : value.title;
-  if (!isWorkspaceArtifactTitle(title) || !isWorkspaceArtifactPlainLine(title)) {
-    cannotImport(`its title must be 1–${WORKSPACE_ARTIFACT_LIMITS.titleChars} characters on one line.`);
+  if (!isWorkspaceArtifactTitle(title)) {
+    cannotImport(`its title must be 1–${WORKSPACE_ARTIFACT_LIMITS.titleChars} visible characters on one line.`);
   }
   const description = strictly(() => parseWorkspaceArtifactDescription(value.description));
   const sources = strictly(() => parseWorkspaceArtifactSources(value.sources));
@@ -170,25 +153,35 @@ export function parseWorkspaceArtifactPageFile(value: unknown): WorkspaceArtifac
   if (!isRecord(raw)) cannotImport("it has no page.");
   if (raw.catalogVersion !== AIDEN_UI_CATALOG_VERSION) cannotImport("it was made for components this Aiden doesn’t have.");
   if (raw.layout !== undefined && raw.layout !== "column" && raw.layout !== "wide") cannotImport('its layout must be "column" or "wide".');
+  // Held to what compileAum enforces, and rebuilt from known keys only.
+  const page = validateCompiledAum(
+    {
+      tree: raw.tree,
+      ...(raw.dataJson !== undefined ? { dataJson: raw.dataJson } : {}),
+      ...(raw.state !== undefined ? { state: raw.state } : {}),
+    },
+    { artifactActions: true },
+  );
+  if (!page.ok) cannotImport(page.error);
   const visual = parseChatUiVisualV1({
     version: 1,
     kind: "ui",
     id: "pending",
     title,
     catalogVersion: raw.catalogVersion,
-    tree: raw.tree,
-    ...(raw.dataJson !== undefined ? { dataJson: raw.dataJson } : {}),
-    ...(raw.state !== undefined ? { state: raw.state } : {}),
+    tree: page.tree,
+    ...(page.dataJson !== undefined ? { dataJson: page.dataJson } : {}),
+    ...(page.state ? { state: page.state } : {}),
     fallbackText: raw.fallbackText,
     ...(raw.layout === "wide" ? { layout: "wide" } : {}),
   });
   if (!visual) cannotImport("its page is invalid or larger than an artifact can hold.");
-  const problem = treeProblem(visual.tree, true);
-  if (problem) cannotImport(problem);
   const content: WorkspaceArtifactContent = {
     title,
     ...(description ? { description } : {}),
     visual,
+    // The file's state is what its markup declared, so it is both.
+    ...(page.state ? { initialState: page.state } : {}),
     sources,
     actions,
     refresh,
@@ -200,6 +193,7 @@ export function parseWorkspaceArtifactPageFile(value: unknown): WorkspaceArtifac
     workspaceId: "import",
     ...(description ? { description } : {}),
     visual: { ...visual, id: "import" },
+    ...(page.state ? { initialState: page.state } : {}),
     sources,
     actions,
     refresh,
