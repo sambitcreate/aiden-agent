@@ -224,6 +224,25 @@ export interface WorkspaceArtifactWriteOptions {
    */
   approvedDigest?: string;
   chatId?: string;
+  /**
+   * Create only: a title another page here already has becomes the first free
+   * "Title (2)", "Title (3)"… instead of failing, as an import needs.
+   */
+  uniqueTitle?: boolean;
+}
+
+/** `title`, or the first "Title (n)" no page in `taken` has, within the title limit. */
+export function freeWorkspaceArtifactTitle(title: string, taken: ReadonlySet<string>): string {
+  if (!taken.has(title)) return title;
+  for (let index = 2; index <= taken.size + 1; index += 1) {
+    const suffix = ` (${index})`;
+    let base = Array.from(title);
+    while (base.join("").length + suffix.length > WORKSPACE_ARTIFACT_LIMITS.titleChars) base = base.slice(0, -1);
+    const candidate = `${base.join("").trimEnd()}${suffix}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  // Unreachable: n titles always leave one of n + 1 candidates free.
+  throw new Error(`An artifact named "${title}" already exists here.`);
 }
 
 /** Thrown inside a history write whose workspace was removed, so nothing is written. */
@@ -455,8 +474,11 @@ export class WorkspaceArtifactStore {
           `This workspace already has ${WORKSPACE_ARTIFACT_LIMITS.perWorkspace} artifacts. Update or delete one first.`,
         );
       }
-      if (draft.artifacts.some((artifact) => artifact.visual.title === content.title)) {
-        throw new Error(`An artifact named "${content.title}" already exists here. Update it instead.`);
+      const title = options.uniqueTitle
+        ? freeWorkspaceArtifactTitle(content.title, new Set(draft.artifacts.map((artifact) => artifact.visual.title)))
+        : content.title;
+      if (draft.artifacts.some((artifact) => artifact.visual.title === title)) {
+        throw new Error(`An artifact named "${title}" already exists here. Update it instead.`);
       }
       const id = requireArtifactId(this.newId());
       const now = this.now();
@@ -465,7 +487,7 @@ export class WorkspaceArtifactStore {
         id,
         workspaceId,
         ...(content.description ? { description: content.description } : {}),
-        visual: { ...content.visual, id, title: content.title },
+        visual: { ...content.visual, id, title },
         sources: content.sources,
         actions: content.actions,
         refresh: content.refresh,

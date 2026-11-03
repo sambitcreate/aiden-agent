@@ -16,6 +16,7 @@ import { registerWorkspaceArtifactHandlers } from "./workspace-artifacts.js";
 import { configStore } from "../services/config-store.js";
 import {
   notifyWorkspaceArtifactsChanged,
+  workspaceArtifactFiles,
   workspaceArtifactRunner,
   workspaceArtifactStore,
 } from "../services/workspace-artifacts/main.js";
@@ -96,6 +97,11 @@ export function registerHandlers(): void {
     store: workspaceArtifactStore,
     workspaceExists: async (id) => Boolean(await configStore.getWorkspace(id)),
     notify: notifyWorkspaceArtifactsChanged,
+    files: workspaceArtifactFiles,
+    owner: (event) => {
+      const owner = rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Artifacts need the active window."));
+      return `${owner.id}:${owner.documentId}`;
+    },
     runner: workspaceArtifactRunner,
     runInWorkspace: (event, workspaceId, operation) =>
       workspaceEnvironmentApplicationService.run(

@@ -372,6 +372,7 @@
         "main/services/shortcut-transaction-core.test.ts",
         "main/services/superseding-task-core.test.ts",
         "main/services/workspace-artifacts/store.test.ts",
+        "main/services/workspace-artifacts/transfer.test.ts",
         "main/services/workspace-artifacts/tool.test.ts",
         "main/services/workspace-artifacts/check.test.ts",
         "main/services/workspace-artifacts/tool-run.test.ts",

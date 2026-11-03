@@ -1,10 +1,15 @@
 /** Electron-main binding for workspace artifacts. */
 
+import { promises as fs } from "node:fs";
 import path from "node:path";
-import { app, ipcMain, logger } from "../../platform.js";
+import type { IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, logger } from "../../platform.js";
 import type { WorkspaceArtifactsChangedEvent } from "../../../renderer/shared/workspace-artifacts.js";
+import type { WorkspaceArtifactFiles } from "../../handlers/workspace-artifacts.js";
 import { agentShellCommandEnvironment } from "../agent-command-environment.js";
 import { runBoundedShellCommand } from "../bounded-shell-command.js";
+import { writeFileAtomic } from "../durable-fs.js";
+import { readRegularFile } from "../regular-file-read.js";
 import { readWorkspaceFile } from "../workspace-files.js";
 import { createWorkspaceArtifactRunner } from "./runner.js";
 import { WorkspaceArtifactStore } from "./store.js";
@@ -32,7 +37,41 @@ export function notifyWorkspaceArtifactsChanged(event: WorkspaceArtifactsChanged
   ipcMain.broadcast("workspaces:artifacts-changed", event);
 }
 
-export const workspaceArtifactRunner = createWorkspaceArtifactRunner({
+function parentWindow(event: unknown): Electron.BrowserWindow | null {
+  const parent = BrowserWindow.fromWebContents((event as IpcMainInvokeEvent).sender);
+  return parent && !parent.isDestroyed() ? parent : null;
+}
+
+/** Native dialogs for Export page and Import page, attached to the calling window. */
+export const workspaceArtifactFiles: WorkspaceArtifactFiles = {
+  chooseExportPath: async (event, defaultName) => {
+    const parent = parentWindow(event);
+    const options: Electron.SaveDialogOptions = {
+      title: "Export page",
+      defaultPath: defaultName,
+      filters: [{ name: "Aiden page", extensions: ["json"] }],
+      properties: ["createDirectory", "showOverwriteConfirmation"],
+    };
+    const result = parent ? await dialog.showSaveDialog(parent, options) : await dialog.showSaveDialog(options);
+    return result.canceled || !result.filePath ? null : result.filePath;
+  },
+  chooseImportFile: async (event) => {
+    const parent = parentWindow(event);
+    // ".aiden-page.json" ends in ".json", which is as far as file filters match.
+    const options: Electron.OpenDialogOptions = {
+      title: "Import page",
+      properties: ["openFile"],
+      filters: [{ name: "Aiden page", extensions: ["json"] }],
+    };
+    const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  },
+  writeFile: (filePath, text) => writeFileAtomic(filePath, text, { mode: 0o600 }),
+  // The picked path may be an alias; the bytes come from the file it names, capped.
+  readFile: async (filePath, maxBytes) => readRegularFile(await fs.realpath(filePath), maxBytes),
+};
+
+export const workspaceArtifactRunner =createWorkspaceArtifactRunner({
   runShell: runBoundedShellCommand,
   readFile: async (root, file, signal) => (await readWorkspaceFile(root, file, signal)).content,
   env: agentShellCommandEnvironment,

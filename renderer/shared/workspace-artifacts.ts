@@ -124,7 +124,24 @@ export interface WorkspaceArtifactRevisionSummary {
   needsApproval: boolean;
 }
 
-export type WorkspaceArtifactChangeReason = "created" | "updated" | "deleted" | "refreshed";
+/**
+ * What a page file would add, shown before anything is saved. Confirming
+ * sends back only the token; main keeps the page itself until then.
+ */
+export type WorkspaceArtifactImportPreview =
+  | { status: "cancelled" }
+  | {
+      status: "ready";
+      token: string;
+      title: string;
+      description?: string;
+      /** Every command the page can run, as the Review dialog lists them. */
+      commands: { label: string; command: string }[];
+      /** Workspace files its sources read. */
+      files: string[];
+    };
+
+export type WorkspaceArtifactChangeReason ="created" | "updated" | "deleted" | "refreshed";
 
 export interface WorkspaceArtifactsChangedEvent {
   workspaceId: string;
@@ -169,6 +186,11 @@ function hasControlCharacter(value: string, allowLineBreaks: boolean): boolean {
     }
   }
   return false;
+}
+
+/** One line with no control or invisible characters (zero-width, bidi overrides), as labels must be. */
+export function isWorkspaceArtifactPlainLine(value: string): boolean {
+  return !hasControlCharacter(value, false);
 }
 
 const WORD_BREAK_AFTER = /[\s;&|)]/u;

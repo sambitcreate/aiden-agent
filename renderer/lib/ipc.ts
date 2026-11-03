@@ -299,6 +299,7 @@ import type { PeerBotSessionMessage, PeerBotSessionSubscription } from "../share
 import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-frames";
 import type {
   WorkspaceArtifactsChangedEvent,
+  WorkspaceArtifactImportPreview,
   WorkspaceArtifactV1,
   WorkspaceArtifactRevisionSummary,
   WorkspaceArtifactSourceResultV1,
@@ -1448,6 +1449,17 @@ export const workspaceArtifactsApi = {
   /** Brings back an earlier version; commands that differ from the approved ones need allowing again. */
   restore: (workspaceId: string, artifactId: string, revision: number) =>
     invoke<WorkspaceArtifactV1>("workspaces:artifacts:restore", workspaceId, artifactId, revision),
+  /** Saves the page as a file the person picks; main reads the page and leaves out approval, ids and data. */
+  exportPage: (workspaceId: string, artifactId: string) =>
+    invoke<{ status: "saved" | "cancelled" }>("workspaces:artifacts:export", workspaceId, artifactId),
+  /** Reads a page file the person picks and holds it in main until confirmed or discarded. */
+  importPreview: (workspaceId: string) =>
+    invoke<WorkspaceArtifactImportPreview>("workspaces:artifacts:importPreview", workspaceId),
+  /** Adds the previewed page, never approved, under a free name. */
+  importConfirm: (workspaceId: string, token: string) =>
+    invoke<WorkspaceArtifactV1>("workspaces:artifacts:importConfirm", workspaceId, token),
+  importDiscard: (workspaceId: string, token: string) =>
+    invoke<{ discarded: boolean }>("workspaces:artifacts:importDiscard", workspaceId, token),
   onChanged: (handler: (event: WorkspaceArtifactsChangedEvent) => void) =>
     onNotification<WorkspaceArtifactsChangedEvent>("workspaces:artifacts-changed", handler),
 };

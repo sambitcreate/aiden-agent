@@ -23,7 +23,7 @@ Aiden builds a small working page first and checks it before adding more. Each s
 
 Aiden fixes those with another update. It doesn't press a button that changes something just to test it. The check only sees what the page draws with this data, so it also says what it couldn't cover: a source that didn't load, a list that was empty, an `<If>` branch hidden with this data, or a page too large to draw in full. Reads behind a guard, such as `<If test={$pulls.error}>` or `$x.note || "none"`, are not flagged. The check is a hint for Aiden, not a guarantee that the page is right.
 
-The tab is in the tools launcher next to the terminal, files and browser once the workspace's pages have loaded, including before there are any: a workspace without pages shows the empty state with **New page…**. The tab closes when the last page is deleted, and when you switch to a workspace without pages.
+The tab is in the tools launcher next to the terminal, files and browser once the workspace's pages have loaded, including before there are any: a workspace without pages shows the empty state with **New page…** and **Import page…**. The tab closes when the last page is deleted, and when you switch to a workspace without pages.
 
 ## How pages get their data
 
@@ -70,7 +70,7 @@ Changing a workspace's access cancels any refresh or button already running. Com
 
 ## Managing pages
 
-The page header has a switcher between pages, **New page…** (the **+**), the time of the last refresh, **Refresh**, and a menu with **Ask Aiden to change this**, **Rename**, **Earlier versions** and **Delete**. Delete asks for confirmation first. Aiden deletes a page only when the person asks, and its delete always shows an approval card.
+The page header has a switcher between pages, **New page…** (the **+**), the time of the last refresh, **Refresh**, and a menu with **Ask Aiden to change this**, **Rename**, **Earlier versions**, **Export page**, **Import page** and **Delete**. Delete asks for confirmation first. Aiden deletes a page only when the person asks, and its delete always shows an approval card.
 
 Pages and their saved data are stored on the device under Aiden's user data folder (`workspace-artifacts/`), not in the repository, and they are not part of portable settings. Removing a workspace removes its pages.
 
@@ -87,11 +87,23 @@ Aiden keeps the last 5 versions of each page (`WORKSPACE_ARTIFACT_LIMITS.history
 
 Earlier versions are stored on the device next to the pages (`<workspaceId>.history.json`), never with an approval. They are deleted with the page, and with the workspace, including when a delete lands while an update is still saving the version it replaced. If the history file is damaged it is replaced rather than repaired, and if it can't be written the page update or delete still goes through; the pages themselves are unaffected.
 
+## Export and import
+
+A page can be saved as a file and added to another workspace, on this Mac or another one.
+
+- **Export page…** in the page menu saves the page as `<title>.aiden-page.json` wherever you choose. The file holds the page's name, description, layout, its `<Data>` text, its sources, its buttons' commands and its refresh settings.
+- The file leaves out the approval of the page's commands, the page's and workspace's ids, the chat that made it, its revision and dates, its earlier versions, the data its sources last read (which may be private) and the page's state (the tab you chose, boxes you ticked, text you typed). An imported page therefore starts in its first state with no data until it refreshes.
+- **Import page…** is in the page menu and, in a workspace without pages, next to **New page…**. Choose a file (at most 2 MiB). Aiden checks it exactly like a page it saves itself (the same limits, command rules and components) and refuses a file of another format or a newer version, saying why. Nothing is added yet: a dialog shows the page's name and description, every command it can run and every workspace file it reads, and says what happens next under the workspace's access. **Import** adds it; **Cancel** adds nothing. If a page here already has its name, the import is called "Name (2)", "Name (3)" and so on.
+- An imported page never arrives allowed, whatever the file says. Under **Ask** its commands don't run until you choose **Review…** on the page and **Allow** them, as for a page Aiden just made; its file sources load right away, as files do under Ask.
+- Under **Full access** an imported page's commands run as soon as it is shown and whenever you press its buttons, with no card. Only import pages from people you trust, and read the commands in the import dialog first.
+- With **No access**, or without a folder, nothing runs until access is turned on.
+- Aiden can't export or import pages itself: the `workspace_artifact` tool has no operation for it. Only you can, from the Artifacts tab.
+
 ## For developers
 
 - Shared contract and parsers: `renderer/shared/workspace-artifacts.ts`.
-- Store, tool, runner, page check and skill: `main/services/workspace-artifacts/`. The page check (`check.ts`) uses the evaluator's `onRead` hook, which only the check sets, to record each `$name` and member read the page actually takes.
-- IPC: `workspaces:artifacts:list`, `rename`, `delete`, `saveState`, `approve`, `refresh`, `run`, `history` and `restore` (which never records an approval), plus the `workspaces:artifacts-changed` notification (`main/handlers/workspace-artifacts.ts`).
+- Store, tool, runner, page check and skill: `main/services/workspace-artifacts/`. The page check (`check.ts`) uses the evaluator's `onRead` hook, which only the check sets, to record each `$name` and member read the page actually takes. The page file format, its strict reader and the pending-import tokens are in `transfer.ts`.
+- IPC: `workspaces:artifacts:list`, `rename`, `delete`, `saveState`, `approve`, `refresh`, `run`, `history` and `restore` (which never records an approval), `export`, `importPreview`, `importConfirm` (which never records an approval) and `importDiscard`, plus the `workspaces:artifacts-changed` notification (`main/handlers/workspace-artifacts.ts`).
 - Tab: `renderer/components/artifacts-panel.tsx`, wired into the Environment panel.
 - Tests: `npm run test:workspace-artifacts`.
 - Design and decisions: [Workspace Artifacts plan](plans/workspace-artifacts-plan.md).

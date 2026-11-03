@@ -1,5 +1,16 @@
 import * as React from "react";
-import { History, MessageSquarePlus, MoreHorizontal, Pencil, Plus, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
+import {
+  Download,
+  History,
+  MessageSquarePlus,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { AidenUiBlock, type AidenUiAction } from "./aiden-ui/aiden-ui-block";
 import {
   AlertDialog,
@@ -33,6 +44,7 @@ import {
   workspaceArtifactPage,
   workspaceArtifactCanRefresh,
   WORKSPACE_ARTIFACT_PAGE_IDEAS,
+  workspaceArtifactImportAccess,
   workspaceArtifactNewPageRequest,
   workspaceArtifactPageAccess,
   workspaceArtifactProblems,
@@ -42,6 +54,7 @@ import {
   WORKSPACE_ARTIFACT_LIMITS,
   resolveWorkspaceArtifactCommand,
   workspaceArtifactCommandList,
+  type WorkspaceArtifactImportPreview,
   type WorkspaceArtifactRevisionSummary,
   type WorkspaceArtifactView,
 } from "../shared/workspace-artifacts";
@@ -73,6 +86,8 @@ export interface ArtifactsPanelProps {
 
 /** Opens the New page dialog; focus goes back to `opener` if nothing is drafted. */
 type OpenNewPage = (opener: HTMLElement | null) => void;
+/** Asks for a page file to import; its preview returns focus to `opener`. */
+type StartImport = (opener: HTMLElement | null) => void;
 
 /**
  * The Tools panel's Artifacts tab: the workspace's saved pages, one at a
@@ -113,6 +128,8 @@ export function ArtifactsPanel({
       returnFocus={() => openerRef.current}
     />
   ) : null;
+  // Import, like New page, belongs to the workspace rather than the page shown.
+  const importer = useArtifactImport(workspace, onSelect);
 
   if (!workspace) {
     return <EmptyState className="h-full" title="No workspace" description="Choose a workspace to see its artifacts." />;
@@ -129,8 +146,9 @@ export function ArtifactsPanel({
       />
     ) : (
       <>
-        <ArtifactsEmptyState onNewPage={openNewPage} />
+        <ArtifactsEmptyState onNewPage={openNewPage} onImport={importer.start} />
         {newPageDialog}
+        {importer.dialog}
       </>
     );
   }
@@ -145,12 +163,181 @@ export function ArtifactsPanel({
         onAskAiden={onAskAiden}
         onAction={onAction}
         onNewPage={openNewPage}
+        onImport={importer.start}
         artifactsError={artifacts.error}
         onRetry={artifacts.reload}
         onStateSaved={artifacts.rememberState}
       />
       {newPageDialog}
+      {importer.dialog}
     </>
+  );
+}
+
+type ReadyImport = Extract<WorkspaceArtifactImportPreview, { status: "ready" }> & { workspaceId: string };
+
+/**
+ * Import page: main asks for the file, checks it like any page Aiden saves,
+ * and holds it under a token. Nothing is added, and so nothing runs, until
+ * the person reads what it can run and presses Import; Cancel lets main
+ * forget it. The imported page is never approved.
+ */
+function useArtifactImport(workspace: Workspace | null, onSelect: (artifactId: string) => void) {
+  const [preview, setPreview] = React.useState<ReadyImport | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const previewRef = React.useRef(preview);
+  previewRef.current = preview;
+  const openerRef = React.useRef<HTMLElement | null>(null);
+  // A ref, so a second press while the file dialog is up opens no other.
+  const choosingRef = React.useRef(false);
+  const workspaceId = workspace?.id ?? null;
+  const workspaceIdRef = React.useRef(workspaceId);
+  workspaceIdRef.current = workspaceId;
+  const onSelectRef = React.useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const discard = React.useCallback((held: ReadyImport) => {
+    // Main also forgets it once it expires, so a failed discard costs nothing.
+    void workspaceArtifactsApi.importDiscard(held.workspaceId, held.token).catch(() => undefined);
+  }, []);
+  // A preview belongs to the workspace it was read for.
+  React.useEffect(() => {
+    const held = previewRef.current;
+    if (held && held.workspaceId !== workspaceId) {
+      setPreview(null);
+      discard(held);
+    }
+  }, [discard, workspaceId]);
+  React.useEffect(
+    () => () => {
+      if (previewRef.current) discard(previewRef.current);
+    },
+    [discard],
+  );
+  const start = React.useCallback<StartImport>(
+    (opener) => {
+      if (!workspace || choosingRef.current) return;
+      choosingRef.current = true;
+      openerRef.current = opener;
+      const id = workspace.id;
+      void workspaceArtifactsApi
+        .importPreview(id)
+        .then(
+          (result) => {
+            if (result.status !== "ready") return;
+            const held = { ...result, workspaceId: id };
+            if (workspaceIdRef.current === id) setPreview(held);
+            else discard(held);
+          },
+          (cause: unknown) => {
+            toast.error(cause instanceof Error ? cause.message : "Could not import this page.");
+          },
+        )
+        .finally(() => {
+          choosingRef.current = false;
+        });
+    },
+    [discard, workspace],
+  );
+  const confirm = async () => {
+    const held = previewRef.current;
+    if (!held || busy) return;
+    setBusy(true);
+    try {
+      const artifact = await workspaceArtifactsApi.importConfirm(held.workspaceId, held.token);
+      setPreview(null);
+      onSelectRef.current(artifact.id);
+      toast.success(`Imported “${artifact.visual.title}”`);
+    } catch (cause) {
+      // Main spent the token either way, so the preview cannot be confirmed again.
+      setPreview(null);
+      toast.error(cause instanceof Error ? cause.message : "Could not import this page.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const dialog = (
+    <Dialog
+      open={preview !== null}
+      onOpenChange={(open) => {
+        if (open) return;
+        const held = previewRef.current;
+        setPreview(null);
+        if (held) discard(held);
+      }}
+      title={preview ? `Import “${preview.title}”?` : ""}
+      description={preview?.description ?? (workspace ? `Adds this page to ${workspace.name}.` : undefined)}
+      confirmLabel="Import"
+      busy={busy}
+      size={preview?.commands.length ? "large" : undefined}
+      onConfirm={confirm}
+      returnFocus={() => (openerRef.current?.isConnected ? openerRef.current : null)}
+    >
+      {preview && workspace ? <ArtifactImportDetails preview={preview} workspace={workspace} /> : null}
+    </Dialog>
+  );
+  return { start, dialog };
+}
+
+/** What an imported page can run and read here, and what happens to it under this workspace's access. */
+function ArtifactImportDetails({ preview, workspace }: { preview: ReadyImport; workspace: Workspace }) {
+  const access = workspaceArtifactImportAccess(workspace);
+  if (preview.commands.length === 0 && preview.files.length === 0) {
+    return (
+      <Text variant="small" color="secondary" as="p">
+        It runs no commands and reads no workspace files.
+      </Text>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {preview.commands.length > 0 ? (
+        <>
+          <Text variant="small" as="p">
+            It can run these commands in {workspace.name}:
+          </Text>
+          <ArtifactCommandList commands={preview.commands} />
+          <Callout color={access === "run" ? "warning" : undefined}>
+            <Text variant="small">
+              {access === "needs-approval"
+                ? "You’ll be asked to allow these before they run."
+                : access === "run"
+                  ? "With Full access these run whenever the page refreshes or you press its buttons."
+                  : "These won’t run while workspace access is off."}
+            </Text>
+          </Callout>
+        </>
+      ) : null}
+      {preview.files.length > 0 ? (
+        <>
+          <Text variant="small" as="p">
+            It reads these files in {workspace.name}:
+          </Text>
+          <ul className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Files">
+            {preview.files.map((file) => (
+              <li key={file} className="rounded-card bg-well p-3">
+                <pre className="m-0 whitespace-pre-wrap break-words font-mono text-small">{file}</pre>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/** Each command a page can run, labelled and verbatim, as the person approves them. */
+function ArtifactCommandList({ commands }: { commands: readonly { label: string; command: string }[] }) {
+  return (
+    <ul className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Commands">
+      {commands.map((entry, index) => (
+        <li key={index} className="rounded-card bg-well p-3">
+          <Text variant="small-strong" as="p">
+            {entry.label}
+          </Text>
+          <pre className="m-0 mt-1 whitespace-pre-wrap break-words font-mono text-small">{entry.command}</pre>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -239,6 +426,7 @@ function ArtifactView({
   onAskAiden,
   onAction,
   onNewPage,
+  onImport,
   artifactsError,
   onRetry,
   onStateSaved,
@@ -251,6 +439,7 @@ function ArtifactView({
   onAskAiden: (view: WorkspaceArtifactView) => void;
   onAction?: (view: WorkspaceArtifactView, action: AidenUiAction) => void;
   onNewPage: OpenNewPage | null;
+  onImport: StartImport;
   artifactsError: string | null;
   onRetry: () => void;
   onStateSaved: (artifactId: string, state: Record<string, unknown>) => void;
@@ -276,6 +465,7 @@ function ArtifactView({
         onSelect={onSelect}
         onAskAiden={onAskAiden}
         onNewPage={onNewPage}
+        onImport={onImport}
       />
       <div ref={pageRef} tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none" data-artifact-page={view.artifact.id}>
         {artifactsError ? (
@@ -450,7 +640,7 @@ function ArtifactsSkeleton() {
   );
 }
 
-function ArtifactsEmptyState({ onNewPage }: { onNewPage: OpenNewPage | null }) {
+function ArtifactsEmptyState({ onNewPage, onImport }: { onNewPage: OpenNewPage | null; onImport: StartImport }) {
   return (
     <EmptyState
       className="h-full"
@@ -461,12 +651,18 @@ function ArtifactsEmptyState({ onNewPage }: { onNewPage: OpenNewPage | null }) {
           : "Ask Aiden to make one, like a page of this repository's open pull requests."
       }
       action={
-        onNewPage ? (
-          <Button variant="accent" size="small" onClick={(event) => onNewPage(event.currentTarget)}>
-            <Plus aria-hidden="true" />
-            New page…
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {onNewPage ? (
+            <Button variant="accent" size="small" onClick={(event) => onNewPage(event.currentTarget)}>
+              <Plus aria-hidden="true" />
+              New page…
+            </Button>
+          ) : null}
+          <Button size="small" onClick={(event) => onImport(event.currentTarget)}>
+            <Upload aria-hidden="true" />
+            Import page…
           </Button>
-        ) : undefined
+        </div>
       }
     />
   );
@@ -568,6 +764,7 @@ function ArtifactsHeader({
   onSelect,
   onAskAiden,
   onNewPage,
+  onImport,
 }: {
   workspace: Workspace;
   views: readonly WorkspaceArtifactView[];
@@ -576,6 +773,7 @@ function ArtifactsHeader({
   onSelect: (artifactId: string) => void;
   onAskAiden: (view: WorkspaceArtifactView) => void;
   onNewPage: OpenNewPage | null;
+  onImport: StartImport;
 }) {
   // Each dialog belongs to the page it was opened on, and closes if another page takes its place.
   const [renaming, setRenaming] = React.useState<string | null>(null);
@@ -682,6 +880,25 @@ function ArtifactsHeader({
           <DropdownMenuItem onSelect={() => setBrowsing(artifactId)}>
             <History aria-hidden="true" />
             Earlier versions…
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onSelect={() => {
+              const name = title;
+              workspaceArtifactsApi.exportPage(workspaceId, artifactId).then(
+                (result) => {
+                  if (result.status === "saved") toast.success(`Exported “${name}”`);
+                },
+                (cause: unknown) => toast.error(cause instanceof Error ? cause.message : "Could not export this page."),
+              );
+            }}
+          >
+            <Download aria-hidden="true" />
+            Export page…
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onImport(menuTriggerRef.current)}>
+            <Upload aria-hidden="true" />
+            Import page…
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem color="red" onSelect={() => setDeleting(artifactId)}>
@@ -1039,16 +1256,7 @@ function ArtifactAccessNotice({
             <Text variant="small">This page’s commands changed while you were reading. Close this and review them again.</Text>
           </Callout>
         ) : null}
-        <ul className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Commands">
-          {reviewing?.commands.map((entry, index) => (
-            <li key={index} className="rounded-card bg-well p-3">
-              <Text variant="small-strong" as="p">
-                {entry.label}
-              </Text>
-              <pre className="m-0 mt-1 whitespace-pre-wrap break-words font-mono text-small">{entry.command}</pre>
-            </li>
-          ))}
-        </ul>
+        <ArtifactCommandList commands={reviewing?.commands ?? []} />
       </Dialog>
     </Callout>
   );

@@ -495,6 +495,101 @@ test("with pages, New page sits beside the page title, not in the page's menu, a
   assert.equal(screen.queryByRole("dialog"), null);
 });
 
+const IMPORT_TOKEN = "t".repeat(32);
+const IMPORT_PREVIEW = {
+  status: "ready",
+  token: IMPORT_TOKEN,
+  title: "Open PRs <b>now</b>",
+  description: "Pull requests from a teammate",
+  commands: [
+    { label: "Source pulls", command: "gh pr list --json number" },
+    { label: "Button “Merge”", command: "gh pr merge {{number}} --squash" },
+  ],
+  files: ["TODO.md"],
+};
+const { folderPath: _folder, ...WORKSPACE_WITHOUT_FOLDER } = WORKSPACE;
+
+test("Import page previews everything the page can run, and says what happens under this workspace's access", async () => {
+  const cases: [Workspace, RegExp][] = [
+    [WORKSPACE, /^You’ll be asked to allow these before they run\.$/u],
+    [{ ...WORKSPACE, permission: "full" }, /^With Full access these run whenever the page refreshes or you press its buttons\.$/u],
+    [{ ...WORKSPACE, permission: "none" }, /^These won’t run while workspace access is off\.$/u],
+    [WORKSPACE_WITHOUT_FOLDER, /^These won’t run while workspace access is off\.$/u],
+  ];
+  for (const [workspace, line] of cases) {
+    const calls = installBotTestIpc({
+      "workspaces:artifacts:importPreview": () => IMPORT_PREVIEW,
+      "workspaces:artifacts:importDiscard": () => ({ discarded: true }),
+    });
+    const { unmount } = renderPanel({ workspace, artifacts: state([]) });
+    const opener = screen.getByRole("button", { name: "Import page…" });
+    fireEvent.click(opener);
+    // The name in the file is text, never markup.
+    const dialog = await screen.findByRole("dialog", { name: "Import “Open PRs <b>now</b>”?" });
+    assert.equal(dialog.querySelector("b"), null);
+    within(dialog).getByText("Pull requests from a teammate");
+    const commands = within(dialog).getByRole("list", { name: "Commands" });
+    assert.deepEqual(
+      within(commands).getAllByRole("listitem").map((item) => item.textContent),
+      ["Source pullsgh pr list --json number", "Button “Merge”gh pr merge {{number}} --squash"],
+    );
+    within(within(dialog).getByRole("list", { name: "Files" })).getByText("TODO.md");
+    within(dialog).getByText(line);
+    assert.deepEqual(calls.find((call) => call.channel === "workspaces:artifacts:importPreview")!.args, [WORKSPACE.id]);
+
+    // Cancel adds nothing and lets main forget the file.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await settle();
+    assert.equal(screen.queryByRole("dialog"), null);
+    assert.deepEqual(calls.find((call) => call.channel === "workspaces:artifacts:importDiscard")!.args, [WORKSPACE.id, IMPORT_TOKEN]);
+    assert.equal(calls.some((call) => call.channel === "workspaces:artifacts:importConfirm"), false);
+    assert.equal(document.activeElement, opener);
+    unmount();
+  }
+});
+
+test("a file dialog the person cancels opens no preview", async () => {
+  const calls = installBotTestIpc({ "workspaces:artifacts:importPreview": () => ({ status: "cancelled" }) });
+  renderPanel({ artifacts: state([]), onDraftNewPage: () => undefined });
+  // Import sits beside New page in an empty workspace.
+  screen.getByRole("button", { name: "New page…" });
+  fireEvent.click(screen.getByRole("button", { name: "Import page…" }));
+  await settle();
+  assert.equal(screen.queryByRole("dialog"), null);
+  assert.deepEqual(calls.map((call) => call.channel), ["workspaces:artifacts:importPreview"]);
+});
+
+test("Import adds the previewed page and shows it, approving nothing", async () => {
+  const calls = installBotTestIpc({
+    "workspaces:artifacts:importPreview": () => IMPORT_PREVIEW,
+    "workspaces:artifacts:importConfirm": () => view("art9", "Open PRs <b>now</b>").artifact,
+  });
+  const selected: string[] = [];
+  renderPanel({ artifacts: state([view("art1", "Open PRs", { approved: true })]), onSelect: (id) => selected.push(id) });
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Actions for Open PRs" }), { button: 0, pointerType: "mouse" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Import page/u }));
+  const dialog = await screen.findByRole("dialog", { name: /Import “Open PRs <b>now<\/b>”\?/u });
+  assert.equal(calls.some((call) => call.channel === "workspaces:artifacts:importConfirm"), false);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Import" }));
+  await settle();
+  assert.equal(screen.queryByRole("dialog"), null);
+  assert.deepEqual(calls.find((call) => call.channel === "workspaces:artifacts:importConfirm")!.args, [WORKSPACE.id, IMPORT_TOKEN]);
+  assert.deepEqual(selected, ["art9"]);
+  assert.equal(calls.some((call) => call.channel === "workspaces:artifacts:approve" || call.channel === "workspaces:artifacts:importDiscard"), false);
+});
+
+test("Export page asks main to save the page, naming only the workspace and page", async () => {
+  const calls = installBotTestIpc({ "workspaces:artifacts:export": () => ({ status: "cancelled" }) });
+  renderPanel({ artifacts: state([view("art1", "Open PRs", { approved: true })]) });
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Actions for Open PRs" }), { button: 0, pointerType: "mouse" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Export page/u }));
+  await settle();
+  assert.deepEqual(
+    calls.filter((call) => call.channel === "workspaces:artifacts:export").map((call) => call.args),
+    [[WORKSPACE.id, "art1"]],
+  );
+});
+
 test("a host that can't draft into a chat offers no New page", () => {
   installBotTestIpc();
   const { unmount } = renderPanel({ artifacts: state([]) });
