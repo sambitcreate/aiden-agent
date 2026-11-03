@@ -2302,7 +2302,7 @@ export function createAidenRemoteRequestHandler(
         // can wait minutes on a boot and are closed by `revokeDevice` instead.
         releaseDeviceAuthorization = dependencies.devices.acquireDeviceAuthorization(
           device.id,
-          request.method !== "GET" && path !== "/simulators" && !path.startsWith("/simulators/"),
+          request.method !== "GET" && path !== "/simulators" && !path.startsWith("/simulators/") && !/^\/bots\/[^/]+\/watches\/sources$/u.test(path),
         );
         return device;
       };
@@ -3141,7 +3141,23 @@ export function createAidenRemoteRequestHandler(
         if (!id && request.method === "GET") { writeJson(response, 200, await callBotWatch(() => service.list(botId))); return; }
         const body = await readJsonBody(request);
         if (id === "sources" && request.method === "POST" && !action) {
-          connectorFields(body, []); writeJson(response, 200, await callBotWatch(() => service.discoverSources(botId))); return;
+          connectorFields(body, []);
+          const controller = new AbortController(); const abort = () => controller.abort();
+          response.once("close", abort); request.once("aborted", abort);
+          const assertCurrent = async () => {
+            controller.signal.throwIfAborted(); admitDevice(device.id)();
+            const current = await authenticateCredential(request, dependencies.devices, "bot:write");
+            if (current.id !== device.id || current.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "This source inspection is no longer authorized.", 403);
+            requireDeviceCapabilities(current, ["bot:read", "bot:watches"]); admitDevice(device.id)(); controller.signal.throwIfAborted();
+          };
+          if (response.destroyed || request.aborted) abort();
+          try {
+            await assertCurrent();
+            const result = await callBotWatch(() => service.discoverSources(botId, { signal: controller.signal, assertCurrent }));
+            await assertCurrent();
+            if (!controller.signal.aborted) writeJson(response, 200, result);
+          } finally { response.off("close", abort); request.off("aborted", abort); }
+          return;
         }
         if (id === "test" && request.method === "POST" && !action) {
           const fields = connectorFields(body, ["id", "expectedRevision", "sourceChoiceId", "condition"]);

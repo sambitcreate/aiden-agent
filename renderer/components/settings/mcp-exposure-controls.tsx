@@ -10,6 +10,7 @@ import { mcpApi } from "../../lib/ipc";
 import { useMcpToolList } from "../../lib/queries";
 import type { McpServer, McpToolSummary } from "../../lib/types";
 import { mcpServerExposure, type McpExposure } from "../../shared/mcp-exposure";
+import { COMPOSIO_SERVICE_TOOL_NAME, composioServiceRequiresReview, isComposioServiceConnection } from "../../shared/composio-service";
 
 const EXPOSURE_OPTIONS: readonly ChoiceOption<McpExposure>[] = [
   { value: "auto", label: "On demand" },
@@ -48,6 +49,10 @@ export function McpExposureControls({
   const label = server.name || "MCP server";
   const exposure = mcpServerExposure(server);
   const helpId = React.useId();
+  const composio = isComposioServiceConnection(server);
+  const hiddenCount = composio
+    ? Number(composioServiceRequiresReview(server.hiddenTools) || server.hiddenTools?.includes(COMPOSIO_SERVICE_TOOL_NAME))
+    : server.hiddenTools?.length ?? 0;
 
   const save = async (patch: Pick<McpServer, "exposure" | "hiddenTools">) => {
     if (saving) return;
@@ -77,7 +82,7 @@ export function McpExposureControls({
       </Text>
       {exposure === "hidden" ? null : (
         <Disclosure
-          title={server.hiddenTools?.length ? `Tools · ${server.hiddenTools.length} hidden` : "Tools"}
+          title={hiddenCount ? `Tools · ${hiddenCount} hidden` : "Tools"}
         >
           <McpToolSwitches
             server={server}
@@ -109,6 +114,8 @@ function McpToolSwitches({
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const hidden = server.hiddenTools ?? [];
   const inventory = list.data ?? loaded;
+  const composio = isComposioServiceConnection(server);
+  const requiresReview = composio && composioServiceRequiresReview(hidden);
 
   // Nothing discovered in this session yet: list the tools through the same
   // connection test Settings already offers (it never changes saved state).
@@ -129,7 +136,7 @@ function McpToolSwitches({
   if (list.isPending) {
     return <Text variant="small" color="tertiary" className="block py-1">Loading tools…</Text>;
   }
-  if (!inventory) {
+  if (!inventory && !composio) {
     return (
       <div className="flex min-w-0 flex-col items-start gap-1.5 py-1">
         <Text variant="small" color="tertiary" className="block">
@@ -146,20 +153,24 @@ function McpToolSwitches({
       </div>
     );
   }
-  const rows = toolRows(inventory, hidden);
+  const rows = composio ? [{ name: COMPOSIO_SERVICE_TOOL_NAME, title: "Composio" }] : toolRows(inventory ?? [], hidden);
   if (rows.length === 0) {
     return <Text variant="small" color="tertiary" className="block py-1">This server has no tools.</Text>;
   }
   return (
+    <>
+    {composio ? <Text variant="small" color="tertiary" className="mb-2 block">
+      {requiresReview ? "Your previous individual tool choices keep Composio off. Allow Composio to use the apps and tools you enable there." : "Manage enabled apps and tools in Composio. Aiden uses one Composio tool under its usual action rules."}
+    </Text> : null}
     <ul className="flex min-w-0 flex-col" aria-label={`${server.name || "MCP server"} tools`}>
       {rows.map((tool) => {
-        const shown = !hidden.includes(tool.name);
+        const shown = !requiresReview && !hidden.includes(tool.name);
         const title = tool.title || tool.name;
         return (
           <li key={tool.name} className="flex min-w-0 items-center gap-3 py-1">
             <div className="min-w-0 flex-1">
               <Text variant="small" truncate className="block">{title}</Text>
-              {tool.title && tool.title !== tool.name ? (
+              {!composio && tool.title && tool.title !== tool.name ? (
                 <Text variant="small" color="tertiary" truncate className="block">{tool.name}</Text>
               ) : null}
             </div>
@@ -168,12 +179,13 @@ function McpToolSwitches({
               checked={shown}
               disabled={disabled}
               onCheckedChange={(next) =>
-                onHiddenChange(next ? hidden.filter((name) => name !== tool.name) : [...hidden, tool.name])
+                onHiddenChange(composio ? next ? [] : [COMPOSIO_SERVICE_TOOL_NAME] : next ? hidden.filter((name) => name !== tool.name) : [...hidden, tool.name])
               }
             />
           </li>
         );
       })}
     </ul>
+    </>
   );
 }

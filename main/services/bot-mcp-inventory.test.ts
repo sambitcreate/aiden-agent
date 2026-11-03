@@ -29,8 +29,30 @@ import {
 import type { McpServer } from "./types.js";
 import { admitWithBotConnectorInventoryScope, botConnectorInventoryServer, withBotConnectorInventoryScope } from "./bot-connector-inventory-scope.js";
 import type { BotRuntimeEffectiveAuthority } from "./bot-runtime-authority.js";
+import { getMcpPreset, serverFromPreset } from "./mcp-presets.js";
+import type { SubagentMcpRemoteTool } from "./subagents/subagent-mcp-read.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+
+test("Composio catalogs one stable service across vendor inventory edits while credential changes revoke it", async () => {
+  const server = serverFromPreset(getMcpPreset("composio")!);
+  let signature = hash("credential-one");
+  let remote: SubagentMcpRemoteTool[] = [{ name: "COMPOSIO_SEARCH_TOOLS", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } }];
+  const snapshot = () => resolveBotMcpInventory(new AbortController().signal, {
+    listServers: async () => [server], credentialSignature: async () => signature, inspectTools: async () => remote,
+    incarnations: { reconcileNamespace: async (_namespace, resources) => resources.map(({ sourceId, credentialSignature }) => ({ sourceId, resourceIncarnation: "a".repeat(43), credentialIncarnation: credentialSignature.slice(0, 43) })) },
+  });
+  const before = (await snapshot())[0];
+  assert.equal(before.tools.length, 1); assert.equal(before.tools[0].toolName, "composio");
+  remote = [{ name: "COMPOSIO_SEARCH_TOOLS", inputSchema: { type: "object", properties: { newArgument: { type: "string" } } }, annotations: { readOnlyHint: true } }, { name: "COMPOSIO_MULTI_EXECUTE_TOOL", inputSchema: { type: "object" }, annotations: { readOnlyHint: false } }];
+  const changedVendor = (await snapshot())[0];
+  assert.equal(changedVendor.connectionFingerprint, before.connectionFingerprint);
+  assert.deepEqual(changedVendor.tools, before.tools);
+  signature = hash("credential-two");
+  assert.notEqual((await snapshot())[0].connectionFingerprint, before.connectionFingerprint);
+  server.hiddenTools = ["COMPOSIO_MULTI_EXECUTE_TOOL"];
+  assert.equal((await snapshot()).length, 0, "legacy partial exclusions need the person's single service allowance");
+});
 
 function connectorScopeFixture() {
   const servers: McpServer[] = ["selected-imcp", "other-connector"].map((id) => ({ id, name: id, transport: "stdio", command: "synthetic-only", enabled: true }));

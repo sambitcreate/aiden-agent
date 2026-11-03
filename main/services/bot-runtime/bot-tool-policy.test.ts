@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
 import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, botTurnOf, type BotToolFacts } from "./bot-tool-policy.js";
+import { composioServiceToolDescriptor } from "../composio-service-tool.js";
+import { botMcpLiveToolGrantFacts } from "../bot-tool-authority.js";
 
 const QUESTION = "ask_user_question";
 const HANDOFF = "hand_off";
@@ -27,6 +29,18 @@ const TELEGRAM = "tg:bot:1:0:5";
 const DESK = "desk-1";
 const PHONE = "remote:device:key";
 const INTRO = "intro:bot";
+
+test("the Composio allowance never starts connection setup on unattended or mixed-source turns", async () => {
+  const descriptor = composioServiceToolDescriptor();
+  const facts = { ...bareFacts(), mcpTools: async () => new Map([["composio", botMcpLiveToolGrantFacts(descriptor)!]]), mcpToolDescriptor: async () => descriptor };
+  const connect = { action: "call", tool: "COMPOSIO_MANAGE_CONNECTIONS", arguments: { toolkits: ["gmail"] } };
+  assert.equal((await botToolVerdict("composio", facts, {}, connect)).allowed, true);
+  for (const turn of [{ routine: true }, { telegram: true }, { routine: true, telegram: true }]) {
+    assert.equal((await botToolVerdict("composio", facts, turn, connect)).allowed, false);
+    assert.equal((await botToolVerdict("composio", facts, turn, { action: "describe" })).allowed, true);
+  }
+  assert.ok(await botToolApprovalSummary("composio", connect, facts), "the normal mutating action approval remains required");
+});
 
 /** [request ids of the run's inputs, whether a person is there to answer a card]. */
 const RUNS: Array<[string, readonly (string | undefined)[], boolean]> = [

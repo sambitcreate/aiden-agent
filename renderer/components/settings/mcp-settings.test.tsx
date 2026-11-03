@@ -820,6 +820,63 @@ test("a same-count rediscovery refreshes the Tools list while open and after reo
   assert.equal(channelCalls(calls, "mcp:toolList").length, 2);
 });
 
+test("Composio has one service switch; explicit allowance replaces old individual restrictions", async () => {
+  const preset = MCP_PRESETS.find((entry) => entry.id === "composio")!;
+  let server: McpServer = { ...serverFromPreset(preset), hiddenTools: ["COMPOSIO_MULTI_EXECUTE_TOOL", "COMPOSIO_SEARCH_TOOLS"] };
+  const calls = mount({
+    "mcp:list": () => [server],
+    "mcp:toolList": () => [{ name: "COMPOSIO_SEARCH_TOOLS" }, { name: "COMPOSIO_MULTI_EXECUTE_TOOL" }],
+    "mcp:liveStatus": () => [{ serverId: server.id, state: "connected", toolCount: 1 }],
+    "mcp:save": (value) => { server = value as McpServer; return server; },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Tools · 1 hidden" }));
+  const list = await screen.findByRole("list", { name: "Composio tools" });
+  assert.equal(within(list).getAllByRole("switch").length, 1);
+  assert.equal(within(list).queryByText("COMPOSIO_SEARCH_TOOLS"), null);
+  const allow = within(list).getByRole("switch", { name: "Let the model use Composio" });
+  assert.equal(allow.getAttribute("aria-checked"), "false");
+  assert.ok(screen.getByText(/previous individual tool choices/u));
+  assert.equal(savedServers(calls).length, 0, "reading the list never broadens old access");
+  fireEvent.click(allow);
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.equal(server.hiddenTools, undefined);
+  await waitFor(() => assert.equal(screen.getByRole("switch", { name: "Let the model use Composio" }).getAttribute("aria-checked"), "true"));
+  fireEvent.click(screen.getByRole("switch", { name: "Let the model use Composio" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 2));
+  assert.deepEqual(server.hiddenTools, ["composio"]);
+});
+
+test("changing Composio visibility preserves old restrictions until its service switch is allowed", async () => {
+  const preset = MCP_PRESETS.find((entry) => entry.id === "composio")!;
+  const legacy = ["COMPOSIO_REMOTE_BASH_TOOL"];
+  const server: McpServer = { ...serverFromPreset(preset), hiddenTools: legacy };
+  const calls = mount({ "mcp:list": () => [server], "mcp:save": (value) => value });
+  const access = await screen.findByRole("radiogroup", { name: "Model access for Composio" });
+  fireEvent.click(within(access).getByRole("radio", { name: "Always visible" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.deepEqual(savedServers(calls)[0]?.hiddenTools, legacy);
+  assert.equal(savedServers(calls)[0]?.exposure, "direct");
+});
+
+test("Composio keeps its one service allowance when its enabled operation inventory changes", async () => {
+  const preset = MCP_PRESETS.find((entry) => entry.id === "composio")!;
+  const server = serverFromPreset(preset);
+  let inventory = [{ name: "COMPOSIO_SEARCH_TOOLS" }];
+  const calls = mount({
+    "mcp:list": () => [server], "mcp:toolList": () => inventory,
+    "mcp:liveStatus": () => [{ serverId: server.id, state: "connected", toolCount: 1, toolsRevision: "before" }],
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Tools" }));
+  await screen.findByRole("switch", { name: "Let the model use Composio" });
+  inventory = [{ name: "COMPOSIO_GET_TOOL_SCHEMAS" }, { name: "COMPOSIO_MULTI_EXECUTE_TOOL" }];
+  act(() => emitBotTestNotification("mcp:statusChanged", { serverId: server.id, state: "connected", toolCount: 1, toolsRevision: "after" }));
+  await waitFor(() => assert.equal(channelCalls(calls, "mcp:toolList").length, 2));
+  const list = await screen.findByRole("list", { name: "Composio tools" });
+  assert.equal(within(list).getAllByRole("switch").length, 1);
+  assert.equal(within(list).getByRole("switch").getAttribute("aria-checked"), "true");
+  assert.equal(savedServers(calls).length, 0);
+});
+
 test("before any discovery the Tools list can load tools with a connection test that saves nothing", async () => {
   const calls = mount({
     "mcp:toolList": () => null,

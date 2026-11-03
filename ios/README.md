@@ -10,6 +10,8 @@ On hosts that offer and grant `bot:watches`, open a Bot’s profile → **Watche
 
 Watches execute on the paired host while Aiden is open and the host is awake. A test shows a bounded preview without advancing the watch baseline or running the Bot. Drafts and unresolved requests stay in this phone’s protected, backup-excluded private storage across editor close, disconnect and app restart; removing or replacing the pairing purges them. Stale saves retain the draft and require review of the latest host revision. An unknown write outcome freezes further changes until a host read confirms it or an explicit retry reuses the same request identity. Older hosts and pairings without `bot:watches` keep their existing profile.
 
+In a Bot’s Advanced → Custom access, Composio has one service allow choice. Manage its enabled apps and tools in Composio; the Bot’s Aiden rules and a watch’s selected account still apply. An older partial Composio selection requires explicit review and replacement with the host’s current service choice. Other MCP connections keep their host-projected choices.
+
 The product and protocol sources of truth are:
 
 - [`PROJECT_SPEC.md`](PROJECT_SPEC.md)

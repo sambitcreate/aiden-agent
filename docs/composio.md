@@ -1,0 +1,17 @@
+# Composio connection access
+
+The built-in Composio connection exposes one **Composio** tool and one service allowance in Aiden. Manage its enabled apps and operations in Composio. Aiden keeps Composio's discovery, schema, execution and connection-management meta-tools behind that tool.
+
+Settings → Connectors → Composio → Tools has one model-access switch. A Custom Bot selects one Composio capability in its connection access. Changing enabled operations in Composio does not require approving twelve separate Aiden tools or replacing the service allowance. Each invocation checks the current vendor operation and its input/output contract. A disabled or removed operation cannot execute through an older tool object.
+
+Existing partial Custom grants do not automatically become a service allowance. Custom access keeps an unavailable **Previous Composio access** choice and offers the service as a separate choice. Remove the previous access and select Composio to grant that broader service; saving another access or model setting cannot rebind it automatically. If older Settings excluded individual Composio operations, Aiden keeps the service unavailable until the person explicitly enables the single Composio switch; ordinary reads or other settings saves never discard those exclusions.
+
+The allowance does not remove Aiden's action approvals, Bot rules or locked protections. Composio is conservatively classified as mutating because its enabled operations can read or change connected apps. Bot routines and Telegram turns cannot use Composio connection setup or wait on its sign-in. Credentials and endpoint identity still fence calls; changing them invalidates an older executable tool. This grouping applies only to the catalog-owned consumer endpoint, not to arbitrary servers named Composio, alternate session endpoints or authentication overrides.
+
+The model-facing contract uses `action: "describe"` to obtain the current internal operation schemas, then `action: "call"`, `tool` and `arguments` to call one of those operations. Descriptions and results are connector data, not a new source of authority. The normal MCP result bounds, output validation, cancellation and connection guards apply. The standalone CLI uses this same tool and service projection and retains its existing approval policy.
+
+The isolated read-only MCP subagent protocol does not inherit this broad service allowance as individual vendor grants. It remains closed to the service facade; parent-owned tool execution retains the parent's existing checks. This grouping adds no child permissions or delegation protocol.
+
+Connected-app watches use a separate narrow host adapter under the same Composio service allowance. That adapter must prove an exact selected account and an understood read operation. A general Composio allowance does not permit arbitrary dispatch, shell, proxy or batch configuration in a watch. Calendar remains unavailable until the installed account-selection and result contracts have been verified; see the [proof record](research/composio-connector-watch-proof.md).
+
+For accepted watches, model/tool assembly and callbacks retain the watch's transport boundary: an already approved live connector can be used, but a missing client is not created, reconnected or joined while awaiting foreground approval. An unavailable unrelated connector is omitted from that watch's tools. Ordinary attended MCP connection behavior is unchanged.

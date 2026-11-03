@@ -776,7 +776,12 @@
         "main/services/bot-routine-events/connector-service.test.ts",
         "main/services/aiden-remote-bot-watches.test.ts",
         "main/handlers/bot-connector-watches.test.ts",
-        "main/services/bot-routine-events/connector-bindings.test.ts"
+        "main/services/bot-routine-events/connector-bindings.test.ts",
+        "main/services/bot-routine-events/connector-watch-composio-probe.test.ts",
+        "main/services/bot-routine-events/composio-inspection-file.test.ts",
+        "main/services/bot-routine-events/composio-source-inspection.test.ts",
+        "main/services/composio-service-tool.test.ts",
+        "main/services/mcp-connector-client-boundary.test.ts"
       ],
       "preserved": [
         "worktree-remover-native",

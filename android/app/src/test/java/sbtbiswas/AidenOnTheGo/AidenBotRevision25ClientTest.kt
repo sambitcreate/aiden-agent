@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -21,6 +22,8 @@ import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.features.bots.AidenRemoteBotDeleter
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotAdvancedDraft
+import sbtbiswas.AidenOnTheGo.features.bots.aidenBotSaveAdvanced
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotRoutineWriteFailure
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
@@ -100,6 +103,45 @@ class AidenBotRevision25ClientTest {
         // The current shape still decodes through the same route.
         server.enqueue(ok(list))
         assertEquals("bot_fixture_01", client.bots().bots.single().id)
+    }
+
+    @Test
+    fun stalePartialComposioRefusesBeforeHttpAndExplicitServiceSelectionUsesOneAllowance() = runBlocking {
+        val wire = AidenBotWireJson.json
+        val serviceId = "conn_composio_service_v2"
+        val oldId = "conn_composio_partial_v1"
+        val catalog = wire.decodeFromJsonElement(AidenBotCapabilityCatalog.serializer(), fixture.getValue("botCapabilityCatalog"))
+            .copy(connections = listOf(
+                AidenBotCapabilityOption(oldId, "Composio", false, "Saved connection access is no longer available."),
+                AidenBotCapabilityOption(serviceId, "Composio", true)
+            ))
+        val access = wire.decodeFromJsonElement(AidenBotAccessView.serializer(), pair("botPolicyUpdate", "response"))
+        val selection = requireNotNull(access.custom).copy(connectionIds = listOf(oldId))
+        val bot = wire.decodeFromJsonElement(AidenBotDetail.serializer(), fixture.getValue("botDetail"))
+            .copy(access = access.copy(custom = selection), modelSelection = AidenBotModelSelection(selection.providerId, selection.modelId))
+        server.enqueue(ok(wire.encodeToJsonElement(AidenBotCapabilityCatalog.serializer(), catalog)))
+        val receivedCatalog = client.botCapabilityCatalog(bot.id)
+        val catalogRead = server.takeRequest()
+        assertEquals("GET", catalogRead.method)
+        assertEquals("/api/aiden/v1/bot-capabilities?botId=${bot.id}", catalogRead.path)
+        val stale = requireNotNull(AidenBotAdvancedDraft.fromDetail(bot, receivedCatalog)).withRecommendedModel(receivedCatalog)
+        assertFalse(stale.isSaveable(receivedCatalog))
+        assertTrue(runCatching { aidenBotSaveAdvanced(client, bot, stale, receivedCatalog) }.isFailure)
+        assertEquals("stale unrelated edit sends no HTTP mutation", 1, server.requestCount)
+
+        val removed = stale.copy(customAccess = stale.customAccess.copy(connectionIDs = stale.customAccess.connectionIDs - oldId))
+        val explicit = removed.copy(customAccess = removed.customAccess.copy(connectionIDs = removed.customAccess.connectionIDs + serviceId))
+        val acceptedAccess = access.copy(custom = selection.copy(connectionIds = listOf(serviceId)))
+        server.enqueue(ok(wire.encodeToJsonElement(AidenBotAccessView.serializer(), acceptedAccess)))
+        server.enqueue(ok(wire.encodeToJsonElement(AidenBotDetail.serializer(), bot.copy(access = acceptedAccess))))
+        val saved = aidenBotSaveAdvanced(client, bot, explicit, receivedCatalog)
+        val update = server.takeRequest()
+        assertEquals("PATCH", update.method)
+        assertEquals("/api/aiden/v1/bots/${bot.id}/capabilities", update.path)
+        val custom = Json.parseToJsonElement(update.body.readUtf8()).jsonObject.getValue("custom").jsonObject
+        assertEquals(listOf(serviceId), custom.getValue("connectionIds").jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(listOf(serviceId), requireNotNull(saved.access.custom).connectionIds)
+        assertEquals("GET", server.takeRequest().method)
     }
 
     @Test

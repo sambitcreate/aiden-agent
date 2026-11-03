@@ -14,7 +14,7 @@ import type { BotConnectorWatchBinding } from "./bot-routine-events/connector-ty
 
 const fixture = JSON.parse(readFileSync(new URL("../../protocol/aiden-remote/v1/fixtures/bot-watches.json", import.meta.url), "utf8"));
 const token = "a".repeat(43);
-async function server(t: test.TestContext, options: { wired?: boolean; capabilities?: AidenRemoteCapability[]; accepted?: boolean; watches?: NonNullable<AidenRemoteRouterDependencies["botWatches"]> } = {}) {
+async function server(t: test.TestContext, options: { wired?: boolean; capabilities?: AidenRemoteCapability[]; accepted?: boolean; watches?: NonNullable<AidenRemoteRouterDependencies["botWatches"]>; authorization?: { revoked: boolean; capabilities: AidenRemoteCapability[] } } = {}) {
   let calls = 0;
   const watches: NonNullable<AidenRemoteRouterDependencies["botWatches"]> = {
     list: async () => { calls++; return structuredClone(fixture.list); },
@@ -24,13 +24,13 @@ async function server(t: test.TestContext, options: { wired?: boolean; capabilit
     setEnabled: async () => structuredClone(fixture.watch), remove: async () => structuredClone(fixture.removal), testCheck: async () => structuredClone(fixture.test), runNow: async () => structuredClone(fixture.run),
   };
   const handler = createAidenRemoteRequestHandler({ instanceId: "instance-test", displayName: () => "Host", appVersion: "0.63.0", devices: {
-    acquireDeviceAuthorization: () => () => {}, authenticate: async (credential) => credential === token ? { id: "device-test", type: "iphone", revoked: false, acceptsBotCapabilities: options.accepted ?? true,
-      capabilities: new Set(options.capabilities ?? ["server:read", "bot:read", "bot:write", "bot:watches"]) } : null,
+    acquireDeviceAuthorization: () => () => {}, authenticate: async (credential) => credential === token ? { id: "device-test", type: "iphone", revoked: options.authorization?.revoked ?? false, acceptsBotCapabilities: options.accepted ?? true,
+      capabilities: new Set(options.authorization?.capabilities ?? options.capabilities ?? ["server:read", "bot:read", "bot:write", "bot:watches"]) } : null,
   }, pairing: { exchange: async () => { throw new Error("unused"); } }, connectionMode: () => "lan", now: Date.now, log() {}, ...(options.wired === false ? {} : { botWatches: options.watches ?? watches }) });
   const app = createServer(handler); await new Promise<void>((resolve) => app.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => { app.close(() => resolve()); app.closeAllConnections(); }));
   const address = app.address(); if (!address || typeof address === "string") throw new Error("No listener");
-  return { calls: () => calls, request: (path: string, method = "GET", body?: unknown) => fetch(`http://127.0.0.1:${address.port}/api/aiden/v1${path}`, { method, headers: { authorization: `Bearer ${token}`, "aiden-protocol-version": "1", ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }) };
+  return { calls: () => calls, request: (path: string, method = "GET", body?: unknown, signal?: AbortSignal) => fetch(`http://127.0.0.1:${address.port}/api/aiden/v1${path}`, { method, signal, headers: { authorization: `Bearer ${token}`, "aiden-protocol-version": "1", ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }) };
 }
 
 test("new watch capability is advertised only with complete host routes and a Bot-negotiating device", async (t) => {
@@ -120,4 +120,32 @@ test("real watch creation refuses aggregate CJK/escaped prompt overflow before a
   for (const row of await store.list("bot_test")) await store.mutate("bot_test", row.id, (fresh) => ({ next: { ...fresh, prompt: "\u0001".repeat(32_768) }, result: undefined }));
   const oversized = await host.request("/bots/bot_test/watches"); const error = await oversized.json();
   assert.equal(oversized.status, 403); assert.equal(error.error.code, "capability_denied"); assert.match(error.error.message, /backup|support/);
+});
+
+test("real HTTP source discovery stops metadata and publication after revocation, capability loss or disconnect", async (t) => {
+  for (const change of ["revoked", "capability", "disconnect"] as const) {
+    const root = mkdtempSync(path.join(os.tmpdir(), "aiden-watch-discovery-lifetime-")); t.after(() => rmSync(root, { recursive: true, force: true }));
+    let started!: () => void; const entered = new Promise<void>((resolve) => { started = resolve; });
+    let release!: () => void; const blocked = new Promise<void>((resolve) => { release = resolve; });
+    let finished!: () => void; const done = new Promise<void>((resolve) => { finished = resolve; });
+    let metadataCalls = 0; let published = 0; let discoverySignal: AbortSignal | undefined;
+    const authorization = { revoked: false, capabilities: ["bot:read", "bot:write", "bot:watches"] as AidenRemoteCapability[] };
+    const watches = createBotConnectorWatchService({ store: createBotEventRoutineStore({ profileDir: () => root }), supported: () => true, knownBot: async () => true, isPaused: async () => false,
+      changed() {}, now: Date.now, dispatcher: { emit: async () => "queued" }, authorize: async () => { throw new Error("unused"); }, withPort: async () => { throw new Error("unused"); },
+      discover: async (_bot, signal, current) => { discoverySignal = signal; try { await current(); metadataCalls++; started(); await blocked; await current(); metadataCalls++; published++; return { bindings: [], unavailableReasons: [] }; } finally { finished(); } },
+    });
+    const host = await server(t, { watches, authorization }); const controller = new AbortController();
+    const result = host.request("/bots/bot_test/watches/sources", "POST", {}, controller.signal).then((response) => response, () => undefined);
+    await entered;
+    if (change === "revoked") authorization.revoked = true;
+    else if (change === "capability") authorization.capabilities = ["bot:read", "bot:watches"];
+    else {
+      const disconnected = new Promise<void>((resolve) => discoverySignal!.addEventListener("abort", () => resolve(), { once: true }));
+      controller.abort(); await disconnected;
+    }
+    release(); await done; const response = await result;
+    if (change === "disconnect") assert.equal(discoverySignal!.aborted, true);
+    else assert.equal(response!.status, 403);
+    assert.equal(metadataCalls, 1); assert.equal(published, 0);
+  }
 });

@@ -232,7 +232,7 @@ export function registerBotHandlers(): void {
   });
   registerBotConnectorWatchHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
-    requireOwner: (event) => { rendererDocumentOwner(event, () => new Error("This watch request came from an inactive renderer.")); },
+    owner: (event) => rendererDocumentOwner(event, () => new Error("This watch request came from an inactive renderer.")),
     service: async () => (await import("../services/bot-routine-events/sources-main.js")).botConnectorWatches,
   });
   // Profile → When something happens: event routines and their links.

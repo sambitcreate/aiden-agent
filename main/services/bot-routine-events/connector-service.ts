@@ -78,6 +78,10 @@ export interface BotConnectorWatchServicePorts {
   retainSource?(binding: BotConnectorWatchBinding): (() => void) | undefined;
   withBotMutation?<T>(botId: string, operation: () => Promise<T>): Promise<T>;
 }
+export interface BotConnectorWatchDiscoveryLifetime {
+  signal: AbortSignal;
+  assertCurrent(): void | Promise<void>;
+}
 export function createBotConnectorWatchService(ports: BotConnectorWatchServicePorts) {
   const localSerial = createKeyedSerial();
   const serial = <T>(botId: string, operation: () => Promise<T>) => localSerial(botId, () => ports.withBotMutation ? ports.withBotMutation(botId, operation) : operation());
@@ -176,13 +180,14 @@ export function createBotConnectorWatchService(ports: BotConnectorWatchServicePo
       if (Buffer.byteLength(JSON.stringify(result), "utf8") > 1_048_576) throw new BotConnectorWatchError("unavailable", "Saved watch data exceeds this host's limit. Restore the last valid backup or contact support.");
       return result;
     },
-    async discoverSources(botId: string): Promise<BotConnectorWatchSourceList> {
+    async discoverSources(botId: string, lifetime?: BotConnectorWatchDiscoveryLifetime): Promise<BotConnectorWatchSourceList> {
       await bot(botId);
       const controller = new AbortController(); active.set(controller, { botId });
+      const signal = lifetime ? AbortSignal.any([controller.signal, lifetime.signal]) : controller.signal;
       try {
-        const check = () => assertActive(botId, controller.signal, controller);
+        const check = async () => { await assertActive(botId, signal, controller); await lifetime?.assertCurrent(); signal.throwIfAborted(); };
         await check();
-        const discovered = await ports.discover(botId, controller.signal, check);
+        const discovered = await ports.discover(botId, signal, check);
         await check();
         if (discovered.bindings.length > LIMITS.sources) throw new BotConnectorWatchError("unavailable", "Too many sources. Narrow the connected account selection.");
         const retained = [...choices.values()].filter((item) => item.botId !== botId && ports.now() - item.at <= 15 * 60_000);
@@ -200,7 +205,7 @@ export function createBotConnectorWatchService(ports: BotConnectorWatchServicePo
         result.forEach((source, index) => choices.set(source.id, { botId, at: ports.now(), binding: { ...discovered.bindings[index]!, labels: connectorSourceLabels(discovered.bindings[index]!.labels) } }));
         return response;
       } catch (error) {
-        if (controller.signal.aborted) throw new ConnectorReadInterrupted();
+        if (signal.aborted) throw new ConnectorReadInterrupted();
         throw error;
       } finally { active.delete(controller); }
     },

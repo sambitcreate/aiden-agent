@@ -1,6 +1,6 @@
 # Bot continuity: watches, Open work, routine models and messaging
 
-Status: In progress, 2026-11-03; all seven original owner decisions confirmed. W0 and W1a (iMCP Mail, reliable delivery, full desktop/iOS/Android watch management) are implemented and clear after GPT-6.1 Sol high review/fix loops. W1b adds Composio as one tool with one connection permission and proves its restricted exact-account watch adapter. Calendar remains gated pending that proof; O/M/P have not started.
+Status: In progress, 2026-11-03; seven original owner decisions plus Composio amendments D8/D9 confirmed. W0 and W1a (iMCP Mail, reliable delivery, full desktop/iOS/Android watch management) are implemented and clear after GPT-6.1 Sol high review/fix loops. W1b’s single Composio tool/allowance and legacy-grant migration passed high review. Its foreground schema inspection passed high review after fixing lifetime, transport-budget and admission-ordering gaps; authenticated account-routing proof and the restricted read executor remain pending. Calendar stays gated. O/M/P have not started.
 
 ## Outcome
 
@@ -186,7 +186,7 @@ Before shipping each slice, update `README.md`, `PRODUCT.md`, `docs/bot-routines
 
 Update concise onboarding where watches, ongoing responsibilities or pair permissions affect first setup. Review the feature-tour gallery for shipped value: each advertised new capability needs its own code-drawn, token-based illustration and art test, with reduced-motion behavior. Never advertise a planned or unwired capability.
 
-For this planning-only change, shipped behavior and release metadata remain unchanged. Existing user-facing feature claims must not be rewritten to imply implementation. Cross-link the existing wake-source follow-up to this plan and keep project memory current.
+Release claims must follow implemented and accepted behavior. Calendar remains gated while its installed account-routing contract is unverified; later phases must not be advertised before their runtime and all-client controls are wired. Keep the existing wake-source follow-up and project memory current.
 
 ## Research and related work
 
@@ -197,7 +197,7 @@ For this planning-only change, shipped behavior and release metadata remain unch
 
 ## Implementation checklist
 
-Progress (2026-11-03): W0 is complete for source research and offline acceptance. Reliable watch hand-offs, source/configuration fencing, live receipt retry and issue lifecycle passed GPT-6.1 Sol high review after fixes. The connector spike separately passed the same model/reasoning review after fixing Swift/JavaScript Unicode comparison differences. The registered proactive suite passes 120 tests, including two real SIGKILL hand-offs and 18 connector fixtures. Root type-check and narrow ESLint pass. See [connector evidence](../research/bot-connector-watch-spike.md): iMCP Calendar remains a prototype because stable account/recurrence/cancellation guarantees are unavailable. The installed Composio tool inventory was inspected read-only and exposes generic orchestrators rather than direct mail/calendar readers. The owner is choosing between a narrowly restricted fixed-read adapter and continued calendar gating. No connector content was fetched and no settings were changed.
+Progress (2026-11-03): W0 is complete for source research and offline acceptance. Reliable watch hand-offs, source/configuration fencing, live receipt retry and issue lifecycle passed GPT-6.1 Sol high review after fixes. The connector spike separately passed the same model/reasoning review after fixing Swift/JavaScript Unicode comparison differences. The registered proactive suite passes 120 tests, including two real SIGKILL hand-offs and 18 connector fixtures. Root type-check and narrow ESLint pass. See [connector evidence](../research/bot-connector-watch-spike.md): iMCP Calendar remains a prototype because stable account/recurrence/cancellation guarantees are unavailable. The installed Composio tool inventory was inspected read-only and exposes generic orchestrators rather than direct mail/calendar readers. The owner approved a narrowly restricted fixed-read adapter (D8) and one Composio tool/service allowance (D9). No connector content was fetched and no settings were changed.
 
 - [x] D6/D7 answered and all owner decisions reconciled (2026-11-03).
 - [x] W0 source evidence, offline connector acceptance and persistent hand-off tests; both high-review scopes clear. Live account/provider admission gates remain with W1.

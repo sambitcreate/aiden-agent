@@ -11,7 +11,7 @@ import { mcpServerOffersTools } from "../../../renderer/shared/mcp-exposure.js";
 import { mcpManager, withBotConnectorMcpClient } from "../mcp.js";
 import { admitWithBotConnectorInventoryScope } from "../bot-connector-inventory-scope.js";
 import { botMcpLiveToolGrantFacts, botMcpLiveToolMatchesGrant } from "../bot-tool-authority.js";
-import { resolveBotRuntimeMcpConnectionIdentities } from "../bot-capability-services-main.js";
+import { botCapabilityStore, resolveBotRuntimeMcpConnectionIdentities } from "../bot-capability-services-main.js";
 import { BotConnectorWatchError, createBotConnectorWatchService, type BotConnectorWatchServicePorts } from "./connector-service.js";
 import { connectorWatchJson, type ImcpWatchPort, type ImcpWatchTool } from "./connector-watch-imcp.js";
 import type { BotConnectorWatchBinding } from "./connector-types.js";
@@ -19,6 +19,10 @@ import type { BotRuntimeAuthorityAdmission, BotRuntimeConnectionAuthority } from
 import type { SubagentMcpRemoteTool } from "../subagents/subagent-mcp-read.js";
 import type { McpServer } from "../types.js";
 import { boundedConnectorText } from "./connector-text.js";
+import { isComposioServiceServer } from "../composio-service-tool.js";
+import { createComposioSourceInspection } from "./composio-source-inspection.js";
+import { createComposioInspectionAccess } from "./composio-inspection-access.js";
+import { saveComposioWatchInspection } from "./composio-inspection-file.js";
 
 const REQUIRED = ["mail_mailboxes_list", "mail_messages_search"] as const;
 const unavailable = (message: string): never => { throw new BotConnectorWatchError("unavailable", message); };
@@ -86,6 +90,19 @@ async function withPort<T>(botId: string, binding: BotConnectorWatchBinding, sig
     });
   } finally { admission.release(); }
 }
+
+/** Explicit Find sources only: catalog metadata under the person's one service allowance. */
+const inspectComposioSource = createComposioSourceInspection({
+  hasExistingConnector: (serverId) => mcpManager.hasExistingConnector(serverId),
+  preflight: createComposioInspectionAccess({ store: botCapabilityStore,
+    currentServer: async (serverId) => (await configStore.listMcpServers()).find((configured) => configured.id === serverId),
+    schedulesEnabled: async () => (await configStore.getSettings()).scheduledTasksEnabled !== false,
+    connectionFingerprint: async (serverId, signal) => (await resolveBotRuntimeMcpConnectionIdentities(signal)).find((identity) => identity.serverId === serverId)?.connectionFingerprint,
+  }),
+  admit, connection, withClient: withBotConnectorMcpClient,
+  publish: (botId, result, current) => botApplicationService.withBotMutation(botId, () => saveComposioWatchInspection(app.getPath("userData"), botId, result, current)),
+});
+
 export function productionConnectorWatchService(ports: Pick<BotConnectorWatchServicePorts, "store" | "dispatcher" | "changed" | "isPaused">) {
   return createBotConnectorWatchService({ ...ports, supported: () => process.platform === "darwin" && app.isReady(),
     knownBot: async (botId) => (await botStore.get(botId)) !== null,
@@ -102,7 +119,9 @@ export function productionConnectorWatchService(ports: Pick<BotConnectorWatchSer
     },
     discover: async (botId, signal, assertActive) => {
       await assertActive();
-      const servers = (await configStore.listMcpServers()).filter((server) => server.presetId === "imcp" && server.enabled && mcpServerOffersTools(server));
+      const configuredServers = await configStore.listMcpServers();
+      const servers = configuredServers.filter((server) => server.presetId === "imcp" && server.enabled && mcpServerOffersTools(server));
+      const composioServers = configuredServers.filter((server) => server.enabled && mcpServerOffersTools(server) && isComposioServiceServer(server));
       const bindings: BotConnectorWatchBinding[] = []; const unavailableReasons: string[] = [];
       for (const configured of servers) {
         await assertActive();
@@ -125,7 +144,15 @@ export function productionConnectorWatchService(ports: Pick<BotConnectorWatchSer
         finally { admission?.release(); }
         await assertActive();
       }
-      if (!servers.length) unavailableReasons.push("Connect and explicitly allow iMCP Mail in Settings → Connectors first.");
+      for (const server of composioServers) {
+        await assertActive();
+        try { unavailableReasons.push(await inspectComposioSource(botId, server, signal, assertActive)); }
+        catch (error) {
+          if (signal.aborted) throw error;
+          unavailableReasons.push(error instanceof BotConnectorWatchError ? error.message : "Composio sources are unavailable. Review its existing setup in Settings → Connectors.");
+        }
+      }
+      if (!servers.length && !composioServers.length) unavailableReasons.push("Connect and allow an app in Settings → Connectors first.");
       unavailableReasons.push("Calendar watches are unavailable until a trusted connector supports exact account and occurrence identity.");
       return { bindings, unavailableReasons };
     },

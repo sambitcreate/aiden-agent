@@ -7,6 +7,8 @@ import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { connectSdkServer } from "./mcp-test-support.js";
+import { COMPOSIO_WATCH_INVENTORY_LIMITS } from "./mcp-tool-inventory.js";
+import { withBotConnectorForegroundLifetime } from "./bot-connector-inventory-scope.js";
 
 async function connectedClient(server: Server): Promise<McpClient> {
   const client = new McpClient({ name: "test-client", version: "1" });
@@ -35,6 +37,38 @@ async function rawServerClient(t: { after(fn: () => Promise<void>): void }, resp
   t.after(async () => { await client.close(); });
   return { client, requests: () => requests.filter(({ method }) => method !== "initialize") };
 }
+
+test("foreground connector inventory enforces its transport budget before requesting a fifth raw RPC page", async (t) => {
+  let pages = 0;
+  const { client } = await rawServerClient(t, () => ({ tools: [], nextCursor: `opaque-${++pages}` }));
+  await assert.rejects(listMcpToolInventory({ assertCurrent() {}, limits: COMPOSIO_WATCH_INVENTORY_LIMITS,
+    listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }, undefined, 256 * 1024) }), /page limit/u);
+  assert.equal(pages, 4);
+});
+
+test("foreground raw tool/byte limits reject the whole inventory without requesting the following RPC page", async (t) => {
+  for (const mode of ["tools", "bytes", "aggregate"] as const) {
+    let pages = 0;
+    const limits = mode === "aggregate" ? { maxPages: 4, maxTools: 128, maxPageBytes: 200, maxTotalBytes: 250 } : COMPOSIO_WATCH_INVENTORY_LIMITS;
+    const { client } = await rawServerClient(t, () => { pages++; return { tools: mode === "tools" ? Array.from({ length: 129 }, (_, i) => ({ name: `read_${i}`, inputSchema: { type: "object" } })) : [], nextCursor: "later", ignoredRawMetadata: "x".repeat(mode === "bytes" ? 256 * 1024 : mode === "aggregate" ? 100 : 0) }; });
+    await assert.rejects(listMcpToolInventory({ assertCurrent() {}, limits,
+      listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }, undefined, limits.maxPageBytes) }), /limit/u);
+    assert.equal(pages, mode === "aggregate" ? 2 : 1);
+  }
+});
+
+test("the initiating foreground lifetime fences every raw inventory RPC page, including admission reads", async (t) => {
+  for (const invalidate of ["abort", "authorization"] as const) {
+    const controller = new AbortController(); let current = true; let pages = 0;
+    const { client } = await rawServerClient(t, () => {
+      pages++; if (invalidate === "abort") controller.abort(); else current = false;
+      return { tools: [], nextCursor: "second" };
+    });
+    await assert.rejects(withBotConnectorForegroundLifetime({ signal: controller.signal, assertCurrent: () => { if (!current) throw new Error("Foreground authorization changed."); } }, () => listMcpToolInventory({ assertCurrent() {}, limits: COMPOSIO_WATCH_INVENTORY_LIMITS,
+      listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }, undefined, 256 * 1024) })));
+    assert.equal(pages, 1, "no next metadata page after the document or device lifetime ends");
+  }
+});
 
 test("inventory follows opaque cursors and retains later-page schemas and annotations", async () => {
   const cursors: Array<string | undefined> = [];

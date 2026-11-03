@@ -241,6 +241,57 @@ class AidenBotProfileBehaviorTest {
         assertFalse(draft.changesAccess(bot, catalog))
     }
 
+    private val composioServiceId = "conn_composio_service_v2"
+    private val staleComposioId = "conn_composio_partial_v1"
+    private fun composioCatalog() = fixture.botCapabilityCatalog.copy(
+        connections = listOf(
+            AidenBotCapabilityOption(staleComposioId, "Composio", false, "Saved connection access is no longer available."),
+            AidenBotCapabilityOption(composioServiceId, "Composio", true,
+                "One service allowance; manage enabled apps and tools in Composio.")
+        )
+    )
+    private fun botWithPartialComposio(): AidenBotDetail {
+        val saved = requireNotNull(fixture.botPolicyUpdate.response.custom).copy(connectionIds = listOf(staleComposioId))
+        return fixture.botDetail.copy(access = fixture.botPolicyUpdate.response.copy(custom = saved),
+            modelSelection = AidenBotModelSelection(saved.providerId, saved.modelId))
+    }
+
+    @Test
+    fun aSingleComposioCatalogChoiceRemainsOneConnectionAllowance() {
+        val draft = requireNotNull(AidenBotCustomAccessDraft.fromCatalog(composioCatalog()))
+        val update = aidenBotAccessUpdate(false, draft, composioCatalog())
+        assertEquals(listOf(composioServiceId), requireNotNull(update.custom).connectionIds)
+    }
+
+    @Test
+    fun unrelatedModelPickDoesNotReplaceAnOldPartialComposioSelection() {
+        val catalog = composioCatalog()
+        val original = requireNotNull(AidenBotAdvancedDraft.fromDetail(botWithPartialComposio(), catalog))
+        val changed = original.withRecommendedModel(catalog)
+        assertEquals(setOf(staleComposioId), changed.customAccess.connectionIDs)
+        assertFalse(changed.customAccess.connectionIDs.contains(composioServiceId))
+        assertTrue("old selected ID remains a known tombstone", catalog.contains(changed.customAccess.selection()))
+        assertFalse(changed.isSaveable(catalog))
+        assertTrue(runCatching { changed.accessUpdate(catalog) }.isFailure)
+    }
+
+    @Test
+    fun explicitlyReplacingStaleComposioWithTheServiceAllowsOnlyThatService() {
+        val catalog = composioCatalog()
+        val original = requireNotNull(AidenBotAdvancedDraft.fromDetail(botWithPartialComposio(), catalog))
+        // The retained unavailable row can be unchecked; the new service is a separate opt-in.
+        val removed = original.copy(customAccess = original.customAccess.copy(connectionIDs = original.customAccess.connectionIDs - staleComposioId))
+        assertTrue(removed.isSaveable(catalog))
+        assertTrue(requireNotNull(removed.accessUpdate(catalog).custom).connectionIds.isEmpty())
+        val explicit = removed.copy(customAccess = removed.customAccess.copy(connectionIDs = removed.customAccess.connectionIDs + composioServiceId))
+        assertTrue(explicit.isSaveable(catalog))
+        val update = requireNotNull(explicit.accessUpdate(catalog).custom)
+        assertEquals(listOf(composioServiceId), update.connectionIds)
+        assertFalse(update.connectionIds.contains(staleComposioId))
+        assertEquals(original.customAccess.fileScopeIDs, update.fileScopeIds.toSet())
+        assertEquals(original.customAccess.skillIDs, update.skillIds.toSet())
+    }
+
     // Routines: the daily check-in suggestion
 
     @Test

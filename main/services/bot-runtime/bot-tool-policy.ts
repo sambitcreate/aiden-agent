@@ -11,6 +11,7 @@
 // so a connection or skill whose fingerprint changed is refused at call time.
 
 import { BOT_ROUTINES_TOOL_NAME } from "../../../renderer/shared/bot-routine-proposals.js";
+import { composioServiceCallRequiresForeground, isComposioServiceToolDescriptor } from "../composio-service-tool.js";
 import { BOT_FILE_TOOL_NAMES } from "../bot-file-tool-router.js";
 import type { BotRuntimeEffectiveAuthority, BotRuntimeMcpToolAuthority } from "../bot-runtime-authority.js";
 import { isComputerUseCapabilityTool } from "../bot-tool-authority.js";
@@ -208,7 +209,13 @@ export async function botToolVerdict(
     const key = await facts.skillToolKeyFor?.(requested);
     return verdict(key !== undefined && granted.has(key), "This skill is not enabled for this Bot.");
   }
-  if ((await facts.mcpTools()).has(name)) return { allowed: true };
+  if ((await facts.mcpTools()).has(name)) {
+    if ((turn.routine || turn.telegram) && composioServiceCallRequiresForeground(args)
+      && isComposioServiceToolDescriptor(await facts.mcpToolDescriptor?.(name))) {
+      return { allowed: false, reason: "Composio connection setup needs the person in the foreground." };
+    }
+    return { allowed: true };
+  }
   return { allowed: false, reason: "This tool is not available to this Bot." };
 }
 

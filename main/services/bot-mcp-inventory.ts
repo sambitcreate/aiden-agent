@@ -10,6 +10,7 @@ import {
 } from "./subagents/subagent-mcp-read.js";
 import type { SubagentMcpScopeV2 } from "./subagents/authority-v2.js";
 import { botConnectorInventoryServer } from "./bot-connector-inventory-scope.js";
+import { projectComposioServiceInventory } from "./composio-service-tool.js";
 
 type BotMcpScopeTools = SubagentMcpScopeV2["tools"];
 
@@ -213,7 +214,7 @@ export function createBotMcpScopeCache(options: BotMcpScopeCacheOptions = {}): B
       controller.signal,
     )
       .then((remote) => {
-        const tools = projectScopeTools(remote);
+        const tools = projectScopeTools(projectComposioServiceInventory(server, remote));
         entries.set(server.id, {
           connectionFingerprint,
           generation: currentGeneration,

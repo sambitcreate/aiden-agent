@@ -3,6 +3,8 @@ import Ajv, { type ValidateFunction } from "ajv";
 import addFormats from "ajv-formats";
 import type { CallToolResult, ServerCapabilities, Tool } from "@earendil-works/pi-mcp";
 import { mcpRequest, type McpCallOptions, type McpRequester } from "./mcp-client.js";
+import { copyBoundedJson, utf8Size } from "./bounded-json.js";
+import { botConnectorForegroundLifetime } from "./bot-connector-inventory-scope.js";
 
 export const MCP_TOOL_INVENTORY_MAX_PAGES = 64;
 export const MCP_TOOL_INVENTORY_MAX_TOOLS = 512;
@@ -43,7 +45,11 @@ export async function callMcpTool(client: McpRequester, params: McpToolCallParam
 export interface McpToolPage {
   tools: Tool[];
   nextCursor?: string;
+  /** Byte size of the unprojected wire result when a foreground budget was requested. */
+  replyBytes?: number;
 }
+export interface McpToolInventoryLimits { maxPages: number; maxTools: number; maxPageBytes: number; maxTotalBytes: number }
+export const COMPOSIO_WATCH_INVENTORY_LIMITS: Readonly<McpToolInventoryLimits> = Object.freeze({ maxPages: 4, maxTools: 128, maxPageBytes: 256 * 1024, maxTotalBytes: 1024 * 1024 });
 
 /** Why a listed tool's input schema cannot be offered, or undefined when its root is usable. */
 export function mcpToolInputSchemaProblem(schema: unknown): string | undefined {
@@ -70,8 +76,15 @@ export async function listMcpToolPage(
   cursor: string | undefined,
   options?: McpCallOptions,
   onSkip?: McpSkippedToolReporter,
+  maxReplyBytes?: number,
 ): Promise<McpToolPage> {
-  const value = await mcpRequest<unknown>(client, "tools/list", cursor === undefined ? undefined : { cursor }, options);
+  let value = await mcpRequest<unknown>(client, "tools/list", cursor === undefined ? undefined : { cursor }, options);
+  let replyBytes: number | undefined;
+  if (maxReplyBytes !== undefined) {
+    value = copyBoundedJson(value, { maxNodes: 20_000, maxDepth: 24, maxSize: maxReplyBytes, measure: utf8Size });
+    if (value === undefined) throw new Error("MCP tool inventory exceeds the reply byte limit.");
+    replyBytes = Buffer.byteLength(JSON.stringify(value), "utf8");
+  }
   if (!isRecord(value) || !Array.isArray(value.tools)) throw new Error("Invalid MCP tools/list result.");
   const tools: Tool[] = [];
   for (const tool of value.tools) {
@@ -82,7 +95,7 @@ export async function listMcpToolPage(
   }
   const nextCursor = mcpListCursor(value.nextCursor);
   if (nextCursor !== undefined && typeof nextCursor !== "string") throw new Error("Invalid MCP tools/list cursor.");
-  return { tools, ...(nextCursor === undefined ? {} : { nextCursor }) };
+  return { tools, ...(nextCursor === undefined ? {} : { nextCursor }), ...(replyBytes === undefined ? {} : { replyBytes }) };
 }
 
 /**
@@ -96,12 +109,19 @@ export function boundedMcpToolPageReader(client: McpRequester, pageTimeoutMs: nu
 
 /** One tools/list page at a time; publish only a complete, bounded inventory. */
 export async function listMcpToolInventory<T extends { name: string }>(options: {
-  listPage(cursor: string | undefined, signal: AbortSignal): Promise<{ tools: readonly T[]; nextCursor?: string | null }>;
+  listPage(cursor: string | undefined, signal: AbortSignal): Promise<{ tools: readonly T[]; nextCursor?: string | null; replyBytes?: number }>;
   signal?: AbortSignal;
   assertCurrent(): void;
+  limits?: McpToolInventoryLimits;
 }): Promise<T[]> {
+  const limits = options.limits;
+  if (limits && (!Number.isSafeInteger(limits.maxPages) || limits.maxPages < 1 || limits.maxPages > MCP_TOOL_INVENTORY_MAX_PAGES
+    || !Number.isSafeInteger(limits.maxTools) || limits.maxTools < 1 || limits.maxTools > MCP_TOOL_INVENTORY_MAX_TOOLS
+    || !Number.isSafeInteger(limits.maxPageBytes) || limits.maxPageBytes < 1 || !Number.isSafeInteger(limits.maxTotalBytes) || limits.maxTotalBytes < limits.maxPageBytes)) throw new Error("Invalid MCP tool inventory bounds.");
+  const foreground = botConnectorForegroundLifetime();
   const signal = AbortSignal.any([
     ...(options.signal ? [options.signal] : []),
+    ...(foreground ? [foreground.signal] : []),
     AbortSignal.timeout(30_000),
   ]);
   const assertCurrent = () => { signal.throwIfAborted(); options.assertCurrent(); };
@@ -109,11 +129,19 @@ export async function listMcpToolInventory<T extends { name: string }>(options: 
   const names = new Set<string>();
   const cursors = new Set<string>();
   let cursor: string | undefined;
-  for (let page = 0; page < MCP_TOOL_INVENTORY_MAX_PAGES; page++) {
+  let totalBytes = 0;
+  for (let page = 0; page < (limits?.maxPages ?? MCP_TOOL_INVENTORY_MAX_PAGES); page++) {
+    await foreground?.assertCurrent();
     assertCurrent();
     const result = await options.listPage(cursor, signal);
+    await foreground?.assertCurrent();
     assertCurrent();
-    if (!Array.isArray(result.tools) || tools.length + result.tools.length > MCP_TOOL_INVENTORY_MAX_TOOLS) {
+    if (limits) {
+      const copy = copyBoundedJson(result, { maxNodes: 20_000, maxDepth: 24, maxSize: limits.maxPageBytes + 128, measure: utf8Size });
+      const bytes = result.replyBytes ?? (copy === undefined ? Infinity : Buffer.byteLength(JSON.stringify(copy), "utf8"));
+      if (copy === undefined || !Number.isSafeInteger(bytes) || bytes < 0 || bytes > limits.maxPageBytes || (totalBytes += bytes) > limits.maxTotalBytes) throw new Error("MCP tool inventory exceeds the reply byte limit.");
+    }
+    if (!Array.isArray(result.tools) || tools.length + result.tools.length > (limits?.maxTools ?? MCP_TOOL_INVENTORY_MAX_TOOLS)) {
       throw new Error("MCP tool inventory exceeds the tool limit or is invalid.");
     }
     for (const tool of result.tools) {

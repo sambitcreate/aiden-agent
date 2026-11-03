@@ -131,6 +131,8 @@ Server chats have no schedule tool, so the model can't create or change schedule
 
 ## MCP connectors
 
+The built-in Composio consumer connection exposes one `composio` tool and one service allowance. Manage its enabled apps/tools in Composio; each call validates the current operation schema while Aiden's action approvals and Bot rules still apply. Old partial Custom grants and individual hidden-operation exclusions require the person's single Composio allowance before broader service access. Credential or endpoint changes still invalidate old calls. See [Composio access](../../docs/composio.md).
+
 The desktop's per-workspace skill and connector switches (Workspace settings) are not read by the server yet; it uses every skill and connector it has.
 
 `aiden-mcp.json` and the `aiden mcp` commands are the server's only MCP configuration. Pi's native `mcp.json` (`mcpServers` object) and its plaintext `mcp-auth.json` are never read and native servers are not started; native entries are not migrated, so add them again with `aiden mcp add`. An older Aiden array configuration in `mcp.json` still migrates to `aiden-mcp.json`, with an exact private backup in `mcp.pre-pi-1.json`. The source inode is retained under a private `.mcp-migration-*/mcp.json` recovery directory so concurrent writers cannot lose their data. A native object configuration is never migrated or overwritten, and conflicting legacy/new Aiden inventories stop with a reconciliation error.
