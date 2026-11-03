@@ -80,6 +80,31 @@ test("rename and delete announce the change; page state saves quietly", async (t
   assert.deepEqual(events.map((event) => event.reason), ["updated", "deleted"]);
 });
 
+test("earlier versions are listed newest first and a restore from the renderer never approves commands", async (t) => {
+  const { invoke, events, store } = await setup(t);
+  const current = (await store.get("ws1", "art1"))!.artifact;
+  const wider = [{ name: "pulls", kind: "shell" as const, command: "gh pr list --state all --json number", parse: "json" as const }];
+  await store.replace("ws1", "art1", { title: "PRs", visual: current.visual, sources: wider, actions: [], refresh: current.refresh }, { approved: true });
+
+  const history = (await invoke(WORKSPACE_ARTIFACT_CHANNELS.history, "ws1", "art1")) as { revision: number; commandsChanged: boolean }[];
+  assert.deepEqual(history.map((entry) => [entry.revision, entry.commandsChanged]), [[1, true]]);
+
+  for (const revision of [0, -1, 1.5, "1", undefined, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.restore, "ws1", "art1", revision), /Invalid revision/u);
+  }
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.restore, "ws1", "art1", 7), /no longer kept/u);
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.history, "ws-gone", "art1"), /no longer exists/u);
+  assert.equal(events.length, 0);
+
+  // Extra arguments cannot smuggle in an approval.
+  const restored = (await invoke(WORKSPACE_ARTIFACT_CHANNELS.restore, "ws1", "art1", 1, { approved: true })) as { revision: number; approvedDigest?: string };
+  assert.equal(restored.revision, 3);
+  assert.equal(restored.approvedDigest, undefined);
+  assert.deepEqual(events, [{ workspaceId: "ws1", artifactId: "art1", reason: "updated" }]);
+  const [view] = (await invoke(WORKSPACE_ARTIFACT_CHANNELS.list, "ws1")) as WorkspaceArtifactView[];
+  assert.deepEqual(view!.artifact.sources, current.sources);
+});
+
 const DIGEST = "c".repeat(64);
 
 test("refresh and buttons run in the resolved workspace folder, and only with well-formed input", async (t) => {

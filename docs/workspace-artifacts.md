@@ -63,15 +63,27 @@ Changing a workspace's access cancels any refresh or button already running. Com
 
 ## Managing pages
 
-The page header has a switcher between pages, the time of the last refresh, **Refresh**, and a menu with **Ask Aiden to change this**, **Rename** and **Delete**. Delete asks for confirmation first. Aiden deletes a page only when the person asks, and its delete always shows an approval card.
+The page header has a switcher between pages, the time of the last refresh, **Refresh**, and a menu with **Ask Aiden to change this**, **Rename**, **Earlier versions** and **Delete**. Delete asks for confirmation first. Aiden deletes a page only when the person asks, and its delete always shows an approval card.
 
 Pages and their saved data are stored on the device under Aiden's user data folder (`workspace-artifacts/`), not in the repository, and they are not part of portable settings. Removing a workspace removes its pages.
+
+## Earlier versions
+
+Aiden keeps the last 5 versions of each page, so a bad update can be undone. Every update by Aiden (and every restore) keeps the version it replaced; renaming a page, allowing its commands and the page's own state do not make a version.
+
+- **Earlier versions…** in the page menu lists them newest first, with when each was replaced and its name at the time if it differed. **Restore** makes that version the page again as a new version, so a restore can itself be undone the same way.
+- You can also ask Aiden, for example "undo the last change to the PR board". It uses the `workspace_artifact` tool's `restore` operation, and `list` shows each page's `earlierRevisions`.
+- A restore keeps the page's current name.
+- Under Ask, a version whose commands differ from the ones you allowed needs allowing again: the page menu marks it "Different commands — needs allowing again", and Aiden's restore shows an approval card listing the commands, like an update. A version with the same commands as the allowed ones restores without asking. A version with commands can't be restored in a workspace without folder access.
+- After a restore from the page menu, the page re-reads its sources if it is allowed to.
+
+Earlier versions are stored on the device next to the pages (`<workspaceId>.history.json`), never with an approval. They are deleted with the page, and with the workspace. If the history file is damaged it is replaced rather than repaired; the pages themselves are unaffected.
 
 ## For developers
 
 - Shared contract and parsers: `renderer/shared/workspace-artifacts.ts`.
 - Store, tool, runner, page check and skill: `main/services/workspace-artifacts/`. The page check (`check.ts`) uses the evaluator's `onRead` hook, which only the check sets, to record each `$name` and member read the page actually takes.
-- IPC: `workspaces:artifacts:list`, `rename`, `delete`, `saveState`, `approve`, `refresh` and `run`, plus the `workspaces:artifacts-changed` notification (`main/handlers/workspace-artifacts.ts`).
+- IPC: `workspaces:artifacts:list`, `rename`, `delete`, `saveState`, `approve`, `refresh`, `run`, `history` and `restore` (which never records an approval), plus the `workspaces:artifacts-changed` notification (`main/handlers/workspace-artifacts.ts`).
 - Tab: `renderer/components/artifacts-panel.tsx`, wired into the Environment panel.
 - Tests: `npm run test:workspace-artifacts`.
 - Design and decisions: [Workspace Artifacts plan](plans/workspace-artifacts-plan.md).

@@ -108,7 +108,18 @@ export interface WorkspaceArtifactView {
   digest: string;
 }
 
-export type WorkspaceArtifactChangeReason = "created" | "updated" | "deleted" | "refreshed";
+/** One earlier version of a page that Restore can bring back. */
+export interface WorkspaceArtifactRevisionSummary {
+  revision: number;
+  /** When that version was replaced. */
+  savedAt: number;
+  /** The page's name at that time; a restore keeps the current name. */
+  title: string;
+  /** Its commands differ from the current page's, so under Ask it needs allowing again. */
+  commandsChanged: boolean;
+}
+
+export type WorkspaceArtifactChangeReason ="created" | "updated" | "deleted" | "refreshed";
 
 export interface WorkspaceArtifactsChangedEvent {
   workspaceId: string;

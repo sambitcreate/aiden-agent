@@ -12,6 +12,10 @@ import { WorkspaceArtifactStore } from "./store.js";
 /** Device-local and never portable: artifacts can run commands in a local folder. */
 export const workspaceArtifactStore = new WorkspaceArtifactStore({
   root: () => path.join(app.getPath("userData"), "workspace-artifacts"),
+  // History is a convenience: a failed write is logged and the update stands.
+  onHistoryError: (error) => {
+    logger.error("workspace", "Could not keep an earlier version of an artifact.", error);
+  },
 });
 
 /**

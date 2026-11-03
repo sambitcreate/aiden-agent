@@ -9,7 +9,7 @@ import { ArtifactsPanel } from "./artifacts-panel";
 import { EnvironmentPanelProvider, useEnvironmentPanel } from "./environment-panel";
 import { WorkspaceTerminalProvider } from "./terminal-drawer";
 import { WorkspaceToolLauncher } from "./workspace-tool-launcher";
-import { TooltipProvider } from "./ui";
+import { Toaster, TooltipProvider } from "./ui";
 import { WorkspaceProvider } from "../lib/workspace-context";
 import { CommandSystemProvider } from "../lib/command-system";
 import type { Workspace } from "../lib/types";
@@ -40,6 +40,7 @@ function view(
     digest?: string;
     refreshedAt?: number;
     intervalSeconds?: number;
+    revision?: number;
   } = {},
 ): WorkspaceArtifactView {
   const compiled = compileAum(
@@ -69,7 +70,7 @@ function view(
       actions: options.actions ?? [],
       refresh: { onOpen: true, ...(options.intervalSeconds ? { intervalSeconds: options.intervalSeconds } : {}) },
       ...(options.approved ? { approvedDigest: digest } : {}),
-      revision: 1,
+      revision: options.revision ?? 1,
       createdAt: 1,
       updatedAt: 1,
     },
@@ -163,6 +164,104 @@ test("a delete dialog open on a page that goes away never offers to delete the p
   await waitFor(() => assert.equal(screen.queryByRole("alertdialog"), null));
   screen.getByRole("button", { name: "Actions for Release" });
   assert.equal(calls.some((call) => call.channel === "workspaces:artifacts:delete"), false);
+});
+
+/**
+ * Lets an IPC answer land and React apply it. (A waitFor on a closing dialog
+ * can spin in jsdom while Radix moves focus, so these tests settle instead.)
+ */
+const settle = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+
+test("earlier versions are listed newest first, and restoring one re-reads the page once it arrives", async () => {
+  const now = Date.now();
+  const calls = installBotTestIpc({
+    "workspaces:artifacts:history": () => [
+      { revision: 2, savedAt: now - 60_000, title: "Open PRs", commandsChanged: false },
+      { revision: 1, savedAt: now - 3_600_000, title: "Pulls", commandsChanged: true },
+    ],
+    "workspaces:artifacts:restore": () => view("art1", "Open PRs", { approved: true, revision: 4 }).artifact,
+    "workspaces:artifacts:refresh": () => ({}),
+  });
+  const refreshes = () => calls.filter((call) => call.channel === "workspaces:artifacts:refresh").length;
+  const panel = (revision: number) => (
+    <TooltipProvider>
+      <ArtifactsPanel
+        workspace={WORKSPACE}
+        active
+        selectedId={null}
+        onSelect={() => undefined}
+        onAskAiden={() => undefined}
+        artifacts={state([view("art1", "Open PRs", { approved: true, pulls: [], revision })])}
+      />
+    </TooltipProvider>
+  );
+  const { rerender } = render(panel(3));
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Actions for Open PRs" }), { button: 0, pointerType: "mouse" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Earlier versions/u }));
+  const dialog = await screen.findByRole("dialog");
+  const list = await within(dialog).findByRole("list", { name: "Earlier versions" });
+  const rows = within(list).getAllByRole("listitem");
+  assert.deepEqual(
+    rows.map((row) => /Revision \d/u.exec(row.textContent ?? "")?.[0]),
+    ["Revision 2", "Revision 1"],
+  );
+  // Only the version with other commands warns, and only it was named differently.
+  assert.equal(within(rows[0]!).queryByText(/needs allowing again/u), null);
+  within(rows[1]!).getByText(/Different commands — needs allowing again/u);
+  within(rows[1]!).getByText(/Named “Pulls”/u);
+  assert.deepEqual(calls.find((call) => call.channel === "workspaces:artifacts:history")!.args, [WORKSPACE.id, "art1"]);
+
+  fireEvent.click(within(rows[1]!).getByRole("button", { name: "Restore revision 1" }));
+  await settle();
+  assert.equal(screen.queryByRole("dialog"), null);
+  assert.deepEqual(calls.find((call) => call.channel === "workspaces:artifacts:restore")!.args, [WORKSPACE.id, "art1", 1]);
+  assert.equal(refreshes(), 0);
+  // The restored version arrives through the change notification's reload.
+  rerender(panel(4));
+  await waitFor(() => assert.equal(refreshes(), 1));
+});
+
+test("a page without earlier versions says how many are kept, and a failed restore keeps the dialog open", async () => {
+  let entries: unknown[] = [];
+  installBotTestIpc({
+    "workspaces:artifacts:history": () => entries,
+    "workspaces:artifacts:restore": () => {
+      throw new Error("Revision 1 of this artifact is no longer kept.");
+    },
+  });
+  render(
+    <TooltipProvider>
+      <ArtifactsPanel
+        workspace={WORKSPACE}
+        active
+        selectedId={null}
+        onSelect={() => undefined}
+        onAskAiden={() => undefined}
+        artifacts={state([view("art1", "Open PRs", { approved: true, pulls: [] })])}
+      />
+      <Toaster />
+    </TooltipProvider>,
+  );
+  const open = async () => {
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Actions for Open PRs" }), { button: 0, pointerType: "mouse" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Earlier versions/u }));
+    return screen.findByRole("dialog");
+  };
+  let dialog = await open();
+  await within(dialog).findByText("No earlier versions yet. Aiden keeps the last 5 versions of a page.");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  await settle();
+  assert.equal(screen.queryByRole("dialog"), null);
+
+  entries = [{ revision: 1, savedAt: Date.now(), title: "Open PRs", commandsChanged: false }];
+  dialog = await open();
+  fireEvent.click(await within(dialog).findByRole("button", { name: "Restore revision 1" }));
+  await screen.findByText(/no longer kept/u);
+  screen.getByRole("dialog");
+  within(dialog).getByRole("button", { name: "Restore revision 1" });
 });
 
 test("Ask Aiden to change this hands the page to the chat", async () => {

@@ -34,11 +34,12 @@ export { WORKSPACE_ARTIFACT_TOOL_NAME };
 const MAX_MARKUP_CHARS = 400_000;
 const MAX_REPORTED_DIAGNOSTICS = 12;
 
-type Operation = "create" | "update" | "list" | "delete" | "run";
+type Operation = "create" | "update" | "list" | "delete" | "run" | "restore";
 
 interface ArtifactToolInput {
   operation?: unknown;
   id?: unknown;
+  revision?: unknown;
   title?: unknown;
   description?: unknown;
   markup?: unknown;
@@ -56,7 +57,10 @@ export interface WorkspaceArtifactToolOptions {
   permission: WorkspaceArtifactPermission;
   /** The workspace has a folder the tools may read. */
   hasFolder: boolean;
-  store: Pick<WorkspaceArtifactStore, "list" | "get" | "create" | "replace" | "delete">;
+  store: Pick<
+    WorkspaceArtifactStore,
+    "list" | "get" | "create" | "replace" | "delete" | "revision" | "restore" | "earlierRevisions"
+  >;
   /**
    * Takes (once) the command digest an allowed approval card showed for this
    * call. A save records an approval only when its commands match it.
@@ -85,13 +89,30 @@ export interface WorkspaceArtifactToolOptions {
 
 function operationOf(input: ArtifactToolInput): Operation {
   const value = input.operation;
-  if (value === "create" || value === "update" || value === "list" || value === "delete" || value === "run") return value;
-  throw new Error('operation must be "create", "update", "list", "delete" or "run".');
+  if (
+    value === "create" ||
+    value === "update" ||
+    value === "list" ||
+    value === "delete" ||
+    value === "run" ||
+    value === "restore"
+  ) {
+    return value;
+  }
+  throw new Error('operation must be "create", "update", "list", "delete", "run" or "restore".');
 }
 
 function idOf(input: ArtifactToolInput): string {
   if (!isWorkspaceArtifactId(input.id)) throw new Error("Give the artifact id from workspace_artifact list.");
   return input.id;
+}
+
+function revisionOf(input: ArtifactToolInput): number {
+  const value = input.revision;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error("revision is required: one of the page's earlierRevisions from list.");
+  }
+  return value;
 }
 
 /** The action a run call names on a page, and the values it passes. */
@@ -267,6 +288,27 @@ export async function workspaceArtifactCallApproval(
     return { required: true, summary: `Delete the artifact "${existing.artifact.visual.title}" from this workspace.` };
   }
   if (options.permission !== "ask") return { required: false };
+  if (operation === "restore") {
+    // A restore that brings back commands other than the approved ones asks,
+    // exactly as an update with those commands would.
+    if (!isWorkspaceArtifactId(input.id)) return { required: false };
+    let revision: number;
+    try {
+      revision = revisionOf(input);
+    } catch {
+      return { required: false };
+    }
+    const view = await options.store.get(options.workspaceId, input.id);
+    const entry = view ? await options.store.revision(options.workspaceId, input.id, revision) : undefined;
+    if (!view || !entry || !workspaceArtifactHasCommands(entry.sources, entry.actions)) return { required: false };
+    const digest = workspaceArtifactDigest(entry.sources, entry.actions);
+    if (view.artifact.approvedDigest === digest) return { required: false };
+    return {
+      required: true,
+      digest,
+      summary: `Restore revision ${revision} of the artifact "${view.artifact.visual.title}". It can run these commands in this workspace whenever it refreshes or you press its buttons:\n${describeWorkspaceArtifactCommands(entry.sources, entry.actions)}`,
+    };
+  }
   // Store reads may throw; the caller blocks the call rather than skip the card.
   const previous =
     operation === "update" && isWorkspaceArtifactId(input.id)
@@ -306,7 +348,7 @@ function describeSources(results: Record<string, WorkspaceArtifactSourceResultV1
   return lines.length ? `\n${heading}:\n${lines.join("\n")}` : "";
 }
 
-function listing(views: readonly WorkspaceArtifactView[]): string {
+function listing(views: readonly WorkspaceArtifactView[], earlier: Record<string, number[]>): string {
   if (views.length === 0) return "This workspace has no artifacts yet.";
   return JSON.stringify(
     views.map(({ artifact, snapshot }) => ({
@@ -314,6 +356,7 @@ function listing(views: readonly WorkspaceArtifactView[]): string {
       title: artifact.visual.title,
       ...(artifact.description ? { description: artifact.description } : {}),
       revision: artifact.revision,
+      ...(earlier[artifact.id]?.length ? { earlierRevisions: earlier[artifact.id] } : {}),
       sources: artifact.sources.map((source) => ({
         name: source.name,
         kind: source.kind,
@@ -341,6 +384,30 @@ function text(value: string): AgentToolResult<null> {
  * commands a save showed, and under Ask only those run an action.
  */
 export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOptions): AgentTool {
+  /**
+   * After a save: the first refresh, then the page checked against its data.
+   * The page is already saved, so neither may make the save look failed.
+   */
+  async function afterSave(artifact: WorkspaceArtifactV1, signal: AbortSignal | undefined): Promise<string> {
+    let firstRefresh = "";
+    let results: Record<string, WorkspaceArtifactSourceResultV1> | undefined;
+    if (options.refresh && artifact.sources.length > 0) {
+      try {
+        results = await options.refresh(artifact, signal);
+        firstRefresh = describeSources(results);
+      } catch (error) {
+        firstRefresh = `\nFirst refresh failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+    let pageCheck: string;
+    try {
+      pageCheck = describeWorkspaceArtifactPageCheck(checkWorkspaceArtifactPage(artifact, results));
+    } catch {
+      pageCheck = "\nPage check unavailable.";
+    }
+    return `${firstRefresh}${pageCheck}`;
+  }
+
   async function runPageAction(input: ArtifactToolInput, shownDigest: string | undefined, signal: AbortSignal | undefined) {
     const view = await options.store.get(options.workspaceId, idOf(input));
     if (!view) throw new Error("No artifact with that id exists in this workspace.");
@@ -380,7 +447,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
       name: WORKSPACE_ARTIFACT_TOOL_NAME,
       label: "Artifact",
       description:
-        "Keep an interactive page in this workspace's Artifacts tab (beside the chat), for status the person will come back to: open pull requests, a release checklist, a TODO board. Unlike render_ui, the page persists for every chat in the workspace and re-reads live data from named sources (a shell command or a workspace file, bound in markup as $name) each time it refreshes. Always list first and update an existing artifact instead of creating a near-duplicate. Delete only when the person asks. run performs one of a page's actions exactly as its button would; use it only when the person asks for that action. Read the aiden-artifacts skill before the first call.",
+        "Keep an interactive page in this workspace's Artifacts tab (beside the chat), for status the person will come back to: open pull requests, a release checklist, a TODO board. Unlike render_ui, the page persists for every chat in the workspace and re-reads live data from named sources (a shell command or a workspace file, bound in markup as $name) each time it refreshes. Always list first and update an existing artifact instead of creating a near-duplicate. Delete only when the person asks. run performs one of a page's actions exactly as its button would; use it only when the person asks for that action. restore brings back one of the page's earlierRevisions (from list) as a new revision, keeping its current title; use it when the person wants to undo or go back to an earlier version. Read the aiden-artifacts skill before the first call.",
       parameters: Type.Object({
         operation: Type.Union([
           Type.Literal("create"),
@@ -388,8 +455,12 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           Type.Literal("list"),
           Type.Literal("delete"),
           Type.Literal("run"),
+          Type.Literal("restore"),
         ]),
-        id: Type.Optional(Type.String({ description: "The artifact id from list; required for update, delete and run." })),
+        id: Type.Optional(Type.String({ description: "The artifact id from list; required for update, delete, run and restore." })),
+        revision: Type.Optional(
+          Type.Integer({ description: "restore: one of the page's earlierRevisions from list.", minimum: 1 }),
+        ),
         action: Type.Optional(Type.String({ description: "run: the name of the page's action, from list." })),
         args: Type.Optional(
           Type.Array(Type.Union([Type.String(), Type.Number()]), {
@@ -455,8 +526,30 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         if (options.workspaceExists && !(await options.workspaceExists())) {
           throw new Error("This workspace no longer exists.");
         }
-        if (operation === "list") return text(listing(await store.list(workspaceId)));
+        if (operation === "list") {
+          const [views, earlier] = await Promise.all([store.list(workspaceId), store.earlierRevisions(workspaceId)]);
+          return text(listing(views, earlier));
+        }
         if (operation === "run") return text(await runPageAction(input, shownDigest, signal));
+        if (operation === "restore") {
+          const id = idOf(input);
+          const revision = revisionOf(input);
+          const current = await store.get(workspaceId, id);
+          if (!current) throw new Error("No artifact with that id exists in this workspace.");
+          const entry = await store.revision(workspaceId, id, revision);
+          if (!entry) {
+            throw new Error(`Revision ${revision} of this artifact is no longer kept. List the artifact for its earlierRevisions.`);
+          }
+          assertSourcesRunnable(entry, options);
+          // Only an allowed card that listed exactly the restored commands covers them.
+          const approved = shownDigest !== undefined && shownDigest === workspaceArtifactDigest(entry.sources, entry.actions);
+          if (signal?.aborted) throw new Error("The restore was cancelled.");
+          const artifact = await store.restore(workspaceId, id, revision, { approved });
+          options.onChanged({ workspaceId, artifactId: artifact.id, reason: "updated", chatId });
+          return text(
+            `Restored revision ${revision} of the artifact "${artifact.visual.title}" as revision ${artifact.revision}.${await afterSave(artifact, signal)}`,
+          );
+        }
         if (operation === "delete") {
           const id = idOf(input);
           const existing = await store.get(workspaceId, id);
@@ -478,26 +571,9 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
           ? await store.replace(workspaceId, previous.id, content, { approved })
           : await store.create(workspaceId, content, { approved, chatId });
         options.onChanged({ workspaceId, artifactId: artifact.id, reason: previous ? "updated" : "created", chatId });
-        let firstRefresh = "";
-        let results: Record<string, WorkspaceArtifactSourceResultV1> | undefined;
-        if (options.refresh && artifact.sources.length > 0) {
-          try {
-            results = await options.refresh(artifact, signal);
-            firstRefresh = describeSources(results);
-          } catch (error) {
-            firstRefresh = `\nFirst refresh failed: ${error instanceof Error ? error.message : String(error)}`;
-          }
-        }
-        // The page is already saved: a check that fails must not make the save look failed.
-        let pageCheck: string;
-        try {
-          pageCheck = describeWorkspaceArtifactPageCheck(checkWorkspaceArtifactPage(artifact, results));
-        } catch {
-          pageCheck = "\nPage check unavailable.";
-        }
         const verb = previous ? "Updated" : "Created";
         return text(
-          `${verb} the artifact "${artifact.visual.title}" (id ${artifact.id}, revision ${artifact.revision}). It is shown in this workspace's Artifacts tab.${firstRefresh}${pageCheck}${describeDiagnostics(diagnostics)}`,
+          `${verb} the artifact "${artifact.visual.title}" (id ${artifact.id}, revision ${artifact.revision}). It is shown in this workspace's Artifacts tab.${await afterSave(artifact, signal)}${describeDiagnostics(diagnostics)}`,
         );
       },
     },

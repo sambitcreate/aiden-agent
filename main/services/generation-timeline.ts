@@ -364,6 +364,8 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
           return { label: "Delete artifact" };
         case "run":
           return { label: "Run artifact action", detail: safeDetail(values.action) };
+        case "restore":
+          return { label: "Restore artifact" };
         default:
           return { label: "Update artifact", detail: safeDetail(values.title) };
       }

@@ -137,6 +137,171 @@ test("page state is saved only while it stays small and wire-safe", async (t) =>
   await assert.rejects(store.saveState("ws1", artifact.id, { token: "x" }), /reserved/u);
 });
 
+function heading(text: string): ChatUiVisualV1 {
+  const compiled = compileAum(`<Visual title="x"><Text>${text}</Text></Visual>`);
+  return { ...page(), tree: compiled.tree!, fallbackText: compiled.fallbackText };
+}
+
+test("each update keeps the version it replaced, at most five per page, newest first", async (t) => {
+  const { store, reopen } = await openStore(t);
+  const created = await store.create("ws1", content({ visual: heading("v1") }));
+  for (let version = 2; version <= 7; version += 1) {
+    await store.replace("ws1", created.id, content({ visual: heading(`v${version}`) }));
+  }
+  const history = await reopen().history("ws1", created.id);
+  assert.deepEqual(
+    history.map((entry) => entry.revision),
+    [6, 5, 4, 3, 2],
+  );
+  assert.equal(history[0]!.title, "Open PRs");
+  assert.equal(history[0]!.commandsChanged, false);
+
+  // Renames, approvals and state saves are not versions.
+  await store.rename("ws1", created.id, "Pulls");
+  await store.saveState("ws1", created.id, { tab: "mine" });
+  const view = (await store.get("ws1", created.id))!;
+  await store.approve("ws1", created.id, view.digest);
+  assert.equal((await store.history("ws1", created.id)).length, 5);
+  assert.deepEqual(await store.earlierRevisions("ws1"), { [created.id]: [6, 5, 4, 3, 2] });
+});
+
+test("restore brings an earlier page back as a new revision under the current name, and can itself be undone", async (t) => {
+  const { store } = await openStore(t);
+  const created = await store.create("ws1", content({ visual: heading("first"), description: "Before" }));
+  await store.replace("ws1", created.id, content({ visual: heading("second"), title: "Pulls", description: "After" }));
+
+  const restored = await store.restore("ws1", created.id, 1);
+  assert.equal(restored.revision, 3);
+  assert.equal(restored.visual.title, "Pulls");
+  assert.equal(restored.description, "Before");
+  assert.match(restored.visual.fallbackText ?? "", /first/u);
+
+  const history = await store.history("ws1", created.id);
+  assert.deepEqual(history.map((entry) => [entry.revision, entry.title]), [
+    [2, "Pulls"],
+    [1, "Open PRs"],
+  ]);
+  const undone = await store.restore("ws1", created.id, 2);
+  assert.equal(undone.revision, 4);
+  assert.match(undone.visual.fallbackText ?? "", /second/u);
+});
+
+test("a restore keeps an approval only when it brings back the commands already approved", async (t) => {
+  const { store } = await openStore(t);
+  const created = await store.create("ws1", content(), { approved: true });
+  const risky = { ...pulls, command: "gh pr list --json number,title" };
+  // Revision 2: same commands, new page. Revision 3: different commands.
+  await store.replace("ws1", created.id, content({ visual: heading("two") }));
+  await store.replace("ws1", created.id, content({ sources: [risky] }), { approved: true });
+  const summaries = await store.history("ws1", created.id);
+  assert.deepEqual(
+    summaries.map((entry) => [entry.revision, entry.commandsChanged]),
+    [
+      [2, true],
+      [1, true],
+    ],
+  );
+
+  const back = await store.restore("ws1", created.id, 2);
+  assert.equal(back.approvedDigest, undefined, "earlier commands must be allowed again");
+  const view = (await store.get("ws1", created.id))!;
+  await store.approve("ws1", created.id, view.digest);
+  const same = await store.restore("ws1", created.id, 1);
+  assert.equal(same.approvedDigest, workspaceArtifactDigest([pulls], []));
+  const forced = await store.restore("ws1", created.id, 3, { approved: true });
+  assert.equal(forced.approvedDigest, workspaceArtifactDigest([risky], []));
+});
+
+test("restoring a version that is no longer kept fails clearly", async (t) => {
+  const { store } = await openStore(t);
+  const created = await store.create("ws1", content());
+  for (let version = 2; version <= 7; version += 1) {
+    await store.replace("ws1", created.id, content({ visual: heading(`v${version}`) }));
+  }
+  await assert.rejects(store.restore("ws1", created.id, 1), /Revision 1 of this artifact is no longer kept/u);
+  await assert.rejects(store.restore("ws1", created.id, 7), /no longer kept/u);
+  assert.equal((await store.get("ws1", created.id))!.artifact.revision, 7);
+});
+
+test("deleting a page forgets its earlier versions", async (t) => {
+  const { store, reopen } = await openStore(t);
+  const created = await store.create("ws1", content());
+  const other = await store.create("ws1", content({ title: "Other" }));
+  await store.replace("ws1", created.id, content({ visual: heading("two") }));
+  await store.replace("ws1", other.id, content({ title: "Other", visual: heading("two") }));
+  await store.delete("ws1", created.id);
+  assert.deepEqual(await reopen().earlierRevisions("ws1"), { [other.id]: [1] });
+});
+
+test("a damaged history file is tolerated: bad entries are dropped and pages still save", async (t) => {
+  const { store, reopen, dir } = await openStore(t);
+  const created = await store.create("ws1", content());
+  await store.replace("ws1", created.id, content({ visual: heading("two") }));
+  const file = path.join(dir, "ws1.history.json");
+  const document = JSON.parse(await fs.readFile(file, "utf8")) as { revisions: Record<string, Record<string, unknown>[]> };
+  const good = document.revisions[created.id]![0]!;
+  document.revisions[created.id] = [
+    good,
+    { ...good, revision: 9, sources: [{ name: "x", kind: "file", file: "../../etc/passwd" }] },
+    { ...good, revision: 10, approvedDigest: "f".repeat(64) },
+  ];
+  (document.revisions as Record<string, unknown>)["../escape"] = [good];
+  await fs.writeFile(file, JSON.stringify(document));
+  const reopened = reopen();
+  assert.deepEqual(await reopened.earlierRevisions("ws1"), { [created.id]: [10, 1] });
+  // An approval written into history by hand is never restored.
+  assert.equal((await reopened.restore("ws1", created.id, 10)).approvedDigest, undefined);
+
+  await fs.writeFile(file, "{ not json");
+  const afterCorruption = reopen();
+  const saved = await afterCorruption.replace("ws1", created.id, content({ visual: heading("three") }));
+  assert.equal(saved.revision, 4);
+  assert.deepEqual(await afterCorruption.earlierRevisions("ws1"), { [created.id]: [3] });
+});
+
+test("history that would outgrow its file drops the oldest versions instead of failing the save", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  let clock = 1_000;
+  let ids = 0;
+  const errors: unknown[] = [];
+  const store = new WorkspaceArtifactStore({
+    root: () => dir,
+    now: () => (clock += 1),
+    newId: () => `art${++ids}`,
+    historyMaxBytes: 6_000,
+    onHistoryError: (error) => errors.push(error),
+  });
+  const first = await store.create("ws1", content({ visual: heading("a".repeat(800)) }));
+  const second = await store.create("ws1", content({ title: "Second", visual: heading("b".repeat(800)) }));
+  for (let version = 0; version < 4; version += 1) {
+    await store.replace("ws1", first.id, content({ visual: heading(`a${version}`.repeat(400)) }));
+    await store.replace("ws1", second.id, content({ title: "Second", visual: heading(`b${version}`.repeat(400)) }));
+  }
+  assert.deepEqual(errors, []);
+  assert.ok((await fs.stat(path.join(dir, "ws1.history.json"))).size <= 6_000);
+  const kept = await store.earlierRevisions("ws1");
+  // The newest version of each page survives; the oldest went first.
+  assert.equal(kept[second.id]![0], 4);
+  assert.ok(!(kept[first.id] ?? []).includes(1));
+  assert.equal((await store.get("ws1", first.id))!.artifact.revision, 5);
+});
+
+test("a history write that fails is reported, and the update still succeeds", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifacts-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const errors: unknown[] = [];
+  let ids = 0;
+  const store = new WorkspaceArtifactStore({ root: () => dir, newId: () => `art${++ids}`, onHistoryError: (error) => errors.push(error) });
+  const created = await store.create("ws1", content());
+  // A directory where the history file belongs: the history write cannot land.
+  await fs.mkdir(path.join(dir, "ws1.history.json"));
+  const saved = await store.replace("ws1", created.id, content({ visual: heading("two") }));
+  assert.equal(saved.revision, 2);
+  assert.equal((await store.get("ws1", created.id))!.artifact.revision, 2);
+  assert.equal(errors.length, 1);
+});
+
 test("ids from outside are checked before they reach the file system", async (t) => {
   const { store } = await openStore(t);
   await assert.rejects(store.list("../escape"), /workspace identifier/u);

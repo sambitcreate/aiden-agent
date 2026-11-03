@@ -300,6 +300,7 @@ import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-f
 import type {
   WorkspaceArtifactsChangedEvent,
   WorkspaceArtifactV1,
+  WorkspaceArtifactRevisionSummary,
   WorkspaceArtifactSourceResultV1,
   WorkspaceArtifactView,
 } from "../shared/workspace-artifacts";
@@ -1441,6 +1442,12 @@ export const workspaceArtifactsApi = {
   /** Runs one of the page's buttons; main fills in the saved command. */
   run: (workspaceId: string, artifactId: string, action: string, args: unknown[], digest: string) =>
     invoke<{ ok: boolean; output: string }>("workspaces:artifacts:run", workspaceId, artifactId, action, args, digest),
+  /** The page's kept earlier versions, newest first. */
+  history: (workspaceId: string, artifactId: string) =>
+    invoke<WorkspaceArtifactRevisionSummary[]>("workspaces:artifacts:history", workspaceId, artifactId),
+  /** Brings back an earlier version; commands that differ from the approved ones need allowing again. */
+  restore: (workspaceId: string, artifactId: string, revision: number) =>
+    invoke<WorkspaceArtifactV1>("workspaces:artifacts:restore", workspaceId, artifactId, revision),
   onChanged: (handler: (event: WorkspaceArtifactsChangedEvent) => void) =>
     onNotification<WorkspaceArtifactsChangedEvent>("workspaces:artifacts-changed", handler),
 };

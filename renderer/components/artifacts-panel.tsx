@@ -1,5 +1,5 @@
 import * as React from "react";
-import { MessageSquarePlus, MoreHorizontal, Pencil, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
+import { History, MessageSquarePlus, MoreHorizontal, Pencil, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 import { AidenUiBlock, type AidenUiAction } from "./aiden-ui/aiden-ui-block";
 import {
   AlertDialog,
@@ -37,6 +37,7 @@ import {
   WORKSPACE_ARTIFACT_LIMITS,
   resolveWorkspaceArtifactCommand,
   workspaceArtifactCommandList,
+  type WorkspaceArtifactRevisionSummary,
   type WorkspaceArtifactView,
 } from "../shared/workspace-artifacts";
 
@@ -161,7 +162,25 @@ function useArtifactRefresh(workspace: Workspace, view: WorkspaceArtifactView, a
     }, intervalSeconds * 1_000);
     return () => window.clearInterval(timer);
   }, [active, intervalSeconds, refresh]);
-  return { canRun, refreshing, error, refresh };
+  // A restore made here brings back sources whose saved data is from another
+  // version: once that revision arrives, re-read them if the page may run.
+  const [awaiting, setAwaiting] = React.useState<{ artifactId: string; revision: number } | null>(null);
+  const revision = view.artifact.revision;
+  React.useEffect(() => {
+    if (!awaiting) return;
+    if (awaiting.artifactId !== artifactId) {
+      setAwaiting(null);
+      return;
+    }
+    if (revision < awaiting.revision) return;
+    setAwaiting(null);
+    if (active) void refresh();
+  }, [active, artifactId, awaiting, refresh, revision]);
+  const refreshAtRevision = React.useCallback(
+    (target: number) => setAwaiting({ artifactId, revision: target }),
+    [artifactId],
+  );
+  return { canRun, refreshing, error, refresh, refreshAtRevision };
 }
 
 function ArtifactView({
@@ -201,7 +220,7 @@ function ArtifactView({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <ArtifactsHeader
-        workspaceId={workspace.id}
+        workspace={workspace}
         views={views}
         view={view}
         refresh={refresh}
@@ -377,14 +396,14 @@ function ArtifactsSkeleton() {
 }
 
 function ArtifactsHeader({
-  workspaceId,
+  workspace,
   views,
   view,
   refresh,
   onSelect,
   onAskAiden,
 }: {
-  workspaceId: string;
+  workspace: Workspace;
   views: readonly WorkspaceArtifactView[];
   view: WorkspaceArtifactView;
   refresh: ReturnType<typeof useArtifactRefresh>;
@@ -394,6 +413,8 @@ function ArtifactsHeader({
   // Each dialog belongs to the page it was opened on, and closes if another page takes its place.
   const [renaming, setRenaming] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState<string | null>(null);
+  const [browsing, setBrowsing] = React.useState<string | null>(null);
+  const workspaceId = workspace.id;
   const artifactId = view.artifact.id;
   const menuTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const title = view.artifact.visual.title;
@@ -458,6 +479,10 @@ function ArtifactsHeader({
             <Pencil aria-hidden="true" />
             Rename…
           </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setBrowsing(artifactId)}>
+            <History aria-hidden="true" />
+            Earlier versions…
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem color="red" onSelect={() => setDeleting(artifactId)}>
             <Trash2 aria-hidden="true" />
@@ -478,7 +503,150 @@ function ArtifactsHeader({
         workspaceId={workspaceId}
         view={view}
       />
+      <ArtifactHistoryDialog
+        open={browsing === artifactId}
+        onOpenChange={(open) => setBrowsing(open ? artifactId : null)}
+        workspace={workspace}
+        view={view}
+        onRestored={refresh.refreshAtRevision}
+        returnFocus={() => menuTriggerRef.current}
+      />
     </div>
+  );
+}
+
+type HistoryLoad =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; entries: WorkspaceArtifactRevisionSummary[] };
+
+/**
+ * The page's kept earlier versions, newest first. Restoring one makes it the
+ * page again as a new version, so a restore can itself be undone here.
+ */
+function ArtifactHistoryDialog({
+  open,
+  onOpenChange,
+  workspace,
+  view,
+  onRestored,
+  returnFocus,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  workspace: Workspace;
+  view: WorkspaceArtifactView;
+  /** Called with the page's new revision so it can re-read its sources once it arrives. */
+  onRestored: (revision: number) => void;
+  returnFocus: () => HTMLElement | null;
+}) {
+  const [load, setLoad] = React.useState<HistoryLoad>({ status: "loading" });
+  const [restoring, setRestoring] = React.useState<number | null>(null);
+  const [attempt, setAttempt] = React.useState(0);
+  const artifactId = view.artifact.id;
+  const title = view.artifact.visual.title;
+  // Read each time the dialog opens, so it lists what is kept now.
+  React.useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoad({ status: "loading" });
+    workspaceArtifactsApi.history(workspace.id, artifactId).then(
+      (entries) => {
+        if (!cancelled) setLoad({ status: "ready", entries });
+      },
+      (cause: unknown) => {
+        if (!cancelled) setLoad({ status: "error", message: cause instanceof Error ? cause.message : "Could not load earlier versions." });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [artifactId, attempt, open, workspace.id]);
+  // Only under Ask does a version with other commands wait to be allowed.
+  const ask = workspace.permission === "ask" && Boolean(workspace.folderPath);
+  // A ref, so a second press in the same frame sees the first one.
+  const restoringRef = React.useRef(false);
+  const restore = async (revision: number) => {
+    if (restoringRef.current) return;
+    restoringRef.current = true;
+    setRestoring(revision);
+    try {
+      const restored = await workspaceArtifactsApi.restore(workspace.id, artifactId, revision);
+      onRestored(restored.revision);
+      onOpenChange(false);
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Could not restore this version.");
+    } finally {
+      restoringRef.current = false;
+      setRestoring(null);
+    }
+  };
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Earlier versions"
+      description={`Restore an earlier version of “${title}”. It keeps its current name, and you can undo a restore here too.`}
+      confirmHidden
+      returnFocus={returnFocus}
+    >
+      {load.status === "loading" ? (
+        <div role="status" aria-label="Loading earlier versions" aria-busy="true" className="flex flex-col gap-2">
+          {[72, 56].map((width) => (
+            <div key={width} className="flex h-12 items-center rounded-card bg-well px-3">
+              <span className="h-2.5 animate-pulse rounded-pill bg-control" style={{ width: `${width}%` }} />
+            </div>
+          ))}
+        </div>
+      ) : load.status === "error" ? (
+        <Callout color="warning" role="alert">
+          <div className="flex items-center gap-3">
+            <Text variant="small" className="min-w-0 flex-1">
+              {load.message}
+            </Text>
+            <Button size="small" onClick={() => setAttempt((value) => value + 1)}>
+              Try again
+            </Button>
+          </div>
+        </Callout>
+      ) : load.entries.length === 0 ? (
+        <Text variant="small" color="secondary" as="p">
+          No earlier versions yet. Aiden keeps the last 5 versions of a page.
+        </Text>
+      ) : (
+        <ul className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Earlier versions">
+          {load.entries.map((entry) => (
+            <li key={entry.revision} className="flex items-center gap-3 rounded-card bg-well p-3">
+              <div className="min-w-0 flex-1">
+                <Text variant="small-strong" as="p">
+                  Revision {entry.revision}
+                  <span className="font-normal text-tertiary"> · {formatRelativeTime(entry.savedAt)}</span>
+                </Text>
+                {entry.title !== title ? (
+                  <Text variant="small" color="secondary" as="p" truncate>
+                    Named “{entry.title}”
+                  </Text>
+                ) : null}
+                {ask && entry.commandsChanged ? (
+                  <Text variant="small" as="p" className="text-status-warning">
+                    Different commands — needs allowing again
+                  </Text>
+                ) : null}
+              </div>
+              {/* Not disabled while a restore runs: that would drop keyboard focus inside the dialog. */}
+              <Button
+                size="small"
+                aria-disabled={restoring !== null || undefined}
+                aria-label={`Restore revision ${entry.revision}`}
+                onClick={() => void restore(entry.revision)}
+              >
+                {restoring === entry.revision ? "Restoring…" : "Restore"}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Dialog>
   );
 }
 

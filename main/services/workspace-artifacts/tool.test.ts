@@ -196,3 +196,76 @@ test("the save checks the page against the first refresh's data", async (t) => {
   const updated = await call("c2", { operation: "update", id: "art1", markup: typo.replace("titel", "title") });
   assert.match(updated, /Page check: every value the page reads was found\./u);
 });
+
+test("restore brings back an earlier version, asking under Ask only for commands not already approved", async (t) => {
+  const { store, call, allow, options, events } = await harness(t, {
+    refresh: async () => ({ pulls: { status: "ok", at: 1, dataJson: "[]" } }),
+  });
+  const create = { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS], actions: [MERGE] };
+  await allow("c1", create);
+  await call("c1", create);
+  const wider = { ...PULLS, command: "gh pr list --state all --json number,title" };
+  const update = { operation: "update", id: "art1", sources: [wider], actions: [] };
+  await allow("c2", update);
+  await call("c2", update);
+
+  // Revision 1 runs other commands than the approved ones: the card lists them.
+  const restore = { operation: "restore", id: "art1", revision: 1 };
+  const card = await workspaceArtifactCallApproval(restore, options);
+  assert.equal(card.required, true);
+  assert.match(card.summary!, /^Restore revision 1 of the artifact "Open PRs"\./u);
+  assert.match(card.summary!, /Source pulls: gh pr list --json number,title/u);
+  assert.match(card.summary!, /Button “Merge pull request”: gh pr merge \{\{number\}\}/u);
+
+  await allow("c3", restore);
+  const text = await call("c3", restore);
+  assert.match(text, /^Restored revision 1 of the artifact "Open PRs" as revision 3\./u);
+  assert.match(text, /First refresh:\n- pulls: ok/u);
+  const view = (await store.get("ws1", "art1"))!;
+  assert.deepEqual(view.artifact.actions.map((action) => action.name), ["merge"]);
+  assert.equal(view.artifact.approvedDigest, view.digest);
+  assert.equal(events[events.length - 1]!.reason, "updated");
+
+  // The restored commands are the approved ones now, so restoring them again asks nothing.
+  assert.equal((await workspaceArtifactCallApproval(restore, options)).required, false);
+});
+
+test("a restore not confirmed under Ask comes back without its commands allowed", async (t) => {
+  const { store, call, allow } = await harness(t);
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] });
+  const update = { operation: "update", id: "art1", sources: [{ ...PULLS, command: "gh pr list --state all" }] };
+  await allow("c2", update);
+  await call("c2", update);
+  await call("c3", { operation: "restore", id: "art1", revision: 1 });
+  const view = (await store.get("ws1", "art1"))!;
+  assert.equal(view.artifact.revision, 3);
+  assert.equal(view.artifact.approvedDigest, undefined);
+});
+
+test("a revision with commands cannot be restored where the workspace has no folder access", async (t) => {
+  const { store, call, options } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] });
+  await call("c2", { operation: "update", id: "art1", sources: [] });
+  const noAccess = createWorkspaceArtifactTool({ ...options, permission: "none" });
+  const run = (id: string, args: Record<string, unknown>) => noAccess.execute(id, args as never, undefined);
+  await assert.rejects(run("c3", { operation: "restore", id: "art1", revision: 1 }), /no folder access/u);
+  assert.equal((await store.get("ws1", "art1"))!.artifact.revision, 2);
+  await assert.rejects(run("c4", { operation: "restore", id: "art1", revision: 9 }), /no longer kept/u);
+  await assert.rejects(run("c5", { operation: "restore", id: "art1" }), /revision is required/u);
+});
+
+test("list shows each page's earlier revisions so the model can restore one", async (t) => {
+  const { call } = await harness(t, { permission: "full" });
+  await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] });
+  await call("c2", { operation: "create", title: "Notes", markup: PAGE });
+  await call("c3", { operation: "update", id: "art1", description: "v2" });
+  await call("c4", { operation: "update", id: "art1", description: "v3" });
+  const listed = JSON.parse(await call("c5", { operation: "list" })) as { id: string; earlierRevisions?: number[] }[];
+  assert.deepEqual(
+    listed.map((entry) => [entry.id, entry.earlierRevisions]),
+    [
+      ["art1", [2, 1]],
+      ["art2", undefined],
+    ],
+  );
+});
