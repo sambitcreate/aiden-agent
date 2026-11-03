@@ -1112,6 +1112,7 @@ export function createConfigStore(
       }
       if (patch.cacheWarmingEnabled !== undefined && typeof patch.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
       if (patch.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(patch.usageLimitWaitHours)) throw new Error("Invalid usage limit wait setting.");
+      if (patch.botMessaging !== undefined && typeof patch.botMessaging !== "boolean") throw new Error("Invalid Bot messaging setting.");
       if (patch.botRoutinesGoAhead !== undefined && typeof patch.botRoutinesGoAhead !== "boolean") throw new Error("Invalid Bot routines setting.");
       if (patch.spendingLimits !== undefined) {
         const spendingLimits = parseSpendingLimitsSettings(patch.spendingLimits);

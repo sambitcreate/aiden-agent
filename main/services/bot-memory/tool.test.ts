@@ -175,3 +175,9 @@ test("a call aborted while its save reads memory is not published", async () => 
     hold.restore();
   }
 });
+
+test('Bot-message inputs cannot write memory', async () => {
+ const {botMemoryAllowed} = await import('./tool.js');
+ assert.equal(botMemoryAllowed(['bot:J:1:00112233-4455-4677-8899-aabbccddeeff']),false);
+ assert.equal(botMemoryAllowed(['botreply:00112233-4455-4677-8899-aabbccddeeff']),false);
+});

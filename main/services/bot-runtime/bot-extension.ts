@@ -1,3 +1,5 @@
+import { isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
+import { BOT_MESSAGE_INPUT_KIND, type BotMessageInputMetadata } from "./bot-input-entry.js";
 import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
 // The `aiden-bot` Pi Durable extension: everything a Bot turn needs from
 // Aiden, installed in a Bot harness's registry before anything can run.
@@ -197,7 +199,13 @@ export interface BotToolCallCheck {
 
 export type BotReadmission = { ok: true } | { ok: false; reason: "access_changed" | "bot_missing" };
 
+export interface BotApprovalOwner {
+  runId: string;
+  inputs: Array<{submissionId: string; requestId?: string; botMessage?: BotMessageInputMetadata}>;
+}
+
 export interface BotApprovalRequest {
+  owner?: BotApprovalOwner;
   botId: string;
   /** Stable across restarts for the same tool call. */
   waitId: string;
@@ -232,6 +240,7 @@ export interface BotTurnContext {
 export type BotCompaction = Parameters<CompactionHooks["beforeCompact"]>[0];
 
 export interface BotExtensionDeps {
+  now?(): number;
   /** Re-read on every refresh. */
   loadBot(botId: string): Promise<BotDefinition>;
   /** Base, persona, authority and guidance sections, in this order. Built after `currentTools`. */
@@ -455,12 +464,32 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId },
     context: Context,
   ): Promise<(string | undefined)[]> {
+    return (await runOwner(api, context)).inputs.map(input => input.requestId);
+  }
+
+  async function runOwner(
+    api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId }, context: Context,
+  ): Promise<BotApprovalOwner> {
     const live = await api.snapshot(LiveDoc, api.conversationId, context);
-    const inputs = live?.run?.inputs ?? [];
-    if (inputs.length === 0) return [];
-    if (harness === undefined) throw new Error("The Bot harness is not attached.");
-    const { submissions } = await harness.inspect(context);
-    return inputs.map((id) => submissions.find((submission) => submission.id === id)?.requestId);
+    if (!harness) throw new Error("The Bot harness is not attached.");
+    const {submissions} = await harness.inspect(context);
+    const conversation = await harness.conversation(api.conversationId, context);
+    const inputs = await Promise.all((live?.run?.inputs ?? []).map(async id => {
+      const submission = submissions.find(s => s.id === id);
+      const entry = submission?.type === "input" && submission.entry !== undefined && conversation
+        ? await conversation.commit(tx => tx.entry(submission.entry!), context) : undefined;
+      return {submissionId: String(id), ...(submission?.requestId !== undefined ? {requestId: submission.requestId} : {}),
+        ...(entry?.kind === BOT_MESSAGE_INPUT_KIND ? {botMessage: entry.data as unknown as BotMessageInputMetadata} : {})};
+    }));
+    return {runId: String(live?.run?.taskId ?? api.conversationId), inputs};
+  }
+
+  function expired(owner: BotApprovalOwner): boolean {
+    return owner.inputs.some(input => isBotMessageRequestId(input.requestId) &&
+      (!input.botMessage || !Number.isFinite(input.botMessage.deadline) || input.botMessage.deadline <= (deps.now?.() ?? Date.now())));
+  }
+  async function assertLive(api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId }, context: Context): Promise<void> {
+    if (expired(await runOwner(api, context))) throw new Error("This Bot message expired. No further actions can run.");
   }
 
   /** Whether the run being served may use `bot_memory`. */
@@ -476,6 +505,9 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   const hooks = [
     hook(GenerationTask, {
       beforeRequest: async (request, api, context) => {
+        const owner = await runOwner(api, context);
+        const messageExpired = expired(owner);
+        if (messageExpired && owner.inputs.every(input => isBotMessageRequestId(input.requestId))) return failClosed(api.taskId, context, new Error("This Bot message expired."));
         if (!admitted) {
           const readmission = await deps.readmit(botId);
           if (!readmission.ok) {
@@ -491,7 +523,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           const refusal = await deps.spending.refusal(botId, await runRequestIds(api, context));
           if (refusal !== undefined) return failClosed(api.taskId, context, new BotSpendingLimitError(refusal));
         }
-        let messages = request.messages;
+        let messages = messageExpired ? withoutTools(request.messages, () => true) : request.messages;
         const turnAllows = deps.turnAllows;
         if (turnAllows !== undefined) {
           const requestIds = await runRequestIds(api, context);
@@ -502,6 +534,11 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         messages = withNewestToolImages(messages, "browser_snapshot", BOT_BROWSER_SNAPSHOT_IMAGES_KEPT);
         messages = withNewestToolImages(messages, BOT_COMPUTER_TOOL_NAME, BOT_COMPUTER_CAPTURE_IMAGES_KEPT, BOT_OLDER_COMPUTER_CAPTURE_NOTE);
         if (deps.imageInput !== undefined && !(await deps.imageInput(botId))) messages = withImageReferences(messages);
+        const finalOwner = await runOwner(api, context);
+        if (expired(finalOwner)) {
+          if (finalOwner.inputs.every(input => isBotMessageRequestId(input.requestId))) return failClosed(api.taskId, context, new Error("This Bot message expired."));
+          messages = withoutTools(messages, () => true);
+        }
         return messages === request.messages ? undefined : { messages };
       },
       afterResponse: async (message, api, context) => {
@@ -537,6 +574,8 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     }),
     hook(ToolTask, {
       beforeTool: async (call, api, context) => {
+        const owner = await runOwner(api, context);
+        if (expired(owner)) return {block: "This Bot message expired. No further actions can run."};
         // A rule hand-off the person already answered is applied as answered,
         // whatever the rules say now: re-deciding could run a call the person
         // already did themselves.
@@ -570,6 +609,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
             }, context);
           },
         });
+        if (expired(await runOwner(api, context))) return {block: "This Bot message expired."};
         if (!decision.allowed) return { block: decision.reason };
         // A hand-off card belongs to a call in the transcript, which a script's call is not.
         if (decision.handoff !== undefined && call.parent !== undefined) return { block: scriptHandoffBlock(call.name) };
@@ -617,7 +657,9 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         if (decision.approval === undefined) return undefined;
         if (decision.approval.preapproved === true) {
           try {
+            await assertLive(api, context);
             await decision.approval.onAllow?.();
+            await assertLive(api, context);
           } catch (error) {
             return { block: error instanceof Error ? error.message : "This action can no longer run." };
           }
@@ -637,17 +679,22 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         // A wait first opened as a hand-off (the rules changed since) asks with
         // today's summary under the same wait id.
         const summary = memo.kind === "handoff" ? decision.approval.summary : memo.summary;
+        await assertLive(api, context);
         const answer = await deps.requestApproval({
           botId,
           waitId: memo.waitId,
           toolCallId: memo.toolCallId,
           toolName: call.name,
           summary,
+          owner: await runOwner(api, context),
           signal: context.abortSignal,
         });
+        if (expired(await runOwner(api, context))) return {block: "This Bot message expired. The approval window ended."};
         if (answer !== "allow") return { block: "The person declined this action." };
         try {
-          await decision.approval.onAllow?.();
+          await assertLive(api, context);
+            await decision.approval.onAllow?.();
+            await assertLive(api, context);
         } catch (error) {
           return { block: error instanceof Error ? error.message : "This action can no longer run." };
         }
@@ -717,7 +764,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       ]);
       const tools = offered.map((entry): DurableTool => {
         const { tool, replay, mcp, bind } = entry;
-        const adapted = adaptAidenTool(tool, { replay: mcp ? "unsafe" : replay, ...(bind === undefined ? {} : { bind, runRequestIds }) });
+        const adapted = adaptAidenTool(tool, { assertRunActive: assertLive, replay: mcp ? "unsafe" : replay, ...(bind === undefined ? {} : { bind, runRequestIds }) });
         // Only the scriptable tools resolve for a script's calls.
         return scriptable.includes(entry) ? adapted : { ...adapted, callers: ["model"] };
       });

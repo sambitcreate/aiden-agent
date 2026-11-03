@@ -1260,3 +1260,22 @@ test("a Bot declares a rarely used tool only after loading it, and keeps it decl
     await harness.close(ctx);
   }
 });
+
+test('message_bot is offered only for a person or an eligible hop-1 turn',async()=>{
+ const state=assemblyState(full(botHome()));
+ const deps=assemblyDeps(state,{candidates:()=>[{tool:countingTool('message_bot')}]});
+ const d='00112233-4455-4677-8899-aabbccddeeff';
+ for(const id of [undefined,`bot:J:1:${d}`]) assert.ok((await deps.currentTools({id:'bot-1'} as never,{requestId:id})).some(e=>e.tool.name==='message_bot'));
+ for(const id of [`bot:J:2:${d}`,`botreply:${d}`,'routine:x:1','tg:x']) assert.ok(!(await deps.currentTools({id:'bot-1'} as never,{requestId:id})).some(e=>e.tool.name==='message_bot'));
+});
+for(const baseline of [false,true])test(`Bot-message approvals ask the person, baseline=${baseline}`,async()=>{
+ const turn=ruledTurn({rules:()=>rulesWith('ask'),baseline,routinesGoAhead:()=>true});
+ const decision=await turn.deps.checkPolicy('bot-1','computer_use',{callId:'call',args:{text:'x'},signal:undefined,requestIds:['bot:J:1:00112233-4455-4677-8899-aabbccddeeff']});
+ assert.equal(decision.allowed,true);if(!decision.allowed)return;
+ assert.ok(decision.approval?.summary.startsWith('Rule · '));assert.equal(decision.approval?.preapproved,undefined);
+});
+test('rule hand-offs on Bot-message turns block without opening a card',async()=>{
+ const turn=ruledTurn({rules:()=>rulesWith('hand_off')});
+ const decision=await turn.deps.checkPolicy('bot-1','computer_use',{callId:'call',args:{text:'x'},signal:undefined,requestIds:['bot:J:1:00112233-4455-4677-8899-aabbccddeeff']});
+ assert.deepEqual(decision,{allowed:false,reason:ruleUnattendedBlock(PURCHASE_LABEL)});
+});

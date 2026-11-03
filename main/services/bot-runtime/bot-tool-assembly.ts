@@ -51,7 +51,7 @@ import type {
   BotTurnContext,
 } from "./bot-extension.js";
 import { ruleAskUnattendedBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
-import { botToolApprovalSummary, botToolVerdict, botTurnOf, SUBAGENT_TOOL, type BotToolFacts } from "./bot-tool-policy.js";
+import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, botTurnOf, SUBAGENT_TOOL, type BotToolFacts } from "./bot-tool-policy.js";
 import type { BotToolCall, ToolReplay } from "./tool-adapter.js";
 
 /** One admission of the Bot's current authority. Release it when done. */
@@ -191,7 +191,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
    * for) used that grant's effect, so a tool that changed since, such as one
    * that turned from read-only to mutating, never runs under the old answer.
    */
-  function fenced(botId: string, tool: AgentTool, mcp: boolean): AgentTool {
+  function fenced(botId: string, tool: AgentTool, mcp: boolean, call?: BotToolCall): AgentTool {
     return {
       ...tool,
       async execute(toolCallId, params, signal, onUpdate) {
@@ -206,6 +206,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
           }
           if (admission.signal.aborted) throw admission.signal.reason;
           const effectSignal = signal ? AbortSignal.any([signal, admission.signal]) : admission.signal;
+          await call?.assertRunActive?.();
           return await tool.execute(toolCallId, params, effectSignal, onUpdate);
         } finally {
           admission.release();
@@ -220,17 +221,18 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       try {
         const facts = await ports.sources.facts(botId, admission);
         const set = await ports.sources.candidates(botId, admission, facts, turn);
-        const { telegram, routine } = botTurnOf(turn.requestId);
+        const { telegram, routine, botMessage } = botTurnOf(turn.requestId);
         const entries: BotToolEntry[] = [];
         for (const candidate of set.tools) {
-          if (!(await botToolVerdict(candidate.tool.name, facts, { telegram, routine })).allowed) continue;
+          if (!botIngressAllowsTool(candidate.tool.name, [turn.requestId])) continue;
+          if (!(await botToolVerdict(candidate.tool.name, facts, { telegram, routine, botMessage })).allowed) continue;
           const bind = candidate.bind;
-          const guard = (tool: AgentTool) => (candidate.interactive ? tool : fenced(botId, tool, candidate.mcp === true));
+          const guard = (tool: AgentTool, call?: BotToolCall) => (candidate.interactive ? tool : fenced(botId, tool, candidate.mcp === true, call));
           entries.push({
             tool: guard(candidate.tool),
             replay: replayOf(candidate),
             ...(candidate.mcp ? { mcp: true } : {}),
-            ...(bind === undefined ? {} : { bind: (call: BotToolCall) => guard(bind(call)) }),
+            bind: (call: BotToolCall) => guard(bind ? bind(call) : candidate.tool, call),
           });
         }
         offered.set(botId, {
@@ -254,8 +256,10 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         await admission.revalidateBeforeEffect();
         const facts = await ports.sources.facts(botId, admission);
         // The calling run's own ingress, not whoever refreshed the tools last.
+        if (call?.requestIds && !botIngressAllowsTool(toolName, call.requestIds)) return {allowed: false, reason: "This tool is not available on this turn."};
         const turns = (call?.requestIds ?? []).map(botTurnOf);
         const verdict = await botToolVerdict(toolName, facts, {
+          botMessage: turns.some((turn) => turn.botMessage),
           telegram: turns.some((turn) => turn.telegram),
           routine: turns.some((turn) => turn.routine),
         }, call?.args);
@@ -304,7 +308,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
           if (unattended && !goAhead) return { allowed: false, reason: ruleAskUnattendedBlock(label) };
           return ask({ summary: `Rule · ${label} — ${callSummary}`, rule: ruleRef });
         }
-        if (unattended) return { allowed: false, reason: ruleUnattendedBlock(label) };
+        if (unattended || turns.some(turn => turn.botMessage)) return { allowed: false, reason: ruleUnattendedBlock(label) };
         const botName = (await ports.botName?.(botId).catch(() => undefined)) ?? "Your Bot";
         const open = live?.open !== undefined && isBotHandoffOpenUrl(live.open.url) ? { url: live.open.url } : undefined;
         return {

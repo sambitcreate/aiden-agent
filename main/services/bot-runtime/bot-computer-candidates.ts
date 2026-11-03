@@ -84,7 +84,7 @@ export async function botComputerCandidates(botId: string, input: BotComputerCan
       async execute(toolCallId, params, signal, onUpdate) {
         const turns = ((await call.runRequestIds?.()) ?? []).map(botTurnOf);
         const routine = input.routine || turns.some((turn) => turn.routine);
-        const telegram = input.telegram || turns.some((turn) => turn.telegram);
+        const telegram = input.telegram || turns.some((turn) => turn.telegram || turn.botMessage);
         const key = `${routine}:${telegram}`;
         let tool = variants.get(key);
         if (tool === undefined) {

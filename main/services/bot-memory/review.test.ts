@@ -354,3 +354,21 @@ test("the review offers an extra add-only tool with its own lines, behind the sa
     await harness.close(ctx);
   }
 });
+
+test('another Bots input and answer never have person provenance',async()=>{
+ const {provenanceOfHistory}=await import('./review.js');
+ const {harness,conversation,personTurns}=await setup(Array.from({length:8},()=>fauxAssistantMessage('answer')));
+ try {
+  await personTurns(1);
+  const requestId='bot:J:1:00112233-4455-4677-8899-aabbccddeeff';
+  await conversation.submit({type:'write',entry:{kind:BOT_NOTICE_ENTRY_KIND,data:{notice:'bot_message',requestId}}},ctx);
+  await (await conversation.submit({type:'input',content:'other Bot',requestId,entry:{kind:'aiden.bot-message-input',data:{kind:'request',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:Date.now()+60_000}}},ctx)).wait(ctx);
+  await personTurns(1);
+  const entries=(await conversation.context(ctx)).entries;
+  const provenance=await provenanceOfHistory(entries,ids=>conversation.commit(tx=>Promise.all(ids.map(id=>tx.submissionByRequest(conversation.id,id))),ctx));
+  const inputs=entries.filter(e=>e.model?.[0]?.role==='user');
+  assert.deepEqual(inputs.map(e=>provenance.get(e.id)),['person','unattended','person']);
+  const answers=entries.filter(e=>e.kind==='pi.assistant');
+  assert.deepEqual(answers.map(e=>provenance.get(e.id)),['person','unattended','person']);
+ } finally {await harness.close(ctx);}
+});

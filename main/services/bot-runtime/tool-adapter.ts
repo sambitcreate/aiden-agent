@@ -23,6 +23,7 @@ export type ToolReplay = "safe" | "unsafe";
 
 /** What a per-call tool may use of the conversation it runs in. */
 export interface BotToolCall {
+  assertRunActive?(): Promise<void>;
   readonly callId: string;
   readonly signal: AbortSignal;
   /** Committed entries of the calling conversation, newest first (the store's default scan order). */
@@ -45,6 +46,7 @@ export interface BotToolCall {
 }
 
 export interface AdaptOptions {
+  assertRunActive?(api: ToolExecutionApi, context: Context): Promise<void>;
   replay: ToolReplay;
   /** Build the tool for one call. `tool` still supplies the name, schema and description. */
   bind?: (call: BotToolCall) => AgentTool;
@@ -57,6 +59,7 @@ const ENTRY_PAGE = 500;
 function callApi(api: ToolExecutionApi, context: Context, signal: AbortSignal, opts: AdaptOptions): BotToolCall {
   const runRequestIds = opts.runRequestIds;
   return {
+    ...(opts.assertRunActive ? {assertRunActive: () => opts.assertRunActive!(api, context)} : {}),
     ...(runRequestIds === undefined ? {} : { runRequestIds: () => runRequestIds(api, context) }),
     callId: api.callId,
     signal,
@@ -146,6 +149,7 @@ export function adaptAidenTool(tool: AgentTool, opts: AdaptOptions): DurableTool
       const { signal, dispose } = linkedSignal(context);
       try {
         const target = opts.bind ? opts.bind(callApi(api, context, signal, opts)) : tool;
+        await opts.assertRunActive?.(api, context);
         const result = await target.execute(api.callId, args, signal, createUpdateForwarder(api, context));
         const details = toJson(result.details);
         return {

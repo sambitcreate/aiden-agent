@@ -886,3 +886,88 @@ test("(k) a pause that lands while a rule hand-off's answer is being recorded cl
     await service.shutdown();
   }
 });
+
+test('an expired authoritative Bot input makes no provider request', async () => {
+  const faux = createFauxModels([fauxAssistantMessage('must not run')]);
+  const deps = {...recordingDeps(), now:()=>100};
+  const {harness,root} = await memoryHarness(deps,faux);
+  try {
+    await (await root.submit({type:'input',content:'message',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',entry:{kind:'aiden.bot-message-input',data:{kind:'request',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:99}}},ctx)).wait(ctx);
+    assert.equal(faux.calls(),0);
+  } finally {await harness.close(ctx);}
+});
+
+test('Bot approvals carry actual owning input metadata and expiry blocks the effect', async () => {
+  let now = 1;
+  const tool = countingTool('change');
+  const deps = recordingDeps({tools:[{tool,replay:'unsafe'}],policy:()=>({allowed:true,approval:{summary:'change'}}),approve:async request=>{
+    assert.equal(request.owner?.inputs[0]?.botMessage?.deliveryId,'00112233-4455-4677-8899-aabbccddeeff');
+    now = 101;
+    return 'allow';
+  }});
+  const faux = createFauxModels([fauxAssistantMessage([fauxToolCall('change',{text:'x'})],{stopReason:'toolUse'}),fauxAssistantMessage('must not request again')]);
+  const {harness,root}=await memoryHarness({...deps,now:()=>now},faux);
+  try {
+    await (await root.submit({type:'input',content:'message',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',entry:{kind:'aiden.bot-message-input',data:{kind:'request',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:100}}},ctx)).wait(ctx);
+    assert.equal(tool.executions.length,0);
+    assert.equal(faux.calls(),1);
+  } finally {await harness.close(ctx);}
+});
+
+test('expiry with a joined human steer blocks new tools without aborting the persons work', async () => {
+ let now=1,entered=false,release:()=>void=()=>undefined;
+ const hold=countingTool('hold',async()=>{entered=true;await new Promise<void>(r=>{release=r;});return 'finished an already started action';});
+ const change=countingTool('change');
+ const faux=createFauxModels([fauxAssistantMessage([fauxToolCall('hold',{text:'x'})],{stopReason:'toolUse'}),fauxAssistantMessage([fauxToolCall('change',{text:'must block'})],{stopReason:'toolUse'}),fauxAssistantMessage('Answer for the person')]);
+ const {harness,root}=await memoryHarness({...recordingDeps({tools:[{tool:hold,replay:'unsafe'},{tool:change,replay:'unsafe'}]}),now:()=>now},faux);
+ try {
+  const bot=await root.submit({type:'input',content:'Bot message',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',entry:{kind:'aiden.bot-message-input',data:{kind:'request',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:100}}},ctx);
+  await waitFor(()=>entered);
+  const person=await root.submit({type:'input',content:'Please also explain this to me',requestId:'human-steer',whenBusy:'steer'},ctx);
+  now=101;release();
+  await Promise.all([bot.wait(ctx),person.wait(ctx)]);
+  assert.equal(change.executions.length,0);
+  const record=await root.commit(tx=>tx.submissionByRequest(root.id,'human-steer'),ctx);
+  assert.equal(record?.status,'done');assert.equal(faux.calls(),3);
+ } finally {release();await harness.close(ctx);}
+});
+
+test('several approval cards retain actual run ownership when the first input is human',async()=>{
+ const {createBotApprovals,publicBotApprovalPrompt}=await import('./bot-approvals.js');
+ let now=1,entered=false,release:()=>void=()=>undefined;
+ const gate=new Promise<void>(r=>{release=r;});
+ const hold=countingTool('hold',async()=>{entered=true;await gate;return 'done';});
+ const change=countingTool('change');
+ const sources:string[]=[];
+ const approvals=createBotApprovals({publish:()=>undefined,withdraw:prompt=>{sources.push(prompt.decisionSource??'missing');}});
+ const deps={...recordingDeps({tools:[{tool:hold,replay:'unsafe'},{tool:change,replay:'unsafe'}],policy:name=>name==='change'?{allowed:true,approval:{summary:'change'}}:{allowed:true}}),now:()=>now,requestApproval:approvals.request};
+ const faux=createFauxModels([fauxAssistantMessage([fauxToolCall('hold',{text:'hold'})],{stopReason:'toolUse'}),fauxAssistantMessage([fauxToolCall('change',{text:'one'}),fauxToolCall('change',{text:'two'})],{stopReason:'toolUse'}),fauxAssistantMessage('person answer')]);
+ const {harness,root}=await memoryHarness(deps,faux);
+ try {
+  const person=await root.submit({type:'input',content:'Person first',requestId:'person-first'},ctx);
+  await waitFor(()=>entered);
+  const bot=await root.submit({type:'input',content:'Bot second',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',whenBusy:'steer',entry:{kind:'aiden.bot-message-input',data:{kind:'request',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:100}}},ctx);
+  release();await waitFor(()=>approvals.pending().length===2);
+  for(const prompt of approvals.pending()) {
+   assert.equal('owner' in publicBotApprovalPrompt(prompt),false);
+   assert.equal(prompt.owner?.inputs[0]?.requestId,'person-first');
+   assert.equal(prompt.owner?.inputs[1]?.botMessage?.deliveryId,'00112233-4455-4677-8899-aabbccddeeff');
+  }
+  now=101;for(const prompt of approvals.pending())approvals.decide(prompt.waitId,'deny','expiry');
+  await Promise.all([person.wait(ctx),bot.wait(ctx)]);
+  assert.deepEqual(sources,['expiry','expiry']);assert.equal(change.executions.length,0);
+  assert.equal((await root.commit(tx=>tx.submissionByRequest(root.id,'person-first'),ctx))?.status,'done');
+ } finally {release();await harness.close(ctx);}
+});
+
+test('host-owned Bot inputs never qualify for routine preapproval',async()=>{
+ let routine:boolean|undefined;
+ const tool=countingTool('change');
+ const deps={...recordingDeps({tools:[{tool,replay:'unsafe'}]}),checkPolicy:async(_bot:string,_name:string,call?:import('./bot-extension.js').BotToolCallCheck)=>{routine=await call?.hasRoutineInputs?.();return {allowed:true as const};}};
+ const faux=createFauxModels([fauxAssistantMessage([fauxToolCall('change',{text:'x'})],{stopReason:'toolUse'}),fauxAssistantMessage('answer')]);
+ const {harness,root}=await memoryHarness(deps,faux);
+ try {
+  await (await root.submit({type:'input',content:'Bot message',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',entry:{kind:'aiden.bot-message-input',data:{kind:'request',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:Date.now()+60_000}}},ctx)).wait(ctx);
+  assert.equal(routine,false);assert.equal(tool.executions.length,1);
+ } finally {await harness.close(ctx);}
+});

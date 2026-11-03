@@ -1,3 +1,7 @@
+import { botMessageChainOf, botMessagingEnabled } from "../../../renderer/shared/bot-messages.js";
+import { botMessages, botMessageRoster } from "../bot-messages/messages-main.js";
+import { messageBotCandidate } from "../bot-messages/candidate.js";
+import { isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 // Production candidate tools for durable Bot turns, built by the same legacy
 // factories and gates `llm-client.ts` used for Bot generations:
 //
@@ -337,12 +341,14 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       const authority = admission.authority;
       const production = facts as ProductionFacts;
       const routineRun = turn.requestId?.startsWith("routine:") ?? false;
+      const messageTurn = isBotMessageRequestId(turn.requestId);
       const telegram = turn.requestId?.startsWith("tg:") ?? false;
       const has = (kind: string) => authority.otherCapabilities.some((grant) => grant.kind === kind);
       const workspace = { id: authority.managedHome.workspaceId, folderPath: authority.workingDirectory };
       const skillSnapshot = await production.skillSnapshot();
       const subagentsAllowed =
         has("subagents") &&
+        !messageTurn &&
         !routineRun &&
         !telegram &&
         subagentsAllowedForGeneration({
@@ -394,7 +400,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
           hasComputer: facts.hasComputer,
           supportsImages: facts.supportsImages,
           routine: routineRun,
-          telegram,
+          telegram: telegram || messageTurn,
           computers: async () => (await botComputerServices()).botComputers(),
           state: (control) => (botComputerToolState ??= createBotComputerToolState(control)),
           botName: async (id) => (await deps.botName?.(id).catch(() => undefined)) ?? "The Bot",
@@ -402,7 +408,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       );
       // The Bot's own browser. Never on routine or Telegram turns: nobody is
       // there to approve a click or use a held tab (blueprint G12).
-      if (has("browser") && !routineRun && !telegram) {
+      if (has("browser") && !messageTurn && !routineRun && !telegram) {
         tools.push(
           ...(await botBrowser.candidates(botId, {
             workspaceId: workspace.id,
@@ -478,8 +484,14 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       // Only in turns a person started (ingress also withholds it on routine,
       // catch-up, wake-up and intro runs), and only while the person's per-Bot
       // switch is on.
-      if (!routineRun && (await (await wakeUpServices()).botSelfWakeUpsEnabled(botId))) {
+      if (!messageTurn && !routineRun && (await (await wakeUpServices()).botSelfWakeUpsEnabled(botId))) {
         tools.push(wakeUpCandidate(botId, lazyWakeUps));
+      }
+      if (botMessageChainOf([turn.requestId]).canSend && botMessagingEnabled(await configStore.getSettings())) {
+        const roster = await botMessageRoster();
+        if (roster.find(b => b.id === botId)?.sendsMessages && roster.some(b => b.id !== botId && b.acceptsMessages)) {
+          tools.push(await messageBotCandidate(botId, {post: input => botMessages().post(input), roster: botMessageRoster}));
+        }
       }
       const signInOnComputer = has("computer") && facts.hasComputer;
       // A step in the Bot's own browser or on its computer: Open brings that forward, and phones finish it on the Mac.

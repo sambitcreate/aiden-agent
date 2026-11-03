@@ -1,3 +1,5 @@
+import { botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
+import { BOT_MESSAGE_INPUT_KIND, type BotMessageInputMetadata } from "./bot-input-entry.js";
 import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
 // The Bot turn path: every ingress (desktop, Remote, Telegram, routines)
 // reaches a Bot's one durable conversation through this service.
@@ -83,6 +85,7 @@ export type BotSessionState =
 
 /** A transcript notice entry; `data` of `aiden.bot-notice`. */
 export type BotNotice =
+  | ({ notice: "bot_message"; requestId: string } & BotMessageInputMetadata)
   | { notice: "interrupted"; submissionId: string }
   | { notice: "session_reset"; movedTo: string }
   /** Precedes a routine's input: the turn is labelled with the routine name. */
@@ -116,6 +119,8 @@ export interface BotInputAttachment {
 }
 
 export interface BotSendInput {
+  ifIdle?: boolean;
+  botMessage?: BotMessageInputMetadata;
   text: string;
   attachments?: readonly BotInputAttachment[];
   requestId: string;
@@ -133,6 +138,7 @@ export interface BotSendInput {
 }
 
 export type BotSessionErrorReason =
+  | "bot_busy"
   | "needs_model"
   | "model_error"
   | "unavailable"
@@ -166,6 +172,7 @@ function authorityOf(error: unknown): string | undefined {
 
 function defaultMessage(reason: BotSessionErrorReason): string {
   switch (reason) {
+    case "bot_busy": return "This Bot is busy.";
     case "needs_model":
       return "This Bot needs an AI model.";
     case "model_error":
@@ -430,7 +437,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     // `hiddenSubmissions` is latent: the only hidden sender (the self-intro) already has the
     // `intro:` prefix. Any future hidden sender needs a durable request-id prefix, because this
     // set is lost on restart.
-    return requestId.startsWith("routine:") || requestId.startsWith(BOT_INTRO_REQUEST_PREFIX) || hiddenSubmissions.has(String(record.id));
+    return isBotMessageRequestId(requestId) || requestId.startsWith("routine:") || requestId.startsWith(BOT_INTRO_REQUEST_PREFIX) || hiddenSubmissions.has(String(record.id));
   }
 
   function requireHost(): BotHarnessHost {
@@ -461,7 +468,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   }
 
   async function writeNotice(conversation: Conversation, notice: BotNotice): Promise<void> {
-    await conversation.submit({ type: "write", entry: { kind: BOT_NOTICE_ENTRY_KIND, data: notice } }, ctx);
+    await conversation.submit({ type: "write", ...(notice.notice === "bot_message" ? {requestId: `bot-message-notice:${notice.requestId}`} : {}), entry: { kind: BOT_NOTICE_ENTRY_KIND, data: {...notice} } }, ctx);
   }
 
   /**
@@ -736,10 +743,17 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     },
 
     send(botId, input) {
+      if (input.botMessage && (input.label !== undefined || input.hidden !== undefined)) return Promise.reject(new TypeError("Bot messages cannot be labelled or hidden."));
+      const turn = botMessageTurnOf(input.requestId);
+      if (isBotMessageRequestId(input.requestId) !== (input.botMessage !== undefined) || (input.botMessage && (
+        (turn.kind !== "message" && turn.kind !== "reply") || turn.deliveryId !== input.botMessage.deliveryId ||
+        (turn.kind === "message" ? input.botMessage.kind !== "request" || turn.fromBotId !== input.botMessage.botId : input.botMessage.kind !== "reply") ||
+        !Number.isFinite(input.botMessage.deadline)))) return Promise.reject(new TypeError("Bot message provenance does not match the request."));
       return serialize(botId, async () => {
         const { conversation, registry } = await openBot(botId);
         const existing = await lookupRequest(conversation, input.requestId);
         if (existing !== undefined) return { submissionId: String(existing.id), deduped: true };
+        if (input.botMessage && input.botMessage.deadline <= Date.now()) throw new BotSessionError("unavailable", "This Bot message expired.");
         // After the dedupe lookup, so a redelivered request still reports its submission.
         await assertNotPaused(botId);
         const spendingRefusal = await deps.spendingRefusal?.(botId);
@@ -747,6 +761,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
         const before = await currentState(botId);
         if (before.kind === "interrupted" && input.ifNotInterrupted) throw new BotSessionError("bot_paused");
+        if (input.ifIdle && before.kind !== "idle") throw new BotSessionError("bot_busy");
         await prepareToRun(botId, conversation, registry);
         if (before.kind === "interrupted") {
           await dismissPaused(conversation, before.submissionId);
@@ -758,13 +773,15 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         if (input.hidden === true) {
           await writeNotice(conversation, { notice: "hidden_input", requestId: input.requestId });
         }
+        if (input.botMessage && input.botMessage.deadline <= Date.now()) throw new BotSessionError("unavailable", "This Bot message expired.");
+        if (input.botMessage) await writeNotice(conversation, {notice: "bot_message", requestId: input.requestId, ...input.botMessage});
         const submission = await conversation.submit(
           {
             type: "input",
             content: userContent(input),
-            ...(input.label !== undefined && { entry: { kind: BOT_ROUTINE_INPUT_KIND } }),
+            ...(input.botMessage ? {entry: {kind: BOT_MESSAGE_INPUT_KIND, data: {...input.botMessage}}} : input.label !== undefined ? {entry: {kind: BOT_ROUTINE_INPUT_KIND}} : {}),
             requestId: input.requestId,
-            whenBusy: input.whenBusy ?? "followUp",
+            whenBusy: input.ifIdle ? "reject" : input.whenBusy ?? "followUp",
           },
           ctx,
         );
@@ -906,9 +923,22 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       await service.appendEntry(botId, BOT_NOTICE_ENTRY_KIND, { notice: "silent", submissionId });
     },
 
-    async appendEntry(botId, kind, data) {
-      const { conversation } = await openBot(botId);
-      await conversation.commit((tx) => tx.appendEntry(conversation.id, { kind, data }), ctx);
+    appendEntry(botId, kind, data) {
+      return serialize(botId, async () => {
+        const {conversation} = await openBot(botId);
+        const effectId = data && typeof data === "object" && !Array.isArray(data) ? data.effectId : undefined;
+        await conversation.commit(async tx => {
+          if (typeof effectId === "string") {
+            let cursor: Cursor | undefined;
+            do {
+              const page = await tx.scanEntries({conversationId: conversation.id}, 500, cursor);
+              if (page.items.some(e => e.kind === kind && (e.data as {effectId?: string} | undefined)?.effectId === effectId)) return;
+              cursor = page.next;
+            } while (cursor !== undefined);
+          }
+          await tx.appendEntry(conversation.id, {kind, data});
+        }, ctx);
+      });
     },
 
     pause(botId, by) {

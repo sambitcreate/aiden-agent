@@ -5,6 +5,7 @@ import {
   botElapsedLabel,
   botStepInfinitive,
   botStepPhrase,
+  botToolStepLabel,
   botToolApp,
   botToolPhase,
   nextBotAnnouncement,
@@ -140,4 +141,9 @@ test("step phrases read naturally and count repeats", () => {
   assert.equal(botStepPhrase("command", 2), "Ran 2 commands");
   assert.equal(botStepInfinitive("command"), "run a command");
   assert.equal(botStepInfinitive("app", "Notion"), "use Notion");
+});
+
+test('message_bot labels the peer',()=>{
+ assert.equal(botToolStepLabel('message_bot','helper','COS'),'Messaged COS');
+ assert.equal(botToolStepLabel('message_bot','helper'),'Messaged a Bot');
 });

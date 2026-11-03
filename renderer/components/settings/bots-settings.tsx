@@ -1,3 +1,4 @@
+import { botMessagingEnabled } from "../../shared/bot-messages";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { LockKeyhole } from "lucide-react";
@@ -23,6 +24,13 @@ export function BotsSettings() {
   const settings = useSettings();
   const { computerUse } = useAppCapabilities();
   const [pending, setPending] = React.useState<boolean | null>(null);
+  const [messagingPending, setMessagingPending] = React.useState<boolean | null>(null);
+  const changeMessaging = async (next: boolean) => {
+    setMessagingPending(next);
+    try { queryClient.setQueryData<AppSettings>(queryKeys.settings, await settingsApi.set({botMessaging: next})); }
+    catch { toast.error("Could not change Bot messaging."); }
+    finally { setMessagingPending(null); }
+  };
   const goAhead = pending ?? botRoutinesGoAhead(settings.data);
 
   // Instant: the switch moves at once and rolls back if it can't be saved.
@@ -40,6 +48,11 @@ export function BotsSettings() {
 
   return (
     <>
+      <FieldSet title="Other Bots">
+        <Field label="Bots can message each other" description="Bots can send each other messages and bring the answer back to their chat.">
+          <Switch aria-label="Bots can message each other" checked={messagingPending ?? botMessagingEnabled(settings.data)} disabled={messagingPending !== null || settings.isLoading} onCheckedChange={next => void changeMessaging(next)} />
+        </Field>
+      </FieldSet>
       <FieldSet title="Routines">
         <Field
           label="Go ahead without asking"

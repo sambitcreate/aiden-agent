@@ -13,9 +13,13 @@
 // being recorded as declined.
 
 import { ToolApprovalCoordinator, type ToolApprovalOutcome } from "../tool-approval.js";
-import type { BotApprovalRequest } from "./bot-extension.js";
+import type { BotApprovalOwner, BotApprovalRequest } from "./bot-extension.js";
+
+export type BotApprovalDecisionSource = "person" | "expiry" | "allow_list";
 
 export interface BotApprovalPrompt {
+  owner?: BotApprovalOwner;
+  decisionSource?: BotApprovalDecisionSource;
   botId: string;
   waitId: string;
   toolCallId: string;
@@ -23,10 +27,15 @@ export interface BotApprovalPrompt {
   summary: string;
 }
 
+/** Renderer prompts never carry the main-only run/input provenance or decision source. */
+export function publicBotApprovalPrompt(prompt: BotApprovalPrompt): Omit<BotApprovalPrompt, "owner" | "decisionSource"> {
+  return {botId: prompt.botId, waitId: prompt.waitId, toolCallId: prompt.toolCallId, toolName: prompt.toolName, summary: prompt.summary};
+}
+
 export interface BotApprovals {
   request(request: BotApprovalRequest): Promise<"allow" | "deny">;
   /** Answer a pending prompt by `waitId`. False when nothing is waiting under that id. */
-  decide(waitId: string, decision: "allow" | "deny"): boolean;
+  decide(waitId: string, decision: "allow" | "deny", source?: BotApprovalDecisionSource): boolean;
   /** Prompts waiting for an answer, oldest first; for one Bot when `botId` is given. */
   pending(botId?: string): BotApprovalPrompt[];
   /** Hear a prompt appear or settle (for example to update phones watching the Bot). */
@@ -45,6 +54,7 @@ function abortReason(signal: AbortSignal): unknown {
 }
 
 export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
+  const owners = new Map<string, BotApprovalOwner>();
   const waiting = new Map<string, BotApprovalPrompt>();
   const listeners = new Set<(botId: string) => void>();
   const changed = (botId: string) => {
@@ -54,6 +64,7 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
     (prompt) => {
       const botId = prompt.streamId.slice(STREAM_PREFIX.length);
       const published: BotApprovalPrompt = {
+        ...(owners.has(prompt.approvalId) ? {owner: owners.get(prompt.approvalId)} : {}),
         botId,
         waitId: prompt.approvalId,
         toolCallId: prompt.toolCallId,
@@ -77,6 +88,7 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
   return {
     async request(request) {
       if (request.signal?.aborted) throw abortReason(request.signal);
+      if (request.owner) owners.set(request.waitId, request.owner);
       const outcome = await coordinator.request(
         {
           streamId: `${STREAM_PREFIX}${request.botId}`,
@@ -87,11 +99,14 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
         },
         request.signal,
       );
+      owners.delete(request.waitId);
       if (outcome === "allowed") return "allow";
       if (request.signal?.aborted) throw abortReason(request.signal);
       return "deny";
     },
-    decide(waitId, decision) {
+    decide(waitId, decision, source = "person") {
+      const prompt = waiting.get(waitId);
+      if (prompt) prompt.decisionSource = source;
       return coordinator.decideAsHost(waitId, decision === "allow");
     },
     pending(botId) {

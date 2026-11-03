@@ -155,3 +155,11 @@ test("a Bot sets its own wake-ups only in turns a person started, and never from
     "a wake-up needs no approval card",
   );
 });
+
+test('Bot-message ingress withholds unattended tools and enforces the hop chain', () => {
+ const d = '00112233-4455-4677-8899-aabbccddeeff';
+ for(const name of ['ask_user_question','hand_off','sign_in','browser','routines','subagent','propose_skill','wake_up']) assert.equal(botIngressAllowsTool(name,[`bot:J:1:${d}`]),false,name);
+ for(const name of ['run_command','mcp__mail__send']) assert.equal(botIngressAllowsTool(name,[`bot:J:1:${d}`]),true);
+ for(const ids of [[undefined],['remote:d:k'],[`bot:J:1:${d}`]]) assert.equal(botIngressAllowsTool('message_bot',ids),true);
+ for(const ids of [[`bot:J:2:${d}`],[undefined,`botreply:${d}`],['routine:t:1'],['tg:1'],['intro:x']]) assert.equal(botIngressAllowsTool('message_bot',ids),false);
+});

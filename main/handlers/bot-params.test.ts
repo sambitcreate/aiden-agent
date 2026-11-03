@@ -252,3 +252,9 @@ test("the own-wake-ups switch crosses IPC only as a boolean", () => {
     assert.throws(() => parseBotUpdate({ ...base, selfWakeUps }), /wake-up|Invalid/u);
   }
 });
+
+test('messaging switch IPC rejects non-booleans',()=>{
+ const base={id:'bot-1',expectedRevision:'botrev:one',name:'Ada',instructions:'help',avatar:{version:1,shape:'hex',color:'sun'}};
+ assert.throws(()=>parseBotUpdate({...base,messagesOtherBots:'yes'}),/messaging/);
+ assert.equal(parseBotUpdate({...base,acceptsBotMessages:false}).acceptsBotMessages,false);
+});

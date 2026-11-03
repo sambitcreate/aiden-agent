@@ -1,3 +1,4 @@
+import { publicBotApprovalPrompt } from "../services/bot-runtime/bot-approvals.js";
 import { ipcMain, logger } from "../platform.js";
 import { chatStore } from "../services/chat-store.js";
 import { botApplicationService } from "../services/bot-application-service-main.js";
@@ -211,7 +212,7 @@ export function registerBotHandlers(): void {
     const { waitId, decision } = parseBotApprovalDecision(input);
     return { decided: botApprovals.decide(waitId, decision) };
   });
-  ipcMain.handle("bots:pendingApprovals", async (_event, id: unknown) => botApprovals.pending(parseBotId(id)));
+  ipcMain.handle("bots:pendingApprovals", async (_event, id: unknown) => botApprovals.pending(parseBotId(id)).map(publicBotApprovalPrompt));
   // Bot quick-reply questions: any desktop window may answer; the first answer wins.
   registerBotQuestionHandlers({ handle: (channel, handler) => ipcMain.handle(channel, handler), questions: botQuestions });
   // Bot hand-off cards: any desktop window may answer; the first answer wins. Open needs the app's own document.

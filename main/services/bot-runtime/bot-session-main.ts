@@ -1,3 +1,4 @@
+import { botMessages, disposeBotMessages } from "../bot-messages/messages-main.js";
 // Production wiring of the durable Bot runtime.
 //
 // One `BotSessionRuntime` per process, created after Bot storage and the
@@ -411,7 +412,11 @@ const extension: BotExtensionDeps = {
   turnAllows: withBotMemoryIngress(botIngressAllowsTool),
   afterReply: (botId) => memoryReview.afterReply(botId),
   beforeCompact: compactionSteering,
-  requestApproval: (request) => botApprovals.request(request),
+  requestApproval: async (request) => {
+    const window = await botMessages().announceWaiting(request.botId, request.owner?.inputs.map(i => i.requestId) ?? [], request.summary, request.waitId);
+    if (window?.expired) return "deny";
+    return botApprovals.request(request);
+  },
   // A rule that hands a call to the person opens a card on the same bridge as `hand_off`.
   requestHandoff: (request) => botHandoffs.request(ruleHandoffRequest(request, ruleHandoffTarget(request.toolName))),
   // Into the stopped call's own conversation, never through the harness host,
@@ -817,6 +822,7 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       },
       deleteRoutines,
       forgetDeliveries,
+      (botId) => botMessages().forgetBot(botId),
       (botId) => botIssues.forgetBot(botId),
       (botId) => botPauses.forgetBot(botId),
       // Its rules file goes, and no later edit can bring its directory back.
@@ -858,6 +864,7 @@ export function initializeBotSessionRuntime(): Promise<void> {
   initialized ??= botSessionRuntime()
     .then(async (service) => {
       const { removedOrphans, interrupted } = await service.initialize();
+      await botMessages().start();
       if (removedOrphans.length > 0) logger.info("bots", `Removed ${removedOrphans.length} orphaned Bot sessions.`);
       if (interrupted.length > 0) logger.info("bots", `${interrupted.length} Bot turns are waiting for Resume.`);
       if (!watchingResume) {
@@ -878,6 +885,7 @@ export function initializeBotSessionRuntime(): Promise<void> {
 
 export async function shutdownBotSessionRuntime(): Promise<void> {
   if (runtime === undefined) return;
+  await disposeBotMessages();
   const service = await runtime.catch(() => undefined);
   runtime = undefined;
   initialized = undefined;

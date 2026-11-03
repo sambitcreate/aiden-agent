@@ -305,7 +305,7 @@ interface NoticeData {
 function unattendedNoticeRequestId(entry: EntryRecord): string | undefined {
   if (entry.kind !== BOT_NOTICE_ENTRY_KIND) return undefined;
   const data = entry.data as NoticeData | undefined;
-  if (data?.notice !== "routine" && data?.notice !== "hidden_input") return undefined;
+  if (data?.notice !== "routine" && data?.notice !== "hidden_input" && data?.notice !== "bot_message") return undefined;
   return typeof data.requestId === "string" ? data.requestId : undefined;
 }
 

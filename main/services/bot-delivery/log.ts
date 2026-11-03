@@ -22,7 +22,7 @@ export const BOT_DELIVERIES_MAX = 200;
 /** The phone feed serves at most this many due rows, newest first. */
 export const BOT_DELIVERIES_DUE_MAX = 100;
 
-export type BotDeliveryClass = "routine_result" | "issue" | "proposal" | "digest";
+export type BotDeliveryClass = "bot_message" | "routine_result" | "issue" | "proposal" | "digest";
 
 export interface BotDeliveryRow {
   id: string;
@@ -81,6 +81,7 @@ export interface BotDeliveryLog {
 }
 
 const CLASSES: ReadonlySet<string> = new Set<BotDeliveryClass>([
+  "bot_message",
   "routine_result",
   "issue",
   "proposal",

@@ -1,3 +1,4 @@
+import { isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 // The `bot_memory` tool (spec 2026-10-09 §7).
 //
 // Main-owned and needs no file authority or approval: it writes only this
@@ -177,12 +178,12 @@ export function botMemoryToolEntry(botId: string, memory: Pick<BotMemoryRuntime,
 
 /** Whether a run serving inputs with these request ids may save memory: never on routine or self-intro turns. */
 export function botMemoryAllowed(requestIds: readonly (string | undefined)[]): boolean {
-  return !requestIds.some((id) => id?.startsWith("routine:") || id?.startsWith(BOT_INTRO_REQUEST_PREFIX));
+  return !requestIds.some((id) => isBotMessageRequestId(id) || id?.startsWith("routine:") || id?.startsWith(BOT_INTRO_REQUEST_PREFIX));
 }
 
 /** Wrap the ingress rule so `bot_memory` follows `botMemoryAllowed` and every other tool `base`. */
 export function withBotMemoryIngress(
   base: (name: string, requestIds: readonly (string | undefined)[]) => boolean,
 ): (name: string, requestIds: readonly (string | undefined)[]) => boolean {
-  return (name, requestIds) => (name === BOT_MEMORY_TOOL_NAME ? botMemoryAllowed(requestIds) : base(name, requestIds));
+  return (name, requestIds) => ((name === BOT_MEMORY_TOOL_NAME || name === "bot_recall") ? botMemoryAllowed(requestIds) : base(name, requestIds));
 }
