@@ -174,8 +174,20 @@ test("a connect card the Bot is suggesting as it pauses never wedges it: the pau
     fauxAssistantMessage("never"),
     fauxAssistantMessage("Hello again."),
   ]);
+  // The card's check finishes once the pause's close signals the tool, so the
+  // pause is always closing the session while the tool still works on the card.
+  const bind: typeof suggest.bind = (call) => {
+    const tool = suggest.bind!(call);
+    return {
+      ...tool,
+      execute(toolCallId, params, signal, onUpdate) {
+        signal?.addEventListener("abort", () => release(), { once: true });
+        return tool.execute(toolCallId, params, signal, onUpdate);
+      },
+    };
+  };
   const service = await serviceFor(tempProfile(), fauxModels, {
-    extension: recordingDeps({ tools: [{ tool: suggest.tool, replay: "unsafe", bind: suggest.bind! }] }),
+    extension: recordingDeps({ tools: [{ tool: suggest.tool, replay: "unsafe", bind }] }),
     suspendTimeoutMs: 300,
   });
   const within = <T>(work: Promise<T>, what: string) =>
@@ -187,9 +199,6 @@ test("a connect card the Bot is suggesting as it pauses never wedges it: the pau
     await service.send(BOT, { text: "check my mail", requestId: "desk-1" });
     await began;
     const pausing = service.pause(BOT, "mac");
-    // The pause is closing the Bot's session while the tool still works on its card.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    release();
     assert.equal((await within(pausing, "the pause")).kind, "paused");
     assert.equal(fauxModels.calls(), 1, "nothing ran under the pause");
     await within(service.unpause(BOT), "the unpause");
