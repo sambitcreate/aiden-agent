@@ -20,6 +20,13 @@ export const BOT_EVENT_ROUTINES_FILE = "event-routines.json";
 export const BOT_EVENT_ROUTINES_MAX = 16;
 export const BOT_WEBHOOK_LIMITS = { tokenBytes: 32, bodyBytes: 16_384 } as const;
 
+export interface BotEventReceipt {
+  eventId: string;
+  payload: string;
+  at: number;
+  watchRevision?: number;
+}
+
 export interface BotEventRoutine {
   id: string;
   botId: string;
@@ -37,14 +44,16 @@ export interface BotEventRoutine {
   seenEventIds: string[];
   lastRunAt?: number;
   day?: { key: string; count: number };
-  held?: { eventId: string; payload: string; at: number };
+  held?: BotEventReceipt;
   /** Accepted events whose run isn't recorded yet; replayed after a restart. */
-  running?: Array<{ eventId: string; payload: string; at: number }>;
+  running?: BotEventReceipt[];
   /** Watch routines only: what the last checks found. */
   watch?: BotWatchState;
 }
 
 export interface BotWatchState {
+  /** A detected change owed to the dispatcher; saved atomically with its baseline. */
+  pending?: { eventId: string; payload: string; revision: number; nextAttemptAt: number };
   /** sha256 hex of the last good output's exact bytes; absent until the baseline. */
   hash?: string;
   /** The last good output, cut to {@link BOT_WATCH_SNAPSHOT_CHARS}, for the next diff. */
@@ -66,11 +75,24 @@ export interface BotWatchState {
 export const BOT_WATCH_SNAPSHOT_CHARS = 16_000;
 const WATCH_RESULTS: ReadonlySet<string> = new Set<BotWatchResult>(["baseline", "no_change", "changed", "error"]);
 
+function watchPending(value: unknown): BotWatchState["pending"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const { eventId, payload, revision, nextAttemptAt } = value as Record<string, unknown>;
+  if (typeof eventId !== "string" || !/^[a-f0-9]{24}-[a-z0-9]+$/u.test(eventId)) return undefined;
+  if (typeof payload !== "string" || payload.length > BOT_ROUTINE_EVENT_LIMITS.payloadChars * 2 ||
+    [...payload].length > BOT_ROUTINE_EVENT_LIMITS.payloadChars) return undefined;
+  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0 ||
+    typeof nextAttemptAt !== "number" || !Number.isSafeInteger(nextAttemptAt) || nextAttemptAt < 0) return undefined;
+  return { eventId, payload, revision, nextAttemptAt };
+}
+
 function parseWatchState(value: unknown): BotWatchState {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { failures: 0 };
   const record = value as Record<string, unknown>;
+  const pending = watchPending(record.pending);
   const time = (key: string) => typeof record[key] === "number" && Number.isFinite(record[key]) ? { [key]: record[key] as number } : {};
   return {
+    ...(pending ? { pending } : {}),
     ...(typeof record.hash === "string" && /^[a-f0-9]{64}$/u.test(record.hash) ? { hash: record.hash } : {}),
     ...(typeof record.snapshot === "string" ? { snapshot: record.snapshot.slice(0, BOT_WATCH_SNAPSHOT_CHARS) } : {}),
     ...time("sameSince"),
@@ -107,7 +129,7 @@ export function viewOf(routine: BotEventRoutine): BotEventRoutineView {
 }
 
 function watchView(state: BotWatchState): NonNullable<BotEventRoutineView["watch"]> {
-  const { hash: _hash, snapshot: _snapshot, unsettledFailure: _unsettled, ...shown } = state;
+  const { hash: _hash, snapshot: _snapshot, unsettledFailure: _unsettled, pending: _pending, ...shown } = state;
   return shown;
 }
 
@@ -144,13 +166,14 @@ function parseRoutine(value: unknown, botId: string): BotEventRoutine | undefine
     ? record.seenEventIds.filter((id): id is string => typeof id === "string").slice(-BOT_ROUTINE_EVENT_LIMITS.seenIds)
     : [];
   const day = record.day && typeof record.day === "object" ? record.day as { key?: unknown; count?: unknown } : undefined;
-  const held = record.held && typeof record.held === "object" ? record.held as { eventId?: unknown; payload?: unknown; at?: unknown } : undefined;
+  const held = record.held && typeof record.held === "object" ? record.held as { eventId?: unknown; payload?: unknown; at?: unknown; watchRevision?: unknown } : undefined;
   const running = Array.isArray(record.running)
-    ? (record.running as Array<{ eventId?: unknown; payload?: unknown; at?: unknown } | null>)
-      .filter((entry): entry is { eventId: string; payload: string; at: number } =>
+    ? (record.running as Array<{ eventId?: unknown; payload?: unknown; at?: unknown; watchRevision?: unknown } | null>)
+      .filter((entry): entry is { eventId: string; payload: string; at: number; watchRevision?: unknown } =>
         !!entry && typeof entry.eventId === "string" && typeof entry.payload === "string" && typeof entry.at === "number")
       .slice(-BOT_EVENT_RUNNING_MAX)
-      .map(({ eventId, payload, at }) => ({ eventId, payload, at }))
+      .map(({ eventId, payload, at, watchRevision }) => ({ eventId, payload, at,
+        ...(typeof watchRevision === "number" && Number.isSafeInteger(watchRevision) ? { watchRevision } : {}) }))
     : [];
   return {
     id: record.id,
@@ -167,7 +190,8 @@ function parseRoutine(value: unknown, botId: string): BotEventRoutine | undefine
     ...(typeof record.lastRunAt === "number" ? { lastRunAt: record.lastRunAt } : {}),
     ...(day && typeof day.key === "string" && typeof day.count === "number" ? { day: { key: day.key, count: day.count } } : {}),
     ...(held && typeof held.eventId === "string" && typeof held.payload === "string" && typeof held.at === "number"
-      ? { held: { eventId: held.eventId, payload: held.payload, at: held.at } }
+      ? { held: { eventId: held.eventId, payload: held.payload, at: held.at,
+        ...(typeof held.watchRevision === "number" && Number.isSafeInteger(held.watchRevision) ? { watchRevision: held.watchRevision } : {}) } }
       : {}),
     ...(running.length ? { running } : {}),
     ...(trigger.kind === "watch" ? { watch: parseWatchState(record.watch) } : {}),
@@ -308,10 +332,24 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
         });
         if (clean.trigger.kind !== current.trigger.kind) throw new Error("Make a new routine to change what starts it.");
         const at = now();
+        const revision = Math.max(at, current.updatedAt + 1);
         const enabled = input.enabled ?? current.enabled;
-        const next: BotEventRoutine = { ...current, ...clean, enabled, updatedAt: at };
+        const next: BotEventRoutine = { ...current, ...clean, enabled, updatedAt: revision };
         if (clean.trigger.kind === "watch" && current.trigger.kind === "watch") {
           next.watch = nextWatchState(current.watch ?? { failures: 0 }, current.trigger, clean.trigger, !current.enabled && enabled, at);
+          if (next.watch.pending) {
+            if (clean.prompt !== current.prompt) delete next.watch.pending;
+            else next.watch = { ...next.watch, pending: { ...next.watch.pending, revision } };
+          }
+          if (clean.prompt === current.prompt && JSON.stringify(clean.trigger.source) === JSON.stringify(current.trigger.source)) {
+            if (next.held?.watchRevision === current.updatedAt) next.held = { ...next.held, watchRevision: revision };
+            if (next.running) next.running = next.running.map((event) => event.watchRevision === current.updatedAt ? { ...event, watchRevision: revision } : event);
+          } else {
+            // Retire queued output of the old source/task, including legacy
+            // receipts with no revision. A later harmless edit cannot revive it.
+            delete next.held;
+            delete next.running;
+          }
         }
         routines[index] = next;
         await save(botId, routines);

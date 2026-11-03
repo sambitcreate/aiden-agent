@@ -65,7 +65,7 @@ export interface BotEventRunnerDependencies {
 export function createBotEventRunner(dependencies: BotEventRunnerDependencies) {
   const inFlight = new Set<AbortController>();
   return {
-    async run(routine: BotEventRoutine, event: { eventId: string; source: BotRoutineTriggerKind; payload: string }): Promise<{ settled: boolean }> {
+    async run(routine: BotEventRoutine, event: { eventId: string; source: BotRoutineTriggerKind; payload: string }, signal?: AbortSignal): Promise<{ settled: boolean }> {
       const trigger = { kind: "event" as const, eventId: event.eventId, source: event.source, payload: event.payload };
       // The event's own request id as the run id: a replay after a restart
       // reads the recorded run or the admitted turn instead of sending again.
@@ -77,7 +77,7 @@ export function createBotEventRunner(dependencies: BotEventRunnerDependencies) {
         const run = await dependencies.executor.run(eventRoutineTask(routine), {
           trigger,
           runId: requestId,
-          signal: controller.signal,
+          signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
         });
         // Only a run recorded under the event's own id, and handed to the
         // delivery log, is settled; anything else is replayed on next start

@@ -6,6 +6,14 @@ import { BOT_ROUTINE_EVENT_LIMITS, type BotRoutineTriggerKind } from "../../../r
 import { BOT_EVENT_RUNNING_MAX, type BotEventRoutine, type BotEventRoutineStore } from "./store.js";
 
 export type BotRoutineEventOutcome = "queued" | "held" | "duplicate" | "daily_limit" | "disabled" | "unknown";
+export interface BotRoutineEvent {
+  eventId: string;
+  payload: string;
+  /** A watch hand-off must still be owed by this exact configuration. */
+  watchRevision?: number;
+  /** Live host authority only; never stored or accepted from a caller over IPC. */
+  isCurrent?: () => boolean;
+}
 
 export interface BotRoutineEventDispatcherDependencies {
   store: Pick<BotEventRoutineStore, "mutate" | "list">;
@@ -16,7 +24,9 @@ export interface BotRoutineEventDispatcherDependencies {
    * `settled: false` (or a throw): the outcome is unknown, so the receipt
    * stays for the next start to replay.
    */
-  run(routine: BotEventRoutine, event: { eventId: string; source: BotRoutineTriggerKind; payload: string }): Promise<{ settled: boolean } | void>;
+  run(routine: BotEventRoutine, event: { eventId: string; source: BotRoutineTriggerKind; payload: string }, signal?: AbortSignal): Promise<{ settled: boolean } | void>;
+  /** Re-admit watch source access at actual startup, including held/replayed work. */
+  authorizeRun?(routine: BotEventRoutine): Promise<{ signal: AbortSignal; release(): void } | { error: string }>;
   isPaused(botId: string): Promise<boolean>;
   now(): number;
   timeZone(): string;
@@ -32,6 +42,7 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
   const heldTimers = new Map<string, { cancel(): void }>();
   /** Runs started and admissions still deciding, not yet settled in the store, for `idle()`. */
   const pending = new Set<Promise<void>>();
+  const active = new Set<string>();
   let disposed = false;
   /**
    * Bumped by dispose(): work that began before a stop (an admission still
@@ -55,9 +66,10 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
   }
 
   /** The receipt list with this event added. Callers admit only below the bound, so none is dropped. */
-  function withRunning(routine: BotEventRoutine, event: { eventId: string; payload: string }, at: number) {
+  function withRunning(routine: BotEventRoutine, event: BotRoutineEvent, at: number) {
     const others = (routine.running ?? []).filter((entry) => entry.eventId !== event.eventId);
-    return [...others, { eventId: event.eventId, payload: event.payload, at }];
+    return [...others, { eventId: event.eventId, payload: event.payload, at,
+      ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}) }];
   }
 
   /** Every receipt slot holds an unfinished run: a new event waits as the held one. */
@@ -66,18 +78,43 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
   }
 
   /** Runs an accepted event, then drops its receipt once the run is recorded. A stopped dispatcher keeps the receipt instead. */
-  async function start(routine: BotEventRoutine, event: { eventId: string; payload: string }, armedFor: number): Promise<void> {
-    if (!live(armedFor)) return;
+  async function start(routine: BotEventRoutine, event: BotRoutineEvent, armedFor: number): Promise<void> {
+    const key = `${routine.botId}:${routine.id}:${event.eventId}`;
+    if (!live(armedFor) || event.isCurrent?.() === false || active.has(key)) return;
+    active.add(key);
     let settled = false;
+    let grant: { signal: AbortSignal; release(): void } | undefined;
     try {
-      settled = (await dependencies.run(routine, { ...event, source: routine.trigger.kind }))?.settled !== false;
+      if (routine.trigger.kind === "watch") {
+        const fresh = (await dependencies.store.list(routine.botId)).find((item) => item.id === routine.id);
+        if (!fresh?.enabled) return;
+        const receipt = fresh.running?.find((item) => item.eventId === event.eventId);
+        if (!receipt) return;
+        if (receipt.watchRevision !== undefined && fresh.updatedAt !== receipt.watchRevision) { settled = true; return; }
+        const admitted = await dependencies.authorizeRun?.(fresh);
+        if (admitted && "error" in admitted) return;
+        grant = admitted;
+        const ready = (await dependencies.store.list(routine.botId)).find((item) => item.id === routine.id);
+        if (!ready?.enabled) return;
+        const currentReceipt = ready.running?.find((item) => item.eventId === event.eventId);
+        if (!currentReceipt) return;
+        if (currentReceipt.watchRevision !== undefined && ready.updatedAt !== currentReceipt.watchRevision) { settled = true; return; }
+        routine = ready;
+      }
+      if (!live(armedFor) || event.isCurrent?.() === false || grant?.signal.aborted) return;
+      settled = (await dependencies.run(routine, { ...event, source: routine.trigger.kind }, grant?.signal))?.settled !== false;
     } finally {
-      if (settled) await dependencies.store.mutate(routine.botId, routine.id, (current) => {
-        const running = (current.running ?? []).filter((entry) => entry.eventId !== event.eventId);
-        if (running.length === (current.running ?? []).length) return { result: undefined };
-        const { running: _previous, ...rest } = current;
-        return { next: running.length ? { ...rest, running } : rest, result: undefined };
-      }).catch((error: unknown) => dependencies.onError?.(error));
+      grant?.release();
+      try {
+        if (settled) await dependencies.store.mutate(routine.botId, routine.id, (current) => {
+          const running = (current.running ?? []).filter((entry) => entry.eventId !== event.eventId);
+          if (running.length === (current.running ?? []).length) return { result: undefined };
+          const { running: _previous, ...rest } = current;
+          return { next: running.length ? { ...rest, running } : rest, result: undefined };
+        }).catch((error: unknown) => dependencies.onError?.(error));
+      } finally {
+        active.delete(key);
+      }
     }
   }
 
@@ -117,8 +154,8 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
     else if (retryAt !== undefined) armHeld(botId, routineId, retryAt, armedFor);
   }
 
-  async function emit(botId: string, routineId: string, event: { eventId: string; payload: string }, armedFor: number): Promise<BotRoutineEventOutcome> {
-    if (await dependencies.isPaused(botId)) return "disabled";
+  async function emit(botId: string, routineId: string, event: BotRoutineEvent, armedFor: number): Promise<BotRoutineEventOutcome> {
+    if (await dependencies.isPaused(botId) || event.isCurrent?.() === false || (event.watchRevision !== undefined && !live(armedFor))) return "disabled";
     const now = dependencies.now();
     const today = dayKey(now, dependencies.timeZone());
     // Cut by length first, so a huge payload is never spread into an array.
@@ -129,7 +166,11 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
       | { kind: "held"; at: number }
       | { kind: "queued"; routine: BotEventRoutine };
     const decision = await dependencies.store.mutate<Decision>(botId, routineId, (routine) => {
-      if (!routine.enabled) return { result: { kind: "disabled" as const } };
+      if (!routine.enabled || event.isCurrent?.() === false || (event.watchRevision !== undefined && !live(armedFor))) return { result: { kind: "disabled" as const } };
+      if (event.watchRevision !== undefined && (routine.trigger.kind !== "watch" ||
+        routine.updatedAt !== event.watchRevision || routine.watch?.pending?.eventId !== event.eventId)) {
+        return { result: { kind: "disabled" as const } };
+      }
       if (routine.seenEventIds.includes(event.eventId) || routine.held?.eventId === event.eventId) {
         return { result: { kind: "duplicate" as const } };
       }
@@ -143,14 +184,15 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
       const nextAllowed = full(routine) ? Math.max(gapEnds, now + BOT_ROUTINE_EVENT_LIMITS.minGapMs) : gapEnds;
       if (now < nextAllowed) {
         return {
-          next: { ...routine, seenEventIds, held: { eventId: event.eventId, payload, at: now } },
+          next: { ...routine, seenEventIds, held: { eventId: event.eventId, payload, at: now,
+            ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}) } },
           result: { kind: "held" as const, at: nextAllowed },
         };
       }
       // The receipt is written with the claim, before the caller hears
       // "queued": a quit before the run is recorded replays it.
       return {
-        next: { ...routine, seenEventIds, running: withRunning(routine, { eventId: event.eventId, payload }, now), lastRunAt: now, day: { key: today, count: count + 1 } },
+        next: { ...routine, seenEventIds, running: withRunning(routine, { ...event, payload }, now), lastRunAt: now, day: { key: today, count: count + 1 } },
         result: { kind: "queued" as const, routine },
       };
     });
@@ -160,14 +202,14 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
       return "held";
     }
     if (decision.kind === "queued") {
-      track(start(decision.routine, { eventId: event.eventId, payload }, armedFor));
+      track(start(decision.routine, { ...event, payload }, armedFor));
       return "queued";
     }
     return decision.kind;
   }
 
   return {
-    emit(botId: string, routineId: string, event: { eventId: string; payload: string }): Promise<BotRoutineEventOutcome> {
+    emit(botId: string, routineId: string, event: BotRoutineEvent): Promise<BotRoutineEventOutcome> {
       return admitting(emit(botId, routineId, event, generation));
     },
 
