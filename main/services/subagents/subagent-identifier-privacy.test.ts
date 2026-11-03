@@ -62,6 +62,7 @@ function snapshot(overrides: Partial<SubagentRunSnapshotV1> = {}): SubagentRunSn
 const rawSecret = "sk-abcdefghijklmno";
 const urlEncodedSecret = Buffer.from(rawSecret, "utf8").toString("base64url");
 const secretIdentifiers = [
+  "550e8400-e29b-41d4-a716-2f612f622f63", // UUID whose last component encodes /a/b/c.
   rawSecret,
   Buffer.from(rawSecret, "utf8").toString("base64").replace(/=+$/u, ""),
   base32(rawSecret),
