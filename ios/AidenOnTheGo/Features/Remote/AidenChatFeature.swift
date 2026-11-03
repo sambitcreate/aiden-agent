@@ -400,7 +400,8 @@ enum AidenChatModelAuthority {
         selectedProviderId: String?,
         selectedModelId: String?,
         selectedThinkingLevel: String?,
-        remembered: AidenChatModelSelection? = nil
+        remembered: AidenChatModelSelection? = nil,
+        hasExplicitSelection: Bool = false
     ) -> AidenChatModelSelection {
         if chat.isBotChat {
             let provider = catalog?.providers.first { $0.id == chat.providerId }
@@ -413,16 +414,23 @@ enum AidenChatModelAuthority {
         }
 
         guard let catalog else {
+            if !hasExplicitSelection, !chat.messages.isEmpty,
+               let providerId = chat.providerId, let modelId = chat.modelId {
+                return AidenChatModelSelection(
+                    providerId: providerId, modelId: modelId,
+                    thinkingLevel: selectedProviderId == providerId && selectedModelId == modelId ? selectedThinkingLevel : nil
+                )
+            }
             return AidenChatModelSelection(
                 providerId: selectedProviderId,
                 modelId: selectedModelId,
                 thinkingLevel: selectedThinkingLevel
             )
         }
-        // A chat that already has messages keeps its own model. The remembered
-        // per-host choice (passed only until the user picks in this chat)
-        // seeds a new chat, or one whose model this phone can't use.
-        if remembered != nil, !chat.messages.isEmpty, let own = ownSelection(
+        // Cache-seeded selections are not user choices. Until the person picks,
+        // a populated chat follows its refreshed host pair, even without a
+        // remembered default. Explicit unsent choices stay with this chat.
+        if !hasExplicitSelection, !chat.messages.isEmpty, let own = ownSelection(
             chat: chat,
             catalog: catalog,
             selectedProviderId: selectedProviderId,
@@ -431,7 +439,7 @@ enum AidenChatModelAuthority {
         ) {
             return own
         }
-        if let remembered = rememberedSelection(remembered, in: catalog) {
+        if !hasExplicitSelection, let remembered = rememberedSelection(remembered, in: catalog) {
             return remembered
         }
         var providerId = selectedProviderId
@@ -4395,7 +4403,8 @@ final class AidenChatViewModel {
             selectedThinkingLevel: selectedThinkingLevel,
             remembered: hasExplicitModelSelection || isReadOnlyFixture || chat.isBotChat
                 ? nil
-                : modelPreferenceStore.selection(for: instanceId)
+                : modelPreferenceStore.selection(for: instanceId),
+            hasExplicitSelection: hasExplicitModelSelection
         )
         selectedProviderId = selection.providerId
         selectedModelId = selection.modelId

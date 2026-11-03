@@ -2699,6 +2699,39 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testRefreshingCachedChatAdoptsDesktopModelWithoutARememberedPhoneDefault() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-model-authority-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cachedJSON = #"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Cached","providerId":"openai","modelId":"old-model","messages":[{"id":"u1","role":"user","text":"Hello","createdAt":"2026-09-14T12:00:00Z"}],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"cached"}"#
+        let catalogJSON = #"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"old-model","label":"Old"}]},{"id":"google","label":"Google","models":[{"id":"desktop-model","label":"Desktop pick"}]}],"defaults":{"providerId":"openai","modelId":"old-model"}}"#
+        let cached = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(cachedJSON.utf8))
+        var refreshed = cached
+        refreshed.providerId = "google"
+        refreshed.modelId = "desktop-model"
+        let host = AidenStreamRecoveryFixture(chat: refreshed)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied, cache: AidenChatCache(root: root), initialChat: cached,
+            responseOverride: { request in
+                if request.url?.path.hasSuffix("/models") == true {
+                    return (200, "application/json", Data(catalogJSON.utf8))
+                }
+                return host.response(request)
+            }
+        )
+        XCTAssertNil(testModelPreferences.selection(for: "instance-progress-lifecycle"))
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.modelId, "desktop-model")
+        XCTAssertEqual(model.selectedProviderId, "google")
+        XCTAssertEqual(model.selectedModelId, "desktop-model")
+        // An intentional unsent choice still wins over subsequent host refreshes.
+        model.selectModel(providerId: "openai", modelId: "old-model", thinkingLevel: nil)
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.selectedModelId, "old-model")
+        XCTAssertEqual(testModelPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: cached.id)?.modelId, "old-model")
+        XCTAssertNil(testModelPreferences.selection(for: "instance-progress-lifecycle"))
+    }
+
+    @MainActor
     func testTranscriptPublishesWhileCatalogIsHeldIncludingCatalogFailure() async throws {
         for fails in [false, true] {
             let root = FileManager.default.temporaryDirectory.appending(path: "aiden-catalog-delay-\(UUID())")
@@ -7157,13 +7190,14 @@ final class AidenChatTests: XCTestCase {
         )
         XCTAssertEqual(hidden, AidenChatModelSelection(providerId: "openai", modelId: "gpt-hidden", thinkingLevel: nil))
 
-        // A pick in this chat (no remembered value passed) still wins.
+        // A pick explicitly made in this chat still wins.
         let picked = AidenChatModelAuthority.resolvedSelection(
             chat: chat,
             catalog: catalog,
             selectedProviderId: "openai",
             selectedModelId: "gpt-5.6",
-            selectedThinkingLevel: "low"
+            selectedThinkingLevel: "low",
+            hasExplicitSelection: true
         )
         XCTAssertEqual(picked, AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "low"))
 
@@ -7179,6 +7213,28 @@ final class AidenChatTests: XCTestCase {
         )
         XCTAssertEqual(bot.providerId, "google")
         XCTAssertEqual(bot.modelId, "gemini-flash")
+    }
+
+    func testRefreshedChatModelDoesNotDependOnRememberedDefaultOrCatalog() throws {
+        let catalog = try JSONDecoder().decode(AidenModelCatalog.self, from: Data(
+            #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]},{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT"},{"id":"gpt-hidden","label":"Hidden","hidden":true}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+        ))
+        for modelID in ["gpt-5.6", "gpt-hidden"] {
+            var chat = sampleChat()
+            chat.botId = nil
+            chat.providerId = "openai"
+            chat.modelId = modelID
+            for inventory in [catalog, nil] as [AidenModelCatalog?] {
+                let resolved = AidenChatModelAuthority.resolvedSelection(
+                    chat: chat, catalog: inventory,
+                    selectedProviderId: "google", selectedModelId: "gemini-flash",
+                    selectedThinkingLevel: "high"
+                )
+                XCTAssertEqual(resolved.providerId, "openai")
+                XCTAssertEqual(resolved.modelId, modelID)
+                XCTAssertNil(resolved.thinkingLevel, "the cached model's level cannot leak to the desktop's pick")
+            }
+        }
     }
 
     func testMissingOrHiddenRememberedModelFallsBackToChatPairThenHostDefaults() throws {

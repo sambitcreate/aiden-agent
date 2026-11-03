@@ -1454,7 +1454,8 @@ class AidenChatViewModel(
             selectedModelId = _selectedModelId.value,
             selectedThinkingLevel = _selectedThinkingLevel.value,
             remembered = if (hasExplicitModelSelection || instanceId.isEmpty()) null
-            else modelPreferenceStore.selection(instanceId)
+            else modelPreferenceStore.selection(instanceId),
+            hasExplicitSelection = hasExplicitModelSelection
         )
         _selectedProviderId.value = selection.providerId
         _selectedModelId.value = selection.modelId
