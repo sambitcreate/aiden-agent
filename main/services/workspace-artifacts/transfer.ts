@@ -18,6 +18,7 @@ import {
 } from "../../../renderer/shared/workspace-artifacts.js";
 import { safeExportFileName } from "../chat-export.js";
 import { readRegularFile } from "../regular-file-read.js";
+import { assertArtifactFilePath } from "./file-policy.js";
 import type { WorkspaceArtifactContent } from "./store.js";
 
 /**
@@ -147,6 +148,9 @@ export function parseWorkspaceArtifactPageFile(value: unknown): WorkspaceArtifac
   }
   const description = strictly(() => parseWorkspaceArtifactDescription(value.description));
   const sources = strictly(() => parseWorkspaceArtifactSources(value.sources));
+  for (const source of sources) {
+    if (source.kind === "file") strictly(() => assertArtifactFilePath(source.file));
+  }
   const actions = strictly(() => parseWorkspaceArtifactActions(value.actions));
   const refresh = strictly(() => parseWorkspaceArtifactRefresh(value.refresh));
   const raw = value.visual;

@@ -77,6 +77,10 @@ When a paired computer is asleep or unreachable, its rows stay in the sidebar ma
 
 If a computer reached over the local network presents a different identity, Aiden blocks it and asks you to pair again rather than trust the new key. Use **Re-pair** from its **···** menu in **Control other devices**. Under the same menu, **Rename locally** changes the name only on this Mac, and **Forget** removes it from this Mac.
 
+## Chat models
+
+A chat with messages keeps its own model on iPhone and Android. Reopening or refreshing it adopts a model changed on the desktop unless you have an unsent model choice in that chat. An empty remembered-default store or an unavailable optional model catalog does not turn the cached model into a new choice. Picking a model in an existing chat leaves other chats and the new-chat default alone.
+
 ## Mobile usage summary
 
 The **Usage** row on the Aiden On The Go home screen reads aggregate usage from the paired Mac. It reflects Aiden Agent's device-local usage store and sends only aggregate request, token, activity, and estimated-cost totals to the phone. Chat content, workspace paths, and provider credentials are not included.
@@ -134,6 +138,10 @@ When the agent leaves something running for a workspace chat on the Mac (a dev s
 ## Chats without a workspace
 
 When the paired desktop has No workspace chats (contract revision 51), Aiden On The Go for iPhone and Android lists them in one **Chats** group, as the desktop does, and **New Chat** offers **No Workspace** first. That chat runs on the desktop with its global settings in a private folder of its own; the private folders never show up in the phone's workspace list or pickers (an iPhone scheduled task that already runs in one keeps showing it while you edit the task). The CLI has no No workspace chats, so a phone paired to it offers nothing new. See [chats without a workspace](no-workspace-chats.md).
+
+## New worktree
+
+A new Workspace chat in a Git repository shows a **New worktree** chip beside the composer on Aiden On The Go for iPhone and Android (contract revision 53, `chat:new-worktree`, asked for in a call of its own; the phone also needs Git write access). Turned on, your first message shows at once with a **Setting up worktree…** row and **Cancel** while the Mac makes a worktree from the repository's default branch (or the branch it's on, without a remote), names its branch from the message (`aiden/new-chat` for a message of attachments only), and moves the chat into it; then the message sends there. Cancel puts the message back in the composer; if the Mac finishes the worktree anyway, sending again uses it. If the Mac can't make the worktree, it says why in plain words and the message comes back unsent, and sending again tries afresh. If New worktree stops being available for the chat while the chip is on, the phone turns the chip off and keeps your message rather than send it to the main folder. The chip doesn't show for a folder that isn't a repository or has no commits yet (when the phone may read Git), for a workspace that is already a worktree, or with an older Mac.
 
 ## Pictures in a reply
 

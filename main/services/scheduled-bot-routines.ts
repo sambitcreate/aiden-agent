@@ -15,7 +15,7 @@ import { botRoutineRetryRequestId } from "./schedule-store-core.js";
 import { BOT_ROUTINE_NOTES_HEADER } from "./bot-routine-notes.js";
 import type { BotDeliveryFunnel } from "./bot-delivery/funnel.js";
 import type { BotRoutinePorts } from "./bot-routines-port.js";
-import type { ScheduledRunTrigger } from "./schedule-service-core.js";
+import { UnclaimableScheduledFire, type ScheduledRunTrigger } from "./schedule-service-core.js";
 import type {
   ScheduledRun,
   ScheduledRunResult,
@@ -126,6 +126,7 @@ export const BOT_ROUTINE_FAILED_PREVIEW = "I couldn't finish this routine.";
  * production wiring (`scheduled-bot-routines-main.ts`) adds.
  */
 export interface BotRoutineExecutorPorts extends BotRoutinePorts {
+  wakeUpAllowed?(botId: string, generation: string | undefined): Promise<boolean>;
   canRetryRoutineRequest?(botId: string, requestId: string): Promise<boolean>;
   /** The notes this routine kept from earlier runs, rendered; "" when none. */
   routineNotes?(botId: string, taskId: string): Promise<string>;
@@ -322,6 +323,11 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
       }
       const notes = ports.routineNotes ? await abortable(ports.routineNotes(task.botId, task.id), signal) : "";
       const label = routineLabel(task, trigger);
+      if (task.wakeUp && (!ports.wakeUpAllowed ||
+        !await abortable(ports.wakeUpAllowed(task.botId, task.wakeUp.generation), signal))) {
+        return { result: "blocked", output: "", error: "This wake-up was turned off.", surface: false };
+      }
+      if (signal.aborted) throw new Error("Routine was cancelled.");
       try {
         submission = await abortable(
           ports.send(task.botId, {
@@ -502,6 +508,14 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
             throw new RoutineOutcomeUnknown(message(error));
           }
         }
+        if (trigger.kind === "retry" && trigger.observeOnly && !existingSubmissionId) {
+          try {
+            await dependencies.store.settleRoutineFire(task.id, requestId);
+          } catch (error) {
+            throw new RoutineOutcomeUnknown(message(error));
+          }
+          throw new UnclaimableScheduledFire("This routine retry was superseded.");
+        }
         outcome = recovering && !task.enabled && task.routineSchedule?.kind !== "once" && !existingSubmissionId
           ? { result: "blocked", output: "", error: "Routine was paused.", surface: false }
           : await execute(
@@ -510,6 +524,7 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
             existingSubmissionId,
           );
       } catch (error) {
+        if (error instanceof UnclaimableScheduledFire) throw error;
         const cancelled = options.signal.aborted;
         const uncertain = error instanceof RoutineOutcomeUnknown || (cancelled && replayable(trigger));
         outcome = {
@@ -627,7 +642,7 @@ export interface BotRoutineCreateInput {
    */
   sourceProposalId?: string;
   /** Main-only (never parsed from IPC or Remote): the Bot's own wake-up (`wake_up`). */
-  wakeUp?: { setAt: number };
+  wakeUp?: ScheduledTask["wakeUp"];
 }
 
 export interface BotRoutineUpdateInput {
@@ -901,7 +916,7 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
         botId: input.botId,
         routineSchedule: input.schedule,
         ...(input.sourceProposalId !== undefined ? { sourceProposalId: input.sourceProposalId } : {}),
-        ...(input.wakeUp !== undefined ? { wakeUp: { setAt: input.wakeUp.setAt } } : {}),
+        ...(input.wakeUp !== undefined ? { wakeUp: input.wakeUp } : {}),
         notify: true,
       });
       dependencies.notifyChanged({ botId: input.botId, routineId: task.id });

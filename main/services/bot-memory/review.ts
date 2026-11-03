@@ -1,3 +1,4 @@
+import { isBotInputEntryKind } from "../bot-runtime/bot-input-entry.js";
 // Background memory review (spec 2026-10-09 §10).
 //
 // After a reply, the Bot's conversation is looked at again outside the turn:
@@ -315,7 +316,7 @@ function stepOf(entry: EntryRecord): Step | undefined {
   const requestId = unattendedNoticeRequestId(entry);
   if (requestId !== undefined) return { id: entry.id, kind: "notice", requestId };
   const role = entry.model?.[0]?.role;
-  if (entry.kind === "pi.user" && role === "user") return { id: entry.id, kind: "input" };
+  if (isBotInputEntryKind(entry.kind) && role === "user") return { id: entry.id, kind: "input" };
   if (entry.kind === "pi.assistant" && role === "assistant") return { id: entry.id, kind: "output" };
   return undefined;
 }

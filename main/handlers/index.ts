@@ -71,7 +71,7 @@ import { spending } from "../services/spending-main.js";
 
 import { ipcMain, logger } from "../platform.js";
 
-export function registerHandlers(): void {
+export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => boolean): void {
   logger.info("handlers", "Registering IPC handlers...");
 
   // Register app handlers using ipcMain API
@@ -134,7 +134,12 @@ export function registerHandlers(): void {
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     spending,
   });
-  registerAnalyticsHandlers({
+  registerAnalyticsHandlers<IpcMainInvokeEvent>({
+    owner: (event) => {
+      const inactive = () => new Error("Usage data changes require the active application document.");
+      if (!isMainWindow(event)) throw inactive();
+      return rendererDocumentOwner(event, inactive);
+    },
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     analytics: analyticsService(),
   });

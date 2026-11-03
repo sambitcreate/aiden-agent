@@ -2,7 +2,7 @@ import { mcpProviderAuthenticatedFetch } from "./mcp-provider-auth.js";
 import { admitMcpProviderAuthServers, withMcpProviderOperation, type McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
 import { inspectInitializedMcpStatus } from "./mcp-status.js";
 import { mcpLiveStatus, recordMcpConnectionLifecycle } from "./mcp-status-events.js";
-import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, guardedMcpToolCall, listMcpToolInventory, listMcpToolPage, MCP_TOOL_INVENTORY_TTL_MS } from "./mcp-tool-inventory.js";
+import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage, readGuardedMcpInventory, MCP_TOOL_INVENTORY_TTL_MS } from "./mcp-tool-inventory.js";
 import { createHash } from "node:crypto";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 import { snapshotMcpServerInstructions } from "./mcp-server-instructions.js";
@@ -47,7 +47,7 @@ import {
 import { markMcpAgentTool, mcpAgentToolNames, mcpServerToolPrefix, type McpToolNamingServer } from "./mcp-tool-identity.js";
 import {
   withIsolatedSubagentMcpClientCore,
-  type IsolatedSubagentMcpClient,
+  isolatedSubagentMcpClient,
 } from "./subagents/subagent-mcp-client-core.js";
 import { createBoundedSubagentMcpFetch } from "./subagents/subagent-mcp-bounded-fetch.js";
 import { resolveProductionSubagentMcpCredentialBoundary } from "./subagents/subagent-mcp-credential-production.js";
@@ -136,9 +136,7 @@ function makeTransport(
   if (!server.url) throw new Error("This MCP server needs a URL.");
   assertMcpPresetServer(server);
   if (server.authProvider && options.forceNoRedirect) throw new Error("Provider-authenticated MCP is unavailable to child agents.");
-  const guardedFetch = options.forceNoRedirect
-    ? createBoundedSubagentMcpFetch()
-    : undefined;
+
   // OAuth-authenticated servers attach a (non-interactive) provider that supplies
   // stored tokens; if none/expired, the connection fails rather than opening a browser.
   const observeOAuthTokens = options.registerCredentialRedactor
@@ -157,7 +155,9 @@ function makeTransport(
     serviceHeaders: server.headers,
     isCurrent,
     authProvider,
-    fetch: server.authProvider ? mcpProviderAuthenticatedFetch(server, isCurrent) : guardedFetch,
+    wrapFetch: server.authProvider
+      ? (send) => mcpProviderAuthenticatedFetch(server, isCurrent, send)
+      : options.forceNoRedirect ? (send) => createBoundedSubagentMcpFetch(send) : undefined,
     onTerminalFailure: options.onTerminalFailure,
   });
 }
@@ -196,15 +196,7 @@ export async function withIsolatedSubagentMcpClient<T>(
     configurationLease,
     operation,
     dependencies: {
-      createClient: () => {
-        const client = createMcpClient(AIDEN_MCP_CLIENT_NAME);
-        return {
-          connect: (transport, options) => connectMcpClient(client, transport as McpTransport, options),
-          close: () => client.close(),
-          listTools: (cursor, options) => listMcpToolPage(client, cursor, options, reportSkippedMcpTool),
-          callTool: (params, options) => callMcpTool(client, params, options),
-        } satisfies IsolatedSubagentMcpClient;
-      },
+      createClient: () => isolatedSubagentMcpClient(createMcpClient(AIDEN_MCP_CLIENT_NAME), reportSkippedMcpTool),
       resolveAuth,
       resolveCredentialBoundary: resolveProductionSubagentMcpCredentialBoundary,
       makeTransport,
@@ -407,12 +399,11 @@ class McpManager {
   }
 
   private async readInventory(client: McpClient, assertCurrent: () => void, signal?: AbortSignal): Promise<McpInventory> {
-    const tools = client.serverCapabilities?.tools ? await listMcpToolInventory({
+    return readGuardedMcpInventory(client, async () => client.serverCapabilities?.tools ? await listMcpToolInventory({
       signal,
       assertCurrent,
       listPage: boundedMcpToolPageReader(client, MCP_DISCOVERY_DEADLINES.listMs, reportSkippedMcpTool),
-    }) as McpToolInfo[] : [];
-    return { tools, guard: createMcpToolCallGuard(tools) };
+    }) as McpToolInfo[] : [], assertCurrent);
   }
 
   /**
@@ -420,11 +411,15 @@ class McpManager {
    * caller's own revoked lease cannot fail other callers; each caller stops
    * waiting on its own signal and re-checks its lease afterwards.
    */
-  private cachedInventory(server: McpServer, generation: number, client: McpClient, signal?: AbortSignal): Promise<McpInventory> {
+  private cachedInventory(server: McpServer, generation: number, client: McpClient, signal?: AbortSignal, fresh = false): Promise<McpInventory> {
     return this.toolInventories.load(
       client,
-      () => this.readInventory(client, () => this.assertGeneration(server.id, generation)),
+      (assertInventoryCurrent) => this.readInventory(client, () => {
+        assertInventoryCurrent();
+        this.assertGeneration(server.id, generation);
+      }, fresh ? signal : undefined),
       signal,
+      fresh,
     );
   }
 
@@ -583,7 +578,11 @@ class McpManager {
         signal: AbortSignal.any([providerScope!.signal, lease.signal, ...(callerSignal ? [callerSignal] : [])]),
         isCurrent: () => { lease.assertCurrent(); return providerScope!.isCurrent(); },
       },
-      create: () => createMcpClient(AIDEN_MCP_CLIENT_NAME),
+      create: () => {
+        const client = createMcpClient(AIDEN_MCP_CLIENT_NAME);
+        this.toolInventories.watch(client);
+        return client;
+      },
       connect: async (client, signal, isCurrent) => {
         // The operation's own 60 s bound is far past the discovery budget.
         await connectMcpWithinDeadline(
@@ -606,7 +605,7 @@ class McpManager {
       inventory: await this.cachedInventory(server, generation, cachedClient, lease.signal),
       ...describe(cachedClient),
     } : await scoped(async (client, signal) => ({
-      inventory: await this.readInventory(client, () => { lease.assertCurrent(); assertGeneration(); }, AbortSignal.any([lease.signal, signal])),
+      inventory: await this.cachedInventory(server, generation, client, signal, true),
       ...describe(client),
     }));
     assertGeneration();
@@ -620,22 +619,24 @@ class McpManager {
     // that is switched off for the model) offers nothing, resources included.
     const exposure = planMcpServerExposure(server, tools);
     if (!exposure) return { tools: [] };
+    const callLive = (live: McpClient, params: Parameters<typeof callMcpTool>[1], options?: McpToolCallOptions) => {
+      const signal = AbortSignal.any([lease.signal, ...(options?.signal ? [options.signal] : [])]);
+      const needsFreshList = live.serverCapabilities?.tools?.listChanged !== true;
+      return callMcpToolOnLiveClient(
+        callGuard, live, (client) => this.cachedInventory(server, generation, client, signal, needsFreshList),
+        params, { ...options, signal },
+      );
+    };
     const client: Parameters<typeof createMcpResourceTool>[1] & {
       callTool(params: Parameters<typeof callMcpTool>[1], options?: McpToolCallOptions): ReturnType<typeof callMcpTool>;
     } = cachedClient ? {
       callTool: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) =>
-        callMcpToolOnLiveClient(
-          { client: cachedClient, guard: callGuard },
-          live,
-          (reconnected) => this.cachedInventory(server, generation, reconnected, options?.signal),
-          params,
-          options,
-        )),
+        callLive(live, params, options)),
       listResources: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => listMcpResourcesPage(live, params, options)),
       listResourceTemplates: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => listMcpResourceTemplatesPage(live, params, options)),
       readResource: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => readMcpResource(live, params, options)),
     } : {
-      callTool: (params, options) => scoped((connection, signal) => guardedMcpToolCall(callGuard, connection, params, { ...options, signal }), options?.signal),
+      callTool: (params, options) => scoped((connection, signal) => callLive(connection, params, { ...options, signal }), options?.signal),
       listResources: (params, options) => scoped((connection, signal) => listMcpResourcesPage(connection, params, { ...options, signal }), options?.signal),
       listResourceTemplates: (params, options) => scoped((connection, signal) => listMcpResourceTemplatesPage(connection, params, { ...options, signal }), options?.signal),
       readResource: (params, options) => scoped((connection, signal) => readMcpResource(connection, params, { ...options, signal }), options?.signal),

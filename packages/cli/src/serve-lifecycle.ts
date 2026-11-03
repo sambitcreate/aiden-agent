@@ -10,8 +10,9 @@
  * metadata is stale whenever its OS guard is free, even if the PID was reused.
  */
 
+import { ensurePrivateDirectory, hardenPrivateFile } from "../../../main/services/private-storage.ts";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { createConnection } from "node:net";
 import { join, relative, resolve } from "node:path";
 import { daemonSocket } from "./daemon-control.ts";
@@ -200,6 +201,7 @@ function sameOwner(current: ServeOwner | undefined, expected: ServeOwner): boole
 
 /** Cleanup owns the same permanent guard as the daemon. Re-evaluate after taking it. */
 function clearServeArtifacts(agentDir: string, expected?: ServeOwner): boolean {
+  ensurePrivateDirectory(agentDir, "reject");
   const lock = join(agentDir, SERVE_LOCK);
   const release = tryAcquireProcessLifetimeLock(leaseGuardPath(join(agentDir, "serve")), cliLeaseHelperPath());
   if (!release) return false;
@@ -220,6 +222,7 @@ function clearServeArtifacts(agentDir: string, expected?: ServeOwner): boolean {
  * a dead owner or a verifiably recycled foreign PID.
  */
 export function recoverStaleServeLease(agentDir: string): boolean {
+  ensurePrivateDirectory(agentDir, "reject");
   const lock = join(agentDir, SERVE_LOCK);
   if (!existsSync(lock)) return false;
   return clearServeArtifacts(agentDir);
@@ -289,7 +292,7 @@ export async function startDaemon(agentDir: string, options: { remote?: boolean;
   if (process.platform === "win32") {
     throw new Error("`aiden serve --daemon` is not supported on Windows; run `aiden serve` in the foreground instead.");
   }
-  mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+  ensurePrivateDirectory(agentDir, "reject");
   const releaseStart = acquireStartLease(agentDir);
   try {
     recoverStaleServeLease(agentDir);
@@ -298,6 +301,7 @@ export async function startDaemon(agentDir: string, options: { remote?: boolean;
     const entry = process.argv[1];
     if (!entry) throw new Error("Cannot determine the Aiden CLI entry point for a background daemon.");
     const log = join(agentDir, SERVE_LOG);
+    hardenPrivateFile(log);
     const logFd = openSync(log, "a", 0o600);
     let child: ChildProcess;
     try {

@@ -1053,7 +1053,10 @@ async function goAheadTurn(options: Parameters<typeof ruledTurn>[0], requestId?:
   });
   const { harness, root } = await memoryHarness(turn.deps, turn.fauxModels);
   try {
-    await (await root.submit({ type: "input", content: "order it", ...(requestId === undefined ? {} : { requestId }) }, ctx)).wait(ctx);
+    await (await root.submit({ type: "input", content: "order it",
+      ...(requestId === undefined ? {} : { requestId }),
+      ...(requestId?.startsWith("routine:") ? { entry: { kind: "aiden.routine-input" } } : {}),
+    }, ctx)).wait(ctx);
     return { turn, handoffAsked, results: await toolResults(root) };
   } finally {
     await harness.close(ctx);
@@ -1121,7 +1124,7 @@ test("routines going ahead never lowers a hand-off, Computer Use on the person's
 });
 
 test("with routines going ahead, a routine sends through a connection without waiting for an OK", async () => {
-  for (const goAhead of [true, false]) {
+  for (const [goAhead, scheduled] of [[true, true], [true, false], [false, true]] as const) {
     const state = assemblyState(full(botHome()));
     const send = countingTool(SEND_EMAIL_TOOL);
     const fauxModels = createFauxModels([
@@ -1135,9 +1138,13 @@ test("with routines going ahead, a routine sends through a connection without wa
     });
     const { harness, root } = await memoryHarness(deps, fauxModels);
     try {
-      await (await root.submit({ type: "input", content: "send it", requestId: "routine:daily:fire-1" }, ctx)).wait(ctx);
+      const recordedId = "routine:daily:fire-1";
+      await root.submit({ type: "write", entry: { kind: "aiden.bot-notice", data: { notice: "routine", label: "Daily", requestId: recordedId } } }, ctx);
+      await (await root.submit({ type: "input", content: "send it", requestId: recordedId,
+        ...(scheduled ? { entry: { kind: "aiden.routine-input" } } : {}),
+      }, ctx)).wait(ctx);
       // Off, the send still waits for the person's OK (this test's approver allows it).
-      assert.equal(deps.approvals.length, goAhead ? 0 : 1, `goAhead ${goAhead}`);
+      assert.equal(deps.approvals.length, goAhead && scheduled ? 0 : 1, `goAhead ${goAhead}, scheduled ${scheduled}`);
       assert.equal(send.executions.length, 1);
     } finally {
       await harness.close(ctx);

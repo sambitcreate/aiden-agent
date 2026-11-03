@@ -7,6 +7,10 @@ import type { Usage } from "@earendil-works/pi-ai";
 import type { ImageGenerationPreflight, ImageGenerationRequest, ImageGenerationResult } from "../../../renderer/shared/images/port.js";
 import type { OutputRef, RunScope } from "../../../renderer/shared/images/run-types.js";
 import type { WorkflowDocV1, WorkflowEdge, WorkflowNode } from "../../../renderer/shared/images/schema.js";
+import { ImageGenerationRuntime } from "../image-generation/runtime.js";
+import { createImageGenerationSettingsStore } from "../image-generation/settings-store.js";
+import { fakeFetch, json, MemoryCredentialStore } from "../image-generation/test-support.js";
+import { createPiImageGenerationPort } from "./image-port.js";
 import { StudioAssetError } from "../studio-assets/contract.js";
 import { StudioAssetStore } from "../studio-assets/store.js";
 import { fakeThumbnailer, pngBytes } from "../studio-assets/test-fixture.js";
@@ -35,7 +39,7 @@ async function fixture(t: TestContext) {
   t.after(() => assets.close());
   const ledger = ImageRunLedger.open({ directory: path.join(root, "runs") });
   t.after(() => ledger.close());
-  return { assets, ledger };
+  return { assets, ledger, root };
 }
 
 function workflow(nodes: WorkflowNode[], edges: WorkflowEdge[]): WorkflowDocV1 {
@@ -92,7 +96,11 @@ async function start(
       onChange: () => undefined,
       port: {
         preflight: async (request) =>
-          options.refuse?.(request) ?? { kind: "ready", send: async () => { calls.push(request); return reply(request, calls.length - 1); } },
+          options.refuse?.(request) ?? { kind: "ready", send: async (claim) => {
+            if (claim && !claim()) return { kind: "failed", code: "request-limit", message: "No claim." };
+            calls.push(request);
+            return reply(request, calls.length - 1);
+          } },
       },
       ...options.deps,
     },
@@ -239,6 +247,87 @@ test("a run with no room left in image storage refuses before claiming, so nothi
   assert.match(attempt.errorMessage!, /storage is full, so this request was not sent/u);
   assert.equal(env.ledger.snapshot("run-1")!.run.requestsSent, 0);
 });
+
+test("sibling Generate steps share the last four asset slots", async (t) => {
+  const env = await fixture(t);
+  const doc = workflow([prompt("p"), gen("a"), gen("b")], [link("p", "text", "a", "prompt"), link("p", "text", "b", "prompt")]);
+  const run = await start(env, doc, (_request, index) => generated(index, 4), {
+    concurrency: 2, deps: { storageLimits: { maxAssets: 4, maxTotalBytes: 1e9 } },
+  });
+  assert.equal(await run.done, "partial");
+  assert.equal(env.assets.usage().assets, 4);
+  assert.equal(run.calls.length, 1);
+  const refused = [...attempts(env).values()].find((attempt) => attempt.errorCode === "storage-full");
+  assert.ok(refused);
+  assert.equal(refused.submittedAt, undefined);
+  assert.equal(refused.mayHaveBeenBilled, false);
+  assert.equal(env.ledger.snapshot("run-1")!.run.requestsSent, 1);
+});
+
+test("separate workflows share reserved bytes and release them after a provider error", async (t) => {
+  const env = await fixture(t);
+  const doc = workflow([prompt("p"), gen("g")], [link("p", "text", "g", "prompt")]);
+  const deps = { storageLimits: { maxAssets: 100, maxTotalBytes: 8 * 1024 * 1024 } };
+  let release!: (result: ImageGenerationResult) => void;
+  const first = await start(env, doc, () => new Promise((resolve) => { release = resolve; }), { deps });
+  while (!first.calls.length) await new Promise((resolve) => setImmediate(resolve));
+  const other = { ...doc, id: "second" };
+  const second = await start(env, other, () => generated(1), { deps, runId: "second" });
+  assert.equal(await second.done, "failed");
+  assert.equal(second.calls.length, 0);
+  assert.equal(attempts(env, "second").get("g")?.errorCode, "storage-full");
+  release({ kind: "failed", code: "provider-error", message: "Provider failed." });
+  await first.done;
+  const retry = await start(env, other, () => generated(2), { deps, runId: "retry" });
+  assert.equal(await retry.done, "succeeded");
+  assert.equal(retry.calls.length, 1);
+});
+
+for (const remove of ["before preflight", "after preflight", "keep key"] as const) {
+  test(`a queued Generate step accounts only authenticated dispatches: ${remove}`, async (t) => {
+    const env = await fixture(t);
+    const transport = fakeFetch(() => json({ detail: "Rejected by provider" }, 401));
+    const runtime = new ImageGenerationRuntime({
+      settings: createImageGenerationSettingsStore(() => env.root),
+      credentials: new MemoryCredentialStore(),
+      authContext: { env: async () => undefined, fileExists: async () => false },
+      openRouterModels: () => [], fetch: transport.fetch,
+    });
+    await runtime.setKey("replicate", "r8_local_fixture");
+    const port = createPiImageGenerationPort({ models: runtime.models, providerLabel: (provider) => provider });
+    const model = (await port.listModels()).find((entry) => entry.provider === "replicate")!;
+    const node: WorkflowNode = {
+      id: "g",
+      type: "generate-image",
+      position: at,
+      data: { model: { provider: model.provider, id: model.model }, count: 1 },
+    };
+    const doc = workflow([prompt("p"), node], [link("p", "text", "g", "prompt")]);
+    if (remove === "before preflight") await runtime.removeKey("replicate");
+    const run = await start(env, doc, () => { throw new Error("unexpected fixture port"); }, {
+      deps: {
+        port: {
+          async preflight(request) {
+            const checked = await port.preflight(request);
+            if (remove === "after preflight") {
+              assert.equal(checked.kind, "ready");
+              await runtime.removeKey("replicate");
+            }
+            return checked;
+          },
+        },
+      },
+    });
+    assert.equal(await run.done, "failed");
+    const attempt = attempts(env).get("g")!;
+    const sent = remove === "keep key";
+    assert.equal(env.ledger.snapshot("run-1")!.run.requestsSent, sent ? 1 : 0);
+    assert.equal(transport.requests.length, sent ? 1 : 0);
+    assert.equal(attempt.mayHaveBeenBilled, sent);
+    assert.equal(attempt.submittedAt !== undefined, sent);
+    assert.equal(attempt.errorCode, sent ? "provider-error" : "unknown-model");
+  });
+}
 
 test("space that garbage collection can reclaim is collected before the storage check refuses", async (t) => {
   const env = await fixture(t);
@@ -591,6 +680,10 @@ test("an executor fault does not wait forever for a request that ignores the abo
   assert.deepEqual([snapshot.run.state, snapshot.run.endReason], ["failed", "executor-fault"]);
   const b = attempts(env).get("b")!;
   assert.deepEqual([b.state, b.mayHaveBeenBilled], ["failed", true]);
+  const next = await start(env, workflow([prompt("p"), gen("g")], [link("p", "text", "g", "prompt")]), () => generated(33), {
+    runId: "after-fault", deps: { storageLimits: { maxAssets: env.assets.usage().assets + 4, maxTotalBytes: 1e9 } },
+  });
+  assert.equal(await next.done, "succeeded", "an unresponsive provider cannot reserve the last four slots forever");
 });
 
 test("a failing terminateRun is reported without masking the original executor error", async (t) => {

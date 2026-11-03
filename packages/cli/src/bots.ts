@@ -1,3 +1,4 @@
+import { parseBotSend } from "../../../main/handlers/bot-params.js";
 import { createBotRoutineService } from "../../../main/services/scheduled-bot-routines.js";
 import type { createCliScheduler } from "./schedules.ts";
 import { cliDurableBotMarker, enableCliDurableBots } from "./bot-durable-migration.ts";
@@ -297,7 +298,12 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
       switch (action) {
         case "enable-durable": return enableCliDurableBots(agentDir, daemon);
         case "session": if (!durable) throw new Error("Run bots enable-durable, then restart the daemon."); return durable.runtime.state(id);
-        case "send": if (!durable || !input) throw new Error("Usage: bots send <bot-id> <JSON file with text and requestId>"); return durable.runtime.send(id, readJson(input, undefined!));
+        case "send": {
+          if (!durable || !input) throw new Error("Usage: bots send <bot-id> <JSON file with text and requestId>");
+          const fields = readJson<Record<string, unknown>>(input, {});
+          const { botId, ...message } = parseBotSend({ ...fields, botId: id });
+          return durable.runtime.send(botId, message);
+        }
         case "resume": if (!durable || !input) throw new Error("Provide a Bot id and request UUID."); return durable.runtime.resume(id, input);
         case "dismiss": if (!durable || !input) throw new Error("Provide a Bot id and request UUID."); return durable.runtime.dismiss(id, input);
         case "stop": if (!durable) throw new Error("Durable sessions are not enabled."); return durable.runtime.stop(id);

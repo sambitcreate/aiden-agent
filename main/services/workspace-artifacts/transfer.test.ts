@@ -180,6 +180,8 @@ test("commands are held to the same rules as a page Aiden saves", () => {
   assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ actions: hiddenLabel })), /label/u);
   const outside = [{ name: "keys", kind: "file", file: "../.ssh/id_ed25519", parse: "text" }];
   assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ sources: outside })), /may not leave the workspace folder/u);
+  const secrets = [{ name: "env", kind: "file", file: ".env", parse: "text" }];
+  assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ sources: secrets })), /can’t be imported: Credential files/u);
 });
 
 test("more sources or actions than a page may have are refused", () => {

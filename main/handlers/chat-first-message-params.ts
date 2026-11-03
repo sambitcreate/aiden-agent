@@ -1,3 +1,4 @@
+import { isDraftChatId } from "../../renderer/shared/chat-identity.js";
 import { parseChatAppend, type ParsedChatAppend } from "./chat-append-params.js";
 import { parseChatCreate } from "./chat-create-params.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
@@ -35,8 +36,7 @@ export function parseChatFirstMessage(input: unknown): ParsedChatFirstMessage {
   }
   // A dedicated UUID namespace prevents a draft from impersonating bot,
   // Assistant, scheduled, or imported chat identities.
-  if (typeof record.draftId !== "string" ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(record.draftId)) {
+  if (!isDraftChatId(record.draftId)) {
     throw new Error("Invalid draft identifier.");
   }
   const create = parseChatCreate({

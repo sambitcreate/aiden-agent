@@ -350,10 +350,15 @@ export function UsageDataSettings() {
 }
 
 /** The usage-data row on onboarding's last step; finishing onboarding counts as seeing it. */
-export function UsageDataOnboardingRow() {
+export function UsageDataOnboardingRow({ onDisplay }: { onDisplay?: (enabled: boolean) => void }) {
   const { status, setEnabled } = useUsageDataSetting();
   const titleId = React.useId();
   const summaryId = React.useId();
+  const shownEnabled = Boolean(status?.enabled && !status.envDisabled);
+  React.useLayoutEffect(() => {
+    onDisplay?.(shownEnabled);
+    return () => onDisplay?.(false);
+  }, [onDisplay, shownEnabled]);
   return (
     <div
       role="group"

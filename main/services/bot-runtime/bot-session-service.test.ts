@@ -287,6 +287,7 @@ test("a labelled routine turn and a silent reply are recorded as notices", async
     });
     const outcome = await service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
     assert.deepEqual(outcome, { kind: "completed", text: "[SILENT]" });
+    assert.ok((await entryKinds(service, "bot:a")).includes("aiden.routine-input"));
     await service.markSilent("bot:a", sent.submissionId);
     assert.deepEqual(await notices(service, "bot:a"), [
       { notice: "routine", label: "Inbox check", requestId: "routine:t1:1" },

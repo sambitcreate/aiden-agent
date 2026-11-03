@@ -1384,7 +1384,7 @@ async function prepareGeneration(
   const subagentWebEnabled = subagentWebAvailability?.ready === true;
   const discoveredSubagentMcpInventory =
     allowSubagents && childMcpRollout && subagentRunStore.selection === "v2"
-      ? await resolveProductionSubagentMcpInventory(signal)
+      ? await resolveProductionSubagentMcpInventory(signal, { disabledMcpServerIds: workspaceDisabledMcpServerIds })
       : [];
   const botSubagentMcpConnectionIdentities =
     botContext && discoveredSubagentMcpInventory.length > 0
@@ -1396,9 +1396,7 @@ async function prepareGeneration(
         discoveredSubagentMcpInventory,
         botSubagentMcpConnectionIdentities,
       )
-    : discoveredSubagentMcpInventory.filter(
-        (scope) => !workspaceDisabledMcpServerIds?.includes(scope.serverId),
-      );
+    : discoveredSubagentMcpInventory;
   const subagentShellBinary = resolveSubagentShellRunnerBinary();
   const subagentShellEnabled =
     allowSubagents &&

@@ -60,13 +60,13 @@ export interface McpControlDependencies<Event> {
   toolList(serverId: string): McpToolSummary[] | undefined;
   pendingLaunchApprovals(): Promise<McpPendingLaunchApproval[]>;
   /** Approve `server` to run if it still has the launch fingerprint the user saw. */
-  approveLaunch(server: McpServer, fingerprint: string): Promise<boolean>;
+  approveLaunch(server: McpServer, fingerprint: string, isCurrent: () => boolean): Promise<boolean>;
   /** Whether a saved local server may run (Settings tests of the saved command are gated like any launch). */
   launchApproved(server: McpServer): Promise<boolean>;
   /** Where a Mac app connector's app is installed and whether it is open. Read-only. */
   macAppStatus(preset: MacAppMcpPreset): Promise<McpMacAppStatus>;
   /** Open the installed app: only because the person chose Open in Settings. */
-  openMacApp(preset: MacAppMcpPreset): Promise<void>;
+  openMacApp(preset: MacAppMcpPreset, isCurrent: () => boolean): Promise<void>;
 }
 
 const INACTIVE = "MCP changes must come from the active application document.";
@@ -211,7 +211,7 @@ export function registerMcpControlHandlers<Event>(deps: McpControlDependencies<E
     if (!configured) throw new Error("This MCP server is no longer configured.");
     if (configured.transport !== "stdio") throw new Error("Only local MCP servers need approval to run.");
     if (!isCurrent()) throw new Error(INACTIVE);
-    const approved = await deps.approveLaunch(configured, fingerprint);
+    const approved = await deps.approveLaunch(configured, fingerprint, isCurrent);
     // The command changed after it was shown: show it again instead of approving it.
     if (!approved) throw new Error("This server’s command changed. Review it again before approving.");
     return { approved: true };
@@ -231,7 +231,7 @@ export function registerMcpControlHandlers<Event>(deps: McpControlDependencies<E
   deps.handle("mcp:openMacApp", async (event, presetId: unknown) => {
     const isCurrent = live(event);
     const preset = macAppPreset(presetId);
-    await deps.openMacApp(preset);
+    await deps.openMacApp(preset, isCurrent);
     if (!isCurrent()) throw new Error(INACTIVE);
     return { opened: true };
   });

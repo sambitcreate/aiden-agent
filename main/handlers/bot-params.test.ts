@@ -144,6 +144,9 @@ test("Resume and Dismiss take an exact Bot id and a bounded request id", () => {
 });
 
 test("a desktop Bot message carries text or images and its send UUID as request id", () => {
+  for (const requestId of ["routine:daily:42", "routine:task:42:retry-1", "tg:42", "remote:phone:key", "intro:bot"]) {
+    assert.throws(() => parseBotSend({ botId: "bot:1", text: "send it", requestId }), /request id/u);
+  }
   assert.deepEqual(parseBotSend({ botId: "bot:1", text: "hi", requestId: "8f1c" }), {
     botId: "bot:1",
     text: "hi",

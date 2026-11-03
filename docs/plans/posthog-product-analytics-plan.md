@@ -215,6 +215,8 @@ All UI follows `docs/settings-design-system.md`, `docs/design-guide.md`, `GUI.md
 
 **Onboarding (new installs).** On the final onboarding step, one grouped-card row: "Share anonymous usage and crash data", trailing switch (on), with a one-line subtitle "Helps improve Aiden. Never includes your chats, files or keys." and a "What's sent" link that opens the event list (below). The onboarding feature-tour gallery is not changed; this is not a feature.
 
+Finishing onboarding acknowledges sharing only if the row displayed it as on. Completing setup while the status is unavailable leaves the notice pending.
+
 **Existing installs (one-time).** A dismissible notice card on first launch after upgrading: same wording, buttons **OK** and **Turn off**. Dismissing it counts as shown.
 
 **Settings.** In **Settings → Diagnostics** (`renderer/components/settings/diagnostics-settings.tsx`), a new top group "Usage data" (my call; it sits with the existing local diagnostics controls):

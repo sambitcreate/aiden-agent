@@ -1803,7 +1803,7 @@ export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
 export const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
->(function Content({ className, sideOffset = 6, ...props }, ref) {
+>(function Content({ className, sideOffset = 6, onCloseAutoFocus, ...props }, ref) {
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
@@ -1816,6 +1816,16 @@ export const DropdownMenuContent = React.forwardRef<
           className,
         )}
         {...props}
+        onCloseAutoFocus={(event) => {
+          onCloseAutoFocus?.(event);
+          // An item that opened a dialog has already moved focus into it. Sending
+          // focus back to the menu button now would pull it out of whatever the
+          // person has started typing in the dialog.
+          const active = document.activeElement;
+          if (!event.defaultPrevented && active instanceof Element && active.closest('[role="dialog"], [role="alertdialog"]')) {
+            event.preventDefault();
+          }
+        }}
       />
     </DropdownMenuPrimitive.Portal>
   );

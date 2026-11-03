@@ -1484,10 +1484,10 @@ export const chatsApi = {
     invoke<ChatTriageResult>("chats:setTriage", id, patch, ifRevision),
   list: (workspaceId?: string) => invoke<ChatMeta[]>("chats:list", workspaceId),
   get: async (id: string) => {
-    const response = parseChatReadResponse(await invoke<ChatReadResponse>("chats:get", id));
+    const response = parseChatReadResponse(await invoke<ChatReadResponse>("chats:get", id), id);
     if (!response) throw new Error("The chat read response was invalid.");
     if (response.reconciliation) {
-      rememberChatReadReconciliation(response.reconciliation);
+      rememberChatReadReconciliation(response.reconciliation, id);
     }
     return response.chat
       ? {

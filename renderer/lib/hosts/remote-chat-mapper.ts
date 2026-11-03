@@ -1,4 +1,5 @@
 import type { Attachment, Chat, ChatMessage } from "../types";
+import type { ChatImagePlacementV1 } from "../../shared/chat-artifacts";
 import { isToolStep, parseGenerationTimeline, type GenerationTimeline } from "../../shared/generation-timeline";
 import {
   parseProviderFailureV1,
@@ -92,10 +93,20 @@ export function mapRemoteMessage(value: unknown): ChatMessage | null {
   const reasoning = text(input.reasoning);
   if (role === "assistant" && reasoning) message.reasoning = reasoning;
   if (Array.isArray(input.attachments)) {
-    const attachments = input.attachments
-      .map(mapAttachment)
-      .filter((entry): entry is Attachment => entry !== null);
+    const attachments: Attachment[] = [];
+    const placements: ChatImagePlacementV1[] = [];
+    for (const value of input.attachments) {
+      const attachment = mapAttachment(value);
+      if (!attachment) continue;
+      attachments.push(attachment);
+      const toolCallId = record(value)?.toolCallId;
+      if (role === "assistant" && attachment.kind === "image" &&
+          typeof toolCallId === "string" && toolCallId.length <= 128 && /^call-[1-9][0-9]*$/u.test(toolCallId)) {
+        placements.push({ attachmentId: attachment.id, toolCallId });
+      }
+    }
     if (attachments.length > 0) message.attachments = attachments;
+    if (placements.length > 0) message.imagePlacements = placements;
   }
   const failure = mapOutcome(input.outcome);
   if (failure) message.providerFailure = failure;

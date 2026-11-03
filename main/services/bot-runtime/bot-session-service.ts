@@ -1,3 +1,4 @@
+import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
 // The Bot turn path: every ingress (desktop, Remote, Telegram, routines)
 // reaches a Bot's one durable conversation through this service.
 //
@@ -761,6 +762,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
           {
             type: "input",
             content: userContent(input),
+            ...(input.label !== undefined && { entry: { kind: BOT_ROUTINE_INPUT_KIND } }),
             requestId: input.requestId,
             whenBusy: input.whenBusy ?? "followUp",
           },

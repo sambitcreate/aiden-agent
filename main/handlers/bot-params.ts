@@ -139,6 +139,8 @@ export function parseBotId(value: unknown): string {
 
 const BOT_SESSION_REQUEST_ID = /^[A-Za-z0-9._:-]{1,200}$/u;
 
+// Colons separate host-owned ingress namespaces in the durable session.
+const BOT_SEND_REQUEST_ID = /^[A-Za-z0-9._-]{1,200}$/u;
 const BOT_SEND_KEYS = new Set(["botId", "text", "requestId", "whenBusy", "attachments"]);
 const BOT_SEND_TEXT_CHARS = 100_000;
 const BOT_SEND_ATTACHMENTS = 20;
@@ -159,7 +161,7 @@ export function parseBotSend(input: unknown): {
   if (typeof fields.text !== "string" || fields.text.length > BOT_SEND_TEXT_CHARS) {
     throw new Error("Invalid bot message text.");
   }
-  if (typeof fields.requestId !== "string" || !BOT_SESSION_REQUEST_ID.test(fields.requestId)) {
+  if (typeof fields.requestId !== "string" || !BOT_SEND_REQUEST_ID.test(fields.requestId)) {
     throw new Error("Invalid bot message request id.");
   }
   if (fields.whenBusy !== undefined && fields.whenBusy !== "steer" && fields.whenBusy !== "followUp") {

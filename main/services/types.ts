@@ -552,6 +552,8 @@ export interface ScheduledTask {
   /** A claimed Bot fire awaiting a durable run receipt and delivery handoff. */
   pendingRoutineFires?: Array<{
     fireTime: number;
+    /** Reconcile an admitted retry without starting a new turn. */
+    observeOnly?: true;
     requestId: string;
     prompt: string;
     name: string;
@@ -659,6 +661,7 @@ export interface ScheduledTaskInput {
 
 /** A Bot's own wake-up: when the Bot set it, for the "You set this wake-up at …" framing. */
 export interface BotWakeUpMarker {
+  generation?: string;
   setAt: number;
 }
 

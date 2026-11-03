@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { EventEmitter, once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -191,4 +193,39 @@ test("quitting while the opt-out response is pending never sends the old lifecyc
     [["analytics_disabled", previousId]]);
   assert.equal(optOutResponses, 1, "Opt-out was aborted before its response could complete.");
   assert.deepEqual(consentWhilePending, { enabled: false, installId: undefined });
+});
+
+test("HTTP redirects cannot forward normal batches or the final opt-out POST", async (t) => {
+  const leaked: Buffer[] = [];
+  const sink = createServer(async (req, res) => {
+    for await (const bytes of req) leaked.push(bytes);
+    res.end("{}");
+  }).listen(0, "127.0.0.1");
+  await once(sink, "listening");
+  t.after(() => sink.close());
+  const received: string[] = [];
+  for (const code of [307, 308]) {
+    const source = createServer((req, res) => {
+      received.push(req.method!);
+      req.resume();
+      res.writeHead(code, { Location: `http://127.0.0.1:${(sink.address() as AddressInfo).port}/sink` });
+      res.end();
+    }).listen(0, "127.0.0.1");
+    await once(source, "listening");
+    t.after(() => source.close());
+    const transport = createPostHogTransport({
+      apiKey: "phc_test", retryDelayMs: 1,
+      fetch: (url, options) => {
+        assert.equal(new URL(url).origin, ANALYTICS_HOST);
+        return fetch(`http://127.0.0.1:${(source.address() as AddressInfo).port}/`, options as RequestInit);
+      },
+    });
+    const message = { distinctId: INSTALL_ID, properties: SUPER };
+    transport.capture({ ...message, event: "terminal_opened" });
+    await transport.flush();
+    await transport.captureOptOut({ ...message, event: "analytics_disabled" });
+    await transport.discard();
+  }
+  assert.ok(received.length >= 4);
+  assert.equal(leaked.length, 0, "another origin received an analytics body");
 });

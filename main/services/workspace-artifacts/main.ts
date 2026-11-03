@@ -7,7 +7,8 @@ import type { WorkspaceArtifactsChangedEvent } from "../../../renderer/shared/wo
 import { agentShellCommandEnvironment } from "../agent-command-environment.js";
 import { runBoundedShellCommand } from "../bounded-shell-command.js";
 import { writeFileAtomic } from "../durable-fs.js";
-import { readWorkspaceFile } from "../workspace-files.js";
+import { configStore } from "../config-store.js";
+import { artifactFileAllowed, readWorkspaceArtifactFile } from "./file-policy.js";
 import { createWorkspaceArtifactRunner } from "./runner.js";
 import { WorkspaceArtifactStore } from "./store.js";
 import { readWorkspaceArtifactPageFile, type WorkspaceArtifactFiles } from "./transfer.js";
@@ -18,6 +19,10 @@ export const workspaceArtifactStore = new WorkspaceArtifactStore({
   // History is a convenience: a failed write is logged and the update stands.
   onHistoryError: (error) => {
     logger.error("workspace", "Could not keep an earlier version of an artifact.", error);
+  },
+  fileSourceAllowed: async (workspaceId, file) => {
+    const workspace = await configStore.getWorkspace(workspaceId);
+    return workspace?.folderPath ? artifactFileAllowed(workspace.folderPath, file) : false;
   },
 });
 
@@ -70,7 +75,7 @@ export const workspaceArtifactFiles: WorkspaceArtifactFiles = {
 
 export const workspaceArtifactRunner = createWorkspaceArtifactRunner({
   runShell: runBoundedShellCommand,
-  readFile: async (root, file, signal) => (await readWorkspaceFile(root, file, signal)).content,
+  readFile: readWorkspaceArtifactFile,
   env: agentShellCommandEnvironment,
   store: workspaceArtifactStore,
   notify: notifyWorkspaceArtifactsChanged,

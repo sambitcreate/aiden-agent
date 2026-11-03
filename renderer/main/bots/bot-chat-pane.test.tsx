@@ -725,6 +725,20 @@ test("Reply quotes a message at the start of the composer", async () => {
   await waitFor(() => assert.equal(composer.value, "> Day one: Alfama.\n\n"));
 });
 
+for (const key of [{ key: "F10", shiftKey: true }, { key: "ContextMenu" }]) {
+  test(`${key.key} opens a Bot message menu and Reply keeps that message's text`, async () => {
+    await mountChat({
+      "bots:live:subscribe": () => snapshot({ entries: [userEntry("u1", "First question"), assistantEntry("a1", "Keep this answer")] }),
+    });
+    const actions = await screen.findByRole("button", { name: "Message actions for Planner’s message" });
+    actions.focus();
+    fireEvent.keyDown(actions, key);
+    const reply = await screen.findByRole("menuitem", { name: "Reply" });
+    fireEvent.click(reply);
+    await waitFor(() => assert.equal((screen.getByPlaceholderText("Ask Planner") as HTMLTextAreaElement).value, "> Keep this answer\n\n"));
+  });
+}
+
 test("Copy puts a message on the clipboard", async () => {
   const copied: string[] = [];
   Object.defineProperty(navigator, "clipboard", {
