@@ -1,3 +1,4 @@
+import { newChatUuid } from "../../renderer/shared/chat-identity.js";
 import { randomUUID } from "node:crypto";
 import { BotRuntimeInventoryLeaseInvalidError } from "./bot-runtime-inventory-lease.js";
 import type {
@@ -283,7 +284,7 @@ export function newBotId(): string {
 
 export function createBotApplicationService(deps: BotApplicationDependencies) {
   const mintBotId = deps.mintBotId ?? newBotId;
-  const mintChatId = deps.mintChatId ?? (() => randomUUID());
+  const mintChatId = deps.mintChatId ?? (() => newChatUuid(randomUUID));
   const mintOperationId = deps.mintOperationId ?? mintBotLifecycleOperationId;
   let initializePromise: Promise<void> | undefined;
   let recoveryFailure: unknown;

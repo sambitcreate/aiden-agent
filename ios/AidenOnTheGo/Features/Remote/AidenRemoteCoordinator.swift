@@ -846,7 +846,7 @@ final class AidenRemoteCoordinator {
     /// (revision 43) in the same call when the Mac offers them, then
     /// `schedule:cards` (revision 39), then `bot:images` (revision 45), then
     /// `bot:issues` (revision 42), then `chat:jobs` (revision 49), then
-    /// `attachments:raw` (revision 50).
+    /// `attachments:raw` (revision 50), then `chat:new-worktree` (revision 53).
     static let capabilitiesAskedForAlone: [[AidenRemoteCapability]] = [
         [.botHandoffs, .botHandoffNotes, .botHandoffOnMac],
         [.scheduleCards],
@@ -854,6 +854,7 @@ final class AidenRemoteCoordinator {
         [.botIssues],
         [.chatJobs],
         [.attachmentsRaw],
+        [.chatNewWorktree],
     ]
 
     /// Existing pairings predate the progress opt-in field. Upgrade them only

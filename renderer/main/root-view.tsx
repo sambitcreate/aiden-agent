@@ -149,7 +149,7 @@ function RootContent() {
       return (async () => {
         try {
           await reconcileChatCacheAfterIdle(owner.chatId);
-          const snapshot = parseChatActivitySnapshot(await chatsApi.activitySnapshot());
+          const snapshot = parseChatActivitySnapshot(await chatsApi.activitySnapshot(), new Set([owner.chatId]));
           if (!snapshot || !captured) return;
           clearInactiveDetachedLifecycleChat(captured, new Set(snapshot.activeChatIds));
         } catch {
@@ -546,10 +546,11 @@ function RootContent() {
   React.useEffect(() => {
     let disposed = false;
     const reconcileInactiveOwners = (payload: unknown) => {
-      const snapshot = parseChatActivitySnapshot(payload);
+      const owners = pendingDetachedLifecycleChats();
+      const snapshot = parseChatActivitySnapshot(payload, new Set(owners.map(owner => owner.chatId)));
       if (!snapshot) return;
       const activeChatIds = new Set(snapshot.activeChatIds);
-      for (const owner of pendingDetachedLifecycleChats()) {
+      for (const owner of owners) {
         if (!activeChatIds.has(owner.chatId)) void reconcileDetachedLifecycleChat(owner);
       }
     };
