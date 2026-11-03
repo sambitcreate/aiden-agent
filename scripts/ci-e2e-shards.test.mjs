@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
-import { discoverSpecs, FILE_SECONDS, planShards, shardArguments } from "./ci-e2e-shards.mjs";
+import { discoverSpecs, planShards, shardArguments } from "./ci-e2e-shards.mjs";
 
 test("every deterministic spec belongs to exactly one shard, including unweighted new files", () => {
   const specs = [...discoverSpecs(), "future/new-flow.spec.ts"];
@@ -11,11 +12,17 @@ test("every deterministic spec belongs to exactly one shard, including unweighte
   assert.deepEqual(planShards([...specs].reverse()), planShards(specs));
 });
 
-test("recorded weights produce balanced isolated runners", () => {
-  const shards = planShards(Object.keys(FILE_SECONDS));
-  assert.ok(shards.every((shard) => shard.files.length > 0));
-  const loads = shards.map((shard) => shard.seconds);
-  assert.ok(Math.max(...loads) - Math.min(...loads) <= Math.max(...Object.values(FILE_SECONDS)));
+test("allocation reduces the slowest runner using an independent completed CI run", () => {
+  const fixture = JSON.parse(readFileSync(new URL("./fixtures/ci-e2e-independent-timings.json", import.meta.url), "utf8"));
+  const specs = fixture.previousAllocation.flat();
+  const observed = fixture.validationWindowsSeconds;
+  const load = (files) => files.reduce((seconds, file) => seconds + (observed[file] ?? 0), 0);
+  const before = fixture.previousAllocation.map(load);
+  const after = planShards(specs).map((shard) => load(shard.files));
+  // Two later specs do not appear in the independent run; they contribute no
+  // estimate to either side of this comparison.
+  assert.equal(specs.filter((file) => observed[file] === undefined).length, 2);
+  assert.ok(Math.max(...after) < Math.max(...before) * 0.8, `before ${before}; after ${after}`);
 });
 
 test("shards preserve one worker, fail on flakes, and select only exact spec paths", () => {
