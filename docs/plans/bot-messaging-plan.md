@@ -18,7 +18,7 @@ Desktop and phones get each step together. The CLI serve daemon gets A's tool an
 ## Owner decisions
 
 **Messaging**
-1. v1 is send now, reply later. Each message gets exactly one reply.
+1. v1 is send now, reply later. Each message gets at most one final reply, with silence/failure as quiet outcomes. A nested child completes its parent's single reply obligation; it never adds a second origin reply.
 2. On by default. Each Bot has "Other Bots can message <Bot>" and "<Bot> can message other Bots", and Settings → Bots has a global switch.
 3. One level of nesting. Hop 1 may message one more Bot; hop 2 and reply turns can't message anyone; nobody messages back up the chain.
 4. Approvals on a Bot-started turn wait as Needs you in the asked Bot's chat. The sender is told at once. After 30 minutes the Bot gives up, and the sender is told.
@@ -52,9 +52,9 @@ Desktop and phones get each step together. The CLI serve daemon gets A's tool an
 ## How the pieces connect
 
 - **Turn kinds come from A.** `renderer/shared/bot-messages.ts` owns `bot:<originBotId>:<hop>:<deliveryId>`, `botreply:<deliveryId>`, `botMessageTurnOf` and `isBotMessageRequestId`. B and C use those helpers and never check the prefix themselves.
-- **Waiting cards.** A's courier watches tool approvals itself. C's plan card calls `botMessages().announceWaiting(...)`, which tells the sender once and returns the delivery deadline. B doesn't need it: nobody can answer `request_access` on a Bot-started turn, so it raises a Needs you issue.
-- **Folders.** C's `BotPlanAccessPort` uses B's `resolveBotAccessTarget`, `coveredByBotLocations` and `botRunAccess.grant`. D's folder entries use B's `grantBotFolder` root and add `revokeBotFolder`.
-- **Skipping a card.** C (plan coverage) and D (allow list) both use the `preapproved` path that "routines go ahead" uses in `bot-tool-assembly.ts`. D matches only where no rule applied. C matches a rule only when the card named it. Order in `checkPolicy`: rule decision, then plan coverage, then allow list.
+- **Waiting cards.** A's courier watches approvals using host-owned run/input provenance, never an arbitrary first pending card. C's plan card calls `botMessages().announceWaiting(...)`, which deduplicates the notice and returns the durable delivery deadline plus expiry state, including on replay. B doesn't need it: nobody can answer `request_access` on a Bot-started turn, so it raises a Needs you issue.
+- **Folders.** C's `BotPlanAccessPort` uses B's `resolveBotAccessTarget`, `coveredByBotLocations` and snapshot-validated `botRunAccess.grant`. Preserve read/write mode and plan ownership; every plan termination revokes its own ephemeral grant, and replay cannot recreate it. D's folder entries use B's `grantBotFolder` root and add `revokeBotFolder`.
+- **Skipping a card.** C (plan coverage) and D (allow list) both use the `preapproved` path that "routines go ahead" uses in `bot-tool-assembly.ts`. D matches only where no rule applied. C matches a rule only when the card named it. Order in `checkPolicy`: fresh authority/ingress/deadlines, rules, existing routine go-ahead, plan coverage once, allow list, ordinary card/block. Every matching Ask first rule must be named for plan coverage.
 
 ## Order and branches
 
@@ -71,14 +71,34 @@ Each PR ships working software on its own. Merge bottom-up and let GitHub retarg
 
 ## How it gets built
 
-Each task goes to a fresh implementer agent (Opus 5.5, medium effort), followed by a separate review, then a commit. The main session orchestrates, reviews and owns the commits. Plans go in order; tasks inside a plan follow their numbered order.
+The main session owns implementation, integration, finding triage and commits. Follow each detailed plan's numbered tasks in order, in phases A, B, C and D. Keep commits focused. A fresh implementation worker is optional; the two models below are independent review agents and must not review their own implementation. This workflow is self-contained and requires no `superpowers` skills.
+
+Use T3 `delegate_task` for each review, with `role: "review"`, a fresh task per round and explicit model options from the live `orchestrator_capabilities` catalog. Record each returned task id and verify its returned model and options. The verified selections on 2026-11-03 are:
+
+- Opus reviewer: provider `claudeAgent`, model `claude-opus-5-5`, options `{ "effort": "medium" }`. Emphasize authority, policy order, lifecycle and consistency between phases.
+- DeepSeek reviewer: provider `opencode`, model `opencode-go/deepseek-v4.1-flash`, options `{ "variant": "high" }`. Emphasize concurrency, persistence, replay, behavioral test gaps and native/CLI parity.
+
+Both review the same frozen checkpoint SHA independently and read-only. Supply the master and phase plan, base SHA, checkpoint SHA, acceptance criteria, changed files, validation results and known limitations. Both may report any concrete correctness issue. They do not edit, commit, open PRs or launch more agents. Reviewers can share this checkout only while the main session keeps it at that checkpoint.
+
+Review gates:
+
+1. A core: after Tasks 1-3 and 5-7. Task 4 still precedes Task 5; this gate reviews provenance, policy, ledger, courier and wiring before transcript and phone work.
+2. A complete: after Task 11, including desktop, phones and CLI.
+3. B complete: after Task 10, including stale-card validation, folder isolation and phone approvals.
+4. C enforcement: after Tasks 2-5, including Task 1's shared contract. Review coverage, all matching rules, caps and crash recovery before card/UI work.
+5. C complete: after Task 9, including Stop, native clients and permission lifetime.
+6. D complete: after Task 8, including durable approval deduplication, revocation and native clients.
+
+Each gate launches both reviewers, for 12 initial review runs across the program. Before launching, run the narrow suites for completed tasks. The main session accepts or rejects each finding with source/test evidence. Resolve every blocking or important finding, rerun affected checks, then start a fresh review round for substantive fixes. Include the original brief, prior findings, fixes, rejected findings and unresolved objections. Never advance on an unresolved correctness finding or a failed relevant check. Re-review changes after a merge from `main` when they affect an accepted contract; CI must always be green on the exact PR head.
 
 Before each PR opens:
-- Run the narrow suites named in the plan, plus `npm run test:bots`, `npm run test:bot-rules`, `npm run type-check` and `npm run test:aiden-remote`.
+- Run the narrow suites named in the plan, plus `npm run test:bots`, `npm run test:bot-runtime`, `npm run test:bot-rules`, `npm run type-check` and `npm run test:aiden-remote`.
 - Run `npm run test:cli` for A, and for any change to files the CLI bundles.
 - Run the iOS and Android suites for every step with phone work.
-- Run window-opening tests through `npm run test:e2e:space`.
-- Run a whole-branch review on the strongest model.
+- Run window-opening tests through `npm run test:e2e:space`, plus the macOS-only checks required by `AGENTS.md` when a changed path has a darwin branch.
+- Complete the phase gate's whole-branch reviews with both selected models. Record reviewed SHA, validation, findings and their dispositions in the PR description.
+
+The main session owns each stacked PR and links it to this T3 thread. Merge only when explicitly authorized, bottom-up, after fresh exact-head CI. Live-model and physical-device checks below are separate acceptance evidence; passing local or hosted tests does not substitute for them.
 
 ## Hand checks the owner should do
 
@@ -90,6 +110,21 @@ Automated tests can't cover these:
 ## Out of scope
 
 Group rooms, Bots talking across machines, A2A, shared memory between Bots, routines or Telegram turns sending messages, and terminal UI. All are possible later on top of this.
+
+## Correctness review, 2026-11-03
+
+GPT-6 Astra reviewed the master, all four detailed plans, research and current runtime seams. This revision addresses its 15 initial findings and eight follow-up findings in the corresponding tasks:
+
+- A Tasks 2-7: host-free tool acceptance, atomic quota reservation, independent counters/cooldowns/replay receipts, recoverable external effects, owned approval deadlines, and one parent reply across nesting. Task 9 retains paused reply text on phones.
+- B Tasks 2-7: immutable card/issue authorization snapshots, policy and directory revalidation, rollback-safe persistent grants, and read/write-aware ephemeral locations.
+- C Tasks 2-6: fresh versus replayed approval, owner-bound access revocation, durable task identities for caps, named matching rules, valid ingress fixtures and one decision sequence.
+- D Tasks 1-5: durable decision receipts with person/expiry/allow-list provenance. Tasks 7-8 page the combined rule/folder list without hiding grants.
+- Follow-up corrections bind decisions to authorization attempts and current requirements, preserve Remove through publication/revocation receipts, enforce Stop at plan execution admission, distinguish read/change on folder cards, register every suite in `test:serial`, scope settlement caches to the current authorization attempt, and let a read-only grant request a separately approved write upgrade.
+- The self-contained execution workflow above supplies both requested reviewers and explicit model settings at each gate.
+
+After four Astra review rounds and the corrections above, the final focused review found no blocking or important plan issues. This is acceptance of the written contracts, not runtime acceptance. Local document checks passed for whitespace, links, fenced blocks and task numbering.
+
+These remain plans, not implemented features. The acceptance cases in each task must be implemented and run before that phase is accepted. Keep the earlier research as a dated design record; the master and corrected detailed contracts govern implementation.
 
 ## Status
 

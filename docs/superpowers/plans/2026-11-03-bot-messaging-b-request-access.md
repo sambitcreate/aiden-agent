@@ -1,11 +1,11 @@
 # Bot messaging B: `request_access` Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Execution:** Follow the numbered tasks and the review gates in [the master plan](../../plans/bot-messaging-plan.md#how-it-gets-built). The main session owns implementation and commits. Fresh read-only Opus 5.5 medium and OpenCode Go DeepSeek V4.1 Flash high reviewers check each gate. No additional execution skill is required. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A Custom-access Bot that is held to its own folder can ask the person to use a folder outside it, or the whole Mac. The person answers on a card with **Allow once**, **Always for this folder** or **Not now**, on the Mac or a phone. On turns nobody watches, the request becomes a "Needs you" Bot issue.
 
 **Architecture:**
-- **The tool.** A new durable tool, `request_access`, follows the `hand_off` pattern. The memo holds a `waitId`, the tool is `interactive` and `replay: "safe"`, and a new bridge, `bot-access-requests.ts`, holds the waiting card.
+- **The tool.** A new durable tool, `request_access`, follows the `hand_off` pattern. The memo holds a logical `requestId`; each genuine authorization attempt has its own `waitId`, the tool is `interactive` and `replay: "safe"`, and a new bridge, `bot-access-requests.ts`, holds the waiting card.
 - **Allow once** is an in-memory grant for the run that asked. The file tools reach it through one stable extra location, `run.access`, which is resolved at each call. Tools are only rebuilt when a run starts, so this extra location is what lets the same run use the folder.
 - **Always** adds an `approved_location` to the Bot's Custom grants through a new `grantBotFolder`. It uses the same `updateBotAccess({ refuseDriftedGrants: true })` path as "Add to this Bot" for connections, under the policy revision.
 - **Unattended turns** raise an `access_needed` Bot issue instead of a card.
@@ -13,12 +13,12 @@
 
 **Tech Stack:** TypeScript, Electron main and renderer (React), Pi Durable (pinned, unchanged), `node:test` through `tsx --test`, Testing Library, Swift (iOS), Kotlin (Android).
 
-**Spec:** [`docs/plans/bot-to-bot-messaging-research.md`](../../plans/bot-to-bot-messaging-research.md) §3 (constraints 1 and 3), §9, §11.2–11.3, §14 step 2. Plan A (`message_bot`) lands first and defines the `bot:` turn kind. This plan refers to it only by its request-id prefix, `bot:<originBotId>:<hop>:<deliveryId>`.
+**Spec:** [`docs/plans/bot-to-bot-messaging-research.md`](../../plans/bot-to-bot-messaging-research.md) §3 (constraints 1 and 3), §9, §11.2–11.3, §14 step 2. Plan A (`message_bot`) lands first and defines the `bot:` turn kind. This plan consumes A's shared turn helpers and host-owned ingress provenance, not independent prefix parsing.
 
 ## Global Constraints
 
 - Read `AGENTS.md` first. Tests are behavioral only: never `readFileSync` production source and `assert.match` it, and write no tautological or change-detector tests.
-- Register every new test file in a new `"test:bot-access"` script, with `"pretest:bot-access": "npm run build:lease-flock"`, and in the `scripts/ci-test-registry.json` lane that holds `bot-handoff-*` tests. `scripts/ci-test-registry.test.mjs` fails if either is missing. Append `test:bot-access` to the root `test` chain.
+- Register every new test file in a new `"test:bot-access"` script, with `"pretest:bot-access": "npm run build:lease-flock"`, and in the `scripts/ci-test-registry.json` lane that holds `bot-handoff-*` tests. `scripts/ci-test-registry.test.mjs` fails if either is missing. Append `test:bot-access` to `test:serial`, which the CI registry uses to discover membership.
 - **Who gets the tool.** It is offered only when `authority.accessMode === "custom" && authority.files.mode === "scoped"`. New Bots keep Full access (spec §11.2), so Full-access Bots, Custom Bots that already have Full Mac, and Bots with Files off never get it.
 - **Whole Mac** is only ever **Allow once**. It is never Always, never an issue action, and never a saved grant.
 - **Only the person grants.** A Bot's model, another Bot's `bot:` message, or a routine can never answer the card or the issue (spec §3, constraint 1). Always goes only through `grantBotFolder`, which saves with `refuseDriftedGrants`.
@@ -35,7 +35,7 @@
 
 1. **Allow once must not outlive its run.** A follow-up turn uses new request ids, so it is refused. A person's steer that joins the run is allowed. After a quit, Resume has no grant, so the Bot asks again. Task 3 tests this.
 2. **Always must not widen access.** If the Bot asks for `~/Documents/Taxes` while `~/Documents` is already an approved root, Always is not offered, and the larger root is never granted. Task 2 tests this.
-3. **Access can change while the card waits.** If the person edits the Bot's access in Settings meanwhile, Always refuses with no write and no new approved root, and the card stays open with the message. A policy-revision change also drops an Allow once. Tasks 3 and 4 test this.
+3. **Access can change while the card waits.** If the person edits the Bot's access in Settings meanwhile, Always refuses with no write and no new approved root, and the card stays open with the message. A policy-revision change also drops an Allow once. A card stores the revision it showed; an answer cannot adopt a newer revision. Directory replacement and newly overlapping roots also invalidate the card. Tasks 2-5 and 7 test this.
 4. **Symlinks.** A requested path that resolves into Aiden's private storage (other Bots' homes, settings) is refused after `realpath`. Task 2 tests this.
 5. **Asking again after Not now.** In the same run, no second card is shown, and the result says the person already declined. Task 7 tests this.
 
@@ -116,7 +116,7 @@
     filesystem?: { realpath(p: string): Promise<string>; stat(p: string): Promise<{ dev: bigint; ino: bigint; isDirectory(): boolean }> };
   }
   export function resolveBotAccessTarget(requested: string, deps: BotAccessTargetDeps): Promise<BotAccessResolution>;
-  export function coveredByBotLocations(root: string, locations: readonly Pick<BotFileToolLocation, "root">[]): boolean;
+  export function coveredByBotLocations(root: string, locations: readonly Pick<BotFileToolLocation, "root" | "access">[], requiredAccess: "read" | "write" = "read"): boolean; // write requires a write-enabled containing location
   ```
 - Rules:
   - `"whole_mac"` gives `whole_mac`.
@@ -172,7 +172,10 @@
     root: string;                           // "/" for whole_mac
     label: string;
     identity?: { device: string; inode: string };
-    policyRevision: string;                 // the Bot policy revision after the answer
+    policyRevision: string;                 // revision validated against the card snapshot
+    access: "read" | "write";                // request_access grants write; Plan C may grant read
+    owner: { kind: "access" | "plan"; id: string }; // waitId or planId
+    expiresAt: number;                       // no later than its owner's deadline
     grantedAt: number;
   }
   export interface BotRunAccess {
@@ -180,19 +183,20 @@
     location(botId: string, requestIds: readonly (string | undefined)[], policyRevision: string): BotFileToolLocation | undefined;
     decline(botId: string, requestIds: readonly string[], key: string): void;
     declined(botId: string, requestIds: readonly (string | undefined)[], key: string): boolean;
+    revokeOwner(botId: string, owner: { kind: "access" | "plan"; id: string }): void;
     clearBot(botId: string): void;
   }
   export function createBotRunAccess(deps: { now(): number }): BotRunAccess;
   export function botRunEnded(state: BotSessionState): boolean; // idle, needs_model, model_error, unavailable, or paused without `interrupted`
   ```
-  - `location` returns `{ id: BOT_RUN_ACCESS_LOCATION_ID, label: BOT_RUN_ACCESS_LOCATION_LABEL, root, expectedIdentity }` only when one of the call's request ids is in `grant.requestIds`, the revision matches, and the grant is younger than 60 minutes.
+  - `location` returns `{ id: BOT_RUN_ACCESS_LOCATION_ID, label: BOT_RUN_ACCESS_LOCATION_LABEL, root, expectedIdentity }` only when one of the call's request ids is in `grant.requestIds`, the revision matches, and the grant is younger than 60 minutes and before `expiresAt`. A plan grant is also revoked on every Plan C termination path. Sharing an input is only evidence of the same live run; prove with the real harness that a queued follow-up/new run cannot inherit it. Keep steers that actually join the run supported.
   - The store is in memory only. A quit ends Allow once, and the Bot asks again on Resume.
 - Router (`bot-file-tool-router.ts`):
   ```ts
   readonly lateLocation?: { readonly id: string; readonly label: string; resolve(): Promise<BotFileToolLocation | undefined> };
   ```
   - It is declared in the `location` schema after the fixed locations.
-  - A call to it resolves its location, then runs the underlying tool for that location. The protected-root, skill-directory and root-redaction checks run exactly as for a fixed location.
+  - A call to it resolves its location on each execution, then runs the underlying tool for that location. Add `BotFileToolLocation.access?: "read" | "write"`, with omitted meaning existing write behavior. Preserve it through `checkedLocation` and reject `write_file`/`edit_file` for a read location before invoking any mutator. The protected-root, skill-directory, expected-identity and root-redaction checks run exactly as for a fixed location. A read grant never narrows independently granted fixed locations.
   - An unresolved location throws `"Nothing extra is allowed for this task yet. Ask with request_access first."`.
 - `BotFileCandidateInput.runAccess?: { resolve(call: BotToolCall): Promise<BotFileToolLocation | undefined> }`. The bound tool passes `lateLocation` with `resolve: () => input.runAccess.resolve(call)`.
 - `BotToolSourceDeps.policyRevision(botId: string): Promise<string>`. In `bot-session-main.ts`, this is `(await botCapabilityStore.getBotPolicy(botId)).revision`.
@@ -204,6 +208,9 @@
     - `a changed policy revision drops the grant` (Review Focus 3).
     - `a grant expires after 60 minutes`, using a fake clock.
     - `clearBot forgets grants and declines`.
+    - `revokeOwner removes only that owner's grant`: stopping a plan does not clear a later independent access grant.
+    - `a read grant refuses writes and edits`: real file tools read a fixture but cannot mutate it via direct or nested codemode calls; a write grant permits the intended change.
+    - Real-harness run scope: a steer joining the same run can use the grant, while a queued follow-up and a later run cannot, including after restart.
     - `botRunEnded` is true for `{kind: "idle"}`, and false for `running`, `interrupted`, and `paused` with `interrupted`.
   - In `bot-file-tool-router.test.ts`, `a late location reads inside its resolved root`: `read_file` with `location: "run.access"` reads a fixture file. Two more checks:
     - `an unresolved late location explains how to ask`;
@@ -237,16 +244,18 @@
     add(folderPath: string): Promise<{ id: string }>;                        // runtime.approvedRoots.addLocalFolder(folderPath, { botsOnly: true })
   };
   // service
-  grantBotFolder(input: { audienceId: string; botId: string; folderPath: string; rootId?: string }): Promise<"added" | "already_allowed">;
+  grantBotFolder(input: { audienceId: string; botId: string; folderPath: string; rootId?: string;
+    expectedRevision: string; expectedIdentity: { device: string; inode: string }; operationId: string;
+  }): Promise<"added" | "already_allowed">;
   ```
 - Behavior:
-  - When the Bot isn't Custom, the result is `"already_allowed"`.
+  - First compare the saved policy with `expectedRevision`, re-resolve the requested canonical root and pinned directory identity, recheck private paths and current root overlaps, and confirm that Custom scoped file access still permits this action. A stale authorization snapshot is an error, including after switching to Full or Files off; do not turn the stale card into a successful answer. A fresh service call for an already-allowed exact folder may return `"already_allowed"`.
   - **Drift pre-check.** Before any new approved root is added, run the same `deps.catalog.reconcile(savedBinding, …)` check that `updateBotAccess` runs. If it is not `ready`, throw the drift message and write nothing.
-  - **The root.** Use `rootId` only when that root's `folderPath` still equals `folderPath`. Otherwise call `approvedFolders.add(folderPath)`.
+  - **The root and save transaction.** Journal a grant operation under `operationId`, including the authorization snapshot and ownership of any newly created `botsOnly` root. Revalidate under the inventory lease used for binding, before root creation and before policy publish. Use `rootId` only when path AND pinned identity match; otherwise create only the exact revalidated root. If policy saving fails, roll back a root created by this operation only when no other committed grant references it. Never delete a reused root. Recovery completes or compensates an unfinished journal entry before serving another grant, so failed answers leave no orphan root or hidden authority. No network or VM operation is involved.
   - **The option.** Find the snapshot's `fileScopes` entry with that `sourceId` and `kind: "approved_location"`. If it is missing or unavailable, throw `"That folder can't be added right now."`.
   - If the option is already selected, the result is `"already_allowed"`.
   - **The save.** Call `updateBotAccess` with:
-    - `expectedRevision: policy.revision`;
+    - `expectedRevision: input.expectedRevision`;
     - `refuseDriftedGrants: { message: "Some of this Bot's access changed since you last saved it. Review it in the Bot's settings first." }`;
     - `fileScopeIds: nextBotFileScopeIds(policy.custom.fileScopeIds, snapshot.catalog.fileScopes, option.id, true)` (`renderer/shared/bot-capabilities.ts:472`, which keeps `bot_home`).
   - The connection grant keeps its current message, so `refuseDriftedGrants: true` reads as before.
@@ -255,7 +264,9 @@
   - `grantBotFolder adds one approved location and keeps the rest`. After the call, the saved `custom.fileScopeIds` holds the earlier ids plus the new option id, and `bot_home`'s id is still there.
   - `grantBotFolder reuses an exact approved root`: `approvedFolders.add` is never called.
   - `grantBotFolder refuses drifted grants with no write and no new root` (Review Focus 3). The save count and the `add` count both stay 0, and it rejects with the message above.
-  - `grantBotFolder on a Full-access Bot is already_allowed`.
+  - `a stale card after switching access mode refuses`: an old expected revision gives no grant or root.
+  - Card/issue race tests: replace the folder inode, turn Files off, change selections, and add an overlapping approved root while waiting. Once and Always refuse the stale snapshot.
+  - Crash-injection grant journal tests: interruption after root creation or before policy publish is compensated or finished once; a reused/shared root is never removed. A failing save leaves no new root.
   - `a folder allowed for a Bot isn't browsable from a phone`: after `add(path, {botsOnly: true})`, `listRoots(deviceId)` has no entry for it, and browsing its root id is refused the same way as an unknown root. The Bot catalog's `listApprovedLocations` still lists it.
   - `approving the same folder for phones clears the mark`: a later plain `addLocalFolder(path)` returns the same root, and `listRoots` now shows it.
   - `the connection grant's drift message is unchanged`. Extend the existing drift test for `grantBotConnection`.
@@ -273,14 +284,27 @@
 **Interfaces:**
 - Produces, in `bot-access-requests.ts`, built like `bot-questions.ts`:
   ```ts
+  export interface BotAccessAuthorization {
+    policyRevision: string;
+    requestIds: readonly string[];
+    target: "folder" | "whole_mac";
+    root: string;
+    identity?: { device: string; inode: string };
+    rootId?: string;
+    choices: readonly BotAccessChoice[];
+    // Captured from a fresh admission; never supplied by a renderer or model.
+  }
   export interface BotAccessRequestPrompt extends BotPendingAccessRequest {
-    /** Main-only: what Always grants. Never projected to the renderer or the wire. */
+    logicalRequestId: string; // main-only durable tool request, distinct from this card's waitId
+    /** Main-only authorization snapshot. Never projected to the renderer or wire. */
+    authorization: BotAccessAuthorization;
     grant?: { folderPath: string; rootId?: string };
   }
   export type BotAccessAnswerOutcome = "answered" | "not_waiting" | "invalid";
   export interface BotAccessRequests {
-    request(prompt: BotAccessRequestPrompt & { signal: AbortSignal | undefined }): Promise<BotAccessChoice>;
-    answer(botId: string, waitId: string, choice: BotAccessChoice, always: (prompt: BotAccessRequestPrompt) => Promise<void>): Promise<BotAccessAnswerOutcome>;
+    request(prompt: Omit<BotAccessRequestPrompt, "waitId"> & { signal: AbortSignal | undefined }): Promise<{ choice: BotAccessChoice; waitId: string }>; // allocates or reuses the current live attempt
+    // The result carries the attempt id; D may add a recorded hint alongside it.
+    answer(botId: string, waitId: string, choice: BotAccessChoice, authorize: (prompt: BotAccessRequestPrompt, choice: BotAccessChoice) => Promise<void>): Promise<BotAccessAnswerOutcome>;
     pending(botId?: string): BotPendingAccessRequest[];   // without `grant`
     get(botId: string, waitId: string): BotPendingAccessRequest | undefined;
     onChange(listener: (botId: string) => void): () => void;
@@ -288,16 +312,16 @@
   export function createBotAccessRequests(): BotAccessRequests;
   ```
   - A choice that is not in `prompt.choices` is `invalid`, and the card keeps waiting.
-  - For `"always"`, `always(prompt)` runs before the card settles. If it throws, the card keeps waiting and the error propagates.
+  - Replace the Always-only callback with `authorize(prompt, choice)` for both `once` and `always`. It runs before settlement and revalidates the immutable authorization snapshot, current run/deadline, choices, canonical root and identity. It must not adopt a new revision. If it throws, no grant is issued, the card remains available with a stale-request error, and the Bot must make a fresh request before a changed scope can be approved. Always additionally runs the journaled persistent grant; once issues only the validated ephemeral grant.
   - While one answer is running, a second answer for the same `waitId` is `not_waiting`.
-  - A request under the same `waitId` withdraws the stale card. An abort rejects with `signal.reason`. Listener throws are swallowed.
+  - A logical `requestId` identifies the durable tool request, not a person decision. A live unchanged authorization attempt reuses its current `waitId`, including transport retries. After quit/abort, or when a changed authorization snapshot deliberately needs a new card, allocate a new random `waitId` and withdraw the old attempt. A late answer to the old id is `not_waiting`; an abort rejects with `signal.reason`. Listener throws are swallowed. Never reuse a prior decision id for a deliberate reapproval.
 - Produces, in `bot-access-requests-main.ts`:
   ```ts
   export const botAccessRequests: BotAccessRequests;
   /** Desktop IPC, Remote and the issue card call this. Throws "That answer doesn’t match the card." for invalid. */
   export function answerBotAccessRequest(botId: string, waitId: string, choice: BotAccessChoice): Promise<{ answered: boolean }>;
   ```
-  - `always` calls `botApplicationService.grantBotFolder({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, ...prompt.grant })`.
+  - `once` validates and issues a run grant under the captured revision. `always` calls `botApplicationService.grantBotFolder` with the captured revision/identity and stable `operationId = waitId` for this authorization attempt, then issues the run grant under the resulting validated policy revision. Both use `prompt.authorization`, not current values substituted for the original authorization.
   - It then broadcasts `bots:changed`, as `grantBotConnection` does (`bot-session-main.ts:769`).
 
 - [ ] **Step 1: Write the failing tests** in `bot-access-requests.test.ts`:
@@ -305,7 +329,7 @@
   - `always is refused on a card that does not offer it`: the result is `invalid` and the card is still pending.
   - `a failing Always keeps the card open` (Review Focus 3): the `always` callback throws, `answer` rejects, and `pending(botId)` still lists the card.
   - `a second answer while Always is running is not_waiting`.
-  - `pending never exposes the folder path`: there is no `grant` key in `pending()` items.
+  - `pending never exposes the authorization snapshot`: neither `grant` nor `authorization` is in `pending()` items. The intentionally displayed bounded `place` remains.
   - `abort withdraws the card and rejects with the reason`.
 - [ ] **Step 2: Run and see them fail.**
 - [ ] **Step 3: Implement both files.**
@@ -330,11 +354,11 @@
   ```ts
   export type BotIssueKind = "preflight_failed" | "routine_failed" | "routine_paused" | "run_stalled" | "access_needed";
   // BotIssueAction gains: | { kind: "allow_folder" }
-  // BotIssue gains: access?: { label: string; folderPath?: string; rootId?: string }  // folderPath absent for whole_mac
+  // BotIssue gains: access?: { label: string; folderPath?: string; rootId?: string; authorization: BotAccessAuthorization }  // folderPath absent for whole_mac; authorization is main-only
   // BotIssueServiceActions gains:
-  allowFolder(botId: string, access: { folderPath: string; rootId?: string }): Promise<"added" | "already_allowed">;
+  allowFolder(botId: string, access: { folderPath: string; rootId?: string; authorization: BotAccessAuthorization }, operationId: string): Promise<"added" | "already_allowed">;
   ```
-  - `act` with `allow_folder` claims the issue, calls `allowFolder`, and settles it `fixed`. If the call throws, the claim is released, as `resume_routine` does.
+  - `act` with `allow_folder` claims the issue, revalidates its stored authorization snapshot as Always does, calls `allowFolder` with the stable issue id as operation id, and settles it `fixed`. An issue can outlive its original run, so persistent authorization validates the captured policy and filesystem identity without reviving that run or issuing an Allow once grant. Never project the authorization snapshot to a phone. If the call throws, the claim is released, as `resume_routine` does.
   - An issue without `access.folderPath` never offers `allow_folder`.
 
 - [ ] **Step 1: Write the failing tests:**
@@ -389,7 +413,7 @@
   export function botAccessRequestCandidate(botId: string, deps: BotAccessRequestToolDeps): BotToolCandidate; // replay "safe", interactive, executionMode "sequential"
   ```
 - Parameters: `{ path: string (≤ 4,096; an absolute folder, "~/…", or "whole_mac"), why: string (1–400) }`.
-- What Always grants is built from the resolution, and only when `always.kind !== "none"`: `{ folderPath: root, rootId?: always.rootId }`. The tool sets it as the card prompt's `grant` (Task 5) and as the issue's `access` (Task 6). Whole Mac carries neither.
+- What Always grants is built from the resolution, and only when `always.kind !== "none"`: `{ folderPath: root, rootId?: always.rootId }`. The tool sets it as the card prompt's `grant` (Task 5) and as the issue's `access` (Task 6), together with the captured main-only authorization snapshot. Whole Mac has its snapshot but no persistent folder grant.
 - Verdict:
   - When `accessMode !== "custom"` or `files.mode === "full_mac"`, refuse with `"This Bot can already use your whole Mac."`.
   - When `files.mode === "off"`, refuse with `"File access is off for this Bot."`.
@@ -400,24 +424,26 @@
      - `private`: `"That folder belongs to Aiden and can't be shared with a Bot."`
      - `not_found`: `"That folder doesn't exist."`
      - `not_absolute`: `"Give the folder's full path, like ~/Documents/Taxes."`
-  2. A folder that `coveredByBotLocations` already covers, or that matches this run's grant, gives `outcome: "already_allowed"`.
+  2. Only sufficient read-and-change authority gives `outcome: "already_allowed"`: a fixed write-enabled location covers the folder, or the current matching run grant has `access: "write"`. A read-only Plan C grant does not satisfy `request_access`, which asks for read-and-change. Continue to a fresh approval attempt for that upgrade; the read grant stays effective while waiting or after Not now. Containment alone never proves sufficient access mode.
   3. `runAccess.declined(...)` gives `outcome: "declined_earlier"`, with `"The person already said not now to this in this task. Carry on without it."`
   4. On an unattended run, raise an issue and return `outcome: "asked_later"`:
      - the issue: `kind: "access_needed"`, `dedupeKey: "access:" + key`, title `"Wants to use {label}"`, body = `why` bounded to 280;
      - its actions: `[allow_folder]` when `always.kind !== "none"`; for whole Mac and other `none` cases, `[{ kind: "open_settings", section: "access" }]`;
      - the result text: `"Nobody can answer a card on this turn, so the person will see this request in your chat. Carry on without it and say what is waiting on it."`
-  5. Otherwise, take the memo `waitId`, request the card (`choices` from `botAccessChoicesFor`), then:
-     - `once` or `always`: call `runAccess.grant` with the revision read after the answer. The text is `"The person allowed {label} for this task. Use the file tools with location \"run.access\" to reach it."` Always adds `" It stays allowed from your next task."`
+  5. Otherwise, take the memoized logical `requestId`, capture a fresh main-only `BotAccessAuthorization`, and request the card (`choices` from `botAccessChoicesFor`). The bridge validates and grants before returning `{choice, waitId}` for the current attempt:
+     - `once` or `always`: use the bridge's already-validated grant, bound to `owner: {kind: "access", id: attempt.waitId}`. Never re-grant using a newly read revision after the answer. The text is `"The person allowed {label} for this task. Use the file tools with location \"run.access\" to reach it."` Always adds `" It stays allowed from your next task."`
      - `not_now`: call `runAccess.decline`. The text is `"The person said not now. Carry on without {label} and tell them what you couldn't do."`
 
 - [ ] **Step 1: Write the failing tests** in `bot-access-request-tool.test.ts`, with fake deps and a real `createBotAccessRequests` and `createBotRunAccess`:
   - `asks once and grants the run on Allow once`. Answer `once` through the bridge. The result details are `{outcome: "once"}`, and `runAccess.location(botId, ["r1"], rev)` has the folder's root.
-  - `a Resume re-asks under the same waitId`: the same `memo` gives the same `waitId` on a second execute.
+  - `Resume reapproves under a new attempt id`: Allow once, quit, then Resume the same logical request. A new card has a fresh waitId. Answer Not now, or Allow once again; each is a new person decision, while retransmissions of either answer count only once. Late answers to the old attempt are refused. Both native clients reuse an idempotency key only within one attempt and mint a new key for the new card.
   - `a whole-Mac card never offers Always`: the pending card's `choices` deep-equal `["not_now", "once"]`.
   - `a routine run raises one access issue and shows no card`, with `runRequestIds: ["routine:t1:1"]`. `raiseIssue` is called once with `kind: "access_needed"`, and `pending()` is empty. Repeat with `tg:1` and `bot:ada:1:d1`.
   - `a second request after Not now shows no card` (Review Focus 5).
-  - `a folder the Bot can already use needs no card`.
+  - `a folder with independent read-and-change authority needs no card`.
+  - Approve a Plan C outside-folder read grant, then call `request_access` for that same folder. A new card appears and write/edit stay blocked until approval. Allow once upgrades to a validated write grant; Not now keeps the original read-only grant usable and does not widen it. Repeat through a phone answer.
   - `Stop withdraws the card and records no answer`: abort the signal, and `execute` rejects.
+  - While a card waits, edit the policy or replace the folder; stale once/always answers grant nothing on desktop and Remote. A fresh request is required for changed authority. The result never substitutes the latest policy revision into the old card.
 - [ ] **Step 2: Extend `bot-tool-policy.test.ts`:**
   - `request_access is offered to a scoped Custom Bot and refused for Full access, Full Mac and Files off`;
   - `botRunUnattended is true when any input is routine, Telegram or bot`.

@@ -1,6 +1,6 @@
 # Bot messaging D: the allow list and the repeat-approval nudge Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Execution:** Follow the numbered tasks and the review gates in [the master plan](../../plans/bot-messaging-plan.md#how-it-gets-built). The main session owns implementation and commits. Fresh read-only Opus 5.5 medium and OpenCode Go DeepSeek V4.1 Flash high reviewers check each gate. No additional execution skill is required. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Aiden counts a Bot's approvals per action class in main. After the third approval of the same class in 14 days with no denial, that class's card offers **Always allow for <Bot>** and the tool result tells the Bot so it can mention it. Each Bot gets an **Allowed without asking** list (desktop profile, Settings → Bots, and phones) with Remove. An entry never skips a locked rule, a rule-made ask, or Computer Use on the person's Mac.
 
@@ -34,7 +34,7 @@ This plan extends those pieces. It does not invent a parallel store:
   - A browser step on one site: `{kind:"site", host, action}` from the browser action's URL. The host is lowercased and loses a leading `www.`. The action is `click`, `type` or `press`.
   - A folder: `{kind:"folder", path}` from `request_access`. Its "Always" stays Plan B's "Always for this folder". Once saved it shows in the list (owner pick 12): every `approved_location` the Bot's Custom access holds is an entry, and Remove takes the folder out of that Bot's access. Folder entries show when they were added but no use count, because file tools don't report uses per folder.
   - Share image and the Bot's own computer have no class: share image has no classifiable action, and the Bot computer needs no approval. The Bot shell needs no approval today, so it has no entries.
-- Limits: at most 50 entries per Bot and 1,000 in all. A ledger keeps at most 100 classes per Bot and 20 approval times per class. The Bot is hinted at most once per class every 7 days.
+- Limits: at most 50 remembered rule entries per Bot and 1,000 remembered rules in all. Existing selected folders are additional list rows and are paginated, never silently hidden by those rule limits. A ledger keeps at most 100 classes per Bot and 20 approval times per class. The Bot is hinted at most once per class every 7 days.
 - Deep links:
   - The list is `/bots/<encodeURIComponent(botId)>?page=allowed`, a new `BotSubpage`. Settings is `/settings?section=bots`.
   - A Bot's reply can't carry an in-app link: assistant markdown opens `https:` only (`markdown.tsx` `RestrictedLink`). So the link lives on Aiden's own UI: a toast after Always allow, and the profile row. The Bot's hint names the place in words.
@@ -46,7 +46,7 @@ This plan extends those pieces. It does not invent a parallel store:
 - No new analytics events. No onboarding change: the nudge appears in context and isn't a first-run choice.
 - UI follows `GUI.md`, `docs/design-guide.md` and `docs/settings-design-system.md`: grouped `FieldSet` cards, inset rows, trailing controls, the shared button shapes, no decorative borders, visible `focus-visible` rings. Copy stays minimal.
 - Pre-1.0: no migration. The document stays `version: 1`, and `botRules` is optional.
-- This plan depends on Plan B (`request_access`) only in Task 5, step 5. Plan B lands first in the stack (A → B → C → D), so the hook goes into B's real settle point, `answerBotAccessRequest` in `main/services/bot-runtime/bot-access-requests.ts`, and B's tool result in `bot-access-request-tool.ts`.
+- This plan depends on Plan B (`request_access`) only in Task 5, step 5. Plan B lands first in the stack (A → B → C → D), so the hook goes into B's real settle point, `answerBotAccessRequest` in `main/services/bot-runtime/bot-access-requests-main.ts`, and B's tool result in `bot-access-request-tool.ts`.
 
 ## Review Focus
 
@@ -87,24 +87,29 @@ This plan extends those pieces. It does not invent a parallel store:
     | { kind: "rule"; id: string; botId: string; what: string; createdAt: string; uses: number; lastUsedAt?: string }
     | { kind: "folder"; id: string; botId: string; what: string; createdAt: string };   // id: "folder_<sourceId>"; what: "Folder · ~/Documents/Taxes"
   ```
-- Produces, in `main/services/tool-approval-rules.ts`: `ToolApprovalRulesDocument.botRules?: BotApprovalRuleView[]`, plus these `ToolApprovalRuleBook` methods:
+- Produces, in `main/services/tool-approval-rules.ts`: `ToolApprovalRulesDocument.botRules?: BotApprovalRuleView[]` and `botGrantOperations` publication/revocation receipts, plus these `ToolApprovalRuleBook` methods:
   ```ts
   matchBot(botId: string, target: BotApprovalRuleTarget): Promise<BotApprovalRuleView | undefined>;
-  grantBot(botId: string, target: BotApprovalRuleTarget, label: string): Promise<BotApprovalRuleView>; // idempotent per (botId, key)
+    grantBot(botId: string, target: BotApprovalRuleTarget, label: string, operationId: string): Promise<
+      { status: "published"; rule: BotApprovalRuleView } | { status: "revoked" }
+    >; // replay-safe per immutable publication operation, not only target
   listBot(botId?: string): Promise<BotApprovalRuleView[]>;   // newest first; every Bot when omitted
   recordBotUse(botId: string, ruleId: string): Promise<void>;
   revokeBot(botId: string, ruleId: string): Promise<boolean>;
   forgetBot(botId: string): Promise<number>;
   onBotChange(listener: (botId: string) => void): () => void;
   ```
-  `list()`, `revoke()`, `revokeAll()` and `onChange()` keep their meaning: workspace rules only.
+  `list()`, `revoke()`, `revokeAll()` and `onChange()` keep their meaning: workspace rules only. `grantBot` enforces both the 50-per-Bot and 1,000-profile limits inside one `store.update`, including concurrent grants. Persist an immutable operation-id receipt atomically with publication. A duplicate operation returns its recorded publication, or `revoked`, without granting again. `revokeBot` atomically removes the entry and tombstones every publication operation that referenced it. A replay of an old operation cannot recreate authority even if the target currently has no entry. A later fresh person decision with a new operation id may intentionally grant it again. Retain publication/revocation receipts while their originating tasks can replay, independently of visible entries. The service also rejects grants for deleted/unknown Bots.
+
+- Publication receipts are main-owned records `{ operationId, botId, targetKey, ruleId, status: "published" | "revoked", publishedAt, revokedAt? }` stored with the rule document. Preserve them through normalization and atomic revoke, and never expose them as another visible list entry.
 
 - [ ] **Step 1: Write the failing tests** in `tool-approval-rules.test.ts`. Use the file's in-memory store, a fixed `now`, and `CAL = {kind:"connection", serverId:"gcal", tool:"create_event"}`:
-  - `a Bot entry covers only its own Bot and exact target`: after `grantBot("bot:a", CAL, "Google Calendar · Create event")`:
+  - `a Bot entry covers only its own Bot and exact target`: after `grantBot("bot:a", CAL, "Google Calendar · Create event", "decision-1")`:
     - `matchBot("bot:a", CAL)?.label === "Google Calendar · Create event"`;
     - `matchBot("bot:b", CAL) === undefined`;
     - `matchBot("bot:a", {...CAL, tool: "delete_event"}) === undefined`.
-  - `granting the same target twice keeps one entry and its first createdAt`.
+  - `granting the same target twice keeps one entry and its first createdAt`; two distinct valid person-operation ids receive separate receipts for that same publication.
+  - Publish with operation d1, crash before acknowledgement, Remove, then replay d1: it returns `revoked`, creates no entry and releases no waiting card. A fresh decision d2 can intentionally grant again. Reopening the store preserves both receipts and tombstones.
   - `recordBotUse counts uses and stamps lastUsedAt`: two calls give `uses === 2` and `lastUsedAt === now().toISOString()`. An unknown rule id changes nothing.
   - `Bot entries stay out of Settings → Tool approvals`:
     - `list()` returns only workspace rules;
@@ -145,28 +150,36 @@ This plan extends those pieces. It does not invent a parallel store:
   export const BOT_APPROVAL_HINT_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
   export type BotApprovalTallyKey = BotApprovalRuleTarget | { kind: "folder"; path: string };
   export interface BotApprovalTallies {
-    record(botId: string, key: BotApprovalTallyKey, outcome: "allowed" | "denied"): Promise<void>;
+    /** Persists decision receipt, tally and hint entitlement in one transaction. Replays return the stored result. */
+    record(botId: string, key: BotApprovalTallyKey, decision: {
+      id: string; authorizationFingerprint: string; source: "person" | "expiry" | "allow_list";
+      answer: BotApprovalAnswer; offered: boolean;
+    }): Promise<{ counted: boolean; hintCount?: number }>;
+    decision(botId: string, id: string, authorizationFingerprint: string): Promise<BotApprovalDecision | undefined>;
     /** Approvals in the window when ≥ threshold and none denied in it; else undefined. */
     nudge(botId: string, key: BotApprovalTallyKey): Promise<{ count: number } | undefined>;
-    /** True at most once per class per cooldown; marks the hint as given. */
-    takeHint(botId: string, key: BotApprovalTallyKey): Promise<boolean>;
+    // Hint ownership is assigned inside record(), at most once per class per cooldown.
     forget(botId: string, key: BotApprovalTallyKey): Promise<void>;
     forgetBot(botId: string): Promise<void>;
   }
   export function createBotApprovalTallies(options: { profileDir(): string; now?(): number }): BotApprovalTallies;
   ```
-  The file is `<profile>/bots/<dir>/approval-tallies.json`: `{version:1, classes:[{key, allowed:number[], deniedAt?, hintedAt?}]}`. Every write drops entries outside the window, keeps 20 times per class and 100 classes (least recent dropped). An unreadable file reads as empty and is replaced on the next write.
+  The file is `<profile>/bots/<dir>/approval-tallies.json`: `{version:1, classes:[{key, allowed:number[], deniedAt?, hintedAt?}], decisions:[...]}`. Each decision receipt contains the host-owned wait/decision id, immutable answer, provenance, target key, timestamp and recorded hint result. Atomically record receipt + tally + hint ownership under one per-Bot serial. A duplicate id with different target/answer is an error; exact replay returns the saved result and does not recount.
 
-- [ ] **Step 1: Write the failing tests** in `bot-approval-tallies.test.ts`. Use a temp profile dir and a settable clock; `DAY = 86_400_000`:
+Class history keeps 20 times per class and 100 classes, pruning timestamps outside the window. Decision receipts are separate from these display/count limits and remain while their durable tasks can replay. Collect them only after proven task settlement, never because a class was evicted or an Always grant cleared the tally. Unreadable receipt bookkeeping fails closed for remembered-approval settlement and preserves the file; it must not reset replay protection. Only `source: "person"` changes approval/denial counts or hint cooldowns. Expiry, withdrawal and release under an allow-list entry are not human choices; withdrawal has no decision at all.
+
+- [ ] **Step 1: Write the failing tests** in `bot-approval-tallies.test.ts`. Use a temp profile dir and a settable clock; `DAY = 86_400_000`. Every human-answer fixture uses a unique host-owned decision id and source `person`:
   - `offers on the third approval in 14 days`: two `record(…,"allowed")` give `nudge === undefined`; a third gives `{count: 3}`.
   - `approvals older than 14 days don't count`: three at day 0, and at day 14 plus 1 ms `nudge === undefined`.
   - `a denial withholds the offer for 14 days` (Review Focus 2):
     - five approvals on days 0–2 and a denial on day 3 give `undefined` on day 4;
     - approvals on days 15, 16 and 17 give `{count: 3}` on day 17.5 (the denial is now more than 14 days old).
-  - `the hint is given once a week`: `takeHint` is `true`, then `false` at day 6, then `true` at day 7 plus 1 ms.
+  - `the hint is assigned once a week`: eligible distinct person decisions at day 0, day 6 and day 7 plus 1 ms get a stored hint result only on days 0 and 7. Replay of any decision returns its original result without moving the cooldown.
   - `classes are independent`: a folder `"/Users/p/Taxes"` key and `CAL` count separately. `forget(CAL)` resets only `CAL`.
   - `counts survive a reopen and stay bounded`: 30 approvals in a day give `count === 20` from a fresh instance on the same dir.
   - `forgetBot removes the file`: the Bot directory has no `approval-tallies.json` afterwards.
+  - Crash after the receipt/tally commit but before the task memo: reopen and settle the same decision repeatedly; the count remains one and the original hint result is returned.
+  - Expiry denial and automatic sibling allowance never change human counts, denials or hint timestamps. Corruption never makes replayable decisions count again. Clearing a class leaves its replay receipts intact.
 - [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-approval-tallies.test.ts`. Expected: FAIL, module not found.
 - [ ] **Step 3: Implement `createBotApprovalTallies`.** Per-Bot serial writes. Keys are `botApprovalRuleKey`, or `JSON.stringify(["folder", path])` for folders.
 - [ ] **Step 4: Run the tests.** Same command. Expected: PASS.
@@ -202,12 +215,15 @@ This plan extends those pieces. It does not invent a parallel store:
   }
   // BotToolAssemblyPorts.allowList?: BotAllowListPort
   ```
-- Rule for `checkPolicy`: replace `if (ruled === "allowed" || rule === undefined) return asBaseline;` with this branch. When `rule === undefined && baseline !== undefined && !goAhead && toolName !== COMPUTER_USE_TOOL_NAME` and `botApprovalTargetOf` gives a target:
-  - `match` hits: return `{allowed:true, approval:{...baseline, preapproved:true, onAllow}}`. The new `onAllow` runs the baseline's `onAllow` first (the browser binding still asserts the page), then `used(...)`, which never fails the call.
-  - Otherwise: return `ask({...baseline, remember:{target, title, ...(offer && {offer})}})`.
-  - A rejected `match` asks. A rejected `offer` asks without an offer.
-  - Every other path is unchanged. With no `rules` port (the CLI) nothing reaches this branch.
-  - Stacked on Plan C, where `asBaseline` is a function and `ask` already checks plan coverage. Keep this order: the rule decision, then plan coverage, then this allow-list match. A call a plan covers counts against the plan and doesn't use the entry.
+- Integrate with C's single decision sequence rather than adding an earlier return:
+  1. Check fresh authority, ingress, deadlines and classification; load rules fail closed. Locked rules, hand-offs and refusals return first.
+  2. Apply the existing eligible routine go-ahead behavior.
+  3. Evaluate C's plan coverage exactly once, with its durable execution identity and every matching Ask first rule. A match returns `preapproved` and reserves only plan counters.
+  4. Only when no rule matched, baseline approval exists, no preceding path covered the call, and the tool is not Computer Use, derive `botApprovalTargetOf` and consult the allow list.
+  5. A match preserves baseline `onAllow`, then records entry usage after that binding check succeeds. No match attaches `remember` and any offer to the ordinary card. An error asks normally, without an offer if necessary.
+  6. A rule-made ask never reaches the allow list; uncovered unattended asks retain the existing block. With no allow-list/rules port, the CLI keeps its existing behavior.
+
+The precedence is authority/ingress, rules, existing routine go-ahead, plan coverage, allow list, then ordinary card/block. When a plan cap runs out, an otherwise eligible persistent entry may handle the call; there is no plan reservation for that call and only the entry usage increases. A rule-made ask still requires a card if the plan does not cover all matching rules. Do not call C's side-effecting coverage function through both `asBaseline` and `ask`.
 
 - [ ] **Step 1: Write the failing target tests** in `bot-allow-target.test.ts`:
   - `a mutating connection call is its server and tool`: `{surface:"mcp", serverId:"gcal", remoteName:"create_event", annotations:{title:"Create event"}, …}` gives `target {kind:"connection", serverId:"gcal", tool:"create_event"}` and `title "Create event"`. Without a title, `title === "create_event"`.
@@ -225,6 +241,7 @@ This plan extends those pieces. It does not invent a parallel store:
   - `without an entry the approval carries its class and the offer`: call `checkPolicy` directly with `offer → {count: 3}`. Expect `decision.approval.remember` to deep-equal `{target: CAL_TARGET, title: "Create event", offer: {count: 3}}`. With `offer → undefined` there is no `offer` key.
   - `a failing allow list falls back to the card`: `match` rejects. Expect one card and no execution before Allow.
   - `Remove takes effect on the very next call` (Review Focus 4): two connection calls in one reply, with `match` hitting for the first and missing after a flag flips between them. Expect one execution without a card, then one card.
+  - `a plan and entry match the same call`: only the plan reservation increases and the list is not queried. At the plan cap, a no-rule call can use the entry; a rule-made ask cannot. Test concurrent calls at the cap with the real plan store.
   - `a routine run that goes ahead neither matches nor offers`: `routinesGoAhead: () => true` on `routine:daily:fire-1`. Expect `match` and `offer` not called.
 - [ ] **Step 3: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-allow-target.test.ts main/services/bot-runtime/bot-tool-assembly.test.ts`. Expected: FAIL.
 - [ ] **Step 4: Implement** `botApprovalTargetOf` and the `checkPolicy` branch above. Hosts come from `new URL(url).hostname`.
@@ -246,26 +263,34 @@ This plan extends those pieces. It does not invent a parallel store:
   ```ts
   // bot-extension.ts
   export type BotApprovalAnswer = "allow" | "allow_always" | "deny";
+  export interface BotApprovalDecision {
+    id: string; // host-owned authorization-attempt waitId, never a provider call id
+    authorizationFingerprint: string; // exact operation + current approval requirements
+    answer: BotApprovalAnswer;
+    source: "person" | "expiry" | "allow_list";
+  }
   // BotApprovalRequest gains: always?: { key: string; count: number }
-  // BotExtensionDeps.requestApproval(request): Promise<BotApprovalAnswer>
+  // BotExtensionDeps.requestApproval(request): Promise<BotApprovalDecision>
   // BotExtensionDeps gains:
   settleApproval?(input: {
     botId: string;
     remember: NonNullable<BotApprovalRequirement["remember"]>;
-    answer: BotApprovalAnswer;
+    decision: BotApprovalDecision;
   }): Promise<{ hint?: string }>;
 
   // bot-approvals.ts
   // BotApprovalPrompt gains: always?: { key: string; count: number }
-  // BotApprovals.request(request): Promise<BotApprovalAnswer>
-  // BotApprovals.decide(waitId: string, decision: "allow" | "deny", scope?: "always"): boolean
+  // BotApprovals.request(request): Promise<BotApprovalDecision>
+  // BotApprovals.decide(waitId: string, decision: "allow" | "deny", scope?: "always", source?: "person" | "expiry" | "allow_list"): boolean
   ```
 - Behavior:
-  - `request` passes `scopes: ["once", "always"]` to the coordinator only when `request.always` is set. On `"allowed"` it reads `coordinator.takeDecisionPayload(\`bot:${botId}\`, toolCallId)?.scope`, and `"always"` returns `"allow_always"`. The coordinator already drops a scope it didn't offer.
+  - Tests below refer to the decision's `answer` field when they say "resolves allow/deny/allow_always"; assert source and stable id as well.
+  - Compute a canonical authorization fingerprint from host execution identity, normalized tool/arguments/target, current baseline/binding requirements, current matching Ask first rule fingerprints and the applicable grant/revocation generation. The durable tool identity and authorization-attempt identity are distinct. The extension retains/memoizes a wait id per current attempt and fingerprint; retransmissions/replay of the SAME requirements reuse it, while changed requirements create a fresh wait id/card and withdraw any old attempt. Never reuse an old allowance for a newly added/edited rule.
+  - `request` first checks a durable settled decision for this attempt id AND authorization fingerprint. Replay returns that exact answer/provenance without reopening a card only while the fingerprint still matches, while current authority, rules, deadlines and page binding are still rechecked before an effect. Otherwise pass `scopes: ["once", "always"]` to the coordinator only when `request.always` is set. Read its offered scope on allow and return `{id: waitId, authorizationFingerprint, answer, source}`. Wire the optional persisted-decision lookup through an injected port to `BotApprovalTallies.decision`; with no port the CLI keeps ordinary once-only approvals. The coordinator still drops an unoffered scope. Provenance is supplied internally, never by renderer or Remote request bodies.
   - `beforeTool` sets `always: {key: botApprovalRuleKey(remember.target), count: remember.offer.count}` when there is an offer.
   - `deny` blocks as today. `allow` and `allow_always` both run `onAllow`.
-  - After any answer to an approval with `remember`, `beforeTool` checks the tool-task memo `aiden.approval.settled`. If the memo is absent, it calls `settleApproval` and memoizes `{hint: hint ?? null}`, so a re-run hook never counts twice.
-  - `afterTool` appends `{type:"text", text: "\n\n" + hint}` to `result.output` when the memo has a hint, the result isn't `isError`, and `output` is an array.
+  - After any answer with `remember`, key the settlement cache by BOTH `decision.id` and `decision.authorizationFingerprint`, for example `aiden.approval.settled:<id>:<fingerprint>`. A cache record also contains those identities and is accepted only for the current attempt. An old task-level cache for a different attempt cannot suppress settlement. When this attempt's cache is absent, call idempotent `settleApproval` with its durable decision and cache that exact recorded result. The store commits decision id + provenance + tally/hint effects atomically; the task memo is only a replay cache, not the exactly-once guarantee. A crash between store and memo reuses the saved result. Fresh current-policy/page checks precede execution even when the human answer was already settled.
+  - `afterTool` appends `{type:"text", text: "\n\n" + hint}` to `result.output` only from the executed attempt's matched decision-id/fingerprint cache, when the result is not `isError` and output is an array. Never reuse a previous attempt's hint; retain the executed attempt identity in host-owned execution context.
 
 - [ ] **Step 1: Write the failing bridge tests** in `bot-approvals.test.ts`. Use `createBotApprovals({publish})` and capture prompts:
   - `Always is honored only when the card offered it`:
@@ -278,9 +303,12 @@ This plan extends those pieces. It does not invent a parallel store:
   - `Allow once on an offered card appends the hint to the tool's result`: `settleApproval` returns `{hint: "Aiden note: test"}`. The committed tool result ends with `Aiden note: test`. A tool that returns `isError` gets no hint.
   - `Deny settles a denial and blocks`: one settle with `"deny"`, and the result is "The person declined this action.".
   - `an approval without remember never settles`.
+  - `a crash between settlement and memo preserves one decision`: inject the interruption, reopen the actual tally store and resume; no duplicate count, hint entitlement or remembered entry.
+  - Allow a baseline call, crash before execution, add an Ask first rule, then Resume: the new fingerprint gets a new card/decision identity, and the saved baseline answer cannot satisfy it. Repeat after editing a custom rule and after a relevant revocation-generation change.
+  - Allow once, persist its settlement cache, crash before execution, change binding requirements while keeping an eligible baseline approval, Resume and choose Always. The new id/fingerprint must settle and publish once despite the old cache; retransmissions do not recount and `afterTool` never emits the old attempt's hint.
   - `a re-run hook settles once`: run `beforeTool` twice for the same call through the scenario's resume path, like the existing share_image resume test, answering allow both times. Expect `settleApproval` called once.
 - [ ] **Step 3: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-approvals.test.ts main/services/bot-runtime/bot-extension.test.ts`. Expected: FAIL.
-- [ ] **Step 4: Implement** the bridge and the extension changes above. The `answer !== "allow"` check at `:648` becomes `answer === "deny"`.
+- [ ] **Step 4: Implement** the bridge and the extension changes above. Read `decision.answer` explicitly. The deny check becomes `decision.answer === "deny"`; callers and CLI adapters adopt the wrapper while preserving ordinary allowance behavior.
 - [ ] **Step 5: Run the tests.** The same files, then `npm run test:bot-runtime` and `npm run test:cli`. Expected: PASS.
 - [ ] **Step 6: Register and commit.** Add `bot-approvals.test.ts` to `test:bot-allowed` and the registry. Commit: "Offer Always allow on a repeated Bot approval".
 
@@ -289,7 +317,7 @@ This plan extends those pieces. It does not invent a parallel store:
 **Files:**
 - Create: `main/services/bot-runtime/bot-allow-list.ts`, `main/services/bot-runtime/bot-allow-list.test.ts`
 - Modify: `main/services/bot-runtime/bot-session-main.ts:239-245` (assembly `allowList` port), `:414` (`settleApproval`), `:802-826` (`deleteEffects`)
-- Modify: `main/services/bot-runtime/bot-access-requests.ts` (`answerBotAccessRequest`, Plan B Task 5) and `main/services/bot-runtime/bot-access-request-tool.ts` (its tool result, Plan B Task 7) for the folder nudge
+- Modify: `main/services/bot-runtime/bot-access-requests-main.ts` (`answerBotAccessRequest`, Plan B Task 5) and `main/services/bot-runtime/bot-access-request-tool.ts` (its tool result, Plan B Task 7) for the folder nudge
 - Modify: `.memory/bot-rules.md` (Enforcement: the "never pass `scopes`" line becomes "pass scopes only for an Always allow offer; rule-made asks never get one"; a new "Allow list" section), `.memory/bot-durable-runtime.md` (Approvals line), `docs/bot-rules.md` (new "Allowed without asking" section after "Routines that go ahead")
 
 **Interfaces:**
@@ -297,17 +325,19 @@ This plan extends those pieces. It does not invent a parallel store:
 - Produces:
   ```ts
   export interface BotAllowList extends BotAllowListPort {
-    settle(input: { botId: string; remember: NonNullable<BotApprovalRequirement["remember"]>; answer: BotApprovalAnswer }): Promise<{ hint?: string }>;
+    settle(input: { botId: string; remember: NonNullable<BotApprovalRequirement["remember"]>; decision: BotApprovalDecision }): Promise<{ hint?: string }>;
     /** Rules plus the Bot's Custom `approved_location` selections, newest first; every Bot when omitted. */
     list(botId?: string): Promise<BotAllowedEntry[]>;
     /** A rule: `revokeBot`. A folder: `BotApplicationService.revokeBotFolder`. */
     remove(botId: string, entryId: string): Promise<boolean>;
     folderOffer(botId: string, path: string): Promise<{ count: number } | undefined>;
-    settleFolder(input: { botId: string; path: string; answer: "once" | "always" | "not_now"; offered: boolean }): Promise<{ hint?: string }>;
+    settleFolder(input: { botId: string; path: string; decisionId: string; authorizationFingerprint: string; source: "person"; answer: "once" | "always" | "not_now"; offered: boolean }): Promise<{ hint?: string }>;
     forgetBot(botId: string): Promise<void>;
   }
   export function createBotAllowList(deps: {
-    rules: Pick<ToolApprovalRuleBook, "matchBot" | "grantBot" | "listBot" | "recordBotUse" | "forgetBot">;
+    rules: Pick<ToolApprovalRuleBook, "matchBot" | "grantBot" | "listBot" | "recordBotUse" | "revokeBot" | "forgetBot">;
+    folderEntries(botId?: string): Promise<BotAllowedEntry[]>; // main wiring reads selected approved locations
+    revokeFolder(botId: string, sourceId: string): Promise<boolean>; // main wiring calls revokeBotFolder
     tallies: BotApprovalTallies;
     approvals: Pick<BotApprovals, "pending" | "decide">;
     botName(botId: string): Promise<string | undefined>;
@@ -324,15 +354,15 @@ This plan extends those pieces. It does not invent a parallel store:
   - Folders: `choice = "Always for this folder"` and no `place`.
   - `count` is the offer's count plus this approval.
 - Settle rules:
-  - `deny` records a denial.
-  - `allow` records an approval. With an offer and `takeHint`, it returns the hint.
+  - First record the immutable attempt decision, authorization fingerprint and tally/hint result atomically. Only a person's `deny` records a denial, and only a person's `allow`/`allow_always` records an approval. Non-person sources neither count nor hint. Replays return the saved settlement result.
+  - `allow` returns the hint only when the stored settlement assigned one. `allow_always` records an idempotent pending grant obligation alongside its decision; grant publication can then be retried by stable target key without recounting.
   - `allow_always`:
-    1. Calls `grantBot` with the label: `${connectionName ?? "Connected app"} · ${title}`, or `describeBotApprovalRule` for a site.
-    2. Forgets the tally.
-    3. Decides `"allow"` on every other pending prompt of that Bot whose `always.key` matches.
+    1. Calls `grantBot` with `operationId = decision.id` and the label: `${connectionName ?? "Connected app"} · ${title}`, or `describeBotApprovalRule` for a site.
+    2. Only a published, still-current grant clears the tally. A `revoked` operation receipt ends the old obligation without restoring authority or releasing cards.
+    3. Recheck fresh policy/rules and release every other matching pending prompt with decision source `allow_list`. Associate the release with the real remembered target even when that older card did not yet offer Always. Never release a rule-made ask or a stale/changed-page approval. These releases do not count as human approvals.
     4. Returns no hint.
-  - A `grantBot` failure is logged and counted as `allow`.
-  - `offer` returns `undefined` when the Bot already has 50 entries.
+  - A `grantBot` failure is logged and the current call keeps its one-time human allowance. The saved grant obligation/result records that persistence failed, so replay cannot manufacture another human approval. Do not clear the tally or release sibling cards unless the remembered grant actually published.
+  - `offer` returns `undefined` when the Bot already has 50 remembered rules or the profile has 1,000. `grantBot` enforces both limits atomically under its store update; folder rows do not consume this rule limit.
 
 - [ ] **Step 1: Write the failing tests** in `bot-allow-list.test.ts`. Use a real `ToolApprovalRuleBook` on an in-memory store, real tallies on a temp dir, and a fake `approvals`:
   - `Always allow adds an entry named after the app and clears the count`: `connectionName("gcal") → "Google Calendar"`, three `allow` settles, then `allow_always`. Expect:
@@ -343,8 +373,10 @@ This plan extends those pieces. It does not invent a parallel store:
   - `Allow once on an offered card hints once a week`:
     - the first settle returns a hint containing `“Google Calendar · Create event”`, `4 times`, `“Always allow for Jester”` and `Allowed without asking on your profile`;
     - a second settle the next day returns no hint.
-  - `no offer without three approvals, and none at 50 entries`.
+  - `no offer without three approvals, none at 50 Bot rules or 1,000 profile rules`; simultaneous final-slot grants admit only one.
   - `used counts a use`: after `used("bot", id)`, `listBot("bot")[0].uses === 1`.
+  - Expiry denials and sibling releases preserve provenance through `BotApprovals` and the extension and do not affect person-decision tallies.
+  - Allow once, quit, Resume and answer Not now: B's new attempt records a distinct denial. Repeating Allow once on the new card records a new approval. Reposting either native answer with its same attempt id counts once.
   - `folders nudge the fourth request for the same folder`:
     - three `settleFolder({answer:"once"})` make `folderOffer("bot", "/Users/p/Taxes")` give `{count: 3}`;
     - the next once-settle with `offered: true` hints `“Always for this folder”` without `Allowed without asking`;
@@ -365,7 +397,7 @@ This plan extends those pieces. It does not invent a parallel store:
   - `removing a folder another Bot uses leaves that Bot's access alone`.
 - [ ] **Step 5: Hook `request_access` (Plan B).** Make these three changes at B's card settle point and its tool result:
   - before raising a folder card, call `folderOffer(botId, path)`, and when it returns a count show the line `You’ve allowed this folder ${count} times in the last 2 weeks.` (B's card already has Always for this folder);
-  - after the answer, call `settleFolder`;
+  - after a successfully validated person answer, call `settleFolder` with this authorization attempt's wait id as `decisionId` and source `person`; B's logical request id is not a decision id. Quit/Resume reapproval creates a new attempt, whereas transport retries keep the current attempt and native idempotency key; stale/aborted answers do not count. Replays are deduplicated by the same durable receipt mechanism;
   - append the returned hint to the tool result.
   
   Whole Mac requests are never counted, since only Allow once exists for them. Extend B's card test: `the fourth request for the same folder shows the count`, and `a Whole Mac request never does`.
@@ -398,7 +430,7 @@ This plan extends those pieces. It does not invent a parallel store:
   // main/handlers/bot-allowed.ts
   export function registerBotAllowedHandlers(deps: {
     handle(channel: string, handler: (event: unknown, input: unknown) => unknown): void;
-    allowed: Pick<BotAllowedService, "list" | "remove">;   // Task 5
+    allowed: Pick<BotAllowList, "list" | "remove">;   // Task 5
     onChange(listener: (botId: string) => void): () => void;  // rule book onBotChange, plus Bot access saves
     botExists(botId: string): Promise<boolean>;
     broadcast(channel: "bots:allowed:changed", payload: { botId: string }): void;
@@ -464,17 +496,17 @@ This plan extends those pieces. It does not invent a parallel store:
   export const AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES = ["bot:allowed"] as const; // in OPT_IN, NEGOTIABLE and CAPABILITIES lists
   export interface AidenRemoteBotAllowedEntry { id: string; kind: "rule" | "folder"; what: string; addedAt: string; uses?: number; lastUsedAt?: string }
   // AidenRemoteBotApproval gains `alwaysCount?: number`, sent only to a device with bot:allowed and only when the card offers Always.
-  export interface AidenRemoteBotAllowedList { botId: string; entries: AidenRemoteBotAllowedEntry[] }   // ≤ 50
+  export interface AidenRemoteBotAllowedList { botId: string; entries: AidenRemoteBotAllowedEntry[]; nextCursor?: string } // ≤ 50 per page; includes ALL rules and folders across pages
   export function parseAidenRemoteBotAllowedList(value: unknown): AidenRemoteBotAllowedList;           // exact keys
   // aiden-remote-bot-allowed.ts
-  export function createAidenRemoteBotAllowedService(deps: {
-    allowed: Pick<BotAllowedService, "list" | "remove">;
+  export function createAidenRemoteBotAllowList(deps: {
+    allowed: Pick<BotAllowList, "list" | "remove">;
     botExists(botId: string): Promise<boolean>;
-  }): { list(botId: string): Promise<AidenRemoteBotAllowedList>; remove(botId: string, entryId: string): Promise<AidenRemoteBotAllowedList> };
+  }): { list(botId: string, cursor?: string): Promise<AidenRemoteBotAllowedList>; remove(botId: string, entryId: string): Promise<AidenRemoteBotAllowedList> };
   ```
 - Routes:
-  - `GET /bots/{botId}/allowed` needs `bot:read` plus `bot:allowed`.
-  - `POST /bots/{botId}/allowed/{entryId}/remove` takes body `{}` and needs `bot:write`, `bot:read` and `bot:allowed`. It returns the list and is naturally idempotent (an entry already gone returns the list unchanged).
+  - `GET /bots/{botId}/allowed` accepts an optional bounded opaque `cursor` and needs `bot:read` plus `bot:allowed`. First read captures the combined rule/folder view into a short-lived, bounded, device-and-Bot-bound snapshot, sorted by createdAt then id. Cursors page that same snapshot in groups of 50; expired/foreign cursors fail with a refreshable error. No entry is truncated because 50 remembered rules already exist. Folder grants do not consume the remembered-rule admission limit. Both native clients load subsequent pages and can remove every row.
+  - `POST /bots/{botId}/allowed/{entryId}/remove` takes body `{}` and needs `bot:write`, `bot:read` and `bot:allowed`. It invalidates that device's old list snapshots and returns a fresh first page. Clients refresh and page the new view after removal. It is naturally idempotent; removing an entry already gone changes no authority.
   - `what` is the entry's `what`, at most 200 characters.
   - `POST /approvals/{id}/respond` with `scope: "always"`: allowed only for a device with `bot:allowed`, on a Bot card whose prompt carries `always`. It calls `approvals.decide(waitId, "allow", "always")`. Any other case stays `invalid_request`.
   - An unknown Bot is `not_found`.
@@ -493,13 +525,14 @@ This plan extends those pieces. It does not invent a parallel store:
     - POST with `bot:read` only is refused, and a non-empty body is `invalid_request`;
     - `bot:allowed` appears in `serverCapabilities` only with the dependency wired.
   - `aiden-remote-protocol.test.ts`: the `botAllowed` fixture parses, and an extra key in an entry throws.
+  - Combined-list case: 50 remembered rules plus several existing folders page through host, iOS and Android parsers without omissions; every row can be removed. Exercise a foreign/expired cursor, remove during pagination and refresh. Fixtures include `nextCursor` and the next page.
   - `aiden-remote-bot-session.test.ts`:
     - `a phone with bot:allowed can answer Always on an offered card`: `respondApproval(..., "allow", "always")` calls `decide` with the scope, and the wire approval carried `alwaysCount: 3`;
     - `Always is refused on a card that doesn't offer it`, and `for a device without bot:allowed`: both `invalid_request`, and that device's wire approval has no `alwaysCount`.
 - [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/aiden-remote-bot-allowed.test.ts main/services/aiden-remote-router.test.ts main/services/aiden-remote-protocol.test.ts main/services/aiden-remote-bot-session.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.** Do the protocol constants, parsers and service. Add the router block modelled on `botSpendingMatch` with `requireNoQuery`, `requireEmptyJsonObject` and `requireDeviceCapabilities(device, ["bot:allowed"])`. Wire it in `aiden-remote-service-main.ts` with `toolApprovalRules` and the Bot store.
+- [ ] **Step 3: Implement.** Do the protocol constants, parsers and service. Add the router block modelled on `botSpendingMatch` with a strict optional cursor parser for GET, `requireNoQuery` for remove, `requireEmptyJsonObject` and `requireDeviceCapabilities(device, ["bot:allowed"])`. Wire it in `aiden-remote-service-main.ts` with `toolApprovalRules` and the Bot store.
 - [ ] **Step 4: Update the contract artifacts.**
-  - `contract.json` gets `botAllowed`: a list with a folder entry, the list after a remove, the capability refusal, and an approval with `alwaysCount`.
+  - `contract.json` gets `botAllowed`: a list with a folder entry, a paginated maximum-rule-plus-folders example, the first page after a remove, the capability refusal, and an approval with `alwaysCount`.
   - `openapi.json` gets both paths.
   - `docs/aiden-remote-api-v1.md` gets a "Revision 54 (`bot:allowed`)" section.
 - [ ] **Step 5: Run the tests.** `npm run test:aiden-remote`. Expected: PASS.
@@ -532,7 +565,7 @@ This plan extends those pieces. It does not invent a parallel store:
   - iOS: `xcodebuild test -project ios/AidenOnTheGo.xcodeproj -scheme AidenOnTheGo -only-testing:AidenOnTheGoTests/AidenBotAllowedTests -destination 'platform=iOS Simulator,name=iPhone 17'`, or the command in `ios/README.md`.
   - Android: `cd android && ./gradlew :app:testDebugUnitTest --tests '*AidenBotAllowed*'`.
   - Expected: FAIL.
-- [ ] **Step 3: Implement** the models, client calls, capability negotiation (asked for alone, like `chat:jobs`), screens and profile rows.
+- [ ] **Step 3: Implement** the models, client calls, capability negotiation (asked for alone, like `chat:jobs`), screens and profile rows. Decode `nextCursor`, load all subsequent pages on request, and refresh the list after remove or an expired cursor. Do not cap the combined list at 50. Test maximum rules plus folders on both native clients.
 - [ ] **Step 4: Run the tests,** plus `AidenRemotePhase0Tests` and the Android protocol tests. Expected: PASS.
 - [ ] **Step 5: Commit.** "Allowed without asking on iOS and Android"
 

@@ -1,13 +1,13 @@
 # Bot messaging A: `message_bot` Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Execution:** Follow the numbered tasks and the review gates in [the master plan](../../plans/bot-messaging-plan.md#how-it-gets-built). The main session owns implementation and commits. Fresh read-only Opus 5.5 medium and OpenCode Go DeepSeek V4.1 Flash high reviewers check each gate. No additional execution skill is required. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A Bot can send another of the person's Bots a message with `message_bot`, return at once, and get the one final reply later as a new labelled turn in its own chat, with a hop chain, a durable courier, limits, per-Bot and global switches, Needs-you approvals in the asked Bot, and the same rows on desktop and phones.
 
 **Architecture:**
 - A `bot:` or `botreply:` request id is a new turn kind. The session service writes a `bot_message` notice and a host-owned input entry kind, so policy, memory review, the transcript and phones can tell the turn apart without new state.
 - A main-process courier sends to the target, waits for its final reply, and sends that reply into the sender's chat. Its per-profile ledger survives restarts.
-- The tool, courier and ledger live in `main/services/bot-messages/` behind injectable ports. The desktop and the CLI serve daemon wire the same modules.
+- The tool accepts into the ledger without awaiting another Bot host; the external courier owns delivery. The tool, courier and ledger live in `main/services/bot-messages/` behind injectable ports. The desktop and the CLI serve daemon wire the same modules.
 
 **Tech Stack:** TypeScript, Electron main and renderer (React), Pi Durable (pinned, unchanged), `node:test` through `tsx --test`, Testing Library, Swift (iOS), Kotlin (Android).
 
@@ -16,8 +16,8 @@
 ## Global Constraints
 
 - Read `AGENTS.md` first. Tests are behavioral only: never `readFileSync` production source and `assert.match` against it, and no tautological or change-detector tests.
-- Register every new test file twice: in the new `"test:bot-messaging"` script (with `"pretest:bot-messaging": "npm run build:lease-flock"`), and in `scripts/ci-test-registry.json`. Main-process tests go in the `runtime-subagents` lane and renderer tests in `renderer-other`. `scripts/ci-test-registry.test.mjs` fails if either registration is missing.
-- Pi packages stay pinned. Do not patch `node_modules`. Pre-1.0: no migrations (owner memory `pre-1-0-no-migrations`).
+- Register every new test file twice: in the new `"test:bot-messaging"` script (with `"pretest:bot-messaging": "npm run build:lease-flock"`), and in `scripts/ci-test-registry.json`. Main-process tests go in the `runtime-subagents` lane and renderer tests in `renderer-other`. Append `test:bot-messaging` to `test:serial` too, because the CI registry derives its suite union from that chain. `scripts/ci-test-registry.test.mjs` must discover every new test.
+- Pi packages stay pinned. Do not patch `node_modules`. Pre-1.0: no migrations. Keep this instruction here; it does not depend on a separate memory file.
 - Request ids:
   - `bot:<fromBotId>:<hop>:<deliveryId>` for the asked Bot's turn, with `hop` 1 or 2. Parse it from the right, because Bot ids may contain `:`. `deliveryId` is a `randomUUID()`.
   - `botreply:<deliveryId>` for the reply turn in the sender's chat.
@@ -30,8 +30,8 @@
 - Limits (§8): `message` ≤ 4,000 characters; the forwarded reply ≤ 8,000; 3 deliveries in flight per sender; 20 sends per sender in any 5 minutes, then a 10-minute cooldown; 30 a day per unordered pair of Bots; a 30-minute delivery window.
 - Only the final reply text crosses. Never status rows, tool steps or "Working…". A `[SILENT]` reply, an expiry and a failure each become one notice in the sender's chat, never a model turn. Nothing is retried in a loop.
 - Provenance: frame the incoming text as `<bot_message from="Jester" hop="1">…</bot_message>` and the reply as `<bot_reply from="COS">…</bot_reply>`. Escape element text with `escapePromptText` (`main/services/bot-system-prompt.ts:27`). Attribute values also escape `"`. Another Bot's words never approve a tool, answer a card, satisfy a rule or change a setting.
-- Never touch the caller's own session host from inside its tool (`.memory/bot-rules.md`, the deadlock rule). The tool sends only to the target. The courier writes to the sender from outside any tool.
-- Never resume, dismiss or stop a paused or interrupted target turn. Never withdraw the person's queued messages. Spending is charged to the Bot that runs the turn, which `send` already does.
+- Never await any Bot session host from inside `message_bot`, including the target: simultaneous cross-sends plus pause/delete can deadlock both closes. The tool persists a courier intent and returns. An external worker performs every session operation after the tool has returned, with no ledger lock held.
+- Never resume, dismiss or stop a paused or interrupted target turn. Never withdraw the person's queued messages. Courier requests remain in its ledger until an atomic idle-only session send can start them, so no stale request waits in the session queue. Spending is charged to the Bot that runs the turn, which `send` already does.
 - Approvals on a `bot:` turn wait in the asked Bot's chat as Needs you (§11.1). Questions, hand-offs, sign-in, the browser, the routines tool, subagents, `propose_skill` and `wake_up` stay withheld on `bot:` and `botreply:` turns, as on `routine:` and `tg:` turns.
 - Memory review, `bot_memory` and `bot_recall` skip `bot:` and `botreply:` turns, like routine turns.
 - Switches default on, and only `false` is stored: per Bot, "Other Bots can message <Bot>" and "<Bot> can message other Bots"; globally, Settings → Bots → "Bots can message each other". Switches gate new sends only. A delivery already in flight still finishes within its window.
@@ -85,7 +85,7 @@
   export function botMessageChainOf(requestIds: readonly (string | undefined)[]): BotMessageChain;
   export type BotMessageStatusOutcome = "waiting_approval" | "silent" | "expired" | "gave_up" | "failed" | "replied_while_paused";
   export interface BotMessageStatusEntryData {
-    deliveryId: string; botId: string; botName: string; outcome: BotMessageStatusOutcome;
+    deliveryId: string; botId: string; botName: string; outcome: BotMessageStatusOutcome; waitId?: string;
     summary?: string;   // waiting_approval / gave_up: the approval's summary, ≤ 160
     text?: string;      // replied_while_paused: the reply, ≤ replyChars
   }
@@ -136,6 +136,7 @@
 **Files:**
 - Modify: `main/services/bot-runtime/bot-input-entry.ts` (`BOT_MESSAGE_INPUT_KIND = "aiden.bot-message-input"`; `isBotInputEntryKind` accepts it)
 - Modify: `main/services/bot-runtime/bot-session-service.ts`:
+  - `BotSendInput.ifIdle?: boolean` atomically requires an idle Bot under the existing send serial, before submit; otherwise throw `BotSessionError("bot_busy")`, without queueing an input or changing state. Existing sends without it are unchanged.
   - `BotNotice` gains `{ notice: "bot_message"; requestId; deliveryId; kind: "request" | "reply"; botId; botName; text }`, where `text` is the unframed message;
   - `BotSendInput.botMessage?`;
   - `send` writes the notice and uses the new entry kind;
@@ -148,13 +149,14 @@
   // BotSendInput
   botMessage?: { kind: "request" | "reply"; deliveryId: string; botId: string; botName: string; text: string };
   ```
-  `botMessage` is mutually exclusive with `label` and `hidden`; `send` throws `TypeError` when combined. The submitted content is the framed text the caller passes in `text`. The notice's `text` is the clean message for display.
+  `botMessage` also carries main-owned `deadline: number` and `deliveryId`; persist these in the input entry so replay and policy checks recover provenance without a model-written request prefix. `botMessage` is mutually exclusive with `label` and `hidden`; `send` throws `TypeError` when combined. The submitted content is the framed text the caller passes in `text`. The notice's `text` is the clean message for display.
 - Consumes: `isBotMessageRequestId` (Task 1).
 
 - [ ] **Step 1: Write the failing tests** in `bot-session-service.test.ts`, on the existing real-harness fixtures:
   - `a bot message is placed with its own input kind and a bot_message notice`: send with `requestId: botMessageRequestId(...)` and `botMessage`. The conversation's entries hold one `aiden.bot-notice` with `notice: "bot_message"` and the clean text before an input entry whose kind is `aiden.bot-message-input`, and no `routine` notice.
   - `bot message inputs are quiet`: `quietInputs(botId, [submissionId])` maps it to `true`, and `placedSubmissions` never lists it.
   - `a bot message to an interrupted Bot is refused, not dismissed`: with an interrupted turn and `ifNotInterrupted: true`, `send` rejects with `reason === "bot_paused"`, and `state()` is still `interrupted` with the same submission.
+  - `idle-only sends never queue behind human work`: force a human submission to win the serial, then a Bot send with `ifIdle: true`; it returns `bot_busy` and adds no Bot input. Retrying the same delivery when idle submits exactly once.
   - `routine preapproval does not apply to bot messages`: through `bot-extension.test.ts`'s `hasRoutineInputs` path, a run whose only input is a `bot:` message gives `hasRoutineInputs() === false`.
 - [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-session-service.test.ts main/services/bot-runtime/bot-extension.test.ts`.
 - [ ] **Step 3: Implement.** In `send`, after the existing `label`/`hidden` notices, write the `bot_message` notice and pass `entry: { kind: BOT_MESSAGE_INPUT_KIND }`.
@@ -169,6 +171,8 @@
   - `BotToolTurn.botMessage?`;
   - `botIngressAllowsTool` withholds `UNATTENDED_WITHHELD` and `wake_up` on Bot-message inputs, and allows `message_bot` only where `botMessageChainOf(requestIds).canSend`;
   - `botToolVerdict` denies the routines tool, questions, hand-offs, sign-in and the browser when `turn.botMessage`, and gives `message_bot` the verdict `"Messaging other Bots is off for this turn."` on telegram or routine turns.
+- Modify: `main/services/bot-runtime/bot-extension.ts`: expose the actual host-owned run inputs to policy and approval requests, including every Bot delivery id/deadline. Check deadline before each request, tool, and approval creation. A Bot-only expired run cannot start another provider request or effect; use the request task's abort/block path, never a session-wide Stop. A mixed run follows the strictest input policy for further tools/cards but does not abort the person's work. Recheck after any wait and immediately before an allowed effect.
+- Modify: `main/services/bot-runtime/bot-approvals.ts`: prompts carry main-only owning run/input delivery ids, and a decision source `person | expiry | allow_list` for Plan D. Never infer ownership from `state().submissionId` or the oldest pending card.
 - Modify: `main/services/bot-runtime/bot-tool-assembly.ts`:
   - `currentTools` (`:223`) and `checkPolicy` (`:257-262`) pass `botMessage`;
   - a rule hand-off on a Bot-message turn blocks with `ruleUnattendedBlock` (`:307`);
@@ -185,6 +189,7 @@
     - `an approval-gated call on a bot: turn asks instead of blocking`: a mutating MCP call with `requestIds: [hop1]` returns `{allowed: true, approval}` without `preapproved`.
     - `a rule-made ask with no baseline asks on a bot: turn`: the decision carries an approval whose summary starts with `"Rule · "`.
     - `a rule hand-off on a bot: turn blocks`: the decision is `{allowed: false, reason: ruleUnattendedBlock(label)}`.
+  - Real-harness ingress cases: expiry before dispatch submits nothing; expiry during a Bot-only run blocks later tools and every new approval; expiry while a human steer shares the run does not Stop/withdraw human inputs. Several pending approvals are associated using their actual run/input metadata, including when the first input is human.
   - `bot-memory/tool.test.ts`: `botMemoryAllowed([hop1])` and `botMemoryAllowed([botReplyRequestId(d)])` are false.
   - `bot-memory/review.test.ts`: `a bot message and the answer to it are not the person's`. With entries person turn, `bot_message` notice + input + answer, then person turn, provenance marks only the two person turns and their answers as `"person"`.
   - `bot-memory/recall.test.ts`: `recall never returns another Bot's words`. A term present only in a `bot:` input gives no hit.
@@ -227,179 +232,137 @@
 - [ ] **Step 4: Run** `npx tsx --test` on every file above, then `npm run test:bots`. Expected: PASS.
 - [ ] **Step 5: Register the new test and commit:** "Add Bot messaging switches".
 
-### Task 5: Delivery ledger and limits
+### Task 5: Delivery ledger, recoverable effects and limits
 
-**Files:**
-- Create: `main/services/bot-messages/ledger.ts`, `main/services/bot-messages/ledger.test.ts`
+**Files:** Create `main/services/bot-messages/ledger.ts` and `ledger.test.ts`.
+
+The ledger is a durable outbox, not only a history of outcomes. Its file is `<profile>/bots/bot-messages.json`, `{ version: 1, rows, counters, receipts }`, written atomically with mode 0600. One serial protects each complete read/check/reserve/update transaction across the profile. Never hold it while calling a session, the approval bridge or the delivery funnel.
 
 **Interfaces:**
-- Produces:
-  ```ts
-  export type BotMessageDeliveryStatus = "delivered" | "answered" | "failed" | "expired";
-  export interface BotMessageDelivery {
-    id: string;                 // deliveryId
-    fromBotId: string; toBotId: string; hop: 1 | 2;
-    parentDeliveryId?: string;  // hop 2: the hop-1 delivery whose turn sent it
-    targetRequestId: string;    // bot:<fromBotId>:<hop>:<id>
-    submissionId?: string;      // set once send returns
-    status: BotMessageDeliveryStatus;
-    createdAt: number; settledAt?: number;
-    outcome?: BotMessageStatusOutcome | "replied";
-    waiting?: { waitId: string; summary: string; at: number };          // approval notice sent
-    reply?: { submissionId: string; settledAt?: number };               // the sender's botreply turn
-    forwarded?: { toBotId: string; submissionId: string; settledAt?: number }; // hop-2 forward to the origin
-  }
-  export interface BotMessageLedger {
-    get(id: string): Promise<BotMessageDelivery | undefined>;
-    /** Insert once by id; an existing row is returned unchanged with created: false. */
-    insert(row: BotMessageDelivery): Promise<{ row: BotMessageDelivery; created: boolean }>;
-    /** Merge a patch. `status` moves only from delivered; a settled row ignores another status. */
-    update(id: string, patch: Partial<Omit<BotMessageDelivery, "id" | "fromBotId" | "toBotId">>): Promise<BotMessageDelivery | undefined>;
-    /** Rows still owed work: delivered, or answered with an unsettled reply or forward. */
-    open(): Promise<BotMessageDelivery[]>;
-    /** Every row created at or after `since` (limits). */
-    since(since: number): Promise<BotMessageDelivery[]>;
-    /** Remove the Bot's rows on either side; returns the removed rows. */
-    forgetBot(botId: string): Promise<BotMessageDelivery[]>;
-  }
-  export function createBotMessageLedger(options: { file(): string; now(): number }): BotMessageLedger;
-  export type BotMessageLimitHit = { reason: "in_flight" | "burst" | "pair_daily" | "once_per_turn"; retryAfter?: number };
-  export function botMessageLimitHit(rows: readonly BotMessageDelivery[], input: { fromBotId: string; toBotId: string; parentDeliveryId?: string; now: number }): BotMessageLimitHit | undefined;
-  ```
-  - The file is `<profile>/bots/bot-messages.json`, `{ version: 1, rows }`, parsed strictly. An unreadable file reads as empty and is replaced on the next write. Written with `writeJsonAtomic` (`durable-fs.ts:142`), mode 0600, all writes behind one serial (`createKeyedSerial`, `bot-routine-notes.ts:40`).
-  - Retention: settled rows are kept 24 hours (the daily cap needs them), at most 500 rows, oldest settled first.
-  - Limits:
-    - in flight: `status === "delivered"` rows from the sender, at most 3;
-    - burst: 20 created by the sender in any 5 minutes, after which sends are refused until 10 minutes after the 20th (`retryAfter` = that time);
-    - pair: 30 a day for the unordered pair, counted from the local day's start;
-    - once per turn: any row with the same `parentDeliveryId`.
+```ts
+export type BotMessageDeliveryStatus = "delivered" | "answered" | "failed" | "expired";
+export interface BotMessageEffect {
+  id: string; // deterministic per delivery, destination and effect kind
+  kind: "target" | "reply" | "notice" | "notification";
+  botId: string;
+  requestId?: string; // bot:<from>:<hop>:<id> or botreply:<parent/root delivery id>
+  text?: string; // bounded clean message/reply; private profile-local data
+  data?: BotMessageStatusEntryData;
+  submissionId?: string;
+  acknowledgedAt?: number;
+}
+export interface BotMessageDelivery {
+  id: string; fromBotId: string; toBotId: string; hop: 1 | 2;
+  parentDeliveryId?: string; childDeliveryId?: string;
+  targetRequestId: string; submissionId?: string;
+  createdAt: number; deadline: number; settledAt?: number;
+  status: BotMessageDeliveryStatus;
+  outcome?: BotMessageStatusOutcome | "replied";
+  message: string; fromName: string; toName: string;
+  initialAnswer?: string; // a parent waits for its admitted child before replying to its sender
+  waiting: Array<{ waitId: string; summary: string; at: number }>;
+  effects: BotMessageEffect[];
+}
+export type BotMessageLimitHit = {
+  reason: "in_flight" | "burst" | "pair_daily" | "once_per_turn" | "capacity";
+  retryAfter?: number;
+};
+export interface BotMessageLedger {
+  get(id: string): Promise<BotMessageDelivery | undefined>;
+  // Checks replay identity, all limits and nesting; inserts intent + updates counters atomically.
+  reserve(row: BotMessageDelivery): Promise<
+    { row: BotMessageDelivery; created: boolean } | { refused: BotMessageLimitHit }
+  >;
+  // A serialized transition persists the result AND any resulting effects together.
+  update(id: string, change: (row: BotMessageDelivery) => BotMessageDelivery): Promise<BotMessageDelivery | undefined>;
+  // Includes terminal outcomes whenever an external effect remains unacknowledged.
+  open(): Promise<BotMessageDelivery[]>;
+  forgetBot(botId: string): Promise<BotMessageDelivery[]>;
+}
+export function createBotMessageLedger(options: { file(): string; now(): number }): BotMessageLedger;
+```
 
-- [ ] **Step 1: Write the failing tests** in `ledger.test.ts` (temp dir, fake clock):
-  - `insert is once by id and survives a reload`: a second `insert` returns `created: false` and the stored row, and a new ledger on the same file returns it from `get`.
-  - `status moves forward only`: `update(id, {status: "answered"})` and then `update(id, {status: "expired"})` leave `"answered"`.
-  - `open lists delivered rows and answered rows still owed a reply`.
-  - `forgetBot removes rows on both sides and returns them`.
-  - `settled rows older than a day are pruned on write; rows stay at most 500`.
-  - `limits`: `botMessageLimitHit` gives `in_flight` with 3 delivered rows; `burst` with 20 rows in 4 minutes, with `retryAfter === twentieth.createdAt + 600_000`; `undefined` 10 minutes after the 20th; `pair_daily` at 30 for (A,B) or (B,A) today but not yesterday; `once_per_turn` when a row has the same `parentDeliveryId` (Review Focus 4).
-  - `an unreadable file reads as empty and the next insert replaces it`.
-- [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-messages/ledger.test.ts`.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run.** Expected: PASS.
-- [ ] **Step 5: Register and commit:** "Add the Bot message delivery ledger".
+- `delivered` means an accepted intent, not proof that the session has received it. The initial target effect stores the original envelope before any submit. A saved acceptance receipt is immutable; an eventual delivery failure produces a notice rather than changing the tool's historical receipt. Reusing an id with different sender, target or message is refused.
+- Admission and insertion are one transaction. Two opposite-direction sends at pair count 29 admit exactly one. Sender in-flight count includes every accepted, unfinished exchange. Parent/child reservation is atomic too: one hop-1 input can admit one child even if two tool calls race.
+- Keep per-pair local-day counts and sender burst times plus `cooldownUntil` independently of display rows. The 20th accepted send in five minutes records a ten-minute cooldown that survives restart and lasts after the triggering sends leave the five-minute window. Check cooldown first. Failed accepted attempts still count; refused attempts do not.
+- Keep at most 500 full rows. Evict only settled rows whose effects are acknowledged and whose replay/nesting obligations ended. Never discard open work. If full, refuse new admission as `capacity`; never erase quota protection to make space.
+- Durable replay receipts and once-per-parent reservations remain while their durable tool tasks can replay. Use task/submission settlement to collect them, not a fixed 24-hour eviction. Counters may be collected after their windows end, independently of row pruning. Missing file means first use; malformed/unreadable bookkeeping fails closed with an actionable unavailable result and preserves the file.
+- Terminal transitions are compare-and-set: completion and expiry cannot both create a terminal outcome. Persist reply/notice/notification effects in that same transition. An interrupted worker may repeat an effect but may never lose it.
+
+- [ ] **Step 1: Write behavioral tests** against a temp profile and a fake clock: atomic opposite-direction admission at 29; concurrent child admission; 3-in-flight; burst at minute 6 and after restart; daily limits surviving 500 settled rows; capacity with all rows unfinished; same-id replay and mismatched-envelope refusal; corruption fails closed; terminal transition race; terminal rows with pending notices remain in `open()`; pruning does not remove replayable receipts.
+- [ ] **Step 2:** Run `npx tsx --test main/services/bot-messages/ledger.test.ts`, implement and rerun to PASS. Register in `test:bot-messaging`, `test:serial` and the CI registry.
+- [ ] **Step 3: Commit:** "Add the durable Bot message outbox and atomic limits".
 
 ### Task 6: The courier
 
-**Files:**
-- Create: `main/services/bot-messages/courier.ts`, `main/services/bot-messages/courier.test.ts`
-- Modify: `main/services/bot-delivery/log.ts:25,83` (class `"bot_message"`)
-- The status entries this task appends are projected and rendered in Task 8. This task only needs the `BOT_MESSAGE_STATUS_ENTRY_KIND` constant from Task 1.
+**Files:** Create `main/services/bot-messages/courier.ts` and `courier.test.ts`. Extend `main/services/bot-delivery/log.ts` with class `bot_message` and its funnel tests. Extend real-harness lifecycle suites in `main/services/bot-runtime/bot-session-service.test.ts` and `bot-extension.test.ts`.
 
 **Interfaces:**
-- Consumes: Task 1 helpers and framing, Task 2 `BotSendInput.botMessage`, Task 5 ledger.
-- Produces:
-  ```ts
-  export interface BotRosterEntry { id: string; name: string; purpose: string; acceptsMessages: boolean; sendsMessages: boolean }
-  export type BotMessageRefusal =
-    | "switched_off" | "unknown_bot" | "ambiguous_bot" | "self" | "in_chain" | "chain_too_deep"
-    | "limit_reached" | "bot_paused" | "needs_model" | "spending_limit" | "unavailable" | "invalid_message";
-  export interface BotMessagePost {
-    fromBotId: string; target: string; message: string;
-    deliveryId: string;                                   // the tool call's memo
-    runRequestIds: readonly (string | undefined)[];
-  }
-  export type BotMessagePostResult =
-    | { status: "sent"; deliveryId: string; to: { id: string; name: string } }
-    | { status: "refused"; code: BotMessageRefusal; message: string; retryAfter?: number; bots?: string[] };
-  export interface BotMessageCourierDeps {
-    ledger: BotMessageLedger;
-    sessions: Pick<BotSessionRuntime, "send" | "awaitReply" | "markSilent" | "appendEntry" | "state" | "submissionForRequest">;
-    roster(): Promise<readonly BotRosterEntry[]>;
-    enabled(): Promise<boolean>;                           // the global switch
-    approvals: Pick<BotApprovals, "pending" | "decide" | "onChange">;
-    onStateChange(listener: (botId: string) => void): () => void;
-    deliver?(input: BotDeliveryInput): Promise<unknown>;   // the funnel; the CLI omits it
-    now(): number;
-    setTimer(fn: () => void, ms: number): { cancel(): void };
-    report?(error: unknown): void;
-  }
-  export interface BotMessageCourier {
-    post(input: BotMessagePost): Promise<BotMessagePostResult>;
-    /** Re-attach every open delivery once (after the runtime initialized). Idempotent. */
-    start(): Promise<void>;
-    forgetBot(botId: string): Promise<void>;
-    dispose(): Promise<void>;
-    /**
-     * A card other than a tool approval (Plan C's plan card) waits for the person in `botId`'s run.
-     * When that run serves a delivered `bot:` row, append one `waiting_approval` notice to the sender
-     * (deduped by `waitId`, recorded in `waiting`) and return the row's deadline (`createdAt + windowMs`).
-     * Returns undefined when no such row exists. Never throws.
-     */
-    announceWaiting(botId: string, requestIds: readonly (string | undefined)[], summary: string, waitId: string): Promise<{ deadline: number } | undefined>;
-  }
-  export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessageCourier;
-  ```
-- Behaviour:
-  - **`post`** runs serialized per sender. It refuses in this order:
-    - `invalid_message`: empty, or over 4,000 characters after trimming;
-    - `switched_off`: the global switch, the sender's `sendsMessages` or the target's `acceptsMessages` is off;
-    - `chain_too_deep`: from `botMessageChainOf`;
-    - target resolution: an exact id first, then a unique case-insensitive trimmed name. Otherwise `unknown_bot` or `ambiguous_bot`, with `bots` set to the roster's other names;
-    - `self`, then `in_chain`;
-    - `limit_reached`, with `retryAfter`.
-  - Then `post` inserts the row (`delivered`, no `submissionId`) and calls:
-    ```ts
-    sessions.send(target, {
-      text: botMessageInputText(...),
-      requestId: botMessageRequestId(from, hop, id),
-      whenBusy: "followUp",
-      ifNotInterrupted: true,
-      botMessage: { kind: "request", ... },
-    })
-    ```
-    It stores `submissionId`, arms the window timer and starts the wait.
-  - A `BotSessionError` from `send` settles the row `failed` and maps its reason to a refusal: `bot_paused` and `paused_by_person` give `bot_paused`; `needs_model` and `model_error` give `needs_model`; `spending_limit` gives `spending_limit`; anything else gives `unavailable`.
-  - A replayed `deliveryId` returns the stored row's result without sending again.
-  - **Wait.** `awaitReply(target, submissionId, signal)` is bounded by the remaining window.
-    - `completed` with a non-silent reply settles the row `answered` / `replied` and sends the reply turn: `requestId: botReplyRequestId(id)`, `text: botReplyInputText(...)`, `botMessage: {kind: "reply"}`, `whenBusy: "followUp"`, `ifNotInterrupted: true`.
-    - A silent reply calls `markSilent(target, …)` and leaves one `silent` notice.
-    - `failed`, or `interrupted` with `settled`, gives one `failed` notice.
-    - `interrupted` without `settled` (the target paused) keeps the row delivered. It is awaited again on the target's next state change, once per change, with at most one wait per row.
-  - **Reply turn.** If the sender refuses with `bot_paused` or `paused_by_person`, append a `replied_while_paused` status entry with the text. Never resume. Any other refusal gives a `failed` notice. After the sender answers:
-    - A silent answer is marked silent.
-    - Otherwise call `deliver({ botId: sender, class: "bot_message", dedupeKey: "bot-message:" + id, title: senderName, body: answer, status: "info", requestId: botReplyRequestId(id) })`.
-    - Skip `deliver` when the row is hop 2: that answer is forwarded instead.
-  - **Nesting (§8).** When a hop-2 row's reply turn is answered in its sender's chat (COS), forward that answer once to the origin (`parent.fromBotId`, Jester) with `botReplyRequestId(id)` and `botMessage: {kind: "reply", botId: COS}`. Record `forwarded`, then await and deliver Jester's answer as above.
-  - **Approvals (§11.1).** On `approvals.onChange(target)`, if a delivered row's `submissionId` is the target's running submission (`state().kind === "running"`) and `approvals.pending(target)[0]` exists, append one `waiting_approval` notice to the sender with its summary. Record `waiting`. Also `deliver({ botId: target, class: "bot_message", dedupeKey: "bot-message-approval:" + waitId, title: targetName, body: "Waiting for you to approve: " + summary, status: "info" })`.
-  - **Expiry.** At `createdAt + windowMs`, a row still delivered settles `expired`. If its approval is still pending, the courier calls `approvals.decide(waitId, "deny")` for that wait only and the outcome is `gave_up`. It never calls `stop`, `withdraw`, `dismiss` or `resume`. A reply that arrives later is ignored.
-  - Every status entry is appended to the sender with `sessions.appendEntry(sender, BOT_MESSAGE_STATUS_ENTRY_KIND, data)` after the ledger records the outcome. Projection shows one row per `(deliveryId, outcome)`, so a duplicate append is harmless.
-  - **`start`.** For each `open()` row:
-    - recover a missing `submissionId` with `submissionForRequest`, or settle `failed`;
-    - expire rows whose window passed;
-    - otherwise resume the wait once.
-    A second `start` adds no waits.
-  - **`forgetBot`.** Removes the Bot's rows and cancels their timers and waits. A removed row whose other side still exists and was waiting on the deleted Bot gets one `failed` notice there.
+```ts
+export interface BotRosterEntry {
+  id: string; name: string; purpose: string;
+  acceptsMessages: boolean; sendsMessages: boolean;
+  unavailable?: "bot_paused" | "needs_model" | "spending_limit";
+}
+export type BotMessageRefusal = "switched_off" | "unknown_bot" | "ambiguous_bot" | "self"
+  | "in_chain" | "chain_too_deep" | "limit_reached" | "bot_paused" | "needs_model"
+  | "spending_limit" | "unavailable" | "invalid_message";
+export interface BotMessagePost {
+  fromBotId: string; target: string; message: string; deliveryId: string;
+  runRequestIds: readonly (string | undefined)[]; signal?: AbortSignal;
+}
+export type BotMessagePostResult =
+  | { status: "sent"; deliveryId: string; to: { id: string; name: string } }
+  | { status: "refused"; code: BotMessageRefusal; message: string; retryAfter?: number; bots?: string[] };
+export interface BotMessageCourierDeps {
+  ledger: BotMessageLedger;
+  sessions: Pick<BotSessionRuntime, "send" | "awaitReply" | "markSilent" | "appendEntry" | "state" | "submissionForRequest">;
+  roster(): Promise<readonly BotRosterEntry[]>; // store/cached availability only; never await a session host
+  enabled(): Promise<boolean>;
+  approvals: Pick<BotApprovals, "pending" | "decide" | "onChange">;
+  onStateChange(listener: (botId: string) => void): () => void;
+  deliver?(input: BotDeliveryInput): Promise<unknown>;
+  now(): number;
+  setTimer(fn: () => void, ms: number): { cancel(): void };
+  report?(error: unknown): void;
+}
+export interface BotMessageCourier {
+  post(input: BotMessagePost): Promise<BotMessagePostResult>;
+  start(): Promise<void>;
+  forgetBot(botId: string): Promise<void>;
+  dispose(): Promise<void>;
+  announceWaiting(botId: string, requestIds: readonly (string | undefined)[], summary: string,
+    waitId: string): Promise<{ deadline: number; expired: boolean } | undefined>;
+}
+export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessageCourier;
+```
 
-- [ ] **Step 1: Write the failing tests** in `courier.test.ts` with an in-memory session fake (records `send`, `appendEntry`, `markSilent`, `stop`, `withdraw`, `dismiss` and `resume` calls; scripted `awaitReply`), the real ledger in a temp dir, and fake timers:
-  - `sends once and returns sent`: a `send` with request id `bot:J:1:<id>`, `whenBusy: "followUp"`, `ifNotInterrupted: true`, and `botMessage.kind === "request"`.
-  - `a replayed delivery id sends nothing new` (Review Focus 4).
-  - `refusals`, one case each: global off; sender off; target off (each `switched_off`); `"Nobody"` (`unknown_bot`, `bots` lists the others); two Bots named "COS" (`ambiguous_bot`); self (`self`); a hop-1 run messaging its sender (`in_chain`); a hop-2 run (`chain_too_deep`); a fourth in-flight delivery (`limit_reached`). In every case no `send` is recorded (Review Focus 5).
-  - `a paused target is refused and left alone`: `send` rejecting `paused_by_person` gives `bot_paused`, the row is `failed`, and no `resume` or `dismiss` is recorded.
-  - `a reply comes back as one labelled turn in the sender's chat`: after `awaitReply` resolves `completed: "Tuesday works"`, the sender gets one `send` with `botreply:<id>`, `botMessage: {kind: "reply", botName: "COS"}`, and framed text containing `Tuesday works`. A second `start` sends nothing more.
-  - `silent and failed replies are notices, never turns`: a `[SILENT]` reply gives `markSilent(target)` and one `silent` status entry, with no sender `send`. A `failed` reply gives one `failed` entry.
-  - `expiry leaves the target's work alone` (Review Focus 1): the target is `running` another submission and the wait never settles. After 30 minutes there is one `expired` entry, and no `stop`, `withdraw`, `dismiss`, `resume` or `decide` is recorded.
-  - `announceWaiting tells the sender once and returns the deadline`: for a run whose request ids include a delivered row's `targetRequestId`, two calls with the same `waitId` append one `waiting_approval` entry and both return `{deadline: createdAt + windowMs}`; a run with only person request ids returns undefined and appends nothing.
-  - `waiting for approval tells the sender once, then gives up`: a pending approval on the target's running delivery submission gives one `waiting_approval` entry with the summary, even after three `onChange` events. At expiry, `decide(waitId, "deny")` is called once and one `gave_up` entry is appended.
-  - `a paused sender gets a row, not a turn` (Review Focus 2): the sender's `send` rejecting `paused_by_person` gives one `replied_while_paused` entry with the reply text, and no `resume`.
-  - `a deleted sender gets nothing`: after `forgetBot(sender)` mid-wait, the reply is dropped and nothing is appended.
-  - `a target paused mid-turn and resumed within the window still answers`.
-  - `restart re-attaches once` (Review Focus 3): a delivered row with a `submissionId` gets one `awaitReply` after `start()` twice. A row whose window passed gives exactly one `expired` entry. A row with no `submissionId` is recovered through `submissionForRequest`, or settles `failed` when there is none.
-  - `nested replies reach the origin once`: J sends d1 to COS. COS's hop-1 run sends d2 to X. X's reply becomes `botreply:d2` in COS. COS's answer is forwarded to J under `botreply:d2` exactly once, and `deliver` is called for J's answer only.
-  - `the person away gets the sender's answer through the funnel`: `deliver` receives `class: "bot_message"` and the sender's answer text, not the target's reply.
-- [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-messages/courier.test.ts`.
-- [ ] **Step 3: Implement.** Keep one map of active waits keyed by delivery id, each with its own `AbortController`. `dispose` aborts them all and cancels timers.
-- [ ] **Step 4: Extend `bot-delivery/funnel.test.ts`:** `a bot_message row is logged and sent like an issue banner`. The `mac` port gets the input, and `log.due` lists the row.
-- [ ] **Step 5: Run** the courier and funnel suites. Expected: PASS.
-- [ ] **Step 6: Register and commit:** "Carry Bot messages and replies between chats".
+**Acceptance and dispatch:**
+- `post` checks a bounded trimmed message, replay receipt, chain, current roster resolution, switches, self/cycle and cached availability. Resolve id/name before reading target switches. Validate sender and parent against host-owned ingress and ledger records. A run containing several hop-1 inputs can send only if a single parent/chain is unambiguous; otherwise refuse. It then calls `reserve` and returns acceptance without calling any session API. An aborted call before reservation writes nothing. After durable acceptance the message is owned by the courier; canceling the caller cannot silently erase accepted work.
+- Schedule work outside tool execution. Dispatch after the posting tool has returned, with no ledger lock or caller session lock held. For target/reply effects, check the saved deadline and call `sessions.send` with the deterministic request id, full host-owned `botMessage` envelope, `ifIdle: true`, `ifNotInterrupted: true`. `bot_busy` leaves the effect pending until a state-change wakeup; no timer loop and no session-queued Bot input. Paused/interrupted targets are never resumed. An availability race after acceptance settles a failed outcome and notice.
+- After a successful send, persist its submission id. If the process died after submit but before that save, `submissionForRequest` recovers it. If none exists and the deadline is live, execute the original saved intent once using the same id. There is no unbounded retry policy. New foreground sends or switch changes never rewrite an accepted receipt; in-flight work keeps its original deadline.
+
+**Waits, one reply and nesting:**
+- One active wait per submission. `awaitReply` observes only; it must not start a paused scheduler. An interrupted, unsettled target remains pending until state change or expiry; a settled interruption/failure creates one failed notice. Silent results create one silent notice and no sender model turn.
+- Completion atomically records its result plus the reply effect. The sender's model gets only one non-silent terminal reply under `botReplyRequestId(parent/root delivery id)`.
+- A hop-1 run may admit one child. Persist that link before returning the child's acceptance. The child's deadline is no later than its parent's. If COS admitted child d2 while answering parent d1, COS's initial final text is stored but does not yet create a reply to Jester. X's final reply creates one `botreply:d2` turn in COS; COS's final answer to that turn satisfies d1's sole reply obligation to Jester under `botreply:d1`. It never creates a second unsolicited origin reply under d2. If the child finishes first, retain its completion until the parent's initial turn settles. Both orderings use the same state machine. Child failure/silence/expiry settles the parent with the corresponding quiet outcome, without another model turn. All ancestor deadlines still apply.
+- A paused/interrupted sender gets the saved answer as a `replied_while_paused` display row, without a model turn. If it stays busy until the saved deadline, use the same display-only reply fallback. The row carries the bounded answer text on desktop and phones. Deleted senders get no writes.
+- After the root sender's reply turn answers, `deliver` receives that sender's answer as class `bot_message`, with deterministic dedupe key. A child answer destined for its parent is never separately delivered through the funnel.
+
+**Approvals and expiry:**
+- Approval prompts identify their actual owning run and all contributing delivery inputs from Task 3. On every new prompt, find every relevant delivery, never `pending()[0]` or a guessed running submission. Persist a waiting notice/notification obligation per `(deliveryId, waitId)`; publish it once effectively using stable destination keys.
+- `announceWaiting` reads durable delivery records even after a terminal transition and returns the earliest applicable deadline plus `expired`. Undefined means a genuinely non-message run only. A claimed Bot run without its authoritative delivery is unavailable, never an unlimited wait.
+- At deadline, compare-and-set the terminal outcome and record the sender's notice effect atomically. Deny every still-owned pending approval with source `expiry`. Admission and pre-effect checks refuse subsequent Bot tools/cards for expired inputs, including a resumed plan wait. Do not Stop, Dismiss, Resume or withdraw any human work. An effect already started before expiry may finish; expiry cannot undo a completed external action, and any late answer is never forwarded.
+
+**Recovery and deletion:**
+- `start` resumes every unacknowledged effect, including notices/notifications on failed or expired rows. Target/reply submissions use stable request ids, status rows dedupe by delivery/outcome/wait id, and the delivery funnel dedupes by effect id. Save each acknowledgement only after the destination write. Repeated startup is safe.
+- `forgetBot` tombstones the id under the ledger serial before canceling workers; workers recheck existence before each external write and ledger publish. No racing worker may recreate deleted rows or chats. Remove private envelopes/receipts for the deleted Bot and persist a failure-notice obligation for a surviving peer before removing the exchange. `dispose` cancels workers and timers and joins them before runtime shutdown without waiting on tools holding cross-Bot operations.
+
+- [ ] **Step 1:** Write courier tests with real ledger, fake clock/timers and scripted session ports for refusal mapping, busy admission, every quiet outcome, paused sender answer visibility, sender/target deletion, switch changes after acceptance, one wait per row, every approval's ownership, late plans, and deadline races.
+- [ ] **Step 2:** Inject crashes before/after each target submit, reply submit, ledger transition, notice append and funnel delivery. Reopen twice. Require one target submission, at most one permitted root reply, one effective terminal notice and no lost effects. Verify recovery when intent exists without a submission.
+- [ ] **Step 3:** Exercise Jester/COS/X with both completion orderings, silence, failure, expiry and restart. Count every reply submission to Jester, not just a chosen request id; d1 has at most one and d2 never adds another.
+- [ ] **Step 4:** Add real-harness barrier cases for simultaneous A-to-B/B-to-A posts with pause, delete and shutdown. Neither tool awaits a session host; close completes without timeout. Test busy target past expiry, multiple pending approvals, a later tool after expiry denial, a mixed human steer, and queued human follow-ups. No stale Bot effect or renewed card, and no human input is canceled. These cases supplement courier fakes.
+- [ ] **Step 5:** Run the new suites, existing funnel suite, `npm run test:bot-runtime`, `npm run test:bot-rules` and `npm run test:bot-pause`; register tests and commit "Carry Bot messages with recoverable effects and bounded provenance".
 
 ### Task 7: The `message_bot` tool and desktop wiring
 
@@ -415,17 +378,17 @@
 - Test: `renderer/shared/bot-activity.test.ts`, `main/services/bot-runtime/bot-activity-detail.test.ts` (extend)
 
 **Interfaces:**
-- Consumes: `BotMessageCourier.post` (Task 6), `BotToolCall.memo`, `BotToolCall.runRequestIds` (`tool-adapter.ts:25-45`).
+- Consumes: `BotMessageCourier.post` (Task 6), `BotToolCall.memo`, `BotToolCall.runRequestIds` and `signal` (`tool-adapter.ts:25-45`).
 - Produces:
   ```ts
   export const BOT_MESSAGE_MEMO = "aiden.bot-message";
-  export function createMessageBotTool(botId: string, deps: { post: BotMessageCourier["post"]; roster(): Promise<readonly BotRosterEntry[]> }, call?: Pick<BotToolCall, "memo" | "runRequestIds">): AgentTool;
+  export function createMessageBotTool(botId: string, deps: { post: BotMessageCourier["post"]; roster(): Promise<readonly BotRosterEntry[]> }, call?: Pick<BotToolCall, "memo" | "runRequestIds" | "signal">): AgentTool;
   export function messageBotCandidate(botId: string, deps: Parameters<typeof createMessageBotTool>[1]): BotToolCandidate; // replay: "safe", bind per call
   export function botMessages(): BotMessageCourier; // messages-main.ts singleton over botSessionRuntime(), botStore, configStore, botApprovals, botDeliveryFunnel()
   ```
 - Tool shape:
   - Parameters are `{ bot: string, message: string (maxLength 4000) }`, `additionalProperties: false`.
-  - `execute` takes `deliveryId` from `call.memo(BOT_MESSAGE_MEMO, { deliveryId: randomUUID() })` and posts with `await call.runRequestIds()`.
+  - `execute` takes `deliveryId` from `call.memo(BOT_MESSAGE_MEMO, { deliveryId: randomUUID() })` and posts with `await call.runRequestIds()` and `call.signal`. `post` only reserves durable work and does not await a session host. The result is acceptance, not a claim that the target already ran.
   - A sent message returns `{ status: "sent", deliveryId, to: name }` with the line "Sent. {name} will reply later in this chat. Finish your turn now; don't wait or check." A refusal returns `{ status: "refused", code, message, bots? }` with `isError: true`.
   - Callers are `["model"]`: not scriptable from codemode, because `scriptCallable` keeps it out.
 - Description, built when tools are refreshed:
@@ -454,7 +417,7 @@
 - Modify: `main/services/bot-runtime/live-projection.ts`:
   - `:355-362`: the `bot_message` notice sets a pending marker, like `pendingRoutine`;
   - `:484-498`: the input it precedes becomes a `bot_message` row with the notice's clean text, and `retryText` is `null`;
-  - the status entries are projected, one per `(deliveryId, outcome)`, and added to `OUTLIVES_SILENT_TURN` (`:150`);
+  - the status entries are projected, one per `(deliveryId, outcome, waitId ?? "")`, and added to `OUTLIVES_SILENT_TURN` (`:150`);
   - a `[SILENT]` answer hides its `bot_message` row like a routine label.
 - Modify: `renderer/main/bots/bot-transcript-rows.ts:32,125`, `renderer/main/bots/bot-chat-pane.tsx:790`. A `bot_message` row is a small secondary label (`botMessageRowLabel`) over a bubble wrapped in `BotMessageActions` with `from={botName}`. A status row is one secondary line, plus the reply text for `replied_while_paused`.
 - Modify: `renderer/main/bots/bot-turns.ts:13-16` (`bot_message` starts a turn), `renderer/main/bots/bot-activity-log.ts:36-51` (the title is the row label)
@@ -464,7 +427,7 @@
   - `live-projection.test.ts`:
     - `a bot message shows its clean text, not the frame`: a notice plus a framed input give one `bot_message` row whose `text` is the clean message and contains no `<bot_message`.
     - `a silent answer hides the bot message row`.
-    - `status rows dedupe by delivery and outcome`: two identical status entries give one row.
+    - `status rows dedupe by delivery, outcome and optional wait id`: two identical status entries give one row.
     - `a bot message turn is not retryable`: a failed answer after it gives `failed_turn.retryText === null`.
   - `bot-chat-pane.test.tsx`:
     - `Jester asked shows in COS's chat`: the label "Jester asked" and the message text are visible.
@@ -481,7 +444,7 @@
 **Files:**
 - Modify: `main/services/aiden-remote-bot-session.ts:396-560` (`projectBotSessionEntries`). This part needs no revision:
   - A `bot_message` row becomes `{ type: "message", role: "user", label: botMessageRowLabel(kind, botName), text }`.
-  - A status row becomes `{ type: "message", role: "user", label: botName, text: botMessageStatusLine(data) }`.
+  - A status row becomes `{ type: "message", role: "user", label: botName, text: botMessageStatusLine(data) }`, except `replied_while_paused`, whose bounded `text` includes the label line plus `data.text`. The phone must display the saved answer, not only "COS replied".
   - Both keep their bounds (`wireText`, `bounded`).
 - Modify: `main/services/aiden-remote-protocol.ts`:
   - `AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION = 54` (provisional) becomes `AIDEN_REMOTE_CONTRACT_REVISION`, with a doc comment;
@@ -518,6 +481,7 @@
     - `PUT /bots/messaging sets the global switch once and needs bot:write`.
   - `aiden-remote-bots.test.ts`: `a phone patch turns off receiving and keeps everything else`. `updateBot` receives `acceptsBotMessages: false` and the Bot's other fields unchanged.
   - `bot-routine-notifications.test.ts`: `bot_message rows reach only bot:messaging devices, as kind message`.
+  - Paused-sender fixture: desktop and both native clients show the same bounded answer without resuming or creating a new model turn.
   - `aiden-remote-protocol.test.ts`: fixtures parse, and the revision equals `AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION`. Check the capability list stays within the bounds its siblings use.
 - [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/aiden-remote-bot-session.test.ts main/services/aiden-remote-router.test.ts main/services/aiden-remote-bots.test.ts main/services/bot-routine-notifications.test.ts main/services/aiden-remote-protocol.test.ts main/services/aiden-remote-operation-contract.test.ts`.
 - [ ] **Step 3: Implement the host side.**
@@ -598,7 +562,7 @@
 - **Type names used across tasks:**
   - `BotMessageStatusEntryData`, `BotMessageStatusOutcome`, `botMessageChainOf`, `botMessageRequestId` and `botReplyRequestId` (Task 1);
   - `BotSendInput.botMessage` (Task 2);
-  - `BotMessageDelivery`, `BotMessageLedger` and `botMessageLimitHit` (Task 5);
+  - `BotMessageDelivery`, `BotMessageLedger` and `BotMessageLimitHit` (Task 5);
   - `BotMessagePost`, `BotMessagePostResult`, `BotMessageCourier` and `BotRosterEntry` (Task 6);
   - `messageBotCandidate` and `botMessages()` (Task 7).
   Later tasks use these spellings.
