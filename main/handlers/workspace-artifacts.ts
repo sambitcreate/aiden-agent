@@ -4,6 +4,7 @@
 import {
   isWorkspaceArtifactId,
   isWorkspaceArtifactName,
+  isWorkspaceArtifactRevision,
   isWorkspaceArtifactWorkspaceId,
   WORKSPACE_ARTIFACT_LIMITS,
   type WorkspaceArtifactsChangedEvent,
@@ -103,15 +104,15 @@ export function registerWorkspaceArtifactHandlers(dependencies: WorkspaceArtifac
   handle(WORKSPACE_ARTIFACT_CHANNELS.restore, async (_event, workspaceId, artifactId, revision) => {
     const workspace = await existingWorkspace(workspaceId);
     const id = asArtifactId(artifactId);
-    if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1) throw new Error("Invalid revision.");
+    if (!isWorkspaceArtifactRevision(revision)) throw new Error("Invalid revision.");
     // A restore from the page menu never approves anything: commands that
     // differ from the approved ones wait for the person to allow them.
-    const artifact = await store.restore(workspace, id, revision, { approved: false });
+    const artifact = await store.restore(workspace, id, revision);
     notify({ workspaceId: workspace, artifactId: artifact.id, reason: "updated" });
     return artifact;
   });
 
-  handle(WORKSPACE_ARTIFACT_CHANNELS.refresh,async (event, workspaceId, artifactId) => {
+  handle(WORKSPACE_ARTIFACT_CHANNELS.refresh, async (event, workspaceId, artifactId) => {
     const workspace = await existingWorkspace(workspaceId);
     const id = asArtifactId(artifactId);
     return dependencies.runInWorkspace(event, workspace, (context, signal) =>

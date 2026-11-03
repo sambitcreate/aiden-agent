@@ -32,6 +32,7 @@ import {
   workspaceArtifactCanRefresh,
   workspaceArtifactPageAccess,
   workspaceArtifactProblems,
+  workspaceArtifactRevisionWaitsForApproval,
 } from "../lib/workspace-artifacts-view";
 import {
   WORKSPACE_ARTIFACT_LIMITS,
@@ -176,9 +177,10 @@ function useArtifactRefresh(workspace: Workspace, view: WorkspaceArtifactView, a
     setAwaiting(null);
     if (active) void refresh();
   }, [active, artifactId, awaiting, refresh, revision]);
+  // Named by the restored page, which may no longer be the one shown when the restore finishes.
   const refreshAtRevision = React.useCallback(
-    (target: number) => setAwaiting({ artifactId, revision: target }),
-    [artifactId],
+    (restoredId: string, target: number) => setAwaiting({ artifactId: restoredId, revision: target }),
+    [],
   );
   return { canRun, refreshing, error, refresh, refreshAtRevision };
 }
@@ -382,15 +384,20 @@ function useArtifactButtons(workspace: Workspace, view: WorkspaceArtifactView, r
   return { press, dialog };
 }
 
+/** Placeholder rows, one per width (a percentage of the row). */
+function SkeletonRows({ widths }: { widths: readonly number[] }) {
+  return widths.map((width, index) => (
+    <div key={index} className="flex h-12 items-center rounded-card bg-well px-3">
+      <span className="h-2.5 animate-pulse rounded-pill bg-control" style={{ width: `${width}%` }} />
+    </div>
+  ));
+}
+
 function ArtifactsSkeleton() {
   return (
     <div role="status" className="space-y-3 p-4" aria-label="Loading artifacts" aria-busy="true">
       <span className="block h-3 w-1/3 animate-pulse rounded-pill bg-control" />
-      {[86, 64, 78].map((width, index) => (
-        <div key={index} className="flex h-12 items-center rounded-card bg-well px-3">
-          <span className="h-2.5 animate-pulse rounded-pill bg-control" style={{ width: `${width}%` }} />
-        </div>
-      ))}
+      <SkeletonRows widths={[86, 64, 78]} />
     </div>
   );
 }
@@ -414,6 +421,9 @@ function ArtifactsHeader({
   const [renaming, setRenaming] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState<string | null>(null);
   const [browsing, setBrowsing] = React.useState<string | null>(null);
+  // Read when a restore finishes, which may be after another page took this one's place.
+  const browsingRef = React.useRef(browsing);
+  browsingRef.current = browsing;
   const workspaceId = workspace.id;
   const artifactId = view.artifact.id;
   const menuTriggerRef = React.useRef<HTMLButtonElement | null>(null);
@@ -504,11 +514,17 @@ function ArtifactsHeader({
         view={view}
       />
       <ArtifactHistoryDialog
+        // A fresh dialog per page, so a restore still running for another page shows nothing here.
+        key={artifactId}
         open={browsing === artifactId}
         onOpenChange={(open) => setBrowsing(open ? artifactId : null)}
         workspace={workspace}
         view={view}
-        onRestored={refresh.refreshAtRevision}
+        onRestored={(restoredId, revision) => {
+          refresh.refreshAtRevision(restoredId, revision);
+          // A dialog opened on another page since the restore began stays open.
+          if (browsingRef.current === restoredId) setBrowsing(null);
+        }}
         returnFocus={() => menuTriggerRef.current}
       />
     </div>
@@ -536,8 +552,11 @@ function ArtifactHistoryDialog({
   onOpenChange: (open: boolean) => void;
   workspace: Workspace;
   view: WorkspaceArtifactView;
-  /** Called with the page's new revision so it can re-read its sources once it arrives. */
-  onRestored: (revision: number) => void;
+  /**
+   * Called with the page and its new revision, so it can re-read its sources
+   * once it arrives and close this dialog if it still belongs to that page.
+   */
+  onRestored: (artifactId: string, revision: number) => void;
   returnFocus: () => HTMLElement | null;
 }) {
   const [load, setLoad] = React.useState<HistoryLoad>({ status: "loading" });
@@ -547,7 +566,11 @@ function ArtifactHistoryDialog({
   const title = view.artifact.visual.title;
   // Read each time the dialog opens, so it lists what is kept now.
   React.useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      // Forget the list on close, so reopening never shows a stale one first.
+      setLoad({ status: "loading" });
+      return;
+    }
     let cancelled = false;
     setLoad({ status: "loading" });
     workspaceArtifactsApi.history(workspace.id, artifactId).then(
@@ -562,8 +585,6 @@ function ArtifactHistoryDialog({
       cancelled = true;
     };
   }, [artifactId, attempt, open, workspace.id]);
-  // Only under Ask does a version with other commands wait to be allowed.
-  const ask = workspace.permission === "ask" && Boolean(workspace.folderPath);
   // A ref, so a second press in the same frame sees the first one.
   const restoringRef = React.useRef(false);
   const restore = async (revision: number) => {
@@ -572,8 +593,7 @@ function ArtifactHistoryDialog({
     setRestoring(revision);
     try {
       const restored = await workspaceArtifactsApi.restore(workspace.id, artifactId, revision);
-      onRestored(restored.revision);
-      onOpenChange(false);
+      onRestored(artifactId, restored.revision);
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "Could not restore this version.");
     } finally {
@@ -592,11 +612,7 @@ function ArtifactHistoryDialog({
     >
       {load.status === "loading" ? (
         <div role="status" aria-label="Loading earlier versions" aria-busy="true" className="flex flex-col gap-2">
-          {[72, 56].map((width) => (
-            <div key={width} className="flex h-12 items-center rounded-card bg-well px-3">
-              <span className="h-2.5 animate-pulse rounded-pill bg-control" style={{ width: `${width}%` }} />
-            </div>
-          ))}
+          <SkeletonRows widths={[72, 56]} />
         </div>
       ) : load.status === "error" ? (
         <Callout color="warning" role="alert">
@@ -611,7 +627,7 @@ function ArtifactHistoryDialog({
         </Callout>
       ) : load.entries.length === 0 ? (
         <Text variant="small" color="secondary" as="p">
-          No earlier versions yet. Aiden keeps the last 5 versions of a page.
+          No earlier versions yet. Aiden keeps the last {WORKSPACE_ARTIFACT_LIMITS.history} versions of a page.
         </Text>
       ) : (
         <ul className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Earlier versions">
@@ -627,15 +643,16 @@ function ArtifactHistoryDialog({
                     Named “{entry.title}”
                   </Text>
                 ) : null}
-                {ask && entry.commandsChanged ? (
+                {workspaceArtifactRevisionWaitsForApproval(entry, workspace) ? (
                   <Text variant="small" as="p" className="text-status-warning">
                     Different commands — needs allowing again
                   </Text>
                 ) : null}
               </div>
-              {/* Not disabled while a restore runs: that would drop keyboard focus inside the dialog. */}
+              {/* Not disabled while a restore runs: that would drop keyboard focus inside the dialog. It looks disabled instead. */}
               <Button
                 size="small"
+                className="aria-disabled:pointer-events-none aria-disabled:opacity-45"
                 aria-disabled={restoring !== null || undefined}
                 aria-label={`Restore revision ${entry.revision}`}
                 onClick={() => void restore(entry.revision)}

@@ -7,6 +7,7 @@ import { parseChatUiVisualV1 } from "../../../renderer/shared/aiden-ui/visual.js
 import {
   describeWorkspaceArtifactCommands,
   isWorkspaceArtifactId,
+  isWorkspaceArtifactRevision,
   isWorkspaceArtifactTitle,
   parseWorkspaceArtifactActions,
   parseWorkspaceArtifactDescription,
@@ -15,7 +16,7 @@ import {
   resolveWorkspaceArtifactCommand,
   WORKSPACE_ARTIFACT_LIMITS,
   WORKSPACE_ARTIFACT_TOOL_NAME,
-  workspaceArtifactHasCommands,
+  workspaceArtifactCommandsNeedApproval,
   type WorkspaceArtifactPermission,
   type WorkspaceArtifactSourceResultV1,
   type WorkspaceArtifactsChangedEvent,
@@ -107,12 +108,11 @@ function idOf(input: ArtifactToolInput): string {
   return input.id;
 }
 
-function revisionOf(input: ArtifactToolInput): number {
-  const value = input.revision;
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+function revisionNumberOf(input: ArtifactToolInput): number {
+  if (!isWorkspaceArtifactRevision(input.revision)) {
     throw new Error("revision is required: one of the page's earlierRevisions from list.");
   }
-  return value;
+  return input.revision;
 }
 
 /** The action a run call names on a page, and the values it passes. */
@@ -241,6 +241,26 @@ function runApprovalDigest(pageDigest: string, command: string): string {
 }
 
 /**
+ * The card for saving a page that can run these commands, or none when it
+ * runs nothing or the page already allows exactly these commands. The same
+ * test marks a version as needing allowing again in the tab.
+ */
+function commandsCard(
+  what: string,
+  sources: WorkspaceArtifactV1["sources"],
+  actions: WorkspaceArtifactV1["actions"],
+  approvedDigest: string | undefined,
+): WorkspaceArtifactCallApproval {
+  const digest = workspaceArtifactDigest(sources, actions);
+  if (!workspaceArtifactCommandsNeedApproval(sources, actions, digest, approvedDigest)) return { required: false };
+  return {
+    required: true,
+    digest,
+    summary: `${what}. It can run these commands in this workspace whenever it refreshes or you press its buttons:\n${describeWorkspaceArtifactCommands(sources, actions)}`,
+  };
+}
+
+/**
  * Whether a call needs the person's approval in chat, and the card text.
  * Deleting always asks. Under Ask, saving commands the person has not
  * approved for this artifact asks, listing every command verbatim, and every
@@ -294,20 +314,19 @@ export async function workspaceArtifactCallApproval(
     if (!isWorkspaceArtifactId(input.id)) return { required: false };
     let revision: number;
     try {
-      revision = revisionOf(input);
+      revision = revisionNumberOf(input);
     } catch {
       return { required: false };
     }
     const view = await options.store.get(options.workspaceId, input.id);
     const entry = view ? await options.store.revision(options.workspaceId, input.id, revision) : undefined;
-    if (!view || !entry || !workspaceArtifactHasCommands(entry.sources, entry.actions)) return { required: false };
-    const digest = workspaceArtifactDigest(entry.sources, entry.actions);
-    if (view.artifact.approvedDigest === digest) return { required: false };
-    return {
-      required: true,
-      digest,
-      summary: `Restore revision ${revision} of the artifact "${view.artifact.visual.title}". It can run these commands in this workspace whenever it refreshes or you press its buttons:\n${describeWorkspaceArtifactCommands(entry.sources, entry.actions)}`,
-    };
+    if (!view || !entry) return { required: false };
+    return commandsCard(
+      `Restore revision ${revision} of the artifact "${view.artifact.visual.title}"`,
+      entry.sources,
+      entry.actions,
+      view.artifact.approvedDigest,
+    );
   }
   // Store reads may throw; the caller blocks the call rather than skip the card.
   const previous =
@@ -323,18 +342,10 @@ export async function workspaceArtifactCallApproval(
     // Invalid input fails in execute with the reason; there is nothing to approve.
     return { required: false };
   }
-  if (!workspaceArtifactHasCommands(sources, actions)) return { required: false };
-  if (previous?.approvedDigest && previous.approvedDigest === workspaceArtifactDigest(sources, actions)) {
-    return { required: false };
-  }
   const title =
     input.title === undefined && previous ? previous.visual.title : typeof input.title === "string" ? input.title.trim() : "";
   const verb = operation === "create" ? "Create" : "Update";
-  return {
-    required: true,
-    digest: workspaceArtifactDigest(sources, actions),
-    summary: `${verb} the artifact "${title}". It can run these commands in this workspace whenever it refreshes or you press its buttons:\n${describeWorkspaceArtifactCommands(sources, actions)}`,
-  };
+  return commandsCard(`${verb} the artifact "${title}"`, sources, actions, previous?.approvedDigest);
 }
 
 function describeSources(results: Record<string, WorkspaceArtifactSourceResultV1>, heading = "First refresh"): string {
@@ -533,7 +544,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         if (operation === "run") return text(await runPageAction(input, shownDigest, signal));
         if (operation === "restore") {
           const id = idOf(input);
-          const revision = revisionOf(input);
+          const revision = revisionNumberOf(input);
           const current = await store.get(workspaceId, id);
           if (!current) throw new Error("No artifact with that id exists in this workspace.");
           const entry = await store.revision(workspaceId, id, revision);
@@ -541,10 +552,9 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
             throw new Error(`Revision ${revision} of this artifact is no longer kept. List the artifact for its earlierRevisions.`);
           }
           assertSourcesRunnable(entry, options);
-          // Only an allowed card that listed exactly the restored commands covers them.
-          const approved = shownDigest !== undefined && shownDigest === workspaceArtifactDigest(entry.sources, entry.actions);
           if (signal?.aborted) throw new Error("The restore was cancelled.");
-          const artifact = await store.restore(workspaceId, id, revision, { approved });
+          // The store approves only when the allowed card listed exactly the restored commands.
+          const artifact = await store.restore(workspaceId, id, revision, { approvedDigest: shownDigest });
           options.onChanged({ workspaceId, artifactId: artifact.id, reason: "updated", chatId });
           return text(
             `Restored revision ${revision} of the artifact "${artifact.visual.title}" as revision ${artifact.revision}.${await afterSave(artifact, signal)}`,
@@ -562,14 +572,12 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
         if (operation === "update" && !previous) throw new Error("No artifact with that id exists in this workspace.");
         const { content, diagnostics } = contentFor(input, previous);
         assertSourcesRunnable(content, options);
-        // Only an allowed card that listed exactly these commands covers them;
-        // otherwise an unchanged set keeps the approval it already had.
-        const approved =
-          shownDigest !== undefined && shownDigest === workspaceArtifactDigest(content.sources, content.actions);
         if (signal?.aborted) throw new Error("The artifact change was cancelled.");
+        // The store approves only when the allowed card listed exactly the saved
+        // commands; otherwise an unchanged set keeps the approval it already had.
         const artifact = previous
-          ? await store.replace(workspaceId, previous.id, content, { approved })
-          : await store.create(workspaceId, content, { approved, chatId });
+          ? await store.replace(workspaceId, previous.id, content, { approvedDigest: shownDigest })
+          : await store.create(workspaceId, content, { approvedDigest: shownDigest, chatId });
         options.onChanged({ workspaceId, artifactId: artifact.id, reason: previous ? "updated" : "created", chatId });
         const verb = previous ? "Updated" : "Created";
         return text(

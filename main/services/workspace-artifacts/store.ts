@@ -10,6 +10,7 @@ import {
   parseWorkspaceArtifactSnapshotV1,
   parseWorkspaceArtifactV1,
   WORKSPACE_ARTIFACT_LIMITS,
+  workspaceArtifactCommandsNeedApproval,
   type WorkspaceArtifactActionV1,
   type WorkspaceArtifactRefreshV1,
   type WorkspaceArtifactRevisionSummary,
@@ -46,8 +47,6 @@ const UNREADABLE_LIMIT = WORKSPACE_ARTIFACT_LIMITS.perWorkspace * 2;
 const TITLE_RULE = `The artifact title must be 1–${WORKSPACE_ARTIFACT_LIMITS.titleChars} characters on one line.`;
 const SNAPSHOTS_MAX_BYTES = 16 * 1024 * 1024;
 const HISTORY_MAX_BYTES = 24 * 1024 * 1024;
-/** Earlier versions kept per page; the oldest is dropped first. */
-export const WORKSPACE_ARTIFACT_HISTORY_LIMIT = 5;
 
 /**
  * One earlier version of a page, as it was before an update replaced it. The
@@ -108,10 +107,10 @@ function parseRevision(workspaceId: string, artifactId: string, value: unknown):
     updatedAt: savedAt,
   });
   if (!artifact) return undefined;
-  return revisionOf(artifact, savedAt);
+  return historyEntryOf(artifact, savedAt);
 }
 
-function revisionOf(artifact: WorkspaceArtifactV1, savedAt: number): WorkspaceArtifactRevisionV1 {
+function historyEntryOf(artifact: WorkspaceArtifactV1, savedAt: number): WorkspaceArtifactRevisionV1 {
   return {
     revision: artifact.revision,
     savedAt,
@@ -130,7 +129,7 @@ export function normalizeWorkspaceArtifactHistoryDocument(workspaceId: string) {
     for (const [id, entries] of Object.entries(value.revisions).slice(0, WORKSPACE_ARTIFACT_LIMITS.perWorkspace * 2)) {
       if (!isWorkspaceArtifactId(id) || !Array.isArray(entries)) continue;
       const kept: WorkspaceArtifactRevisionV1[] = [];
-      for (const entry of entries.slice(-WORKSPACE_ARTIFACT_HISTORY_LIMIT)) {
+      for (const entry of entries.slice(-WORKSPACE_ARTIFACT_LIMITS.history)) {
         const revision = parseRevision(workspaceId, id, entry);
         if (revision && !kept.some((other) => other.revision === revision.revision)) kept.push(revision);
       }
@@ -145,8 +144,11 @@ export function normalizeWorkspaceArtifactHistoryDocument(workspaceId: string) {
  * `maxBytes`, so recording history never fails a write for its size.
  */
 function trimHistoryToFit(draft: WorkspaceArtifactHistoryDocument, maxBytes: number): void {
-  // Leaves room for the trailing newline the store writes.
-  while (Buffer.byteLength(JSON.stringify(draft), "utf8") + 1 > maxBytes) {
+  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
+  // Measured once; each removal subtracts exactly what it takes out of the
+  // compact JSON. The +1 is the trailing newline the store writes.
+  let size = bytes(draft) + 1;
+  while (size > maxBytes) {
     let oldest: { id: string; savedAt: number } | undefined;
     for (const [id, entries] of Object.entries(draft.revisions)) {
       const first = entries[0];
@@ -154,8 +156,14 @@ function trimHistoryToFit(draft: WorkspaceArtifactHistoryDocument, maxBytes: num
     }
     if (!oldest) return;
     const entries = draft.revisions[oldest.id]!;
-    entries.shift();
-    if (entries.length === 0) delete draft.revisions[oldest.id];
+    // The entry, plus the comma that separated it from the next one.
+    size -= bytes(entries.shift()) + (entries.length > 0 ? 1 : 0);
+    if (entries.length === 0) {
+      const keys = Object.keys(draft.revisions).length;
+      // `"id":[]`, plus its separating comma when other pages remain.
+      size -= bytes(oldest.id) + 3 + (keys > 1 ? 1 : 0);
+      delete draft.revisions[oldest.id];
+    }
   }
 }
 
@@ -209,10 +217,17 @@ export interface WorkspaceArtifactContent {
 }
 
 export interface WorkspaceArtifactWriteOptions {
-  /** The person approved these commands (the chat approval card under Ask). */
-  approved?: boolean;
+  /**
+   * The command digest an approval card the person allowed showed. It
+   * approves the save only when it equals the digest of the commands saved,
+   * checked inside the write.
+   */
+  approvedDigest?: string;
   chatId?: string;
 }
+
+/** Thrown inside a history write whose workspace was removed, so nothing is written. */
+class HistoryDetachedError extends Error {}
 
 export interface WorkspaceArtifactStoreOptions {
   /** Directory holding the per-workspace files; defaults to `<userData>/workspace-artifacts`. */
@@ -315,17 +330,32 @@ export class WorkspaceArtifactStore {
   }
 
   /** Keeps the version an update replaced; never fails the update that called it. */
-  private async recordRevision(workspaceId: string, previous: WorkspaceArtifactV1): Promise<void> {
+  private async recordRevision(
+    workspaceId: string,
+    pages: DataStore<WorkspaceArtifactsDocument>,
+    previous: WorkspaceArtifactV1,
+  ): Promise<void> {
+    const history = this.historyStore(workspaceId);
     try {
-      await this.historyStore(workspaceId).update((draft) => {
+      await history.update(async (draft) => {
+        // A workspace removed meanwhile must not get its history file back.
+        if (this.artifactStores.get(workspaceId) !== pages || this.historyStores.get(workspaceId) !== history) {
+          throw new HistoryDetachedError();
+        }
+        // Pages deleted meanwhile (their delete may have run first) keep no history.
+        const live = new Set((await pages.load()).artifacts.map((artifact) => artifact.id));
+        for (const id of Object.keys(draft.revisions)) {
+          if (!live.has(id)) delete draft.revisions[id];
+        }
+        if (!live.has(previous.id)) return;
         const entries = (draft.revisions[previous.id] ?? []).filter((entry) => entry.revision !== previous.revision);
-        entries.push(revisionOf(previous, this.now()));
+        entries.push(historyEntryOf(previous, this.now()));
         entries.sort((a, b) => a.revision - b.revision);
-        draft.revisions[previous.id] = entries.slice(-WORKSPACE_ARTIFACT_HISTORY_LIMIT);
+        draft.revisions[previous.id] = entries.slice(-WORKSPACE_ARTIFACT_LIMITS.history);
         trimHistoryToFit(draft, this.historyMaxBytes);
       });
     } catch (error) {
-      this.onHistoryError(error);
+      if (!(error instanceof HistoryDetachedError)) this.onHistoryError(error);
     }
   }
 
@@ -339,7 +369,12 @@ export class WorkspaceArtifactStore {
         revision: entry.revision,
         savedAt: entry.savedAt,
         title: entry.visual.title,
-        commandsChanged: workspaceArtifactDigest(entry.sources, entry.actions) !== view.digest,
+        needsApproval: workspaceArtifactCommandsNeedApproval(
+          entry.sources,
+          entry.actions,
+          workspaceArtifactDigest(entry.sources, entry.actions),
+          view.artifact.approvedDigest,
+        ),
       }))
       .reverse();
   }
@@ -434,7 +469,10 @@ export class WorkspaceArtifactStore {
         sources: content.sources,
         actions: content.actions,
         refresh: content.refresh,
-        ...(options.approved ? { approvedDigest: workspaceArtifactDigest(content.sources, content.actions) } : {}),
+        ...(options.approvedDigest !== undefined &&
+        options.approvedDigest === workspaceArtifactDigest(content.sources, content.actions)
+          ? { approvedDigest: options.approvedDigest }
+          : {}),
         ...(options.chatId ? { createdByChatId: options.chatId } : {}),
         revision: 1,
         createdAt: now,
@@ -454,7 +492,6 @@ export class WorkspaceArtifactStore {
     content: WorkspaceArtifactContent,
     options: WorkspaceArtifactWriteOptions = {},
   ): Promise<WorkspaceArtifactV1> {
-    if (!isWorkspaceArtifactTitle(content.title)) throw new Error(TITLE_RULE);
     return this.replaceWith(workspaceId, artifactId, () => content, options);
   }
 
@@ -469,8 +506,8 @@ export class WorkspaceArtifactStore {
     options: WorkspaceArtifactWriteOptions,
   ): Promise<WorkspaceArtifactV1> {
     const id = requireArtifactId(artifactId);
-    let replaced = undefined as WorkspaceArtifactV1 | undefined;
-    const saved = await this.artifacts(workspaceId).update((draft) => {
+    const pages = this.artifacts(workspaceId);
+    const { saved, replaced } = await pages.update((draft) => {
       const index = draft.artifacts.findIndex((artifact) => artifact.id === id);
       if (index < 0) notFound();
       const previous = draft.artifacts[index]!;
@@ -479,9 +516,11 @@ export class WorkspaceArtifactStore {
       if (draft.artifacts.some((artifact) => artifact.id !== id && artifact.visual.title === content.title)) {
         throw new Error(`Another artifact here is already named "${content.title}".`);
       }
-      replaced = structuredClone(previous);
       const digest = workspaceArtifactDigest(content.sources, content.actions);
-      const approvedDigest = options.approved ? digest : previous.approvedDigest === digest ? digest : undefined;
+      // Only a card that showed exactly these commands approves them;
+      // otherwise an unchanged set keeps the approval it had.
+      const approvedDigest =
+        options.approvedDigest === digest || previous.approvedDigest === digest ? digest : undefined;
       const next: WorkspaceArtifactV1 = {
         version: 1,
         id,
@@ -500,9 +539,9 @@ export class WorkspaceArtifactStore {
       const checked = parseWorkspaceArtifactV1(next);
       if (!checked) throw new Error("The artifact could not be saved because its page is too large or invalid.");
       draft.artifacts[index] = checked;
-      return checked;
+      return { saved: checked, replaced: structuredClone(previous) };
     });
-    if (replaced) await this.recordRevision(workspaceId, replaced);
+    await this.recordRevision(workspaceId, pages, replaced);
     return saved;
   }
 
@@ -554,11 +593,14 @@ export class WorkspaceArtifactStore {
     await this.snapshots(workspaceId).update((draft) => {
       delete draft.snapshots[id];
     });
-    const history = this.historyStore(workspaceId);
-    if ((await history.load()).revisions[id]) {
-      await history.update((draft) => {
+    // History is a convenience: failing to forget it never fails the delete,
+    // and a later history write prunes ids that are no longer pages.
+    try {
+      await this.historyStore(workspaceId).update((draft) => {
         delete draft.revisions[id];
       });
+    } catch (error) {
+      this.onHistoryError(error);
     }
     return removed;
   }
@@ -604,7 +646,15 @@ export class WorkspaceArtifactStore {
     const root = this.root();
     this.artifactStores.delete(id);
     this.snapshotStores.delete(id);
+    const history = this.historyStores.get(id);
     this.historyStores.delete(id);
+    // Waits out a history write already queued; queued ones see the store
+    // detached and write nothing, so the file is not recreated after the rm.
+    await history
+      ?.update(() => {
+        throw new HistoryDetachedError();
+      })
+      .catch(() => undefined);
     await Promise.all([
       fs.rm(path.join(root, `${id}.json`), { force: true }),
       fs.rm(path.join(root, `${id}.snapshots.json`), { force: true }),

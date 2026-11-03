@@ -4,6 +4,7 @@ import {
   workspaceArtifactDataJson,
   workspaceArtifactSourceAccess,
   type WorkspaceArtifactSourceAccess,
+  type WorkspaceArtifactRevisionSummary,
   type WorkspaceArtifactsChangedEvent,
   type WorkspaceArtifactView,
 } from "../shared/workspace-artifacts";
@@ -18,12 +19,25 @@ export function workspaceArtifactPage(view: WorkspaceArtifactView): ChatUiVisual
 
 type ArtifactWorkspace = { permission: WorkspacePermission; folderPath?: string } | null;
 
+function workspaceAccess(workspace: ArtifactWorkspace) {
+  return { permission: workspace?.permission ?? "none", hasFolder: Boolean(workspace?.folderPath) };
+}
+
 function accessInputs(view: WorkspaceArtifactView, workspace: ArtifactWorkspace) {
-  return {
-    permission: workspace?.permission ?? "none",
-    hasFolder: Boolean(workspace?.folderPath),
-    approved: view.artifact.approvedDigest === view.digest,
-  };
+  return { ...workspaceAccess(workspace), approved: view.artifact.approvedDigest === view.digest };
+}
+
+/**
+ * Whether restoring an earlier version would leave its commands waiting for
+ * the person to allow them. Only Ask waits: Full runs them and Off, or a
+ * workspace without a folder, runs nothing either way.
+ */
+export function workspaceArtifactRevisionWaitsForApproval(
+  entry: WorkspaceArtifactRevisionSummary,
+  workspace: ArtifactWorkspace,
+): boolean {
+  const { permission, hasFolder } = workspaceAccess(workspace);
+  return entry.needsApproval && workspaceArtifactCommandAccess(permission, hasFolder, false) === "needs-approval";
 }
 
 /**

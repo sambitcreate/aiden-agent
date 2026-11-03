@@ -14,7 +14,7 @@ import type {
 import { runBoundedShellCommand, type BoundedShellCommandOptions } from "../bounded-shell-command.js";
 import { readWorkspaceFile } from "../workspace-files.js";
 import { createWorkspaceArtifactRunner } from "./runner.js";
-import { WorkspaceArtifactStore } from "./store.js";
+import { WorkspaceArtifactStore, workspaceArtifactDigest } from "./store.js";
 
 const SHELL: WorkspaceArtifactSourceV1 = { name: "pulls", kind: "shell", command: `printf '[{"number":12}]'`, parse: "json" };
 const FILE: WorkspaceArtifactSourceV1 = { name: "todo", kind: "file", file: "TODO.md", parse: "lines" };
@@ -43,16 +43,17 @@ async function setup(t: test.TestContext, options: { sources?: WorkspaceArtifact
     notify: (event) => events.push(event),
   });
   const compiled = compileAum('<Visual title="PRs"><Text>{len($pulls)}</Text></Visual>');
+  const sources = options.sources ?? [SHELL, FILE];
   await store.create(
     "ws1",
     {
       title: "PRs",
       visual: { version: 1, kind: "ui", id: "x", title: "PRs", catalogVersion: AIDEN_UI_CATALOG_VERSION, tree: compiled.tree!, fallbackText: "" },
-      sources: options.sources ?? [SHELL, FILE],
+      sources,
       actions: [ECHO],
       refresh: { onOpen: true },
     },
-    { approved: options.approved ?? false },
+    options.approved ? { approvedDigest: workspaceArtifactDigest(sources, [ECHO]) } : {},
   );
   const context = (permission: WorkspaceArtifactPermission) => ({ folderPath: folder, permission });
   // What the tab sends with a button press: the page's digest as it was shown.

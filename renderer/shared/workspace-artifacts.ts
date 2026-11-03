@@ -37,6 +37,8 @@ export const WORKSPACE_ARTIFACT_LIMITS = {
   actionTimeoutMs: 120_000,
   minIntervalSeconds: 60,
   maxIntervalSeconds: 24 * 60 * 60,
+  /** Earlier versions kept per page; the oldest is dropped first. */
+  history: 5,
 } as const;
 
 export type WorkspaceArtifactParse = "json" | "lines" | "text";
@@ -115,11 +117,14 @@ export interface WorkspaceArtifactRevisionSummary {
   savedAt: number;
   /** The page's name at that time; a restore keeps the current name. */
   title: string;
-  /** Its commands differ from the current page's, so under Ask it needs allowing again. */
-  commandsChanged: boolean;
+  /**
+   * It runs commands other than the ones allowed for the current page, so under
+   * Ask a restore leaves them waiting to be allowed again.
+   */
+  needsApproval: boolean;
 }
 
-export type WorkspaceArtifactChangeReason ="created" | "updated" | "deleted" | "refreshed";
+export type WorkspaceArtifactChangeReason = "created" | "updated" | "deleted" | "refreshed";
 
 export interface WorkspaceArtifactsChangedEvent {
   workspaceId: string;
@@ -509,6 +514,11 @@ export function isWorkspaceArtifactId(value: unknown): value is string {
   return typeof value === "string" && ARTIFACT_ID.test(value);
 }
 
+/** A page revision number: a positive safe integer. */
+export function isWorkspaceArtifactRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
 export function isWorkspaceArtifactWorkspaceId(value: unknown): value is string {
   return typeof value === "string" && WORKSPACE_ID.test(value);
 }
@@ -687,7 +697,7 @@ export function parseWorkspaceArtifactV1(value: unknown): WorkspaceArtifactV1 | 
   const revision = value.revision;
   const createdAt = finiteTime(value.createdAt);
   const updatedAt = finiteTime(value.updatedAt);
-  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1) return undefined;
+  if (!isWorkspaceArtifactRevision(revision)) return undefined;
   if (createdAt === undefined || updatedAt === undefined) return undefined;
   const approvedDigest =
     typeof value.approvedDigest === "string" && /^[a-f0-9]{64}$/u.test(value.approvedDigest) ? value.approvedDigest : undefined;
@@ -714,7 +724,7 @@ export function parseWorkspaceArtifactSnapshotV1(value: unknown): WorkspaceArtif
   if (!isRecord(value) || !isRecord(value.sources)) return undefined;
   const revision = value.revision;
   const refreshedAt = finiteTime(value.refreshedAt);
-  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1 || refreshedAt === undefined) {
+  if (!isWorkspaceArtifactRevision(revision) || refreshedAt === undefined) {
     return undefined;
   }
   const sources: Record<string, WorkspaceArtifactSourceResultV1> = {};
@@ -907,6 +917,19 @@ export function describeWorkspaceArtifactCommands(
   return workspaceArtifactCommandList(sources, actions)
     .map((entry) => `• ${entry.label}: ${entry.command}`)
     .join("\n");
+}
+
+/**
+ * Whether saving these commands leaves them waiting for the person under Ask:
+ * they run something, and they are not the exact set already allowed.
+ */
+export function workspaceArtifactCommandsNeedApproval(
+  sources: readonly WorkspaceArtifactSourceV1[],
+  actions: readonly WorkspaceArtifactActionV1[],
+  digest: string,
+  approvedDigest: string | undefined,
+): boolean {
+  return workspaceArtifactHasCommands(sources, actions) && digest !== approvedDigest;
 }
 
 export function workspaceArtifactHasCommands(

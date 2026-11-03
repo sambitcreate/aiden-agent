@@ -6,7 +6,7 @@ import test from "node:test";
 import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
 import { AIDEN_UI_CATALOG_VERSION } from "../../renderer/shared/aiden-ui/types.js";
 import type { WorkspaceArtifactsChangedEvent, WorkspaceArtifactView } from "../../renderer/shared/workspace-artifacts.js";
-import { WorkspaceArtifactStore } from "../services/workspace-artifacts/store.js";
+import { WorkspaceArtifactStore, workspaceArtifactDigest } from "../services/workspace-artifacts/store.js";
 import { registerWorkspaceArtifactHandlers, WORKSPACE_ARTIFACT_CHANNELS } from "./workspace-artifacts.js";
 
 async function setup(t: test.TestContext) {
@@ -84,10 +84,10 @@ test("earlier versions are listed newest first and a restore from the renderer n
   const { invoke, events, store } = await setup(t);
   const current = (await store.get("ws1", "art1"))!.artifact;
   const wider = [{ name: "pulls", kind: "shell" as const, command: "gh pr list --state all --json number", parse: "json" as const }];
-  await store.replace("ws1", "art1", { title: "PRs", visual: current.visual, sources: wider, actions: [], refresh: current.refresh }, { approved: true });
+  await store.replace("ws1", "art1", { title: "PRs", visual: current.visual, sources: wider, actions: [], refresh: current.refresh }, { approvedDigest: workspaceArtifactDigest(wider, []) });
 
-  const history = (await invoke(WORKSPACE_ARTIFACT_CHANNELS.history, "ws1", "art1")) as { revision: number; commandsChanged: boolean }[];
-  assert.deepEqual(history.map((entry) => [entry.revision, entry.commandsChanged]), [[1, true]]);
+  const history = (await invoke(WORKSPACE_ARTIFACT_CHANNELS.history, "ws1", "art1")) as { revision: number; needsApproval: boolean }[];
+  assert.deepEqual(history.map((entry) => [entry.revision, entry.needsApproval]), [[1, true]]);
 
   for (const revision of [0, -1, 1.5, "1", undefined, Number.MAX_SAFE_INTEGER + 1]) {
     await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.restore, "ws1", "art1", revision), /Invalid revision/u);
@@ -97,7 +97,7 @@ test("earlier versions are listed newest first and a restore from the renderer n
   assert.equal(events.length, 0);
 
   // Extra arguments cannot smuggle in an approval.
-  const restored = (await invoke(WORKSPACE_ARTIFACT_CHANNELS.restore, "ws1", "art1", 1, { approved: true })) as { revision: number; approvedDigest?: string };
+  const restored = (await invoke(WORKSPACE_ARTIFACT_CHANNELS.restore, "ws1", "art1", 1, { approvedDigest: workspaceArtifactDigest(current.sources, current.actions) })) as { revision: number; approvedDigest?: string };
   assert.equal(restored.revision, 3);
   assert.equal(restored.approvedDigest, undefined);
   assert.deepEqual(events, [{ workspaceId: "ws1", artifactId: "art1", reason: "updated" }]);

@@ -129,7 +129,7 @@ test("under Ask, a page whose commands were never allowed asks nothing and refus
   const { call, card, notes, store } = await setup(t, "ask");
   // New commands saved without the person allowing them.
   const view = (await store.get("ws1", "art1"))!;
-  await store.replace("ws1", "art1", { ...view.artifact, title: view.artifact.visual.title, actions: [{ ...NOTE, label: "Add" }] }, { approved: false });
+  await store.replace("ws1", "art1", { ...view.artifact, title: view.artifact.visual.title, actions: [{ ...NOTE, label: "Add" }] });
   assert.deepEqual(await card(RUN), { required: false });
   await assert.rejects(call("c1", RUN), /not allowed this page's commands/u);
   assert.equal(await notes(), "first\n");
