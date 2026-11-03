@@ -393,6 +393,14 @@ function ArtifactCommandList({ commands }: { commands: readonly { label: string;
  * Re-reads the page's sources when it is shown, when the person asks, and on
  * its interval while visible. Only pages allowed to run do.
  */
+/**
+ * When saved data was read, if it was read for this revision of the page.
+ * After a restore or a change it belongs to another version and isn't fresh.
+ */
+function freshAt(snapshot: WorkspaceArtifactView["snapshot"], revision: number): number | undefined {
+  return snapshot?.revision === revision ? snapshot.refreshedAt : undefined;
+}
+
 function useArtifactRefresh(workspace: Workspace, view: WorkspaceArtifactView, active: boolean) {
   const [refreshing, setRefreshing] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -418,10 +426,10 @@ function useArtifactRefresh(workspace: Workspace, view: WorkspaceArtifactView, a
     setError(null);
     setRefreshing(false);
   }, [artifactId]);
-  const refreshedAtRef = React.useRef(view.snapshot?.refreshedAt);
+  const refreshedAtRef = React.useRef(freshAt(view.snapshot, view.artifact.revision));
   React.useLayoutEffect(() => {
-    refreshedAtRef.current = view.snapshot?.refreshedAt;
-  }, [view.snapshot?.refreshedAt]);
+    refreshedAtRef.current = freshAt(view.snapshot, view.artifact.revision);
+  }, [view.snapshot, view.artifact.revision]);
   const onOpen = view.artifact.refresh.onOpen;
   const approved = view.artifact.approvedDigest === view.digest;
   const approvedRef = React.useRef({ artifactId, approved });
@@ -453,9 +461,11 @@ function useArtifactRefresh(workspace: Workspace, view: WorkspaceArtifactView, a
       setAwaiting(null);
       return;
     }
-    if (revision < awaiting.revision) return;
+    // Wait until the tab is shown again: refreshing then is what replaces the
+    // older version's data.
+    if (revision < awaiting.revision || !active) return;
     setAwaiting(null);
-    if (active) void refresh();
+    void refresh();
   }, [active, artifactId, awaiting, refresh, revision]);
   // Named by the restored page, which may no longer be the one shown when the restore finishes.
   const refreshAtRevision = React.useCallback(

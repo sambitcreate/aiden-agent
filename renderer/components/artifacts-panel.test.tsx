@@ -47,6 +47,8 @@ function view(
     refreshedAt?: number;
     intervalSeconds?: number;
     revision?: number;
+    /** The page revision the saved data was read for; defaults to the page's own. */
+    snapshotRevision?: number;
   } = {},
 ): WorkspaceArtifactView {
   const compiled = compileAum(
@@ -81,7 +83,7 @@ function view(
       updatedAt: 1,
     },
     ...(options.pulls !== undefined
-      ? { snapshot: { revision: 1, refreshedAt: options.refreshedAt ?? Date.now(), sources: { pulls: { status: "ok" as const, at: 1, dataJson: JSON.stringify(options.pulls) } } } }
+      ? { snapshot: { revision: options.snapshotRevision ?? options.revision ?? 1, refreshedAt: options.refreshedAt ?? Date.now(), sources: { pulls: { status: "ok" as const, at: 1, dataJson: JSON.stringify(options.pulls) } } } }
       : {}),
   };
 }
@@ -226,8 +228,36 @@ test("earlier versions are listed newest first, and restoring one re-reads the p
   assert.equal(screen.queryByRole("dialog"), null);
   assert.deepEqual(calls.find((call) => call.channel === "workspaces:artifacts:restore")!.args, [WORKSPACE.id, "art1", 1]);
   assert.equal(refreshes(), 0);
-  // The restored version arrives through the change notification's reload.
+  // The restored version arrives through the change notification's reload,
+  // still carrying the data read for the version it replaced.
   rerender(panel(4));
+  await waitFor(() => assert.equal(refreshes(), 1));
+});
+
+test("a restored page shown again re-reads its sources, however recently the replaced version was read", async () => {
+  const calls = installBotTestIpc({ "workspaces:artifacts:refresh": () => ({}) });
+  const refreshes = () => calls.filter((call) => call.channel === "workspaces:artifacts:refresh").length;
+  const panel = (active: boolean, revision: number, snapshotRevision: number) => (
+    <TooltipProvider>
+      <ArtifactsPanel
+        workspace={WORKSPACE}
+        active={active}
+        selectedId={null}
+        onSelect={() => undefined}
+        onAskAiden={() => undefined}
+        artifacts={state([view("art1", "Open PRs", { approved: true, pulls: [], revision, snapshotRevision })])}
+      />
+    </TooltipProvider>
+  );
+  // Data read a moment ago for this revision is fresh: opening the tab doesn't re-read it.
+  const { rerender } = render(panel(true, 3, 3));
+  await settle();
+  assert.equal(refreshes(), 0);
+  // While the tab is hidden the page is restored as revision 4; its saved data is still revision 3's.
+  rerender(panel(false, 4, 3));
+  await settle();
+  assert.equal(refreshes(), 0);
+  rerender(panel(true, 4, 3));
   await waitFor(() => assert.equal(refreshes(), 1));
 });
 
