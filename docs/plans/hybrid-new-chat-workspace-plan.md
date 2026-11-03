@@ -377,3 +377,7 @@ Each phase is its own PR off `main` and runs its narrow suites before review.
 - Cloud execution.
 - Automatic setup scripts (still open in the managed-worktree plan).
 - Drag-and-drop of folders.
+
+## Saved chat identity
+
+Desktop drafts keep their UUID through first send, reopening and interrupted approval recovery. A saved chat can still appear in the Inbox when an approval ends its snooze. Reading a saved chat or its provisional recovery marker requires an exact match to the requested chat ID.
