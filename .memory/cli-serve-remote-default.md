@@ -22,3 +22,7 @@
 - `service uninstall` stops and removes the unit first (`uninstallService`; a failed stop throws and leaves the route alone), then calls `releaseTailscaleRoute`: daemon `remote tailscale-disconnect` when the server answers; when it is stopped or does not answer (`unanswered`), it reads `tailscaleOwnership` from `<agentDir>/remote.json` and disconnects through `AidenRemoteTailscaleController` directly (ownership-checked, clears the saved ownership), skipping when a `tailscalePendingOutcome` is saved.
 - `cli-runtime.ts` now exits with `process.exitCode` after a dispatched command.
 - Tests: `packages/cli/tests/reachability.test.mjs`. In the cloud container, `remote check` correctly reports a cloud server.
+
+## Service profile identity
+
+The login service is per OS user, not per AIDEN_CODING_AGENT_DIR profile. Service mutation is serialized at the account's service boundary. Before uninstall, the manager's loaded profile is identified and rechecked; cleanup uses that installed profile, and unknown or ambiguous identity leaves the service and route alone. Linux rejects unresolved environment files/unsets and checks the running process against the loaded profile; macOS uses the loaded launchd job's environment. A confirmed absent manager job may use a recognizable installed service file. Uninstall stops before attempting route release.

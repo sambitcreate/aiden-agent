@@ -93,6 +93,8 @@ The suggested answer is Tailscale only on a cloud server (where phones can't rea
 
 The service runs the built `dist/app/cli.js` of this checkout with the current Node, `PATH` and agent directory, so run `aiden service install` again after moving the checkout or changing Node. A server already started with `aiden serve` or `--daemon` is stopped first, so the service can take it over. If the install fails, a service that was already installed is put back, a first install whose server never starts is removed, and a server it stopped is named with the command to start it again. When the chosen network can't be set up, the install says which network really reaches the server (Tailscale counts only while its route is connected), or that none does yet.
 
+The login service is shared by this OS user, even when different `AIDEN_CODING_AGENT_DIR` profiles are used. Uninstall identifies the installed service's profile and removes only that profile's owned route, regardless of the profile used to invoke the command. If the service manager or its effective profile cannot be identified, the command leaves the service and route in place. On Linux, service definitions that use environment files or unset environment variables need to be simplified before Aiden can safely identify the profile. Install and uninstall operations for this user's service are serialized.
+
 | Command | What it does |
 | --- | --- |
 | `aiden service install [--network local\|tailscale\|both] [--no-pair]` | Install (or reinstall) and start the service |
