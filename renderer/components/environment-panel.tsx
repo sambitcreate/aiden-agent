@@ -180,6 +180,8 @@ export interface EnvironmentPanelContextValue {
    * last page is deleted or the workspace changes.
    */
   artifacts: WorkspaceArtifactsState;
+  /** The Artifacts tab is offered (launcher, ⌘K): the active workspace's list has loaded. */
+  artifactsOffered: boolean;
   selectedArtifactId: string | null;
   selectArtifact: (artifactId: string) => void;
   reviewMode: EnvironmentReviewMode;
@@ -644,14 +646,23 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     showToolsRef.current("artifacts");
   }, []);
   const artifacts = useWorkspaceArtifacts(activeId ?? null, onArtifactsChanged);
+  // The launcher and ⌘K offer the tab once this workspace's list has loaded, pages or not.
+  const artifactsOffered = artifacts.loaded && artifacts.workspaceId !== null && artifacts.workspaceId === activeId;
   const artifactsSeenRef = React.useRef<{ workspaceId: string | null; count: number } | null>(null);
   const artifactsTabOpen = (surfaceState.openTabs ?? [surfaceState.toolsTab]).includes("artifacts");
   React.useEffect(() => {
     // Wait for a workspace and a list that actually loaded: a restored tab must
     // survive startup, and a failed read is not an empty workspace.
     if (artifacts.workspaceId === null || artifacts.workspaceId !== activeId) return;
-    if (!artifacts.loaded || artifacts.error) return;
+    if (!artifacts.loaded) return;
     const previous = artifactsSeenRef.current;
+    if (artifacts.error) {
+      // Remember the workspace, so a tab opened on the failure isn't taken as
+      // a workspace switch when Try again then finds no pages.
+      const sameWorkspace = previous?.workspaceId === artifacts.workspaceId;
+      artifactsSeenRef.current = { workspaceId: artifacts.workspaceId, count: sameWorkspace ? previous.count : 0 };
+      return;
+    }
     const count = artifacts.views.length;
     artifactsSeenRef.current = { workspaceId: artifacts.workspaceId, count };
     // The tab closes when the last page is deleted, or on a workspace that has
@@ -1141,6 +1152,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagentsEnabled,
       devicesEnabled,
       artifacts,
+      artifactsOffered,
       selectedArtifactId,
       selectArtifact: setSelectedArtifactId,
       reviewMode,
@@ -1247,6 +1259,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagentsEnabled,
       devicesEnabled,
       artifacts,
+      artifactsOffered,
       selectedArtifactId,
       surfaceMode,
       surfaceState.frontSurface,
@@ -1467,7 +1480,7 @@ function EnvironmentPanelSurface({
   const newPageChatId = active && panel.activeChat.workspaceId === active.id ? panel.activeChat.chatId : null;
   const viewBodies: Record<EnvironmentPanelTab, () => React.ReactNode> = {
     "new-tab": () => (
-      <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} artifacts={Boolean(active) && panel.artifacts.workspaceId === active?.id && panel.artifacts.loaded} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
+      <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} artifacts={panel.artifactsOffered} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
     ),
     context: () => <ChatContextPanel details={panel.contextDetails} />,
     artifacts: () => (
@@ -1479,7 +1492,7 @@ function EnvironmentPanelSurface({
         onSelect={panel.selectArtifact}
         onAskAiden={(view) => {
           const chatId = artifactChat(view);
-          if (chatId) stageComposerText(chatId, workspaceArtifactChangeRequest(view));
+          if (chatId) stageComposerText(chatId, workspaceArtifactChangeRequest(view), { notice: null });
         }}
         onAction={(view, action) => {
           if (action.kind !== "send" && action.kind !== "compose") return;
@@ -1490,7 +1503,7 @@ function EnvironmentPanelSurface({
         }}
         onDraftNewPage={(request) => {
           // Only ever staged: the person reads the request and sends it.
-          if (newPageChatId) stageComposerText(newPageChatId, request);
+          if (newPageChatId) stageComposerText(newPageChatId, request, { notice: null });
         }}
         newPageUnavailable={newPageChatId ? null : "Open a chat in this workspace first, then draft the page there."}
       />

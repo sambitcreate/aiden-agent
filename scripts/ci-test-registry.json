@@ -1275,6 +1275,7 @@
         "renderer/shared/workspace-artifacts.test.ts",
         "renderer/components/artifacts-panel.test.tsx",
         "renderer/lib/chat-prompt-bridge.test.ts",
+        "renderer/lib/workspace-artifacts-view.test.ts",
         "renderer/shared/web-extract.test.ts",
         "renderer/shared/web-fetch-settings.test.ts",
         "renderer/components/settings/web-page-settings.test.tsx",

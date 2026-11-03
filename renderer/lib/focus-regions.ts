@@ -61,10 +61,10 @@ export function focusRegionEntry(region: FocusRegion, root: ParentNode = documen
 
 /** Move focus into `region`. False when the page has no such area or it holds nothing to focus. */
 export function focusRegion(region: FocusRegion, root: ParentNode = document): boolean {
-  const element = focusRegionElement(region, root);
-  const entry = element ? regionEntry(element) : null;
+  const entry = focusRegionEntry(region, root);
   if (!entry) return false;
-  entry.focus({ preventScroll: entry === element });
+  // The area itself as its entry keeps its scroll; an inner control scrolls into view.
+  entry.focus({ preventScroll: entry.hasAttribute("data-focus-region") });
   const doc = (root as Node).nodeType === Node.DOCUMENT_NODE ? (root as Document) : null;
   return doc ? doc.activeElement === entry : true;
 }

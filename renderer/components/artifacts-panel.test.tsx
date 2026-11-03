@@ -6,7 +6,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createBotTestQueryClient } from "../main/bots/test-providers";
 import { ArtifactsPanel } from "./artifacts-panel";
-import { EnvironmentPanelProvider, useEnvironmentPanel } from "./environment-panel";
+import { EnvironmentPanelProvider, EnvironmentWorkbench, useEnvironmentPanel } from "./environment-panel";
+import { subscribeStagedComposerText } from "../lib/composer-draft-store";
 import { WorkspaceTerminalProvider } from "./terminal-drawer";
 import { WorkspaceToolLauncher } from "./workspace-tool-launcher";
 import { Toaster, TooltipProvider } from "./ui";
@@ -325,33 +326,57 @@ test("a restore that finishes after another page is shown leaves that page's dia
 test("Ask Aiden to change this hands the page to the chat", async () => {
   installBotTestIpc();
   const asked: string[] = [];
-  renderPanel({ artifacts: state([view("art1", "Open PRs", { approved: true })]), onAskAiden: (entry) => asked.push(entry.artifact.id) });
+  const { unmount } = render(
+    <TooltipProvider>
+      <ArtifactsPanel
+        workspace={WORKSPACE}
+        active
+        selectedId={null}
+        onSelect={() => undefined}
+        onAskAiden={(entry) => asked.push(entry.artifact.id)}
+        artifacts={state([view("art1", "Open PRs", { approved: true })])}
+      />
+      <div data-focus-region="composer">
+        <textarea aria-label="Message" data-focus-region-entry />
+      </div>
+    </TooltipProvider>,
+  );
   fireEvent.pointerDown(screen.getByRole("button", { name: "Actions for Open PRs" }), { button: 0, pointerType: "mouse" });
   fireEvent.click(await screen.findByRole("menuitem", { name: /Ask Aiden/u }));
+  await settle();
   assert.deepEqual(asked, ["art1"]);
+  // Focus follows the request to the message box.
+  assert.equal(document.activeElement, screen.getByRole("textbox", { name: "Message" }));
+  unmount();
+
+  // With no message box on screen, focus stays on the menu's button.
+  renderPanel({ artifacts: state([view("art1", "Open PRs", { approved: true })]), onAskAiden: (entry) => asked.push(entry.artifact.id) });
+  const trigger = screen.getByRole("button", { name: "Actions for Open PRs" });
+  fireEvent.pointerDown(trigger, { button: 0, pointerType: "mouse" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Ask Aiden/u }));
+  await settle();
+  assert.deepEqual(asked, ["art1", "art1"]);
+  assert.equal(document.activeElement, trigger);
 });
 
-async function openNewPageFromEmptyState() {
+async function openNewPage() {
   fireEvent.click(screen.getByRole("button", { name: /New page/u }));
-  return screen.findByRole("dialog", { name: "New artifact page" });
+  return screen.findByRole("dialog", { name: "New page" });
 }
 
-test("an empty workspace offers New page, and its suggestions fill the field", async () => {
+test("an empty workspace offers New page, and a suggestion fills the field with words that fit the request", async () => {
   const calls = installBotTestIpc();
   const drafted: string[] = [];
   renderPanel({ artifacts: state([]), onDraftNewPage: (request) => drafted.push(request) });
   screen.getByText("No artifacts yet");
-  const dialog = await openNewPageFromEmptyState();
+  const dialog = await openNewPage();
   const field = within(dialog).getByLabelText("What should it show?") as HTMLInputElement;
   const suggestions = within(dialog).getByRole("group", { name: "Suggestions" });
-  assert.deepEqual(
-    within(suggestions).getAllByRole("button").map((chip) => chip.textContent),
-    ["Open pull requests", "CI status on main", "TODO board from TODO.md", "Release checklist"],
-  );
-  fireEvent.click(within(suggestions).getByRole("button", { name: "CI status on main" }));
+  fireEvent.click(within(suggestions).getByRole("button", { name: "Use: CI status on main" }));
   assert.equal(field.value, "CI status on main");
-  fireEvent.click(within(suggestions).getByRole("button", { name: "Release checklist" }));
-  assert.equal(field.value, "Release checklist");
+  fireEvent.click(within(suggestions).getByRole("button", { name: "Use: Release checklist" }));
+  assert.equal(field.value, "a release checklist");
+  assert.equal(document.activeElement, field);
   // Choosing an idea only fills the field; nothing is drafted or sent yet.
   assert.deepEqual(drafted, []);
   assert.deepEqual(calls, []);
@@ -361,7 +386,7 @@ test("Draft in chat stays off until the field says what to show", async () => {
   installBotTestIpc();
   const drafted: string[] = [];
   renderPanel({ artifacts: state([]), onDraftNewPage: (request) => drafted.push(request) });
-  const dialog = await openNewPageFromEmptyState();
+  const dialog = await openNewPage();
   const confirm = within(dialog).getByRole("button", { name: "Draft in chat" }) as HTMLButtonElement;
   assert.equal(confirm.disabled, true);
   const field = within(dialog).getByLabelText("What should it show?");
@@ -371,7 +396,7 @@ test("Draft in chat stays off until the field says what to show", async () => {
   fireEvent.keyDown(field, { key: "Enter" });
   await settle();
   assert.deepEqual(drafted, []);
-  screen.getByRole("dialog", { name: "New artifact page" });
+  screen.getByRole("dialog", { name: "New page" });
 });
 
 test("Draft in chat hands the request to the chat's message box, closes, and moves focus there without sending", async () => {
@@ -395,74 +420,88 @@ test("Draft in chat hands the request to the chat's message box, closes, and mov
       </div>
     </TooltipProvider>,
   );
-  const dialog = await openNewPageFromEmptyState();
-  fireEvent.click(within(within(dialog).getByRole("group", { name: "Suggestions" })).getByRole("button", { name: "Open pull requests" }));
+  const dialog = await openNewPage();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Use: Open pull requests" }));
   fireEvent.click(within(dialog).getByRole("button", { name: "Draft in chat" }));
   await settle();
   assert.equal(screen.queryByRole("dialog"), null);
-  assert.deepEqual(drafted, ["Make a workspace artifact page that shows open pull requests."]);
+  assert.deepEqual(drafted, ["Make a workspace artifact page that shows this repository's open pull requests."]);
   assert.equal(document.activeElement, screen.getByRole("textbox", { name: "Message" }));
   // Staging is the only hand-off: no follow-up is sent and nothing reaches the main process.
   assert.deepEqual(actions, []);
   assert.deepEqual(calls, []);
 });
 
-test("typed text keeps its own capitals, and Enter drafts it", async () => {
+test("Enter drafts the person's words as typed, and a closed dialog reopens empty", async () => {
   installBotTestIpc();
   const drafted: string[] = [];
   renderPanel({ artifacts: state([]), onDraftNewPage: (request) => drafted.push(request) });
-  const dialog = await openNewPageFromEmptyState();
-  const field = within(dialog).getByLabelText("What should it show?");
-  fireEvent.change(field, { target: { value: "  CI runs on main for the last day.  " } });
+  let dialog = await openNewPage();
+  let field = within(dialog).getByLabelText("What should it show?");
+  fireEvent.change(field, { target: { value: "  GitHub issues labelled bug  " } });
   fireEvent.keyDown(field, { key: "Enter" });
   await settle();
-  assert.deepEqual(drafted, ["Make a workspace artifact page that shows CI runs on main for the last day."]);
+  assert.deepEqual(drafted, ["Make a workspace artifact page that shows GitHub issues labelled bug."]);
   assert.equal(screen.queryByRole("dialog"), null);
+
+  dialog = await openNewPage();
+  field = within(dialog).getByLabelText("What should it show?");
+  fireEvent.change(field, { target: { value: "half-typed" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await settle();
+  dialog = await openNewPage();
+  assert.equal((within(dialog).getByLabelText("What should it show?") as HTMLInputElement).value, "");
 });
 
 test("without a chat in this workspace, New page says why and drafts nothing", async () => {
   installBotTestIpc();
   const drafted: string[] = [];
-  renderPanel({
-    artifacts: state([]),
-    onDraftNewPage: (request) => drafted.push(request),
-    newPageUnavailable: "Open a chat in this workspace first, then draft the page there.",
-  });
-  const dialog = await openNewPageFromEmptyState();
+  const reason = "Open a chat in this workspace first, then draft the page there.";
+  renderPanel({ artifacts: state([]), onDraftNewPage: (request) => drafted.push(request), newPageUnavailable: reason });
+  const dialog = await openNewPage();
   const field = within(dialog).getByLabelText("What should it show?");
-  fireEvent.change(field, { target: { value: "Open pull requests" } });
-  assert.equal((within(dialog).getByRole("button", { name: "Draft in chat" }) as HTMLButtonElement).disabled, true);
-  within(dialog).getByText("Open a chat in this workspace first, then draft the page there.");
+  fireEvent.change(field, { target: { value: "open pull requests" } });
+  const confirm = within(dialog).getByRole("button", { name: "Draft in chat" }) as HTMLButtonElement;
+  assert.equal(confirm.disabled, true);
+  // The reason is the dialog's description, and the button points to it.
+  assert.equal(document.getElementById(confirm.getAttribute("aria-describedby") ?? "")?.textContent, reason);
+  assert.equal(screen.queryByText(/adds the request to your chat/u), null);
   fireEvent.keyDown(field, { key: "Enter" });
   await settle();
   assert.deepEqual(drafted, []);
 });
 
-test("New page leads the page menu and drafts a second page", async () => {
+test("with pages, New page sits beside the page title, not in the page's menu, and focus returns to it on cancel", async () => {
   installBotTestIpc();
   const drafted: string[] = [];
   renderPanel({ artifacts: state([view("art1", "Open PRs", { approved: true })]), onDraftNewPage: (request) => drafted.push(request) });
   fireEvent.pointerDown(screen.getByRole("button", { name: "Actions for Open PRs" }), { button: 0, pointerType: "mouse" });
-  const items = await screen.findAllByRole("menuitem");
-  assert.match(items[0]!.textContent ?? "", /New page/u);
-  fireEvent.click(items[0]!);
-  const dialog = await screen.findByRole("dialog", { name: "New artifact page" });
-  fireEvent.change(within(dialog).getByLabelText("What should it show?"), { target: { value: "TODO board from TODO.md" } });
+  await screen.findByRole("menuitem", { name: /Ask Aiden/u });
+  assert.equal(screen.queryByRole("menuitem", { name: /New page/u }), null);
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+  await settle();
+
+  const opener = screen.getByRole("button", { name: "New page…" });
+  let dialog = await openNewPage();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await settle();
+  assert.equal(document.activeElement, opener);
+
+  dialog = await openNewPage();
+  fireEvent.change(within(dialog).getByLabelText("What should it show?"), { target: { value: "a TODO board from TODO.md" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Draft in chat" }));
   await settle();
-  assert.deepEqual(drafted, ["Make a workspace artifact page that shows TODO board from TODO.md."]);
+  assert.deepEqual(drafted, ["Make a workspace artifact page that shows a TODO board from TODO.md."]);
   assert.equal(screen.queryByRole("dialog"), null);
 });
 
-test("a host that can't draft into a chat offers no New page", async () => {
+test("a host that can't draft into a chat offers no New page", () => {
   installBotTestIpc();
   const { unmount } = renderPanel({ artifacts: state([]) });
   assert.equal(screen.queryByRole("button", { name: /New page/u }), null);
   unmount();
   renderPanel({ artifacts: state([view("art1", "Open PRs", { approved: true })]) });
-  fireEvent.pointerDown(screen.getByRole("button", { name: "Actions for Open PRs" }), { button: 0, pointerType: "mouse" });
-  await screen.findByRole("menuitem", { name: /Ask Aiden/u });
-  assert.equal(screen.queryByRole("menuitem", { name: /New page/u }), null);
+  assert.equal(screen.queryByRole("button", { name: /New page/u }), null);
 });
 
 test("a list from another workspace is never shown for this one", () => {
@@ -494,18 +533,30 @@ function PanelProbe({ chatId }: { chatId: string }) {
   return (
     <>
       <output data-testid="probe">
-        {JSON.stringify({ open: panel.toolsOpen, tab: panel.tab, tabs: panel.openTabs, selected: panel.selectedArtifactId, loaded: panel.artifacts.loaded })}
+        {JSON.stringify({ open: panel.toolsOpen, tab: panel.tab, tabs: panel.openTabs, selected: panel.selectedArtifactId, loaded: panel.artifacts.loaded, workspaceId: panel.artifacts.workspaceId, error: panel.artifacts.error })}
       </output>
       {/* What the launcher's Artifacts entry does. */}
       <button type="button" onClick={() => panel.setTab("artifacts")}>
         Open Artifacts
+      </button>
+      {/* What the tab's Try again does. */}
+      <button type="button" onClick={() => panel.artifacts.reload()}>
+        Reload artifacts
       </button>
     </>
   );
 }
 
 function probe() {
-  return JSON.parse(screen.getByTestId("probe").textContent ?? "{}") as { open: boolean; tab: string; tabs: string[]; selected: string | null; loaded: boolean };
+  return JSON.parse(screen.getByTestId("probe").textContent ?? "{}") as {
+    open: boolean;
+    tab: string;
+    tabs: string[];
+    selected: string | null;
+    loaded: boolean;
+    workspaceId: string | null;
+    error: string | null;
+  };
 }
 
 test("a page made in this chat opens beside it, and the tab goes away with the last page", async () => {
@@ -712,17 +763,109 @@ test("a failed read leaves the tab open instead of treating the workspace as emp
   assert.ok(probe().tabs.includes("artifacts"));
 });
 
+function WiredChat({ chatId, workspaceId }: { chatId: string; workspaceId: string }) {
+  const panel = useEnvironmentPanel();
+  React.useEffect(() => panel.setActiveChat(chatId, workspaceId), [chatId, workspaceId, panel.setActiveChat]);
+  return (
+    <button type="button" onClick={() => panel.showTools("new-tab")}>
+      Open tools
+    </button>
+  );
+}
+
+function renderWiredPanel(chat: { chatId: string; workspaceId: string }) {
+  const client = createBotTestQueryClient();
+  const tree = (props: { chatId: string; workspaceId: string }) => (
+    <QueryClientProvider client={client}>
+      <TooltipProvider>
+        <CommandSystemProvider>
+          <WorkspaceProvider>
+            <WorkspaceTerminalProvider>
+              <EnvironmentPanelProvider>
+                <EnvironmentWorkbench>
+                  <WiredChat {...props} />
+                </EnvironmentWorkbench>
+              </EnvironmentPanelProvider>
+            </WorkspaceTerminalProvider>
+          </WorkspaceProvider>
+        </CommandSystemProvider>
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+  const result = render(tree(chat));
+  return { rerender: (next: { chatId: string; workspaceId: string }) => result.rerender(tree(next)) };
+}
+
+test("in the real panel, an empty workspace's Artifacts tab drafts New page into this workspace's chat", async () => {
+  installBotTestIpc({
+    "settings:get": () => null,
+    "shortcut:get": () => null,
+    "browser:link-preference": () => "ask",
+    "workspaces:list": () => [WORKSPACE],
+    "workspaces:artifacts:list": () => [],
+  });
+  const staged: { text: string; notice: string | null | undefined }[] = [];
+  const unsubscribe = subscribeStagedComposerText("chat-1", (text, options) => staged.push({ text, notice: options.notice }));
+  try {
+    let wired!: ReturnType<typeof renderWiredPanel>;
+    await act(async () => {
+      wired = renderWiredPanel({ chatId: "chat-1", workspaceId: WORKSPACE.id });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open tools" }));
+    // The launcher offers Artifacts once the empty list has loaded.
+    fireEvent.click(await screen.findByRole("button", { name: /^Artifacts/u }));
+    await screen.findByText("No artifacts yet");
+    let dialog = await openNewPage();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Use: CI status on main" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Draft in chat" }));
+    await settle();
+    assert.deepEqual(staged, [{ text: "Make a workspace artifact page that shows CI status on main.", notice: null }]);
+
+    // The chat beside the tab now belongs to another workspace: nothing to draft into.
+    await act(async () => wired.rerender({ chatId: "chat-9", workspaceId: "ws-other" }));
+    dialog = await openNewPage();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Use: CI status on main" }));
+    const confirm = within(dialog).getByRole("button", { name: "Draft in chat" }) as HTMLButtonElement;
+    assert.equal(confirm.disabled, true);
+    within(dialog).getByText(/Open a chat in this workspace first/u);
+    assert.equal(staged.length, 1);
+  } finally {
+    unsubscribe();
+  }
+});
+
 test("opened on a workspace with no pages, the Artifacts tab stays to offer New page", async () => {
   installBotTestIpc({
     "workspaces:list": () => [WORKSPACE],
     "workspaces:artifacts:list": () => [],
   });
   await mountProvider();
-  await waitFor(() => assert.equal(probe().loaded, true));
+  await waitFor(() => assert.deepEqual({ loaded: probe().loaded, workspaceId: probe().workspaceId }, { loaded: true, workspaceId: WORKSPACE.id }));
   fireEvent.click(screen.getByRole("button", { name: "Open Artifacts" }));
   await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
   assert.deepEqual({ open: probe().open, tab: probe().tab }, { open: true, tab: "artifacts" });
   assert.ok(probe().tabs.includes("artifacts"));
+});
+
+test("a tab opened while the list failed stays when Try again finds no pages", async () => {
+  let fail = true;
+  installBotTestIpc({
+    "workspaces:list": () => [WORKSPACE],
+    "workspaces:artifacts:list": () => {
+      if (fail) throw new Error("disk busy");
+      return [];
+    },
+  });
+  await mountProvider();
+  await waitFor(() => assert.deepEqual({ loaded: probe().loaded, workspaceId: probe().workspaceId }, { loaded: true, workspaceId: WORKSPACE.id }));
+  fireEvent.click(screen.getByRole("button", { name: "Open Artifacts" }));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+  assert.ok(probe().tabs.includes("artifacts"));
+  fail = false;
+  fireEvent.click(screen.getByRole("button", { name: "Reload artifacts" }));
+  await waitFor(() => assert.equal(probe().error, null));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+  assert.deepEqual({ tab: probe().tab, tabs: probe().tabs.includes("artifacts") }, { tab: "artifacts", tabs: true });
 });
 
 const MERGE: WorkspaceArtifactActionV1 = { name: "merge", label: "Merge pull request", command: "gh pr merge {{number}} --squash", params: [{ name: "number", type: "number" }] };

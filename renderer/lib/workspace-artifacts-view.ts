@@ -109,14 +109,26 @@ export function workspaceArtifactChangeRequest(view: WorkspaceArtifactView): str
   return `Update the "${view.artifact.visual.title}" artifact (id ${view.artifact.id}): `;
 }
 
+/** A New page suggestion: the chip's label, and the words it puts in the field. */
+export interface WorkspaceArtifactPageIdea {
+  label: string;
+  subject: string;
+}
+
+/** Ideas the New page dialog offers. Each subject reads naturally after "shows". */
+export const WORKSPACE_ARTIFACT_PAGE_IDEAS: readonly WorkspaceArtifactPageIdea[] = [
+  { label: "Open pull requests", subject: "this repository's open pull requests" },
+  { label: "CI status on main", subject: "CI status on main" },
+  { label: "TODO board from TODO.md", subject: "a TODO board from TODO.md" },
+  { label: "Release checklist", subject: "a release checklist" },
+];
+
 /**
  * The chat request a New page dialog drafts from what the person wants the
- * page to show. Empty when there is nothing to ask for.
+ * page to show, in their own words. Empty when there is nothing to ask for.
  */
 export function workspaceArtifactNewPageRequest(subject: string): string {
-  const trimmed = subject.trim().replace(/[.\s]+$/u, "");
-  if (!trimmed) return "";
-  // "Open pull requests" reads as "shows open pull requests"; "CI status" keeps its capitals.
-  const lowered = /^\p{Lu}\p{Ll}/u.test(trimmed) ? trimmed[0]!.toLowerCase() + trimmed.slice(1) : trimmed;
-  return `Make a workspace artifact page that shows ${lowered}.`;
+  const words = subject.trim();
+  if (!words) return "";
+  return `Make a workspace artifact page that shows ${words}${/[.?!]$/u.test(words) ? "" : "."}`;
 }

@@ -9,7 +9,9 @@ They are a desktop feature on macOS and Linux. The CLI, Bots, Telegram and the i
 There are two ways to start a page, and both end in the chat:
 
 - Ask in any chat in a workspace, for example "make me an artifact that shows the open PRs for this repo".
-- Choose **New page…** in the Artifacts tab: the button on its empty state, or the first item in the page menu. Say what the page should show, or pick one of the suggestions (open pull requests, CI status on main, a TODO board from `TODO.md`, a release checklist), and choose **Draft in chat**. Aiden puts a request such as "Make a workspace artifact page that shows open pull requests." in the message box of the chat beside the tab and moves focus there. It never sends it: read it, change it if you like, and send it yourself. With no chat open in the workspace, Draft in chat is off and says to open one first.
+- Choose **New page…** in the Artifacts tab: the button on its empty state, or the **+** beside the page title once there are pages. Say what the page should show, in your own words, or pick one of the suggestions (open pull requests, CI status on main, a TODO board from `TODO.md`, a release checklist), and choose **Draft in chat**. The request, such as "Make a workspace artifact page that shows this repository's open pull requests.", is added to the message box of the chat beside the tab, and focus moves there. It is never sent for you: read it, change it if you like, and send it yourself. With no chat from this workspace open beside the tab, Draft in chat is off and the dialog says to open one first.
+
+In a workspace without a folder, or with workspace access set to **No access**, a page can't read files or run commands: Aiden can only make pages whose data it writes into the page itself. Pages like the open pull requests or CI status need a folder with access turned on.
 
 The Artifacts tab never builds a page itself. Aiden uses the built-in **aiden-artifacts** skill and the `workspace_artifact` tool. It lists the workspace's pages first, so it updates an existing page rather than making a near-duplicate. The Artifacts tab opens on the new page beside the chat that made it.
 
@@ -68,7 +70,7 @@ Changing a workspace's access cancels any refresh or button already running. Com
 
 ## Managing pages
 
-The page header has a switcher between pages, the time of the last refresh, **Refresh**, and a menu with **New page…**, **Ask Aiden to change this**, **Rename**, **Earlier versions** and **Delete**. Delete asks for confirmation first. Aiden deletes a page only when the person asks, and its delete always shows an approval card.
+The page header has a switcher between pages, **New page…** (the **+**), the time of the last refresh, **Refresh**, and a menu with **Ask Aiden to change this**, **Rename**, **Earlier versions** and **Delete**. Delete asks for confirmation first. Aiden deletes a page only when the person asks, and its delete always shows an approval card.
 
 Pages and their saved data are stored on the device under Aiden's user data folder (`workspace-artifacts/`), not in the repository, and they are not part of portable settings. Removing a workspace removes its pages.
 
