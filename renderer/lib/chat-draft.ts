@@ -1,3 +1,4 @@
+import { newChatUuid } from "../shared/chat-identity";
 import type { Chat } from "./types";
 import {
   readChatDraftGitMemory,
@@ -83,7 +84,7 @@ export function listChatDrafts(): readonly ChatDraft[] {
 
 export function createChatDraft(
   workspaceId: string,
-  id: string = crypto.randomUUID(),
+  id: string = newChatUuid(() => crypto.randomUUID()),
   initialText?: string,
   options: { gitMode?: ChatDraftGitMode } = {},
 ): ChatDraft {
