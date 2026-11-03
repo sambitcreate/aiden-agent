@@ -154,15 +154,22 @@ struct AidenStreamNetworkRecovery {
     private(set) var policy = AidenStreamRecoveryPolicy()
     private let sleep: @MainActor (Int) async throws -> Void
     private let delayMilliseconds: (Int) -> Int
+    private let nowMilliseconds: @MainActor () -> Double
+    private static let clockOrigin = ContinuousClock.now
 
     init(
         path: AidenNetworkPathSource,
         sleep: @escaping @MainActor (Int) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
-        delayMilliseconds: @escaping (Int) -> Int = { AidenTerminalReconciliation.retryDelayMilliseconds(attempt: $0) }
+        delayMilliseconds: @escaping (Int) -> Int = { AidenTerminalReconciliation.retryDelayMilliseconds(attempt: $0) },
+        nowMilliseconds: @escaping @MainActor () -> Double = {
+            let elapsed = clockOrigin.duration(to: .now).components
+            return Double(elapsed.seconds) * 1_000 + Double(elapsed.attoseconds) / 1e15
+        }
     ) {
         self.path = path
         self.sleep = sleep
         self.delayMilliseconds = delayMilliseconds
+        self.nowMilliseconds = nowMilliseconds
     }
 
     mutating func recordHealthy() { policy.recordHealthy() }
@@ -194,9 +201,11 @@ struct AidenStreamNetworkRecovery {
         onBackoff: () async -> Void,
         onWaiting: (Bool) async -> Void
     ) async throws -> ProbeFailureOutcome {
+        let deadline = nowMilliseconds() + Double(max(0, minimumDelayMilliseconds))
         switch policy.afterProbeFailure(isNetworkAvailable: path.isNetworkAvailable) {
         case .waitForNetwork, .probeStatus:
             try await park(onWaiting: onWaiting)
+            try await waitForServerDeadline(deadline, onWaiting: onWaiting)
             return .networkReturned
         case .backoff(let attempt):
             await onBackoff()
@@ -206,8 +215,19 @@ struct AidenStreamNetworkRecovery {
             }
             policy.backoffInterruptedByNetworkLoss()
             try await park(onWaiting: onWaiting)
+            try await waitForServerDeadline(deadline, onWaiting: onWaiting)
             return .networkReturned
         }
+    }
+
+    private func waitForServerDeadline(_ deadline: Double, onWaiting: (Bool) async -> Void) async throws {
+        while true {
+            let remaining = Int(ceil(max(0, deadline - nowMilliseconds())))
+            if remaining == 0 { break }
+            if try await sleepUnlessNetworkLost(milliseconds: remaining) { break }
+            try await park(onWaiting: onWaiting)
+        }
+        if !path.isNetworkAvailable { try await park(onWaiting: onWaiting) }
     }
 
     private func park(onWaiting: (Bool) async -> Void) async throws {

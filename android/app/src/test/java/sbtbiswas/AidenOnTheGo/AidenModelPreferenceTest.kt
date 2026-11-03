@@ -400,7 +400,7 @@ class AidenModelPreferenceTest {
                     val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts,
                         scope = CoroutineScope(main + Job().apply { cancel() }))
                     coordinator.refreshClient()
-                    return AidenChatViewModel(chat.id, coordinator, cache, drafts, chat).also {
+                    return AidenChatViewModel(chat.id, coordinator, cache, drafts, chat, recoveryClock = { System.nanoTime() / 1_000_000 }).also {
                         viewModels.put(key, it)
                         withTimeout(5_000) { it.catalog.first { catalog -> catalog != null } }
                     }
@@ -480,7 +480,7 @@ class AidenModelPreferenceTest {
                 coordinator.modelPreferenceStore.remember("instance-models", AidenChatModelSelection("google", "gemini-flash", null))
 
                 suspend fun open(chat: AidenChat, key: String = chat.id): AidenChatViewModel =
-                    AidenChatViewModel(chat.id, coordinator, cache, drafts, chat).also {
+                    AidenChatViewModel(chat.id, coordinator, cache, drafts, chat, recoveryClock = { System.nanoTime() / 1_000_000 }).also {
                         viewModels.put(key, it)
                         withTimeout(5_000) { it.catalog.first { catalog -> catalog != null } }
                     }
