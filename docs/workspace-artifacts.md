@@ -14,7 +14,7 @@ Aiden builds a small working page first and checks it before adding more. Each s
 - `run()` calls that name no action or pass the wrong number of values;
 - sources the page never reads.
 
-Aiden fixes those with another update. It doesn't press a button that changes something just to test it. It tells you what the check couldn't cover, such as a source that didn't load or a list that was empty.
+Aiden fixes those with another update. It doesn't press a button that changes something just to test it. The check only sees what the page draws with this data, so it also says what it couldn't cover: a source that didn't load, a list that was empty, an `<If>` branch hidden with this data, or a page too large to draw in full. Reads behind a guard, such as `<If test={$pulls.error}>` or `$x.note || "none"`, are not flagged. The check is a hint for Aiden, not a guarantee that the page is right.
 
 The tab exists only once the workspace has a page. It appears in the tools launcher next to the terminal, files and browser, and it closes when the last page is deleted.
 
@@ -42,7 +42,14 @@ Page buttons can:
 
 Action values from the page never become shell syntax. Each `{{param}}` must be its own unquoted argument in the template: not inside quotes, `$(…)`, a heredoc or a comment, not the command itself, and not an argument a command runs as code or as a program: after `eval`, `sudo`, `env` or `xargs`, the script of `sh -c` or `python -c`, or an `awk` or `sed` program. Redirections, assignments and comments before a command do not hide it. Text values cannot appear inside `[[ ]]`, `(( ))`, `let`, `read`, `declare` or `printf -v`, where bash evaluates names and arithmetic; number values can. The list of programs that run code covers common ones, not every program, so under Ask each press still shows the exact command before it runs. The value is bound to a read-only variable and passed as one quoted argument, so it is exactly what the confirmation showed. Values may not start with `-`, number values may not be negative, and control or invisible characters are refused. The command that runs is always the one saved with the page, never text from the page itself. A page has at most 16 actions, each with a 2-minute limit.
 
-Aiden can also run a page's action when you ask it in chat, for example "merge PR 12" with a pull request board open. It uses the `workspace_artifact` tool's `run` operation, which goes through the same checks as a button press: under Ask the approval card shows the exact command and nothing runs until you allow it, a page whose commands changed after you allowed the card does not run, and the page refreshes afterwards. Aiden doesn't run an action you didn't ask for, and it doesn't press buttons to test a page.
+Aiden can also run a page's action when you ask it in chat, for example "merge PR 12" with a pull request board open. It uses the `workspace_artifact` tool's `run` operation, which goes through the same checks as a button press:
+
+- Under Ask, the approval card shows the exact command with its values, and nothing runs until you allow it. Allowing covers that one command only: if the page or the values change before it runs, it doesn't run.
+- A page whose commands you haven't allowed yet doesn't run, and no card is shown; allow the page in the Artifacts tab first.
+- Under Full access the action runs without a card, as a button press would. Aiden's skill tells it to run actions only when you ask and never to press buttons to test a page, but under Full that is guidance, not something the app enforces.
+- Without a folder or with workspace access off, nothing runs.
+
+A failed command fails the tool call with its output, and the page refreshes afterwards either way.
 
 ## Access
 

@@ -209,7 +209,7 @@ import {
   type FormFillApprovalDescriptor,
 } from "./form-fill/service.js";
 import { FORM_FILL_MUTATION_AVAILABLE } from "../../renderer/shared/form-fill-availability.js";
-import { toolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
+import { toolApprovalPreview, type ToolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
 import { formFillArtifacts, formFillRuntime } from "./form-fill/artifacts.js";
 import {
   EDIT_AUTOMATION_TOOL_NAME,
@@ -3841,8 +3841,10 @@ export const llmClient = {
           let summary: string;
           let approvalDetails: ToolApprovalDetails | undefined;
           let formFillApproval: FormFillApprovalDescriptor | undefined;
-          /** Commands digest an allowed workspace_artifact card showed. */
+          /** What an allowed workspace_artifact card covers (see `workspaceArtifactCallApproval`). */
           let artifactApprovalDigest: string | undefined;
+          /** The resolved command a workspace_artifact run card shows. */
+          let artifactApprovalPreview: ToolApprovalPreview | undefined;
           let attendedScheduleApproval = false;
           let browserFileApproval: PreparedBrowserFile | undefined;
           let browserActionApproval: BrowserToolApproval | undefined;
@@ -3957,6 +3959,7 @@ export const llmClient = {
               try {
                 artifactApproval = await workspaceArtifactCallApproval(context.args, {
                   workspaceId,
+                  hasFolder: Boolean(folderPath),
                   permission: permission === "read-only" ? "none" : permission,
                   store: workspaceArtifactStore,
                 });
@@ -3969,7 +3972,10 @@ export const llmClient = {
                 };
               }
             }
-            if (artifactApproval?.required) artifactApprovalDigest = artifactApproval.digest;
+            if (artifactApproval?.required) {
+              artifactApprovalDigest = artifactApproval.digest;
+              artifactApprovalPreview = artifactApproval.preview;
+            }
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
             let preparedStandardScheduleSummary: string | undefined;
             if (
@@ -4206,7 +4212,9 @@ export const llmClient = {
                 summary,
                 details: approvalDetails,
                 ...(() => {
-                  const preview = approvalDetails ? undefined : toolApprovalPreview(context.toolCall.name, context.args);
+                  const preview = approvalDetails
+                    ? undefined
+                    : (artifactApprovalPreview ?? toolApprovalPreview(context.toolCall.name, context.args));
                   return preview ? { preview } : {};
                 })(),
                 ...(scopedRuleTarget ? { scopes: SCOPED_APPROVAL_OFFER } : {}),

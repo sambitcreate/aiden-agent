@@ -30,6 +30,7 @@ The original plan below is kept as written. The build differs in these ways:
 - **Skill.** `aiden-artifacts` is a built-in skill registered in main (`main/services/workspace-artifacts/skill.ts`), not a bundled `SKILL.md`, because `resources/aiden-help` is copied into the CLI. Turns without the tool (phones, Telegram, Bots, read-only runs) drop it from their skill list, and the phone and Telegram skill catalogs leave it out.
 - **No transcript card or phone fallback text** beyond the normal tool row. **No `workspaceArtifacts` host capability**, because the feature is identical on macOS and Linux and absent from other surfaces by registration (`workspace_artifact` is registered only for attended desktop chats).
 - **IPC.** `workspaces:artifacts:list`, `rename`, `delete`, `saveState`, `approve`, `refresh` and `run`, and the `workspaces:artifacts-changed` notification.
+- **Build-and-check loop (2026-11-02).** Each create or update result ends with a page check that draws the page with its first refresh and reports reads that miss, mismatched `run()` calls and unread sources. The tool gained a `run` operation that runs a page's action through the same runner as a button press; under Ask its card covers one exact command.
 - **Not done in v1.** A Playwright flow. A page that fails to draw falls back through `AidenUiBlock`'s own error boundary, so no separate page boundary was added.
 
 ## Building blocks already on main

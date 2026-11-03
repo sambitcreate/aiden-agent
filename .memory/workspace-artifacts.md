@@ -26,4 +26,12 @@ Adopted from a review of DeepSeek Creator Mode's plugin skill (Notion: "DeepSeek
 
 - Each create/update result now ends with a page check (`main/services/workspace-artifacts/check.ts`). It draws the page with the first refresh's data, mirroring `renderNode` in `aiden-ui-block.tsx` (If, Each, node budgets), and reports field reads that miss on every row, member reads on a list (including `.length`), `<Each>` over an object, unknown `$name`s, `run()` calls naming no action or passing the wrong number of values, and sources the page never reads. Reads rooted in a source that did not load, and rows of an empty list, are reported as not checked rather than passing.
 - The evaluator gained an optional `scope.onRead` hook, set only by the check. If `renderNode` changes how it walks the tree, update the check's walker too.
-- Planned next: add `operation: "run"` to `workspace_artifact` with a per-call approval card (the per-press confirm under Ask lives in the renderer, not in `runner.runAction`); then revision history with Restore.
+- Check limits (after review): it is bounded (250 ms deadline, 10 findings, 3,000 chars) because it runs inside every save. Page-chosen names are JSON-quoted and only shown when they match `[\w$-]{1,40}`, so source data or markup can't inject text into the tool result. Guard reads (If/ternary tests, `!`, left of `&&`/`||`, `== null`) are collected statically and not flagged. Hidden If branches, render-budget cutoffs and time-outs are reported as not checked. Shared helpers moved to `renderer/shared/aiden-ui/props.ts` and the render budget to `AIDEN_UI_RENDER_BUDGET` so the renderer and the check can't drift.
+
+## Agent run (2026-11-02)
+
+- `workspace_artifact` gained `operation: "run"` (`id`, `action`, `args`). It calls the same `runner.runAction` the tab's buttons use, then refreshes and returns the refresh summary.
+- Under Ask the card shows `preview: {kind: "command"}` with the resolved command; its digest is `runApprovalDigest(pageDigest, command)`, so an allowed card covers that exact command on that exact page. A save card's digest can't authorize a run. No card when there's no folder, permission is none, or the page's commands were never allowed (the call then refuses). Under Full it runs with no card; "only when asked" is skill guidance only.
+- A failed command throws, so the chat shows the call as failed. The card label is "Artifact" and the timeline says "Run artifact action".
+- `llm-client.ts` carries the card's preview through `artifactApprovalPreview` next to `artifactApprovalDigest`.
+- Planned next: revision history with Restore, a New page entry point, then export/import (an imported page arrives with its approval cleared).

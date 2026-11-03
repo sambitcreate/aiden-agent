@@ -18,7 +18,7 @@ export interface AidenUiScope {
 
 export type AidenUiRead =
   | { kind: "var"; expr: Extract<AidenUiExprV1, { op: "var" }>; found: boolean }
-  | { kind: "member"; expr: Extract<AidenUiExprV1, { op: "get" }>; object: unknown; key: unknown };
+  | { kind: "member"; expr: Extract<AidenUiExprV1, { op: "get" }>; object: unknown; key: unknown; value: unknown };
 
 const DEFAULT_STEPS = 20_000;
 /** Longest string `+` may build; repeated concatenation cannot balloon memory. */
@@ -180,8 +180,9 @@ function run(expr: AidenUiExprV1, scope: AidenUiScope, budget: { steps: number }
     case "get": {
       const object = run(expr.of, scope, budget);
       const key = run(expr.key, scope, budget);
-      scope.onRead?.({ kind: "member", expr, object, key });
-      return readMember(object, key);
+      const value = readMember(object, key);
+      scope.onRead?.({ kind: "member", expr, object, key, value });
+      return value;
     }
     case "not":
       return !truthy(run(expr.e, scope, budget));

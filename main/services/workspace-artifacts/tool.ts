@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import { compileAum } from "../../../renderer/shared/aiden-ui/compile.js";
@@ -22,8 +23,10 @@ import {
   type WorkspaceArtifactV1,
   type WorkspaceArtifactView,
 } from "../../../renderer/shared/workspace-artifacts.js";
+import type { ToolApprovalPreview } from "../../../renderer/shared/tool-approval-preview.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import { checkWorkspaceArtifactPage, describeWorkspaceArtifactPageCheck } from "./check.js";
+import type { WorkspaceArtifactActionResult } from "./runner.js";
 import { workspaceArtifactDigest, type WorkspaceArtifactContent, type WorkspaceArtifactStore } from "./store.js";
 
 export { WORKSPACE_ARTIFACT_TOOL_NAME };
@@ -67,8 +70,8 @@ export interface WorkspaceArtifactToolOptions {
     signal: AbortSignal | undefined,
   ) => Promise<Record<string, WorkspaceArtifactSourceResultV1>>;
   /**
-   * Runs one of a saved page's actions, as its button would. `expectedDigest`
-   * is the page the person confirmed; a page changed since then does not run.
+   * Runs one of a saved page's actions, as its button would. A page whose
+   * command digest is no longer `expectedDigest` does not run.
    */
   runAction?: (
     artifactId: string,
@@ -76,7 +79,7 @@ export interface WorkspaceArtifactToolOptions {
     args: readonly unknown[],
     expectedDigest: string,
     signal: AbortSignal | undefined,
-  ) => Promise<{ ok: boolean; output: string }>;
+  ) => Promise<WorkspaceArtifactActionResult>;
   onChanged: (event: WorkspaceArtifactsChangedEvent) => void;
 }
 
@@ -198,19 +201,35 @@ function contentFor(input: ArtifactToolInput, previous: WorkspaceArtifactV1 | un
 export interface WorkspaceArtifactCallApproval {
   required: boolean;
   summary?: string;
-  /** Digest of the commands the card lists; set when saving commands asks. */
+  /**
+   * What an allowed card covers, handed back to the tool: the commands a save
+   * listed, or for a run the page and the exact resolved command it showed.
+   */
   digest?: string;
+  /** For a run, the resolved command, shown as the card's command. */
+  preview?: ToolApprovalPreview;
+}
+
+/**
+ * What a run card covers: this page's commands and the exact command the card
+ * showed. A card allowed for a save, another action or other values never
+ * matches, so it cannot authorize this run.
+ */
+function runApprovalDigest(pageDigest: string, command: string): string {
+  return createHash("sha256").update(JSON.stringify({ run: pageDigest, command })).digest("hex");
 }
 
 /**
  * Whether a call needs the person's approval in chat, and the card text.
  * Deleting always asks. Under Ask, saving commands the person has not
- * approved for this artifact asks, listing every command verbatim.
- * Invalid input asks nothing: the call then fails with the reason.
+ * approved for this artifact asks, listing every command verbatim, and every
+ * run asks with the exact command, as a button press does.
+ * Invalid input, or a run that cannot happen, asks nothing: the call then
+ * fails with the reason.
  */
 export async function workspaceArtifactCallApproval(
   args: unknown,
-  options: Pick<WorkspaceArtifactToolOptions, "workspaceId" | "permission" | "store">,
+  options: Pick<WorkspaceArtifactToolOptions, "workspaceId" | "permission" | "store" | "hasFolder">,
 ): Promise<WorkspaceArtifactCallApproval> {
   const input = (args && typeof args === "object" ? args : {}) as ArtifactToolInput;
   let operation: Operation;
@@ -224,7 +243,7 @@ export async function workspaceArtifactCallApproval(
     // Under Ask the person confirms each run with the exact command, as they
     // would a button press. Elsewhere, or for a call that cannot run, there is
     // nothing to confirm: execute runs it or fails with the reason.
-    if (options.permission !== "ask" || !isWorkspaceArtifactId(input.id)) return { required: false };
+    if (options.permission !== "ask" || !options.hasFolder || !isWorkspaceArtifactId(input.id)) return { required: false };
     const view = await options.store.get(options.workspaceId, input.id);
     if (!view || view.artifact.approvedDigest !== view.digest) return { required: false };
     let target: ReturnType<typeof runTarget>;
@@ -235,8 +254,10 @@ export async function workspaceArtifactCallApproval(
     }
     return {
       required: true,
-      digest: view.digest,
-      summary: `Run "${target.action.label}" from the artifact "${view.artifact.visual.title}":\n${target.preview}`,
+      digest: runApprovalDigest(view.digest, target.preview),
+      // The title is quoted so it cannot pose as extra lines of the card.
+      summary: `Run "${target.action.label}" from the artifact ${JSON.stringify(view.artifact.visual.title)}.`,
+      preview: { kind: "command", command: target.preview },
     };
   }
   if (operation === "delete") {
@@ -274,7 +295,7 @@ export async function workspaceArtifactCallApproval(
   };
 }
 
-function describeSources(results: Record<string, WorkspaceArtifactSourceResultV1>): string {
+function describeSources(results: Record<string, WorkspaceArtifactSourceResultV1>, heading = "First refresh"): string {
   const lines = Object.entries(results).map(([name, result]) =>
     result.status === "ok"
       ? `- ${name}: ok`
@@ -282,7 +303,7 @@ function describeSources(results: Record<string, WorkspaceArtifactSourceResultV1
         ? `- ${name}: not run (${result.error ?? "needs approval"})`
         : `- ${name}: failed: ${result.error ?? "unknown error"}`,
   );
-  return lines.length ? `\nFirst refresh:\n${lines.join("\n")}` : "";
+  return lines.length ? `\n${heading}:\n${lines.join("\n")}` : "";
 }
 
 function listing(views: readonly WorkspaceArtifactView[]): string {
@@ -314,38 +335,44 @@ function text(value: string): AgentToolResult<null> {
 
 /**
  * `workspace_artifact`: lets the model keep interactive pages in the
- * workspace's Artifacts tab. Approval happens before execution (see
- * `workspaceArtifactCallApproval`); the host reports allowed calls through
- * `takeApprovedDigest`, and only those record an approval for the commands they showed.
+ * workspace's Artifacts tab and run their actions. Approval happens before
+ * execution (see `workspaceArtifactCallApproval`); the host reports allowed
+ * calls through `takeApprovedDigest`. Only those record an approval for the
+ * commands a save showed, and under Ask only those run an action.
  */
 export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOptions): AgentTool {
   async function runPageAction(input: ArtifactToolInput, shownDigest: string | undefined, signal: AbortSignal | undefined) {
     const view = await options.store.get(options.workspaceId, idOf(input));
     if (!view) throw new Error("No artifact with that id exists in this workspace.");
     if (!options.runAction) throw new Error("This chat cannot run artifact actions.");
-    const { action, args } = runTarget(input, view.artifact);
+    const { action, args, preview } = runTarget(input, view.artifact);
+    if (!options.hasFolder) throw new Error("This workspace has no folder, so its pages' actions can't run.");
     const approved = view.artifact.approvedDigest === view.digest;
     const access = workspaceArtifactCommandAccess(options.permission, options.hasFolder, approved);
     if (access === "blocked") throw new Error("Workspace access is off, so this page's actions can't run.");
     if (access === "needs-approval") {
       throw new Error("The person has not allowed this page's commands yet; they can allow them in the Artifacts tab.");
     }
-    // Under Ask only a confirmed card runs, and only for the page it showed.
+    // Under Ask only a confirmed card runs, and only the exact command on this page it showed.
     if (options.permission === "ask") {
       if (shownDigest === undefined) throw new Error("The person did not confirm this run.");
-      if (shownDigest !== view.digest) throw new Error("This page changed after the person confirmed the run. Try again.");
+      if (shownDigest !== runApprovalDigest(view.digest, preview)) {
+        throw new Error("This page changed after the person confirmed the run. Try again.");
+      }
     }
-    const result = await options.runAction(view.artifact.id, action.name, args, shownDigest ?? view.digest, signal);
+    const result = await options.runAction(view.artifact.id, action.name, args, view.digest, signal);
     let refreshed = "";
     if (options.refresh && view.artifact.sources.length > 0) {
       try {
-        refreshed = describeSources(await options.refresh(view.artifact, signal)).replace("First refresh:", "Refresh after the run:");
+        refreshed = describeSources(await options.refresh(view.artifact, signal), "Refresh after the run");
       } catch (error) {
         refreshed = `\nRefresh after the run failed: ${error instanceof Error ? error.message : String(error)}`;
       }
     }
-    const status = result.ok ? `Ran "${action.label}".` : `"${action.label}" failed.`;
-    return `${status}${result.output ? `\nOutput:\n${result.output}` : ""}${refreshed}`;
+    const output = result.output ? `\nOutput:\n${result.output}` : "";
+    // A failed command fails the tool call, so the chat and the model see it as failed.
+    if (!result.ok) throw new Error(`"${action.label}" failed.${output}${refreshed}`);
+    return `Ran "${action.label}".${output}${refreshed}`;
   }
 
   return declarePiRuntimeReplay(
@@ -421,7 +448,7 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
       execute: async (toolCallId, params, signal): Promise<AgentToolResult<null>> => {
         // Consumed before anything can fail, so an entry never outlives its call.
         const shownDigest = options.takeApprovedDigest?.(toolCallId);
-        if (signal?.aborted) throw new Error("The artifact change was cancelled.");
+        if (signal?.aborted) throw new Error("Cancelled.");
         const input = (params ?? {}) as ArtifactToolInput;
         const operation = operationOf(input);
         const { workspaceId, chatId, store } = options;
@@ -461,7 +488,13 @@ export function createWorkspaceArtifactTool(options: WorkspaceArtifactToolOption
             firstRefresh = `\nFirst refresh failed: ${error instanceof Error ? error.message : String(error)}`;
           }
         }
-        const pageCheck = describeWorkspaceArtifactPageCheck(checkWorkspaceArtifactPage(artifact, results));
+        // The page is already saved: a check that fails must not make the save look failed.
+        let pageCheck: string;
+        try {
+          pageCheck = describeWorkspaceArtifactPageCheck(checkWorkspaceArtifactPage(artifact, results));
+        } catch {
+          pageCheck = "\nPage check unavailable.";
+        }
         const verb = previous ? "Updated" : "Created";
         return text(
           `${verb} the artifact "${artifact.visual.title}" (id ${artifact.id}, revision ${artifact.revision}). It is shown in this workspace's Artifacts tab.${firstRefresh}${pageCheck}${describeDiagnostics(diagnostics)}`,

@@ -190,7 +190,7 @@ test("the save checks the page against the first refresh's data", async (t) => {
   const created = await call("c1", { operation: "create", title: "Open PRs", markup: typo, sources: [PULLS] });
   assert.match(
     created,
-    /Page check \(fix these, then update the page\):\n- \$pr\.titel is always empty: the data has no "titel" field \(it has number, title\)/u,
+    /Page check \(fix these, then update the page\):\n- \$pr\.titel is always empty: the data has no "titel" field \(it has "number", "title"\)/u,
   );
 
   const updated = await call("c2", { operation: "update", id: "art1", markup: typo.replace("titel", "title") });

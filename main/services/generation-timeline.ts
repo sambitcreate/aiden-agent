@@ -354,6 +354,19 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Ask a question" };
     case "todo":
       return { label: "Update task list" };
+    case "workspace_artifact":
+      switch (values.operation) {
+        case "create":
+          return { label: "Create artifact", detail: safeDetail(values.title) };
+        case "list":
+          return { label: "List artifacts" };
+        case "delete":
+          return { label: "Delete artifact" };
+        case "run":
+          return { label: "Run artifact action", detail: safeDetail(values.action) };
+        default:
+          return { label: "Update artifact", detail: safeDetail(values.title) };
+      }
     // Simulator device tools: compact rows for what the user sees open, close, or get captured.
     case "device_list":
       return { label: "List simulators" };

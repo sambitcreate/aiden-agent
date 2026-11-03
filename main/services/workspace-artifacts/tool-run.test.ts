@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import type { WorkspaceArtifactPermission } from "../../../renderer/shared/workspace-artifacts.js";
+import type { WorkspaceArtifactActionV1, WorkspaceArtifactPermission } from "../../../renderer/shared/workspace-artifacts.js";
 import { runBoundedShellCommand, type BoundedShellCommandOptions } from "../bounded-shell-command.js";
 import { readWorkspaceFile } from "../workspace-files.js";
 import { createWorkspaceArtifactRunner } from "./runner.js";
@@ -12,7 +12,12 @@ import { createWorkspaceArtifactTool, workspaceArtifactCallApproval, type Worksp
 
 const PAGE = `<Visual title="Notes"><Text>{len($notes)} notes</Text><Button action={run("note", "hello")}>Note</Button></Visual>`;
 const NOTES = { name: "notes", kind: "file", file: "notes.txt", parse: "lines" };
-const NOTE = { name: "note", label: "Add a note", command: "printf '%s\\n' {{text}} >> notes.txt", params: [{ name: "text", type: "string" }] };
+const NOTE: WorkspaceArtifactActionV1 = {
+  name: "note",
+  label: "Add a note",
+  command: "printf '%s\\n' {{text}} >> notes.txt",
+  params: [{ name: "text", type: "string" }],
+};
 
 /**
  * A real store and runner over a temporary workspace folder: the tool's run
@@ -53,13 +58,18 @@ async function setup(t: test.TestContext, permission: WorkspaceArtifactPermissio
     runAction: (artifactId, name, args, digest, signal) => runner.runAction("ws1", artifactId, name, args, context, signal, digest),
     onChanged: () => undefined,
   };
-  const tool = createWorkspaceArtifactTool(options);
-  const call = async (id: string, args: Record<string, unknown>) => {
-    const result = await tool.execute(id, args as never, undefined);
-    return result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  /** Calls the tool as a chat with these settings would; the page is the same one. */
+  const callWith = (overrides: Partial<WorkspaceArtifactToolOptions>) => {
+    const tool = createWorkspaceArtifactTool({ ...options, ...overrides });
+    return async (id: string, args: Record<string, unknown>) => {
+      const result = await tool.execute(id, args as never, undefined);
+      return result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+    };
   };
+  const call = callWith({});
   /** The chat's card for this call; allowing it hands the tool the digest it showed. */
-  const card = (args: Record<string, unknown>) => workspaceArtifactCallApproval(args, options);
+  const card = (args: Record<string, unknown>, overrides: Partial<WorkspaceArtifactToolOptions> = {}) =>
+    workspaceArtifactCallApproval(args, { ...options, ...overrides });
   const allow = async (id: string, args: Record<string, unknown>) => {
     const shown = await card(args);
     assert.ok(shown.digest, "the call should have asked");
@@ -75,7 +85,7 @@ async function setup(t: test.TestContext, permission: WorkspaceArtifactPermissio
     const view = (await store.get("ws1", "art1"))!;
     return runner.runAction("ws1", "art1", "note", args, context, undefined, view.digest);
   };
-  return { store, commands, call, card, allow, notes, pressButton };
+  return { store, commands, call, callWith, card, allow, approvedCalls, notes, pressButton };
 }
 
 const RUN = { operation: "run", id: "art1", action: "note", args: ["from the agent"] };
@@ -84,7 +94,8 @@ test("under Ask, a run shows the exact command and runs what a button press woul
   const { call, allow, notes, commands, pressButton } = await setup(t, "ask");
   const shown = await allow("c1", RUN);
   assert.equal(shown.required, true);
-  assert.match(shown.summary!, /Run "Add a note" from the artifact "Notes":\nprintf '%s\\n' 'from the agent' >> notes\.txt/u);
+  assert.equal(shown.summary, 'Run "Add a note" from the artifact "Notes".');
+  assert.deepEqual(shown.preview, { kind: "command", command: "printf '%s\\n' 'from the agent' >> notes.txt" });
 
   const before = commands.length;
   const text = await call("c1", RUN);
@@ -94,7 +105,7 @@ test("under Ask, a run shows the exact command and runs what a button press woul
   const toolCommand = commands[before];
 
   await pressButton(["from the agent"]);
-  assert.equal(commands.at(-1), toolCommand, "the button runs the same command the tool ran");
+  assert.equal(commands[commands.length - 1], toolCommand, "the button runs the same command the tool ran");
 });
 
 test("under Ask, a run nobody confirmed does not run", async (t) => {
@@ -137,5 +148,38 @@ test("a run that names no action or passes values that do not fit fails with the
   await assert.rejects(call("c2", { ...RUN, args: ["a", "b"] }), /takes 1 value/u);
   await assert.rejects(call("c3", { ...RUN, args: ["--force"] }), /cannot start with "-"/u);
   assert.deepEqual(await card({ ...RUN, action: "erase" }), { required: false });
+  assert.equal(await notes(), "first\n");
+});
+
+test("a card allowed for one run does not cover a run with other values", async (t) => {
+  const { call, allow, approvedCalls, notes } = await setup(t, "ask");
+  const shown = await allow("c1", RUN);
+  approvedCalls.set("c2", shown.digest!);
+  await assert.rejects(call("c2", { ...RUN, args: ["something else"] }), /changed after the person confirmed/u);
+  assert.equal(await notes(), "first\n");
+});
+
+test("the digest a save card recorded does not authorize a run", async (t) => {
+  const { call, store, approvedCalls, notes } = await setup(t, "ask");
+  const view = (await store.get("ws1", "art1"))!;
+  assert.equal(view.artifact.approvedDigest, view.digest, "the setup allowed the page's commands");
+  approvedCalls.set("c1", view.digest);
+  await assert.rejects(call("c1", RUN), /changed after the person confirmed/u);
+  assert.equal(await notes(), "first\n");
+});
+
+test("a failed action fails the call with its output", async (t) => {
+  const { call } = await setup(t, "full");
+  const failing: WorkspaceArtifactActionV1 = { name: "fail", label: "Fail", command: "echo nope >&2; exit 3", params: [] };
+  await call("u1", { operation: "update", id: "art1", actions: [NOTE, failing] });
+  await assert.rejects(call("c1", { operation: "run", id: "art1", action: "fail" }), /^Error: "Fail" failed\.\nOutput:\n.*nope/su);
+});
+
+test("without a folder or with workspace access off, a run asks nothing and refuses", async (t) => {
+  const { callWith, card, notes } = await setup(t, "ask");
+  assert.deepEqual(await card(RUN, { hasFolder: false }), { required: false });
+  await assert.rejects(callWith({ hasFolder: false })("c1", RUN), /has no folder/u);
+  assert.deepEqual(await card(RUN, { permission: "none" }), { required: false });
+  await assert.rejects(callWith({ permission: "none" })("c2", RUN), /Workspace access is off/u);
   assert.equal(await notes(), "first\n");
 });
