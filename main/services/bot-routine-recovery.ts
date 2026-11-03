@@ -125,7 +125,7 @@ const RESOLVED_BY_SUCCESS = ["preflight:bot_state", "preflight:model", "prefligh
 
 /** Only fires with a durable id can be retried; a Run now has no pending entry to ride. */
 function retriable(trigger: ScheduledRunTrigger): boolean {
-  return trigger.kind === "automatic" || trigger.kind === "retry" || trigger.kind === "catch_up";
+  return trigger.kind === "automatic" || (trigger.kind === "retry" && !trigger.observeOnly) || trigger.kind === "catch_up";
 }
 
 export function createBotRoutineRecovery(dependencies: BotRoutineRecoveryDependencies): BotRoutineRecovery {

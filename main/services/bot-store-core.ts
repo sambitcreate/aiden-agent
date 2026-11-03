@@ -29,6 +29,7 @@ type StoredBotDefinition = Omit<BotDefinition, "revision" | "archivedAt"> & {
    * it through Bot delete (`legacyArchivedIds`).
    */
   archivedAt?: number;
+  selfWakeUpGeneration?: string;
 };
 
 export class BotIdentityRevisionConflictError extends Error {
@@ -50,7 +51,7 @@ interface BotState {
 }
 
 function botForRenderer(bot: StoredBotDefinition): BotDefinition {
-  const { archivedAt: _archivedAt, ...stored } = bot;
+  const { archivedAt: _archivedAt, selfWakeUpGeneration: _generation, ...stored } = bot;
   return { ...stored, revision: botIdentityRevision(bot), avatar: { ...bot.avatar } };
 }
 
@@ -137,6 +138,7 @@ function projectBot(value: unknown): StoredBotDefinition | null {
     ...(interruptions ? { interruptions } : {}),
     // Also last, after interruptions: only "off" is stored.
     ...(bot.selfWakeUps === false ? { selfWakeUps: false as const } : {}),
+    ...(typeof bot.selfWakeUpGeneration === "string" ? { selfWakeUpGeneration: bot.selfWakeUpGeneration } : {}),
   };
   return projected;
 }
@@ -263,6 +265,13 @@ export function createBotStore(options: {
 
   return {
     list,
+    /** Null is off. The empty generation belongs to wake-ups made before the first revocation. */
+    wakeUpGeneration(id: string): Promise<string | null> {
+      return queueMutation(async () => {
+        const bot = (await loadBotState()).bots.find((entry) => entry.id === id && entry.archivedAt === undefined);
+        return !bot || bot.selfWakeUps === false ? null : bot.selfWakeUpGeneration ?? "";
+      });
+    },
     async get(id: string): Promise<BotDefinition | null> {
       return (await list()).find((bot) => bot.id === id) ?? null;
     },
@@ -298,8 +307,11 @@ export function createBotStore(options: {
           if (keptInterruptions) bot.interruptions = keptInterruptions;
           // Last of all; only "off" is stored, so a Bot that never changed it stays unchanged.
           const selfWakeUpsOff = input.selfWakeUps === undefined ? bot.selfWakeUps === false : input.selfWakeUps === false;
+          const generation = bot.selfWakeUps === false && !selfWakeUpsOff ? randomUUID() : bot.selfWakeUpGeneration;
           delete bot.selfWakeUps;
+          delete bot.selfWakeUpGeneration;
           if (selfWakeUpsOff) bot.selfWakeUps = false;
+          if (generation !== undefined) bot.selfWakeUpGeneration = generation;
           bot.updatedAt = nextIdentityTimestamp(bot.updatedAt, now);
           return structuredClone(botForRenderer(bot));
         });

@@ -470,19 +470,51 @@ test("aborted pause preserves an already-paused task", async () => {
   const testbed = harness();
   const task = await addTask(testbed.store);
   await testbed.store.setEnabled(task.id, false);
-  const original = testbed.store.setEnabled.bind(testbed.store);
   const controller = new AbortController();
-  let calls = 0;
-  Object.defineProperty(testbed.store, "setEnabled", {
-    configurable: true,
-    value: async (...args: Parameters<typeof original>) => {
-      const result = await original(...args);
-      if (++calls === 1) controller.abort();
-      return result;
-    },
-  });
+  testbed.taskPersistence.beforeCommit = async () => controller.abort();
   await assert.rejects(testbed.service.pause(task.id, { signal: controller.signal }), /cancelled/iu);
   assert.equal((await testbed.store.get(task.id))?.enabled, false);
+});
+
+test("rolling back a pause keeps the run that settled during cancellation", async (t) => {
+  const h = harness();
+  const task = await addTask(h.store);
+  await h.service.start();
+  t.after(() => h.service.stopAndSettle());
+  const execute = h.execution.run;
+  h.execution.run = async (current) => h.store.recordRun(await execute(current));
+  const running = h.service.runNow(task.id);
+  while (!h.hasPending(task.id)) await new Promise((resolve) => setImmediate(resolve));
+
+  const controller = new AbortController();
+  h.taskPersistence.beforeCommit = async (draft) => {
+    if ((draft as ScheduledTask[]).some((row) => row.id === task.id && !row.enabled)) controller.abort();
+  };
+  await assert.rejects(h.service.pause(task.id, { signal: controller.signal }), /cancelled/iu);
+  const settled = await running;
+  const current = await h.store.get(task.id);
+  assert.equal(current?.enabled, true);
+  assert.equal(current.lastResult, "blocked");
+  assert.equal(current.lastRunAt, settled.finishedAt);
+  assert.equal((await h.store.runs(task.id))[0]?.id, settled.id);
+  assert.ok(scheduledJobs.some((entry) => entry.name === `scheduled:${task.id}`));
+});
+
+test("a cancelled pause leaves a newer runtime revision in place", async (t) => {
+  const h = harness();
+  const task = await addTask(h.store);
+  const controller = new AbortController();
+  const pause = h.store.pauseWithRollback;
+  t.mock.method(h.store, "pauseWithRollback", async (id: string) => {
+    const paused = await pause(id);
+    await h.store.updateRuntime(id, { lastRunAt: 42, lastResult: "success" });
+    controller.abort();
+    return paused;
+  });
+  await assert.rejects(h.service.pause(task.id, { signal: controller.signal }), /cancelled/iu);
+  const current = await h.store.get(task.id);
+  assert.equal(current?.lastRunAt, 42);
+  assert.equal(current.enabled, false);
 });
 
 test("aborted resume preserves an already-enabled task", async () => {

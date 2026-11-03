@@ -33,3 +33,5 @@ Spec: `docs/superpowers/specs/2026-10-27-bot-autonomy-design.md` §4–§5. Plan
 - Full-access connections are not checked before a fire.
 - The CLI has failure kinds only.
 - The detector matches general success claims ("Done", "task completed") for connector tools, not "I sent the email".
+
+Superseded retries become observation-only. Recovery checks the saved run and Pi admission before it discards a stale receipt, including after an uncertain attempt advanced lastRunAt. A person pausing or editing a routine retires its queued retry instructions. A cancelled pause restores the task as it stood after the active run settled, only if the pause revision is still current.
