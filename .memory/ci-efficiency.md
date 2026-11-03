@@ -42,3 +42,7 @@
 ## Needs live validation
 Artifact tar round trip, iOS test-without-building and SPM cache, Gradle
 cache, routing outputs on real PR/main/catalog-bot events.
+
+## Electron shard weights (2026-11-02)
+
+Refreshed file windows from run 41534097337 (attempt 2's third shard, and its retained successful first/second jobs). The third shard timed out after starting 117 tests; its final workspace-panel file receives an allowance beyond the observed truncated window. A separate completed run 41391629898 supplies independent fixture windows: on its 60 observed files the old allocation projects 506/524/830 seconds and the refreshed allocation 597/626/637 seconds. Two later files have no independent timing and are excluded equally from that comparison. Three single-worker shards, selection, exclusions, timeout and flake policy are unchanged.
