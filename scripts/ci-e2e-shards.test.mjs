@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { URL } from "node:url";
 import { discoverSpecs, planShards, shardArguments } from "./ci-e2e-shards.mjs";
 
 test("every deterministic spec belongs to exactly one shard, including unweighted new files", () => {
