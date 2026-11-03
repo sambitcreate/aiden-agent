@@ -178,6 +178,7 @@ export class PullRequestFollowReader {
     const viewer = isRecord(data.viewer) ? boundedString(data.viewer.login, 128) : undefined;
     const comments: FollowedComment[] = [];
     for (const comment of commentsFromPullRequest(raw)) {
+      signal?.throwIfAborted();
       const trusted = await this.trusted(follow.host, follow.repository, comment, repositoryOwner, viewer, signal);
       comments.push({
         id: comment.id,

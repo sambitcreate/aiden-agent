@@ -26,6 +26,7 @@ recomposition with O(n²) work on Android. The owner wanted animations that are 
 - Only translation, rotation, scale and opacity animate. No filters or per-frame allocation.
 - Inactive, Reduced Motion (system or in-app) and off-screen marks freeze on the t = 0 pose; never
   hide them instead.
+- A hidden window (`:root[data-document-hidden]`, from `renderer/lib/offscreen-pause.ts`) pauses marks and working Bot faces too.
 - Desktop phase offsets are inline `animation-delay`s, not CSS custom properties. The xmldom-mounted
   tests can't set custom properties, and this avoids per-shape style variables.
 - When a mark's geometry or timing changes, update `docs/activity-marks.md` and all three clients together.

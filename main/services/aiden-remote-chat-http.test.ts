@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import test from "node:test";
 import type { Chat, ChatMessage } from "./types.js";
@@ -10,7 +11,10 @@ import { BotMutationGate } from "./bot-mutation-gate.js";
 const ONE_PIXEL_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
 
-async function projectionReadServer(initial: Chat | Chat[]) {
+async function projectionReadServer(
+  initial: Chat | Chat[],
+  readImage?: (sha256: string, size: number) => Promise<Uint8Array | undefined>,
+) {
   let current = structuredClone(Array.isArray(initial) ? initial : [initial]);
   const streams = new AidenRemoteStreamService({
     now: Date.now,
@@ -35,6 +39,7 @@ async function projectionReadServer(initial: Chat | Chat[]) {
     chatStore: {
       get: async (chatId) => structuredClone(current.find((chat) => chat.id === chatId) ?? null),
       appendMessage: async () => structuredClone(current[0]!),
+      ...(readImage ? { readImage } : {}),
     },
     generation: {
       beginChatTurn: () => null,
@@ -508,5 +513,63 @@ test("HTTP client resumes, approves, denies, and cancels device-owned mocked tur
     assert.equal(appendCount, 3);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("HTTP attachment content serves a stored chat image by hash and revalidates it", async () => {
+  const bytes = Buffer.from(ONE_PIXEL_PNG, "base64");
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const reads: string[] = [];
+  const app = await projectionReadServer(
+    {
+      id: "chat-1",
+      title: "Remote chat",
+      workspaceId: "workspace-1",
+      providerId: "provider-1",
+      model: "model-1",
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      messages: [{
+        id: "message-1",
+        role: "assistant",
+        content: "Here it is",
+        createdAt: 1_500,
+        // As the desktop stores it: the hash of the image file, no inline bytes.
+        attachments: [{ id: "image-1", name: "result.png", mimeType: "image/png", kind: "image", size: bytes.length, sha256 }],
+      }],
+    },
+    async (hash, size) => {
+      reads.push(hash);
+      return hash === sha256 && size === bytes.length ? bytes : undefined;
+    },
+  );
+  const headers = {
+    authorization: `Bearer ${"a".repeat(43)}`,
+    "aiden-protocol-version": "1",
+  };
+  try {
+    const url = `${app.base}/chats/chat-1/attachments/image-1/content`;
+    const first = await fetch(url, { headers });
+    assert.equal(first.status, 200);
+    assert.equal(first.headers.get("content-type"), "image/png");
+    assert.equal(first.headers.get("cache-control"), "no-store");
+    assert.equal(first.headers.get("etag"), `"${sha256}"`);
+    assert.deepEqual(Buffer.from(await first.arrayBuffer()), bytes);
+
+    const again = await fetch(url, { headers: { ...headers, "if-none-match": `"${sha256}"` } });
+    assert.equal(again.status, 304);
+    assert.equal((await again.arrayBuffer()).byteLength, 0);
+
+    const stale = await fetch(url, { headers: { ...headers, "if-none-match": `"${"0".repeat(64)}"` } });
+    assert.equal(stale.status, 200);
+    assert.deepEqual(Buffer.from(await stale.arrayBuffer()), bytes);
+
+    const chat = await (await fetch(`${app.base}/chats/chat-1`, { headers })).json() as Chat;
+    assert.deepEqual(chat.messages[0]?.attachments, [
+      { id: "image-1", name: "result.png", mimeType: "image/png", kind: "image", size: bytes.length },
+    ]);
+    assert.ok(reads.length >= 3);
+  } finally {
+    await app.close();
   }
 });

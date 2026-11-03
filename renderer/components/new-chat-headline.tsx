@@ -4,7 +4,8 @@ import { workspaceDisplayName } from "../lib/workspace-path-display";
 /**
  * The new-chat empty state's title. It names where the draft will run, and
  * the name opens the same workspace menu as the composer chip. A scratch chat
- * (created by Scratch chat, so marked `scratch`) has no project to name.
+ * (created by Scratch chat, so marked `scratch`) or a No workspace chat has no
+ * project to name.
  */
 export function NewChatHeadline({
   workspace,
@@ -17,7 +18,8 @@ export function NewChatHeadline({
   onChooseWorkspace?: () => void;
 }) {
   if (!workspace) return <>What would you like to work on?</>;
-  if (workspace.scratch) return <>What’s on your mind?</>;
+  // Scratch and No workspace chats have no project to name.
+  if (workspace.scratch || workspace.noWorkspace) return <>What’s on your mind?</>;
   const name = workspaceDisplayName(workspace, workspaces);
   return (
     <span data-new-chat-headline>

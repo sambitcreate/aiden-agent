@@ -7,11 +7,15 @@
  * forces a conscious re-review instead of silently shipping Pi strings.
  *
  * Patched surfaces:
- *  - interactive-mode: the startup header's Pi self-promotion line (removed)
- *    and the tmux csi-u hint wording.
  *  - system-prompt: the agent identity sentence and the engine-docs guidance
- *    wording. Doc paths are intentionally unchanged — they point at the
- *    vendored engine docs that ship with the bundle.
+ *    wording (daemon chats use Pi's system prompt). Doc paths are
+ *    intentionally unchanged — they point at the vendored engine docs that
+ *    ship with the bundle.
+ *  - telemetry: pi's install ping call sites and endpoint are stripped and
+ *    its settings default turned off, wherever that code still ships.
+ *
+ * Aiden has no interactive terminal UI, so pi's startup header, logo and
+ * theme defaults are not patched.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -38,24 +42,8 @@ if (expectedPin && installedVersion !== expectedPin) {
 
 const patches = [
 	{
-		file: join(piAgentDir, "dist", "modes", "interactive", "theme", "theme.js"),
-		replacements: [{
-			from: "const name = themeName ?? SYSTEM_THEME_NAME;",
-			to: "const name = themeName ?? getTerminalTheme(); // Aiden palettes by default; system remains selectable",
-		}],
-	},
-	{
 		file: join(piAgentDir, "dist", "modes", "interactive", "interactive-mode.js"),
 		replacements: [
-			{
-				// The startup header line the product asked to remove outright.
-				from: "`Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`",
-				to: '""',
-			},
-			{
-				from: "tmux extended-keys-format is xterm. Pi works best with csi-u.",
-				to: "tmux extended-keys-format is xterm. Aiden works best with csi-u.",
-			},
 			{
 				// Both changelog-triggered call sites of the pi.dev report-install
 				// ping. The method stays (dead) but can never fire, even if the
@@ -68,14 +56,6 @@ const patches = [
 				// The ping endpoint itself: strip it so no telemetry URL ships.
 				from: "https://pi.dev/api/report-install?version=",
 				to: "data:text/plain,telemetry-removed?version=",
-			},
-			{
-				from: "const showLogo = supportsPiLogo();",
-				to: "const showLogo = false; // Aiden owns its startup wordmark",
-			},
-			{
-				from: '${piWordmark()}',
-				to: '${theme.bold(theme.fg("accent", APP_NAME))}',
 			},
 		],
 	},
@@ -118,21 +98,6 @@ const patches = [
 			from: "    enableInstallTelemetry: true,",
 			to: "    enableInstallTelemetry: false,",
 		}],
-	},
-	{
-		file: join(piAgentDir, "dist", "core", "settings-manager.js"),
-		replacements: [
-			{
-				from: 'const value = this.settings.theme;',
-				to: 'const value = this.settings.theme ?? "light/dark";',
-			},
-			{
-				// Native 1.0 supports the header-only behavior Aiden used to patch.
-				from: 'const value = this.settings.quietStartup;',
-				to: 'const value = this.settings.quietStartup ?? "header";',
-			},
-
-		],
 	},
 ];
 

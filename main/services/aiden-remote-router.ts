@@ -1,3 +1,4 @@
+import { PEER_PROJECT_CLONE_FEATURE } from "../../renderer/shared/peer-project-clone.js";
 import type { remoteAppControls } from "./aiden-remote-app-controls.js";
 import type { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
 import { projectBotDetailForAudience, projectBotSummaryForAudience } from "./aiden-remote-bot-handoffs.js";
@@ -34,6 +35,8 @@ import {
   AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
   AIDEN_REMOTE_CHAT_SUMMARY_FEATURE,
   AIDEN_REMOTE_CHAT_READ_STATE_FEATURE,
+  AIDEN_REMOTE_CHAT_TRIAGE_FEATURE,
+  AIDEN_REMOTE_INBOX_SIGNALS_FEATURE,
   AIDEN_REMOTE_BOT_CONNECTION_REQUESTS_FEATURE,
   AIDEN_REMOTE_BOT_DELETE_FEATURE,
   AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE,
@@ -49,6 +52,11 @@ import {
   AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE,
   AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
+  AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
+  AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
+  AIDEN_REMOTE_RAW_UPLOAD_MIME_TYPES,
+  AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME,
+  AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   AIDEN_REMOTE_CHAT_TASKS_FEATURE,
@@ -119,9 +127,11 @@ import type { AidenRemoteGitService } from "./aiden-remote-git.js";
 import type { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
 import type { AidenRemoteMemorySettingsService } from "./aiden-remote-memory-settings.js";
 import type { AidenRemoteSpendingService } from "./aiden-remote-spending.js";
+import type { AidenRemoteBackgroundJobService } from "./aiden-remote-background-jobs.js";
 import type { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import type { UsageDateRange, UsageSummary } from "./types.js";
 import { MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES } from "./aiden-remote-attachments.js";
+import { MAX_IMAGE_BYTES } from "./attachments.js";
 import type { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import {
   AIDEN_REMOTE_SIMULATOR_HUB_PREFIX,
@@ -199,7 +209,7 @@ export interface AidenRemoteRouterDependencies {
     AidenRemotePairingRequestService,
     "accepting" | "create" | "reveal" | "poll" | "cancel"
   >;
-  workspaces?: Pick<AidenRemoteWorkspaceService, "list" | "get" | "create" | "update" | "remove">;
+  workspaces?: Pick<AidenRemoteWorkspaceService, "list" | "get" | "create" | "update" | "remove"> & { supportsClone?: boolean };
   workspaceBrowser?: Pick<
     AidenRemoteWorkspaceBrowserService,
     "listRoots" | "listChildren" | "createSelection"
@@ -207,7 +217,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure" | "moveToNewWorktree" | "supportsNewWorktrees" | "setTriage" | "supportsTriage">>;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -273,6 +283,11 @@ export interface AidenRemoteRouterDependencies {
    * `not_found` and phones are not told `spending-limits-v1`.
    */
   spending?: Pick<AidenRemoteSpendingService, "chat" | "bot" | "allowMoreChat" | "allowMoreBot">;
+  /**
+   * A chat's background jobs (contract revision 49). Absent: the job routes
+   * are `not_found` and `chat:jobs` is neither offered nor negotiable.
+   */
+  backgroundJobs?: Pick<AidenRemoteBackgroundJobService, "list" | "stop">;
   usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
   readAloud?: Pick<AidenRemoteTtsService, "status" | "start" | "read" | "stop">;
   speech?: Pick<
@@ -455,6 +470,7 @@ export type AidenRemoteRouteLabel =
   | "chatFork"
   | "chatForkSummary"
   | "chatRead"
+  | "chatTriage"
   | "chatTasks"
   | "chatAgents"
   | "chatAgentInterrupt"
@@ -465,6 +481,8 @@ export type AidenRemoteRouteLabel =
   | "chatVisualDocument"
   | "chatBrowserRecording"
   | "chatSpending"
+  | "chatBackgroundJobs"
+  | "chatNewWorktree"
   | "turns"
   | "models"
   | "stream"
@@ -561,6 +579,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   chatFork: ["/chats/:id/fork"],
   chatForkSummary: ["/chats/:id/fork-summary/:action"],
   chatRead: ["/chats/:id/read"],
+  chatTriage: ["/chats/:id/triage"],
   chatTasks: ["/chats/:id/tasks"],
   chatAgents: ["/chats/:id/agents"],
   chatAgentInterrupt: ["/chats/:id/agents/:agentId/interrupt"],
@@ -575,6 +594,8 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   chatVisualDocument: ["/chats/:id/visuals/:visualId/document"],
   chatBrowserRecording: ["/chats/:id/recordings/:recordingId"],
   chatSpending: ["/chats/:id/spending", "/chats/:id/spending/allow-more"],
+  chatBackgroundJobs: ["/chats/:id/jobs", "/chats/:id/jobs/:jobId/stop"],
+  chatNewWorktree: ["/chats/:id/worktree"],
   turns: ["/chats/:id/turns"],
   models: ["/models"],
   stream: ["/streams/:streamId"],
@@ -805,15 +826,32 @@ function writeVisualDocument(response: ServerResponse, request: IncomingMessage,
   response.end(body);
 }
 
+/**
+ * Raw attachment bytes. A stored chat image carries its SHA-256, sent as a
+ * strong ETag: the bytes never change for a hash, so a client that kept its
+ * own copy can revalidate with `If-None-Match` and receive an empty 304.
+ */
 function writeAttachmentContent(
   response: ServerResponse,
-  content: { bytes: Buffer; mimeType: string },
+  content: { bytes: Buffer; mimeType: string; sha256?: string },
 ): void {
-  response.writeHead(200, {
+  const headers = {
     ...responseHeaders(content.mimeType),
-    "content-length": String(content.bytes.length),
     "content-security-policy": "default-src 'none'; sandbox",
-  });
+    ...(content.sha256 ? { etag: `"${content.sha256}"` } : {}),
+  };
+  const request = negotiatedRequests.get(response);
+  if (
+    headers.etag &&
+    request?.method === "GET" &&
+    ifNoneMatchSatisfied(request.headers["if-none-match"], headers.etag)
+  ) {
+    const { "content-type": _contentType, ...notModified } = headers;
+    response.writeHead(304, notModified);
+    response.end();
+    return;
+  }
+  response.writeHead(200, { ...headers, "content-length": String(content.bytes.length) });
   response.end(content.bytes);
 }
 
@@ -831,6 +869,12 @@ function writeError(
       ...(error.details ? { details: error.details } : {}),
     },
   };
+  // The envelope carries the wait for Aiden clients; the standard header lets
+  // generic HTTP stacks honor it too.
+  const retryAfter = error.details?.retryAfterSeconds;
+  if (retryAfter !== undefined && Number.isFinite(retryAfter) && retryAfter > 0) {
+    response.setHeader("retry-after", String(Math.ceil(retryAfter)));
+  }
   writeJson(response, error.status, envelope);
 }
 
@@ -855,6 +899,59 @@ async function readRawBody(request: IncomingMessage, maximumBytes: number): Prom
     chunks.push(buffer);
   }
   return Buffer.concat(chunks);
+}
+
+
+/**
+ * An attachment upload body (revision 50): the JSON envelope, or one picture's
+ * raw bytes with its name in `Aiden-Attachment-Name`, turned into the same
+ * envelope so the upload services validate both alike. `raw` uploads need
+ * `attachments:raw`, which the caller checks once the device is known.
+ */
+async function readAttachmentUploadBody(
+  request: IncomingMessage,
+): Promise<{ body: unknown; raw: boolean }> {
+  const contentType = request.headers["content-type"];
+  const mimeType = typeof contentType === "string"
+    ? contentType.toLowerCase().split(";", 1)[0]?.trim()
+    : undefined;
+  if (!mimeType || !AIDEN_REMOTE_RAW_UPLOAD_MIME_TYPES.has(mimeType)) {
+    return { body: await readJsonBody(request, MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES), raw: false };
+  }
+  const declared = request.headers["content-length"];
+  if (typeof declared !== "string" || !/^\d{1,10}$/u.test(declared)) {
+    throw new AidenRemoteServiceError("invalid_request", "A picture upload needs its exact Content-Length.", 411);
+  }
+  const declaredBytes = Number(declared);
+  if (declaredBytes > MAX_IMAGE_BYTES) {
+    throw new AidenRemoteServiceError("payload_too_large", "The picture is too large.", 413);
+  }
+  if (declaredBytes === 0) {
+    throw new AidenRemoteServiceError("invalid_request", "The request body is required.", 400);
+  }
+  const encodedName = request.headers["aiden-attachment-name"];
+  let name: string;
+  try {
+    if (typeof encodedName !== "string" || encodedName.length === 0 || encodedName.length > AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME) {
+      throw new Error("missing name");
+    }
+    name = decodeURIComponent(encodedName);
+  } catch {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "Aiden-Attachment-Name is required and must be the percent-encoded UTF-8 file name.",
+      400,
+    );
+  }
+  const bytes = await readRawBody(request, MAX_IMAGE_BYTES);
+  if (!bytes) throw new AidenRemoteServiceError("payload_too_large", "The picture is too large.", 413);
+  if (bytes.length !== declaredBytes) {
+    throw new AidenRemoteServiceError("invalid_request", "The picture upload ended early.", 400);
+  }
+  return {
+    body: { name, mimeType, kind: "image", data: Buffer.from(bytes).toString("base64") },
+    raw: true,
+  };
 }
 
 async function readJsonBody(
@@ -1499,8 +1596,31 @@ function selectionLocation(value: unknown): string {
   return (value as { location: string }).location;
 }
 
-function sourceIdentity(request: IncomingMessage): string {
+function isLoopbackAddress(address: string | undefined): boolean {
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
+function singleHeader(request: IncomingMessage, name: string): string | undefined {
+  const value = request.headers[name];
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * The key for per-source pairing budgets. Tailscale Serve proxies every
+ * tailnet peer through one loopback socket, so on that listener the peer is
+ * named by the headers tailscaled sets (it replaces any client-sent copies):
+ * the forwarded tailnet address, else the tailnet login. Pairing secrets are
+ * high-entropy, so these budgets only keep one device from crowding out
+ * others; they are not what protects the secret.
+ */
+function sourceIdentity(request: IncomingMessage, tailscale: boolean): string {
   const address = request.socket.remoteAddress ?? "unknown";
+  if (tailscale && isLoopbackAddress(address)) {
+    const forwarded = singleHeader(request, "x-forwarded-for")?.split(",").pop()?.trim();
+    if (forwarded && /^[0-9A-Fa-f:.]{2,45}$/u.test(forwarded)) return `tailscale:${forwarded}`;
+    const login = singleHeader(request, "tailscale-user-login")?.trim();
+    if (login && /^[\x21-\x7e]{1,128}$/u.test(login)) return `tailscale-user:${login}`;
+  }
   return address.length <= 128 ? address : "unknown";
 }
 
@@ -1517,6 +1637,11 @@ function requireEmptyObject(value: unknown): void {
       400,
     );
   }
+}
+
+/** Revision 53: whether phones can put an empty chat in a new worktree. */
+function newWorktreesWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return dependencies.chats?.supportsNewWorktrees === true && dependencies.chats.moveToNewWorktree !== undefined;
 }
 
 function requireDeviceCapabilities(
@@ -1580,7 +1705,6 @@ function isDesktopDevice(device: Pick<AidenRemoteRouterAuthenticatedDevice, "typ
 
 /** What this host has wired, one flag per `/server.features` token it can announce. */
 export interface AidenRemoteServerFeatureSupport {
-  appControls: boolean;
   appControlsEnabled: boolean;
   peerRoutes: boolean;
   providers: boolean;
@@ -1588,6 +1712,13 @@ export interface AidenRemoteServerFeatureSupport {
   speech: boolean;
   chatSummaries: boolean;
   readState: boolean;
+  /** `POST /chats/{chatId}/triage`, announced to desktops and phones. */
+  triage: boolean;
+  /**
+   * Revision 52 Inbox signals on summaries, `run.state` and Bot rows
+   * (desktop-only token; phones decode the additive fields without it).
+   */
+  inboxSignals: boolean;
   tasks: boolean;
   agents: boolean;
   agentInterrupt: boolean;
@@ -1615,6 +1746,7 @@ export interface AidenRemoteServerFeatureSupport {
   botAttachments: boolean;
   spending: boolean;
   mobileSimulators: boolean;
+  workspaceClone?: boolean;
 }
 
 /**
@@ -1631,14 +1763,19 @@ export function aidenRemoteServerFeatures(
   const desktop = isDesktopDevice(device);
   const phone = !desktop;
   return [
-    ...(phone && support.appControls ? ["chat-ui-panels-v1"] : []),
+    // `chat-ui-panels-v1` (revision 32) is retired: no shipped client read it,
+    // and its slot in the phones' 32-token list went to `chat-triage-v1`.
     ...(phone && support.appControlsEnabled ? ["chat-ui-panels-enabled-v1"] : []),
+    ...(desktop && support.workspaceClone ? [PEER_PROJECT_CLONE_FEATURE] : []),
     ...(desktop && support.peerRoutes ? ["peer-routes-v1"] : []),
     ...(phone && support.providers ? [AIDEN_REMOTE_PROVIDER_CREATE_FEATURE] : []),
     ...(phone && support.readAloud ? [REMOTE_TTS_FEATURE] : []),
     ...(phone && support.speech ? [AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE] : []),
     ...(support.chatSummaries ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE] : []),
     ...(support.readState ? [AIDEN_REMOTE_CHAT_READ_STATE_FEATURE] : []),
+    // Inbox triage (revision 52): every device type; the route still needs `chat:write`.
+    ...(support.triage ? [AIDEN_REMOTE_CHAT_TRIAGE_FEATURE] : []),
+    ...(desktop && support.inboxSignals ? [AIDEN_REMOTE_INBOX_SIGNALS_FEATURE] : []),
     ...(support.tasks ? [AIDEN_REMOTE_CHAT_TASKS_FEATURE] : []),
     ...(support.agents ? [AIDEN_REMOTE_CHAT_AGENTS_FEATURE] : []),
     ...(support.agentInterrupt ? [AIDEN_REMOTE_CHAT_AGENT_INTERRUPT_FEATURE] : []),
@@ -1667,7 +1804,10 @@ export function aidenRemoteServerFeatures(
     ...(support.botSessions ? [AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE] : []),
     ...(support.botRoutines ? [AIDEN_REMOTE_BOT_ROUTINES_FEATURE] : []),
     ...(support.botConnectionRequests ? [AIDEN_REMOTE_BOT_CONNECTION_REQUESTS_FEATURE] : []),
-    ...(support.botPresets ? [AIDEN_REMOTE_BOT_PRESETS_FEATURE] : []),
+    // Bot presets fill a phone's empty Bots home; desktops never read the
+    // presets routes, so they are not told (contract revision 51, which keeps
+    // a fully wired host's desktop list within the 32 tokens shipped clients accept).
+    ...(phone && support.botPresets ? [AIDEN_REMOTE_BOT_PRESETS_FEATURE] : []),
     // Bot memory and proactivity (contract revision 27).
     ...(support.botMemory ? [AIDEN_REMOTE_BOT_MEMORY_FEATURE] : []),
     ...(support.botProactive ? [AIDEN_REMOTE_BOT_PROACTIVE_FEATURE] : []),
@@ -1905,6 +2045,11 @@ function botSummaryForAudience(
   );
 }
 
+/** Revision 50: raw picture uploads ride the chat and Bot upload routes. */
+function rawUploadsWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return typeof dependencies.chats?.uploadAttachment === "function" || botAttachmentsWired(dependencies);
+}
+
 /** Revision 33: uploads, removals and `attachmentIds` ship together, or not at all. */
 function botAttachmentsWired(dependencies: AidenRemoteRouterDependencies): boolean {
   const sessions = dependencies.botSessions;
@@ -1969,6 +2114,12 @@ function advertisedServerCapabilities(
       : []),
     // Revision 39: a display opt-in for any device type while approvals are served.
     ...(scheduleCardsWired(dependencies) ? AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES : []),
+    // Revision 49: offered only while the host runs background jobs.
+    ...(dependencies.backgroundJobs ? AIDEN_REMOTE_CHAT_JOB_CAPABILITIES : []),
+    // Revision 50: offered while chat or Bot uploads are served.
+    ...(rawUploadsWired(dependencies) ? AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES : []),
+    // Revision 53: offered only while the host makes worktrees for phones.
+    ...(newWorktreesWired(dependencies) ? AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES : []),
     ...(device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
           progressCapabilitySupported(dependencies, capability),
@@ -2183,7 +2334,7 @@ export function createAidenRemoteRequestHandler(
         route = "pairingExchange";
         const result = await dependencies.pairing.exchange(
           await readJsonBody(request),
-          sourceIdentity(request),
+          sourceIdentity(request, dependencies.acceptStrippedBasePath === true),
         );
         writeJson(response, 200, result);
         return;
@@ -2209,7 +2360,7 @@ export function createAidenRemoteRequestHandler(
         const secret = pairingSecretHeader(request);
         if (route === "pairingRequests" && request.method === "POST") {
           const created = await service.create(await readJsonBody(request, 2_048), {
-            source: sourceIdentity(request),
+            source: sourceIdentity(request, dependencies.acceptStrippedBasePath === true),
             transport: dependencies.acceptStrippedBasePath === true ? "tailscale" : "lan",
           });
           writeJson(response, 201, created);
@@ -2278,7 +2429,7 @@ export function createAidenRemoteRequestHandler(
             : {}),
           connectionMode: dependencies.connectionMode(),
           features: aidenRemoteServerFeatures(device, {
-            appControls: Boolean(dependencies.appControls),
+            workspaceClone: dependencies.workspaces?.supportsClone === true,
             appControlsEnabled: (await dependencies.appControls?.enabled()) === true,
             peerRoutes: peerRoutes !== undefined,
             providers: Boolean(dependencies.providers),
@@ -2286,6 +2437,8 @@ export function createAidenRemoteRequestHandler(
             speech: Boolean(dependencies.speech),
             chatSummaries: Boolean(dependencies.chats?.listSummaries),
             readState: Boolean(dependencies.chats?.markRead) && dependencies.chats?.supportsReadMarkers === true,
+            triage: Boolean(dependencies.chats?.setTriage) && dependencies.chats?.supportsTriage === true,
+            inboxSignals: Boolean(dependencies.chats?.listSummaries),
             tasks: progressCapabilitySupported(dependencies, "tasks:read"),
             agents: progressCapabilitySupported(dependencies, "agents:read"),
             agentInterrupt: agentInterruptSupported(dependencies),
@@ -2399,6 +2552,21 @@ export function createAidenRemoteRequestHandler(
             // Revision 39: a display opt-in for scheduled-task approvals; it never changes canAllow.
             if (!scheduleCardsWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Schedule cards are unavailable on this Aiden installation.", 404);
+            }
+          } else if ((AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 50: raw picture uploads, offered while chat or Bot uploads are served.
+            if (!rawUploadsWired(dependencies)) {
+              throw new AidenRemoteServiceError("not_found", "Picture uploads are unavailable on this Aiden installation.", 404);
+            }
+          } else if ((AIDEN_REMOTE_CHAT_JOB_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 49: offered only while the host runs background jobs.
+            if (!dependencies.backgroundJobs) {
+              throw new AidenRemoteServiceError("not_found", "Background jobs are unavailable on this Aiden installation.", 404);
+            }
+          } else if ((AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 53: offered only while the host makes worktrees for phones.
+            if (!newWorktreesWired(dependencies)) {
+              throw new AidenRemoteServiceError("not_found", "New worktrees are unavailable on this Aiden installation.", 404);
             }
           } else if (capability === "simulators:control") {
             // Refuse non-desktops first so they never learn whether this Mac has simulators.
@@ -2754,10 +2922,11 @@ export function createAidenRemoteRequestHandler(
       if (botAttachmentsMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "botAttachment";
-        const body = await readJsonBody(request, MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES);
+        const { body, raw } = await readAttachmentUploadBody(request);
         const device = await authenticate(request, dependencies.devices, "bot:write");
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read", "chat:write"]);
+        if (raw) requireDeviceCapabilities(device, AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES);
         if (!botAttachmentsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 201, await dependencies.botSessions!.uploadAttachment!(device.id, botAttachmentsMatch[1]!, body));
         return;
@@ -3200,11 +3369,18 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.workspaces) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(
-          response,
-          201,
-          await dependencies.workspaces.create(device.id, key, body),
-        );
+        const cloning = body !== null && typeof body === "object" && (body as { mode?: unknown }).mode === "clone";
+        if (cloning && (!isDesktopDevice(device) || !device.capabilities.has("workspace:browse"))) throw new AidenRemoteServiceError("capability_denied", "Cloning projects requires a paired desktop with folder browsing access.", 403);
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        if (cloning) {
+          response.once("close", abort);
+          if (response.destroyed || request.aborted) abort();
+        }
+        try {
+          const result = await dependencies.workspaces.create(device.id, key, body, controller.signal);
+          if (!controller.signal.aborted) writeJson(response, 201, result);
+        } finally { response.off("close", abort); }
         return;
       }
       const workspaceMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})$/u.exec(path);
@@ -3846,6 +4022,26 @@ export function createAidenRemoteRequestHandler(
         response.end();
         return;
       }
+      const triageMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/triage$/u.exec(path);
+      if (triageMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "chatTriage";
+        const body = await readJsonBody(request, 1_024);
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const chats = dependencies.chats;
+        if (!chats?.setTriage || chats.supportsTriage !== true) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        writeJson(
+          response,
+          200,
+          await runChatMutation(chats, device, triageMatch[1]!, "chat", () =>
+            chats.setTriage!(device.id, triageMatch[1]!, key, body)),
+        );
+        return;
+      }
       const moveMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/move$/u.exec(path);
       if (moveMatch && request.method === "POST") {
         requireNoQuery(query);
@@ -3861,6 +4057,29 @@ export function createAidenRemoteRequestHandler(
           200,
           await runChatMutation(dependencies.chats, device, moveMatch[1]!, "chat", () =>
             dependencies.chats!.move(device.id, moveMatch[1]!, revision, key, body)),
+        );
+        return;
+      }
+      const newWorktreeMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/worktree$/u.exec(path);
+      if (newWorktreeMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "chatNewWorktree";
+        const body = await readJsonBody(request, 32_768);
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const chats = dependencies.chats;
+        if (!chats?.moveToNewWorktree || !newWorktreesWired(dependencies)) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        // Making a worktree is a Git write; the opt-in only says the phone can show it.
+        requireDeviceCapabilities(device, ["git:write", "chat:new-worktree"]);
+        const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        writeJson(
+          response,
+          200,
+          await runChatMutation(chats, device, newWorktreeMatch[1]!, "chat", () =>
+            chats.moveToNewWorktree!(device.id, newWorktreeMatch[1]!, revision, key, body)),
         );
         return;
       }
@@ -4085,9 +4304,10 @@ export function createAidenRemoteRequestHandler(
       if (attachmentCollectionMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "chatAttachment";
-        const body = await readJsonBody(request, MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES);
+        const { body, raw } = await readAttachmentUploadBody(request);
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
+        if (raw) requireDeviceCapabilities(device, AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES);
         if (!dependencies.chats?.uploadAttachment) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(
           response,
@@ -4200,6 +4420,30 @@ export function createAidenRemoteRequestHandler(
                 requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u),
               )
             : await dependencies.spending.chat(chatSpendingMatch[1]!),
+        );
+        return;
+      }
+      const chatJobsListMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/jobs$/u.exec(path);
+      const chatJobStopMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/jobs\/(job_[0-9a-f]{8})\/stop$/u.exec(path);
+      const chatJobsMatch = request.method === "GET" ? chatJobsListMatch : request.method === "POST" ? chatJobStopMatch : null;
+      if (chatJobsMatch) {
+        requireNoQuery(query);
+        route = "chatBackgroundJobs";
+        const stop = chatJobsMatch === chatJobStopMatch;
+        if (stop) requireEmptyJsonObject(await readJsonBody(request, 64));
+        const device = await authenticate(request, dependencies.devices, stop ? "chat:write" : "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.backgroundJobs || !dependencies.chats) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        requireDeviceCapabilities(device, ["chat:jobs"]);
+        await requireChatAccess(dependencies.chats, device, chatJobsMatch[1]!, stop ? "write" : "read");
+        writeJson(
+          response,
+          200,
+          stop
+            ? await dependencies.backgroundJobs.stop(chatJobsMatch[1]!, chatJobsMatch[2]!)
+            : dependencies.backgroundJobs.list(chatJobsMatch[1]!),
         );
         return;
       }

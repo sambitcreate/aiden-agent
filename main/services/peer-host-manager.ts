@@ -27,10 +27,12 @@ import { PeerBotSessionStreams } from "./peer-bot-sessions.js";
 import { PeerHostFeedCache } from "./peer-host-feed-cache.js";
 import type { PeerRequestPartition } from "./peer-host-registry.js";
 import {
+  PEER_BINARY_OPERATIONS,
   PEER_BOT_SESSION_MUTATIONS,
   PEER_CHAT_MUTATIONS,
   PEER_RUN_OPERATIONS,
   peerOperationRequest,
+  peerRawUploadRequest,
   peerOperationResult,
 } from "./peer-operation.js";
 import {
@@ -369,6 +371,8 @@ export class PeerHostManager {
       const code = BLOCKED_CODES[sup.state.reason];
       return { ok: false, error: { code, message: new PeerTransportError(code).message } };
     }
+    // Revision 50: a host that granted `attachments:raw` takes a picture as its own bytes.
+    if (sup?.view.capabilities.includes("attachments:raw")) request = peerRawUploadRequest(operation, request);
     // Only the connection that admitted the request may be blocked by its failure.
     const admitted = sup?.controller;
     const record = operation as Record<string, unknown>;
@@ -378,7 +382,7 @@ export class PeerHostManager {
         id,
         { ...request, ...(signal ? { signal } : {}) },
         undefined,
-        { ...(record.operation === "attachmentContent" ? { binary: true } : {}), ...options },
+        { ...(PEER_BINARY_OPERATIONS.has(String(record.operation)) ? { binary: true } : {}), ...options },
       );
     } catch (error) {
       if (
@@ -683,7 +687,7 @@ export class PeerHostManager {
     const reason = blockedReason(error);
     sup.failure = error instanceof PeerTransportError && error.code === "invalid_response"
       ? "invalid_response"
-      : "unreachable";
+      : error instanceof PeerTransportError ? error.failure ?? "unreachable" : "unreachable";
     if (reason) {
       this.transition(sup, { kind: "blocked", reason });
     } else {

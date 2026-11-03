@@ -58,10 +58,18 @@ export function createSupersedingTaskGate() {
     }
   };
 
+  /**
+   * Replace the current task with a fresh attempt only when it failed. A
+   * failed current task otherwise keeps rejecting every later wait(), so a
+   * caller that can redo the work uses this before waiting.
+   */
+  const retryFailed = (start: () => Promise<void>): SupersedingTaskToken | null =>
+    current?.state === "rejected" ? replace(start()) : null;
+
   const clear = (): void => {
     current?.resolveSuperseded();
     current = null;
   };
 
-  return { clear, isCurrent, replace, wait };
+  return { clear, isCurrent, replace, retryFailed, wait };
 }

@@ -75,4 +75,28 @@ test("workspace terminal opens a real PTY, runs a shell command, and persists ou
   expect(exitState.inert).toBe(true);
   await expect(page.getByRole("button", { name: "Show terminal" })).toBeVisible();
   await expect(page.locator(".terminal-drawer")).toBeHidden();
+
+  // Split panes fill the drawer, so they would follow its height animation.
+  // Reopening must not resize their canvases on every frame (a new backing
+  // store and a full grid render each time); they open at their settled size.
+  await page.getByRole("button", { name: "Show terminal" }).click();
+  await drawer.getByRole("button", { name: "Split terminal horizontally" }).click();
+  await expect(drawer.locator("canvas")).toHaveCount(2);
+  await drawer.getByRole("button", { name: "Hide terminal" }).click();
+  await expect(page.locator(".terminal-drawer")).toBeHidden();
+  const canvasSizes = await page.evaluate(() => new Promise<string[]>((resolve) => {
+    const sizes = new Set<string>();
+    const start = performance.now();
+    const sample = () => {
+      const drawer = document.querySelector<HTMLElement>(".terminal-drawer");
+      if (drawer && drawer.getBoundingClientRect().height > 0) {
+        for (const canvas of drawer.querySelectorAll("canvas")) sizes.add(`${canvas.clientHeight}/${canvas.height}`);
+      }
+      if (performance.now() - start < 600) requestAnimationFrame(sample);
+      else resolve([...sizes]);
+    };
+    document.querySelector<HTMLButtonElement>("button[data-terminal-toggle]")!.click();
+    requestAnimationFrame(sample);
+  }));
+  expect(canvasSizes).toHaveLength(1);
 });

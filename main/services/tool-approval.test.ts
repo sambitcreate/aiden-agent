@@ -194,6 +194,54 @@ test("detaching a renderer denies pending and future approvals without aborting 
   assert.equal(await resumed, "allowed");
 });
 
+test("an approval asked after a detach reports itself unpublished; cancelled or released streams do not", async () => {
+  const published: string[] = [];
+  const shortCircuited: Array<{ streamId: string; approvalId: string; summary: string }> = [];
+  const approvals = new ToolApprovalCoordinator(
+    (prompt) => published.push(prompt.approvalId),
+    undefined,
+    (prompt) => shortCircuited.push({ streamId: prompt.streamId, approvalId: prompt.approvalId, summary: prompt.summary }),
+  );
+  const ask = (streamId: string, summary: string) =>
+    approvals.request({ streamId, toolCallId: `call-${summary}`, toolName: "run_command", summary });
+
+  approvals.detachStream("left");
+  assert.equal(await ask("left", "npm test"), "detached");
+  assert.equal(shortCircuited.length, 1);
+  assert.equal(shortCircuited[0]!.streamId, "left");
+  assert.equal(shortCircuited[0]!.summary, "npm test");
+  assert.ok(shortCircuited[0]!.approvalId.length > 0);
+  assert.deepEqual(published, []);
+
+  // Stop, not a detach: the person ended the run, so nothing waits on them.
+  approvals.cancelStream("stopped");
+  assert.equal(await ask("stopped", "rm -rf build"), "cancelled");
+  approvals.detachStream("stopped");
+  assert.equal(await ask("stopped", "ls"), "cancelled");
+
+  approvals.releaseStream("left");
+  const live = ask("left", "git push");
+  assert.equal(published.length, 1);
+  approvals.decide(published[0]!, true);
+  assert.equal(await live, "allowed");
+  assert.equal(shortCircuited.length, 1);
+});
+
+test("a throwing short-circuit observer still settles the approval", async () => {
+  const approvals = new ToolApprovalCoordinator(
+    () => {},
+    undefined,
+    () => {
+      throw new Error("log unavailable");
+    },
+  );
+  approvals.detachStream("left");
+  assert.equal(
+    await approvals.request({ streamId: "left", toolCallId: "call", toolName: "write_file", summary: "write" }),
+    "detached",
+  );
+});
+
 test("publication failures are distinct from user denial", async () => {
   const approvals = new ToolApprovalCoordinator(() => {
     throw new Error("renderer unavailable");

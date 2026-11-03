@@ -16,7 +16,7 @@ test("the onboarding reset closes the renderer before destructive cleanup and pr
   const reset = source.slice(start, end);
 
   assert.match(reset, /shutdownStarted\s*\|\|\s*installUpdateOnQuit/u);
-  const authorize = reset.indexOf('authorizeProtectedAction(window, "close")');
+  const authorize = reset.indexOf('authorizeProtectedAction(window, "close"');
   const clearCompletion = reset.indexOf(
     "await clearRendererOnboardingCompletion(window)",
   );

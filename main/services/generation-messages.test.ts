@@ -102,6 +102,24 @@ test("matches Pi's installed tool-result image serialization gate", () => {
   assert.equal(JSON.stringify(text).includes("TOOL_IMAGE_SENTINEL"), false);
 });
 
+test("a shared image whose file is gone is named for the model instead of vanishing", () => {
+  const message = chatMessageToPiMessage(
+    {
+      id: "message-lost-image",
+      role: "user",
+      content: "What is in this?",
+      createdAt: 1,
+      attachments: [
+        { id: "lost", name: "receipt.png", mimeType: "image/png", kind: "image", size: 70, sha256: "e".repeat(64) },
+      ],
+    },
+    model,
+    true,
+  );
+  assert.equal(message.role, "user");
+  assert.deepEqual(message.content, [{ type: "text", text: "What is in this?\n\n[Image unavailable: receipt.png]" }]);
+});
+
 test("journal rehydration preserves the authoritative chat timestamp", () => {
   const message = chatMessageToPiMessage(
     {

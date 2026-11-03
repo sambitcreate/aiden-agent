@@ -7,6 +7,7 @@ import {
   BOT_SIDEBAR_PREFERENCES_KEY,
   parseBotSidebarPreferences,
   serializeBotSidebarPreferences,
+  withBotReplySeen,
   withBotViewed,
   withoutBot,
   withoutMissingBots,
@@ -92,6 +93,12 @@ export const botSidebarPreferenceActions = {
   markViewed: (botId: string, replyAt: number | null) =>
     update((current) => withBotViewed(current, botId, Date.now(), replyAt)),
   /**
+   * The person marked the reply at `replyAt` read without opening the Bot (the
+   * Inbox's Mark read). Leaves the Bot's last view, so `/bots` opens where it did.
+   */
+  markReplySeen: (botId: string, replyAt: number | null) =>
+    update((current) => withBotReplySeen(current, botId, replyAt)),
+  /**
    * Drops the pin and views of deleted Bots. Call it only after a settled,
    * successful Bots load: an empty set is ignored, but a partial or stale list
    * would still unpin a Bot that exists.
@@ -111,4 +118,24 @@ export function useBotSidebarPreferences() {
   const preferences = React.useSyncExternalStore(subscribe, snapshot, snapshot);
   React.useEffect(persistIfMissing, []);
   return { preferences, ...botSidebarPreferenceActions };
+}
+
+const subscribeNowhere = () => () => {};
+const noPreferences = () => null;
+
+/**
+ * The preferences only while `enabled` (the Inbox listing Bots): until then
+ * it is null, subscribes to nothing, so Bot visits don't re-render the
+ * caller, and writes no record for a person who never uses it.
+ */
+export function useBotSidebarPreferencesWhen(enabled: boolean): BotSidebarPreferences | null {
+  const preferences = React.useSyncExternalStore(
+    enabled ? subscribe : subscribeNowhere,
+    enabled ? snapshot : noPreferences,
+    enabled ? snapshot : noPreferences,
+  );
+  React.useEffect(() => {
+    if (enabled) persistIfMissing();
+  }, [enabled]);
+  return preferences;
 }

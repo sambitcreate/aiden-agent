@@ -196,6 +196,39 @@ test("a recorder that exits by itself settles, and an empty file fails", async (
   assert.equal(h.recorder.take(started.id), null, "only a ready recording can be taken");
 });
 
+test("a failed recording nobody discarded is deleted with its file after an hour; a ready one waits to be saved", async () => {
+  const h = harness();
+  const failed = await start(h, "chat-1");
+  const failedArgs = h.spawned[0]!.args;
+  const failedFile = failedArgs[failedArgs.length - 1]!;
+  // The recorder wrote part of a file, then died while the device viewer was closed.
+  h.files.set(failedFile, 4096);
+  h.spawned[0]!.child.exit(1);
+  const ready = await start(h, "chat-2", "5C1E4B7A-0000-4000-8000-000000000002");
+  await h.recorder.stop(ready.id);
+  await settle();
+  assert.equal(h.recorder.get(failed.id)?.status, "failed");
+  h.advance(59 * 60_000);
+  await settle();
+  assert.equal(h.recorder.get(failed.id)?.status, "failed", "the viewer can still report the failure for a while");
+  h.advance(60_000);
+  await settle();
+  assert.equal(h.recorder.get(failed.id), null);
+  assert.ok(h.removed.includes(failedFile), "its partial file is deleted");
+  assert.ok(!h.files.has(failedFile));
+  assert.equal(h.recorder.get(ready.id)?.status, "ready", "a finished recording is still offered for saving");
+  assert.ok(h.recorder.take(ready.id));
+});
+
+test("a failed recording the viewer discards leaves no sweep behind", async () => {
+  const h = harness();
+  const started = await start(h);
+  h.spawned[0]!.child.exit(1);
+  await settle();
+  await h.recorder.discard(started.id);
+  assert.equal(h.pendingTimers(), 0);
+});
+
 test("a child that fails to spawn fails its recording instead of wedging stop and discard", async () => {
   const h = harness();
   const started = await start(h);
@@ -300,7 +333,8 @@ test("an emulator recording whose on-device stop was never confirmed fails inste
   assert.equal(h.recorder.take(started.id), null);
   assert.equal(local === "" || !h.files.has(local), true, "no unfinished copy is left behind");
   assert.ok(steps.includes("cleanup"), "the device copy is still deleted");
-  assert.equal(h.pendingTimers(), 0);
+  h.advance(600_000);
+  assert.deepEqual(h.spawned[0]!.child.signals, ["SIGINT"], "no duration cap or kill timer fires later");
 });
 
 test("a start still preparing its temp file when its chat is discarded never spawns a recorder", async () => {

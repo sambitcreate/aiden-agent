@@ -4395,6 +4395,35 @@ test("GitService retries a read that crosses a mutation epoch", async (t) => {
   assert.equal((await service.info(repository)).branch, "feature/during-read");
 });
 
+test("GitService lets a cancelled read leave the queue behind a slow mutation", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const wrapper = path.join(root, "slow-switch-git");
+  const started = path.join(root, "switch-started");
+  await fs.writeFile(
+    wrapper,
+    `#!/bin/sh\nif [ "$1" = "switch" ]; then\n  touch '${started}'\n  sleep 3\nfi\nexec /usr/bin/git "$@"\n`,
+    { encoding: "utf8", mode: 0o700 },
+  );
+  const service = new GitService({ cacheTtlMs: 0, gitBinary: wrapper });
+  const mutation = service.createBranch(repository, "feature/slow");
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (await fs.access(started).then(() => true, () => false)) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  const controller = new AbortController();
+  const read = service.worktrees(repository, controller.signal);
+  const settled = read.then(() => Date.now(), () => Date.now());
+  // Let repository discovery finish so the read is queued behind the mutation.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const abortedAt = Date.now();
+  controller.abort();
+  await assert.rejects(read, (error: unknown) => error instanceof GitServiceError && error.code === "aborted");
+  assert.ok((await settled) - abortedAt < 1_000, "the cancelled read must not wait for the push-length mutation");
+  await mutation;
+  assert.equal(await git(repository, ["branch", "--show-current"]), "feature/slow");
+});
+
 test("GitService preserves a timed-out worktree until stable ownership is established", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);

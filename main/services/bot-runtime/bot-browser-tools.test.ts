@@ -458,6 +458,8 @@ test("typing into a password field hands the step to the person on that page, an
     await waitFor(() => handoffs.pending(BOT).length === 1, { what: "the hand-off card" });
     const card = handoffs.pending(BOT)[0]!;
     assert.equal(card.rule?.id, "locked.credentials");
+    assert.equal(handoffs.browserTarget(BOT, card.waitId)?.tabId, "slack");
+    assert.equal("browserTarget" in card, false, "the tab identity stays on the host");
     assert.equal(JSON.stringify(card).includes("hunter2"), false);
     assert.deepEqual(card.open, { url: SLACK }, "Open takes the person to the page the Bot was on, in its own tab");
     handoffs.answer(BOT, card.waitId, { outcome: "done" });

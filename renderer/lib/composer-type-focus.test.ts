@@ -166,3 +166,35 @@ test("Escape stops a running response only from an empty composer", () => {
   assert.equal(escapeStopsGeneration({ ...running, repeat: true }), false);
   assert.equal(escapeStopsGeneration({ ...running, key: "Enter" }), false);
 });
+
+test("keys already settled by the event never run the page checks", () => {
+  const reads: string[] = [];
+  const watched = Object.fromEntries(
+    Object.entries(writable).map(([name, value]) => [name, { get: () => (reads.push(name), value) }]),
+  );
+  const context = Object.defineProperties({}, watched) as ComposerTypeFocusContext;
+  const decide = (value: string, extras: Partial<Parameters<typeof decideComposerTypeFocus>[0]> = {}) =>
+    decideComposerTypeFocus({ key: value, metaKey: false, ctrlKey: false, altKey: false, ...extras }, context);
+  for (const [value, extras] of [
+    ["k", { metaKey: true }],
+    ["k", { ctrlKey: true }],
+    ["k", { defaultPrevented: true }],
+    ["Enter", {}],
+    ["ArrowDown", {}],
+  ] as const) {
+    assert.deepEqual(decide(value, extras), { action: "ignore" });
+  }
+  assert.equal(reads.length, 0, reads.join(", "));
+  // Typing in the focused composer, the common case, never pays for the
+  // document-wide overlay search or the composer's layout read.
+  const focused = Object.defineProperties({}, {
+    ...watched,
+    composerFocused: { get: () => (reads.push("composerFocused"), true) },
+  }) as ComposerTypeFocusContext;
+  assert.deepEqual(
+    decideComposerTypeFocus({ key: "a", metaKey: false, ctrlKey: false, altKey: false }, focused),
+    { action: "ignore" },
+  );
+  assert.ok(!reads.includes("overlayOpen"));
+  assert.ok(!reads.includes("composerAvailable"));
+});

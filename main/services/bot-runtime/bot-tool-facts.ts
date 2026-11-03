@@ -14,7 +14,7 @@ import {
   filterBotSkillSnapshot,
 } from "../bot-tool-authority.js";
 import type { SubagentMcpRemoteTool } from "../subagents/subagent-mcp-read.js";
-import type { SkillRegistrySnapshot } from "../skill-registry.js";
+import { skillToolKeyForName, type SkillRegistrySnapshot } from "../skill-registry.js";
 import type { BotAdmission } from "./bot-tool-assembly.js";
 import type { BotToolFacts } from "./bot-tool-policy.js";
 
@@ -85,6 +85,10 @@ export function createBotToolFacts(input: BotToolFactsInput): BotToolFactsWithSk
     hasComputer: input.hasComputer,
     mcpTools,
     skillToolNames: async () => (await skills()).names,
+    skillToolKeyFor: async (name) => {
+      const snapshot = (await skills()).snapshot;
+      return snapshot ? skillToolKeyForName(snapshot, name) : undefined;
+    },
     skillSnapshot: async () => (await skills()).snapshot,
     // Only a granted tool's entry: the same live inventory the grant was checked against.
     mcpToolDescriptor: async (name) => ((await mcpTools()).has(name) ? (await liveMcpTools()).get(name) : undefined),

@@ -8,6 +8,7 @@ import {
 import { terminalAssistantThinkingSegments } from "./generation-runtime.js";
 import { markMcpAgentTool, mcpToolActivityLabel } from "./mcp-tool-identity.js";
 import { mcpAgentToolPresentation } from "./mcp-tool-result.js";
+import { assistantPresentationRows } from "../../renderer/lib/assistant-message-presentation.js";
 import {
   isToolStep,
   parseGenerationTimeline,
@@ -988,4 +989,168 @@ test("form fill activity persists counts without source or field values", () => 
   const timeline = projector.finish("completed");
   assert.equal(toolSteps(timeline)[0].detail, "1 filled · 1 not attempted · stopped early");
   assert.doesNotMatch(JSON.stringify(timeline), /private-document|Secret field|secret-value/);
+});
+
+test("a long run's saved timeline stays readable past the step limit", () => {
+  let now = 0;
+  const published: GenerationTimeline[] = [];
+  const projector = new GenerationTimelineProjector("generation-1", (value) => published.push(value), () => (now += 100));
+  let reasoning = "";
+  const think = () => {
+    projector.thinkingStarted();
+    const start = reasoning.length;
+    reasoning += `thought ${start}. `;
+    projector.reasoningDelta(start, reasoning.length);
+    projector.thinkingEnded();
+  };
+  think();
+  projector.toolStarted("edit", "edit_file", { path: "src/app.ts" });
+  projector.toolFinished("edit", "completed", { kind: "file_line_changes", version: 1, additions: 4, deletions: 1 });
+  think();
+  projector.toolStarted("image", "display_image", { path: "previews/page.png" });
+  projector.toolFinished("image", "completed");
+  think();
+  projector.toolStarted("broken", "run_command", { description: "Run the tests" });
+  projector.toolFinished("broken", "failed");
+  for (let round = 0; round < 150; round += 1) {
+    think();
+    projector.toolStarted(`read-${round}`, "read_file", { path: `src/file-${round}.ts` });
+    projector.toolFinished(`read-${round}`, "completed");
+  }
+  think();
+  projector.toolStarted("last", "grep", { pattern: "TODO" });
+
+  assert.ok(published.every((snapshot) => snapshot.steps.length <= 200));
+  const live = published[published.length - 1]!;
+  const newest = live.steps[live.steps.length - 1];
+  assert.equal(newest && isToolStep(newest) && newest.status, "pending");
+
+  const final = projector.finish("completed");
+  // 306 steps were recorded; the reader that used to drop the whole timeline now accepts it.
+  assert.ok(final.steps.length <= 200);
+  assert.deepEqual(parseGenerationTimeline(final, 0, reasoning.length), final);
+  // Every thought is still shown, in order, and keeps its time.
+  const rows = assistantPresentationRows("", final, reasoning);
+  assert.ok(rows);
+  assert.equal(
+    rows.filter((row) => row.kind === "reasoning").map((row) => row.content).join(""),
+    reasoning,
+  );
+  const thinkingMs = final.steps.reduce((total, step) => total + (isToolStep(step) ? 0 : step.durationMs ?? 0), 0);
+  assert.equal(thinkingMs, 154 * 100);
+  // Steps that carry something are kept: the edit's line counts, the image's anchor, the failure.
+  const kept = toolSteps(final);
+  assert.deepEqual(kept.find((step) => step.toolName === "edit_file")?.lineChanges, { additions: 4, deletions: 1 });
+  assert.ok(kept.some((step) => step.toolName === "display_image"));
+  assert.ok(kept.some((step) => step.status === "failed"));
+  // Thoughts stay where they happened: none sits above a call that started before it ended.
+  final.steps.forEach((step, index) => {
+    const next = final.steps[index + 1];
+    if (!isToolStep(step) && next) assert.ok((step.finishedAt ?? 0) <= next.startedAt, `${step.id} before ${next.id}`);
+  });
+  // The oldest plain reads made the room; the reads still listed are the newest ones.
+  const reads = kept.filter((step) => step.toolName === "read_file").map((step) => step.target);
+  assert.ok(reads.length < 150);
+  assert.deepEqual(reads, Array.from({ length: reads.length }, (_, index) => `src/file-${150 - reads.length + index}.ts`));
+});
+
+test("a run of more tool calls than the step limit drops the oldest plain reads first", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.toolStarted("edit", "edit_file", { path: "src/app.ts" });
+  projector.toolFinished("edit", "completed", { kind: "file_line_changes", version: 1, additions: 4, deletions: 1 });
+  projector.toolStarted("image", "display_image", { path: "previews/page.png" });
+  projector.toolFinished("image", "completed");
+  projector.toolStarted("broken", "run_command", { description: "Run the tests" });
+  projector.toolFinished("broken", "failed");
+  for (let round = 0; round < 250; round += 1) {
+    projector.toolStarted(`read-${round}`, "read_file", { path: `src/file-${round}.ts` });
+    projector.toolFinished(`read-${round}`, "completed");
+  }
+  const final = projector.finish("completed");
+  assert.equal(final.steps.length, 200);
+  assert.deepEqual(parseGenerationTimeline(final), final);
+  const kept = toolSteps(final);
+  assert.deepEqual(kept.slice(0, 3).map((step) => step.toolName), ["edit_file", "display_image", "run_command"]);
+  assert.equal(kept[2]?.status, "failed");
+  // The newest 197 reads remain; the 53 oldest went.
+  assert.equal(kept[3]?.target, "src/file-53.ts");
+  assert.equal(kept[kept.length - 1]?.target, "src/file-249.ts");
+  // Public call ids still name the original calls, so anything placed after them stays put.
+  assert.equal(kept[1]?.toolCallId, "call-2");
+});
+
+test("a step folded out of a long run never comes back while the run goes on", () => {
+  const published: GenerationTimeline[] = [];
+  const projector = new GenerationTimelineProjector("generation-1", (value) => published.push(value));
+  projector.toolStarted("slow", "read_file", { path: "src/slow.ts" });
+  projector.toolRunning("slow");
+  projector.toolStarted("write", "write_file", { path: "notes.md" });
+  projector.toolFinished("write", "completed");
+  for (let round = 0; round < 199; round += 1) {
+    projector.toolStarted(`edit-${round}`, "edit_file", { path: `src/file-${round}.ts` });
+    projector.toolFinished(`edit-${round}`, "completed");
+  }
+  // The slow read settles after the limit was reached, becoming the cheapest step to fold.
+  projector.toolFinished("slow", "completed");
+  projector.finish("completed");
+
+  const seen = new Set<string>();
+  const gone = new Set<string>();
+  for (const snapshot of published) {
+    assert.ok(snapshot.steps.length <= 200);
+    const ids = new Set(snapshot.steps.map((step) => step.id));
+    for (const id of gone) assert.ok(!ids.has(id), `${id} came back`);
+    for (const id of seen) if (!ids.has(id)) gone.add(id);
+    for (const id of ids) seen.add(id);
+  }
+  assert.ok(gone.size > 0);
+});
+
+test("folding a long run never moves its reply text or an image's row", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  let content = "";
+  const say = (text: string) => {
+    content += text;
+    projector.setContentOffset(content.length);
+  };
+  // A lone read between two paragraphs, then a row that opens with a read and shows a visual.
+  projector.toolStarted("between", "read_file", { path: "src/between.ts" });
+  projector.toolFinished("between", "completed");
+  say("First paragraph. ");
+  projector.toolStarted("lead", "read_file", { path: "src/lead.ts" });
+  projector.toolFinished("lead", "completed");
+  projector.toolStarted("visual", "render_ui", { title: "Chart" });
+  projector.toolFinished("visual", "completed");
+  say("Second paragraph. ");
+  for (let round = 0; round < 260; round += 1) {
+    projector.toolStarted(`read-${round}`, "read_file", { path: `src/file-${round}.ts` });
+    projector.toolFinished(`read-${round}`, "completed");
+  }
+  const full = projector.finish("completed");
+  assert.equal(full.steps.length, 200);
+
+  const rows = assistantPresentationRows(content, full)!;
+  const texts = rows.filter((row) => row.kind === "text").map((row) => row.content);
+  assert.deepEqual(texts, ["First paragraph. ", "Second paragraph. "]);
+  const visualRow = rows.find((row) => row.kind === "activity" && row.steps.some((step) => isToolStep(step) && step.toolName === "render_ui"));
+  assert.ok(visualRow && visualRow.kind === "activity");
+  assert.equal((visualRow.steps[0] as AgentToolStep).target, "src/lead.ts");
+});
+
+test("a run that writes a line before every call still keeps a timeline past the step limit", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  let content = "";
+  for (let round = 0; round < 230; round += 1) {
+    content += `Now reading file ${round}. `;
+    projector.setContentOffset(content.length);
+    projector.toolStarted(`read-${round}`, "read_file", { path: `src/file-${round}.ts` });
+    projector.toolFinished(`read-${round}`, "completed");
+  }
+  const final = projector.finish("completed");
+  assert.equal(final.steps.length, 200);
+  assert.deepEqual(parseGenerationTimeline(final, content.length), final);
+  // The reply's words all survive; only where some calls sat between them is lost.
+  const rows = assistantPresentationRows(content, final)!;
+  assert.equal(rows.filter((row) => row.kind === "text").map((row) => row.content).join(""), content);
+  assert.equal(toolSteps(final)[0]?.target, "src/file-30.ts");
 });

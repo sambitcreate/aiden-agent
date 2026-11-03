@@ -602,3 +602,49 @@ test("composer context usage visibility updates immediately from Appearance", as
     else await expect(meter).toHaveCount(0);
   }
 });
+
+test("chat detail, collapse, busy-send and shared link preferences persist without overflowing", async ({ aiden }) => {
+  let page = aiden.page;
+  await finishLmStudioOnboarding(page);
+  const openAppearance = async () => {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Appearance", exact: true }).click();
+  };
+  await openAppearance();
+  for (const [name, value] of [
+    ["Work details", "Verbose"],
+    ["When to collapse work details", "On next message"],
+    ["Send behavior while busy", "Steer"],
+    ["Open chat links in", "System browser"],
+  ]) {
+    await page.getByRole("combobox", { name, exact: true }).click();
+    await page.getByRole("option", { name: value, exact: true }).click();
+    await expect(page.getByRole("combobox", { name, exact: true })).toHaveText(value);
+  }
+  for (const width of [1280, 600, 390]) {
+    await aiden.app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 900), width);
+    for (const name of ["Work details", "When to collapse work details", "Send behavior while busy", "Open chat links in"]) {
+      const control = page.getByRole("combobox", { name, exact: true });
+      await control.scrollIntoViewIfNeeded();
+      const box = await control.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+    }
+  }
+  await expect.poll(async () => {
+    try {
+      return JSON.parse(await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8")).settings?.appearance;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  }).toMatchObject({ workDetails: "verbose", workDetailsCollapseTiming: "next-input", busySendBehavior: "steer" });
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 900));
+  page = await aiden.relaunch();
+  await openAppearance();
+  await expect(page.getByRole("combobox", { name: "Work details", exact: true })).toHaveText("Verbose");
+  await expect(page.getByRole("combobox", { name: "When to collapse work details", exact: true })).toHaveText("On next message");
+  await expect(page.getByRole("combobox", { name: "Send behavior while busy", exact: true })).toHaveText("Steer");
+  await expect(page.getByRole("combobox", { name: "Open chat links in", exact: true })).toHaveText("System browser");
+});

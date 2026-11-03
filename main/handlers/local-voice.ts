@@ -4,17 +4,16 @@
 
 import { ipcMain, logger } from "../platform.js";
 import {
+  deleteLocalSpeechModel,
   engineStatus,
   onLocalSpeechState,
   transcribeLocalPcm16,
-  releaseRecognizer,
   warmLocalVoice,
 } from "../services/local-speech.js";
 import {
   listModels,
   downloadModel,
   cancelDownload,
-  deleteModel,
   isModelInstalled,
 } from "../services/local-speech-models.js";
 import { configStore } from "../services/config-store.js";
@@ -79,8 +78,7 @@ export function registerLocalVoiceHandlers(): void {
   });
   ipcMain.handle("localModels:delete", async (_event, id: unknown) => {
     const modelId = asString(id, "id");
-    await releaseRecognizer(modelId);
-    await deleteModel(modelId);
+    await deleteLocalSpeechModel(modelId);
     const settings = await configStore.getSettings();
     if (settings.localVoiceModel === modelId)
       await configStore.setSettings({ localVoiceModel: "" });

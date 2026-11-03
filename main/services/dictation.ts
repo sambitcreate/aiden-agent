@@ -56,7 +56,7 @@ function livePasteDeps(): PasteDeps {
       ? () => secureInput.isSecureInputActive()
       : async () => false,
     pasteWithPreservedClipboard: behavior.accessibilityPaste
-      ? runAtomicMacPaste
+      ? (text) => runAtomicMacPaste(text)
       : async () => false,
     log: (message, error) => logger.warn("dictation", message, error),
   };

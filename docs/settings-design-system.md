@@ -25,7 +25,17 @@ Duplicate workspace names receive a short stable ID suffix in both visible and a
 
 ## Chat width
 
-`AppearanceConfig.chatWidth` (`narrow`, `default`, `wide`, or `full`; default `default`) is the one Appearance layout preference. `applyAppearanceConfig` writes it to `--chat-content-max-width` (44rem, 52rem, 64rem, or `none`) and `data-chat-width` on the root. Every `.chat-content-column` surface shares that token, so the transcript, pending approvals, the task and subagent row above the composer, and the composer stay aligned. The dock inset still reserves the floating Live button's gutter at Full. Older v1 settings and exports without the field load as Default, and strict parsing rejects unknown values. The control is a four-option radio card group: selection is the label's list-selection fill, never a border, and keyboard focus uses the neutral focus ring. Below 540px of content width it reflows to two columns. `settings-unification.spec.ts` measures the rendered transcript and composer widths for every option and checks that the choice survives a relaunch.
+`AppearanceConfig.chatWidth` (`narrow`, `default`, `wide`, or `full`; default `default`) is the one Appearance layout preference stored in `AppearanceConfig`; the sidebar view below is a per-device sidebar preference shown on the same page. `applyAppearanceConfig` writes it to `--chat-content-max-width` (44rem, 52rem, 64rem, or `none`) and `data-chat-width` on the root. Every `.chat-content-column` surface shares that token, so the transcript, pending approvals, the task and subagent row above the composer, and the composer stay aligned. The dock inset still reserves the floating Live button's gutter at Full. Older v1 settings and exports without the field load as Default, and strict parsing rejects unknown values. The control is a four-option radio card group: selection is the label's list-selection fill, never a border, and keyboard focus uses the neutral focus ring. Below 540px of content width it reflows to two columns. `settings-unification.spec.ts` measures the rendered transcript and composer widths for every option and checks that the choice survives a relaunch.
+
+## Sidebar
+
+Settings → Appearance → Sidebar, under Chat width, picks how the sidebar lists chats: **By workspace** (the default), **Recent only** or **Inbox**, which carries a Beta pill and is named "Inbox (Beta)". It is not an `AppearanceConfig` field: `SidebarViewPicker` reads and writes the same `useSidebarView()` store as the sidebar's Organize menu (`SidebarPreferences.view` in local storage), so a change in either one shows in the other at once, in every window. The control reuses the Chat width radio cards: a three-option `radiogroup` with one tab stop, arrow keys, Home and End (`radio-navigation.ts`), selection drawn with the label's list-selection fill, never a border, and the neutral focus ring on keyboard focus. Each card's preview is a few skeleton bars (indented rows for By workspace, a flat list for Recent only, a soft warning-tinted row on top for Inbox), with no outline or stripe. The three cards keep one row down to 380px of content width (unlike Chat width, which reflows to two columns below 540px), then stack in one column. `sidebar-view-picker.test.tsx` covers the selection, the sync with the menu's store and the keyboard.
+
+While Inbox is the chosen view, and only on a host with the `badgeCount` capability (macOS and Linux), a grouped card below the cards holds one switch row: **Show Needs you count on the Dock icon** ("on the app icon" on Linux), with a one-line description of what counts. It uses the shared `FieldSet`, `Field` and trailing `Switch`, like any other settings row. It is on by default and stored as `SidebarPreferences.dockBadge` in the same local-storage record as the view, so it is not an `AppearanceConfig` field either. Switching to another view hides the row and clears the badge, and keeps the choice for when the Inbox comes back. `sidebar-view-picker.test.tsx` covers when the row shows, its default, the stored choice and what the window reports to main.
+
+## Window (Linux only)
+
+`AppearanceConfig.linuxTitleBar` (`auto`, `aiden`, or `system`; default `auto`) picks the Linux window frame. Appearance shows a "Window" group with one trailing **Use system title bar** switch only when the host is Linux. `auto` draws Aiden's own title bar (window buttons in the 52px top bar, a ☰ main menu button, no menu bar strip) except on tiling window managers, which get the system title bar. The switch reads `auto` as whatever the running window uses and writes `aiden` or `system`. The frame is chosen when the main window is created, so the description adds "Takes effect the next time you open Aiden." while the saved choice differs from the running window. Older settings without the field load as `auto`, and strict parsing rejects unknown values. `linux-window-controls.spec.ts` checks that the choice is saved and applied after a relaunch.
 
 ## Aiden Live
 
@@ -37,13 +47,26 @@ Settings → Connectors (section id `mcp`) has one heading with an ⓘ, **Add cu
 
 Local connectors added outside Aiden remain blocked while their environment is sealed into encrypted device-local storage. The pending card shows variable names and saved/missing indicators, never plaintext values. **Review and approve** opens a trusted native confirmation containing the exact command, arguments and resolved environment overrides, JSON-escaped without truncation so settings such as `NODE_OPTIONS` and `PATH` can be reviewed. Cancel is the default. Main resolves and compares the effective launch again before approval, and rejects failed sealing, missing values or a changed configuration. An editor save that introduces a new launch also opens this review. Ordinary unchanged approved saves and storage-only migrations keep existing consent. No plaintext fallback is permitted.
 
-A connector served by a Mac app (iMCP, `macApp` in the catalog) appears only where `app:getInfo` reports `macAppConnectors` (macOS). Its setup dialog (`mcp-mac-app-setup.tsx`) has three rows: **Install** (a green "Installed" chip with the version, or **Check again** and a **Download** link to the vendor's page), **Open** (a green "Open" chip, or **Open iMCP**, which opens the installed copy only when pressed), and **Choose what Aiden can use** (where in the app to turn services on, with an ⓘ saying tool results go to the chat's model). Connection details show the one command it runs. A failed Test or Connect adds a line with the app and macOS settings that usually fix it. Aiden never bundles, downloads, updates or quits the app.
+A connector served by a Mac app (iMCP, `macApp` in the catalog) appears only where `app:getInfo` reports `macAppConnectors` (macOS). Its setup dialog (`mcp-mac-app-setup.tsx`) has three rows: **Install** (a green "Installed" chip with the version, or **Check again** and a **Download** link to the vendor's page), **Open** (a green "Open" chip, or **Open iMCP**, which opens the installed copy only when pressed), and **Choose what Aiden can use** (where in the app to turn services on, with an ⓘ saying tool results go to the chat's model). Connection details show the approved server path. Setup checks the iMCP publisher’s signatures on both the app and server. Each connection verifies them again, and macOS enforces the server’s Developer ID team and signing identifier at launch. A failed Test or Connect adds a line with the app and macOS settings that usually fix it. Aiden never bundles, downloads, updates or quits the app.
 
 Settings → Providers → Manage shows **Let custom connectors use this key** (off by default) only for a built-in provider with a saved API key; the custom-connector key picker lists only providers with it turned on.
+
+## Workspace settings
+
+Workspace settings is a pop-up, not a Settings page (`renderer/components/workspace-settings-dialog.tsx`). It opens from **Workspace settings…** in a workspace's ⋯ menu in the sidebar, the same item in the top-bar workspace chip menu, the command palette, or `⇧⌘,`. Only a workspace with a folder has one. Chats without a workspace, including No workspace chats in their hidden managed folders, follow Settings: the Chats group row and the No workspace chip menu have no Workspace settings item, and the config store drops any off-list saved on a No workspace record. It uses the shared `Dialog` at `size="wide"` (860px) with a vertical tab list on the left (General, Skills, Connectors; arrow keys move between tabs and selection is the list-selection fill) and the shared `FieldSet` cards on the right. Below 640px the tabs sit in a row above the content. Done closes it.
+
+- **General:** Name (saves on Enter or when the field loses focus; the first Escape undoes an edit), Folder with Show in Finder, Access (Full access, Ask first, No access) and the per-workspace Memory switch.
+- **Skills** and **Connectors:** a header with "n of m on", a search field once there are more than 8 rows, and a ⋯ menu with Turn all off here and Turn all on here. Each row has a trailing switch and a soft gray "Off here" `Badge` when it is switched off for this workspace. When Settings decides (a connector off in Settings or off for the model, a skill that only runs by name or is unavailable), the switch is disabled and the row's line says why, with a link back to Settings. A connector that can't connect shows a soft red badge, its error and Fix in Settings. Skills are grouped as Your skills, From this folder, and Built-in and global. When Skills are off in Settings the tab shows one callout instead of the list.
+
+Switches save at once on screen and roll back with a toast if saving fails. A short line under each list says changes apply from the next message. The stored off-lists (`Workspace.disabledSkills`, by canonical skill name, and `Workspace.disabledMcpServerIds`) live with the workspace in the device-local config. The main process enforces them for every chat in that workspace, including chats started from a phone and the subagents they start; Bots keep their own access, and the CLI does not read them yet.
 
 ## Limits & spending
 
 Settings → Limits & spending (section id `limits`, in the Agent group) has two `FieldSet` groups. **Usage limits** has one row, "Wait for a limit to clear", with a trailing Select of the longest wait (Don't wait, Up to 1, 6, 12 or 24 hours; default 6), backed by `AppSettings.usageLimitWaitHours`. **Spending limits** has four rows with trailing Selects: Each chat, Each Bot per month, Each routine run (No limit or a preset amount, `AppSettings.spendingLimits`) and "A Bot's month starts on" (1st to 28th). Each row's one secondary line says what the limit covers. A Bot's Profile has a "Spending" group with one "Monthly limit" row (Default, No limit or an amount) and a secondary line with this month's spend. The spending notices above a composer use a warning-tone icon and a soft raised fill, never a colored border; Allow more is the shared primary button. See [usage limits and spending limits](usage-limits-and-spending.md).
+
+## Bots
+
+Settings → Bots (section id `bots`, in the Agent group, before Bot computers) has two `FieldSet` groups. **Routines** has one trailing switch, "Go ahead without asking" (`AppSettings.botRoutinesGoAhead`, off by default), saved at once and put back if the save fails. **Always comes to you** lists what the switch never covers, each row with a trailing lock and "Always", the same treatment as a Bot's locked rules: passwords, 2FA codes and money; steps a Bot's rules hand off; and Computer Use on the person's Mac (only where this Mac offers Computer Use). A secondary line under the groups says what routines do while the switch is off. Each Bot's Rules group ends with a secondary line saying what routines do with Ask first steps and an inline "Change this for every Bot" link to the page. See [Bot rules](bot-rules.md#routines-that-go-ahead-settings--bots).
 
 ## Web pages
 
@@ -65,3 +88,35 @@ legacy settings). It uses the normal live-preview/save path. This is separate
 from `autoHideComposerContext`, which controls the workspace strip. Hiding the
 meter changes only presentation; Context remains in the workspace launcher and
 the runtime continues context accounting and compaction.
+
+## Work details and busy sends
+
+Appearance → Chat has **Work details** (Compact, Standard, Detailed, Verbose),
+**When to collapse work details** (On completion / On next message), **Open chat
+links in**, and **Send behavior while busy** (Queue / Steer). The work and send
+preferences use `AppearanceConfig.workDetails`, `workDetailsCollapseTiming`, and
+`busySendBehavior`, defaulting to `standard`, `completion`, and `queue` for new and
+legacy v1 settings. They follow live preview and the normal debounced save path.
+
+Compact keeps work behind summary headers. Standard shows a three-row activity
+preview; Detailed opens eligible tool trails; Verbose keeps automatic details
+open in history. On next message retains the latest exchange's work until the
+next committed ordinary prompt, including across reopening the chat. Reasoning is
+not part of these modes: it stays the steady one-line Thinking row that only the
+reader opens, so the transcript does not jump while a model thinks. Manual
+opens/closes win over automatic timing. Completed work never keeps live shimmer or announcements.
+Answers, visuals, approvals and question recaps keep their normal placement.
+Bot activity availability still follows each Bot's Quiet/Summary/Detailed level;
+the global mode and timing adjust Detailed recaps without adding hidden steps.
+
+The link row edits the same browser-service preference as Settings → Links,
+including Ask each time, Aiden browser and System browser. Local-file checks,
+loopback rules, modifier-click and restricted-content confirmation still apply.
+This preference remains separate from Appearance import/reset.
+
+While busy, Enter and the send pill use the chosen Queue/Steer default, and
+Cmd/Ctrl+Enter uses the other action. The pill's menu can override the default
+for that run; the next idle transition restores the saved default. Unsupported
+Steer uses the Queue affordance. Shift+Enter and idle sends are unchanged. These
+preferences apply to desktop viewers/composers; native phones and the CLI keep
+their existing local behavior, with no Remote wire change.

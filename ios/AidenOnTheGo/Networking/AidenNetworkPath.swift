@@ -167,6 +167,13 @@ struct AidenStreamNetworkRecovery {
 
     mutating func recordHealthy() { policy.recordHealthy() }
 
+    /// The wait a 429 asked for (`details.retryAfterSeconds`, else the
+    /// `Retry-After` header, clamped), or 0 for any other failure.
+    nonisolated static func serverRequestedDelayMilliseconds(after error: Error) -> Int {
+        guard let seconds = (error as? AidenRemoteClientError)?.serverRetryAfterSeconds else { return 0 }
+        return seconds * 1_000
+    }
+
     /// After the event stream fails. Returns `true` when the caller should
     /// probe status, or `false` after parking offline until the path returned,
     /// in which case the caller reopens the stream directly.
@@ -179,8 +186,11 @@ struct AidenStreamNetworkRecovery {
     }
 
     /// After the status probe fails. `onBackoff` runs before an online backoff
-    /// sleep (the caller's warning); offline parking never calls it.
+    /// sleep (the caller's warning); offline parking never calls it. A server
+    /// that asked for a longer wait (a retryable 429's `Retry-After`) passes it
+    /// as `minimumDelayMilliseconds`, so the reconnect never comes sooner.
     mutating func recoverAfterProbeFailure(
+        minimumDelayMilliseconds: Int = 0,
         onBackoff: () async -> Void,
         onWaiting: (Bool) async -> Void
     ) async throws -> ProbeFailureOutcome {
@@ -190,7 +200,8 @@ struct AidenStreamNetworkRecovery {
             return .networkReturned
         case .backoff(let attempt):
             await onBackoff()
-            if try await sleepUnlessNetworkLost(milliseconds: delayMilliseconds(attempt)) {
+            let delay = max(delayMilliseconds(attempt), minimumDelayMilliseconds)
+            if try await sleepUnlessNetworkLost(milliseconds: delay) {
                 return .backoffElapsed
             }
             policy.backoffInterruptedByNetworkLoss()

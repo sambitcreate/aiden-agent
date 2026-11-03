@@ -28,10 +28,10 @@ Plan: `docs/plans/live-cross-device-streaming-plan.md` (desktop lane D1–D4). B
 - The reveal renders the revealed source prefix as one Markdown document through `MarkdownContent` with `streaming`, so streamed and settled output match `<Markdown>` from history exactly: reference links, footnotes, and loose lists resolve across blocks. react-markdown keys elements as `tag-ordinal`, which is stable while text only appends, so earlier blocks keep their elements.
   - `streamingRevealVisibleEnd` maps a unit count to a source offset (each unit carries `end`).
   - While streaming, `remarkOpenFence` marks a trailing unclosed fence with `data-open-fence`, and `CodeBlock` renders it `plain`. Once the fence closes, the same element turns highlighting on in place.
-- The action row is laid out while streaming but kept `hidden` (aria-hidden). `MessageForkContextMenu` always wraps assistant rows, with a disabled trigger when there is no action.
+- The action row is laid out while streaming but kept `hidden` (aria-hidden). It is one slot at the end of the turn (`AssistantResponse` renders it after every row, media and visual), not under the newest paragraph, so a new paragraph never moves it. `MessageForkContextMenu` always wraps assistant rows, with a disabled trigger when there is no action.
 - The no-steps layout of `AssistantResponse` mirrors the step layout's slots (`text-0`), so the first tool step does not remount the text.
 - E2E specs wait for a settled reply with `getByRole("button", { name: "Fork from here" })`, because only the saved row can fork. Do not reintroduce `.streaming-reveal` count 0: the tree now persists.
-- Accepted risk: the reasoning block key differs between the two layouts.
+- Accepted risk: the reasoning block key differs between the two layouts. A remount now only loses a reader-opened state and replays the 220ms entrance; it no longer reopens a preview.
 
 ## Block reveal (D4, `renderer/lib/streaming-reveal.ts`)
 
@@ -44,7 +44,8 @@ Plan: `docs/plans/live-cross-device-streaming-plan.md` (desktop lane D1–D4). B
   - the closing fence.
 - **Timing.** A strong boundary releases at most once per 300ms. A tail with no boundary is released after 1000ms. A plain "300ms at paragraph boundaries" would hold a long open paragraph, a lone heading, or the last list item indefinitely.
 - **Incremental scan.** The gate looks for a boundary only once a release is allowed (`now >= earliest`). It keeps the scan state (scanned prefix, boundary, fence, previous line, table state) in `gate.scan` and resumes from it, so each release reads only the lines that arrived since. A text that does not extend the scanned prefix starts over. `waitingSince` is when the oldest unreleased text arrived.
-- **Full release.** The turn's end (`complete`, from `streamComplete`) and reduced motion release everything at once, and only the turn's end hands off.
+- **Full release.** The turn's end (`complete`, from `streamComplete`) releases everything at once, and only the turn's end hands off.
+- **Reduced motion** (since 570082aae) skips block gating and the fade but keeps the cadence: all text that has arrived is released at most once per 300ms (`STREAMING_REVEAL_RELEASE_MS`), so the reply is not re-parsed on every token.
 - **Tool-closed text** (`textClosed` on `MessageBubble`, the component's `closed` prop) stays gated: its end counts as a boundary and joins whole at the next release slot, without the 1000ms wait. It passes no `onHandoffComplete`.
 - **Fade.** Opacity only, over 450ms, via a top-level `@starting-style` in `styles.css`. It is gated on `:root[data-reduce-motion="false"] .streaming-reveal[data-streaming]`. It applies to `.streaming-reveal[data-streaming] > *` and to `li` and `tr` inside it. `data-streaming` is removed 450ms after the text completes (`STREAMING_REVEAL_FADE_MS`). There is no translateY, and the old `aiden-streaming-*` keyframes are gone.
 - `STREAMING_REVEAL_FALLBACK_MS` and `STREAMING_REVEAL_HANDOFF_MS` are kept. The per-unit schedule API (`revealDelayMs`, `advanceStreamingRevealSchedule`, and the rest) was removed.

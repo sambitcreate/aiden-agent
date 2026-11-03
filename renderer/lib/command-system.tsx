@@ -171,6 +171,21 @@ export function CommandSystemProvider({
     });
   }, [execute]);
 
+  // Grey out the menu bar items that can't run here (no chat open, nothing to stop).
+  const sentMenuCommands = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      const ids = applicationModal ? [] : ["commandPalette.toggle", ...handlers.current.keys()].sort();
+      const key = ids.join(" ");
+      if (key === sentMenuCommands.current) return;
+      sentMenuCommands.current = key;
+      void appApi.setMenuCommands(ids).catch(() => {
+        sentMenuCommands.current = null;
+      });
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [applicationModal, handlerRevision]);
+
   React.useEffect(() => {
     // This effect is deliberately declared after the native-command listener.
     // Main waits for this handshake before delivering queued menu actions.
@@ -180,13 +195,24 @@ export function CommandSystemProvider({
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target instanceof HTMLElement ? event.target : null;
+      // The page checks are getters, read only once a key matches a binding:
+      // ordinary typing never searches the page.
       const commandId = resolveCommandForKeyEvent(event, bindings, {
-        editable: isEditable(target),
-        fileEditor: Boolean(target?.closest("[data-command-scope='fileEditor']")),
-        terminal: Boolean(target?.closest("[data-command-scope='terminal'], .ghostty-screen")),
-        modal:
-          applicationModal ||
-          Boolean(document.querySelector('[data-slot="dialog-content"][data-state="open"]')),
+        get editable() {
+          return isEditable(target);
+        },
+        get fileEditor() {
+          return Boolean(target?.closest("[data-command-scope='fileEditor']"));
+        },
+        get terminal() {
+          return Boolean(target?.closest("[data-command-scope='terminal'], .ghostty-screen"));
+        },
+        get modal() {
+          return (
+            applicationModal ||
+            Boolean(document.querySelector('[data-slot="dialog-content"][data-state="open"]'))
+          );
+        },
         paletteOpen,
         composing: event.isComposing || event.key === "Dead",
         repeat: event.repeat,

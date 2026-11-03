@@ -65,6 +65,11 @@ final class AidenExternalNewChatQueue {
 }
 
 struct ContentView: View {
+    private enum ConnectionRecoveryDestination: String, Identifiable {
+        case installations, pairing
+        var id: Self { self }
+    }
+
     @Bindable var coordinator: AidenRemoteCoordinator
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("aiden.mobileOnboarding.v1.complete") private var hasCompletedMobileOnboarding = false
@@ -76,6 +81,7 @@ struct ContentView: View {
     @State private var navigationRequest: AidenNavigationRequest?
     @State private var sceneConnectionRefreshInProgress = false
     @State private var sceneRefreshGate = AidenSceneRefreshGate(refreshOnFirstActivation: true)
+    @State private var connectionRecoveryDestination: ConnectionRecoveryDestination?
 
     var body: some View {
         Group {
@@ -97,24 +103,21 @@ struct ContentView: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             if case .offline = coordinator.connectionState, let issue = coordinator.connectionIssue {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(issue.title).font(.subheadline.weight(.semibold))
-                    if let installation = coordinator.installationStore.activeInstallation {
-                        Text(installation.name).font(.caption.weight(.medium))
-                        if let last = installation.lastConnectedAt {
-                            Text("Last connected \(last.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    Text(issue.message).font(.caption).foregroundStyle(.secondary)
-                    if issue.canRetry {
-                        Button("Retry connection") { Task { await coordinator.connectActiveInstallation() } }
-                            .buttonStyle(.bordered)
-                    }
+                AidenConnectionRecoveryView(coordinator: coordinator, issue: issue) {
+                    connectionRecoveryDestination = .installations
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .background(.regularMaterial)
-                .accessibilityElement(children: .contain)
+            }
+        }
+        // Keep the sheet on the stable root so a foreground reconnect cannot
+        // remove connection management while the person is using it.
+        .sheet(item: $connectionRecoveryDestination) { destination in
+            switch destination {
+            case .installations:
+                AidenInstallationsView(coordinator: coordinator, addInstallation: {
+                    connectionRecoveryDestination = .pairing
+                })
+            case .pairing:
+                AidenPairingView(coordinator: coordinator, onPaired: { connectionRecoveryDestination = nil })
             }
         }
         .task { await coordinator.start() }
@@ -161,7 +164,10 @@ struct ContentView: View {
             _ = foregroundIntents.take()
         }
         .onChange(of: coordinator.connectionState) { _, state in
-            if state == .needsPairing { externalNewChats.invalidate() }
+            if state == .needsPairing {
+                externalNewChats.invalidate()
+                connectionRecoveryDestination = nil
+            }
             if state == .connected {
                 consumeExternalNewChatIfReady()
                 Task { await consumeForegroundIntentIfReady() }
@@ -267,12 +273,22 @@ struct ContentView: View {
         let archived = AidenWorkspaceArchiveStore().archivedWorkspaceIDs(for: instanceID)
         let candidates: [AidenIntentWorkspaceRecord]
         if coordinator.activeInstanceId == instanceID {
-            candidates = coordinator.workspaces.map { .init(id: $0.id, instanceId: instanceID, name: $0.name) }
+            candidates = AidenNoWorkspace.grouped(coordinator.workspaces).map {
+                .init(id: $0.id, instanceId: instanceID, name: $0.name)
+            }
         } else {
             candidates = AidenIntentCatalogStore.shared.load().workspaces.filter { $0.instanceId == instanceID }
         }
         let available = candidates.filter { !archived.contains($0.id) }
-        let selected = request.workspaceId ?? AidenProductNavigationStore.shared.selectedWorkspace(for: instanceID)
+        // A chat's own hidden folder is listed under the Chats home, so match against that: the
+        // active Mac's workspaces say which ids are hidden, the catalog says so for the others.
+        let isActive = coordinator.activeInstanceId == instanceID
+        let selected = (request.workspaceId ?? AidenProductNavigationStore.shared.selectedWorkspace(for: instanceID))
+            .map { id in
+                isActive
+                    ? AidenNoWorkspace.groupID(for: id, in: coordinator.workspaces)
+                    : AidenIntentWorkspaceRecord.listedID(for: id, in: candidates)
+            }
         guard let workspace = selected.flatMap({ id in available.first { $0.id == id } })
                 ?? (request.workspaceId == nil ? available.first : nil) else {
             coordinator.presentedError = String(localized: "Open this installation and choose an available workspace before starting a chat.")
@@ -302,9 +318,20 @@ struct ContentView: View {
                       coordinator.workspaces.contains(where: { $0.id == target.workspaceID }),
                       !AidenWorkspaceArchiveStore().isArchived(workspaceID: target.workspaceID, instanceID: target.instanceID),
                       coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .chatWrite) == true else { return nil }
-                let chat = try await coordinator.remoteClient(for: context).createChat(workspaceId: target.workspaceID)
-                guard coordinator.isCurrent(context), scenePhase == .active,
-                      !chat.isBotChat, chat.workspaceId == target.workspaceID else { return nil }
+                // A chat started under Chats can land in a fresh hidden workspace of its own.
+                let startsUnderChats = coordinator.workspaces.contains { $0.id == target.workspaceID && $0.noWorkspace }
+                let chat = try await coordinator.remoteClient(for: context)
+                    .createChat(workspaceId: target.workspaceID, noWorkspace: startsUnderChats)
+                guard coordinator.isCurrent(context), scenePhase == .active, !chat.isBotChat,
+                      chat.workspaceId == target.workspaceID || startsUnderChats else { return nil }
+                if !coordinator.workspaces.contains(where: { $0.id == chat.workspaceId }) {
+                    await coordinator.refreshWorkspaces()
+                    guard coordinator.isCurrent(context) else { return nil }
+                    guard coordinator.workspaces.contains(where: { $0.id == chat.workspaceId }) else {
+                        coordinator.presentedError = AidenNoWorkspace.startedButUnlistedMessage
+                        return nil
+                    }
+                }
                 return AidenNavigationRequest(destination: .chat(chat.id), instanceId: target.instanceID,
                     workspaceId: nil, startsVoice: target.startsVoice)
             }
@@ -342,6 +369,50 @@ struct ContentView: View {
             return
         }
         navigationRequest = request
+    }
+}
+
+/// Connection management must remain reachable without a successful connection,
+/// including failures where retry is unsafe, such as a changed certificate.
+struct AidenConnectionRecoveryView: View {
+    @Bindable var coordinator: AidenRemoteCoordinator
+    let issue: AidenConnectionIssue
+    let switchConnection: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(issue.title).font(.subheadline.weight(.semibold))
+            if let installation = coordinator.installationStore.activeInstallation {
+                Text(installation.name).font(.caption.weight(.medium))
+                if let last = installation.lastConnectedAt {
+                    Text("Last connected \(last.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Text(issue.message).font(.caption).foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    recoveryActions
+                }
+                VStack(alignment: .leading) {
+                    recoveryActions
+                }
+            }
+            .buttonStyle(.bordered)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(.regularMaterial)
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var recoveryActions: some View {
+        if issue.canRetry {
+            Button("Retry connection") { Task { await coordinator.connectActiveInstallation() } }
+        }
+        Button("Switch connection", action: switchConnection)
+            .accessibilityHint("Choose a paired computer or pair another Aiden Agent.")
     }
 }
 

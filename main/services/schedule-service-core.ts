@@ -18,7 +18,7 @@ export type ScheduledRunTrigger =
   | { kind: "manual"; key: string }
   | { kind: "catch_up"; missedRunId: string; missedAt: number }
   /** A delayed retry of a failed Bot routine fire, replayed from its pending entry. */
-  | { kind: "retry"; requestId: string; failedRunId: string; attempt: 1 | 2 }
+  | { kind: "retry"; requestId: string; failedRunId: string; attempt: 1 | 2; verifiedToolFree?: true }
   /** An event routine's run: what happened, as untrusted data for the Bot. */
   | { kind: "event"; eventId: string; source: "file_change" | "webhook" | "watch"; payload: string };
 
@@ -359,10 +359,12 @@ export function createScheduleServiceCore(
         if (options.automatic && options.recovery && !pendingFire)
           throw new UnclaimableScheduledFire(`Routine ${taskId} has no pending fire to recover.`);
         // A retry replayed after the routine's next regular fire came due (the
-        // Mac slept, Aiden was closed) is stale: that fire replaces it.
+        // Mac slept, Aiden was closed) is stale. A recorded retry still needs
+        // its delivery reconciled; the executor reads its result without a send.
         if (
           pendingFire?.retry &&
-          ((task.nextRunAt !== undefined && task.nextRunAt <= Date.now()) || (task.lastRunAt ?? 0) > pendingFire.fireTime)
+          ((task.nextRunAt !== undefined && task.nextRunAt <= Date.now()) || (task.lastRunAt ?? 0) > pendingFire.fireTime) &&
+          !(await store.runById(task.id, pendingFire.requestId))
         ) {
           await store.settleRoutineFire(task.id, pendingFire.requestId);
           throw new UnclaimableScheduledFire(`Routine ${taskId}'s retry was replaced by its next fire.`);
@@ -806,6 +808,13 @@ export function createScheduleServiceCore(
         }
         dependencies.broadcast({ taskId: id, removed: true });
       });
+    },
+
+    // Called by the active run itself. User-facing edits wait for that run to settle.
+    async pauseAfterFailedRun(id: string, activeRunId: string): Promise<void> {
+      await store.setEnabled(id, false, { clearRoutineRetriesExcept: activeRunId });
+      stopJob(id);
+      dependencies.broadcast({ taskId: id });
     },
 
     async pause(

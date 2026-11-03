@@ -67,11 +67,51 @@ sealed class AidenRemoteClientException(message: String, cause: Throwable? = nul
     object InstallationChanged : AidenRemoteClientException("The active Aiden Agent changed. Try again on the selected desktop.")
     object InvalidEndpoint : AidenRemoteClientException("The Aiden Agent address is invalid.")
     class UnexpectedStatus(val statusCode: Int) : AidenRemoteClientException("Aiden Agent returned HTTP status $statusCode.")
-    data class Server(val statusCode: Int, val body: AidenRemoteErrorEnvelope.Body) : AidenRemoteClientException(body.message) {
+    /**
+     * [retryAfterHeaderSeconds] is the response's HTTP `Retry-After`
+     * delta-seconds, when it sent a usable one.
+     */
+    data class Server(
+        val statusCode: Int,
+        val body: AidenRemoteErrorEnvelope.Body,
+        val retryAfterHeaderSeconds: Int? = null,
+    ) : AidenRemoteClientException(body.message) {
         val isCredentialRevoked: Boolean
             get() = statusCode == 401 || statusCode == 403 || body.code == AidenRemoteErrorCode.CREDENTIAL_REVOKED
+
+        /** A 429 the server marked `retryable`: refused before it ran, so it can be sent again. */
+        val isRetryableRateLimit: Boolean
+            get() = statusCode == 429 && body.retryable
+
+        /**
+         * The wait a 429 asked for: `details.retryAfterSeconds` first, then
+         * the `Retry-After` header, clamped to [AidenRetryAfter.BOUNDS_SECONDS].
+         * `null` for any other status or when the server named no delay.
+         */
+        val retryAfterSeconds: Int?
+            get() {
+                if (statusCode != 429) return null
+                val raw = body.details?.retryAfterSeconds ?: retryAfterHeaderSeconds ?: return null
+                return raw.coerceIn(AidenRetryAfter.BOUNDS_SECONDS)
+            }
     }
     class InvalidResponse(message: String = "Aiden Agent returned an invalid response.") : AidenRemoteClientException(message)
     class Disconnected(message: String = "Disconnected from Aiden Agent.") : AidenRemoteClientException(message)
     class IdempotencyConflict(message: String = "Operation already in progress.") : AidenRemoteClientException(message)
+}
+
+object AidenRetryAfter {
+    /**
+     * The shortest and longest server-requested wait the app honors: a zero
+     * delay still waits a second, and a long one never parks a send or a
+     * stream for more than a minute.
+     */
+    val BOUNDS_SECONDS = 1..60
+
+    /** Parses an HTTP `Retry-After` header's delta-seconds form; an HTTP-date or junk is ignored. */
+    fun parseHeader(value: String?): Int? {
+        val trimmed = value?.trim() ?: return null
+        if (trimmed.isEmpty() || trimmed.length > 6 || !trimmed.all { it in '0'..'9' }) return null
+        return trimmed.toInt().takeIf { it in 0..86_400 }
+    }
 }

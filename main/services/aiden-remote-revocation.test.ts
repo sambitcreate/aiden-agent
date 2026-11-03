@@ -6,7 +6,11 @@ import {
   createDefaultAidenRemoteState,
   defaultAidenRemoteStateDependencies,
 } from "./aiden-remote-state.js";
-import { AidenRemoteStreamService, type AidenRemoteStreamSnapshot } from "./aiden-remote-streams.js";
+import {
+  AidenRemoteStreamService,
+  mergeAidenRemoteStreamJournal,
+  type AidenRemoteStreamSnapshot,
+} from "./aiden-remote-streams.js";
 
 test("runtime revocation is durable, cleans device resources, retries persistence, and preserves device B", async () => {
   let stateDocument = createDefaultAidenRemoteState(() => Buffer.alloc(24, 4));
@@ -29,6 +33,7 @@ test("runtime revocation is durable, cleans device resources, retries persistenc
   });
 
   let streamSnapshot: AidenRemoteStreamSnapshot = { version: 1, streams: [] };
+  let archive: AidenRemoteStreamSnapshot = { version: 1, streams: [] };
   let failStreamSave = false;
   const deniedApprovals: string[] = [];
   const streams = new AidenRemoteStreamService({
@@ -38,9 +43,10 @@ test("runtime revocation is durable, cleans device resources, retries persistenc
       deniedApprovals.push(`${approvalId}:${decision}`);
       return true;
     },
-    persist: async (snapshot) => {
+    persist: async (write) => {
       if (failStreamSave) throw new Error("stream disk unavailable");
-      streamSnapshot = structuredClone(snapshot);
+      if (write.archive) archive = structuredClone(write.archive);
+      streamSnapshot = mergeAidenRemoteStreamJournal(archive, write.live);
     },
   });
   const ownerA = streams.create(deviceA.device.id, "stream-a", "chat-a", "turn-a");

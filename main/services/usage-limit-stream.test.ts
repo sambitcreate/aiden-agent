@@ -133,6 +133,22 @@ async function read(stream: AssistantMessageEventStream): Promise<AssistantMessa
 
 const RATE_LIMITED = '429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}';
 
+test("a chat reaching its cap during a rate-limit wait gives up the probe without sending", async () => {
+  let refusal: string | undefined;
+  const { clock, calls, streamFn, gate } = fixture(
+    [{ kind: "reject", message: RATE_LIMITED, status: 429, headers: { "retry-after": "10" } }],
+    { beforeSendRefusal: async () => refusal },
+  );
+  const pending = Promise.resolve(streamFn(model(), context, {}));
+  await settle();
+  assert.equal(calls.length, 1);
+  refusal = "This chat reached its spending limit.";
+  await clock.advance(15_000);
+  assert.equal((await (await pending).result()).errorMessage, refusal);
+  assert.equal(calls.length, 1);
+  assert.ok(gate.entry(usageLimitKeys("anthropic", "opus").model), "only a provider response can clear the limit");
+});
+
 test("a rate limit before any content waits for the reset and sends the same request again", async () => {
   const { clock, calls, streamFn, gate } = fixture([
     { kind: "reject", message: RATE_LIMITED, status: 429, headers: { "retry-after": "40", "x-request-id": "secret-id" } },

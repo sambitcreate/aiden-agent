@@ -33,6 +33,7 @@ export const COMPUTER_USE_ENTITLEMENTS = path.resolve(
 
 const MINIMAL_ENTITLEMENT_HELPERS = Object.freeze([
   "aiden-bot-inbox-writer",
+  "aiden-imcp-launcher",
   "aiden-lease-flock",
   "aiden-subagent-file-mutator",
   "aiden-subagent-shell-runner",

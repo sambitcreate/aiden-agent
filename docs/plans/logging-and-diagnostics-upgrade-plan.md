@@ -138,6 +138,10 @@ and rollout.
 
 - Product analytics, engagement tracking, cohorting, feature adoption, or
   developer-accessible telemetry.
+  - Note (2026-10-30): opt-out product analytics and crash reporting now live in
+    a separate subsystem, [PostHog product analytics](posthog-product-analytics-plan.md)
+    and [`docs/analytics.md`](../analytics.md). Diagnostics itself still has no
+    upload path, and the local journal is never sent.
 - Automatic crash upload, remote log streaming, a hosted support backend, or a
   new account identity.
 - Logging model inputs/outputs, tool traffic, repository contents, terminal

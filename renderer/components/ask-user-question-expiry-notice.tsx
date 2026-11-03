@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Clock } from "lucide-react";
+import { Clock, RotateCcw } from "lucide-react";
 import { Button, Callout, Text } from "./ui";
 
 /** Remaining time at which the countdown is announced once to assistive tech. */
@@ -57,9 +57,12 @@ export function AskUserQuestionCountdown({
  *   answer submitted now becomes a follow-up offer instead.
  * - `late-answer`: the user answered after the deadline; offer to send the
  *   answer as a normal follow-up message, or discard it.
+ * - `restarted`: Aiden quit or crashed while the card was open; the answers
+ *   start a new turn.
  */
 export type AskUserQuestionExpiryNoticeProps =
   | { state: "expired" }
+  | { state: "restarted" }
   | {
       state: "late-answer";
       sending?: boolean;
@@ -72,13 +75,24 @@ export type AskUserQuestionExpiryNoticeProps =
 export function AskUserQuestionExpiryNotice(props: AskUserQuestionExpiryNoticeProps) {
   return (
     <div className="aiden-dock-inset chat-content-column pb-2">
-      <Callout role="status" aria-label={props.state === "expired" ? "Question expired" : "Late answer"}>
+      <Callout
+        role="status"
+        aria-label={
+          props.state === "expired" ? "Question expired" : props.state === "restarted" ? "Question from before a restart" : "Late answer"
+        }
+      >
         <p className="flex items-start gap-2 text-small text-secondary">
-          <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+          {props.state === "restarted" ? (
+            <RotateCcw className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+          ) : (
+            <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+          )}
           <span>
             {props.state === "expired"
               ? "This question expired, so Aiden continued with its best judgement. You can still answer, and Aiden will offer to send it as a follow-up message."
-              : `Your answer arrived after the question expired. Send it as a follow-up so Aiden can adjust${props.queued ? " once the current response finishes" : ""}.`}
+              : props.state === "restarted"
+                ? "Aiden closed while asking this. Your answers go as a new message, and Aiden picks up from there."
+                : `Your answer arrived after the question expired. Send it as a follow-up so Aiden can adjust${props.queued ? " once the current response finishes" : ""}.`}
           </span>
         </p>
         {props.state === "late-answer" ? (

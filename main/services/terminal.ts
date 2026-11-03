@@ -17,6 +17,8 @@ const MAX_INPUT_CHARS = 64_000;
 const MAX_BUFFER_CHARS = 200_000;
 /** Pty chunks arriving within this window reach the renderer as one message. */
 const OUTPUT_COALESCE_MS = 8;
+/** Grace between SIGHUP and SIGKILL for a shell that ignores hangup. */
+const PTY_KILL_GRACE_MS = 2_000;
 /** Pending output that forces delivery without waiting for the window. */
 const OUTPUT_COALESCE_MAX_CHARS = 64_000;
 const MAX_SESSIONS_PER_WEB_CONTENTS = 8;
@@ -86,6 +88,8 @@ export interface TerminalServiceOptions {
   sessionHasMembers?: (sessionId: number) => Promise<boolean>;
   /** Test seam for process-group signaling. */
   signalProcess?: (pid: number, signal: NodeJS.Signals) => void;
+  /** How long a hung-up shell has to exit before SIGKILL. Test seam. */
+  killGraceMs?: number;
 }
 
 /**
@@ -373,6 +377,7 @@ export class TerminalService {
     // session. A retained pending exit must always have a way to settle.
     pty.onExit(({ exitCode, signal }) => {
       session.settleExit();
+      this.forgetEmptySession(workspaceId, pty.pid);
       const current = this.sessions.get(id);
       if (current !== session) return;
       // Deliver the final output before the exit notification.
@@ -516,7 +521,8 @@ export class TerminalService {
       }
     }
     const currentIds = this.workspaceSessionIds.get(workspaceId);
-    if (currentIds && (currentIds.size !== sessionIds.length || sessionIds.some((id) => !currentIds.has(id)))) {
+    // Only a new shell invalidates the audit; exits may drop verified-empty IDs.
+    if (currentIds && [...currentIds].some((id) => !sessionIds.includes(id))) {
       throw new ManagedWorktreeProcessActiveError(
         "Terminal processes changed during cleanup. Retry worktree removal.",
       );
@@ -574,7 +580,7 @@ export class TerminalService {
       pending.delete(session.exited);
       if (pending.size === 0) this.pendingWorkspaceExits.delete(session.workspaceId);
     });
-    this.terminatePty(session.pty);
+    this.terminatePty(session.pty, session);
     // Best-effort flush so the last output chunk is on disk before the session
     // is torn down (window close, workspace switch, quit). Never block on it.
     void this.historyStore?.flush(session.historyWorkspaceId);
@@ -589,25 +595,67 @@ export class TerminalService {
     }
   }
 
-  private terminatePty(pty: IPty): void {
+  /**
+   * After a shell exits, drop its session ID once the session is verifiably
+   * empty, so IDs do not accumulate and a later reuse of the PID cannot block
+   * worktree removal. A surviving job, or an audit that fails, keeps the ID.
+   */
+  private forgetEmptySession(workspaceId: string, sessionId: number): void {
+    if (process.platform === "win32") return;
+    void (this.options.sessionHasMembers ?? managedWorktreeSessionHasMembers)(sessionId).then(
+      (active) => {
+        if (active) return;
+        const ids = this.workspaceSessionIds.get(workspaceId);
+        if (!ids?.delete(sessionId)) return;
+        if (ids.size === 0) this.workspaceSessionIds.delete(workspaceId);
+      },
+      () => undefined,
+    );
+  }
+
+  private terminatePty(pty: IPty, session?: Pick<TerminalSession, "exited" | "settleExit">): void {
     const pid = pty.pid;
     if (!Number.isSafeInteger(pid) || pid <= 0) return;
-    // A PTY shell is normally its own process group. Signalling the group
-    // cleans up ordinary foreground/background descendants as well as the
-    // shell; deliberately detached processes retain normal Unix semantics.
-    if (process.platform !== "win32") {
+    const signalGroup = (signal: NodeJS.Signals) => {
+      if (process.platform === "win32") return;
       try {
-        (this.options.signalProcess ?? process.kill)(-pid, "SIGHUP");
+        (this.options.signalProcess ?? process.kill)(-pid, signal);
       } catch {
         // The process may have exited between lookup and termination.
       }
-    }
+    };
+    // A PTY shell is normally its own process group. Signalling the group
+    // cleans up ordinary foreground/background descendants as well as the
+    // shell; deliberately detached processes retain normal Unix semantics.
+    signalGroup("SIGHUP");
     try {
       pty.kill();
     } catch {
       // Teardown is best effort and must not block other renderer-document
       // revocation callbacks.
     }
+    if (!session || process.platform === "win32") return;
+    // A shell that ignores SIGHUP (`trap '' HUP`) would otherwise never exit.
+    const graceMs = this.options.killGraceMs ?? PTY_KILL_GRACE_MS;
+    let exited = false;
+    const escalate = setTimeout(() => {
+      if (exited) return;
+      signalGroup("SIGKILL");
+      try {
+        pty.kill("SIGKILL");
+      } catch {
+        // Already gone.
+      }
+      // node-pty reports the exit; if it never does, stop retaining the
+      // pending exit. Worktree removal still audits the PTY session itself.
+      const release = setTimeout(() => session.settleExit(), graceMs);
+      release.unref?.();
+    }, graceMs);
+    escalate.unref?.();
+    void session.exited.then(() => {
+      exited = true;
+      clearTimeout(escalate);
+    });
   }
 
   // node-pty's helper can be restored without its execute bit by a prebuilt

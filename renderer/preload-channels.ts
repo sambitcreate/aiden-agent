@@ -5,6 +5,7 @@
 // these at runtime; main/handlers/ipc-contract.test.ts enforces them statically.
 
 export const INVOKE_PREFIXES = [
+  "analytics:",
   "app:",
   "assistant:",
   "assistant-live:",
@@ -71,6 +72,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "app:command",
   "app:navigate",
   "app:update-state",
+  /** The main window's maximize or full-screen state changed: `WindowControlsState`. Linux Aiden title bar only. */
+  "app:window-state",
   "assistant-live:event",
   "chat:approval",
   "chat:artifact",
@@ -106,6 +109,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "devices:recordings",
   "chats:activity-changed",
   "chats:read-markers-changed",
+  /** Inbox Pin, Done or Snooze changed: the full triage snapshot. */
+  "chats:triage-changed",
   "chats:changed",
   "chats:metadata-updated",
   "chats:fork-summary-changed",

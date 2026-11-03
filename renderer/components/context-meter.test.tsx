@@ -118,3 +118,16 @@ test("a chat whose provider never reported usage says so once instead of a colum
   assert.match(html, /hasn(?:'|&#x27;)t reported token usage/u);
   assert.doesNotMatch(html, /Unavailable/u);
 });
+
+test("the Session panel's provider chip wears the provider's mark and its model chip the model's own", async () => {
+  const { ChatContextPanel } = await import("./chat-context-panel.js");
+  const html = renderToStaticMarkup(<ChatContextPanel details={{ chat: { id: "chat", title: "Test", createdAt: 1, updatedAt: 20, messages: [] }, pressure: null, compacting: false, providerId: "anthropic", providerLabel: "Anthropic", modelId: "claude-opus-4-1", modelLabel: "Claude Opus 4.1" }} />);
+  const chipFor = (label: string) => {
+    const end = html.indexOf(`${label}</`);
+    assert.ok(end > 0, `${label} chip is rendered`);
+    const start = html.lastIndexOf("data-provider-icon=", end);
+    return html.slice(start, end).match(/data-provider-icon="([^"]+)"/u)?.[1];
+  };
+  assert.equal(chipFor("Anthropic"), "anthropic");
+  assert.equal(chipFor("Claude Opus 4.1"), "claude");
+});

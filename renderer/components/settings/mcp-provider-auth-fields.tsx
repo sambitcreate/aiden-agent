@@ -1,5 +1,6 @@
 import { Button, Field, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Text } from "../ui";
 import { InfoHint } from "../ui-info-hint";
+import { ProviderIcon } from "../provider-icon";
 import type { Provider } from "../../lib/types";
 
 /**
@@ -37,7 +38,14 @@ export function McpProviderAuthFields(props: {
           <SelectTrigger aria-label="Provider API key"><SelectValue placeholder="Do not share" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="none">Do not share</SelectItem>
-            {props.providers.map((provider) => <SelectItem key={provider.id} value={provider.id}>{provider.label}</SelectItem>)}
+            {props.providers.map((provider) => (
+              <SelectItem key={provider.id} value={provider.id}>
+                <span className="inline-flex min-w-0 items-center gap-2">
+                  <ProviderIcon providerId={provider.id} providerLabel={provider.label} className="size-4 text-secondary" />
+                  <span className="truncate">{provider.label}</span>
+                </span>
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       )}
