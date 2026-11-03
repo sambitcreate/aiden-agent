@@ -32,13 +32,13 @@ This plan extends those pieces. It does not invent a parallel store:
 - What counts as a class (decided here):
   - A connection tool: `{kind:"connection", serverId, tool}` from `describeMcpAction`'s `serverId` and `remoteName`.
   - A browser step on one site: `{kind:"site", host, action}` from the browser action's URL. The host is lowercased and loses a leading `www.`. The action is `click`, `type` or `press`.
-  - A folder: `{kind:"folder", path}` from `request_access`. It is counted only. Its "Always" stays Plan B's "Always for this folder".
+  - A folder: `{kind:"folder", path}` from `request_access`. Its "Always" stays Plan B's "Always for this folder". Once saved it shows in the list (owner pick 12): every `approved_location` the Bot's Custom access holds is an entry, and Remove takes the folder out of that Bot's access. Folder entries show when they were added but no use count, because file tools don't report uses per folder.
   - Share image and the Bot's own computer have no class: share image has no classifiable action, and the Bot computer needs no approval. The Bot shell needs no approval today, so it has no entries.
 - Limits: at most 50 entries per Bot and 1,000 in all. A ledger keeps at most 100 classes per Bot and 20 approval times per class. The Bot is hinted at most once per class every 7 days.
 - Deep links:
   - The list is `/bots/<encodeURIComponent(botId)>?page=allowed`, a new `BotSubpage`. Settings is `/settings?section=bots`.
   - A Bot's reply can't carry an in-app link: assistant markdown opens `https:` only (`markdown.tsx` `RestrictedLink`). So the link lives on Aiden's own UI: a toast after Always allow, and the profile row. The Bot's hint names the place in words.
-- Phones show the list and can Remove it. They don't get the Always choice (owner question 1). The Remote wire for the Bot approval card stays "once" only (`aiden-remote-bot-session.ts:1906`).
+- Phones show the list, can Remove from it, and get the Always choice (owner pick 10). The shared `POST /approvals/{id}/respond` route already takes `scope`; `aiden-remote-bot-session.ts:1906` accepts `"always"` only for a device with `bot:allowed` on a card that offers it.
 - Remote: claim the next contract revision after `main`'s at merge, provisionally 54 (this branch's tip is `AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION = 53`, `main/services/aiden-remote-protocol.ts:282`). Plans A–C may claim revisions first. Update these together: iOS, Android, `protocol/aiden-remote/v1/fixtures/contract.json`, `protocol/aiden-remote/v1/openapi.json`, `docs/aiden-remote-api-v1.md`, and the revision assertion in `ios/AidenOnTheGoTests/AidenRemotePhase0Tests.swift`.
 - Use an opt-in capability (`bot:allowed`), not a feature token. Phones already hear the most feature tokens shipped clients accept (see revision 49's note).
 - New tests go in a new `"test:bot-allowed"` script, with `"pretest:bot-allowed": "npm run build:lease-flock"`. Append it to the `test:serial` chain, and if `main` changed the chain, resolve by union. Register every new test file in `scripts/ci-test-registry.json` too. Extended existing test files stay in their scripts.
@@ -82,6 +82,10 @@ This plan extends those pieces. It does not invent a parallel store:
   export function describeBotApprovalRule(rule: Pick<BotApprovalRuleView, "target" | "label">): string;
   // connection → label; site → "Click on amazon.com" | "Type on amazon.com" | "Press keys on amazon.com"
   export function botAlwaysAllowLabel(botName: string): string; // "Always allow for Jester"
+  /** One row of the list: a remembered approval, or a folder in the Bot's Custom access. */
+  export type BotAllowedEntry =
+    | { kind: "rule"; id: string; botId: string; what: string; createdAt: string; uses: number; lastUsedAt?: string }
+    | { kind: "folder"; id: string; botId: string; what: string; createdAt: string };   // id: "folder_<sourceId>"; what: "Folder · ~/Documents/Taxes"
   ```
 - Produces, in `main/services/tool-approval-rules.ts`: `ToolApprovalRulesDocument.botRules?: BotApprovalRuleView[]`, plus these `ToolApprovalRuleBook` methods:
   ```ts
@@ -203,6 +207,7 @@ This plan extends those pieces. It does not invent a parallel store:
   - Otherwise: return `ask({...baseline, remember:{target, title, ...(offer && {offer})}})`.
   - A rejected `match` asks. A rejected `offer` asks without an offer.
   - Every other path is unchanged. With no `rules` port (the CLI) nothing reaches this branch.
+  - Stacked on Plan C, where `asBaseline` is a function and `ask` already checks plan coverage. Keep this order: the rule decision, then plan coverage, then this allow-list match. A call a plan covers counts against the plan and doesn't use the entry.
 
 - [ ] **Step 1: Write the failing target tests** in `bot-allow-target.test.ts`:
   - `a mutating connection call is its server and tool`: `{surface:"mcp", serverId:"gcal", remoteName:"create_event", annotations:{title:"Create event"}, …}` gives `target {kind:"connection", serverId:"gcal", tool:"create_event"}` and `title "Create event"`. Without a title, `title === "create_event"`.
@@ -293,6 +298,10 @@ This plan extends those pieces. It does not invent a parallel store:
   ```ts
   export interface BotAllowList extends BotAllowListPort {
     settle(input: { botId: string; remember: NonNullable<BotApprovalRequirement["remember"]>; answer: BotApprovalAnswer }): Promise<{ hint?: string }>;
+    /** Rules plus the Bot's Custom `approved_location` selections, newest first; every Bot when omitted. */
+    list(botId?: string): Promise<BotAllowedEntry[]>;
+    /** A rule: `revokeBot`. A folder: `BotApplicationService.revokeBotFolder`. */
+    remove(botId: string, entryId: string): Promise<boolean>;
     folderOffer(botId: string, path: string): Promise<{ count: number } | undefined>;
     settleFolder(input: { botId: string; path: string; answer: "once" | "always" | "not_now"; offered: boolean }): Promise<{ hint?: string }>;
     forgetBot(botId: string): Promise<void>;
@@ -350,6 +359,10 @@ This plan extends those pieces. It does not invent a parallel store:
   - pass `allowList: botAllowList` to `createBotToolAssembly`;
   - pass `settleApproval: (input) => botAllowList.settle(input)` and `requestApproval: (request) => botApprovals.request(request)` (the type changes, the call doesn't);
   - add `(botId) => botAllowList.forgetBot(botId)` to `deleteEffects` before `eraseBotData`.
+- [ ] **Step 4b: Add `revokeBotFolder` and folder entries (owner pick 12).** In `main/services/bot-application-service.ts`, next to Plan B's `grantBotFolder`, add `revokeBotFolder(input: { audienceId: string; botId: string; sourceId: string }): Promise<boolean>`. It saves through `updateBotAccess` with `nextBotFileScopeIds(policy.custom.fileScopeIds, snapshot.catalog.fileScopes, option.id, false)` and the same `refuseDriftedGrants` message; a Full-access Bot or an unselected folder returns `false`. It leaves the approved root in place. Tests:
+  - `list includes the folders in a Custom Bot's access`: a Custom Bot with one rule and one `approved_location` gives one `kind: "rule"` and one `kind: "folder"` row whose `what` is `Folder · ~/Documents/Taxes`. A Full-access Bot gives no folder rows.
+  - `removing a folder entry takes it out of the Bot's access`: `remove(bot, "folder_root_a")` returns true, the saved `custom.fileScopeIds` no longer holds that option, `bot_home` stays, and the next `list` has no folder row.
+  - `removing a folder another Bot uses leaves that Bot's access alone`.
 - [ ] **Step 5: Hook `request_access` (Plan B).** Make these three changes at B's card settle point and its tool result:
   - before raising a folder card, call `folderOffer(botId, path)`, and when it returns a count show the line `You’ve allowed this folder ${count} times in the last 2 weeks.` (B's card already has Always for this folder);
   - after the answer, call `settleFolder`;
@@ -381,34 +394,35 @@ This plan extends those pieces. It does not invent a parallel store:
   // main/handlers/bot-params.ts
   export function parseBotApprovalDecision(input: unknown): { waitId: string; decision: "allow" | "deny"; scope?: "always" };
   export function parseBotAllowedList(input: unknown): string | undefined;            // botId, or every Bot
-  export function parseBotAllowedRemove(input: unknown): { botId: string; ruleId: string };
+  export function parseBotAllowedRemove(input: unknown): { botId: string; entryId: string };
   // main/handlers/bot-allowed.ts
   export function registerBotAllowedHandlers(deps: {
     handle(channel: string, handler: (event: unknown, input: unknown) => unknown): void;
-    rules: Pick<ToolApprovalRuleBook, "listBot" | "revokeBot" | "onBotChange">;
+    allowed: Pick<BotAllowedService, "list" | "remove">;   // Task 5
+    onChange(listener: (botId: string) => void): () => void;  // rule book onBotChange, plus Bot access saves
     botExists(botId: string): Promise<boolean>;
     broadcast(channel: "bots:allowed:changed", payload: { botId: string }): void;
-  }): void;   // "bots:allowed:list" → BotApprovalRuleView[]; "bots:allowed:remove" → { removed: boolean }
+  }): void;   // "bots:allowed:list" → BotAllowedEntry[]; "bots:allowed:remove" → { removed: boolean }
   // renderer/lib/ipc.ts botsApi
   approve(waitId: string, decision: "allow" | "deny", scope?: "always"): Promise<{ decided: boolean }>;
-  allowedList(botId?: string): Promise<BotApprovalRuleView[]>;
-  removeAllowed(botId: string, ruleId: string): Promise<{ removed: boolean }>;
+  allowedList(botId?: string): Promise<BotAllowedEntry[]>;
+  removeAllowed(botId: string, entryId: string): Promise<{ removed: boolean }>;
   onAllowedChanged(handler: (payload: { botId: string }) => void): () => void;
   // renderer/lib/bot-routes.ts
   export function botAllowedLocation(botId: string): { to: "/bots/$botId"; params: { botId: string }; search: { page: "allowed" } };
   // renderer/components/bots/bot-allowed-list.tsx
-  export function BotAllowedList(props: { entries: BotApprovalRuleView[]; onRemove(entry: BotApprovalRuleView): void; removing?: string }): JSX.Element;
+  export function BotAllowedList(props: { entries: BotAllowedEntry[]; onRemove(entry: BotAllowedEntry): void; removing?: string }): JSX.Element;
   ```
 - Copy:
   - Card line: `You’ve allowed this ${count} times in the last 2 weeks.` Card button: `botAlwaysAllowLabel(name)`, a transparent button between Deny and Allow. Allow stays the accent button and keeps ⌘↩.
   - Toast after Always: `${name} won’t ask about this again.` with action `Manage`, which navigates to `botAllowedLocation(botId)`.
-  - Row description: `Added ${date} · Used ${uses} time(s)` (`Not used yet` at 0). Trailing `Remove`.
+  - Row description: `Added ${date} · Used ${uses} time(s)` (`Not used yet` at 0); a folder row reads `Added ${date}`. Trailing `Remove`.
   - Page title and profile row: "Allowed without asking". The profile row's secondary line is the entry count, or `Nothing yet`.
   - Empty page: `${name} asks before changes in your apps and on websites. Choose ${botAlwaysAllowLabel(name)} on a card to stop a question you keep answering.`
   - Settings → Bots: a third `FieldSet`, "Allowed without asking", with one group per Bot that has entries (the Bot's name as the group label). With no entries anywhere: `No Bot does anything without asking yet.` Its `Always comes to you` rows stay unchanged.
 
 - [ ] **Step 1: Write the failing main tests.**
-  - `bot-params.test.ts`: `{waitId, decision:"allow", scope:"always"}` parses. `scope` with `deny`, `scope:"chat"` and an extra key throw `Invalid bot approval fields.` `parseBotAllowedRemove` rejects a `ruleId` outside `[A-Za-z0-9_-]{1,64}`.
+  - `bot-params.test.ts`: `{waitId, decision:"allow", scope:"always"}` parses. `scope` with `deny`, `scope:"chat"` and an extra key throw `Invalid bot approval fields.` `parseBotAllowedRemove` rejects an `entryId` outside `[A-Za-z0-9_-]{1,80}`.
   - `bot-allowed.test.ts` (register-and-invoke with a `Map` of handlers and a real rule book on a memory store):
     - `list` with no Bot returns both Bots' entries, and with `"bot:a"` only its own;
     - `remove` returns `{removed: true}`, then `list` is empty;
@@ -423,7 +437,7 @@ This plan extends those pieces. It does not invent a parallel store:
     A prompt without `always` has no such button.
   - `bot-allowed-list.test.tsx`: two entries render their `describeBotApprovalRule` text and `Added 3 Nov 2026 · Used 12 times`. `Remove` on the second calls `onRemove` with it, and the button is disabled while `removing` names it.
   - `bot-profile.test.tsx`: the `Allowed without asking` row shows `2` and navigates to `/bots/bot%3Aa?page=allowed`. `bots-view.test.tsx`: that URL renders the page heading `Allowed without asking`, and its back button returns to Profile.
-  - `bots-settings.test.tsx`: entries for Ada and Jo render under their names. Remove on Jo's entry invokes `bots:allowed:remove` with `{botId:"bot:jo", ruleId}`. No entries shows `No Bot does anything without asking yet.`
+  - `bots-settings.test.tsx`: entries for Ada and Jo render under their names. Remove on Jo's entry invokes `bots:allowed:remove` with `{botId:"bot:jo", entryId}`. No entries shows `No Bot does anything without asking yet.`
 - [ ] **Step 3: Run and see them fail.** `npx tsx --test main/handlers/bot-params.test.ts main/handlers/bot-allowed.test.ts renderer/main/bots/bot-chat-pane.test.tsx renderer/components/bots/bot-allowed-list.test.tsx renderer/main/bots/bot-profile.test.tsx renderer/main/bots-view.test.tsx renderer/components/settings/bots-settings.test.tsx`. Expected: FAIL.
 - [ ] **Step 4: Implement.**
   - `use-bot-allowed.ts` is a query on `queryKeys.botAllowed(botId)`, invalidated on `bots:allowed:changed` (all Bots when the key's id is `"all"`).
@@ -440,32 +454,36 @@ This plan extends those pieces. It does not invent a parallel store:
 - Modify: `main/services/aiden-remote-router.ts`: route table `:550`; dependency field near `:285`; the route block next to `botSpendingMatch` (`:3067`); capability offer next to `chat:jobs`
 - Modify: `main/services/aiden-remote-state.ts:~264` (opt-in doc comment), `main/services/aiden-remote-service-main.ts` (wire `botAllowed`)
 - Modify: `protocol/aiden-remote/v1/fixtures/contract.json` (`botAllowed`), `protocol/aiden-remote/v1/openapi.json` (two paths), `docs/aiden-remote-api-v1.md`
-- Test: extend `main/services/aiden-remote-router.test.ts`, `main/services/aiden-remote-protocol.test.ts`, and `main/services/aiden-remote-bot-session.test.ts` (a scope of `"always"` is still refused)
+- Modify: `main/services/aiden-remote-bot-session.ts:1890-1925` (`scope: "always"`) and `wireApproval` (`alwaysCount`)
+- Test: extend `main/services/aiden-remote-router.test.ts`, `main/services/aiden-remote-protocol.test.ts`, and `main/services/aiden-remote-bot-session.test.ts`
 
 **Interfaces:**
 - Produces:
   ```ts
   export const AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION = 54 as const; // re-claim at merge; becomes AIDEN_REMOTE_CONTRACT_REVISION
   export const AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES = ["bot:allowed"] as const; // in OPT_IN, NEGOTIABLE and CAPABILITIES lists
-  export interface AidenRemoteBotAllowedEntry { id: string; what: string; addedAt: string; uses: number; lastUsedAt?: string }
+  export interface AidenRemoteBotAllowedEntry { id: string; kind: "rule" | "folder"; what: string; addedAt: string; uses?: number; lastUsedAt?: string }
+  // AidenRemoteBotApproval gains `alwaysCount?: number`, sent only to a device with bot:allowed and only when the card offers Always.
   export interface AidenRemoteBotAllowedList { botId: string; entries: AidenRemoteBotAllowedEntry[] }   // ≤ 50
   export function parseAidenRemoteBotAllowedList(value: unknown): AidenRemoteBotAllowedList;           // exact keys
   // aiden-remote-bot-allowed.ts
   export function createAidenRemoteBotAllowedService(deps: {
-    rules: Pick<ToolApprovalRuleBook, "listBot" | "revokeBot">;
+    allowed: Pick<BotAllowedService, "list" | "remove">;
     botExists(botId: string): Promise<boolean>;
   }): { list(botId: string): Promise<AidenRemoteBotAllowedList>; remove(botId: string, entryId: string): Promise<AidenRemoteBotAllowedList> };
   ```
 - Routes:
   - `GET /bots/{botId}/allowed` needs `bot:read` plus `bot:allowed`.
   - `POST /bots/{botId}/allowed/{entryId}/remove` takes body `{}` and needs `bot:write`, `bot:read` and `bot:allowed`. It returns the list and is naturally idempotent (an entry already gone returns the list unchanged).
-  - `what` is `describeBotApprovalRule`, at most 200 characters.
+  - `what` is the entry's `what`, at most 200 characters.
+  - `POST /approvals/{id}/respond` with `scope: "always"`: allowed only for a device with `bot:allowed`, on a Bot card whose prompt carries `always`. It calls `approvals.decide(waitId, "allow", "always")`. Any other case stays `invalid_request`.
   - An unknown Bot is `not_found`.
   - `bot:allowed` is offered only when the host wires `botAllowed`.
 
 - [ ] **Step 1: Write the failing tests.**
   - `aiden-remote-bot-allowed.test.ts`:
-    - `list` maps one connection and one site entry to `{id, what, addedAt, uses}` with `what === "Google Calendar · Create event"` and `"Click on amazon.com"`, and `lastUsedAt` only when used;
+    - `list` maps one connection and one site entry to `{id, kind, what, addedAt, uses}` with `what === "Google Calendar · Create event"` and `"Click on amazon.com"`, and `lastUsedAt` only when used;
+    - a folder entry maps to `{id, kind: "folder", what, addedAt}` with no `uses`;
     - `remove` drops one and returns the rest;
     - a second `remove` of the same id returns the same list;
     - an unknown Bot throws `AidenRemoteServiceError` `not_found`.
@@ -475,11 +493,13 @@ This plan extends those pieces. It does not invent a parallel store:
     - POST with `bot:read` only is refused, and a non-empty body is `invalid_request`;
     - `bot:allowed` appears in `serverCapabilities` only with the dependency wired.
   - `aiden-remote-protocol.test.ts`: the `botAllowed` fixture parses, and an extra key in an entry throws.
-  - `aiden-remote-bot-session.test.ts`: `respondApproval(..., "always")` on a Bot approval is still `invalid_request`.
+  - `aiden-remote-bot-session.test.ts`:
+    - `a phone with bot:allowed can answer Always on an offered card`: `respondApproval(..., "allow", "always")` calls `decide` with the scope, and the wire approval carried `alwaysCount: 3`;
+    - `Always is refused on a card that doesn't offer it`, and `for a device without bot:allowed`: both `invalid_request`, and that device's wire approval has no `alwaysCount`.
 - [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/aiden-remote-bot-allowed.test.ts main/services/aiden-remote-router.test.ts main/services/aiden-remote-protocol.test.ts main/services/aiden-remote-bot-session.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement.** Do the protocol constants, parsers and service. Add the router block modelled on `botSpendingMatch` with `requireNoQuery`, `requireEmptyJsonObject` and `requireDeviceCapabilities(device, ["bot:allowed"])`. Wire it in `aiden-remote-service-main.ts` with `toolApprovalRules` and the Bot store.
 - [ ] **Step 4: Update the contract artifacts.**
-  - `contract.json` gets `botAllowed`: a list, the list after a remove, and the capability refusal.
+  - `contract.json` gets `botAllowed`: a list with a folder entry, the list after a remove, the capability refusal, and an approval with `alwaysCount`.
   - `openapi.json` gets both paths.
   - `docs/aiden-remote-api-v1.md` gets a "Revision 54 (`bot:allowed`)" section.
 - [ ] **Step 5: Run the tests.** `npm run test:aiden-remote`. Expected: PASS.
@@ -499,14 +519,15 @@ This plan extends those pieces. It does not invent a parallel store:
 
 **Interfaces:**
 - Consumes: the Task 7 wire shapes and the `botAllowed` fixture.
-- Produces: a profile row "Allowed without asking" (with the count) shown only when the Mac granted `bot:allowed`. It opens a list of `what` with "Added …" and "Used N times", and a Remove action. Remove is a swipe action on iOS and a trailing text button on Android; both ask for no confirmation, matching the desktop. A failed Remove keeps the row and shows the existing error banner.
+- Produces: on the Bot approval card, when `alwaysCount` is present, the line `You’ve allowed this N times in the last 2 weeks.` and a third button `Always allow for <Bot>` that responds with `scope: "always"`. And a profile row "Allowed without asking" (with the count) shown only when the Mac granted `bot:allowed`. It opens a list of `what` with "Added …" and "Used N times", and a Remove action. Remove is a swipe action on iOS and a trailing text button on Android; both ask for no confirmation, matching the desktop. A failed Remove keeps the row and shows the existing error banner.
 
 - [ ] **Step 1: Write the failing tests.**
   - iOS `AidenBotAllowedTests`:
     - `testDecodesFixtureList` decodes `botAllowed.list` from `contract.json` like `AidenBackgroundJobsTests`;
     - `testRemoveReplacesListWithResponse` uses a stub client returning the post-remove fixture, and the model has one entry;
-    - `testRowHiddenWithoutCapability`.
-  - Android `AidenBotAllowedTest`: the same three cases, mirroring `AidenBackgroundJobsTest`.
+    - `testRowHiddenWithoutCapability`;
+    - `testApprovalOffersAlwaysOnlyWithCount`: a fixture approval with `alwaysCount` shows the button and responds with `scope: "always"`; one without it shows Allow and Deny only.
+  - Android `AidenBotAllowedTest`: the same four cases, mirroring `AidenBackgroundJobsTest`.
 - [ ] **Step 2: Run and see them fail.**
   - iOS: `xcodebuild test -project ios/AidenOnTheGo.xcodeproj -scheme AidenOnTheGo -only-testing:AidenOnTheGoTests/AidenBotAllowedTests -destination 'platform=iOS Simulator,name=iPhone 17'`, or the command in `ios/README.md`.
   - Android: `cd android && ./gradlew :app:testDebugUnitTest --tests '*AidenBotAllowed*'`.
@@ -529,4 +550,4 @@ This plan extends those pieces. It does not invent a parallel store:
   - Reusing the remembered "always" scopes: Tasks 1 and 4.
   - Never skipping locked rules or rule-made asks: Task 3.
   - Phones: Tasks 7 and 8.
-- Deliberately out of scope: phones answering with Always (owner question 1); folders in the list (owner question 3); CLI parity (no allow-list port); a Bot-shell class (the shell isn't approval-gated).
+- Deliberately out of scope: CLI parity (no allow-list port); a Bot-shell class (the shell isn't approval-gated).

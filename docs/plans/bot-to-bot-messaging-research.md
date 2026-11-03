@@ -1,6 +1,6 @@
 # Bots that talk to each other: research
 
-Research only, 2026-11-03, against `main` at `2c3cda1cf`. Nothing here is built yet. The owner decides the open questions in §6 before a plan is written.
+Research, 2026-11-03, against `main` at `2c3cda1cf`. The owner's final decisions and the implementation plan are in [bot-messaging-plan.md](bot-messaging-plan.md). Where the two differ, that plan wins: §4–§6 here are the first-round thinking, kept as the record.
 
 ## 1. The problem
 

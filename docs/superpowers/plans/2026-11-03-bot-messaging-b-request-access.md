@@ -24,6 +24,7 @@
 - **Only the person grants.** A Bot's model, another Bot's `bot:` message, or a routine can never answer the card or the issue (spec §3, constraint 1). Always goes only through `grantBotFolder`, which saves with `refuseDriftedGrants`.
 - **Unattended turns** never show a card: `routine:`, `tg:`, plan A's `bot:`, and plan A's `botreply:` if plan A defines it. A run joined by any of those counts as unattended, the same rule `hand_off` uses.
 - **No network.** Nothing here contacts a server.
+- **A folder allowed for a Bot stays off phones (owner pick 5).** A new root from `grantBotFolder` is marked `botsOnly: true`. It feeds the Bot catalog like any approved root, and it never reaches a paired device's file browser or the count and list in Settings → Aiden on the Go. Reusing an exact root the person already approved leaves that root as it is.
 - **Remote.** Claim the next contract revision after `main`'s at merge. It is 53 today (`main/services/aiden-remote-protocol.ts:288`), and plan A claims one first. Change these together: iOS, Android, `protocol/aiden-remote/v1/fixtures/contract.json`, `protocol/aiden-remote/v1/openapi.json`, `docs/aiden-remote-api-v1.md` and `ios/AidenOnTheGoTests/AidenRemotePhase0Tests.swift:174`.
 - **UI.** Follow `GUI.md`, `docs/design-guide.md`, `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-specimen.html`. Use the shared squircle buttons and `BotNoticeCard`. Use no decorative borders, keep `focus-visible` rings, and use no brain icons.
 - **Electron imports.** Modules under `main/services/` must not import `electron`, except the `*-main.ts` wiring files.
@@ -221,6 +222,10 @@
   - `updateBotAccess`'s `refuseDriftedGrants` accepts `{ message: string }`;
   - the new `grantBotFolder`, next to `grantBotConnection` at `:1725`.
 - Modify: `main/services/bot-application-service-main.ts` (wire `approvedFolders` through a dynamic `import("./aiden-remote-service-main.js")`, as `listApprovedLocations` does in `bot-capability-services-main.ts:247`)
+- Modify: `main/services/aiden-remote-state.ts:56` (`AidenRemoteApprovedRoot.botsOnly?: true`, kept by the state parser)
+- Modify: `main/services/aiden-remote-approved-roots.ts` (`addLocalFolder(path, { botsOnly: true })`; a plain `addLocalFolder` of the same folder clears the mark, because the person has now approved it for phones)
+- Modify: `main/services/aiden-remote-workspace-browser.ts:130,203` (skip `botsOnly` roots), `main/services/aiden-remote-service.ts:1663` (not counted), `main/handlers/aiden-remote.ts:38` (not listed)
+- Test: `main/services/aiden-remote-workspace-browser.test.ts` and the approved-roots test (extend)
 - Test: `main/services/bot-application-service.test.ts` (extend)
 
 **Interfaces:**
@@ -229,7 +234,7 @@
   // BotApplicationDependencies
   approvedFolders?: {
     list(): Promise<readonly { id: string; folderPath: string }[]>;          // runtime.state.snapshot().approvedRoots
-    add(folderPath: string): Promise<{ id: string }>;                        // runtime.approvedRoots.addLocalFolder(folderPath)
+    add(folderPath: string): Promise<{ id: string }>;                        // runtime.approvedRoots.addLocalFolder(folderPath, { botsOnly: true })
   };
   // service
   grantBotFolder(input: { audienceId: string; botId: string; folderPath: string; rootId?: string }): Promise<"added" | "already_allowed">;
@@ -251,6 +256,8 @@
   - `grantBotFolder reuses an exact approved root`: `approvedFolders.add` is never called.
   - `grantBotFolder refuses drifted grants with no write and no new root` (Review Focus 3). The save count and the `add` count both stay 0, and it rejects with the message above.
   - `grantBotFolder on a Full-access Bot is already_allowed`.
+  - `a folder allowed for a Bot isn't browsable from a phone`: after `add(path, {botsOnly: true})`, `listRoots(deviceId)` has no entry for it, and browsing its root id is refused the same way as an unknown root. The Bot catalog's `listApprovedLocations` still lists it.
+  - `approving the same folder for phones clears the mark`: a later plain `addLocalFolder(path)` returns the same root, and `listRoots` now shows it.
   - `the connection grant's drift message is unchanged`. Extend the existing drift test for `grantBotConnection`.
 - [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-application-service.test.ts`.
 - [ ] **Step 3: Implement and wire.**
@@ -557,7 +564,7 @@
   - layout and constants;
   - the `run.access` late location;
   - that Allow once is memory-only;
-  - Always through `grantBotFolder`, and the shared approved-roots list;
+  - Always through `grantBotFolder`, and `botsOnly` roots that phones never see (an unselected one still appears as a choice on other Custom Bots' Access pages, without being granted);
   - the Remote revision;
   - known limits: paired desktops see the notice line, and there is no CLI tool.
 - Modify: `.memory/bot-durable-runtime.md` (one line under Connections, linking the folder grant beside "Add to this Bot")
