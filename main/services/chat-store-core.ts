@@ -1,3 +1,4 @@
+import { newChatUuid } from "../../renderer/shared/chat-identity.js";
 import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
 // Chat history persistence: an index.json of metadata + one file per chat.
 //
@@ -1604,7 +1605,7 @@ export function createChatStore(
         sourceMessageIds: readonly string[],
       ) => void | Promise<void>;
     }): Promise<Chat> {
-      const newChatId = input.targetChatId ?? randomUUID();
+      const newChatId = input.targetChatId ?? newChatUuid(randomUUID);
       return withImageData(await shared([input.sourceChatId, newChatId], true, async () => {
         input.assertCurrent?.();
         const source = await readChat(input.sourceChatId, "owner");
