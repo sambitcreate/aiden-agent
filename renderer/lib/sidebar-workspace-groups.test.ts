@@ -34,10 +34,10 @@ const chats: ChatMeta[] = [
   { id: "unowned", title: "No workspace", createdAt: 8, updatedAt: 90 },
 ];
 
-function organize(search: string, view: SidebarView = "projects", attention = new Map<string, "needs_input">()) {
+function organize(search: string, view: SidebarView = "projects") {
   return organizeSidebar({
     projects: localSidebarProjects(workspaces),
-    chats: localSidebarChats(workspaces, chats, (chat) => attention.get(chat.id) ?? "none"),
+    chats: localSidebarChats(workspaces, chats),
     search,
     view,
     chatSort: "last_activity",
@@ -76,13 +76,43 @@ test("search matches the workspace folder path and chat titles without leaking o
   assert.deepEqual(byChat.chatSections, []);
 });
 
-test("the attention tier supplied for a local chat drives the triage view", () => {
-  const result = organize("", "attention", new Map([["alpha-old", "needs_input"]]));
-  assert.deepEqual(
-    result.chatSections.map((section) => [section.label, chatIds(section.chats)]),
-    [
-      ["Needs input", ["alpha-old"]],
-      ["Other chats", ["beta-new", "alpha-new"]],
-    ],
-  );
+test("the Inbox view leaves chat sections to the Inbox model", () => {
+  const result = organize("", "inbox");
+  assert.deepEqual(result.chatSections, []);
+  assert.deepEqual(workspaceIds(result), ["beta", "alpha", "empty"]);
+});
+
+test("No workspace chats share one Chats group instead of a row per hidden folder", () => {
+  const hidden = (id: string, createdAt: number): Workspace => ({
+    id,
+    name: "No workspace",
+    folderPath: `/data/chat-folders/${id}`,
+    permission: "ask",
+    noWorkspace: true,
+    createdAt,
+    updatedAt: createdAt,
+  });
+  const registry = [...workspaces, hidden("chat-b", 12), hidden("chat-a", 11)];
+  const result = organizeSidebar({
+    projects: localSidebarProjects(registry),
+    chats: localSidebarChats(
+      registry,
+      [
+        ...chats,
+        { id: "trip", title: "Trip ideas", workspaceId: "chat-a", createdAt: 9, updatedAt: 95 },
+        { id: "recipe", title: "Soup", workspaceId: "chat-b", createdAt: 9, updatedAt: 96 },
+      ],
+    ),
+    search: "",
+    view: "projects",
+    chatSort: "last_activity",
+    projectSort: "last_activity",
+    projectOrder: [],
+    now: 100,
+  });
+  const chatsGroup = result.projectGroups.filter((group) => group.project.workspace.noWorkspace);
+  assert.equal(chatsGroup.length, 1);
+  assert.equal(chatsGroup[0].project.name, "Chats");
+  assert.equal(chatsGroup[0].project.workspace.id, "chat-a", "the oldest hidden record stands for the group");
+  assert.deepEqual(chatIds(chatsGroup[0].chats), ["recipe", "trip"]);
 });

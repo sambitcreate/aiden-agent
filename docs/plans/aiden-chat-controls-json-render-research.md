@@ -1,6 +1,8 @@
 # Interactive Aiden controls inside chat
 
 Status: **Bounded profile merged in [PR #312](https://github.com/sambitcreate/aiden-agent/pull/312) (2026-10-15) and shipped in 0.57.0. Physical release acceptance remains open.**
+
+2026-10-30: the CLI TUI surfaces in this specification (`/help-aiden`, `/aiden-app`, `/aiden-settings` and terminal panels) were removed when the CLI became a [serve-only headless server](aiden-serve-only-cli.md); `aiden app help|status|get|set` remains for Memory, Web Search and Skills.
 Date: 2026-10-03.
 Implementation update: the bounded MVP described in the [parent plan](aiden-app-knowledge-actions-plan.md#implemented-contract-and-evidence) is implemented. Exact shipped DTOs supersede the proposed names below: assistant `appPanels`, `AppControlPanel` version 1, current host snapshots and four-field typed operations. json-render core/React 0.21.0 renders only the host-assembled desktop template. Native clients and CLI use their existing native controls. Automated acceptance is tracked on PR #312; physical release acceptance remains open.
 

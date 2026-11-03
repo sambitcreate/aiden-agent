@@ -9,10 +9,12 @@ import { sanitizeSubagentSnapshotText } from "../../renderer/shared/subagent-saf
 import { boundedUnicodePrefix } from "../../renderer/shared/unicode-prefix.js";
 import { ChatProgressEvents } from "./chat-progress-events.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { openCursorSse, sseFrame, type CursorSseHandle, type CursorSsePull } from "./aiden-remote-sse.js";
 import {
   parseAidenRemoteChatTaskProgress,
   parseAidenRemoteChatAgentRoster,
   AIDEN_REMOTE_CHAT_AGENT_TERMINAL_STATES,
+  AIDEN_REMOTE_SSE_HEARTBEAT_MS,
   type AidenRemoteCapability,
   type AidenRemoteChatTaskProgress,
   type AidenRemoteChatAgentRoster,
@@ -51,6 +53,13 @@ interface ProgressPorts {
   stopAgent?(run: { chatId: string; runId: string }): Promise<boolean>;
   now?: () => number;
 }
+
+const PROGRESS_STREAMS_TOTAL = 64;
+const PROGRESS_STREAMS_PER_DEVICE = 8;
+const PROGRESS_RETRY_AFTER_SECONDS = 5;
+
+type ProgressEventType = "task_update" | "agents_update" | "app_controls_changed";
+type ProgressSnapshot = AidenRemoteChatTaskProgress | AidenRemoteChatAgentRoster | { revision: number };
 
 const ACTIVITY = {
   reading: "Reading",
@@ -430,23 +439,25 @@ export class AidenRemoteChatProgressService {
     // The response emits "close" once; a client that dropped during the
     // awaits above would never release a registered slot.
     if (response.destroyed || response.writableEnded) return;
-    if (
-      this.subscribers.size >= 64 ||
-      [...this.subscribers.values()].filter(
-        (entry) => entry.deviceId === deviceId,
-      ).length >= 8
-    ) {
+    // A phone that changed networks can leave half-open streams behind until
+    // the socket times out. Its newest stream replaces its oldest one, so a
+    // reconnecting device is never locked out by its own stale connections.
+    const own = [...this.subscribers.values()].filter((entry) => entry.deviceId === deviceId);
+    if (own.length >= PROGRESS_STREAMS_PER_DEVICE) own[0]!.close();
+    if (this.subscribers.size >= PROGRESS_STREAMS_TOTAL) {
       throw new AidenRemoteServiceError(
         "rate_limited",
-        "Too many progress connections.",
+        "Too many progress connections. Try again shortly.",
         429,
+        true,
+        { retryAfterSeconds: PROGRESS_RETRY_AFTER_SECONDS },
       );
     }
     let closed = false;
     let running = false;
     let dirty = false;
     let unsubscribe = () => {};
-    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let revalidate: ReturnType<typeof setInterval> | undefined;
     let scheduled: ReturnType<typeof setTimeout> | undefined;
     const resumed = after > 0 && (epoch === undefined || epoch === this.epoch) ? this.cursors.get(after) : undefined;
     const isResumed = resumed?.deviceId === deviceId && resumed.chatId === chatId;
@@ -458,39 +469,50 @@ export class AidenRemoteChatProgressService {
         ? [...resumed.sent].filter(([type]) => type !== "app_controls_changed")
         : [],
     );
-    const close = () => {
+    // Snapshots are full state, so a client that cannot keep up only needs the
+    // newest of each kind: at most one per kind waits while the socket drains.
+    const pending = new Map<ProgressEventType, ProgressSnapshot>();
+    let handle: CursorSseHandle | undefined;
+    const release = () => {
       if (closed) return;
       closed = true;
       unsubscribe();
-      if (heartbeat) clearInterval(heartbeat);
+      if (revalidate) clearInterval(revalidate);
       if (scheduled) clearTimeout(scheduled);
-      this.subscribers.delete(response);
-      response.end();
+      pending.clear();
+      if (this.subscribers.get(response)?.close === close) this.subscribers.delete(response);
     };
-    const write = (
-      type: "task_update" | "agents_update" | "app_controls_changed",
-      snapshot: AidenRemoteChatTaskProgress | AidenRemoteChatAgentRoster | { revision: number },
-    ) => {
-      if (closed || sent.get(type) === snapshot.revision) return;
-      sent.set(type, snapshot.revision);
-      const event = {
-        protocolVersion: 1,
-        streamId: chatId,
-        sequence: ++this.sequence,
-        timestamp: new Date(this.now()).toISOString(),
-        type,
-        terminal: false,
-        payload: snapshot,
-      };
-      response.write(
-        `id: ${event.sequence}\nevent: ${type}\ndata: ${JSON.stringify(event)}\n\n`,
-      );
-      if (this.cursors.size >= 1024)
-        this.cursors.delete(this.cursors.keys().next().value!);
-      this.cursors.set(event.sequence, { deviceId, chatId, sent: new Map(sent) });
-      // A single bounded snapshot can exceed the socket high-water mark. Allow
-      // that write to drain; close only genuinely slow consumers with >1 MiB queued.
-      if (response.writableLength > 1_048_576) close();
+    const close = () => {
+      release();
+      if (handle) handle.close();
+      else response.destroy();
+    };
+    const offer = (type: ProgressEventType, snapshot: ProgressSnapshot) => {
+      if (closed) return;
+      if (sent.get(type) === snapshot.revision) pending.delete(type);
+      else pending.set(type, snapshot);
+    };
+    const pull = (): CursorSsePull => {
+      const frames: string[] = [];
+      for (const [type, snapshot] of pending) {
+        pending.delete(type);
+        if (sent.get(type) === snapshot.revision) continue;
+        sent.set(type, snapshot.revision);
+        const event = {
+          protocolVersion: 1,
+          streamId: chatId,
+          sequence: ++this.sequence,
+          timestamp: new Date(this.now()).toISOString(),
+          type,
+          terminal: false,
+          payload: snapshot,
+        };
+        frames.push(sseFrame(String(event.sequence), type, event));
+        if (this.cursors.size >= 1024)
+          this.cursors.delete(this.cursors.keys().next().value!);
+        this.cursors.set(event.sequence, { deviceId, chatId, sent: new Map(sent) });
+      }
+      return { frames };
     };
     const refresh = async () => {
       dirty = true;
@@ -500,14 +522,13 @@ export class AidenRemoteChatProgressService {
         if (dirty && !closed) {
           dirty = false;
           if (grants.has("tasks:read"))
-            write("task_update", await this.taskSnapshot(deviceId, chatId));
+            offer("task_update", await this.taskSnapshot(deviceId, chatId));
           if (grants.has("agents:read"))
-            write("agents_update", await this.agentRoster(deviceId, chatId));
-          if (observesControls && this.ports.appControlsEnabled) {
-            await this.ports.authorize(deviceId, chatId, "app-controls:read");
-            if (!(await this.ports.appControlsEnabled())) throw new Error("App controls were revoked.");
-            write("app_controls_changed", { revision: this.ports.events.appControlsRevision() });
-          }
+            offer("agents_update", await this.agentRoster(deviceId, chatId));
+          if (observesControls) await this.authorizeControls(deviceId, chatId);
+          if (observesControls)
+            offer("app_controls_changed", { revision: this.ports.events.appControlsRevision() });
+          handle?.wake();
         }
       } catch {
         close();
@@ -530,25 +551,42 @@ export class AidenRemoteChatProgressService {
       schedule();
     });
     this.subscribers.set(response, { deviceId, close });
-    response.on("close", close);
-    response.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-store",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-      "Aiden-Progress-Resumed": String(isResumed),
+    handle = openCursorSse(response, {
+      pull,
+      onClose: release,
+      headers: {
+        "cache-control": "no-cache, no-store",
+        "aiden-progress-resumed": String(isResumed),
+      },
     });
-    response.flushHeaders();
     await refresh();
-    if (!closed) {
-      heartbeat = setInterval(() => {
-        // Also revalidate idle subscriptions after chat deletion/authority changes.
-        void refresh();
-        if (!closed) response.write(": heartbeat\n\n");
-        if (response.writableLength > 1_048_576) close();
-      }, 15_000);
-      heartbeat.unref();
-    }
+    if (closed) return;
+    // Idle subscriptions still lose access when the device grant, the chat or
+    // its Workspace/Bot ownership changes. That check is cheap; snapshots are
+    // rebuilt only when the chat publishes a change.
+    // A check slower than the heartbeat is never stacked by the next tick.
+    let revalidating = false;
+    revalidate = setInterval(() => {
+      if (revalidating) return;
+      revalidating = true;
+      void (async () => {
+        try {
+          if (grants.has("tasks:read")) await this.ports.authorize(deviceId, chatId, "tasks:read");
+          if (grants.has("agents:read")) await this.ports.authorize(deviceId, chatId, "agents:read");
+          if (observesControls) await this.authorizeControls(deviceId, chatId);
+        } catch {
+          close();
+        } finally {
+          revalidating = false;
+        }
+      })();
+    }, AIDEN_REMOTE_SSE_HEARTBEAT_MS);
+    revalidate.unref();
+  }
+
+  private async authorizeControls(deviceId: string, chatId: string): Promise<void> {
+    await this.ports.authorize(deviceId, chatId, "app-controls:read");
+    if (!(await this.ports.appControlsEnabled?.())) throw new Error("App controls were revoked.");
   }
 
   revokeDevice(deviceId: string): void {

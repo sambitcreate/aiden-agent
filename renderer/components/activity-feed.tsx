@@ -15,6 +15,10 @@ import {
   type ActivityLine,
 } from "../lib/agent-steps";
 import { isToolStep, type AgentStep, type GenerationTimeline } from "../shared/generation-timeline";
+import type { WorkDetailsMode } from "../shared/appearance";
+import { workDetailsOpen } from "../lib/work-details";
+import { DisclosureCollapseBoundary } from "./disclosure-collapse-boundary";
+import { pauseWhenUnseen } from "../lib/offscreen-pause";
 
 const EXIT_MS = 180;
 /** Rows kept in the collapsed ticker. The topmost sits under the fade mask. */
@@ -66,8 +70,11 @@ function StepLine({ step }: { step: AgentStep }) {
   );
 }
 
+// Rows are memoized by step: the live timeline keeps an unchanged step's
+// object between updates, so only the step that changed renders again.
+
 /** A single fixed-height ticker row. Height must stay in step with the CSS shift. */
-function TickerRow({ step }: { step: AgentStep }) {
+const TickerRow = React.memo(function TickerRow({ step }: { step: AgentStep }) {
   // A pending tool step is the model still writing the call's arguments, so
   // it shimmers like any other work in progress. Approval waits do not.
   const active = !isToolStep(step)
@@ -79,6 +86,7 @@ function TickerRow({ step }: { step: AgentStep }) {
       data-activity-stage={activityLine(step).stage}
     >
       <span
+        ref={active ? pauseWhenUnseen : undefined}
         className={`activity-feed-detail-label min-w-0 truncate text-mini text-secondary ${
           active ? "agent-thinking-shimmer" : ""
         }`}
@@ -87,9 +95,9 @@ function TickerRow({ step }: { step: AgentStep }) {
       </span>
     </div>
   );
-}
+});
 
-function TrailRow({ step }: { step: AgentStep }) {
+const TrailRow = React.memo(function TrailRow({ step }: { step: AgentStep }) {
   return (
     <div
       className="flex min-h-5 min-w-0 items-start py-px"
@@ -101,25 +109,28 @@ function TrailRow({ step }: { step: AgentStep }) {
       </span>
     </div>
   );
-}
+});
 
 export function ActivityFeed({
   timeline,
   animate = true,
+  mode = "standard",
+  retainDetails = false,
 }: {
   timeline: GenerationTimeline | null;
   animate?: boolean;
+  mode?: WorkDetailsMode;
+  retainDetails?: boolean;
 }) {
   const [visible, setVisible] = React.useState(timeline);
   const [exiting, setExiting] = React.useState(false);
-  const [open, setOpen] = React.useState(false);
+  const [choice, setChoice] = React.useState<boolean | null>(null);
+  const attention = Boolean(visible?.claimCheck) || (visible ? activityIssueCount(visible) > 0 : false);
+  const eligible = visible?.status === "running" || retainDetails;
+  const open = choice ?? (attention || workDetailsOpen(mode, eligible));
   const autoOpenKeyRef = React.useRef<string | null>(null);
-  const { sectionRef, headerRef, noteCollapse, restoreAfterCollapse } =
+  const { sectionRef, headerRef, noteCollapse, noteAutomaticCollapse, restoreAfterCollapse, onFocusCapture } =
     useStickySectionCollapse<HTMLDetailsElement, HTMLElement>();
-
-  React.useLayoutEffect(() => {
-    if (!open) restoreAfterCollapse();
-  }, [open, restoreAfterCollapse]);
 
   React.useEffect(() => {
     if (timeline) {
@@ -131,7 +142,7 @@ export function ActivityFeed({
       const autoOpenKey = `${timeline.generationId}:${timeline.claimCheck ? "claim" : "issue"}`;
       if (attention && autoOpenKeyRef.current !== autoOpenKey) {
         autoOpenKeyRef.current = autoOpenKey;
-        setOpen(true);
+        setChoice(null);
       }
       return;
     }
@@ -157,7 +168,7 @@ export function ActivityFeed({
   // trail would only repeat it. A claim check still needs the disclosure body.
   const stepInHeader = compactOnly && issues === 0;
   const disclosure = !stepInHeader || Boolean(visible.claimCheck);
-  const showTicker = running && (!open || !disclosure);
+  const showTicker = mode === "standard" && (running || retainDetails) && (!open || !disclosure);
   const rows = visible.steps.slice(-TICKER_ROWS);
   const newest = visible.steps[visible.steps.length - 1];
   const presence = exiting ? "exiting" : "visible";
@@ -167,8 +178,8 @@ export function ActivityFeed({
         <div
           className="activity-feed-window min-w-0 flex-1 overflow-hidden"
           data-masked={rows.length === TICKER_ROWS ? "true" : "false"}
-          role="status"
-          aria-live="polite"
+          role={running ? "status" : undefined}
+          aria-live={running ? "polite" : undefined}
           aria-label={activityLineText(newest)}
         >
           <div className="activity-feed-stack flex flex-col">
@@ -181,6 +192,7 @@ export function ActivityFeed({
         <Text
           variant="small-strong"
           color="secondary"
+          ref={running ? pauseWhenUnseen : undefined}
           className={`activity-feed-summary-label min-w-0 flex-1 truncate ${
             running ? "agent-thinking-shimmer" : ""
           }`}
@@ -220,19 +232,22 @@ export function ActivityFeed({
   }
 
   return (
+    <DisclosureCollapseBoundary expanded={open} beforeCollapse={noteAutomaticCollapse} afterCollapse={restoreAfterCollapse}>
     <details
       ref={sectionRef}
+      onFocusCapture={onFocusCapture}
       className="transcript-sticky-section activity-feed group/activity min-w-0"
       data-presence={presence}
       data-animate={animate ? "true" : "false"}
       data-state={open ? "open" : "closed"}
       open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary
         ref={headerRef}
-        onClick={() => {
+        onClick={(event) => {
+          event.preventDefault();
           if (open) noteCollapse();
+          setChoice(!open);
         }}
         className={`transcript-sticky-header -mx-1.5 flex min-w-0 list-none gap-2 rounded-control px-1.5 py-0.5 outline-none transition-colors focus-visible:outline-none ${
           showTicker ? "items-end" : "items-center"
@@ -274,5 +289,6 @@ export function ActivityFeed({
         ) : null}
       </div>
     </details>
+    </DisclosureCollapseBoundary>
   );
 }

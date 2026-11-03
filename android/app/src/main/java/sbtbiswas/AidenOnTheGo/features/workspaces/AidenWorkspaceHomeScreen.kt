@@ -50,6 +50,7 @@ import androidx.compose.material.icons.outlined.DataUsage
 import androidx.compose.material.icons.outlined.FolderCopy
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.FolderSpecial
+import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Person
@@ -68,7 +69,13 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material.icons.outlined.Inbox
+import kotlinx.coroutines.delay
+import java.time.Instant
+import sbtbiswas.AidenOnTheGo.models.AidenChatTriageChange
+import sbtbiswas.AidenOnTheGo.models.AidenInboxProjection
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -112,10 +119,13 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.scheduled.AidenScheduledTasksScreen
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
+import sbtbiswas.AidenOnTheGo.models.AidenNoWorkspace
 import sbtbiswas.AidenOnTheGo.models.AidenUsageSummary
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspace
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceCreate
+import sbtbiswas.AidenOnTheGo.navigation.LocalAidenOpenChatId
 import sbtbiswas.AidenOnTheGo.persistence.AidenProductNavigationStore
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenSnackbar
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceSidebarOrganization
 import sbtbiswas.AidenOnTheGo.features.shared.AidenReadPresentation
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
@@ -226,8 +236,10 @@ private fun AidenWorkspaceHome(
     val nextChatCursor by viewModel.nextChatCursor.collectAsStateWithLifecycle()
     val isLoadingMoreChats by viewModel.isLoadingMoreChats.collectAsStateWithLifecycle()
     val chatPaginationErrorMessage by viewModel.chatPaginationErrorMessage.collectAsStateWithLifecycle()
-    val canReadSchedules = installations.firstOrNull { it.id == activeInstallationId }
-        ?.hasNegotiatedAccess(AidenRemoteCapability.SCHEDULE_READ) == true
+    val serverInfo by coordinator.serverInfo.collectAsStateWithLifecycle()
+    val activeInstallation = installations.firstOrNull { it.id == activeInstallationId }
+    val canReadSchedules = activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.SCHEDULE_READ) == true
+    val openChatId = LocalAidenOpenChatId.current
 
     var isSearching by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -261,14 +273,67 @@ private fun AidenWorkspaceHome(
 
     val archivedIds = coordinator.activeInstanceId?.let { archivedByInstance[it] }.orEmpty()
     val activeWorkspaces = remember(workspaces, archivedIds) {
-        workspaces.filterNot { archivedIds.contains(it.id) }
+        AidenNoWorkspace.unarchived(workspaces, archivedIds.toSet())
     }
     val activeById = remember(activeWorkspaces) { activeWorkspaces.associateBy { it.id } }
+    // Chats without a workspace are started from their own choice, not picked as a workspace.
+    val workspaceChoices = remember(activeWorkspaces) { AidenNoWorkspace.choices(activeWorkspaces) }
+    val noWorkspaceHome = remember(workspaces) { AidenNoWorkspace.home(workspaces) }
     val sidebarOrganization = runCatching {
         AidenWorkspaceSidebarOrganization.valueOf(sidebarOrganizationRaw)
     }.getOrDefault(AidenWorkspaceSidebarOrganization.WORKSPACE)
     val sidebarProjection = remember(activeWorkspaces, chats, searchQuery) {
         projectAidenWorkspaceSidebar(activeWorkspaces, chats, searchQuery)
+    }
+    val showsInbox = sidebarOrganization == AidenWorkspaceSidebarOrganization.INBOX
+    // The Inbox's clock: waits, snooze ends and the recent window move every 30 s.
+    var inboxNow by remember { mutableStateOf(Instant.now()) }
+    LaunchedEffect(showsInbox) {
+        while (showsInbox) {
+            inboxNow = Instant.now()
+            delay(30_000)
+        }
+    }
+    var showsAllInboxEarlier by rememberSaveable(activeInstanceId, sidebarOrganizationRaw) { mutableStateOf(false) }
+    var inboxSnoozeChatId by rememberSaveable { mutableStateOf<String?>(null) }
+    val workspaceNames = remember(activeWorkspaces) { activeWorkspaces.associate { it.id to AidenNoWorkspace.label(it) } }
+    val inboxProjection = remember(chats, workspaceNames, inboxNow, searchQuery, showsAllInboxEarlier, showsInbox, openChatId) {
+        if (!showsInbox) AidenInboxProjection()
+        else AidenInboxProjection.make(
+            chats = chats,
+            workspaceNames = workspaceNames,
+            openChatId = openChatId,
+            now = inboxNow,
+            searchText = searchQuery,
+            showAllEarlier = showsAllInboxEarlier
+        )
+    }
+    // Keyed on the host's features and the negotiated access, which can
+    // arrive after the list does.
+    val inboxOffers = AidenInboxRowOffers(
+        supportsReadState = serverInfo?.supportsChatReadState == true,
+        supportsTriage = serverInfo?.supportsChatTriage == true &&
+            activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.CHAT_WRITE) == true,
+        openChatId = openChatId
+    )
+    val inboxSwipe = remember(activeInstanceId) { AidenInboxSwipeState() }
+    val inboxNotice by viewModel.inboxNotice.collectAsStateWithLifecycle()
+    AidenInboxNoticeEffect(
+        notice = inboxNotice,
+        snackbarHostState = snackbarHostState,
+        onUndo = { chatId, undo, revision ->
+            viewModel.setInboxTriage(chatId, undo, isOpen = chatId == openChatId, undoRevision = revision)
+        },
+        onDismissed = viewModel::dismissInboxNotice
+    )
+    // Switching how the sidebar is organized drops a notice about the old
+    // list; the first composition (coming back to this screen) does not.
+    var noticeOrganization by remember { mutableStateOf(sidebarOrganizationRaw) }
+    LaunchedEffect(sidebarOrganizationRaw) {
+        if (noticeOrganization != sidebarOrganizationRaw) {
+            noticeOrganization = sidebarOrganizationRaw
+            viewModel.dismissInboxNotice()
+        }
     }
     val chatListUnavailable = chatListLoadState == AidenChatListLoadState.FAILED
     val chatCreationBlocked = chatListLoadState != AidenChatListLoadState.LOADED
@@ -332,8 +397,15 @@ private fun AidenWorkspaceHome(
         creationStatus = status
         scope.launch {
             try {
-                val chat = activeClient.createChat(workspace.id)
+                val chat = activeClient.createChat(workspace.id, noWorkspace = workspace.noWorkspace)
                 viewModel.accept(chat)
+                // A No workspace chat can land in a fresh hidden workspace the phone hasn't listed
+                // yet; the sidebar lists it under Chats once that re-read lands.
+                if (workspaces.none { it.id == chat.workspaceId }) {
+                    coordinator.refreshWorkspaces()?.join()
+                    // The wait can outlive the pairing that made the chat; don't open it under another.
+                    if (coordinator.client.value !== activeClient) return@launch
+                }
                 onNavigateToChat(chat.id)
             } catch (error: Exception) {
                 snackbarHostState.showSnackbar(error.message ?: resources.getString(R.string.workspace_home_create_chat_failed))
@@ -359,7 +431,7 @@ private fun AidenWorkspaceHome(
                 onOpenSettings = onOpenSettings
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { SnackbarHost(snackbarHostState) { data -> AidenSnackbar(data) } },
         floatingActionButton = {
             AnimatedVisibility(
                 visible = !isSearching && !chatCreationBlocked,
@@ -473,16 +545,22 @@ private fun AidenWorkspaceHome(
                             label = "SidebarOrganizationTitle",
                             modifier = Modifier.weight(1f)
                         ) { organization ->
-                            Text(
-                                if (organization == AidenWorkspaceSidebarOrganization.WORKSPACE) {
-                                    stringResource(R.string.workspace_directory_title)
-                                } else {
-                                    stringResource(R.string.workspace_home_recents)
-                                },
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = palette.foreground
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    when (organization) {
+                                        AidenWorkspaceSidebarOrganization.WORKSPACE -> stringResource(R.string.workspace_directory_title)
+                                        AidenWorkspaceSidebarOrganization.RECENT -> stringResource(R.string.workspace_home_recents)
+                                        AidenWorkspaceSidebarOrganization.INBOX -> stringResource(R.string.inbox_title)
+                                    },
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = palette.foreground
+                                )
+                                if (organization == AidenWorkspaceSidebarOrganization.INBOX) AidenInboxBetaBadge()
+                            }
                         }
                         AidenSidebarOrganizationMenu(
                             selected = sidebarOrganization,
@@ -528,7 +606,11 @@ private fun AidenWorkspaceHome(
                         AidenSkeletonList(
                             count = 6,
                             leading = false,
-                            loadingDescription = stringResource(R.string.workspace_chats_loading),
+                            loadingDescription = if (showsInbox) {
+                                stringResource(R.string.inbox_loading)
+                            } else {
+                                stringResource(R.string.workspace_chats_loading)
+                            },
                             modifier = Modifier.padding(horizontal = 8.dp)
                         )
                     }
@@ -593,11 +675,49 @@ private fun AidenWorkspaceHome(
                                 }
                             )
                         }
+                    } else if (showsInbox) {
+                        if (listPresentation == AidenReadPresentation.CONTENT && inboxProjection.isEmpty) {
+                            item(key = "inbox-empty") {
+                                AidenEmptyState(
+                                    icon = if (isSearching) Icons.Outlined.Search else Icons.Outlined.Inbox,
+                                    title = if (isSearching) {
+                                        stringResource(R.string.workspace_home_empty_search_title)
+                                    } else {
+                                        stringResource(R.string.inbox_empty_title)
+                                    },
+                                    body = if (isSearching) {
+                                        stringResource(R.string.workspace_home_empty_search_body)
+                                    } else {
+                                        stringResource(R.string.inbox_empty_body)
+                                    },
+                                    modifier = Modifier.padding(top = if (isSearching) 80.dp else 32.dp)
+                                )
+                            }
+                        }
+                        aidenInboxItems(
+                            projection = inboxProjection,
+                            workspaceNames = workspaceNames,
+                            now = inboxNow,
+                            offers = inboxOffers,
+                            swipe = inboxSwipe,
+                            onOpen = onNavigateToChat,
+                            onMarkRead = viewModel::markInboxRead,
+                            onDone = { id ->
+                                val held = chats.firstOrNull { it.id == id }?.let { inboxOffers.offer(it, inboxNow).undone } == true
+                                viewModel.setInboxTriage(id, AidenChatTriageChange.done(!held), isOpen = id == openChatId)
+                            },
+                            onSnooze = { id ->
+                                if (chats.firstOrNull { it.id == id }?.let { inboxOffers.offer(it, inboxNow).wake } == true) {
+                                    viewModel.setInboxTriage(id, AidenChatTriageChange.wake, isOpen = id == openChatId)
+                                } else inboxSnoozeChatId = id
+                            },
+                            onShowMore = { showsAllInboxEarlier = true }
+                        )
                     } else {
                         items(sidebarProjection.recents, key = AidenChatSummary::id) { chat ->
                             AidenWorkspaceChatRow(
                                 chat = chat,
-                                workspaceName = activeById[chat.workspaceId]?.name.orEmpty(),
+                                workspaceName = activeById[chat.workspaceId]?.let(AidenNoWorkspace::label).orEmpty(),
                                 showsWorkspaceName = true,
                                 indented = false,
                                 onClick = { onNavigateToChat(chat.id) }
@@ -658,6 +778,17 @@ private fun AidenWorkspaceHome(
         }
     }
 
+    inboxSnoozeChatId?.let { chatId ->
+        AidenInboxSnoozeSheet(
+            now = inboxNow,
+            onPick = { until ->
+                inboxSnoozeChatId = null
+                viewModel.setInboxTriage(chatId, AidenChatTriageChange.snooze(until), isOpen = chatId == openChatId)
+            },
+            onDismiss = { inboxSnoozeChatId = null }
+        )
+    }
+
     if (showScheduledTasks) {
         ModalBottomSheet(
             onDismissRequest = { showScheduledTasks = false },
@@ -701,13 +832,24 @@ private fun AidenWorkspaceHome(
             Column(
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = AidenUi.ScreenGutter, vertical = 8.dp)
             ) {
-                Text(stringResource(R.string.workspace_home_new_chat_cd), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.workspace_new_chat), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(10.dp))
+                // Revision 51: the Mac gives the chat a folder of its own if the home already holds one.
+                noWorkspaceHome?.let { home ->
+                    AidenNewChatChoice(
+                        stringResource(R.string.workspace_home_choice_no_workspace),
+                        stringResource(R.string.workspace_home_choice_no_workspace_detail),
+                        Icons.Outlined.Forum
+                    ) {
+                        showNewChatChoices = false
+                        createChat(home)
+                    }
+                }
                 AidenNewChatChoice(
                     stringResource(R.string.workspace_home_choice_existing),
                     stringResource(R.string.workspace_home_choice_existing_detail),
                     Icons.Outlined.FolderOpen,
-                    enabled = activeWorkspaces.isNotEmpty()
+                    enabled = workspaceChoices.isNotEmpty()
                 ) {
                     showNewChatChoices = false
                     showExistingWorkspacePicker = true
@@ -731,10 +873,10 @@ private fun AidenWorkspaceHome(
             title = { Text(stringResource(R.string.workspace_home_choice_existing)) },
             text = {
                 AidenConnectedColumn(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    activeWorkspaces.forEachIndexed { index, workspace ->
+                    workspaceChoices.forEachIndexed { index, workspace ->
                         AidenGroupCard(
                             index = index,
-                            count = activeWorkspaces.size,
+                            count = workspaceChoices.size,
                             onClick = {
                                 showExistingWorkspacePicker = false
                                 createChat(workspace)
@@ -1032,12 +1174,14 @@ private val AidenWorkspaceSidebarOrganization.menuTitle: Int
     get() = when (this) {
         AidenWorkspaceSidebarOrganization.WORKSPACE -> R.string.workspace_home_organize_by_workspace
         AidenWorkspaceSidebarOrganization.RECENT -> R.string.workspace_home_organize_recent
+        AidenWorkspaceSidebarOrganization.INBOX -> R.string.workspace_home_organize_inbox
     }
 
 private val AidenWorkspaceSidebarOrganization.icon: ImageVector
     get() = when (this) {
         AidenWorkspaceSidebarOrganization.WORKSPACE -> Icons.Outlined.FolderCopy
         AidenWorkspaceSidebarOrganization.RECENT -> Icons.Outlined.History
+        AidenWorkspaceSidebarOrganization.INBOX -> Icons.Outlined.Inbox
     }
 
 @Composable
@@ -1201,7 +1345,7 @@ internal fun AidenWorkspaceSidebarSectionRow(
                 )
                 Spacer(Modifier.width(4.dp))
                 Icon(
-                    Icons.Outlined.FolderOpen,
+                    if (section.workspace.noWorkspace) Icons.Outlined.Forum else Icons.Outlined.FolderOpen,
                     contentDescription = null,
                     tint = palette.accent,
                     modifier = Modifier.size(21.dp)

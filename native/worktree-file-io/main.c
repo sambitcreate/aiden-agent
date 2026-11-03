@@ -487,7 +487,7 @@ static int editor_file(int argc, char **argv, int edit) {
 
 #define MAX_CREATE_BYTES (8U * 1024U * 1024U)
 
-/* create <root> <root-dev> <root-ino> <relative> <bytes>
+/* create|create-private <root> <root-dev> <root-ino> <relative> <bytes>
  * Create a new regular file beneath descriptors opened one component at a
  * time (creating missing directories with mkdirat), never following a
  * symlink, and write exactly <bytes> read from stdin. A renamed or replaced
@@ -507,7 +507,7 @@ static int create_file(int argc, char **argv) {
   if (parent < 0) return fail("unsafe_destination");
   int descriptor = openat(parent, leaf,
                           O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
-                          0644);
+                          strcmp(argv[1], "create-private") == 0 ? 0600 : 0644);
   if (descriptor < 0) {
     int error = errno;
     close(parent);
@@ -635,7 +635,7 @@ int main(int argc, char **argv) {
   if (argc >= 2 && strcmp(argv[1], "list") == 0) return list_directory(argc, argv);
   if (argc >= 2 && strcmp(argv[1], "read") == 0) return editor_file(argc, argv, 0);
   if (argc >= 2 && strcmp(argv[1], "edit") == 0) return editor_file(argc, argv, 1);
-  if (argc >= 2 && strcmp(argv[1], "create") == 0) return create_file(argc, argv);
+  if (argc >= 2 && (strcmp(argv[1], "create") == 0 || strcmp(argv[1], "create-private") == 0)) return create_file(argc, argv);
   if (argc != 13 ||
       (strcmp(argv[1], "copy") != 0 && strcmp(argv[1], "restore") != 0) ||
       !valid_relative(argv[5]) || !valid_relative(argv[9])) return fail("invalid_input");

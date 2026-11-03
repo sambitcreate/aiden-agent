@@ -398,3 +398,16 @@ test("save refuses a symlinked ancestor or leaf and never writes through a hard 
   assert.equal(await readFile(path.join(outside, "shot.png"), "utf8"), "outside");
   assert.deepEqual(await readdir(outside), ["shot.png"]);
 });
+
+test("private file creation uses mode 0600 and refuses an existing environment file", async t => {
+  if (process.platform !== "darwin") return;
+  const folder = await directory(t);
+  const rootId = await identity(folder);
+  const input = Buffer.from("KEY=synthetic");
+  const created = await runEditor(["create-private", ...rootId, ".env", String(input.length)], input);
+  assert.equal(created.code, 0, created.stderr);
+  assert.equal((await stat(path.join(folder, ".env"))).mode & 0o777, 0o600);
+  const existing = await runEditor(["create-private", ...rootId, ".env", "3"], Buffer.from("new"));
+  assert.notEqual(existing.code, 0);
+  assert.equal(await readFile(path.join(folder, ".env"), "utf8"), input.toString());
+});

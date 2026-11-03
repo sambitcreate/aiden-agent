@@ -25,7 +25,12 @@ export interface EncodedImage {
   height: number;
 }
 
-/** BGRA pixels to PNG or JPEG, scaled down (aspect kept) to at most `maxWidth` wide. */
+/**
+ * BGRA pixels to PNG or JPEG, scaled down (aspect kept) to at most `maxWidth` wide.
+ * `bgra` is the live framebuffer, which later updates keep painting into: the
+ * encoder reads it before it first yields (Electron's `createFromBitmap` copies
+ * it), so the screen hands it over without a whole-framebuffer copy per frame.
+ */
 export type BotComputerImageEncoder = (
   bgra: Buffer,
   width: number,
@@ -231,8 +236,8 @@ export async function createRfbScreen(options: RfbScreenOptions, signal?: AbortS
     await pictureOf(current);
     const { data, width, height } = current.framebuffer();
     const at = version;
-    // The framebuffer keeps changing underneath; encode a copy.
-    const encoded = await options.encode(Buffer.from(data), width, height, format, quality, maxWidth);
+    // No await between reading the framebuffer and the encoder taking its pixels, so it gets this picture.
+    const encoded = await options.encode(data, width, height, format, quality, maxWidth);
     return { ...encoded, framebufferWidth: width, framebufferHeight: height, version: at };
   };
 

@@ -128,6 +128,8 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     let resumeGate = TestGate()
     let sendGate = TestGate()
     let stopGate = TestGate()
+    /// Holds each upload once armed, after it is recorded.
+    let uploadGate = TestGate()
     /// Holds each Resume until `releaseResume()`.
     var holdResume: Bool {
         get { resumeGate.isArmed }
@@ -267,6 +269,8 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
             _uploads.append(upload)
             return (_uploads.count - 1, _uploadFailures.contains(_uploads.count - 1))
         }
+        await uploadGate.pass()
+        try Task.checkCancellation()
         if fails { throw URLError(.networkConnectionLost) }
         let (name, mimeType, kind, size): (String, String, String, Int) = switch upload {
         case let .image(name, mimeType, data): (name, mimeType, "image", data.count)
@@ -2585,6 +2589,40 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertEqual(model.outgoing, [])
     }
 
+    /// A message taken on an earlier visit can have its entry beyond the window
+    /// a snapshot carries. Coming back, it never sits at the bottom as "Sent"
+    /// for the grace period; one sent on this visit still waits it out (above).
+    func testAMessageTakenOnAnEarlierVisitThatTheMacNoLongerShowsDoesNotFlashBack() async throws {
+        let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
+        let cache = AidenBotSessionCache()
+        let reading = AidenBotSessionActivity(phase: "reading", startedAt: started)
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try session(.running, activity: reading)))
+        let first = model(transport, key: key, cache: cache)
+        await first.load()
+        _ = await first.send("Also add a shopping list.", whenBusy: .queue)
+        XCTAssertEqual(first.outgoing.first?.status, .sent(submissionId: "17"))
+        first.release()
+
+        // Much later: its turn ran long ago, and the transcript window holds only newer entries.
+        let newer = (1...3).map { assistant("entry_\($0)", "Later reply \($0)") }
+        let second = model(transport, key: key, cache: cache)
+        XCTAssertEqual(second.outgoing.map(\.text), ["Also add a shopping list."], "it waits for the Mac's word")
+        transport.queueSession(.success(try session(.idle, seq: 30, entries: newer)))
+        await second.load()
+        XCTAssertEqual(bubbles("Also add a shopping list.", in: second), 0, "nothing on the Mac shows it: no Sent bubble")
+        second.release()
+
+        // Open again before its grace ran out: it stays hidden while connecting.
+        let third = model(transport, key: key, cache: cache)
+        XCTAssertEqual(third.outgoing, [])
+        // The Mac lists it after all: its own Queued bubble shows it, once.
+        let onMac = AidenBotQueuedMessage(submissionId: "17", mode: .queue, text: "Also add a shopping list.")
+        transport.queueSession(.success(try session(.running, seq: 31, activity: reading, queued: [onMac])))
+        await third.load()
+        XCTAssertEqual(bubbles("Also add a shopping list.", in: third), 1)
+    }
+
     /// R21: a request frozen while the cached capability said Steer/Queue goes
     /// again byte for byte, even after `/server` says this Mac doesn't offer them.
     func testASendFrozenUnderTheCachedCapabilityReplaysExactly() async throws {
@@ -3684,6 +3722,27 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertEqual(second.outgoing.first?.status, .sent(submissionId: "17"))
     }
 
+    func testCancelledRequestCannotReturnAReceiptFromCancellation() async throws {
+        for _ in 0..<100 {
+            let gate = TestGate()
+            gate.hold()
+            let caller = Task {
+                try await aidenBotWithin(.seconds(30)) {
+                    await gate.pass()
+                    return "receipt"
+                }
+            }
+            try await waitUntil({ gate.isHolding }, what: "the request")
+            caller.cancel()
+            do {
+                _ = try await caller.value
+                XCTFail("A cancelled request must not take the receipt returned on cancellation.")
+            } catch is CancellationError {
+                // The result remains ambiguous so the idempotency key is retained.
+            }
+        }
+    }
+
     func testACancelledCallerNeverLeavesItsRequestRunning() async throws {
         // An already-cancelled caller never starts the request.
         let untouched = LiveRequests()
@@ -4612,6 +4671,34 @@ final class AidenBotSessionAttachmentTests: XCTestCase {
         // Something typed since stays, after the message's own words.
         XCTAssertEqual(model.reattach(failed.id, into: "Also the totals"), "Summarise\n\nAlso the totals")
         XCTAssertNil(model.reattach(failed.id, into: ""), "it comes back once")
+    }
+
+    func testStopDropsTheUploadInFlightButKeepsWhatReachedTheMac() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = try await loaded(transport)
+        // The first upload goes through; the second waits on the Mac.
+        transport.uploadGate.hold()
+        transport.uploadGate.release()
+        defer { transport.uploadGate.releaseAll() }
+        let attaching = Task { await model.attach([photo, notes, photo]) }
+        let deadline = Date().addingTimeInterval(5)
+        while !transport.uploadGate.isHolding {
+            guard Date() < deadline else { return XCTFail("Timed out waiting for the second upload") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(model.uploadProgress?.index, 1)
+        XCTAssertEqual(model.uploadProgress?.count, 3)
+        XCTAssertEqual(model.uploadProgress?.title, "Sending 2 of 3")
+
+        model.cancelUploads()
+        _ = await attaching.value
+
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["receipt.png"], "what reached the Mac stays ready to send")
+        XCTAssertNil(model.uploadProgress, "the bar goes away")
+        XCTAssertFalse(model.isAttaching)
+        XCTAssertTrue(model.canAttach, "the + opens again")
+        XCTAssertEqual(transport.uploads.count, 2, "the third picture never left the phone")
+        XCTAssertTrue(transport.removedAttachmentIds.isEmpty, "Stop doesn't take the staged photo off the Mac")
     }
 
     func testAMacWithoutBotAttachmentsOffersNoPlus() async throws {

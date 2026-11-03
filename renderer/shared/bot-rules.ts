@@ -139,6 +139,17 @@ export interface BotRulesUpdateInput {
   change: BotRuleChange;
 }
 
+/**
+ * Settings → Bots, for every Bot: whether a routine run (nobody watching) goes
+ * ahead with a step that would otherwise wait for the person's OK, an Ask
+ * first rule or a connected app's change. Absent or false: such a step is
+ * skipped (a rule) or waits (an approval), as before. It never lowers a Hand
+ * off to me rule, the locked password and money rules, or a chat turn.
+ */
+export function botRoutinesGoAhead(settings: { botRoutinesGoAhead?: unknown } | undefined): boolean {
+  return settings?.botRoutinesGoAhead === true;
+}
+
 export const BOT_RULE_CHANNELS = {
   get: "bots:rules:get", // invoke(botId) → BotRulesView
   update: "bots:rules:update", // invoke(BotRulesUpdateInput) → BotRulesUpdateResult

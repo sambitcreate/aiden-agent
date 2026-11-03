@@ -9,6 +9,76 @@ const GENERATION_TIMEOUT_MS = 15_000;
 const STABLE_STATUS_TTL_MS = 30_000;
 const PREPARING_STATUS_TTL_MS = 5_000;
 
+export interface RecordedHelperStopDependencies {
+  /** The running executable for `pid`, or null when it has exited or cannot be read. */
+  readExecutable: (pid: number) => Promise<string | null>;
+  kill: (pid: number, signal: NodeJS.Signals) => void;
+}
+
+/**
+ * SIGTERM the helper whose PID it wrote to its process file, but only while
+ * that PID still runs an executable inside the helper app bundle. The helper
+ * is launched through `open`, so it is not our child and its PID can be
+ * recycled by an unrelated process once it exits.
+ */
+export async function stopRecordedHelperProcess(
+  recordedPid: string,
+  helperAppPath: string,
+  dependencies: RecordedHelperStopDependencies,
+): Promise<boolean> {
+  const text = recordedPid.trim();
+  if (!/^[0-9]+$/.test(text)) return false;
+  const pid = Number.parseInt(text, 10);
+  if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+  let executable: string | null;
+  try {
+    executable = await dependencies.readExecutable(pid);
+  } catch {
+    return false;
+  }
+  const bundle = helperAppPath.replace(/\/+$/, "");
+  if (!executable || !executable.startsWith(`${bundle}/`)) return false;
+  try {
+    dependencies.kill(pid, "SIGTERM");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Holds helper stops that run asynchronously (the identity lookup comes first)
+ * so quit can wait for them, bounded, instead of exiting before the signal.
+ */
+export function createPendingHelperStops() {
+  const pending = new Set<Promise<void>>();
+  return {
+    track(work: Promise<unknown>): void {
+      const settled: Promise<void> = work
+        .then(
+          () => undefined,
+          () => undefined,
+        )
+        .finally(() => pending.delete(settled));
+      pending.add(settled);
+    },
+    /** Resolve true once every tracked stop settles, or false when the budget runs out first. */
+    async settleWithin(budgetMs: number): Promise<boolean> {
+      if (pending.size === 0) return true;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const expired = new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), budgetMs);
+        timer.unref?.();
+      });
+      try {
+        return await Promise.race([Promise.all([...pending]).then(() => true), expired]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  };
+}
+
 export type NativeFoundationModelsMethod = "availability" | "generateTitle";
 
 export interface NativeFoundationModelsRequest {

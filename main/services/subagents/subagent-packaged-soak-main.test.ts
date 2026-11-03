@@ -96,15 +96,15 @@ test("the packaged soak has fixed UI actions, aggregate receipt timing, and no I
     settlement.lastIndexOf("app.quit()") >
       settlement.lastIndexOf("writeSubagentPackagedSoakReceipt("),
   );
-  const shutdownStart = main.indexOf("async function shutdownAndQuit");
+  const shutdownStart = main.indexOf("async function runShutdownAndQuit");
   const shutdownEnd = main.indexOf(
     "\nasync function refreshCloseGuardFromRenderer",
     shutdownStart,
   );
   const shutdown = main.slice(shutdownStart, shutdownEnd);
-  const parentShutdown = shutdown.indexOf("await llmClient.shutdown()");
+  const parentShutdown = shutdown.indexOf("llmClient.shutdown(),");
   const registryShutdown = shutdown.indexOf(
-    "await subagentRuntimeRegistry.shutdown()",
+    "subagentRuntimeRegistry.shutdown(),",
   );
   const quitReceiptFinalization = shutdown.indexOf(
     "await tryFinalizeSubagentPackagedSoakQuitReceipt(",
@@ -137,7 +137,7 @@ test("the packaged soak has fixed UI actions, aggregate receipt timing, and no I
   assert.ok(forcedQuit > cleanup);
   assert.ok(normalDiagnosticFlush > cleanup);
   assert.ok(normalDiagnosticFlush < forcedQuit);
-  assert.match(shutdown, /parentSettled\s*=\s*await llmClient\.shutdown\(\)/u);
+  assert.match(shutdown, /parentShutdown = await settleShutdownStep\([^;]*llmClient\.shutdown\(\)[\s\S]*?parentSettled = parentShutdown\.status === "fulfilled" && parentShutdown\.value/u);
   assert.match(shutdown, /quitReceiptFinalization\.status === "failed"/u);
   assert.match(shutdown, /continuing shutdown without a receipt/u);
   assert.match(shutdown, /quitReceiptFinalization\.status === "timed_out"/u);

@@ -30,6 +30,11 @@ export interface PeerRequest {
    * as an attachment upload. Capped at `MAX_PEER_UPLOAD_BYTES`.
    */
   maxBodyBytes?: number;
+  /**
+   * Revision 50 (`attachments:raw`): a picture sent as its own bytes instead
+   * of `body`, with its percent-encoded name in `Aiden-Attachment-Name`.
+   */
+  rawBody?: PeerRawBody;
   /** SSE resume cursor sent as `Last-Event-ID`. */
   lastEventId?: string;
   /**
@@ -37,6 +42,14 @@ export interface PeerRequest {
    * A resumed feed may legitimately send nothing until something changes.
    */
   onOpen?(): void;
+}
+
+/** A picture upload's bytes (revision 50). */
+export interface PeerRawBody {
+  contentType: "image/png" | "image/jpeg";
+  /** `encodeAidenRemoteAttachmentName` of the file name. */
+  encodedName: string;
+  data: Buffer;
 }
 
 /** How a stream ended without an error: the host closed it, or the 5-minute session cap fired. */
@@ -207,11 +220,25 @@ export type PeerTransportErrorCode =
   | "identity_changed"
   | "unsupported_protocol";
 
+/** Only fixed categories leave the transport, never OS messages or endpoint text. */
+export type PeerConnectionFailure = "timeout" | "dns" | "refused" | "network" | "tls" | "unreachable" | "invalid_response";
+
+export function peerConnectionFailure(error: unknown): PeerConnectionFailure {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") return "dns";
+  if (code === "ECONNREFUSED") return "refused";
+  if (code === "ETIMEDOUT" || code === "ESOCKETTIMEDOUT") return "timeout";
+  if (code === "ENETUNREACH" || code === "EHOSTUNREACH" || code === "ENETDOWN") return "network";
+  if (typeof code === "string" && (code.startsWith("ERR_TLS_") || code.startsWith("ERR_SSL_") || code.startsWith("CERT_"))) return "tls";
+  return "unreachable";
+}
+
 export class PeerTransportError extends Error {
   constructor(
     readonly code: PeerTransportErrorCode,
     readonly status?: number,
     readonly remote?: PeerRemoteError,
+    readonly failure?: PeerConnectionFailure,
   ) {
     super(
       code === "authentication_required"
@@ -411,8 +438,18 @@ export class PeerTransport {
     const streaming = mode === "events";
     const target = peerRequestUrl(this.trust.endpoint, input.path);
     const requestHeaders = headers(input, mode);
-    const body =
-      input.body === undefined
+    const raw = input.rawBody;
+    if (
+      raw &&
+      (input.body !== undefined ||
+        (raw.contentType !== "image/png" && raw.contentType !== "image/jpeg") ||
+        !/^[A-Za-z0-9%._~-]{1,2048}$/u.test(raw.encodedName) ||
+        raw.data.length === 0)
+    )
+      throw new Error("Invalid peer picture upload.");
+    const body = raw
+      ? raw.data
+      : input.body === undefined
         ? undefined
         : Buffer.from(JSON.stringify(input.body));
     const maxBodyBytes = Math.min(
@@ -422,9 +459,10 @@ export class PeerTransport {
     if (body && body.length > maxBodyBytes)
       throw new Error("Peer request is too large.");
     if (body) {
-      requestHeaders["Content-Type"] = "application/json";
+      requestHeaders["Content-Type"] = raw?.contentType ?? "application/json";
       requestHeaders["Content-Length"] = String(body.length);
     }
+    if (raw) requestHeaders["Aiden-Attachment-Name"] = raw.encodedName;
     if (input.signal?.aborted) throw new PeerTransportError("unavailable");
     const deadlineMs =
       !streaming && input.timeoutMs !== undefined
@@ -506,7 +544,7 @@ export class PeerTransport {
           const frames = streaming ? new PeerEventFrames() : undefined;
           const frameBoundary = () => {
             clearTimeout(deadline);
-            deadline = setTimeout(abort, DEADLINE_MS);
+            deadline = setTimeout(timedOut, DEADLINE_MS);
           };
           if (streaming) {
             // The quiet time before the first frame starts once the stream is accepted,
@@ -581,15 +619,22 @@ export class PeerTransport {
         request.destroy();
       };
       input.signal?.addEventListener("abort", abort, { once: true });
+      const timedOut = () => {
+        finish(new PeerTransportError("unavailable", undefined, undefined, "timeout"));
+        request.destroy();
+      };
       request.on("error", (error: Error & { code?: unknown }) =>
         finish(
           new PeerTransportError(
             isPeerIdentityTlsError(error) ? "identity_changed" : "unavailable",
+            undefined,
+            undefined,
+            peerConnectionFailure(error),
           ),
         ),
       );
-      request.setTimeout(streaming ? 60_000 : deadlineMs, abort);
-      deadline = setTimeout(abort, deadlineMs);
+      request.setTimeout(streaming ? 60_000 : deadlineMs, timedOut);
+      deadline = setTimeout(timedOut, deadlineMs);
       if (streaming) sessionDeadline = setTimeout(capped, PEER_STREAM_SESSION_MS);
       request.end(body);
     });

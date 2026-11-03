@@ -16,3 +16,13 @@ function flush(stream: NodeJS.WriteStream): Promise<void> {
     stream.write("", () => resolve());
   });
 }
+
+/**
+ * A reader that closes early (`aiden schedule list | head -1`) makes the next
+ * stdout write fail with EPIPE. Aiden's own commands then exit quietly with
+ * status 0 (a tool killed by SIGPIPE would report 141; exiting 0 keeps
+ * `set -o pipefail` scripts from failing on a reader that stopped early)
+ * instead of printing an unhandled 'error' stack.
+ */
+const closedStdout = (error: NodeJS.ErrnoException) => { if (error.code !== "EPIPE") throw error; process.exit(0); };
+export function exitQuietlyOnClosedStdout(): void { if (!process.stdout.listeners("error").includes(closedStdout)) process.stdout.on("error", closedStdout); }

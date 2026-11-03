@@ -14,12 +14,17 @@
 //   rule hands the call to the person instead of running it. On a turn nobody
 //   is watching (routine, Telegram) neither waits: the call is blocked with
 //   what the person needs to do.
+// - Routines go ahead (Settings → Bots, off by default): on a run made only of
+//   routine inputs, an approval (today's or a rule's Ask first) is granted
+//   without a card. Hand-offs, the locked rules, Computer Use on the person's
+//   Mac and every turn a person or Telegram joined are unchanged.
 // - Effect: each offered tool re-admits and revalidates immediately before it
 //   runs, and its signal follows the admission, as `protectAdmittedBotTool`
 //   does on the legacy path.
 // - Replay: a tool's own declaration (`declarePiRuntimeReplay`) unless the
 //   candidate overrides it; MCP tools and subagents are always `unsafe`.
 
+import type { BrowserApprovalTarget } from "../browser/approval.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   BOT_HANDOFF_ACTION_MAX_CHARS,
@@ -34,6 +39,7 @@ import { botBaselineOf, decideBotRule } from "../bot-rules/decide.js";
 import { describeMcpAction } from "../bot-rules/mcp-action.js";
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
 import { summarizeToolCall } from "../coding-tools.js";
+import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
 import { renderMcpServersSection } from "../mcp-server-instructions.js";
 import { piRuntimeReplayPolicy } from "../pi-runtime-tool.js";
 import type { SkillRegistrySnapshot } from "../skill-registry.js";
@@ -89,6 +95,7 @@ export interface BotLiveApproval {
    * (the Bot browser's page): the card's Open. An https page only.
    */
   open?: { url: string };
+  browserTarget?: Readonly<BrowserApprovalTarget>;
   /**
    * What a rule-made card says the call does when there is no baseline
    * approval to quote (the Bot computer's stated intent).
@@ -110,6 +117,8 @@ export interface BotToolAssemblyPorts {
   rules?(botId: string): Promise<readonly BotRule[]>;
   /** The Bot's name, for the hand-off card's "why". */
   botName?(botId: string): Promise<string | undefined>;
+  /** Settings → Bots, read fresh on every call: routine runs go ahead without asking. Absent: off. */
+  routinesGoAhead?(): Promise<boolean>;
 }
 
 export interface BotToolAssembly {
@@ -249,7 +258,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         const verdict = await botToolVerdict(toolName, facts, {
           telegram: turns.some((turn) => turn.telegram),
           routine: turns.some((turn) => turn.routine),
-        });
+        }, call?.args);
         if (!verdict.allowed) return verdict;
         if (call === undefined) return { allowed: true };
         // The baseline: today's approval decision, untouched by any rule.
@@ -261,7 +270,14 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
           const summary = await botToolApprovalSummary(toolName, call.args, facts);
           baseline = summary === undefined ? undefined : { summary };
         }
-        const asBaseline: BotPolicyDecision = baseline === undefined ? { allowed: true } : { allowed: true, approval: baseline };
+        // Only a run every input of which is a routine: a person who joined it is watching.
+        const routineOnly = turns.length > 0 && turns.every((turn) => turn.routine && !turn.telegram);
+        // Computer Use acts on the person's own Mac, so it keeps asking whatever the setting.
+        const goAhead =
+          routineOnly && toolName !== COMPUTER_USE_TOOL_NAME && (await ports.routinesGoAhead?.().catch(() => false)) === true;
+        const ask = (approval: BotApprovalRequirement): BotPolicyDecision =>
+          goAhead ? { allowed: true, approval: { ...approval, preapproved: true } } : { allowed: true, approval };
+        const asBaseline: BotPolicyDecision = baseline === undefined ? { allowed: true } : ask(baseline);
         const action = live !== undefined ? live.action : await describeMcpAction(toolName, call.args, facts);
         if (action === undefined || ports.rules === undefined) return asBaseline;
         let rules: readonly BotRule[];
@@ -281,10 +297,10 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         if (ruled === "ask") {
           // Never with remembered scopes: a rule-made ask is answered each time.
           if (baseline !== undefined) {
-            return { allowed: true, approval: { ...baseline, summary: `Rule · ${label} — ${baseline.summary}`, rule: ruleRef } };
+            return ask({ ...baseline, summary: `Rule · ${label} — ${baseline.summary}`, rule: ruleRef });
           }
-          if (unattended) return { allowed: false, reason: ruleAskUnattendedBlock(label) };
-          return { allowed: true, approval: { summary: `Rule · ${label} — ${callSummary}`, rule: ruleRef } };
+          if (unattended && !goAhead) return { allowed: false, reason: ruleAskUnattendedBlock(label) };
+          return ask({ summary: `Rule · ${label} — ${callSummary}`, rule: ruleRef });
         }
         if (unattended) return { allowed: false, reason: ruleUnattendedBlock(label) };
         const botName = (await ports.botName?.(botId).catch(() => undefined)) ?? "Your Bot";
@@ -296,6 +312,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
             summary: callSummary,
             action: ruleActionText(rule),
             why: ruleWhyText(label, botName, callSummary),
+            ...(live?.browserTarget && { browserTarget: live.browserTarget }),
             ...(open === undefined ? {} : { open }),
           },
         };

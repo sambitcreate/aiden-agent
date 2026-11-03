@@ -51,6 +51,22 @@ export interface BotComputerSessionsDependencies {
   botName?(botId: string): string | Promise<string>;
 }
 
+interface CachedScreen {
+  key: string;
+  screen: Promise<BotComputerScreen>;
+  /** Cancels the open itself, once no caller is waiting for it. */
+  cancel: AbortController;
+  /** Callers still waiting with a signal; infinite once one waits without a signal. */
+  waiters: number;
+  settled: boolean;
+  /** Every waiting caller left before it opened; whatever opens is closed. */
+  abandoned: boolean;
+}
+
+function screenOpenCancelled(): BotComputerError {
+  return new BotComputerError("cancelled", "Opening the computer's screen was cancelled.");
+}
+
 function connectionKey(connection: BotComputerConnection): string {
   return `${connection.vmName}\u0000${connection.vnc.port}\u0000${connection.vnc.password}`;
 }
@@ -65,7 +81,7 @@ export function createBotComputerSessions(
   deps: BotComputerSessionsDependencies,
 ): BotComputerSessions & { screen(botId: string, signal?: AbortSignal, options?: { reason?: BotComputerStartReason }): Promise<BotComputerScreen> } {
   let factory: BotComputerScreenFactory | undefined;
-  const screens = new Map<string, { key: string; screen: Promise<BotComputerScreen> }>();
+  const screens = new Map<string, CachedScreen>();
   const pointers = new Map<string, BotComputerPointer>();
   const activity = deps.activity ?? createBotComputerActivity();
 
@@ -74,6 +90,44 @@ export function createBotComputerSessions(
     if (!cached) return;
     screens.delete(botId);
     void cached.screen.then((screen) => screen.close()).catch(() => undefined);
+  };
+
+  /**
+   * One caller's wait on a shared open. The open runs on its own signal, so a
+   * caller that gives up (the Computer tab closing) never cancels it for the
+   * others (the Bot's `computer` call); it is cancelled only once every caller
+   * that was waiting has gone.
+   */
+  const join = (botId: string, cached: CachedScreen, signal?: AbortSignal): Promise<BotComputerScreen> => {
+    if (cached.settled) return cached.screen;
+    if (!signal) {
+      cached.waiters = Number.POSITIVE_INFINITY;
+      return cached.screen;
+    }
+    if (signal.aborted) return Promise.reject(screenOpenCancelled());
+    cached.waiters += 1;
+    return new Promise<BotComputerScreen>((resolve, reject) => {
+      const leave = () => {
+        cached.waiters -= 1;
+        if (!cached.settled && cached.waiters <= 0) {
+          cached.abandoned = true;
+          cached.cancel.abort();
+          if (screens.get(botId) === cached) screens.delete(botId);
+        }
+        reject(screenOpenCancelled());
+      };
+      signal.addEventListener("abort", leave, { once: true });
+      cached.screen.then(
+        (screen) => {
+          signal.removeEventListener("abort", leave);
+          resolve(screen);
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", leave);
+          reject(error);
+        },
+      );
+    });
   };
 
   /** This run's cached screen, or a new one through the factory. */
@@ -85,14 +139,25 @@ export function createBotComputerSessions(
   ): Promise<BotComputerScreen> => {
     const key = connectionKey(connection);
     const cached = screens.get(botId);
-    if (cached?.key === key) return cached.screen;
+    if (cached?.key === key) return join(botId, cached, signal);
     if (cached) drop(botId);
-    const opening = open(connection, signal);
-    screens.set(botId, { key, screen: opening });
-    opening.catch(() => {
-      if (screens.get(botId)?.screen === opening) screens.delete(botId);
-    });
-    return opening;
+    if (signal?.aborted) return Promise.reject(screenOpenCancelled());
+    const cancel = new AbortController();
+    const opening = open(connection, cancel.signal);
+    const entry: CachedScreen = { key, screen: opening, cancel, waiters: 0, settled: false, abandoned: false };
+    screens.set(botId, entry);
+    opening.then(
+      (screen) => {
+        entry.settled = true;
+        // Every caller left just as it opened: nobody holds this screen.
+        if (entry.abandoned) void screen.close().catch(() => undefined);
+      },
+      () => {
+        entry.settled = true;
+        if (screens.get(botId) === entry) screens.delete(botId);
+      },
+    );
+    return join(botId, entry, signal);
   };
 
   const opener = async (botId: string) => {

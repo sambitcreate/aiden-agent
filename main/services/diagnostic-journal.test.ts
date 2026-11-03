@@ -229,6 +229,128 @@ test("expired rotations are pruned on the next append", async () => {
   });
 });
 
+test("a retained rotation is pruned on the first append after it expires mid-session", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-diagnostic-live-retention-"));
+  const target = path.join(dir, "aiden.log");
+  let current = new Date("2026-08-01T00:00:00.000Z");
+  try {
+    const rotation = `${target}.1`;
+    await fs.writeFile(rotation, `${JSON.stringify({ version: 1, at: current.toISOString() })}\n`, { mode: 0o600 });
+    await fs.utimes(rotation, current, current);
+    initDiagnosticJournal({ targetPath: target, profile: "production", now: () => current });
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 1 } });
+    await flushDiagnosticJournal();
+
+    current = new Date(current.getTime() + MAX_DIAGNOSTIC_LOG_AGE_MS - 60_000);
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 2 } });
+    await flushDiagnosticJournal();
+    await fs.stat(rotation);
+
+    current = new Date(current.getTime() + 120_000);
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 3 } });
+    await flushDiagnosticJournal();
+    await assert.rejects(fs.stat(rotation), { code: "ENOENT" });
+  } finally {
+    await flushDiagnosticJournal();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a burst of lines lands complete and in order", async () => {
+  await withJournal("production", async (target) => {
+    await flushDiagnosticJournal();
+    for (let index = 0; index < 200; index += 1) {
+      writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "backpressure-fixture", fields: { sequence: index } });
+      if (index % 50 === 0) await Promise.resolve();
+    }
+    await flushDiagnosticJournal();
+    const sequences = (await fs.readFile(target, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { event: string; fields?: { sequence?: number } })
+      .filter((record) => record.event === "backpressure-fixture")
+      .map((record) => record.fields?.sequence);
+    assert.deepEqual(sequences, Array.from({ length: 200 }, (_, index) => index));
+    assert.equal(diagnosticJournalStatus().pendingWrites, 0);
+  });
+});
+
+test("a batch that crosses the size cap rotates without splitting or losing lines", async () => {
+  await withJournal("production", async (target) => {
+    await flushDiagnosticJournal();
+    const currentBytes = (await fs.stat(target)).size;
+    await fs.appendFile(target, `${"x".repeat(MAX_DIAGNOSTIC_LOG_BYTES - currentBytes - 2_000)}\n`);
+    for (let index = 0; index < 100; index += 1) {
+      writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "rotation-fixture", fields: { sequence: index } });
+    }
+    await flushDiagnosticJournal();
+    const sequences: unknown[] = [];
+    for (const file of [`${target}.1`, target]) {
+      assert.ok((await fs.stat(file)).size <= MAX_DIAGNOSTIC_LOG_BYTES);
+      for (const line of (await fs.readFile(file, "utf8")).split("\n")) {
+        if (!line.startsWith("{")) continue;
+        const record = JSON.parse(line) as { event: string; fields?: { sequence?: number } };
+        if (record.event === "rotation-fixture") sequences.push(record.fields?.sequence);
+      }
+    }
+    assert.deepEqual(sequences, Array.from({ length: 100 }, (_, index) => index));
+  });
+});
+
+test("a log directory removed mid-session is recreated owner-only on the next append", async () => {
+  await withJournal("production", async (target, dir) => {
+    await flushDiagnosticJournal();
+    await fs.rm(dir, { recursive: true, force: true });
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 9 } });
+    await flushDiagnosticJournal();
+    assert.match(await fs.readFile(target, "utf8"), /"sequence":9/u);
+    assert.equal((await fs.stat(dir)).mode & 0o777, 0o700);
+    assert.equal((await fs.stat(target)).mode & 0o777, 0o600);
+    assert.equal(diagnosticJournalStatus().writeFailed, false);
+  });
+});
+
+test("a log directory swapped for a symlink mid-session is not written through", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-diagnostic-root-swap-"));
+  const outside = path.join(dir, "outside");
+  const root = path.join(dir, "logs");
+  try {
+    await fs.mkdir(outside);
+    initDiagnosticJournal({ targetPath: path.join(root, "aiden.log"), profile: "production" });
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 1 } });
+    await flushDiagnosticJournal();
+    assert.equal(diagnosticJournalStatus().writeFailed, false);
+
+    await fs.rename(root, path.join(dir, "logs-moved"));
+    await fs.symlink(outside, root);
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 2 } });
+    await flushDiagnosticJournal();
+
+    assert.deepEqual(await fs.readdir(outside), []);
+    assert.equal(diagnosticJournalStatus().writeFailed, true);
+  } finally {
+    await flushDiagnosticJournal();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("lines lost to a failed append are reported as dropped", async () => {
+  await withJournal("production", async (target, dir) => {
+    await flushDiagnosticJournal();
+    // A second link makes the journal no longer an owned regular file.
+    await fs.link(target, path.join(dir, "second-link"));
+    for (let index = 0; index < 3; index += 1) {
+      writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "backpressure-fixture", fields: { sequence: index } });
+    }
+    await flushDiagnosticJournal();
+
+    const status = diagnosticJournalStatus();
+    assert.equal(status.writeFailed, true);
+    assert.equal(status.droppedWrites, 3);
+    assert.equal(status.pendingWrites, 0);
+  });
+});
+
 test("oversized retained rotations are removed at startup", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-diagnostic-retained-size-"));
   const target = path.join(dir, "aiden.log");

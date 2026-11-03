@@ -1,3 +1,4 @@
+import type { WorkspaceFolderCreationOptions } from "./workspace-application-service.js";
 // Add a workspace from a typed path or by cloning a repository.
 //
 // Everything here re-validates renderer input. Inspection is read-only; only
@@ -62,6 +63,8 @@ export function parseWorkspacePathInput(
 
 interface StatLike {
   isDirectory(): boolean;
+  dev?: number | bigint;
+  ino?: number | bigint;
 }
 
 interface LinkStatLike extends StatLike {
@@ -98,7 +101,7 @@ export interface WorkspaceIntakeDependencies {
   listWorkspaces(): Promise<Workspace[]>;
   getWorkspace(id: string): Promise<Workspace | null | undefined>;
   /** The shared registration path used by the native folder picker. */
-  createFromFolder(folderPath: string): Promise<Workspace>;
+  createFromFolder(folderPath: string, options?: WorkspaceFolderCreationOptions): Promise<Workspace>;
   runClone(request: GitCloneRequest): Promise<GitCloneOutcome>;
   /** Treat `Widget` and `widget` as one folder (default: macOS and Windows). */
   caseInsensitivePaths?: boolean;
@@ -281,13 +284,27 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
   /** Register a folder, returning the existing workspace if another call won the race. */
   const register = async (
     folderPath: string,
+    options: WorkspaceFolderCreationOptions = {},
   ): Promise<{ ok: true; workspace: Workspace; existing: boolean } | { ok: false; reason: string }> => {
     try {
-      return { ok: true, workspace: await deps.createFromFolder(folderPath), existing: false };
+      return { ok: true, workspace: await deps.createFromFolder(folderPath, options), existing: false };
     } catch (error) {
       try {
-        const existing = await registeredAt(await deps.realpath(folderPath));
-        if (existing) return { ok: true, workspace: existing, existing: true };
+        const canonicalPath = await deps.realpath(folderPath);
+        const existing = await registeredAt(canonicalPath);
+        if (existing) {
+          if (options.assertCurrent) {
+            const currentPath = await deps.realpath(folderPath);
+            const identity = await deps.stat(currentPath);
+            if (!identity.isDirectory()) throw new Error("The workspace folder changed.");
+            await options.assertCurrent({ canonicalPath: currentPath,
+              ...(identity.dev === undefined ? {} : { filesystemDevice: String(identity.dev) }),
+              ...(identity.ino === undefined ? {} : { filesystemInode: String(identity.ino) }),
+            });
+            if (existing.folderPath !== currentPath) throw new Error("The workspace folder changed.");
+          }
+          return { ok: true, workspace: existing, existing: true };
+        }
       } catch {
         // Report the registration failure below.
       }
@@ -468,7 +485,7 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
 
   const clone = async (
     input: CloneRequestInput,
-    options: { cloneId: string; signal: AbortSignal; onProgress(progress: WorkspaceCloneProgress): void },
+    options: { cloneId: string; signal: AbortSignal; onProgress(progress: WorkspaceCloneProgress): void; beforePublish?(stagedRepository: string): Promise<void>; beforeRegister?(): Promise<void>; registration?: WorkspaceFolderCreationOptions },
   ): Promise<WorkspaceCloneResult<Workspace>> => {
     const parsed = parseCloneUrl(input.url);
     if (!parsed.ok) return fail("invalid-url", parsed.reason);
@@ -532,12 +549,15 @@ export function createWorkspaceIntakeService(deps: WorkspaceIntakeDependencies) 
           const classified = classifyCloneFailure(outcome.stderrTail);
           return fail(classified.code, classified.reason, detail ? { detail } : {});
         }
+        await options.beforePublish?.(path.join(staging, CLONE_STAGING_REPO));
+        if (options.signal.aborted) return fail("cancelled", "Clone cancelled.");
         const published = await publishClone(staging, destination);
         if (published) return published;
       } finally {
         await removeStaging(staging, token);
       }
-      const registered = await register(destination);
+      await options.beforeRegister?.();
+      const registered = await register(destination, options.registration);
       if (!registered.ok) {
         return fail(
           "register-failed",

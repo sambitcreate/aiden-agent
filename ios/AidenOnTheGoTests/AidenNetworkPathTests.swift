@@ -138,6 +138,31 @@ final class AidenNetworkPathTests: XCTestCase {
         XCTAssertEqual(sleeper.requests.last, 1_000)
     }
 
+    func testServerRequestedDelayIsAFloorUnderTheBackoff() async throws {
+        let path = AidenNetworkAvailability(isNetworkAvailable: true)
+        let sleeper = ManualSleeper()
+        sleeper.completesImmediately = true
+        var recovery = AidenStreamNetworkRecovery(path: path, sleep: sleeper.sleep, delayMilliseconds: { 1_000 * ($0 + 1) })
+        let recorder = WaitRecorder()
+        _ = try await recovery.recoverAfterProbeFailure(minimumDelayMilliseconds: 5_000, onBackoff: {}, onWaiting: recorder.record)
+        _ = try await recovery.recoverAfterProbeFailure(minimumDelayMilliseconds: 0, onBackoff: {}, onWaiting: recorder.record)
+        _ = try await recovery.recoverAfterProbeFailure(minimumDelayMilliseconds: 1_500, onBackoff: {}, onWaiting: recorder.record)
+        // A busy server's delay is waited out; a longer backoff is kept.
+        XCTAssertEqual(sleeper.requests, [5_000, 2_000, 3_000])
+    }
+
+    func testOnlyARateLimitAsksForAServerDelay() throws {
+        func error(status: Int, json: String) throws -> Error {
+            let envelope = try AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: Data(json.utf8))
+            return AidenRemoteClientError.server(statusCode: status, body: envelope.error)
+        }
+        let busy = try error(status: 429, json: #"{"error":{"code":"rate_limited","message":"Busy","requestId":"r","retryable":true,"details":{"retryAfterSeconds":5}}}"#)
+        XCTAssertEqual(AidenStreamNetworkRecovery.serverRequestedDelayMilliseconds(after: busy), 5_000)
+        let unavailable = try error(status: 503, json: #"{"error":{"code":"internal_error","message":"Down","requestId":"r","retryable":true,"details":{"retryAfterSeconds":5}}}"#)
+        XCTAssertEqual(AidenStreamNetworkRecovery.serverRequestedDelayMilliseconds(after: unavailable), 0)
+        XCTAssertEqual(AidenStreamNetworkRecovery.serverRequestedDelayMilliseconds(after: URLError(.timedOut)), 0)
+    }
+
     func testCancellingAParkedConsumerEndsTheWaitAndClearsTheWaitingState() async throws {
         let path = AidenNetworkAvailability(isNetworkAvailable: false)
         let recovery = AidenStreamNetworkRecovery(path: path, sleep: { _ in })

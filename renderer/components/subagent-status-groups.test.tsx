@@ -174,7 +174,13 @@ test("finished runs show their duration", () => {
 });
 
 test("active runs show live elapsed time that ticks each second", (t) => {
-  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 11_000 });
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 11_000 });
+  t.mock.method(window, "setTimeout", (callback: () => void, delay: number) =>
+    setTimeout(callback, delay) as unknown as number,
+  );
+  t.mock.method(window, "clearTimeout", (handle: number) =>
+    clearTimeout(handle as unknown as ReturnType<typeof setTimeout>),
+  );
   mount([runView("live", "running")]);
   const row = screen.getByRole("button", { name: /^Run live/u });
   assert.match(row.textContent ?? "", /10s/u);

@@ -186,6 +186,417 @@ final class AidenChatTests: XCTestCase {
         XCTAssertTrue(restored.draft.contains("Later edit"))
     }
 
+    @MainActor
+    func testBusyMacSendIsResentAfterTheServerDelayUnderAFreshKey() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts"))
+        )
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        let turns = AidenRecordedTurnStarts()
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
+                if turns.record(request) == 1 {
+                    return (429, "application/json", Data(#"{"error":{"code":"rate_limited","message":"A turn is already starting","requestId":"busy","retryable":true,"details":{"retryAfterSeconds":4}}}"#.utf8))
+                }
+                return (202, "application/json", Data(#"{"turnId":"turn-recovery","streamId":"stream-recovery","status":"queued","message":{"id":"accepted-message","role":"user","text":"Hello","createdAt":"2026-09-22T00:00:00Z"}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        let sleeper = AidenGatedSleep()
+        model.rateLimitedSendRetrySleep = { try await sleeper.sleep($0) }
+        await model.load(observeProgress: false)
+        model.draft = "Hello"
+        await model.send()
+
+        // Busy is not a failure: no error, the request is kept, and its resend
+        // waits the server's delay.
+        XCTAssertNil(model.presentedError)
+        XCTAssertNotNil(model.pendingSend)
+        XCTAssertTrue(model.isWaitingToRetryRateLimitedSend)
+        XCTAssertFalse(model.canSend, "The kept request blocks a second, different send")
+        try await waitUntil { sleeper.requested == [.seconds(4)] }
+        XCTAssertEqual(turns.count, 1)
+
+        sleeper.release()
+        try await waitUntil { turns.count == 2 && model.pendingSend == nil && !model.isStarting }
+        XCTAssertNil(model.presentedError)
+        XCTAssertFalse(model.isWaitingToRetryRateLimitedSend)
+        XCTAssertTrue(model.chat.messages.contains { $0.id == "accepted-message" })
+        let sent = turns.values
+        XCTAssertNotEqual(sent[0].key, sent[1].key, "The Mac refuses a replay of a key it rejected, so the resend uses a new one")
+        XCTAssertEqual(
+            try JSONDecoder().decode(AidenTurnStart.self, from: XCTUnwrap(sent[0].body)),
+            try JSONDecoder().decode(AidenTurnStart.self, from: XCTUnwrap(sent[1].body))
+        )
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testBusyMacResendNeverCrossesToAReplacementPairingOfTheSameMac() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+            onCoordinator: { coordinator = $0 }
+        )
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        let turns = AidenRecordedTurnStarts()
+        let credentials = AidenRecordedAuthorizations()
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
+                credentials.record(request.value(forHTTPHeaderField: "Authorization"))
+                if turns.record(request) == 1 {
+                    return (429, "application/json", Data(#"{"error":{"code":"rate_limited","message":"A turn is already starting","requestId":"busy","retryable":true,"details":{"retryAfterSeconds":4}}}"#.utf8))
+                }
+                return (202, "application/json", Data(#"{"turnId":"turn-recovery","streamId":"stream-recovery","status":"queued","message":{"id":"accepted-message","role":"user","text":"Hello","createdAt":"2026-09-22T00:00:00Z"}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        let sleeper = AidenGatedSleep()
+        model.rateLimitedSendRetrySleep = { try await sleeper.sleep($0) }
+        await model.load(observeProgress: false)
+        model.draft = "Hello"
+        await model.send()
+        try await waitUntil { sleeper.requested == [.seconds(4)] }
+        XCTAssertTrue(model.isWaitingToRetryRateLimitedSend)
+
+        // An earlier retained-data write holds the installation data gate, so
+        // the re-pair below publishes its new device but cannot purge the old
+        // pairing's saved send yet.
+        let originalContext = try coordinator.requestContext()
+        let (gateEntered, enteredSignal) = AsyncStream<Void>.makeStream()
+        let (gateRelease, releaseSignal) = AsyncStream<Void>.makeStream()
+        let heldGate = Task { @MainActor in
+            await coordinator.withRetainedInstallationData(for: originalContext) {
+                enteredSignal.yield()
+                for await _ in gateRelease { break }
+            }
+        }
+        for await _ in gateEntered { break }
+        let endpoint = URL(string: "https://aiden.test/api/aiden/v1")!
+        let repair = Task { @MainActor in
+            try await coordinator.activatePairing(
+                payload: AidenRemotePairing.PairingPayload(
+                    bootstrap: AidenRemotePairing.PairingBootstrap(
+                        protocolVersion: 1,
+                        instanceId: "instance-progress-lifecycle",
+                        endpoint: endpoint,
+                        serverSpkiSha256: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                        secret: String(repeating: "B", count: 43),
+                        expiresAt: Date().addingTimeInterval(120)
+                    ),
+                    trust: AidenRemoteContractFixture.PairingTrust(mode: .system)
+                ),
+                exchange: AidenRemoteContractFixture.PairingExchange(
+                    protocolVersion: 1,
+                    instanceId: "instance-progress-lifecycle",
+                    deviceId: "device-replacement",
+                    credential: "credential-replacement",
+                    capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite, .tasksRead, .agentsRead, .approvalRespond],
+                    endpoint: endpoint,
+                    serverSpkiSha256: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                )
+            )
+        }
+        try await waitUntil { coordinator.installationStore.activeInstallation?.deviceId == "device-replacement" }
+        XCTAssertEqual(coordinator.activeInstanceId, "instance-progress-lifecycle", "The same Mac stays active")
+
+        // The server's delay passes while the old pairing's data is still on disk.
+        sleeper.release()
+        try await waitUntil { !model.isWaitingToRetryRateLimitedSend && !model.isStarting }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(turns.count, 1, "The resend of a message made under the old pairing is never sent with the new one")
+        XCTAssertFalse(credentials.values.contains { $0?.contains("credential-replacement") == true })
+
+        releaseSignal.yield()
+        _ = await heldGate.value
+        try await repair.value
+        XCTAssertEqual(turns.count, 1)
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testBusyMacResendsStopAfterTheirLimitAndLeaveRetryToThePerson() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts"))
+        )
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        let turns = AidenRecordedTurnStarts()
+        let automaticSends = 1 + AidenChatViewModel.maxRateLimitedSendRetries
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
+                let n = turns.record(request)
+                if n <= automaticSends {
+                    return (429, "application/json", Data(#"{"error":{"code":"rate_limited","message":"Busy","requestId":"busy","retryable":true}}"#.utf8))
+                }
+                if n == automaticSends + 1 {
+                    return (AidenChatProgressLifecycleURLProtocol.connectionLostStatus, "", Data())
+                }
+                return (202, "application/json", Data(#"{"turnId":"turn-recovery","streamId":"stream-recovery","status":"queued","message":{"id":"accepted-message","role":"user","text":"Hello","createdAt":"2026-09-22T00:00:00Z"}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        model.rateLimitedSendRetrySleep = { _ in }
+        await model.load(observeProgress: false)
+        model.draft = "Hello"
+        await model.send()
+        try await waitUntil { turns.count == automaticSends && !model.isStarting && !model.isWaitingToRetryRateLimitedSend }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(turns.count, automaticSends, "Resends stop at their limit")
+        XCTAssertNil(model.presentedError)
+        XCTAssertNotNil(model.pendingSend)
+        XCTAssertTrue(model.canRetrySend)
+        XCTAssertEqual(model.draft, "Hello")
+        XCTAssertEqual(
+            model.sendRecoveryMessage,
+            "Aiden Agent is still busy. Your message wasn’t sent; try again in a moment.",
+            "The Mac refused every attempt, so the notice says it is busy rather than that delivery is unknown"
+        )
+
+        // The person's Retry clears the busy notice; this time the answer is lost.
+        await model.send(retry: true)
+        try await waitUntil { turns.count == automaticSends + 1 && !model.isStarting }
+        XCTAssertFalse(model.isPendingSendRefusedBecauseBusy)
+        XCTAssertNotNil(model.pendingSend, "An unconfirmed send stays saved")
+        XCTAssertEqual(
+            model.sendRecoveryMessage,
+            "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
+        )
+
+        await model.send(retry: true)
+        try await waitUntil { model.pendingSend == nil && !model.isStarting }
+        XCTAssertNil(model.sendRecoveryMessage)
+        XCTAssertTrue(model.chat.messages.contains { $0.id == "accepted-message" })
+        let keys = turns.values.map(\.key)
+        XCTAssertEqual(keys.count, automaticSends + 2)
+        XCTAssertEqual(Set(keys.dropLast()).count, automaticSends + 1, "Every resend after a refusal carries a fresh key")
+        XCTAssertEqual(keys[automaticSends], keys[automaticSends + 1], "A send whose answer was lost replays its key")
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testRateLimitTheMacMarksFinalStillFailsTheSend() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts"))
+        )
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        let turns = AidenRecordedTurnStarts()
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
+                turns.record(request)
+                return (429, "application/json", Data(#"{"error":{"code":"rate_limited","message":"Daily limit reached","requestId":"limit","retryable":false,"details":{"retryAfterSeconds":5}}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        model.rateLimitedSendRetrySleep = { _ in XCTFail("A final refusal is never resent") }
+        await model.load(observeProgress: false)
+        model.draft = "Hello"
+        await model.send()
+        XCTAssertEqual(model.presentedError, "Daily limit reached")
+        XCTAssertNil(model.pendingSend)
+        XCTAssertFalse(model.isWaitingToRetryRateLimitedSend)
+        XCTAssertEqual(model.draft, "Hello")
+        XCTAssertEqual(turns.count, 1)
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testMissingFolderRefusalShowsTheMacsReasonAndTheSameMessageSendsOnceItIsBack() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts"))
+        )
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        let refusal = "The folder for this workspace was moved or deleted. Restore it on your Mac, then send again."
+        final class Turns: @unchecked Sendable {
+            let lock = NSLock()
+            var count = 0
+            var folderBack = false
+        }
+        let turns = Turns()
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
+                let folderBack = turns.lock.withLock { turns.count += 1; return turns.folderBack }
+                if folderBack {
+                    return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Try again","requestId":"folder-2","retryable":true}}"#.utf8))
+                }
+                return (409, "application/json", Data(#"{"error":{"code":"workspace_unavailable","message":"\#(refusal)","requestId":"folder-1","retryable":false}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        await model.load(observeProgress: false)
+        model.draft = "Fix the header"
+        await model.send()
+        // Nothing ran on the Mac, so this is a refusal, not an unknown delivery.
+        XCTAssertEqual(model.presentedError, refusal)
+        XCTAssertNil(model.pendingSend)
+        XCTAssertEqual(model.draft, "Fix the header")
+        XCTAssertTrue(model.canSend)
+        turns.lock.withLock { turns.folderBack = true }
+        await model.send()
+        XCTAssertEqual(turns.lock.withLock { turns.count }, 2)
+    }
+
+    @MainActor
+    func testTheFirstMessageMovesTheChatIntoItsNewWorktreeThenSendsThere() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root.appending(path: "cache"))
+        let mac = AidenNewWorktreeMacFixture()
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: cache,
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+            onCoordinator: { coordinator = $0 },
+            responseOverride: { mac.response($0) },
+            extraCapabilities: [.gitWrite, .chatNewWorktree]
+        )
+        await coordinator.refreshWorkspaces()
+        await model.load(observeProgress: false)
+        XCTAssertTrue(model.offersNewWorktree)
+
+        model.draft = "Fix the header"
+        model.startsInNewWorktree = true
+        await model.send()
+
+        XCTAssertNil(model.presentedError)
+        XCTAssertEqual(
+            AidenChatProgressLifecycleURLProtocol.postPaths.filter { $0.contains("/chats/") },
+            ["/api/aiden/v1/chats/chat-progress-lifecycle/worktree", "/api/aiden/v1/chats/chat-progress-lifecycle/turns"],
+            "the worktree first, then the turn"
+        )
+        XCTAssertEqual(model.chat.workspaceId, AidenNewWorktreeMacFixture.worktreeWorkspaceId)
+        let saved = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertEqual(saved?.workspaceId, AidenNewWorktreeMacFixture.worktreeWorkspaceId, "the saved chat stays in the worktree too")
+        XCTAssertFalse(model.startsInNewWorktree, "the next message is an ordinary one")
+        XCTAssertEqual(model.draft, "")
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testAChatThatStoppedQualifyingForNewWorktreeKeepsItsMessageInsteadOfSendingToTheMainCheckout() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let mac = AidenNewWorktreeMacFixture()
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+            onCoordinator: { coordinator = $0 },
+            responseOverride: { mac.response($0) },
+            extraCapabilities: [.gitWrite, .chatNewWorktree]
+        )
+        await coordinator.refreshWorkspaces()
+        await model.load(observeProgress: false)
+        XCTAssertTrue(model.offersNewWorktree)
+        model.draft = "Fix the header"
+        model.startsInNewWorktree = true
+
+        // Another device moves the still-empty chat into a worktree while the chip is on.
+        mac.moveElsewhere()
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.workspaceId, AidenNewWorktreeMacFixture.worktreeWorkspaceId)
+        XCTAssertFalse(model.offersNewWorktree)
+
+        await model.send()
+        XCTAssertEqual(model.presentedError, AidenNewWorktreeCopy.noLongerOffered)
+        XCTAssertEqual(model.draft, "Fix the header", "the message stays in the composer")
+        XCTAssertFalse(model.startsInNewWorktree, "the chip is off, so sending again uses the chat's own folder")
+        XCTAssertTrue(model.chat.messages.isEmpty)
+        XCTAssertFalse(
+            AidenChatProgressLifecycleURLProtocol.postPaths.contains { $0.contains("/chats/") },
+            "nothing was sent to the Mac"
+        )
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testANewWorktreeRefusalShowsTheMacsSentenceAndCancelPutsTheMessageBackUnsent() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let mac = AidenNewWorktreeMacFixture()
+        mac.setup = .refuses
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+            onCoordinator: { coordinator = $0 },
+            responseOverride: { mac.response($0) },
+            extraCapabilities: [.gitWrite, .chatNewWorktree]
+        )
+        await coordinator.refreshWorkspaces()
+        await model.load(observeProgress: false)
+
+        model.draft = "Fix the header"
+        model.startsInNewWorktree = true
+        await model.send()
+        XCTAssertEqual(model.presentedError, AidenNewWorktreeMacFixture.refusal)
+        XCTAssertEqual(model.draft, "Fix the header", "the message is back in the composer")
+        XCTAssertTrue(model.chat.messages.isEmpty)
+        XCTAssertEqual(model.chat.workspaceId, "workspace-1")
+        XCTAssertTrue(model.startsInNewWorktree, "sending again tries the worktree again")
+
+        // Twice: the Mac never answers, and the person cancels the wait.
+        mac.setup = .neverAnswers
+        for attempt in 2...3 {
+            let held = expectation(description: "worktree request \(attempt) held")
+            AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/worktree") { held.fulfill() }
+            let sending = Task { await model.send() }
+            await fulfillment(of: [held], timeout: 3)
+            XCTAssertTrue(model.isSettingUpWorktree)
+            // The second time, the person types more while the Mac works.
+            if attempt == 3 { model.draft = "And the footer" }
+            model.cancelWorktreeSetup()
+            await sending.value
+            _ = AidenChatProgressLifecycleURLProtocol.takeHeldRequest()
+            XCTAssertFalse(model.isSettingUpWorktree)
+            XCTAssertNil(model.presentedError, "Cancel is not an error")
+            XCTAssertEqual(
+                model.draft,
+                attempt == 3 ? "Fix the header\n\nAnd the footer" : "Fix the header",
+                "the canceled message comes back, ahead of anything typed meanwhile"
+            )
+            XCTAssertTrue(model.chat.messages.isEmpty)
+        }
+
+        let keys = mac.worktreeKeys
+        XCTAssertEqual(keys.count, 3)
+        XCTAssertNotEqual(keys[0], keys[1], "the Mac answered the refusal, so the next request has a new key")
+        XCTAssertEqual(keys[1], keys[2], "a canceled wait got no answer, so the retry keeps its key")
+        XCTAssertFalse(AidenChatProgressLifecycleURLProtocol.postPaths.contains { $0.hasSuffix("/turns") }, "no message was sent")
+        model.stopProgressObservation()
+    }
+
+    func testOnlyAMissingFolderConflictCountsAsARefusedSend() {
+        let missing = AidenRemoteErrorCode(rawValue: "workspace_unavailable")
+        let conflict = AidenRemoteErrorCode(rawValue: "revision_conflict")
+        XCTAssertTrue(AidenDraftSendReconciliation.refusalSettlesSend(status: 409, code: missing))
+        XCTAssertFalse(AidenDraftSendReconciliation.refusalSettlesSend(status: 409, code: conflict))
+        XCTAssertFalse(AidenDraftSendReconciliation.refusalSettlesSend(status: 503, code: missing))
+        XCTAssertTrue(AidenDraftSendReconciliation.refusalSettlesSend(status: 422, code: conflict))
+    }
+
     func testPendingSendSurvivesRelaunchExpiresAndIsPurgedWithPairing() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -653,6 +1064,31 @@ final class AidenChatTests: XCTestCase {
         XCTAssertFalse(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline: stopped, reasoningVisible: false))
         XCTAssertTrue(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline: nil, reasoningVisible: true))
         XCTAssertFalse(AidenAgentActivityPresentation.showsLiveToolRows([], timeline: nil, reasoningVisible: true))
+    }
+
+    func testLiveReasoningLineIsTheLatestFinishedSentenceNeverTheUnfinishedTail() {
+        let line = AidenAgentActivityPresentation.latestReasoningLine
+        XCTAssertEqual(line(""), "")
+        XCTAssertEqual(line("Still forming the first thought"), "")
+        XCTAssertEqual(line("Read the diff. Then group the"), "Read the diff.")
+        XCTAssertEqual(line("Read the diff. Group the hunks by story! Check the style? "), "Check the style?")
+        // A sentence is finished only once whitespace follows its punctuation.
+        XCTAssertEqual(line("Read the diff. Group by story."), "Read the diff.")
+        XCTAssertEqual(line(#"He said "stage it first." Then "#), #"He said "stage it first.""#)
+        // Decimals and versions do not end a sentence.
+        XCTAssertEqual(line("Pin v4.1 before 2.5 ships. And"), "Pin v4.1 before 2.5 ships.")
+    }
+
+    func testLiveReasoningLineCountsFinishedLinesAndDropsMarkdownMarkers() {
+        let line = AidenAgentActivityPresentation.latestReasoningLine
+        XCTAssertEqual(line("**Mapping hunk boundaries**\n\nREADME has"), "Mapping hunk boundaries")
+        XCTAssertEqual(line("## Plan the split\nStart"), "Plan the split")
+        XCTAssertEqual(line("- Stage `hunk 1` with the fix\n"), "Stage hunk 1 with the fix")
+        XCTAssertEqual(line("1. Check   the build\n\n\n"), "Check the build")
+        // Blank lines and bare markers never become the line.
+        XCTAssertEqual(line("Read the diff.\n\n**\n\n"), "Read the diff.")
+        // A Windows line break ends a line like a bare newline does.
+        XCTAssertEqual(line("Plan the split\r\nStart"), "Plan the split")
     }
 
     private func extractStepJSON(
@@ -5163,6 +5599,51 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testStopDropsTheUploadInFlightButKeepsWhatAlreadyReachedTheMac() async throws {
+        let model = try await makeProgressLifecycleModel(mode: .denied)
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        await model.load(observeProgress: false)
+        let secondArrived = expectation(description: "the second upload reached the Mac")
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            guard request.httpMethod == "POST", request.url?.path.hasSuffix("/attachments") == true else { return nil }
+            let count = AidenChatProgressLifecycleURLProtocol.uploadRequestCount
+            // The first upload is staged; the second waits on the Mac until Stop.
+            if count == 2 {
+                AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/attachments") { secondArrived.fulfill() }
+            }
+            return (201, "application/json", try! JSONSerialization.data(withJSONObject: [
+                "id": "att_" + String(repeating: count == 1 ? "a" : "b", count: 43),
+                "name": "file-\(count).txt", "mimeType": "text/plain", "kind": "text", "size": 1,
+                "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(3_600)),
+            ]))
+        }
+        defer { AidenChatProgressLifecycleURLProtocol.releaseHeldRequest() }
+
+        let uploading = Task {
+            await model.upload([
+                .text(name: "file-1.txt", mimeType: "text/plain", text: "1"),
+                .text(name: "file-2.txt", mimeType: "text/plain", text: "2"),
+                .text(name: "file-3.txt", mimeType: "text/plain", text: "3"),
+            ])
+        }
+        await fulfillment(of: [secondArrived], timeout: 5)
+        XCTAssertEqual(model.uploadProgress?.title, "Sending 2 of 3")
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["file-1.txt"])
+
+        model.cancelUploads()
+        _ = await uploading.value
+
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["file-1.txt"], "what reached the Mac stays ready to send")
+        XCTAssertNil(model.uploadProgress, "the bar goes away")
+        XCTAssertFalse(model.isUploadingAttachment)
+        XCTAssertNil(model.presentedError, "Stop is not a failure")
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.uploadRequestCount, 2, "the third file never left the phone")
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 0, "Stop doesn't take the staged file off the Mac")
+        XCTAssertTrue(model.canSend, "the staged file can still be sent")
+        model.setAllowsMutations(false)
+    }
+
+    @MainActor
     func testRemovalCancelsOwnedUploadAndRejectsHeldImageCompletion() async throws {
         try await assertRemovalJoinsUploadCleanup()
     }
@@ -7096,20 +7577,145 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenRelativeTimestamp.text(for: now.addingTimeInterval(30), now: now), "just now")
     }
 
-    func testNewAgentPopoverKeepsTheThreeReviewedWorkspaceChoices() {
+    func testNewAgentPopoverOffersNoWorkspaceOnlyWhenTheMacHasAChatsHome() {
         XCTAssertEqual(
-            AidenNewAgentChoice.allCases,
+            AidenNewAgentChoice.available(noWorkspace: false),
             [.existingWorkspace, .newWorkspace, .scratchWorkspace]
         )
         XCTAssertEqual(
-            AidenNewAgentChoice.allCases.map(\.title),
-            ["Existing Workspace", "New Workspace", "Managed Scratch Workspace"]
-        )
-        XCTAssertEqual(
-            AidenNewAgentChoice.allCases.map(\.symbol),
-            ["folder", "folder.badge.plus", "hammer.fill"]
+            AidenNewAgentChoice.available(noWorkspace: true),
+            [.noWorkspace, .existingWorkspace, .newWorkspace, .scratchWorkspace]
         )
         XCTAssertTrue(AidenNewAgentChoice.allCases.allSatisfy { !$0.detail.isEmpty })
+    }
+
+    func testChatsWithoutAWorkspaceShareOneChatsSectionOnTheirHome() throws {
+        let base = Date(timeIntervalSince1970: 1_000)
+        func record(_ id: String, created: TimeInterval, noWorkspace: Bool = false) -> AidenWorkspace {
+            AidenWorkspace(
+                id: id,
+                name: noWorkspace ? "No workspace" : id.capitalized,
+                permission: .ask,
+                hasFolder: true,
+                isManagedWorktree: false,
+                noWorkspace: noWorkspace,
+                branchName: nil,
+                repositoryName: nil,
+                git: nil,
+                createdAt: base.addingTimeInterval(created),
+                updatedAt: base.addingTimeInterval(created),
+                revision: "\(id)-r1"
+            )
+        }
+        func chat(_ id: String, in workspaceId: String, updated: TimeInterval) -> AidenChat {
+            AidenChat(
+                id: id,
+                workspaceId: workspaceId,
+                title: id,
+                providerId: nil,
+                modelId: nil,
+                messages: [],
+                createdAt: base,
+                updatedAt: base.addingTimeInterval(updated),
+                revision: "\(id)-r1"
+            )
+        }
+        let workspaces = [
+            record("project", created: 0),
+            record("hidden-later", created: 30, noWorkspace: true),
+            record("hidden-first", created: 10, noWorkspace: true),
+        ]
+        XCTAssertEqual(AidenNoWorkspace.home(in: workspaces)?.id, "hidden-first", "the oldest stands for the group")
+        XCTAssertEqual(
+            AidenNoWorkspace.home(in: workspaces + [record("default", created: 50, noWorkspace: true)])?.id,
+            "default",
+            "the long-lived default home wins"
+        )
+        XCTAssertEqual(AidenNoWorkspace.choices(workspaces).map(\.id), ["project"])
+        // A scheduled task that already runs in a hidden folder keeps it as a choice while edited.
+        XCTAssertEqual(
+            AidenNoWorkspace.choices(workspaces, keeping: "hidden-later").map(\.id),
+            ["project", "hidden-later"]
+        )
+
+        let projection = AidenWorkspaceSidebarProjection.make(
+            workspaces: workspaces,
+            chats: [
+                chat("soup", in: "hidden-later", updated: 40),
+                chat("trip", in: "hidden-first", updated: 20),
+                chat("fix", in: "project", updated: 5),
+            ],
+            searchText: ""
+        )
+        XCTAssertEqual(projection.sections.map(\.workspace.id), ["hidden-first", "project"])
+        XCTAssertEqual(projection.sections[0].workspace.name, "Chats")
+        XCTAssertEqual(projection.sections[0].chats.map(\.id), ["soup", "trip"])
+        XCTAssertEqual(projection.sections[1].chats.map(\.id), ["fix"])
+
+        // A Mac before revision 51 marks nothing: every workspace stays its own section.
+        XCTAssertNil(AidenNoWorkspace.home(in: [record("project", created: 0)]))
+
+        // An older build could archive a "No workspace" record; the Chats group has no Unarchive,
+        // so that flag is ignored and its chats stay listed. Archived projects stay archived.
+        XCTAssertEqual(
+            AidenNoWorkspace.unarchived(workspaces, archivedIDs: ["hidden-first", "project"]).map(\.id),
+            ["hidden-later", "hidden-first"]
+        )
+
+        // A link or Shortcut that remembers a hidden folder on a Mac that isn't the active one
+        // finds the Chats entry through the catalog; other ids are left as they are.
+        let catalog = [
+            AidenIntentWorkspaceRecord(id: "hidden-first", instanceId: "other", name: "Chats",
+                                       groupedIDs: ["hidden-first", "hidden-later"]),
+            AidenIntentWorkspaceRecord(id: "project", instanceId: "other", name: "Project"),
+        ]
+        XCTAssertEqual(AidenIntentWorkspaceRecord.listedID(for: "hidden-later", in: catalog), "hidden-first")
+        XCTAssertEqual(AidenIntentWorkspaceRecord.listedID(for: "project", in: catalog), "project")
+        XCTAssertEqual(AidenIntentWorkspaceRecord.listedID(for: "gone", in: catalog), "gone")
+        // A catalog saved by an older build has no grouped ids and still decodes.
+        let older = try JSONDecoder().decode(
+            AidenIntentWorkspaceRecord.self,
+            from: Data(#"{"id":"default","instanceId":"other","name":"No workspace"}"#.utf8)
+        )
+        XCTAssertNil(older.groupedIDs)
+
+        // Recents search matches the label a hidden chat shows ("Chats"), not the record's name.
+        let hiddenChats = [chat("soup", in: "hidden-later", updated: 40), chat("fix", in: "project", updated: 5)]
+        XCTAssertEqual(
+            AidenWorkspaceSidebarProjection.make(workspaces: workspaces, chats: hiddenChats, searchText: "chats").recents.map(\.id),
+            ["soup"]
+        )
+        XCTAssertEqual(
+            AidenWorkspaceSidebarProjection.make(workspaces: workspaces, chats: hiddenChats, searchText: "No workspace").recents.map(\.id),
+            []
+        )
+
+        // A chat another device started in a fresh hidden record is left out until the phone
+        // re-reads its workspaces, and it asks once per such record.
+        let elsewhere = chat("elsewhere", in: "hidden-new", updated: 60)
+        XCTAssertFalse(
+            AidenWorkspaceSidebarProjection.make(workspaces: workspaces, chats: [elsewhere], searchText: "")
+                .recents.contains { $0.id == "elsewhere" }
+        )
+        let chatWorkspaceIDs = ["hidden-later", "project", "hidden-new"]
+        XCTAssertEqual(
+            AidenNoWorkspace.unlistedWorkspaceIDs(chatWorkspaceIDs: chatWorkspaceIDs, in: workspaces, alreadyReRead: []),
+            ["hidden-new"]
+        )
+        XCTAssertEqual(
+            AidenNoWorkspace.unlistedWorkspaceIDs(chatWorkspaceIDs: chatWorkspaceIDs, in: workspaces, alreadyReRead: ["hidden-new"]),
+            []
+        )
+        let reRead = workspaces + [record("hidden-new", created: 60, noWorkspace: true)]
+        XCTAssertEqual(
+            AidenNoWorkspace.unlistedWorkspaceIDs(chatWorkspaceIDs: chatWorkspaceIDs, in: reRead, alreadyReRead: []),
+            []
+        )
+        XCTAssertEqual(
+            AidenWorkspaceSidebarProjection.make(workspaces: reRead, chats: [elsewhere], searchText: "")
+                .sections.first?.chats.map(\.id),
+            ["elsewhere"]
+        )
     }
 
     func testProviderIconResolverMatchesDesktopAliasesAndFallbackRules() {
@@ -9835,7 +10441,7 @@ final class AidenChatTests: XCTestCase {
             from: Data(#"""
             {
                 "invocationId": "sk1_\#(String(repeating: "a", count: 43))",
-                "name": "review-code",
+                "name": "engineering:review-code",
                 "description": "Review the current changes.",
                 "source": "workspace",
                 "available": true
@@ -9853,7 +10459,7 @@ final class AidenChatTests: XCTestCase {
 
         XCTAssertEqual(request.skill?.version, 1)
         XCTAssertEqual(request.skill?.invocationId, entry.invocationId)
-        XCTAssertEqual(request.skill?.displayName, "review-code")
+        XCTAssertEqual(request.skill?.displayName, "engineering:review-code")
         XCTAssertEqual(request.skill?.source, .workspace)
 
         let encoded = try JSONEncoder().encode(request)
@@ -11542,70 +12148,7 @@ final class AidenAppearanceTests: XCTestCase {
         )
     }
 
-    func testNeedsAttentionChatsSortAboveNewerWorkingAndIdleChats() {
-        let newestFirst = [
-            attentionSummary("idle-newest", updated: 50),
-            attentionSummary("running", updated: 40, active: true, rowState: .working),
-            attentionSummary("idle-middle", updated: 30),
-            attentionSummary("question", updated: 20, active: true, rowState: .needsInput),
-            attentionSummary("approval", updated: 10, active: true, rowState: .needsApproval),
-        ]
-
-        XCTAssertEqual(
-            aidenNeedsAttentionFirst(newestFirst).map(\.id),
-            ["approval", "question", "running", "idle-newest", "idle-middle"]
-        )
-    }
-
-    func testNeedsAttentionOrderingKeepsIncomingOrderWithinATier() {
-        // Older Macs send no row state; an active chat still counts as working.
-        let newestFirst = [
-            attentionSummary("idle-c", updated: 30),
-            attentionSummary("run-b", updated: 25, active: true),
-            attentionSummary("idle-b", updated: 20),
-            attentionSummary("run-a", updated: 15, active: true, rowState: .working),
-            attentionSummary("idle-a", updated: 10),
-        ]
-
-        XCTAssertEqual(
-            aidenNeedsAttentionFirst(newestFirst).map(\.id),
-            ["run-b", "run-a", "idle-c", "idle-b", "idle-a"]
-        )
-    }
-
-    func testUnseenFailuresSortBetweenChatsNeedingTheUserAndWorkingChats() {
-        var seenFailure = attentionSummary("seen-failure", updated: 40)
-        seenFailure.lastRunFailed = true
-        var unseenFailure = attentionSummary("unseen-failure", updated: 30)
-        unseenFailure.unread = true
-        unseenFailure.lastRunFailed = true
-        var unreadReply = attentionSummary("unread-reply", updated: 25)
-        unreadReply.unread = true
-        let newestFirst = [
-            attentionSummary("idle-newest", updated: 60),
-            attentionSummary("running", updated: 50, active: true, rowState: .working),
-            seenFailure,
-            unseenFailure,
-            unreadReply,
-            attentionSummary("question", updated: 20, active: true, rowState: .needsInput),
-        ]
-
-        XCTAssertEqual(
-            aidenNeedsAttentionFirst(newestFirst).map(\.id),
-            ["question", "unseen-failure", "running", "idle-newest", "seen-failure", "unread-reply"]
-        )
-    }
-
-    func testStaleAttentionStateOnIdleChatDoesNotJumpTheQueue() {
-        let newestFirst = [
-            attentionSummary("newer", updated: 20),
-            attentionSummary("stale-approval", updated: 10, active: false, rowState: .needsApproval),
-        ]
-
-        XCTAssertEqual(aidenNeedsAttentionFirst(newestFirst).map(\.id), ["newer", "stale-approval"])
-    }
-
-    func testWorkspaceSidebarSurfacesAttentionFirstWithoutReorderingWorkspaces() {
+    func testWorkspaceAndRecentSidebarsSortPlainlyByRecencyAsOnTheDesktop() {
         let base = Date(timeIntervalSince1970: 1_000)
         let workspaces = ["alpha", "beta"].map { id in
             AidenWorkspace(
@@ -11635,14 +12178,15 @@ final class AidenAppearanceTests: XCTestCase {
             searchText: ""
         )
 
-        // Workspaces stay ordered by their newest activity, not by attention.
+        // Attention ordering belongs to the Inbox; By workspace and Recent
+        // keep newest first, and workspaces follow their newest activity.
         XCTAssertEqual(projection.sections.map(\.workspace.id), ["alpha", "beta"])
         XCTAssertEqual(projection.sections[0].newestActivityAt, base.addingTimeInterval(100))
-        XCTAssertEqual(projection.sections[0].chats.map(\.id), ["alpha-approval", "alpha-newest"])
-        XCTAssertEqual(projection.sections[1].chats.map(\.id), ["beta-working", "beta-idle"])
+        XCTAssertEqual(projection.sections[0].chats.map(\.id), ["alpha-newest", "alpha-approval"])
+        XCTAssertEqual(projection.sections[1].chats.map(\.id), ["beta-idle", "beta-working"])
         XCTAssertEqual(
             projection.recents.map(\.id),
-            ["alpha-approval", "beta-working", "alpha-newest", "beta-idle"]
+            ["alpha-newest", "beta-idle", "beta-working", "alpha-approval"]
         )
     }
 
@@ -11657,10 +12201,21 @@ final class AidenAppearanceTests: XCTestCase {
         store.setWorkspaceSidebarOrganization(.recent, for: "mac-one")
         store.toggleExpandedSidebarWorkspace("alpha", for: "mac-one")
         store.toggleExpandedSidebarWorkspace("beta", for: "mac-two")
+        store.setWorkspaceSidebarOrganization(.inbox, for: "mac-three")
 
         let restored = AidenProductNavigationStore(defaults: defaults)
         XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-one"), .recent)
         XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-two"), .workspace)
+        XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-three"), .inbox)
+        // Each Mac's sidebar header names the organization it restored; only Inbox is Beta.
+        XCTAssertEqual(
+            ["mac-one", "mac-two", "mac-three"].map { restored.workspaceSidebarOrganization(for: $0).title },
+            ["Recents", "Workspaces", "Inbox"]
+        )
+        XCTAssertEqual(
+            ["mac-one", "mac-two", "mac-three"].map { restored.workspaceSidebarOrganization(for: $0).isBeta },
+            [false, false, true]
+        )
         XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-one"), ["alpha"])
         XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-two"), ["beta"])
 
@@ -11672,6 +12227,28 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-one"), .workspace)
         XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-one"), [])
         XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-two"), ["beta"])
+    }
+
+    @MainActor
+    func testASidebarViewThisBuildDoesNotKnowDropsOnlyThatMacsChoice() throws {
+        let suiteName = "AidenWorkspaceSidebarTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        // As a newer build might save it: one Mac on a view this build lacks.
+        let saved = #"""
+        {"areasByInstance":{"mac-one":"workspaces"},"selectedWorkspaceByInstance":{"mac-one":"alpha"},
+         "compactWorkspacePathByInstance":{},"compactBotPathByInstance":{},
+         "workspaceSidebarOrganizationsByInstance":{"mac-one":"recent","mac-two":"kanban"},
+         "expandedSidebarWorkspaceIDsByInstance":{"mac-one":["alpha"]}}
+        """#
+        defaults.set(Data(saved.utf8), forKey: "aiden.product-navigation.v1")
+
+        let store = AidenProductNavigationStore(defaults: defaults)
+
+        XCTAssertEqual(store.workspaceSidebarOrganization(for: "mac-one"), .recent)
+        XCTAssertEqual(store.workspaceSidebarOrganization(for: "mac-two"), .workspace)
+        XCTAssertEqual(store.expandedSidebarWorkspaceIDs(for: "mac-one"), ["alpha"])
+        XCTAssertEqual(store.selectedWorkspace(for: "mac-one"), "alpha", "The rest of the snapshot survives.")
     }
 
     func testWorkspaceSelectionSurvivesAdaptiveLayoutChangesAndReconcilesCRUD() {
@@ -11691,6 +12268,40 @@ final class AidenAppearanceTests: XCTestCase {
             "Removing the selected workspace should converge on an available detail"
         )
         XCTAssertNil(AidenWorkspaceNavigation.reconciledSelection(current: selected, workspaceIDs: []))
+    }
+
+    func testSplitViewSelectsTheChatsHomeOnlyWhileOneOfItsChatsIsOpen() {
+        let base = Date(timeIntervalSince1970: 1_000)
+        func workspace(_ id: String, noWorkspace: Bool = false) -> AidenWorkspace {
+            AidenWorkspace(
+                id: id,
+                name: noWorkspace ? "No workspace" : id.capitalized,
+                permission: .ask,
+                hasFolder: true,
+                isManagedWorktree: false,
+                noWorkspace: noWorkspace,
+                branchName: nil,
+                repositoryName: nil,
+                git: nil,
+                createdAt: base,
+                updatedAt: base,
+                revision: "\(id)-r1"
+            )
+        }
+        // The Mac lists its seeded hidden home first.
+        let workspaces = [workspace("default", noWorkspace: true), workspace("hidden-2", noWorkspace: true), workspace("project")]
+
+        let idle = AidenWorkspaceNavigation.selectableIDs(workspaces, openChatWorkspaceID: nil)
+        XCTAssertEqual(idle, ["project"])
+        XCTAssertEqual(
+            AidenWorkspaceNavigation.reconciledSelection(current: "default", workspaceIDs: idle),
+            "project",
+            "with no Chats chat open, a hidden selection falls to a workspace that has a page"
+        )
+
+        let chatOpen = AidenWorkspaceNavigation.selectableIDs(workspaces, openChatWorkspaceID: "hidden-2")
+        XCTAssertEqual(chatOpen, ["default", "project"], "an open chat in any hidden folder keeps the Chats home")
+        XCTAssertEqual(AidenWorkspaceNavigation.reconciledSelection(current: "default", workspaceIDs: chatOpen), "default")
     }
 
     func testCompactWorkspacePathPreservesOnlyAnAvailableDestination() {
@@ -12295,6 +12906,33 @@ extension AidenChatTests {
         ])
     }
 
+    func testRecommendedOptionsStartSelectedAndShowWithoutTheMarker() {
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("Postgres (Recommended)") == ("Postgres", true))
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("Postgres(recommended)") == ("Postgres", true))
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("(Recommended)") == ("(Recommended)", false))
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("(Recommended) Postgres") == ("(Recommended) Postgres", false))
+
+        let questions = [
+            questionFixture(options: [
+                AidenRemoteQuestionOption(label: "0.5 mm", description: "Standard."),
+                AidenRemoteQuestionOption(label: "1.0 mm (Recommended)", description: "Heavy."),
+                AidenRemoteQuestionOption(label: "2.0 mm (Recommended)", description: "Heavier."),
+            ]),
+            questionFixture(multiSelect: true, options: [
+                AidenRemoteQuestionOption(label: "Top (Recommended)", description: "Top edge."),
+                AidenRemoteQuestionOption(label: "Side", description: "Side edge."),
+                AidenRemoteQuestionOption(label: "Bottom (Recommended)", description: "Bottom edge."),
+            ]),
+            questionFixture(),
+        ]
+        let draft = AidenQuestionComposerDraft(questions: questions)
+        // Accepting them sends the full labels, which are the options' identities.
+        XCTAssertEqual(draft.answers(for: questions), [
+            .option(questionIndex: 0, answer: "1.0 mm (Recommended)"),
+            .multi(questionIndex: 1, selected: ["Top (Recommended)", "Bottom (Recommended)"]),
+        ])
+    }
+
     func testQuestionAnswerDraftBuildsWireAnswersInOrder() {
         let questions = [questionFixture(), questionFixture(multiSelect: true)]
         let answers = AidenQuestionAnswerDraft.answers(
@@ -12816,6 +13454,87 @@ private final class AidenStreamRecoveryFixture: @unchecked Sendable {
 
     private func event(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
         "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-recovery\",\"sequence\":\(sequence),\"timestamp\":\"2026-09-22T00:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
+    }
+}
+
+/// A Mac that offers New worktree (revision 53) for the empty chat in
+/// workspace-1, and answers the worktree request as the test chooses.
+private final class AidenNewWorktreeMacFixture: @unchecked Sendable {
+    enum Setup: Sendable { case moves, refuses, neverAnswers }
+    static let worktreeWorkspaceId = "workspace-worktree"
+    static let refusal = "Aiden couldn't fetch main from origin."
+    private let lock = NSLock()
+    private var setupMode: Setup = .moves
+    private var moved = false
+    private var sent = false
+    private var keys: [String?] = []
+    var setup: Setup {
+        get { lock.withLock { setupMode } }
+        set { lock.withLock { setupMode = newValue } }
+    }
+    var worktreeKeys: [String?] { lock.withLock { keys } }
+    /// Another device moves the still-empty chat into the worktree workspace.
+    func moveElsewhere() { lock.withLock { moved = true } }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        switch request.url!.path {
+        case "/api/aiden/v1/server":
+            let grants = #"["server:read","workspace:read","chat:read","chat:write","git:write","chat:new-worktree"]"#
+            return (200, "application/json", Data("""
+            {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":\(grants),"serverCapabilities":\(grants),"features":[],"connectionMode":"lan","serverTime":"2026-10-31T09:00:00Z"}
+            """.utf8))
+        case "/api/aiden/v1/workspaces":
+            let workspaces = [Self.workspace(id: "workspace-1", worktree: false), Self.workspace(id: Self.worktreeWorkspaceId, worktree: true)]
+                .joined(separator: ",")
+            return (200, "application/json", Data(#"{"workspaces":[\#(workspaces)]}"#.utf8))
+        case "/api/aiden/v1/models":
+            return (200, "application/json", Data(#"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT"}]}],"defaults":{"providerId":"openai","modelId":"gpt-5.6"}}"#.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle":
+            let state = lock.withLock { (moved, sent) }
+            return (200, "application/json", Data(Self.chat(moved: state.0, sent: state.1).utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/worktree":
+            let mode = lock.withLock { () -> Setup in
+                keys.append(request.value(forHTTPHeaderField: "Idempotency-Key"))
+                if setupMode == .moves { moved = true }
+                return setupMode
+            }
+            if mode == .refuses {
+                return (409, "application/json", Data("""
+                {"error":{"code":"git_capability_denied","message":"\(Self.refusal)","requestId":"worktree-1","retryable":false}}
+                """.utf8))
+            }
+            // A request the test holds is never delivered.
+            return (200, "application/json", Data(#"{"chat":\#(Self.chat(moved: true, sent: false)),"branch":"aiden/fix-the-header"}"#.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/turns":
+            lock.withLock { sent = true }
+            return (202, "application/json", Data(#"{"turnId":"turn-worktree","streamId":"stream-worktree","status":"queued","message":\#(Self.question)}"#.utf8))
+        case "/api/aiden/v1/streams/stream-worktree":
+            return (200, "application/json", Data(#"{"streamId":"stream-worktree","chatId":"chat-progress-lifecycle","turnId":"turn-worktree","state":"done","lastSequence":1,"updatedAt":"2026-10-31T09:00:00Z"}"#.utf8))
+        case "/api/aiden/v1/streams/stream-worktree/events":
+            return (200, "text/event-stream", Data(
+                "id: 1\nevent: done\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-worktree\",\"sequence\":1,\"timestamp\":\"2026-10-31T09:00:00Z\",\"type\":\"done\",\"terminal\":true,\"payload\":{\"messageId\":\"accepted-message\"}}\n\n".utf8
+            ))
+        default:
+            return nil
+        }
+    }
+
+    private static let question = #"{"id":"accepted-message","role":"user","text":"Fix the header","createdAt":"2026-10-31T09:00:00Z"}"#
+
+    private static func chat(moved: Bool, sent: Bool) -> String {
+        let workspaceId = moved ? worktreeWorkspaceId : "workspace-1"
+        let messages = sent ? question : ""
+        let revision = moved ? "revision-2" : "revision-1"
+        return """
+        {"id":"chat-progress-lifecycle","workspaceId":"\(workspaceId)","title":"Progress lifecycle","messages":[\(messages)],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"\(revision)"}
+        """
+    }
+
+    private static func workspace(id: String, worktree: Bool) -> String {
+        let branch = worktree ? #""branchName":"aiden/fix-the-header","# : ""
+        return """
+        {"id":"\(id)","name":"Site","permission":"ask","hasFolder":true,"isManagedWorktree":\(worktree),\(branch)"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:00Z","revision":"workspace-revision-1"}
+        """
     }
 }
 
@@ -14761,26 +15480,39 @@ final class AidenMessageVisualSnapshotLayoutTests: XCTestCase {
         }
         .environment(AidenHapticCenter())
         let host = UIHostingController(rootView: view)
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: width, height: 2000))
+        // Host in the app's scene. A window that belongs to no scene can take a
+        // layout pass whose thumbnail loads never reach the screen, leaving the
+        // spinners in place however long the test waits.
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: width, height: 2000)
         window.rootViewController = host
         window.makeKeyAndVisible()
         defer { window.isHidden = true }
+
+        // The snapshot and the deck cards decode asynchronously, each behind a
+        // spinner. Measure once every spinner has given way to its image, so a
+        // slow load is never mistaken for a squeezed snapshot.
+        func isLoading(_ view: UIView) -> Bool {
+            view is UIActivityIndicatorView || view.subviews.contains(where: isLoading)
+        }
+        window.layoutIfNeeded()
+        XCTAssertTrue(isLoading(window), "the first pass shows the attachments loading")
+        let deadline = ContinuousClock.now + .seconds(5)
+        while isLoading(window), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertFalse(isLoading(window), "the snapshot and the image deck never finished loading")
 
         // The snapshot draws edge to edge at its own 4:3 shape.
         let expectedHeight = Int(((width - 32) * 3 / 4).rounded())
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
-        var rows = 0
-        for attempt in 0..<20 {
-            try await Task.sleep(for: .milliseconds(attempt == 0 ? 1500 : 200))
-            window.layoutIfNeeded()
-            let rendered = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { context in
-                window.layer.render(in: context.cgContext)
-            }
-            rows = snapshotRowCount(in: rendered)
-            if abs(rows - expectedHeight) <= 3 { break }
+        window.layoutIfNeeded()
+        let rendered = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { context in
+            window.layer.render(in: context.cgContext)
         }
-        XCTAssertEqual(rows, expectedHeight, accuracy: 3, "the snapshot was squeezed instead of drawn at its own height")
+        XCTAssertEqual(snapshotRowCount(in: rendered), expectedHeight, accuracy: 3, "the snapshot was squeezed instead of drawn at its own height")
     }
 }
 
@@ -15071,5 +15803,66 @@ private final class AidenCacheFirstMemoryKeychain: KeychainStoring {
     }
     func delete(_ key: KeychainStore.Key, scope: String) throws {
         values[KeychainStore.scopedKey(key, scope: scope)] = nil
+    }
+}
+
+/// Records each turn start's Idempotency-Key and body.
+private final class AidenRecordedTurnStarts: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [(key: String?, body: Data?)] = []
+    var values: [(key: String?, body: Data?)] { lock.withLock { recorded } }
+    var count: Int { lock.withLock { recorded.count } }
+
+    /// Returns how many turn starts have been recorded, this one included.
+    @discardableResult
+    func record(_ request: URLRequest) -> Int {
+        var body = request.httpBody
+        if body == nil, let stream = request.httpBodyStream {
+            stream.open(); defer { stream.close() }
+            var bytes = [UInt8](repeating: 0, count: 4096)
+            var data = Data()
+            while stream.hasBytesAvailable {
+                let count = stream.read(&bytes, maxLength: bytes.count)
+                if count <= 0 { break }
+                data.append(contentsOf: bytes.prefix(count))
+            }
+            body = data
+        }
+        return lock.withLock {
+            recorded.append((request.value(forHTTPHeaderField: "Idempotency-Key"), body))
+            return recorded.count
+        }
+    }
+}
+
+/// A sleep that records what it was asked to wait and returns only when released.
+private final class AidenRecordedAuthorizations: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String?] = []
+    var values: [String?] { lock.withLock { recorded } }
+    func record(_ value: String?) { lock.withLock { recorded.append(value) } }
+}
+
+private final class AidenGatedSleep: @unchecked Sendable {
+    private let lock = NSLock()
+    private var durations: [Duration] = []
+    private var waiter: CheckedContinuation<Void, Never>?
+    var requested: [Duration] { lock.withLock { durations } }
+
+    func sleep(_ duration: Duration) async throws {
+        await withCheckedContinuation { continuation in
+            lock.withLock {
+                durations.append(duration)
+                waiter = continuation
+            }
+        }
+    }
+
+    func release() {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            defer { waiter = nil }
+            return waiter
+        }
+        continuation?.resume()
     }
 }

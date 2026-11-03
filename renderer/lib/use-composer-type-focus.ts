@@ -18,6 +18,8 @@ export function useComposerTypeFocus(
     if (!enabled) return;
     const onKeyDown = (event: KeyboardEvent) => {
       const composer = inputRef.current;
+      // The page checks are getters: most keys (typing in the composer,
+      // shortcuts) are settled before any of them runs.
       const decision = decideComposerTypeFocus({
         key: event.key,
         metaKey: event.metaKey,
@@ -30,18 +32,31 @@ export function useComposerTypeFocus(
         keyCode: event.keyCode,
       }, {
         macOS: isMacPlatform(),
-        composerFocused: composer !== null && document.activeElement === composer,
-        composerAvailable: composerCanAcceptTyping(composer),
-        composerWritable: Boolean(composer && !composer.disabled && !composer.readOnly),
-        editable: isEditableTypingTarget(event.target),
-        overlayOpen: typingRedirectBlockedByOverlay(
-          document,
-          document.activeElement instanceof Element ? document.activeElement : null,
-        ),
-        reservedSurface: isReservedTypingSurface(event.target),
         composing: event.isComposing || event.key === "Dead" || event.keyCode === 229,
-        activationControl:
-          isActivationControl(event.target) || isActivationControl(document.activeElement),
+        get composerFocused() {
+          return composer !== null && document.activeElement === composer;
+        },
+        get composerAvailable() {
+          return composerCanAcceptTyping(composer);
+        },
+        get composerWritable() {
+          return Boolean(composer && !composer.disabled && !composer.readOnly);
+        },
+        get editable() {
+          return isEditableTypingTarget(event.target);
+        },
+        get overlayOpen() {
+          return typingRedirectBlockedByOverlay(
+            document,
+            document.activeElement instanceof Element ? document.activeElement : null,
+          );
+        },
+        get reservedSurface() {
+          return isReservedTypingSurface(event.target);
+        },
+        get activationControl() {
+          return isActivationControl(event.target) || isActivationControl(document.activeElement);
+        },
       });
       if (decision.action === "ignore" || !composer) return;
       event.preventDefault();

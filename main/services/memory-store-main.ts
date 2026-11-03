@@ -16,7 +16,8 @@ export const memoryStore = new MemoryStore({
     file: path.join((await import("../platform.js")).app.getPath("userData"), "memory", "memory-v1.sqlite"),
   }],
   scopeAliases: async () => (await configStore.listWorkspaces()).flatMap((workspace) =>
-    workspace.folderPath
+    // No workspace chats keep the default workspace's id scope (see memoryScopeForChat).
+    workspace.folderPath && !workspace.noWorkspace
       ? [{
           from: { kind: "workspace" as const, id: workspace.id },
           to: { kind: "workspace" as const, id: sharedWorkspaceScopeId(workspace.folderPath) },

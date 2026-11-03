@@ -584,6 +584,7 @@ async function runCycle({ appPath, artifact, cycle, cycles }) {
         ...process.env,
         AIDEN_CONFIG_DIR: seeded.portableConfig,
         AIDEN_SUBAGENTS_ENABLED: "1",
+        AIDEN_ANALYTICS: "0",
         [SUBAGENT_PACKAGED_SOAK_ENV]: "1",
       },
       stdio: ["ignore", "pipe", "pipe"],

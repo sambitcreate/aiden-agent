@@ -103,8 +103,25 @@ test("ids that name an Object.prototype member are refused for the workflow, nod
   const near = structuredClone(starter()) as any;
   for (const edge of near.edges) if (edge.target === near.nodes[2].id) edge.target = "constructor-2";
   near.nodes[2].id = "constructor-2";
-  near.id = "toStringify";
+  near.id = "tostring-ify";
   assert.equal(parseWorkflowDocV1(near).ok, true);
+});
+
+test("ids are lowercase: an uppercase workflow, node or edge id is refused", () => {
+  const upperWorkflow = structuredClone(starter()) as any;
+  upperWorkflow.id = "WF-1";
+  assert.equal(parseWorkflowDocV1(upperWorkflow).ok, false, "workflow");
+  const upperNode = structuredClone(starter()) as any;
+  const output = upperNode.nodes[2];
+  for (const edge of upperNode.edges) if (edge.target === output.id) edge.target = "Out";
+  output.id = "Out";
+  assert.equal(parseWorkflowDocV1(upperNode).ok, false, "node");
+  const upperEdge = structuredClone(starter()) as any;
+  upperEdge.edges[0].id = "E0";
+  assert.equal(parseWorkflowDocV1(upperEdge).ok, false, "edge");
+  const generated = structuredClone(starter()) as any;
+  generated.id = crypto.randomUUID();
+  assert.equal(parseWorkflowDocV1(generated).ok, true, "a generated id is lowercase");
 });
 
 test("the parser enforces node, edge and document size caps", () => {

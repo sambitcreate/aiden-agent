@@ -10,6 +10,7 @@ export const SETTINGS_SECTIONS = [
   "remoteAccess",
   "approvals",
   "computerUse",
+  "bots",
   "botComputers",
   "simulator",
   "memory",
@@ -160,6 +161,12 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     title: "Computer Use",
     group: "Agent",
     keywords: ["desktop", "native apps", "accessibility", "screen recording", "beta", "control my computer", "see my screen", "permissions"],
+  },
+  {
+    id: "bots",
+    title: "Bots",
+    group: "Agent",
+    keywords: ["bot", "routines", "allow", "go ahead", "ask first", "approvals", "permissions", "stop asking me", "unattended"],
   },
   {
     id: "botComputers",

@@ -644,7 +644,9 @@ function route(seed: (client: QueryClient) => unknown = noop) {
     parse(
       renderToStaticMarkup(
         <QueryClientProvider client={client}>
-          <RemoteChatRoute hostId="host-b" chatId="chat-1" onManage={noop} onRemoved={noop} />
+          <CommandSystemProvider>
+            <RemoteChatRoute hostId="host-b" chatId="chat-1" onManage={noop} onRemoved={noop} />
+          </CommandSystemProvider>
         </QueryClientProvider>,
       ),
     ),

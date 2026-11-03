@@ -54,6 +54,67 @@ export async function saveConfiguredMcpServer(
   return saved!;
 }
 
+/** A save's staged record, and whether it keeps a launch that is already approved. */
+async function stageForSave(
+  serverId: string,
+  current: McpServer | undefined,
+  plan: McpFieldSecretPlan,
+  isCurrent: () => boolean,
+  options: SaveConfiguredMcpServerOptions,
+): Promise<{ staged: McpServer; launchUnchanged: boolean }> {
+  // Additive only: nothing the configured record resolves changes until
+  // the new record is published.
+  const staged = await stageStoredMcpFieldSecrets(serverId, plan, isCurrent, { fromEditor: options.approveLaunch === true || options.fromEditor === true, current });
+  const baseline = mcpFieldSecretCleanupBaseline(current, plan);
+  const launchUnchanged = current?.transport === "stdio" && baseline !== undefined &&
+    mcpStdioLaunchFingerprint(baseline) === mcpStdioLaunchFingerprint(staged) &&
+    (await mcpStdioApprovals.isApproved(current));
+  return { staged, launchUnchanged };
+}
+
+/** The stored values a save plans against, read before its mutation (planning is synchronous). */
+async function storedValuesFor(serverId: string) {
+  const before = (await configStore.listMcpServers()).find(({ id }) => id === serverId);
+  return before ? storedMcpFieldSecretValues(before) : {};
+}
+
+/**
+ * Shows the editor's launch review with no MCP lock held, so chats, Bots and
+ * other saves keep using connectors while the box is open. A first, publishing-
+ * free pass stages the record to learn the exact launch; the save then
+ * publishes only if it stages that same launch again. Returns the fingerprint
+ * of the approved effective launch, or undefined when no review is needed.
+ */
+async function reviewEditorLaunch(
+  serverId: string,
+  target: (current: McpServer | undefined) => McpServer | undefined,
+  isCurrent: () => boolean,
+  options: SaveConfiguredMcpServerOptions,
+): Promise<string | undefined> {
+  const storedValues = await storedValuesFor(serverId);
+  const effective = await mutateMcpWithCredentialCleanup<McpServer | undefined>(
+    serverId,
+    () => null,
+    async (current) => {
+      const next = target(current);
+      if (!next) return undefined;
+      const plan = planMcpServerFieldSecrets(next, { reuse: { current, values: storedValues } });
+      const { staged, launchUnchanged } = await stageForSave(serverId, current, plan, isCurrent, options);
+      return staged.transport === "stdio" && !launchUnchanged ? resolveStoredMcpFieldSecrets(staged) : undefined;
+    },
+    isCurrent,
+  );
+  if (!effective) return undefined;
+  if (!(await confirmMcpLaunch(effective))) {
+    // Drop the values staged for the launch that was not approved.
+    await mutateMcpWithCredentialCleanup(serverId, () => null, (current) => pruneStoredMcpFieldSecrets(serverId, current), isCurrent)
+      .catch(() => undefined);
+    throw new Error("Launch review cancelled.");
+  }
+  if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+  return mcpStdioLaunchFingerprint(effective);
+}
+
 /**
  * `target` derives the record to save from the configured one read inside the
  * mutation (undefined: nothing to save), so a background rewrite never
@@ -65,11 +126,11 @@ async function saveWithFieldSecrets(
   isCurrent: () => boolean,
   options: SaveConfiguredMcpServerOptions,
 ): Promise<McpServer | undefined> {
+  const reviewed = options.approveLaunch ? await reviewEditorLaunch(serverId, target, isCurrent, options) : undefined;
   // Planning runs synchronously inside the mutation, so the stored values it
   // compares against are read first. They only choose which markers to reuse;
   // staging validates every kept marker again.
-  const before = (await configStore.listMcpServers()).find(({ id }) => id === serverId);
-  const storedValues = before ? await storedMcpFieldSecretValues(before) : {};
+  const storedValues = await storedValuesFor(serverId);
   let plan: McpFieldSecretPlan | undefined;
   return mutateMcpWithCredentialCleanup(
     serverId,
@@ -83,23 +144,15 @@ async function saveWithFieldSecrets(
     },
     async (current) => {
       if (!plan) return current;
-      // Additive only: nothing the configured record resolves changes until
-      // the new record is published.
-      const staged = await stageStoredMcpFieldSecrets(serverId, plan, isCurrent, { fromEditor: options.approveLaunch === true || options.fromEditor === true, current });
       // Approve before publishing, so the first connection after the save is
       // already allowed. Like the field secrets, the approval is additive until
       // the record is published, so a failed save keeps the configured launch
       // runnable; afterwards only the published launch stays approved.
-      const baseline = mcpFieldSecretCleanupBaseline(current, plan);
-      const launchUnchanged = current?.transport === "stdio" && baseline !== undefined &&
-        mcpStdioLaunchFingerprint(baseline) === mcpStdioLaunchFingerprint(staged) &&
-        (await mcpStdioApprovals.isApproved(current));
+      const { staged, launchUnchanged } = await stageForSave(serverId, current, plan, isCurrent, options);
       if (options.approveLaunch && staged.transport === "stdio" && !launchUnchanged) {
         const effective = await resolveStoredMcpFieldSecrets(staged);
-        if (!(await confirmMcpLaunch(effective))) throw new Error("Launch review cancelled.");
-        if (!isCurrent()) throw new Error("The renderer document is no longer active.");
-        if (mcpStdioLaunchFingerprint(await resolveStoredMcpFieldSecrets(staged)) !== mcpStdioLaunchFingerprint(effective)) {
-          throw new Error("This connector’s environment changed during launch review. Review it again.");
+        if (reviewed === undefined || mcpStdioLaunchFingerprint(effective) !== reviewed) {
+          throw new Error("This connector’s launch changed during review. Review it again.");
         }
       }
       const saved = await publishWithLaunchApproval(

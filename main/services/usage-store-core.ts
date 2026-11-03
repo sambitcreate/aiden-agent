@@ -406,18 +406,60 @@ function summaryFromDatabase(
   };
 }
 
+export interface UsageStoreOptions {
+  /**
+   * Coalesce saves for this many milliseconds instead of writing on every
+   * request. Callers that set it must call `flush()` before exit; `record`
+   * then resolves once the aggregate is in memory and reports later save
+   * failures through `onSaveError`. Omitted, every record waits for its save.
+   * A failed coalesced save is retried after another delay.
+   */
+  saveDelayMs?: number;
+  onSaveError?: (error: unknown) => void;
+}
+
 export function createUsageStore(
   persistence: UsagePersistence,
   now: () => number = Date.now,
+  options: UsageStoreOptions = {},
 ): {
   record(record: UsageRequestRecord): Promise<void>;
   summary(range: UsageDateRange): Promise<UsageSummary>;
+  /**
+   * Write any coalesced aggregate now; resolves once it is durable. Meant for
+   * shutdown: from then on every record waits for its own save, so usage
+   * recorded by work that settles after the flush is not left on a timer the
+   * exiting process never runs.
+   */
+  flush(): Promise<void>;
 } {
+  const saveDelayMs =
+    typeof options.saveDelayMs === "number" && options.saveDelayMs > 0
+      ? options.saveDelayMs
+      : 0;
   let mutationQueue: Promise<void> = Promise.resolve();
-  let databasePromise: Promise<UsageDatabase> | null = null;
+  let databasePromise: Promise<{
+    database: UsageDatabase;
+    index: Map<string, DailyUsageBucket>;
+  }> | null = null;
+  let dirty = false;
+  let writeThrough = saveDelayMs === 0;
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-  async function loadDatabase(): Promise<UsageDatabase> {
-    databasePromise ??= persistence.load().then(normalizeDatabase);
+  async function loadDatabase(): Promise<{
+    database: UsageDatabase;
+    index: Map<string, DailyUsageBucket>;
+  }> {
+    databasePromise ??= persistence.load().then((value) => {
+      const database = normalizeDatabase(value);
+      const index = new Map<string, DailyUsageBucket>();
+      // Keep the first bucket for a key, as the former linear lookup did.
+      for (const bucket of database.buckets) {
+        const key = bucketKey(bucket);
+        if (!index.has(key)) index.set(key, bucket);
+      }
+      return { database, index };
+    });
     try {
       return await databasePromise;
     } catch (error) {
@@ -426,10 +468,46 @@ export function createUsageStore(
     }
   }
 
+  /** Runs inside the mutation queue, so it never races a record. */
+  async function saveIfDirty(): Promise<void> {
+    if (!dirty || !databasePromise) return;
+    const { database } = await databasePromise;
+    dirty = false;
+    try {
+      await persistence.save(database);
+    } catch (error) {
+      dirty = true;
+      throw error;
+    }
+  }
+
+  function enqueueFlush(): Promise<void> {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    const task = mutationQueue.then(saveIfDirty);
+    mutationQueue = task.catch(() => undefined);
+    return task;
+  }
+
+  function scheduleSave(): void {
+    if (saveTimer) return;
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      enqueueFlush().catch((error: unknown) => {
+        options.onSaveError?.(error);
+        // Keep retrying on the same cadence rather than waiting for a record.
+        if (dirty && !writeThrough) scheduleSave();
+      });
+    }, saveDelayMs);
+    saveTimer.unref?.();
+  }
+
   return {
     record(record) {
       const task = mutationQueue.then(async () => {
-        const database = await loadDatabase();
+        const { database, index } = await loadDatabase();
         const timestamp =
           typeof record.timestamp === "number" &&
           Number.isFinite(record.timestamp)
@@ -451,9 +529,7 @@ export function createUsageStore(
           local: record.local,
         };
         const key = bucketKey(descriptor);
-        let bucket = database.buckets.find(
-          (candidate) => bucketKey(candidate) === key,
-        );
+        let bucket = index.get(key);
         if (!bucket) {
           bucket = {
             ...descriptor,
@@ -469,6 +545,7 @@ export function createUsageStore(
             hostedCostUsd: 0,
           };
           database.buckets.push(bucket);
+          index.set(key, bucket);
         }
         bucket.providerLabel = descriptor.providerLabel;
         bucket.modelLabel = descriptor.modelLabel;
@@ -490,7 +567,21 @@ export function createUsageStore(
         } else if (!record.local) {
           bucket.unpricedHostedRequests += 1;
         }
-        await persistence.save(database);
+        if (writeThrough) {
+          // Without a delay, or after the shutdown flush, every record waits
+          // for its own save. Anything a failed coalesced save left behind is
+          // written with it.
+          dirty = false;
+          try {
+            await persistence.save(database);
+          } catch (error) {
+            dirty = saveDelayMs > 0;
+            throw error;
+          }
+        } else {
+          dirty = true;
+          scheduleSave();
+        }
       });
       mutationQueue = task.catch(() => undefined);
       return task;
@@ -498,7 +589,13 @@ export function createUsageStore(
 
     async summary(range) {
       await mutationQueue;
-      return summaryFromDatabase(await loadDatabase(), range, now());
+      const { database } = await loadDatabase();
+      return summaryFromDatabase(database, range, now());
+    },
+
+    flush() {
+      writeThrough = true;
+      return enqueueFlush();
     },
   };
 }

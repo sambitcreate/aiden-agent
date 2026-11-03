@@ -14,6 +14,7 @@ import { STREAMING_REVEAL_FADE_MS, STREAMING_REVEAL_RELEASE_MS, STREAMING_REVEAL
 afterEach(() => {
   mock.restoreAll();
   cleanup();
+  localStorage.clear();
   delete document.documentElement.dataset.reduceMotion;
 });
 
@@ -230,8 +231,9 @@ test("a new answer to a prompt that already has one starts with its own sections
 
   // The saved answer is replaced by a fresh one streaming in its place.
   view.rerender(transcript({ messages: [prompt], streamingText: "", reasoning: "Fresh thinking." }));
-  const live = screen.getByText("Fresh thinking.").closest("section");
-  assert.equal(live?.dataset.disclosureLayout, "preview", "the new reasoning opens as a live preview");
+  const live = view.container.querySelector<HTMLButtonElement>("section > button[aria-expanded]");
+  assert.equal(live?.getAttribute("aria-expanded"), "false", "the new reasoning starts closed");
+  assert.equal(live?.closest("section")?.dataset.disclosureLayout, "collapsed");
 });
 
 function previews(container: HTMLElement): number {
@@ -339,6 +341,34 @@ test("tool-closed text keeps its release slot when follow-up prose starts", asyn
   assert.ok(view.container.textContent?.includes("The follow-up"));
 });
 
+test("a streaming reply keeps one hidden action row after its last row, so new paragraphs never move it", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const first = "Checked the config.\n\n";
+  const timeline: GenerationTimeline = {
+    version: 3,
+    generationId: "generation-1",
+    status: "running",
+    startedAt: 1,
+    steps: [toolStep(first.length)],
+  };
+  const view = render(transcript({ messages: [prompt], streamingText: first, timeline }));
+  const copy = replyCopyButton();
+  assert.ok(copy.closest('[aria-hidden="true"]'), "laid out but hidden while streaming");
+  const tool = view.container.querySelector(".activity-feed");
+  assert.ok(tool, "the tool step shows");
+  assert.ok(
+    tool.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING,
+    "the row sits after the tool step, not under the paragraph above it",
+  );
+
+  const both = `${first}The follow-up paragraph.\n\n`;
+  view.rerender(transcript({ messages: [prompt], streamingText: both, timeline }));
+  const followUp = screen.getByText("The follow-up paragraph.");
+  assert.equal(replyCopyButton(), copy, "the same row stays put as a new paragraph starts");
+  assert.ok(followUp.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.equal(copy.closest("p, .streaming-reveal"), null, "it belongs to the turn, not a paragraph");
+});
+
 test("max-wait timeout releases pending heading and prose tails while turn still runs", async () => {
   // A lone heading with no boundary: should stay hidden until timeout
   const contentWithHeading = "Intro paragraph.\n\n## Next section";
@@ -402,10 +432,12 @@ test("a streaming reply joins a paragraph at a time and stops fading once settle
   assert.equal(settled?.hasAttribute("data-streaming"), false, "and no longer fades anything in");
 });
 
-test("with reduced motion every streamed block shows as soon as it arrives", () => {
+test("with reduced motion streamed text shows whole at each release, unfinished blocks included", async () => {
   document.documentElement.dataset.reduceMotion = "true";
   const view = render(transcript({ messages: [prompt], streamingText: "One.\n\n" }));
+  assert.ok(view.container.textContent?.includes("One."), "the first text shows at once");
   view.rerender(transcript({ messages: [prompt], streamingText: "One.\n\nTwo.\n\n- three\n- four" }));
+  await wait(STREAMING_REVEAL_RELEASE_MS + 20);
   for (const text of ["One.", "Two.", "three", "four"]) {
     assert.ok(view.container.textContent?.includes(text), text);
   }
@@ -666,7 +698,7 @@ test("a generated image shows exactly once through handoff and settlement", () =
   assert.ok(onlyPreview(), "and once the saved reply settles");
 });
 
-test("links a reparsed reply replaces keep their previews, as the saved reply shows them", () => {
+test("links a reparsed reply replaces keep their previews, as the saved reply shows them", async () => {
   document.documentElement.dataset.reduceMotion = "true";
   const tight = Array.from(
     { length: 50 },
@@ -684,6 +716,7 @@ test("links a reparsed reply replaces keep their previews, as the saved reply sh
   const view = render(transcript({ messages: [prompt], streamingText: `${tight}\n` }));
   assert.equal(previews(view.container), 50, "the tight list previews its links while streaming");
   view.rerender(transcript({ messages: [prompt], streamingText: loose }));
+  await wait(STREAMING_REVEAL_RELEASE_MS + 20);
   assert.ok(view.container.querySelector("li > p"), "the list is loose now");
   assert.equal(previews(view.container), 50, "the replaced links keep their previews");
   view.rerender(
@@ -697,4 +730,46 @@ test("links a reparsed reply replaces keep their previews, as the saved reply sh
   assert.equal(previews(view.container), 50);
   view.rerender(transcript({ messages: [prompt, saved], streamingText: null }));
   assert.equal(previews(view.container), fromHistory, "the settled reply shows what history shows");
+});
+
+test("latest work details retain on completion, fold on an admitted prompt, and preserve answer identity", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  installBotTestIpc({ "chats:htmlArtifactSrcdoc": () => new Promise(() => undefined) });
+  localStorage.setItem("aiden-agent.appearance-v1", JSON.stringify({ workDetails: "detailed", workDetailsCollapseTiming: "next-input" }));
+  const completed: GenerationTimeline = {
+    version: 3, generationId: "details-run", status: "completed", startedAt: 1, finishedAt: 2,
+    steps: [{ ...toolStep(0), status: "completed", target: "preferences.json" }],
+  };
+  const saved: ChatMessage = { id: "details-answer", role: "assistant", content: "Preferences checked.", reasoning: "Inspecting the saved preference.", createdAt: 2, timeline: completed };
+  const view = render(transcript({ messages: [prompt, saved], streamingText: null }));
+  const answer = screen.getByText("Preferences checked.");
+  const reasoning = screen.getByRole("button", { name: /Thought|Thinking/u });
+  // Thinking is the steady one-line row in every mode; only the reader opens it.
+  assert.equal(reasoning.getAttribute("aria-expanded"), "false");
+  const activity = view.container.querySelector("details.activity-feed")!;
+  assert.equal(activity.hasAttribute("open"), true);
+  view.rerender(transcript({ messages: [prompt, saved, { id: "next-user", role: "user", content: "Continue", createdAt: 3 }], streamingText: null }));
+  assert.equal(activity.hasAttribute("open"), false);
+  assert.equal(screen.getByText("Preferences checked."), answer);
+  localStorage.clear();
+});
+
+test("a next prompt admitted during handoff folds the old automatic preview once", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  installBotTestIpc({ "chats:htmlArtifactSrcdoc": () => new Promise(() => undefined) });
+  localStorage.setItem("aiden-agent.appearance-v1", JSON.stringify({ workDetails: "detailed", workDetailsCollapseTiming: "next-input" }));
+  const finished: GenerationTimeline = {
+    version: 3, generationId: "handoff-run", status: "completed", startedAt: 1, finishedAt: 2,
+    steps: [{ ...toolStep(0), status: "completed", target: "first.txt" }],
+  };
+  const saved: ChatMessage = { id: "handoff-details", role: "assistant", content: "First answer.", createdAt: 2, timeline: finished };
+  const next: ChatMessage = { id: "handoff-next", role: "user", content: "Next request", createdAt: 3 };
+  const view = render(transcript({ messages: [prompt], streamingText: "First answer.", timeline: finished }));
+  const activity = () => view.container.querySelector("details.activity-feed");
+  assert.equal(activity()?.hasAttribute("open"), true, "Detailed keeps the live exchange's steps open");
+  view.rerender(transcript({ messages: [prompt, saved, next], streamingText: saved.content, timeline: finished, streamComplete: true, persistedHandoffMessageId: saved.id }));
+  assert.equal(activity()?.hasAttribute("open"), false);
+  view.rerender(transcript({ messages: [prompt, saved, next], streamingText: null }));
+  assert.equal(activity()?.hasAttribute("open"), false);
+  localStorage.clear();
 });

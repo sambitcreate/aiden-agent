@@ -20,6 +20,7 @@ import { createBotSessionService, type BotSessionRuntime, type BotSessionService
 import {
   BOT_CONNECT_CARD_ENTRY_KIND,
   createBotLiveProjection,
+  createQueuedInputClassifier,
   liveBotActivity,
   liveQueuedInputIds,
   liveQueuedMessages,
@@ -871,6 +872,78 @@ test("a waiting question reaches subscribers and late joiners, and its answer re
     first.unsubscribe();
   } finally {
     stopListening();
+    await live.close();
+  }
+});
+
+test("needsYou agrees with the summary, with or without an open feed, and never reads the transcript", async () => {
+  let service: BotSessionRuntime | undefined;
+  let transcriptReads = 0;
+  let issueOpen = false;
+  let unavailable = false;
+  const live = await start(createFauxModels([fauxAssistantMessage("Hello.")]), {
+    projection: {
+      conversation: async (botId) => {
+        transcriptReads += 1;
+        return service!.conversation(botId);
+      },
+      state: async (botId) => (unavailable ? { kind: "unavailable", reason: "held_by_live_process" } : service!.state(botId)),
+      issuePending: () => issueOpen,
+    },
+  });
+  service = live.service;
+  const agree = async (expected: boolean, label: string) => {
+    const before = transcriptReads;
+    const needsYou = await live.projection.needsYou("bot:a");
+    assert.equal(transcriptReads, before, `the cheap read opens no transcript (${label})`);
+    assert.equal(needsYou, expected, label);
+    const signals = await live.projection.inboxSignals("bot:a");
+    assert.equal(transcriptReads, before, "host-feed signals never open a transcript");
+    assert.equal(signals.needsYou, expected);
+    const summary = await live.projection.summary("bot:a");
+    assert.deepEqual(signals.state, summary.state, `host-feed state agrees (${label})`);
+    assert.equal(summary.needsYou, expected, `the summary agrees (${label})`);
+    if (label.startsWith("no feed") || label.startsWith("feed closed")) assert.equal(signals.lastReplyAt, null);
+  };
+  const states = [
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ] as const;
+  try {
+    for (const [open, gone] of states) {
+      issueOpen = open;
+      unavailable = gone;
+      // With no open feed, an unavailable Bot never needs the person.
+      await agree(open && !gone, `no feed, issue ${open}, unavailable ${gone}`);
+    }
+
+    issueOpen = false;
+    unavailable = false;
+    const tape = recorder();
+    const watching = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(watching.snapshot);
+    for (const [open, gone] of states) {
+      issueOpen = open;
+      unavailable = gone;
+      // An open feed keeps its own state, so an open issue counts whatever the session reports.
+      await agree(open, `open feed, issue ${open}, unavailable ${gone}`);
+    }
+
+    issueOpen = false;
+    unavailable = false;
+    await live.service.send("bot:a", { text: "hello", requestId: "feed-signals" });
+    await waitFor(() => visibleText(tape.view).includes("assistant:Hello."), { what: "the existing live feed's reply" });
+    const before = transcriptReads;
+    assert.equal((await live.projection.inboxSignals("bot:a")).lastReplyAt,
+      (await live.projection.summary("bot:a")).lastReplyAt);
+    assert.equal(transcriptReads, before, "an open feed reuses its admitted entries too");
+    watching.unsubscribe();
+    issueOpen = true;
+    unavailable = true;
+    await agree(false, "feed closed, issue open, unavailable");
+  } finally {
     await live.close();
   }
 });
@@ -1893,6 +1966,45 @@ test("while classifying fails, a cached routine stays hidden and the person's cl
   }
 });
 
+test("a retry timer that fires early never opens the classification pause before its time", async (t) => {
+  // A busy event loop schedules timers from a stale loop time, so a timer can
+  // fire before the classifier's own clock reaches the end of the pause.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let clock = 1_000;
+  const callsAt: number[] = [];
+  let retries = 0;
+  const classifier = createQueuedInputClassifier({
+    classify: async () => {
+      callsAt.push(clock);
+      throw new Error("inspect failed");
+    },
+    now: () => clock,
+    retryMs: 150,
+    report: () => undefined,
+    retry: () => {
+      retries += 1;
+    },
+  });
+  const docs = { "pi.inbox": { items: [{ id: "desk-3", mode: "followUp" }] } };
+  try {
+    assert.deepEqual([...(await classifier.personal(docs))], []);
+    // The timer fires on schedule while the classifier's clock has only moved 100 ms.
+    clock += 100;
+    t.mock.timers.tick(150);
+    assert.equal(retries, 0, "an early timer does not call for a retry");
+    await classifier.personal(docs);
+    assert.deepEqual(callsAt, [1_000], "no classification inside the pause");
+    // Once the pause is over by the classifier's clock, the retry comes without a new frame.
+    clock += 50;
+    t.mock.timers.tick(50);
+    assert.equal(retries, 1);
+    await classifier.personal(docs);
+    assert.deepEqual(callsAt, [1_000, 1_150]);
+  } finally {
+    classifier.close();
+  }
+});
+
 test("an id the session cannot find stays hidden and is retried", async () => {
   const { live, control } = await startFlaky();
   try {
@@ -1966,6 +2078,51 @@ test("a message the person sent after the last reply does not move the last repl
     assert.equal(waiting.lastReplyAt, answered.lastReplyAt);
     assert.equal(typeof waiting.lastReplyAt, "number");
   } finally {
+    await live.close();
+  }
+});
+
+test("list summaries of a closed Bot read its transcript again only once it has changed", async () => {
+  const live = await start(createFauxModels([fauxAssistantMessage("First answer."), fauxAssistantMessage("Second answer.")]));
+  let contextReads = 0;
+  const projection = createBotLiveProjection({
+    conversation: async (botId) => {
+      const conversation = await live.service.conversation(botId);
+      return new Proxy(conversation, {
+        get(target, key, receiver) {
+          if (key === "context") {
+            return (...args: Parameters<typeof target.context>) => {
+              contextReads += 1;
+              return target.context(...args);
+            };
+          }
+          const value = Reflect.get(target, key, receiver);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    },
+    state: (botId) => live.service.state(botId),
+    quietInputs: (botId, ids) => live.service.quietInputs(botId, ids),
+  });
+  try {
+    const first = await live.service.send("bot:a", { text: "One", requestId: "desk-1" });
+    await live.service.awaitReply("bot:a", first.submissionId, new AbortController().signal);
+    const answered = await projection.summary("bot:a");
+    assert.equal(answered.preview, "First answer.");
+    const reads = contextReads;
+    for (let refresh = 0; refresh < 5; refresh += 1) {
+      assert.deepEqual(await projection.summary("bot:a"), answered, "an unrelated refresh answers the same");
+    }
+    assert.equal(contextReads, reads, "an unchanged transcript is not read again");
+
+    const second = await live.service.send("bot:a", { text: "Two", requestId: "desk-2" });
+    await live.service.awaitReply("bot:a", second.submissionId, new AbortController().signal);
+    const next = await projection.summary("bot:a");
+    assert.equal(next.preview, "Second answer.", "a new turn is read");
+    assert.ok((next.lastReplyAt ?? 0) >= (answered.lastReplyAt ?? 0));
+    assert.equal(contextReads, reads + 1);
+  } finally {
+    await projection.close();
     await live.close();
   }
 });

@@ -4,7 +4,13 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DOMParser } from "@xmldom/xmldom";
 import type { AttemptSnapshot, ImageRunConsentPlan, RunSnapshot } from "../shared/images/run-types";
+import { ReactFlowProvider } from "@xyflow/react";
+import type { WorkflowDocV1 } from "../shared/images/schema";
 import { ConsentSummary } from "./consent-sheet";
+import { toFlowNodes } from "./flow-adapter-core";
+import { IMAGE_NODE_WIDTH, fitNodeToMediaAspect } from "./node-dimensions-core";
+import { ImageNodeFrame } from "./nodes/node-frame";
+import { NodePorts } from "./nodes/node-ports";
 import { ModelPicker } from "./model-picker";
 import { GenerateImageNodeBody } from "./nodes/generate-image-node";
 import { OutputNodeBody } from "./nodes/output-node";
@@ -17,6 +23,7 @@ function render(element: ReactElement) {
     text: document.documentElement.textContent ?? "",
     buttons: all.filter((node) => node.tagName === "button"),
     images: all.filter((node) => node.tagName === "img"),
+    all,
     byRole: (role: string) => all.filter((node) => node.getAttribute("role") === role),
     listItems: all.filter((node) => node.getAttribute("role") === "listitem"),
   };
@@ -145,4 +152,50 @@ test("a Generate node shows its run status and disables Run from Here during a r
   assert.match(body.text, /may have been billed/u);
   const runFromHere = body.buttons.find((button) => button.textContent === "Run from Here");
   assert.equal(runFromHere?.hasAttribute("disabled"), true);
+});
+
+test("retry choices are disabled while a run is being prepared, so a second click cannot open a second consent", () => {
+  const failed = run("failed", [attempt({ state: "failed", submittedAt: 1 })]);
+  const idle = render(<RunPanel snapshot={failed} nodeTitles={new Map()} onStop={noop} onRetry={noop} />);
+  assert.ok(idle.buttons.length > 0);
+  assert.ok(idle.buttons.every((button) => !button.hasAttribute("disabled")));
+  const busy = render(<RunPanel snapshot={failed} nodeTitles={new Map()} busy onStop={noop} onRetry={noop} />);
+  assert.deepEqual(busy.buttons.map((button) => button.textContent), ["Retry from here", "Retry this node only"]);
+  assert.ok(busy.buttons.every((button) => button.hasAttribute("disabled")));
+});
+
+test("a sized image node renders exactly the box React Flow lays out and attaches edges to", () => {
+  const dimensions = fitNodeToMediaAspect(undefined, 1920, 1080)!;
+  const doc: WorkflowDocV1 = {
+    schemaVersion: 1, id: "wf", title: "T", revision: 1, createdAt: 0, updatedAt: 0, settings: { concurrency: 2 }, edges: [],
+    nodes: [
+      { id: "i", type: "image-input", position: { x: 0, y: 0 }, dimensions, data: { assetId: "a".repeat(64) } },
+      { id: "p", type: "prompt", position: { x: 0, y: 0 }, data: { text: "" } },
+    ],
+  };
+  const [image, prompt] = toFlowNodes(doc, new Map(), new Set());
+  const boxOf = (element: ReactElement) => {
+    const frame = render(element).all.find((node) => node.getAttribute("class") === "image-node")!;
+    const style = frame.getAttribute("style") ?? "";
+    const px = (name: string) => Number(new RegExp(`(?:^|;)${name}:(\\d+)px`, "u").exec(style)?.[1]);
+    return { width: px("width"), height: px("height") };
+  };
+  assert.deepEqual(boxOf(<ImageNodeFrame dimensions={image?.data.node.dimensions} />), { width: image?.width, height: image?.height });
+  // An unsized node takes the shared width; React Flow measures its height.
+  assert.equal(prompt?.width, undefined);
+  assert.equal(boxOf(<ImageNodeFrame />).width, IMAGE_NODE_WIDTH);
+});
+
+test("ports are keyboard controls that announce which port they are", () => {
+  const ports = render(
+    <ReactFlowProvider>
+      <NodePorts type="generate-image" />
+    </ReactFlowProvider>,
+  ).all.filter((node) => (node.getAttribute("class") ?? "").includes("image-port"));
+  assert.ok(ports.length >= 2);
+  for (const port of ports) {
+    assert.equal(port.getAttribute("tabindex"), "0");
+    assert.equal(port.getAttribute("role"), "button");
+    assert.match(port.getAttribute("aria-label") ?? "", / (input|output)$/u);
+  }
 });

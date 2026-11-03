@@ -13,23 +13,24 @@ import type { AppControlId, AppControlTopic } from "../../../renderer/shared/app
 import { JsonStore, acquireLease } from "./state.ts";
 import { readAidenSettings } from "./extensions/aiden-settings.ts";
 
+/** Settings `aiden app set` can change; everything else is read-only here. */
 export const CLI_APP_CONTROLS: ReadonlySet<AppControlId> = new Set([
-  "appearance.terminalTheme",
   "memory.enabled",
   "webSearch.enabled",
 ]);
-export interface CliControlUi {
-  currentTheme(): string;
-  themes(): string[];
-  setTheme(name: string): { success: boolean; error?: string };
+/** The topics `aiden app status` and `aiden app get` show. Appearance is desktop-only. */
+export const CLI_APP_TOPICS = ["memory", "web-search", "skills"] as const satisfies readonly AppControlTopic[];
+export type CliAppTopic = (typeof CLI_APP_TOPICS)[number];
+export function isCliAppTopic(value: unknown): value is CliAppTopic {
+  return CLI_APP_TOPICS.includes(value as CliAppTopic);
 }
-export function createCliAppControls(agentDir: string, ui: () => CliControlUi | undefined) {
+/** App controls for explicit human administration (`aiden app`); no agent can reach them. */
+export function createCliAppControls(agentDir: string) {
   const settingsStore = new JsonStore<Record<string, unknown>>(join(agentDir, "aiden.json"), {});
   const webStore = new JsonStore<Record<string, unknown>>(
     join(agentDir, "web-search.json"),
     defaultWebSearchSettings() as unknown as Record<string, unknown>,
   );
-  const terminalStore = new JsonStore<Record<string, unknown>>(join(agentDir, "settings.json"), {});
   const ledger = new JsonStore<StoredAppOperation[]>(
     join(agentDir, "app-control-operations.json"),
     [],
@@ -39,8 +40,6 @@ export function createCliAppControls(agentDir: string, ui: () => CliControlUi | 
       ...readAidenSettings(agentDir),
       webSearch: normalizeWebSearchSettings(await webStore.load()),
     },
-    terminalTheme: ui()?.currentTheme() ?? String((await terminalStore.load()).theme ?? "dark"),
-    terminalThemes: ui()?.themes() ?? [],
   });
   const service = new AppControlsService({
     read,
@@ -59,29 +58,6 @@ export function createCliAppControls(agentDir: string, ui: () => CliControlUi | 
         )
           throw new Error("Settings changed. Refresh this control.");
       };
-      if (operation.control === "appearance.terminalTheme") {
-        const native = ui();
-        if (!native || !native.themes().includes(String(operation.value)))
-          throw new Error("Terminal theme changes require the interactive TUI.");
-        await assertRevision();
-        const result = native.setTheme(String(operation.value));
-        if (!result.success) throw new Error(result.error ?? "Theme is unavailable.");
-        // Pi owns its SettingsManager and write queue. Do not race it with a
-        // second writer. A visible theme alone is not a persistence receipt.
-        let persisted = false;
-        for (let attempt = 0; attempt < 100 && context.isCurrent(); attempt++) {
-          if ((await terminalStore.load()).theme === operation.value) {
-            persisted = true;
-            break;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        if (!persisted)
-          throw new Error(
-            "The terminal changed, but its saved default could not be confirmed. Refresh before another change.",
-          );
-        return { effective: "now" };
-      }
       if (operation.control === "webSearch.enabled")
         await webStore.update(async (draft) => {
           await assertRevision();
@@ -95,49 +71,33 @@ export function createCliAppControls(agentDir: string, ui: () => CliControlUi | 
       return {
         effective: "next_session",
         warning:
-          "Saved. Start a new CLI process to rebuild its feature tools. Disabling is also checked by existing tools before further work.",
+          "Saved. New sessions use the change. Disabling is also checked by existing tools before further work.",
       };
     },
   });
   return {
-    snapshot: async (
-      topic: AppControlTopic,
-      interactive: boolean,
-      isCurrent: () => boolean = () => true,
-    ) => {
+    snapshot: async (topic: CliAppTopic, isCurrent: () => boolean = () => true) => {
       const snapshot = await service.snapshot(topic, {
         actor: "cli",
         target: "This CLI",
         isCurrent,
         humanGesture: false,
-        allowedControls: interactive ? CLI_APP_CONTROLS : new Set(),
+        allowedControls: CLI_APP_CONTROLS,
       });
-      if (topic === "appearance")
-        snapshot.rows = snapshot.rows.filter((row) => row.id === "appearance.terminalTheme");
       for (const row of snapshot.rows)
         if (!CLI_APP_CONTROLS.has(row.id))
           row.disabledReason =
-            "This setting has no supported CLI execution gate. Use the native CLI setup options.";
+            "This setting has no supported CLI execution gate. Change it in the Aiden desktop app.";
       return snapshot;
     },
-    async apply(
-      input: unknown,
-      interactive: boolean,
-      humanGesture: boolean,
-      explicitAdministration = false,
-      isCurrent: () => boolean = () => true,
-    ) {
-      if (!interactive && !explicitAdministration)
-        throw new Error(
-          "Agent app mutations require the interactive CLI. Use an explicit human app command for headless administration.",
-        );
+    async apply(input: unknown, isCurrent: () => boolean = () => true) {
       const release = acquireLease(join(agentDir, "app-controls-owner"));
       try {
         return await service.apply(input, {
           actor: "cli",
           target: "This CLI",
           isCurrent,
-          humanGesture,
+          humanGesture: true,
           allowedControls: CLI_APP_CONTROLS,
         });
       } finally {

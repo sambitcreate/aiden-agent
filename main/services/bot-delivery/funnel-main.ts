@@ -89,9 +89,17 @@ export function botDeliveryFunnel(): BotDeliveryFunnel {
 const FLUSH_INTERVAL_MS = 5 * 60_000;
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
 let flushInterval: ReturnType<typeof setInterval> | undefined;
+/** Flushes still sending, so a stop can wait for them before the stores close. */
+const flushing = new Set<Promise<void>>();
+
+function flushHeld(): Promise<void> {
+  const work = flushHeldOnce().finally(() => flushing.delete(work));
+  flushing.add(work);
+  return work;
+}
 
 /** Send what quiet hours held back once it is due; re-arms for the next held row. */
-async function flushHeld(): Promise<void> {
+async function flushHeldOnce(): Promise<void> {
   const next = await botDeliveryFunnel().flush(Date.now()).catch((error: unknown) => {
     logger.warn("bots", "Held Bot messages could not be sent.", error);
     return undefined;
@@ -112,9 +120,11 @@ export function startBotDeliveryFlush(): void {
   void flushHeld();
 }
 
-export function stopBotDeliveryFlush(): void {
+/** Stops the flush; resolves once a flush already sending has finished. */
+export async function stopBotDeliveryFlush(): Promise<void> {
   if (flushInterval) clearInterval(flushInterval);
   if (flushTimer) clearTimeout(flushTimer);
   flushInterval = undefined;
   flushTimer = undefined;
+  while (flushing.size) await Promise.allSettled([...flushing]);
 }

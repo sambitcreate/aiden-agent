@@ -22,6 +22,7 @@ import {
   Text,
   toast,
 } from "../components/ui";
+import { botListLocation } from "../lib/bot-routes";
 import { insertTextIntoTextarea } from "../lib/composer-type-focus";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import { hostServesBotHandoffs, hostSharesBotSessions } from "../lib/hosts/remote-bot-session";
@@ -40,6 +41,8 @@ import { BOT_CHAT_COMPOSER_SURFACES } from "./bots/bot-chat-mode";
 import { botReplyQuote } from "./bots/bot-message-actions";
 import { BotPausedNotice, botPausedText } from "./bots/bot-paused-card";
 import { BotStatusLine } from "./bots/bot-status-line";
+import { useChatFind } from "../components/chat-find-bar";
+import { useRemoteBotImages } from "../lib/hosts/remote-images";
 
 /** Text files ride along in the message, as in a local Bot chat. */
 function attachmentText(attachments: readonly Attachment[]): string {
@@ -123,6 +126,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const live = useRemoteBotSession(hostId, botId, shared);
   const { busy, run } = useBusyOperations();
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const findBar = useChatFind(`${hostId}/${botId}`);
   // A question or approval this Mac answered, hidden only while the host's view
   // still holds that same prompt. A Resume asks it again under the same wait
   // id: the host's frame (or a fresh snapshot) for it is a new prompt, and it shows.
@@ -144,6 +148,9 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
 
   const view = live.view;
   const snapshot = view?.snapshot ?? null;
+  // Revision 45 (`bot:images`): shared images draw once their bytes are read from the host.
+  // Images are read only while the host's stream is up; a read cut off by a drop is asked again once it is back.
+  const entries = useRemoteBotImages(hostId, botId, snapshot?.entries, live.stream === "streaming");
   const state = snapshot?.state;
   const running = state?.kind === "running";
   const features = new Set(host?.features ?? []);
@@ -180,6 +187,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
 
   const shell = (body: React.ReactNode, footer?: React.ReactNode) => (
     <ScrollArea
+      focusRegion="chat"
+      overlay={findBar}
       scrollRestorationId={`remote-bot-chat:${hostId}:${botId}`}
       className="h-full min-h-0"
       alignFooterToScrollContent
@@ -227,7 +236,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           title="This device isn't paired anymore"
           description="Pair it again in Settings to use its Bots here."
           action={
-            <Button variant="filled" onClick={() => void navigate({ to: "/bots" })}>
+            <Button variant="filled" onClick={() => void navigate(botListLocation())}>
               All Bots
             </Button>
           }
@@ -246,7 +255,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
               : `Update Aiden on ${hostName} to chat with its Bots here.`
           }
           action={
-            <Button variant="filled" onClick={() => void navigate({ to: "/bots" })}>
+            <Button variant="filled" onClick={() => void navigate(botListLocation())}>
               All Bots
             </Button>
           }
@@ -261,7 +270,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           title="Bot not found"
           description={`This Bot may have been deleted on ${hostName}, or this Mac may no longer use it.`}
           action={
-            <Button variant="filled" onClick={() => void navigate({ to: "/bots" })}>
+            <Button variant="filled" onClick={() => void navigate(botListLocation())}>
               All Bots
             </Button>
           }
@@ -649,7 +658,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       <MessageAttachmentPreviewProvider>
         <TranscriptEntries
           name={name}
-          entries={snapshot.entries}
+          entries={entries ?? snapshot.entries}
           partial={snapshot.partial}
           running={running}
           level={chatActivity.level}
@@ -665,7 +674,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
         />
       </MessageAttachmentPreviewProvider>
       {statusActivity ? (
-        <BotStatusLine activity={statusActivity} wording={chatActivity.wording} onStop={stop} onLayoutChange={setStatusLayout} />
+        <BotStatusLine activity={statusActivity} wording={chatActivity.wording} onLayoutChange={setStatusLayout} />
       ) : null}
       {isPaused ? <BotPausedNotice name={name} busy={busy("pause")} onResume={() => void setPaused(false)} /> : null}
       {state?.kind === "interrupted" ? (

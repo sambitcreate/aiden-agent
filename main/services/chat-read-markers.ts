@@ -201,3 +201,29 @@ export function chatReadThroughAt(
   );
   return latest;
 }
+
+/**
+ * Mark `chat` read through `throughMessageId` (or its newest visible message)
+ * on behalf of any surface: the desktop and `aiden serve` share this. Returns
+ * false when the chat or referenced message no longer exists, so a stale
+ * report is a no-op.
+ */
+export async function markChatReadThrough(
+  markers: Pick<ChatReadMarkerStore, "markRead">,
+  chat: Pick<Chat, "id" | "messages"> | null | undefined,
+  throughMessageId?: string,
+): Promise<boolean> {
+  if (!chat) return false;
+  const throughAt = chatReadThroughAt(chat, throughMessageId);
+  if (throughAt === null) return false;
+  const sequence =
+    throughMessageId === undefined
+      ? chat.messages.length -
+        1 -
+        [...chat.messages]
+          .reverse()
+          .findIndex((message) => message.role === "user" || message.role === "assistant")
+      : chat.messages.findIndex((message) => message.id === throughMessageId);
+  await markers.markRead(chat.id, throughAt, sequence);
+  return true;
+}

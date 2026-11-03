@@ -94,6 +94,8 @@ struct AidenGitBranches: Codable, Equatable, Sendable {
     let kind: String
     let current: String
     let branches: [String]
+    /// The repository has no commits yet; `branches` still lists its current branch.
+    var unborn: Bool? = nil
 }
 
 struct AidenGitComparison: Codable, Equatable, Sendable {

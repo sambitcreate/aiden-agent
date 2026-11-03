@@ -5,6 +5,7 @@ import { RemoteHostMarker } from "./sidebar-remote";
 import { cn } from "../lib/ui-utils";
 import { BOT_INTERRUPTED_ROW_LABEL, BOT_PAUSED_ROW_LABEL } from "../main/bots/bot-session-state";
 import { Text } from "./ui";
+import { pauseWhenUnseen } from "../lib/offscreen-pause";
 
 /** The paired Macs' Bots that match the sidebar's search; a Mac with none is left out. */
 export function remoteBotGroupsMatching(groups: readonly RemoteBotGroup[], query: string): RemoteBotGroup[] {
@@ -63,6 +64,7 @@ export function RemoteBotsSection({
                 <li key={bot.id}>
                   <button
                     type="button"
+                    data-roving-item
                     disabled={Boolean(host.disabledReason) || opening !== null}
                     aria-busy={busy || undefined}
                     aria-current={current ? "page" : undefined}
@@ -79,6 +81,7 @@ export function RemoteBotsSection({
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-regular font-medium text-primary">{bot.name}</span>
                       <span
+                        ref={bot.working ? pauseWhenUnseen : undefined}
                         className={cn("mt-0.5 block truncate text-small text-secondary", bot.working && "agent-thinking-shimmer")}
                       >
                         {status?.label ?? bot.purpose ?? `A Bot on ${host.label}.`}

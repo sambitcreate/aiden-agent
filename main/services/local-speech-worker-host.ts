@@ -98,6 +98,8 @@ export class LocalSpeechWorkerHost {
   private launching: Promise<LocalSpeechProcessClient> | null = null;
   private generation = 0;
   private loaded: LoadedSpeechModel | null = null;
+  /** Disposed workers that have not exited yet. */
+  private readonly retirements = new Set<Promise<void>>();
 
   constructor(private readonly options: LocalSpeechWorkerHostOptions) {}
 
@@ -106,11 +108,21 @@ export class LocalSpeechWorkerHost {
     return this.client;
   }
 
-  /** The worker, launched when needed. */
+  /** The model the running worker was last asked to load, even if that load failed part-way. */
+  heldModelId(): string | null {
+    return this.loaded?.modelId ?? null;
+  }
+
+  /**
+   * The worker, launched when needed. A new worker forks only after every
+   * disposed one has exited (or been killed), so two native models are never
+   * resident at once, even after a hang, crash or cancel.
+   */
   acquire(): Promise<LocalSpeechProcessClient> {
     if (this.client) return Promise.resolve(this.client);
     if (!this.launching) {
-      const pending = this.launch(this.generation);
+      const generation = this.generation;
+      const pending = this.retirementsSettled().then(() => this.launch(generation));
       const tracked = pending.finally(() => {
         if (this.launching === tracked) this.launching = null;
       });
@@ -139,14 +151,26 @@ export class LocalSpeechWorkerHost {
    * is escalated to SIGKILL; the wait is bounded so a stuck process cannot wedge the lane.
    */
   async retire(): Promise<void> {
-    const exiting = this.live;
-    this.shutDown();
+    this.detach();
     this.options.onUnloaded();
-    if (!exiting) return;
+    await this.retirementsSettled();
+  }
+
+  private async retirementsSettled(): Promise<void> {
+    while (this.retirements.size > 0) await Promise.all([...this.retirements]);
+  }
+
+  /** Tracks a disposed worker until it exits, escalating to SIGKILL when it ignores the ordinary kill. */
+  private trackRetirement(exiting: LiveWorker): void {
     const waitMs = this.options.exitWaitMs ?? DEFAULT_EXIT_WAIT_MS;
-    if (await settlesWithin(exiting.exited, waitMs)) return;
-    this.forceKill(exiting.process);
-    await settlesWithin(exiting.exited, waitMs);
+    const retirement: Promise<void> = (async () => {
+      if (await settlesWithin(exiting.exited, waitMs)) return;
+      this.forceKill(exiting.process);
+      await settlesWithin(exiting.exited, waitMs);
+    })().finally(() => {
+      this.retirements.delete(retirement);
+    });
+    this.retirements.add(retirement);
   }
 
   /**
@@ -167,35 +191,45 @@ export class LocalSpeechWorkerHost {
     }
   }
 
-  /** Disposes the worker only when it is still the current one (a hang, crash or cancel). */
+  /**
+   * Disposes the worker only when it is still the current one (a hang, crash or
+   * cancel). Its exit is tracked like a retirement, so the next `acquire` waits for it.
+   */
   disposeIfCurrent(expected: LocalSpeechProcessClient): void {
     if (this.client !== expected) return;
-    this.shutDown();
+    this.detach();
     this.options.onUnloaded();
   }
 
-  /** Synchronous teardown for app shutdown. Does not wait for the exit. */
+  /**
+   * Synchronous teardown for app shutdown. The caller does not wait; a worker
+   * that ignores the kill is still escalated to SIGKILL in the background.
+   */
   shutDown(): void {
+    this.detach();
+  }
+
+  private detach(): void {
     this.generation += 1;
     const current = this.client;
+    const exiting = this.live;
     this.client = null;
     this.launching = null;
     this.loaded = null;
-    current?.dispose();
     this.live = null;
+    current?.dispose();
+    if (exiting) this.trackRetirement(exiting);
   }
 
   private async launch(generation: number): Promise<LocalSpeechProcessClient> {
+    // Retired while waiting for an old worker to exit: forking now would only start a worker to kill.
+    if (generation !== this.generation) throw new Error("Local speech host was replaced.");
     const launched = await this.options.fork();
     const created: LocalSpeechProcessClient = attachUtilityProcess(launched, () => this.disposeIfCurrent(created));
     if (launched.stderr) {
       createInterface({ input: launched.stderr }).on("line", (line) => created.pushStderr(line));
     }
     launched.stdout?.resume();
-    if (generation !== this.generation) {
-      created.dispose();
-      throw new Error("Local speech host was replaced.");
-    }
     let markExited!: () => void;
     const exited = new Promise<void>((resolve) => {
       markExited = resolve;
@@ -210,6 +244,12 @@ export class LocalSpeechWorkerHost {
         this.options.onUnloaded();
       }
     });
+    if (generation !== this.generation) {
+      // Retired while forking: this worker never served a request, but it must exit before the next fork.
+      created.dispose();
+      this.trackRetirement({ process: launched, exited });
+      throw new Error("Local speech host was replaced.");
+    }
     this.live = { process: launched, exited };
     this.client = created;
     return created;

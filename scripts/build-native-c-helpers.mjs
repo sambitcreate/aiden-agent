@@ -17,6 +17,7 @@ export const NATIVE_C_HELPER_BUILDERS = Object.freeze([
   "build-secret-service-authority.mjs",
   "build-worktree-remover.mjs",
   "build-worktree-file-io.mjs",
+  "build-imcp-launcher.mjs",
   "build-bot-inbox-writer.mjs",
   "build-lease-flock.mjs",
   "build-subagent-run-store.mjs",

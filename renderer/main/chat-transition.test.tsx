@@ -919,3 +919,135 @@ test("a pending Resume in one chat leaves another interrupted chat's Resume usab
     queryClient.clear();
   }
 });
+
+function recoveredQuestionWaits(chatId: string) {
+  return [{
+    kind: "question" as const,
+    waitId: `wait-${chatId}`,
+    askedAt: 1,
+    questions: [{
+      question: "Which database?",
+      header: "Database",
+      multiSelect: false,
+      options: [
+        { label: "SQLite", description: "Embedded." },
+        { label: "Postgres", description: "Relational." },
+      ],
+    }],
+  }];
+}
+
+test("a recovered answer still sending in one chat leaves another chat's question usable", async () => {
+  let rejectAppend!: (error: Error) => void;
+  const { router, queryClient } = await mountRoutedChatPane("chat-a", {
+    "chats:replyInterrupted": () => true,
+    "chats:interruptedWaits": (id) => recoveredQuestionWaits(String(id)),
+    "chats:dismissInterruptedWait": () => undefined,
+    "chats:appendMessage": () => new Promise((_resolve, reject) => { rejectAppend = reject; }),
+  });
+  const close = async () => (await screen.findByRole("button", { name: "Close questionnaire" })) as HTMLButtonElement;
+  const visit = async (chatId: string) => {
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  };
+  try {
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /SQLite/u }));
+      fireEvent.click(await screen.findByRole("button", { name: "Submit" }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await visit("chat-b");
+    assert.equal((await close()).disabled, false, "Chat B must not inherit chat A's pending answer");
+    await act(async () => {
+      rejectAppend(new Error("The answer could not be saved."));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await visit("chat-a");
+    assert.equal((await close()).disabled, false, "a failed answer frees chat A's question again");
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
+});
+
+test("a dismissed recovered question stays gone when the chat opens again", async () => {
+  const dismissed = new Set<string>();
+  const handlers = {
+    "chats:replyInterrupted": () => true,
+    "chats:interruptedWaits": (id: unknown) =>
+      recoveredQuestionWaits(String(id)).filter((wait) => !dismissed.has(wait.waitId)),
+    "chats:dismissInterruptedWait": (_id: unknown, waitId: unknown) => {
+      dismissed.add(String(waitId));
+    },
+  };
+  const { queryClient } = await mountRoutedChatPane("chat-a", handlers);
+  try {
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Close questionnaire" }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.deepEqual([...dismissed], ["wait-chat-a"]);
+    // Leave the chat (the pane unmounts) and come back with the same cache.
+    cleanup();
+    await mountRoutedChatPane("chat-a", handlers);
+    await screen.findByRole("button", { name: "Resume" });
+    assert.equal(screen.queryByRole("heading", { name: "Which database?" }), null);
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
+});
+
+test("a send waiting on its folder check sends nothing once the person moves to another chat", async () => {
+  const releases: Array<() => void> = [];
+  const appended: string[] = [];
+  const { router, queryClient } = await mountRoutedChatPane("chat-a", {
+    "chats:get": (id) => {
+      const response = chatReadResponse(String(id));
+      return { ...response, chat: { ...response.chat, workspaceId: `workspace-${String(id)}` } };
+    },
+    "workspaces:list": () =>
+      ["chat-a", "chat-b"].map((id) => ({
+        id: `workspace-${id}`,
+        name: `Folder ${id}`,
+        folderPath: `/projects/${id}`,
+        permission: "ask",
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+    // Chat A's check waits until the test lets it answer; chat B's answers at once.
+    "workspaces:folderPresence": (workspaceId) =>
+      workspaceId === "workspace-chat-a"
+        ? new Promise((resolve) => releases.push(() => resolve({ presence: "present" })))
+        : { presence: "present" },
+    "chats:replyInterrupted": () => true,
+    "chats:appendMessage": (chatId) => {
+      appended.push(String(chatId));
+      return new Promise(() => undefined);
+    },
+  });
+  const resume = async () => (await screen.findByRole("button", { name: "Resume" })) as HTMLButtonElement;
+  try {
+    await act(async () => {
+      fireEvent.click(await resume());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId: "chat-b" } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.ok(releases.length > 0, "chat A's send must be waiting on its folder check");
+    await act(async () => {
+      for (const release of releases) release();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.deepEqual(appended, [], "chat A's send must not go out from chat B's pane");
+    assert.equal(screen.getByRole("heading", { level: 1 }).textContent, "Chat chat-b");
+    assert.equal((await resume()).disabled, false);
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
+});

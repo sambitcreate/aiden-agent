@@ -70,6 +70,26 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Recovery waits must not keep a quitting app (or a test runner) alive. */
+function unrefDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
+}
+
+/**
+ * After an unproven stop, keep retrying the identity-checked kill and exit
+ * proof with backoff. A transient `ps` failure would otherwise leave the run,
+ * and the parent agent waiting on it, pending forever.
+ *
+ * The retries stop after about 75 s. A run whose exit is still unproven then
+ * stays pending on purpose: settling it would claim a process is gone that may
+ * still be running and writing. Quitting Aiden remains the way out.
+ */
+const STOP_RECOVERY_ATTEMPTS = 10;
+// The identity read that just failed has a 1 s `ps` timeout, so retrying
+// sooner than that would only race the same overload.
+const STOP_RECOVERY_FIRST_INTERVAL_MS = 1_000;
+const STOP_RECOVERY_MAX_INTERVAL_MS = 10_000;
+
 export class SubagentInferenceProcessOwner {
   private readonly active = new Map<Promise<void>, AbortController>();
   private cleanupHealthy = true;
@@ -232,8 +252,31 @@ export class SubagentInferenceProcessOwner {
             // Diagnostic observers cannot reject detached shutdown or erase
             // the fail-closed cleanup state.
           }
+          void recoverUnprovenStop();
         }
       })());
+    // The run stays owned until the exit is proven, but an indeterminate
+    // identity read is usually transient. Retry the hard kill and the proof so
+    // the run settles once the process is verifiably gone. Cleanup stays
+    // marked unhealthy either way.
+    const recoverUnprovenStop = async () => {
+      let interval = STOP_RECOVERY_FIRST_INTERVAL_MS;
+      for (let attempt = 0; attempt < STOP_RECOVERY_ATTEMPTS && !exited; attempt += 1) {
+        await Promise.race([exit, unrefDelay(interval)]);
+        if (exited || !process) return;
+        interval = Math.min(interval * 2, STOP_RECOVERY_MAX_INTERVAL_MS);
+        try {
+          await process.killHard();
+        } catch {
+          // Still unverifiable; the exit proof below decides.
+        }
+        try {
+          if (await process.hasExited()) finishExit();
+        } catch {
+          // Indeterminate again. Try once more after the next interval.
+        }
+      }
+    };
     const onAbort = () => {
       terminalAuthenticationFailure = false;
       setFailure("Subagent inference cancelled.", "aborted");

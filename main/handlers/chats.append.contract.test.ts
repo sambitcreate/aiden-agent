@@ -149,7 +149,6 @@ async function fixture(
     botApplicationService: { deleteChat: async () => assert.fail("no Bot chat is deleted here") },
     hostPlatformCapabilities: () => ({ bots: false }),
     closeDeviceSessionsForChat: () => undefined,
-    chatReadMarkers: { remove: async () => undefined },
     rendererDocumentOwner: () => owner,
     llmClient,
     unresolvedGuiArtifactMessage: options.unresolvedGuiArtifactMessage ?? (async () => undefined),

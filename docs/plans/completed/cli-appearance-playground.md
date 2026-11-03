@@ -13,6 +13,8 @@ Status: **Complete** (2026-09-05). This is a design exploration deliverable; app
 
 Validation: production TypeScript/Vite build, focused ESLint, diff check and all four Playwright integration tests pass. Browser visual review confirmed the dark preview and dark/light comparison. React Doctor reports no bug/accessibility findings; two advisory maintainability warnings remain for the multi-layout preview and studio component size.
 
+**2026-10-30:** `packages/cli-playground`, its scripts and CI job were removed when the CLI became a serve-only server ([plan](../aiden-serve-only-cli.md)); the links and commands below no longer work.
+
 See [the package guide](../../../packages/cli-playground/README.md). Run `npm ci --prefix packages/cli-playground` once, then `npm run cli:playground` at the repository root. The local URL is http://127.0.0.1:4178.
 
 The CLI parity plan remains active independently because physical-iPhone acceptance is waiting for the phone to be unlocked. No CLI appearance settings, shared remote contracts, onboarding or mobile UI were changed by this playground.

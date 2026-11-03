@@ -9,7 +9,7 @@ import { createWorkspaceIntakeService } from "./workspace-intake.js";
 
 export const workspaceIntakeService = createWorkspaceIntakeService({
   home: os.homedir(),
-  stat: (target) => fs.stat(target),
+  stat: (target) => fs.stat(target, { bigint: true }),
   lstat: (target) => fs.lstat(target),
   rename: (from, to) => fs.rename(from, to),
   mkdtemp: (prefix) => fs.mkdtemp(prefix),
@@ -26,6 +26,6 @@ export const workspaceIntakeService = createWorkspaceIntakeService({
   removeTree: (target) => fs.rm(target, { recursive: true, force: true }),
   listWorkspaces: () => configStore.listWorkspaces(),
   getWorkspace: async (id) => (await configStore.getWorkspace(id)) ?? null,
-  createFromFolder: (folderPath) => workspaceApplicationService.createFromFolder(folderPath),
+  createFromFolder: (folderPath, options) => workspaceApplicationService.createFromFolder(folderPath, undefined, options),
   runClone: createGitCloneRunner(),
 });

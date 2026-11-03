@@ -13,6 +13,11 @@ import type { Chat } from "./types.js";
 
 const MAX_ID_LENGTH = 256;
 const MAX_FILE_STEM = 120;
+/**
+ * Most UTF-8 bytes a file name stem may take. Linux file systems cap a name at 255 bytes, so a
+ * stem of 180 leaves room for a time prefix, a hash, an extension and a " (999)" suffix.
+ */
+export const MAX_FILE_STEM_BYTES = 180;
 const MAX_UNIQUE_ATTEMPTS = 1000;
 const EXTENSIONS: Readonly<Record<CanonicalRasterImageMimeType, string>> = {
   "image/png": "png",
@@ -25,7 +30,10 @@ const EXTENSIONS: Readonly<Record<CanonicalRasterImageMimeType, string>> = {
 };
 
 export interface ChatImageActionDeps {
+  /** The chat as stored; an image may be a file reference instead of carrying its bytes. */
   getChat(chatId: string): Promise<Pick<Chat, "messages"> | null>;
+  /** One stored image's bytes by hash, when the chat keeps images as files. */
+  readImage?(sha256: string, size: number): Promise<Uint8Array | undefined>;
   downloadsDir(): string;
   /** Throws when the bytes cannot be decoded as an image. */
   writeClipboardImage(bytes: Buffer): void;
@@ -54,16 +62,38 @@ function parseImageRef(input: unknown): ImageRef {
  * Finder), or leading dots.
  */
 export function safeImageFileStem(name: string): string {
-  const withoutExtension = name.replace(/\.[a-z0-9]{1,5}$/iu, "");
-  const cleaned = withoutExtension
+  return safeFileNameStem(name.replace(/\.[a-z0-9]{1,5}$/iu, ""));
+}
+
+/** `safeImageFileStem` for text that has no extension to strip, such as a title. */
+export function safeFileNameStem(name: string, fallback = "Image"): string {
+  const cleaned = name
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069/\\:*?"<>|]+/gu, " ")
     .replace(/\s+/gu, " ")
     .trim()
-    .replace(/^[.\s]+/u, "")
-    .slice(0, MAX_FILE_STEM)
-    .trim();
-  return cleaned || "Image";
+    .replace(/^[.\s]+/u, "");
+  return truncateFileNameText(cleaned, MAX_FILE_STEM, MAX_FILE_STEM_BYTES).trim() || fallback;
+}
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/**
+ * The longest prefix of `text` within `maxUnits` UTF-16 units and `maxBytes` UTF-8 bytes,
+ * cut only between graphemes, so no code point, emoji or accented letter is split.
+ */
+export function truncateFileNameText(text: string, maxUnits: number, maxBytes: number): string {
+  if (text.length <= maxUnits && Buffer.byteLength(text) <= maxBytes) return text;
+  let units = 0;
+  let bytes = 0;
+  let kept = "";
+  for (const { segment } of graphemes.segment(text)) {
+    units += segment.length;
+    bytes += Buffer.byteLength(segment);
+    if (units > maxUnits || bytes > maxBytes) break;
+    kept += segment;
+  }
+  return kept;
 }
 
 export function createChatImageActions(deps: ChatImageActionDeps) {
@@ -76,9 +106,14 @@ export function createChatImageActions(deps: ChatImageActionDeps) {
     for (const message of chat.messages) {
       const attachment = message.attachments?.find((candidate) => candidate.id === ref.attachmentId);
       if (!attachment) continue;
-      if (attachment.kind !== "image" || !attachment.data || !isCanonicalRasterImageMimeType(attachment.mimeType))
-        break;
-      return { attachment, mimeType: attachment.mimeType, bytes: Buffer.from(attachment.data, "base64") };
+      if (attachment.kind !== "image" || !isCanonicalRasterImageMimeType(attachment.mimeType)) break;
+      const bytes = attachment.data
+        ? Buffer.from(attachment.data, "base64")
+        : attachment.sha256 && deps.readImage
+          ? await deps.readImage(attachment.sha256, attachment.size)
+          : undefined;
+      if (!bytes) break;
+      return { attachment, mimeType: attachment.mimeType, bytes: Buffer.from(bytes) };
     }
     throw new Error("This image isn't saved in the chat yet. Try again when the response finishes.");
   }
@@ -121,6 +156,14 @@ export function createChatImageActions(deps: ChatImageActionDeps) {
       }
       return true;
     },
+    /**
+     * The image's base64 bytes, for reusing it in a new message (a fork's
+     * composer). The window otherwise loads stored images by link.
+     */
+    async data(input: unknown): Promise<{ data: string }> {
+      const { bytes } = await image(input);
+      return { data: bytes.toString("base64") };
+    },
     /** Reveals only a file this app session saved. */
     showSaved(input: unknown): true {
       if (typeof input !== "string" || !saved.has(input)) throw new Error("That saved image isn't available.");
@@ -137,4 +180,5 @@ export function registerChatImageActionHandlers(ipc: { handle: Handle }, deps: C
   ipc.handle("chats:saveImageToDownloads", (_event, input) => actions.saveToDownloads(input));
   ipc.handle("chats:copyImage", (_event, input) => actions.copy(input));
   ipc.handle("chats:showSavedImage", (_event, filePath) => actions.showSaved(filePath));
+  ipc.handle("chats:imageData", (_event, input) => actions.data(input));
 }
