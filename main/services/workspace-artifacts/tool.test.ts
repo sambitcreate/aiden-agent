@@ -179,3 +179,14 @@ test("the first refresh's results go back to the model", async (t) => {
   const text = await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] });
   assert.match(text, /First refresh:\n- pulls: failed: gh: not logged in/u);
 });
+
+test("model artifact creation and updates reject credential paths while ordinary data stays usable", async (t) => {
+  const { call, store } = await harness(t, { permission: "full" });
+  for (const file of [".env", ".env.local", ".ssh/id_ed25519", "credentials.json.bak", ".config/gcloud/adc.json"]) {
+    await assert.rejects(call("denied", { operation: "create", title: "Forbidden", markup: PAGE, sources: [{ name: "data", kind: "file", file }] }), /Credential files/u);
+  }
+  assert.deepEqual(await store.list("ws1"), []);
+  await call("allowed", { operation: "create", title: "Allowed", markup: PAGE, sources: [{ name: "data", kind: "file", file: ".env.example" }] });
+  await assert.rejects(call("denied-update", { operation: "update", id: "art1", sources: [{ name: "data", kind: "file", file: ".env" }] }), /Credential files/u);
+  assert.equal((await store.get("ws1", "art1"))!.artifact.sources[0]!.kind, "file");
+});
