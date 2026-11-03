@@ -60,25 +60,3 @@ export interface CapturedContext {
 	mode: "tui" | "rpc" | "json" | "print";
 	ui: unknown;
 }
-
-/**
- * Creates a stasher that tracks the most recent ExtensionContext. Extension
- * event handlers receive ctx, but tool executes in Aiden cores do not, so
- * feature extensions use this to reach ctx.ui from inside tool callbacks.
- */
-export function createContextCapture(): {
-	register(pi: import("@earendil-works/pi-coding-agent").ExtensionAPI): void;
-	latest(): CapturedContext | undefined;
-} {
-	let current: CapturedContext | undefined;
-	return {
-		register(pi) {
-			const capture = (_event: unknown, ctx: CapturedContext): void => {
-				current = ctx;
-			};
-			pi.on("session_start", capture);
-			pi.on("before_agent_start", capture);
-		},
-		latest: () => current,
-	};
-}

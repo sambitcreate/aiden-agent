@@ -11,6 +11,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AidenStreamNetworkRecoveryTest {
@@ -160,6 +163,36 @@ class AidenStreamNetworkRecoveryTest {
         val start = testScheduler.currentTime
         recovery.recoverAfterProbeFailure(onBackoff = {}, onWaiting = {})
         assertEquals(1_000L, testScheduler.currentTime - start)
+    }
+
+    @Test
+    fun aServerRequestedDelayIsAFloorUnderTheBackoff() = runTest {
+        val network = FakeNetwork(initial = true)
+        val recovery = AidenStreamNetworkRecovery(network) { 1_000L * (it + 1) }
+        val elapsed = mutableListOf<Long>()
+        for (minimum in listOf(5_000L, 0L, 0L)) {
+            val start = testScheduler.currentTime
+            recovery.recoverAfterProbeFailure(minimumDelayMilliseconds = minimum, onBackoff = {}, onWaiting = {})
+            elapsed += testScheduler.currentTime - start
+        }
+        assertEquals("a 429's wait replaces a shorter backoff without resetting its growth", listOf(5_000L, 2_000L, 3_000L), elapsed)
+    }
+
+    @Test
+    fun onlyARateLimitAsksForAServerDelay() {
+        fun server(status: Int, retryAfter: Int?, header: Int? = null) = AidenRemoteClientException.Server(
+            status,
+            AidenRemoteErrorEnvelope.Body(
+                code = AidenRemoteErrorCode.RATE_LIMITED, message = "Busy", requestId = "req", retryable = true,
+                details = retryAfter?.let { AidenRemoteErrorEnvelope.Details(retryAfterSeconds = it) }
+            ),
+            header
+        )
+        assertEquals(5_000L, AidenStreamNetworkRecovery.serverRequestedDelayMilliseconds(server(429, 5)))
+        assertEquals(9_000L, AidenStreamNetworkRecovery.serverRequestedDelayMilliseconds(server(429, null, header = 9)))
+        assertEquals(0L, AidenStreamNetworkRecovery.serverRequestedDelayMilliseconds(server(429, null)))
+        assertEquals("only a 429 carries a wait", 0L, AidenStreamNetworkRecovery.serverRequestedDelayMilliseconds(server(503, 5)))
+        assertEquals(0L, AidenStreamNetworkRecovery.serverRequestedDelayMilliseconds(java.io.IOException("reset")))
     }
 
     @Test

@@ -33,7 +33,7 @@ export async function createMemoryInlineExtension(options: {
 	workspaceRoot: string;
 	/** Recall-only: no remember/forget tools (unattended generations). */
 	readOnly?: boolean;
-}): Promise<{ name: string; factory: ExtensionFactory }> {
+}): Promise<{ name: string; factory: ExtensionFactory; close?: () => Promise<void> }> {
 	// Memory disabled → never open the store (no migration writes either).
 	if (!memoryEnabledFor(options.agentDir, options.workspaceRoot)) {
 		return { name: "aiden-memory", factory: () => undefined };
@@ -59,7 +59,7 @@ export async function createMemoryInlineExtension(options: {
 		scope,
 		provenance: options.readOnly ? undefined : { kind: "user_edit", sourceId: "aiden-cli" },
 		enabled,
-	});
+	}).catch(async (error: unknown) => { await store.close(); throw error; });
 	// The desktop's createMemoryExtension freezes the always-on prompt at
 	// construction; strip it here and inject it per turn instead.
 	const { factory } = aidenExtensionToInlineFactory("aiden-memory", {
@@ -84,5 +84,7 @@ export async function createMemoryInlineExtension(options: {
 			return undefined;
 		});
 	};
-	return { name: "aiden-memory", factory: wrapped };
+	// A daemon turn that fails before its session exists never emits
+	// session_shutdown, so it closes the store through this instead.
+	return { name: "aiden-memory", factory: wrapped, close: () => store.close() };
 }

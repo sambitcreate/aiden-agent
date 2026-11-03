@@ -5,16 +5,21 @@ import {
   type SkillCatalogEntry,
 } from "../../renderer/shared/slash-commands.js";
 import {
+  canonicalSkillIdentity,
   mintSkillInvocationId,
   projectSkillCatalogEntry,
   resolveSkillCandidates,
+  SKILL_TOOL_NAME,
   skillToolKey,
   type ResolvedSkillCandidate,
   type SkillRegistryCandidate,
 } from "./skill-registry-core.js";
 import type { DiscoveredSkill, Skill, Workspace } from "./types.js";
+import { workspaceSkillOff } from "./workspace-capabilities.js";
 
 const DEFAULT_CACHE_TTL_MS = 5_000;
+
+type RegistryWorkspace = Pick<Workspace, "id" | "folderPath" | "permission" | "disabledSkills">;
 const DEFAULT_CACHE_LIMIT = 50;
 
 export interface RegisteredSkill extends ResolvedSkillCandidate {
@@ -57,7 +62,28 @@ interface CacheEntry {
   expiresAt: number;
   workspaceRoot?: string;
   workspacePermission: Workspace["permission"];
+  disabledSkillsKey: string;
   snapshot: Promise<SkillRegistrySnapshot>;
+}
+
+function disabledSkillsKey(workspace: RegistryWorkspace): string {
+  return JSON.stringify(workspace.disabledSkills ?? []);
+}
+
+/**
+ * A skill switched off for the workspace stays in the registry so the person
+ * can still run it by typing `$skill`, but the model no longer sees or calls it.
+ */
+function applyWorkspaceSkillChoices(
+  workspace: RegistryWorkspace,
+  candidates: readonly ResolvedSkillCandidate[],
+): ResolvedSkillCandidate[] {
+  if (!workspace.disabledSkills?.length) return [...candidates];
+  return candidates.map((candidate) =>
+    candidate.modelInvocable !== false && workspaceSkillOff(workspace, candidate.name)
+      ? { ...candidate, modelInvocable: false, workspaceOff: true }
+      : candidate,
+  );
 }
 
 function configuredCandidate(skill: Skill): SkillRegistryCandidate {
@@ -92,7 +118,7 @@ function discoveredCandidate(
 }
 
 function skillRegistryFingerprint(
-  workspace: Pick<Workspace, "id" | "folderPath" | "permission">,
+  workspace: RegistryWorkspace,
   candidates: readonly ResolvedSkillCandidate[],
 ): string {
   const hash = createHash("sha256");
@@ -116,6 +142,7 @@ function skillRegistryFingerprint(
     field(candidate.blockedReason);
     field(candidate.available);
     field(candidate.unavailableReason);
+    field(candidate.workspaceOff === true);
   }
   return hash.digest("base64url");
 }
@@ -155,7 +182,7 @@ export class SkillRegistry {
   }
 
   async snapshotResolved(
-    workspace: Pick<Workspace, "id" | "folderPath" | "permission">,
+    workspace: RegistryWorkspace,
   ): Promise<SkillRegistrySnapshot> {
     if (!workspace.id || workspace.id.length > 256) {
       throw new SkillInvocationError("workspace_changed", "Invalid skill workspace.");
@@ -171,7 +198,8 @@ export class SkillRegistry {
       cached &&
       cached.expiresAt > now &&
       cached.workspaceRoot === workspace.folderPath &&
-      cached.workspacePermission === workspace.permission
+      cached.workspacePermission === workspace.permission &&
+      cached.disabledSkillsKey === disabledSkillsKey(workspace)
     ) {
       return cached.snapshot;
     }
@@ -190,6 +218,7 @@ export class SkillRegistry {
       expiresAt: now + this.#dependencies.cacheTtlMs,
       workspaceRoot: workspace.folderPath,
       workspacePermission: workspace.permission,
+      disabledSkillsKey: disabledSkillsKey(workspace),
       snapshot,
     });
     return snapshot;
@@ -242,7 +271,7 @@ export class SkillRegistry {
   }
 
   async #load(
-    workspace: Pick<Workspace, "id" | "folderPath" | "permission">,
+    workspace: RegistryWorkspace,
   ): Promise<SkillRegistrySnapshot> {
     if (!(await this.#dependencies.isEnabled())) return this.#project(workspace, []);
     const [configured, discovered, builtin] = await Promise.all([
@@ -261,11 +290,11 @@ export class SkillRegistry {
       ...configured.map(configuredCandidate),
       ...discovered.map((skill) => discoveredCandidate(skill, workspace.permission)),
     ]);
-    return this.#project(workspace, resolved);
+    return this.#project(workspace, applyWorkspaceSkillChoices(workspace, resolved));
   }
 
   #project(
-    workspace: Pick<Workspace, "id" | "folderPath" | "permission">,
+    workspace: RegistryWorkspace,
     resolved: readonly ResolvedSkillCandidate[],
   ): SkillRegistrySnapshot {
     const fingerprint = skillRegistryFingerprint(workspace, resolved);
@@ -310,6 +339,50 @@ export class SkillRegistry {
   }
 }
 
+/** One row of a workspace's Skills settings. `key` is what an off-list stores. */
+export interface WorkspaceSkillChoice {
+  key: string;
+  name: string;
+  description: string;
+  source: RegisteredSkill["source"];
+  available: boolean;
+  unavailableReason?: string;
+  /** Switched off for this workspace. */
+  offHere: boolean;
+  /** The skill itself only runs when asked for by name, so the switch has no effect. */
+  userOnly: boolean;
+}
+
+export function workspaceSkillChoices(
+  snapshot: SkillRegistrySnapshot,
+): WorkspaceSkillChoice[] {
+  // One row per name: the skill the model would actually get, else the first
+  // unavailable one so the row can say why.
+  const winners = new Map<string, RegisteredSkill>();
+  for (const skill of snapshot.skills) {
+    let key: string;
+    try {
+      key = canonicalSkillIdentity(skill.name);
+    } catch {
+      continue;
+    }
+    const current = winners.get(key);
+    if (!current || (!current.available && skill.available)) winners.set(key, skill);
+  }
+  return [...winners]
+    .map(([key, skill]) => ({
+      key,
+      name: skill.name,
+      description: skill.description,
+      source: skill.source,
+      available: skill.available,
+      ...(skill.available ? {} : { unavailableReason: skill.unavailableReason ?? "Unavailable." }),
+      offHere: skill.workspaceOff === true,
+      userOnly: skill.modelInvocable === false && skill.workspaceOff !== true,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
 function escapeSkillXml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -334,17 +407,58 @@ export function withoutSkills(
   });
 }
 
+/** The skills the model may load: the prompt listing and the `skill` tool share this set. */
+export function modelInvocableSkills(
+  snapshot: SkillRegistrySnapshot,
+  allowWorkspaceSkills = true,
+): RegisteredSkill[] {
+  return snapshot.available.filter(
+    (skill) => skill.modelInvocable !== false && (allowWorkspaceSkills || skill.source !== "workspace"),
+  );
+}
+
+/**
+ * The skill the `skill` tool's `name` argument means: its listed name (any
+ * case or Unicode form), else its internal tool key. A listed name always
+ * wins, so another skill's key can never shadow it. Undefined when none matches.
+ */
+export function findSkillByName<T extends Pick<RegisteredSkill, "name" | "toolKey">>(
+  skills: readonly T[],
+  requested: string,
+): T | undefined {
+  const value = requested.trim();
+  let canonical: string | undefined;
+  try {
+    canonical = canonicalSkillIdentity(value);
+  } catch {
+    canonical = undefined;
+  }
+  const byName = canonical === undefined ? undefined : skills.find((skill) => {
+    try {
+      return canonicalSkillIdentity(skill.name) === canonical;
+    } catch {
+      return false;
+    }
+  });
+  return byName ?? skills.find((skill) => skill.toolKey === value);
+}
+
+/** The internal key of the model-invocable skill `requested` names, if any. */
+export function skillToolKeyForName(snapshot: SkillRegistrySnapshot, requested: string): string | undefined {
+  return findSkillByName(modelInvocableSkills(snapshot), requested)?.toolKey;
+}
+
 export function formatAvailableSkills(
   snapshot: SkillRegistrySnapshot,
   allowedToolNames?: ReadonlySet<string>,
+  allowWorkspaceSkills = true,
 ): string | undefined {
-  const available = snapshot.available.filter(
-    (skill) => skill.modelInvocable !== false && (!allowedToolNames || allowedToolNames.has(skill.toolKey)),
-  );
+  if (allowedToolNames && !allowedToolNames.has(SKILL_TOOL_NAME)) return undefined;
+  const available = modelInvocableSkills(snapshot, allowWorkspaceSkills);
   if (available.length === 0) return undefined;
   return [
     "Skills provide specialized instructions and workflows for specific tasks.",
-    "When a request matches a skill's description, call its skill tool to load the instructions.",
+    `When a request matches a skill's description, call the ${SKILL_TOOL_NAME} tool with its name to load the instructions.`,
     "<available_skills>",
     ...available.flatMap((skill) => [
       "  <skill>",
@@ -352,7 +466,6 @@ export function formatAvailableSkills(
       ...(skill.description
         ? [`    <description>${escapeSkillXml(skill.description)}</description>`]
         : []),
-      `    <tool>${skill.toolKey}</tool>`,
       `    <source>${skill.source}</source>`,
       "  </skill>",
     ]),

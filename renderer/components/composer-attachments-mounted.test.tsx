@@ -52,6 +52,7 @@ async function loadComposer() {
     "./chat-pull-requests": "export const ChatPullRequestsChip=()=>null;",
     "./follow-through-chips": "export const FollowThroughChips=()=>null;",
     "./busy-send-button": "export const BusySendButton=()=>null;",
+    "./provider-icon": "export const ProviderIcon=()=>null;",
   };
   await build({
     entryPoints: [path.resolve("renderer/components/composer.tsx")],

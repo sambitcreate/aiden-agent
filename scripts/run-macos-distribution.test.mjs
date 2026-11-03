@@ -196,6 +196,7 @@ test("release artifact configuration uses stable GitHub-safe names", async () =>
     "Aiden Foundation Models Helper.app",
     "aiden-worktree-remover",
     "aiden-bot-inbox-writer",
+    "aiden-imcp-launcher",
     "aiden-lease-flock",
     "aiden-subagent-run-store",
     "aiden-subagent-file-mutator",

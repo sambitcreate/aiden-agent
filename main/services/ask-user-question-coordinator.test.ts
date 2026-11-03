@@ -63,6 +63,40 @@ test("abort and renderer detach settle pending prompts as cancelled", async () =
   assert.equal(coordinator.pendingCount, 0);
 });
 
+test("a question asked after a detach reports itself unpublished; aborted or released ones do not", async () => {
+  const published: string[] = [];
+  const shortCircuited: AskUserQuestionPromptV1[] = [];
+  const coordinator = new AskUserQuestionCoordinator(
+    (prompt) => published.push(prompt.promptId),
+    undefined,
+    (prompt) => shortCircuited.push(prompt),
+  );
+  coordinator.detachStream("s-left");
+  const response = await coordinator.request(
+    { streamId: "s-left", toolCallId: "call-late", questions },
+    "document-one",
+  );
+  assert.equal(response.cancelled, true);
+  assert.equal(shortCircuited.length, 1);
+  assert.equal(shortCircuited[0]!.streamId, "s-left");
+  assert.equal(shortCircuited[0]!.promptId, response.promptId);
+  assert.equal(shortCircuited[0]!.questions[0]!.question, "Which approach?");
+  assert.deepEqual(published, []);
+
+  // The person stopped this ask themselves.
+  const controller = new AbortController();
+  controller.abort();
+  await coordinator.request({ streamId: "s-left", toolCallId: "call-aborted", questions }, "document-one", controller.signal);
+  assert.equal(shortCircuited.length, 1);
+
+  coordinator.releaseStream("s-left");
+  const live = coordinator.request({ streamId: "s-left", toolCallId: "call-live", questions }, "document-one");
+  assert.equal(published.length, 1);
+  coordinator.cancelStream("s-left");
+  await live;
+  assert.equal(shortCircuited.length, 1);
+});
+
 test("published prompts are withdrawn exactly once however they settle", async () => {
   const published: string[] = [];
   const withdrawn: string[] = [];
@@ -193,4 +227,40 @@ test("prompts without a timeout wait for their owner and carry no deadline", asy
     "answered",
   );
   assert.equal((await pending).timedOut, undefined);
+});
+
+test("a withdrawn prompt says whether its owner settled it or the host ended it", async () => {
+  const published: AskUserQuestionPromptV1[] = [];
+  const withdrawn: Array<[string, string]> = [];
+  const coordinator = new AskUserQuestionCoordinator(
+    (prompt) => published.push(prompt),
+    (promptId, _response, settledBy) => withdrawn.push([promptId, settledBy]),
+  );
+  const answered = coordinator.request({ streamId: "s-owner", toolCallId: "call-owner", questions }, "document-one");
+  const closed = coordinator.request({ streamId: "s-closed", toolCallId: "call-closed", questions }, "document-one");
+  const quit = coordinator.request({ streamId: "s-quit", toolCallId: "call-quit", questions }, "document-one");
+  const [answerPrompt, closePrompt, quitPrompt] = published;
+  coordinator.respond(
+    answerPrompt!.promptId,
+    {
+      version: ASK_USER_QUESTION_VERSION,
+      promptId: answerPrompt!.promptId,
+      cancelled: false,
+      answers: [{ questionIndex: 0, kind: "option", answer: "Guided" }],
+    },
+    "document-one",
+  );
+  // Closing the card is the owner's choice too.
+  coordinator.respond(
+    closePrompt!.promptId,
+    { version: ASK_USER_QUESTION_VERSION, promptId: closePrompt!.promptId, cancelled: true, answers: [] },
+    "document-one",
+  );
+  coordinator.shutdown();
+  await Promise.all([answered, closed, quit]);
+  assert.deepEqual(withdrawn, [
+    [answerPrompt!.promptId, "owner"],
+    [closePrompt!.promptId, "owner"],
+    [quitPrompt!.promptId, "host"],
+  ]);
 });

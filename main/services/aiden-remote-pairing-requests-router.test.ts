@@ -251,20 +251,26 @@ test("admission limits are reported as retryable with a retry delay", async () =
     const publicKey = generatePairingRequestKeyPair().publicKey;
     const statuses: number[] = [];
     let limited: Awaited<ReturnType<typeof errorOf>> | undefined;
+    let retryAfterHeader: string | null = null;
     for (let index = 0; index < 6; index += 1) {
       const response = await fetch(
         `${app.base}/pairing/requests`,
         json({ deviceName: "Mac", deviceType: "mac", publicKey }),
       );
       statuses.push(response.status);
-      if (response.status === 429) limited = await errorOf(response);
-      else await response.arrayBuffer();
+      if (response.status === 429) {
+        retryAfterHeader = response.headers.get("retry-after");
+        limited = await errorOf(response);
+      } else await response.arrayBuffer();
     }
     assert.deepEqual(statuses.slice(0, 2), [201, 201]);
     assert.equal(statuses[statuses.length - 1], 429);
     assert.equal(limited?.code, "rate_limited");
     assert.equal(limited?.retryable, true);
     assert.equal(typeof limited?.details?.retryAfterSeconds, "number");
+    // Generic HTTP stacks read the standard header; it never asks for less wait than the envelope.
+    assert.ok(Number(retryAfterHeader) >= (limited?.details?.retryAfterSeconds as number));
+    assert.ok(Number.isInteger(Number(retryAfterHeader)) && Number(retryAfterHeader) > 0);
   } finally {
     await app.close();
   }
@@ -279,6 +285,48 @@ test("requests through Tailscale Serve resolve the Tailscale identity", async ()
     );
     assert.equal(response.status, 201);
     assert.deepEqual(app.transports, ["tailscale"]);
+  } finally {
+    await app.close();
+  }
+});
+
+async function admissions(
+  base: string,
+  headers: Record<string, string>,
+  attempts: number,
+): Promise<number[]> {
+  const statuses: number[] = [];
+  for (let index = 0; index < attempts; index += 1) {
+    const response = await fetch(
+      `${base}/pairing/requests`,
+      json({ deviceName: "Mac", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey }, headers),
+    );
+    statuses.push(response.status);
+    await response.arrayBuffer();
+  }
+  return statuses;
+}
+
+test("tailnet peers behind Tailscale Serve keep separate admission budgets", async () => {
+  const app = await host({ acceptStrippedBasePath: true });
+  try {
+    const noisy = await admissions(app.base, { "x-forwarded-for": "100.64.0.7" }, 6);
+    assert.equal(noisy[noisy.length - 1], 429, "one peer still reaches its own limit");
+    const other = await admissions(app.base, { "x-forwarded-for": "100.64.0.8" }, 1);
+    assert.deepEqual(other, [201], "another tailnet device can still ask to pair");
+  } finally {
+    await app.close();
+  }
+});
+
+test("forwarding headers sent straight to the LAN listener do not reset a source's budget", async () => {
+  const app = await host();
+  try {
+    const statuses: number[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      statuses.push(...await admissions(app.base, { "x-forwarded-for": `198.51.100.${index}` }, 1));
+    }
+    assert.equal(statuses[statuses.length - 1], 429);
   } finally {
     await app.close();
   }

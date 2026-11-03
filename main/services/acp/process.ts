@@ -20,6 +20,28 @@ const TERM_GRACE_MS = 1_000;
 const KILL_GRACE_MS = 1_500;
 let nextGeneration = 1;
 
+/**
+ * Process groups of agents that are still running. If the app exits before
+ * their async teardown finishes, the exit hook kills them synchronously so
+ * they never outlive Aiden.
+ */
+const liveGroups = new Set<number>();
+let exitHookInstalled = false;
+
+function installExitHook(): void {
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.once("exit", () => {
+    for (const pgid of liveGroups) {
+      try {
+        process.kill(-pgid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+  });
+}
+
 export interface AcpProcessExit {
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -71,11 +93,17 @@ export class AcpProcess {
       detached: this.platform !== "win32",
     }) as ChildProcessWithoutNullStreams;
     this.child = child;
+    const group = this.platform !== "win32" && options.spawnImpl === undefined ? child.pid : undefined;
+    if (group !== undefined) {
+      installExitHook();
+      liveGroups.add(group);
+    }
     if (child.pid !== undefined) options.onSpawn?.(child.pid);
 
     const finish = (code: number | null, signal: NodeJS.Signals | null, note?: string) => {
       if (this.settled) return;
       this.settled = true;
+      if (group !== undefined) liveGroups.delete(group);
       // The leader is gone, but helpers it started may live on in its group.
       // The group id cannot be reused while any member exists.
       if (this.platform !== "win32" && child.pid) {
@@ -98,7 +126,10 @@ export class AcpProcess {
     // A dead agent turns stdin writes into EPIPE; the exit promise reports it.
     child.stdin.on("error", () => undefined);
 
-    let pending: Buffer = Buffer.alloc(0);
+    // The unfinished line, as received. Joined once when its newline arrives,
+    // so a large line costs one copy instead of one per chunk.
+    let pending: Buffer[] = [];
+    let pendingBytes = 0;
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     /** Errored or cancelled: enqueueing again would throw out of the stdout handlers. */
     let streamClosed = false;
@@ -108,7 +139,8 @@ export class AcpProcess {
       },
       cancel() {
         streamClosed = true;
-        pending = Buffer.alloc(0);
+        pending = [];
+        pendingBytes = 0;
       },
     });
     const emitLine = (line: Buffer) => {
@@ -127,23 +159,35 @@ export class AcpProcess {
     };
     child.stdout.on("data", (chunk: Buffer) => {
       if (streamClosed) return;
-      pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
+      let start = 0;
       let index: number;
-      while (!streamClosed && (index = pending.indexOf(0x0a)) >= 0) {
-        emitLine(pending.subarray(0, index));
-        pending = pending.subarray(index + 1);
+      // Only the new chunk is searched; earlier chunks held no newline.
+      while (!streamClosed && (index = chunk.indexOf(0x0a, start)) >= 0) {
+        const end = chunk.subarray(start, index);
+        const line = pending.length === 0 ? end : Buffer.concat([...pending, end]);
+        pending = [];
+        pendingBytes = 0;
+        emitLine(line);
+        start = index + 1;
       }
-      if (!streamClosed && pending.length > MAX_LINE_BYTES) {
+      if (streamClosed) return;
+      if (start < chunk.length) {
+        pending.push(chunk.subarray(start));
+        pendingBytes += chunk.length - start;
+      }
+      if (pendingBytes > MAX_LINE_BYTES) {
         // The rest of the line is dropped with the buffer; the agent is stopped.
         streamClosed = true;
-        pending = Buffer.alloc(0);
+        pending = [];
+        pendingBytes = 0;
         controller.error(new AcpHarnessError("protocol", "The agent sent an oversized protocol line."));
         void this.close();
       }
     });
     child.stdout.once("end", () => {
-      if (!streamClosed && pending.length > 0) emitLine(pending);
-      pending = Buffer.alloc(0);
+      if (!streamClosed && pendingBytes > 0) emitLine(Buffer.concat(pending));
+      pending = [];
+      pendingBytes = 0;
       if (streamClosed) return;
       streamClosed = true;
       try {

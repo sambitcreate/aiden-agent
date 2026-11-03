@@ -2,6 +2,7 @@
 // outcome. Completed runs stay folded behind one disclosure row.
 
 import * as React from "react";
+import { useNowSecond } from "../lib/second-clock";
 import { ChevronRight, Square } from "lucide-react";
 import { groupSubagentRunsByStatus, type SubagentRunStatusGroup } from "../lib/subagent-panel-state";
 import {
@@ -11,7 +12,6 @@ import {
   type SubagentRunView,
 } from "../lib/subagent-view-state";
 import { cn } from "../lib/ui-utils";
-import { useNow } from "../lib/use-now";
 import { formatContextTokenCount } from "../shared/context-pressure";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 import { SubagentMark, subagentStateLabel } from "./subagent-chips";
@@ -167,7 +167,7 @@ export function SubagentStatusGroups({
   const groups = React.useMemo(() => groupSubagentRunsByStatus(runs), [runs]);
   const stopPending = React.useMemo(() => new Set(stopPendingRunIds), [stopPendingRunIds]);
   const live = groups.some((group) => group.id === "running" || group.id === "needs_attention");
-  const now = useNow(live);
+  const now = useNowSecond(live);
 
   return (
     <div className="flex flex-col">

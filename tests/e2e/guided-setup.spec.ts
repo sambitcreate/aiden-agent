@@ -41,8 +41,9 @@ test("skipping provider setup explains the blocked Next and leaves a route to Pr
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
 
-  // The new-chat headline names the default workspace it will run in.
-  await expect(page.locator("[data-new-chat-headline]")).toHaveText("What should we build in Workspace?");
+  // A new install starts in No workspace, so the headline names no folder.
+  await expect(page.getByText("What’s on your mind?")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Choose a workspace" })).toHaveText("No workspace");
   const connect = page.getByRole("button", { name: "Connect a provider", exact: true });
   await expect(connect.first()).toBeVisible();
   await connect.first().click();
@@ -330,7 +331,7 @@ test("classifier approval lets users inspect late payload fields before denying"
         kind: "model-classification", providerId: "research", providerLabel: "Research team", modelId: "judge",
         stateJson: payload.state, questionsJson: payload.questions, stateBytes: Buffer.byteLength(payload.state), questionsBytes: Buffer.byteLength(payload.questions), payloadComplete: true,
       } });
-      return { streamId };
+      return { streamId, accepted: true, started: true };
     });
     ipcMain.handle("chat:approve", (_event, _id: string, decision: string) => {
       (globalThis as unknown as { classifierDecision: string }).classifierDecision = decision;

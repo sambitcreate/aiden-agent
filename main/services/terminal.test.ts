@@ -904,6 +904,65 @@ test("managed worktree removal refuses a surviving job in the PTY session after 
   await service.closeForWorkspaceAndWait("managed-workspace", 10);
 });
 
+test("a shell that ignores hangup is killed so worktree removal can finish", { skip: process.platform === "win32" }, async () => {
+  const owner = ownerState();
+  const child = fakePty();
+  const signals: Array<[number, NodeJS.Signals]> = [];
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => child.pty) as typeof spawn,
+    killGraceMs: 20,
+    sessionHasMembers: async () => false,
+    // The shell traps SIGHUP and dies only to SIGKILL.
+    signalProcess: (target, signal) => {
+      signals.push([target, signal]);
+      if (signal === "SIGKILL") child.emitExit(0, 9);
+    },
+  });
+  await service.create("managed-workspace", "/tmp", owner.owner);
+
+  await service.closeForWorkspaceAndWait("managed-workspace", 1_000);
+  assert.deepEqual(signals, [[-child.pty.pid, "SIGHUP"], [-child.pty.pid, "SIGKILL"]]);
+});
+
+test("a shell that exits on hangup is never sent SIGKILL", { skip: process.platform === "win32" }, async () => {
+  const owner = ownerState();
+  const child = fakePty();
+  const signals: NodeJS.Signals[] = [];
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => child.pty) as typeof spawn,
+    killGraceMs: 10,
+    sessionHasMembers: async () => false,
+    signalProcess: (_target, signal) => {
+      signals.push(signal);
+      if (signal === "SIGHUP") queueMicrotask(() => child.emitExit(0, 1));
+    },
+  });
+  await service.create("managed-workspace", "/tmp", owner.owner);
+  await service.closeForWorkspaceAndWait("managed-workspace", 1_000);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(signals, ["SIGHUP"]);
+});
+
+test("an exited shell whose session is empty no longer blocks removal if its PID is reused", { skip: process.platform === "win32" }, async () => {
+  const owner = ownerState();
+  const child = fakePty();
+  let pidReused = false;
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => child.pty) as typeof spawn,
+    // Before reuse the session is empty; afterwards an unrelated process leads a session with that PID.
+    sessionHasMembers: async () => pidReused,
+  });
+  await service.create("managed-workspace", "/tmp", owner.owner);
+  child.emitExit(0);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  pidReused = true;
+
+  await service.closeForWorkspaceAndWait("managed-workspace", 10);
+});
+
 test("terminal enforces the per-document session cap and history initialization order", async () => {
   const owner = ownerState();
   const service = new TerminalService({

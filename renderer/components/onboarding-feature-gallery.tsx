@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { Text } from "./ui";
 import { onboardingModelDescription } from "../lib/onboarding-provider";
+import { pauseWhenUnseen } from "../lib/offscreen-pause";
 import type { KeyboardPlatform } from "../shared/keybindings";
 import {
   FeatureArt,
@@ -150,7 +151,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "create",
     title: "Workspaces & Worktrees",
     description:
-      "Start a chat in any folder, clone a repository, or use a scratch space. Chats stay grouped with isolated worktrees in one workspace outline.",
+      "Start a chat in any folder, clone a repository, use a scratch space, or just chat with no workspace while Aiden keeps a private folder for files and Git. Chats stay grouped with isolated worktrees in one workspace outline.",
     icon: FolderGit2,
     size: "wide",
   },
@@ -210,7 +211,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "skills",
     group: "extend",
     title: "Reusable Skills",
-    description: "Skills can allow automatic use, explicit attachment with $, or both. Turn all skills off anytime in Settings → Skills.",
+    description: "Use your local skill folders and enabled installed Claude Code plugin skills. Skills can allow automatic use, explicit attachment with $, or both. Turn all skills off anytime in Settings → Skills.",
     icon: Wand2,
     size: "wide",
   },
@@ -302,6 +303,14 @@ export const onboardingFeatures: OnboardingFeature[] = [
     size: "standard",
   },
   {
+    id: "peerProjects",
+    group: "control",
+    title: "Projects on paired computers",
+    description: "Clone a local repository onto a paired computer from the new-chat machine menu. Choose an approved destination and optionally copy selected environment files. Git credentials stay on each computer; environment files are never selected automatically.",
+    icon: FolderGit2,
+    size: "standard",
+  },
+  {
     id: "usage",
     group: "control",
     title: "Private Usage Profile",
@@ -376,6 +385,7 @@ export function OnboardingFeatureGallery({
                 return (
                   <article
                     key={feature.id}
+                    ref={pauseWhenUnseen}
                     tabIndex={0}
                     aria-label={`${feature.title}. ${feature.description}`}
                     data-onboarding-feature={feature.id}

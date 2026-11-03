@@ -20,7 +20,7 @@ import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/t
 import { EnvironmentPanelProvider, useEnvironmentPanel } from "../components/environment-panel";
 import { toast } from "../components/ui";
 import { RoutedBotPanelProvider, useBotPanelActions } from "./bots/bot-panel-context";
-import { environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
+import { botListLocation, environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { queryKeys } from "../lib/queries";
 import { subscribeGitQuerySync } from "../lib/git-query-sync";
@@ -33,6 +33,9 @@ import { CommandSystemProvider, useCommandHandler, useCommandSystem } from "../l
 import { NewChatActionsProvider, type NewChatActions } from "../lib/new-chat-actions";
 import { chatIdFromPath, draftWorkspaceMenu, requestDraftWorkspaceMenu } from "../lib/draft-workspace-menu";
 import { AppCommandPalette } from "../components/command-palette";
+import { KeyboardRegions } from "../components/keyboard-regions";
+import { KeyboardShortcutsDialog } from "../components/keyboard-shortcuts-dialog";
+import { WorkspaceSettingsDialog } from "../components/workspace-settings-dialog";
 import { OnboardingFlow } from "../components/onboarding-flow";
 import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
@@ -54,8 +57,10 @@ import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { useBotNotificationsSync } from "../lib/bot-notifications-sync";
+import { useInboxDockBadgeSync } from "../lib/use-sidebar-view";
 import { subscribeLateReturnedGuidance } from "../lib/composer-draft-store";
 import { onAssistantAutomationComposerRequested } from "../lib/assistant-dock";
+import { WindowControls } from "../components/window-controls";
 
 export function RootView() {
   useTheme();
@@ -103,7 +108,7 @@ function RootContent() {
   const reconcileChatCacheAfterIdle = React.useCallback(
     async (chatId: string) => {
       const chatKey = queryKeys.chat(chatId);
-      await reconcileChatReadUntilAuthoritative({
+      const outcome = await reconcileChatReadUntilAuthoritative({
         isDeleted: () => isChatCacheDeleted(chatId),
         waitUntilIdle: () => chatsApi.waitUntilIdle(chatId),
         refreshChat: async () => {
@@ -125,6 +130,12 @@ function RootContent() {
           });
         },
       });
+      if (outcome === "failed" && !isChatCacheDeleted(chatId)) {
+        // The read kept failing, so stop polling and drop the provisional
+        // transcript. An open pane reloads it and shows its "couldn't be
+        // loaded / Try again" state; a later visit reads it afresh.
+        await queryClient.resetQueries({ queryKey: chatKey, exact: true }).catch(() => undefined);
+      }
     },
     [queryClient],
   );
@@ -210,7 +221,7 @@ function RootContent() {
         toast.info(navigationBlockedReason);
         return;
       }
-      void navigate({ to });
+      void navigate(to === "/bots" ? botListLocation() : { to });
     },
     [navigate, navigationBlockedReason],
   );
@@ -333,7 +344,7 @@ function RootContent() {
   const newChatActions = React.useMemo<NewChatActions>(
     () => ({
       openNewChatIn: async (workspaceId, options) => {
-        let gitMode: ChatDraftGitMode | undefined;
+        let gitMode: ChatDraftGitMode | undefined = options?.gitMode;
         if (options?.newWorktree) {
           // ⌥↵: only a repository with a commit can start a new worktree.
           // A local status read; nothing is created until the first send.
@@ -346,7 +357,7 @@ function RootContent() {
             .catch(() => undefined);
           if (git?.isRepo && !git.unborn) gitMode = "worktree";
         }
-        await openNewChatIn(workspaceId, undefined, gitMode ? { gitMode } : {});
+        await openNewChatIn(workspaceId, options?.initialText || undefined, gitMode ? { gitMode } : {});
       },
       openFolderForNewChat,
       cloneRepositoryForNewChat,
@@ -474,6 +485,7 @@ function RootContent() {
   }, [queryClient]);
 
   useBotNotificationsSync(queryClient);
+  useInboxDockBadgeSync(appApi.setInboxDockBadge, capabilities.badgeCount);
 
   React.useEffect(
     () =>
@@ -624,6 +636,10 @@ function RootContent() {
         />
         <AssistantDock rightInset={environmentPanel.dockRightInset} />
         <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
+        <WindowControls />
+        <KeyboardRegions />
+        <KeyboardShortcutsDialog />
+        <WorkspaceSettingsDialog />
         <PairingRequestSheet />
         {capabilities.bots ? <BotConnectionSetupHost /> : null}
       </div>

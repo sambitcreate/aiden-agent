@@ -69,6 +69,10 @@ function fixture(
 class Response extends EventEmitter {
   chunks: string[] = [];
   ended = false;
+  destroyed = false;
+  get writableEnded() {
+    return this.ended;
+  }
   writeHead() {}
   flushHeaders() {}
   write(chunk: string) {
@@ -78,6 +82,11 @@ class Response extends EventEmitter {
   }
   end() {
     this.ended = true;
+  }
+  destroy() {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.emit("close");
   }
   get wire() {
     return this as unknown as ServerResponse;
@@ -422,7 +431,7 @@ test("SSE is scoped by read grants, publishes fresh state on reconnect, and clos
     "unchanged state does not emit duplicate snapshots",
   );
   service.revokeDevice("device-1");
-  assert.ok(response.ended);
+  assert.ok(response.destroyed, "revocation drops the socket instead of flushing to it");
   assert.equal(events.current("chat-1"), undefined);
   service.close();
 });
@@ -555,14 +564,15 @@ test("late publications and old turn settlement cannot change the active chat", 
   assert.deepEqual(events.current("chat-1"), { generationId: "generation-2" });
 });
 
-test("chat-scoped subscribers see desktop task changes and do not close on ordinary socket backpressure", async () => {
+test("a blocked subscriber stays open and receives only the newest snapshot once the socket drains", async () => {
   const { service, events } = fixture();
   events.begin("chat-1", "generation-1");
   events.durableTodo("chat-1", "generation-1", todo);
   const response = new Response();
+  let blocked = true;
   response.write = (chunk) => {
     response.chunks.push(chunk);
-    return false;
+    return !blocked;
   };
   await service.openEvents(
     "device-1",
@@ -571,18 +581,76 @@ test("chat-scoped subscribers see desktop task changes and do not close on ordin
     0,
     response.wire,
   );
+  assert.equal(response.destroyed, false);
   assert.equal(response.ended, false);
   assert.match(response.chunks.join(""), /agents_update/);
-  events.durableTodo("chat-1", "generation-1", {
-    ...todo,
-    tasks: [{ ...todo.tasks[0]!, status: "completed" }],
+  const taskUpdates = () => response.chunks.filter((chunk) => chunk.includes("event: task_update"));
+  assert.equal(taskUpdates().length, 1);
+  for (const status of ["in_progress", "completed"] as const) {
+    events.durableTodo("chat-1", "generation-1", {
+      ...todo,
+      tasks: [{ ...todo.tasks[0]!, status }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  assert.equal(taskUpdates().length, 1, "nothing more is queued while the socket is blocked");
+  blocked = false;
+  response.emit("drain");
+  const updates = taskUpdates();
+  assert.equal(updates.length, 2, "intermediate snapshots coalesce into one frame");
+  assert.match(updates[1]!, /"status":"completed"/);
+  assert.equal(response.destroyed, false);
+  service.close();
+});
+
+test("a device's newest progress stream replaces its oldest once it reaches its stream cap", async () => {
+  const { service } = fixture();
+  const grants = new Set(["tasks:read"] as const);
+  const streams: Response[] = [];
+  for (let index = 0; index < 9; index += 1) {
+    const response = new Response();
+    await service.openEvents("device-1", "chat-1", grants, 0, response.wire);
+    streams.push(response);
+  }
+  assert.equal(streams[0]!.destroyed, true, "the stalest stream is dropped");
+  assert.ok(streams.slice(1).every((response) => !response.destroyed));
+  assert.match(streams[8]!.chunks.join(""), /event: task_update/);
+  service.close();
+});
+
+test("a host at its total progress stream cap asks the client to retry shortly", async () => {
+  const { service } = fixture({
+    authorize: async (_deviceId, chatId) => ({ id: chatId, latestGenerationId: "generation-1" }),
   });
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  const taskEvents = response.chunks.filter((chunk) =>
-    chunk.includes("event: task_update"),
+  const grants = new Set(["tasks:read"] as const);
+  const streams: Response[] = [];
+  for (let device = 0; device < 8; device += 1) {
+    for (let index = 0; index < 8; index += 1) {
+      const response = new Response();
+      await service.openEvents(`device-${device}`, "chat-1", grants, 0, response.wire);
+      streams.push(response);
+    }
+  }
+  assert.ok(streams.every((response) => !response.destroyed));
+  await assert.rejects(
+    service.openEvents("device-8", "chat-1", grants, 0, new Response().wire),
+    (error: unknown) => {
+      const value = error as {
+        code?: string;
+        status?: number;
+        retryable?: boolean;
+        details?: { retryAfterSeconds?: number };
+      };
+      return value.code === "rate_limited"
+        && value.status === 429
+        && value.retryable === true
+        && (value.details?.retryAfterSeconds ?? 0) > 0;
+    },
   );
-  assert.equal(taskEvents.length, 2);
-  assert.match(taskEvents[1]!, /"status":"completed"/);
+  streams[0]!.emit("close");
+  const afterRelease = new Response();
+  await service.openEvents("device-8", "chat-1", grants, 0, afterRelease.wire);
+  assert.match(afterRelease.chunks.join(""), /event: task_update/);
   service.close();
 });
 
@@ -740,10 +808,10 @@ test("foreground control invalidations reach every subscribed client without exp
   assert.ok(updates.every((text) => !text.includes("memory") && !text.includes("value")));
   assert.doesNotMatch(legacy.chunks.join(""), /app_controls_changed/u);
   allowed = false;
-  const closed = new Promise<void>((resolve) => { const end = first.end.bind(first); first.end = () => { end(); resolve(); }; });
+  const closed = once(first, "close");
   events.appControlsChanged();
   await closed;
-  assert.ok(first.ended);
+  assert.ok(first.destroyed);
   service.close();
 });
 

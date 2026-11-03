@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { ArrowLeft, ArrowRight, Camera, Check, ExternalLink, Globe, History, Link2, Loader2, MessageCirclePlus, Minus, MoreVertical, PictureInPicture2, Plus, RadioTower, RotateCw, Settings2, Square, Unlink2, Volume2, VolumeX, X } from "lucide-react";
 import type { BrowserAnnotation, BrowserCommand, BrowserCommandResult, BrowserImage, BrowserSnapshot, BrowserState, BrowserStylePreview, BrowserTab, BrowserViewport } from "../shared/browser";
 import { browserApi } from "../lib/ipc";
-import { acceptBrowserState, BROWSER_DEVICE_PRESETS, browserBoundsFromRect, enqueueBrowserPresentation, resizeBrowserViewport, savedBrowserScreenshotPath, validBrowserViewport, visibleBrowserNativeOccluders, browserNativeViewObstructed } from "../lib/browser-ui-state";
+import { acceptBrowserState, BROWSER_DEVICE_PRESETS, browserBoundsFromRect, enqueueBrowserPresentation, resizeBrowserViewport, savedBrowserScreenshotPath, validBrowserViewport, visibleBrowserNativeOccluders, browserNativeViewObstructed, browserOcclusionMutated, browserOcclusionScrolled } from "../lib/browser-ui-state";
 import { Button, DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, Input, Text, toast } from "./ui";
 import { BrowserSettings } from "./browser-settings";
 import { BrowserFloatingFrame } from "./browser-floating-frame";
@@ -156,13 +156,15 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
     let frame = 0;
     let disposed = false;
     let previous = "";
+    let occluders: HTMLElement[] = [];
     const presentationKey = `${workspaceId}:${tabId}`;
     const present = () => {
       frame = 0;
       if (disposed) return;
       const bounds = browserBoundsFromRect(host.getBoundingClientRect());
+      occluders = visibleBrowserNativeOccluders();
       const overlay = bounds
-        ? browserNativeViewObstructed(bounds, visibleBrowserNativeOccluders().map((element) => element.getBoundingClientRect()))
+        ? browserNativeViewObstructed(bounds, occluders.map((element) => element.getBoundingClientRect()))
         : false;
       const visible = surfaceActive && ready && !annotation && !settingsOpen && !menuOpen && !profileMenuOpen && !overlay && Boolean(bounds);
       const command: BrowserCommand = { action: "present", tabId, visible, ...(bounds ? { bounds } : {}) };
@@ -175,16 +177,17 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
     presentationRef.current = schedule;
     const resize = new ResizeObserver(schedule);
     resize.observe(host);
-    const overlays = new MutationObserver(schedule);
+    const overlays = new MutationObserver((records) => { if (browserOcclusionMutated(records, host, occluders)) schedule(); });
+    const scrolled = (event: Event) => { if (browserOcclusionScrolled(event.target, host, occluders)) schedule(); };
     overlays.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-state", "aria-hidden", "inert", "data-presence", "popover", "style"] });
     window.addEventListener("resize", schedule);
-    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("scroll", scrolled, true);
     document.addEventListener("transitionend", schedule, true);
     present();
     return () => {
       disposed = true; window.cancelAnimationFrame(frame); resize.disconnect(); overlays.disconnect();
       if (presentationRef.current === schedule) presentationRef.current = null;
-      window.removeEventListener("resize", schedule); window.removeEventListener("scroll", schedule, true); document.removeEventListener("transitionend", schedule, true);
+      window.removeEventListener("resize", schedule); window.removeEventListener("scroll", scrolled, true); document.removeEventListener("transitionend", schedule, true);
       void enqueueBrowserPresentation(presentationKey, () => browserApi.command(workspaceId, { action: "present", tabId, visible: false })).catch(() => undefined);
     };
   }, [workspaceId, tab?.id, tab?.floating, surfaceActive, ready, annotation, settingsOpen, menuOpen, profileMenuOpen]);

@@ -13,7 +13,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { app, BrowserWindow, session } from "electron";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { BrowserCommand, BrowserState } from "../../renderer/shared/browser";
+import type { BrowserCommand, BrowserEvent, BrowserState } from "../../renderer/shared/browser";
 
 const root = process.env.AIDEN_BOT_SIGN_IN_ROOT!;
 await mkdir(path.join(root, "user-data"), { recursive: true });
@@ -85,9 +85,15 @@ void app.whenReady().then(async () => {
   const window = new BrowserWindow({ show: false, width: 900, height: 700 });
   await window.loadURL("about:blank");
   window.show();
+  const shownTabs: string[] = [];
   const owner = {
     id: window.webContents.id, documentId: "bot-sign-in-native",
-    isDestroyed: () => window.isDestroyed(), send: () => {}, onInvalidated: () => () => {},
+    isDestroyed: () => window.isDestroyed(),
+    send(channel: string, payload: unknown) {
+      const event = payload as BrowserEvent;
+      if (channel === "browser:event" && event.type === "show" && event.workspaceId === BOT_WORKSPACE) shownTabs.push(event.tabId);
+    },
+    onInvalidated: () => () => {},
   };
   browser.attachOwner(PERSON_WORKSPACE, owner);
   const user = (workspaceId: string, command: BrowserCommand) => browser.command(workspaceId, command, { source: "user", owner });
@@ -112,8 +118,46 @@ void app.whenReady().then(async () => {
     call("browser_status", { tabId }).then((text) => JSON.parse(text) as { url: string | null; title: string | null });
   await call("browser");
 
-  // 1. The Bot asks: the sign_in tool shows its card and waits.
+  async function finish() {
+    // Close the tabs before exiting Electron.
+    botBrowser.shutdown();
+    await browser.shutdown();
+    window.destroy();
+    clearTimeout(deadline);
+    app.exit(0);
+  }
+
   const handoffs = createBotHandoffs();
+  const opener = createBotBrowserHandoffOpener({
+    service: async () => browser,
+    handoffs,
+    workspace: async () => BOT_WORKSPACE,
+    hasBrowserAccess: async () => true,
+    mintOwner: () => owner,
+  });
+  if (process.env.AIDEN_HANDOFF_TEST_SCENARIO === "rule") {
+    browser.transferOwner(BOT_WORKSPACE, owner);
+    const url = `https://${SITE}/whoami`;
+    const firstTab = (await user(BOT_WORKSPACE, { action: "create", url, show: true })).tabId!;
+    const targetTab = (await user(BOT_WORKSPACE, { action: "create", url, show: false })).tabId!;
+    await loaded(firstTab, "/whoami");
+    await loaded(targetTab, "/whoami");
+    const selectedBefore = browser.getState(BOT_WORKSPACE).activeTabId;
+    const ruleAnswer = handoffs.request({
+      botId: BOT, waitId: "account-rule", toolCallId: "account-call", kind: "action", action: "Check the account",
+      source: "rule", target: "browser", open: { url }, browserTarget: browser.getApprovalTarget(BOT_WORKSPACE, targetTab), signal: undefined,
+    });
+    const shownBeforeOpen = shownTabs.length;
+    assert.equal(await opener(BOT, "account-rule", url, "handoff", owner), true);
+    const selectedAfter = browser.getState(BOT_WORKSPACE).activeTabId;
+    const revealed = shownTabs.slice(shownBeforeOpen);
+    handoffs.answer(BOT, "account-rule", { outcome: "done" });
+    await ruleAnswer;
+    await writeFile(path.join(root, "result.json"), JSON.stringify({ firstTab, targetTab, selectedBefore, selectedAfter, revealed }));
+    return finish();
+  }
+
+  // 1. The Bot asks: the sign_in tool shows its card and waits.
   const signIn = signInCandidate(BOT, handoffs, { botName: async () => "Ada" });
   const memos = new Map<string, unknown>();
   const turn = new AbortController();
@@ -128,13 +172,6 @@ void app.whenReady().then(async () => {
   const card = await until(() => handoffs.pending(BOT)[0], "the sign-in card");
 
   // 2. The person presses Open sign-in on the desktop.
-  const opener = createBotBrowserHandoffOpener({
-    service: async () => browser,
-    handoffs,
-    workspace: async () => BOT_WORKSPACE,
-    hasBrowserAccess: async () => true,
-    mintOwner: () => owner,
-  });
   const elsewhere: string[] = [];
   const opened = await openBotHandoff(card, "desktop", {
     external: async (url) => void elsewhere.push(`external ${url}`),
@@ -211,12 +248,7 @@ void app.whenReady().then(async () => {
       2,
     ),
   );
-  // Close the tabs first: with them still open, this process didn't exit.
-  botBrowser.shutdown();
-  await browser.shutdown();
-  window.destroy();
-  clearTimeout(deadline);
-  app.exit(0);
+  await finish();
 }).catch((error) => {
   console.error(error);
   app.exit(1);

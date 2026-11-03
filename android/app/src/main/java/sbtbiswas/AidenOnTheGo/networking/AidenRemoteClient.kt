@@ -25,6 +25,8 @@ import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.MediaType
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.ResponseBody
@@ -55,6 +57,7 @@ import javax.crypto.spec.SecretKeySpec
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
 import kotlin.coroutines.resume
+import okio.BufferedSink
 import kotlin.coroutines.resumeWithException
 
 /**
@@ -83,7 +86,7 @@ class AidenRemoteClient(
     val endpoint: String,
     val credential: String?,
     val customOkHttpClient: OkHttpClient? = null
-) : AidenSpendingTransport {
+) : AidenSpendingTransport, AidenBackgroundJobTransport {
     constructor(
         installation: AidenInstallation,
         credential: String,
@@ -417,6 +420,7 @@ class AidenRemoteClient(
         requestTimeoutSeconds: Long? = null,
         maximumResponseBytes: Int? = null,
         retryConnectionFailure: Boolean = true,
+        customBody: RequestBody? = null,
         deserializer: (ByteArray) -> T
     ): T = try {
         withContext(Dispatchers.IO) {
@@ -447,7 +451,8 @@ class AidenRemoteClient(
         }
 
         cached?.let { requestBuilder.header("If-None-Match", it.etag) }
-        val requestBody = bodyBytes?.toRequestBody("application/json".toMediaType())
+        val requestBody = customBody
+            ?: bodyBytes?.toRequestBody("application/json".toMediaType())
             ?: bodyJson?.toRequestBody("application/json".toMediaType())
         when (method.uppercase()) {
             "GET" -> requestBuilder.get()
@@ -490,7 +495,7 @@ class AidenRemoteClient(
                 AidenDiagnosticOutcome.FAILED,
                 if (response.code == 401 || response.code == 403) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
             )
-            throw AidenRemoteClientException.Server(response.code, errorBody)
+            throw AidenRemoteClientException.Server(response.code, errorBody, AidenRetryAfter.parseHeader(response.retryAfter))
         }
 
         try {
@@ -637,6 +642,24 @@ class AidenRemoteClient(
     /** Revision 47: the chat's or Bot's spending limit, or `spending: null` without one. */
     override suspend fun spending(owner: AidenSpendingOwner): AidenSpendingStatus =
         executeRequest(spendingPath(owner)) { bytes -> decodeSpending(bytes) }
+
+    /** Revision 49 (`chat:jobs`): what the agent left running for the chat on the Mac. */
+    override suspend fun backgroundJobs(chatId: String): AidenBackgroundJobs {
+        AidenBotWire.validateIdentifier(chatId, "chatId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+        return executeRequest("/chats/$chatId/jobs") { bytes -> AidenBackgroundJobs.decode(String(bytes, Charsets.UTF_8)) }
+    }
+
+    /** Stops a job and everything it started; returns the chat's list once it has ended. */
+    override suspend fun stopBackgroundJob(chatId: String, jobId: String): AidenBackgroundJobs {
+        AidenBotWire.validateIdentifier(chatId, "chatId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+        if (!AidenBackgroundJob.ID.matches(jobId)) throw AidenRemoteClientException.InvalidResponse()
+        return executeRequest(
+            "/chats/$chatId/jobs/$jobId/stop",
+            method = "POST",
+            bodyJson = "{}",
+            retryConnectionFailure = false
+        ) { bytes -> AidenBackgroundJobs.decode(String(bytes, Charsets.UTF_8)) }
+    }
 
     /** Adds the limit once more; the revision makes a repeated tap a `revision_conflict`. */
     override suspend fun allowMoreSpending(owner: AidenSpendingOwner, revision: String): AidenSpendingStatus {
@@ -889,11 +912,12 @@ class AidenRemoteClient(
         workspaceId: String,
         providerId: String? = null,
         modelId: String? = null,
+        noWorkspace: Boolean = false,
         idempotencyKey: UUID = UUID.randomUUID()
     ): AidenChat = executeRequest(
         "/chats",
         method = "POST",
-        bodyJson = json.encodeToString(ChatCreateRequest(workspaceId, providerId, modelId)),
+        bodyJson = json.encodeToString(ChatCreateRequest(workspaceId, providerId, modelId, noWorkspace.takeIf { it })),
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(201),
         botScope = AidenBotPrivateResponseScope.ChatProjection
@@ -927,6 +951,33 @@ class AidenRemoteClient(
      * Report that the user viewed a chat, clearing its unread marker on every
      * surface. With a message id the marker lands exactly on what was shown.
      */
+    suspend fun markInboxRead(row: AidenChatSummary, supportsMessagesWindow: Boolean) {
+        row.lastAssistantMessageId?.takeIf(AidenChatForkLineageRow.IDENTIFIER::matches)?.let { markChatRead(row.id, it); return }
+        val (tail, transcriptRevision) = if (supportsMessagesWindow) {
+            val window = messagesWindow(row.id, limit = 1)
+            (window.messages.lastOrNull()?.id ?: throw AidenRemoteClientException.InvalidResponse("Chat has no messages.")) to window.revision
+        } else {
+            val detail = chat(row.id)
+            (detail.messages.lastOrNull()?.id ?: throw AidenRemoteClientException.InvalidResponse("Chat has no messages.")) to detail.revision
+        }
+        // A window carries the full-chat revision, distinct from a summary revision.
+        if (supportsMessagesWindow || transcriptRevision != row.revision) {
+            var cursor: String? = null
+            val seen = mutableSetOf<String>()
+            while (true) {
+                val page = chatSummaryPage(cursor = cursor)
+                val current = page.summaries.firstOrNull { it.id == row.id }
+                if (current != null) {
+                    if (current.revision != row.revision) throw AidenRemoteClientException.InvalidResponse("Chat has changed.")
+                    break
+                }
+                if (seen.size >= 99) throw AidenRemoteClientException.InvalidResponse("Chat list exceeded its limit.")
+                cursor = page.nextCursor?.takeIf(seen::add) ?: throw AidenRemoteClientException.InvalidResponse("Chat is no longer listed.")
+            }
+        }
+        markChatRead(row.id, tail)
+    }
+
     suspend fun markChatRead(id: String, throughMessageId: String? = null) =
         executeRequest<Unit>(
             "/chats/$id/read",
@@ -934,6 +985,37 @@ class AidenRemoteClient(
             bodyJson = json.encodeToString(ChatReadRequest(throughMessageId)),
             acceptedStatus = setOf(204)
         ) {}
+
+    /**
+     * Pin, mark done or snooze a chat for every surface paired to the host
+     * (`chat-triage-v1`, needs `chat:write`). [ifRevision] is the triage
+     * revision the row last showed (0 for none); a stale one is a 409
+     * `revision_conflict` and nothing changes.
+     */
+    suspend fun setChatTriage(
+        id: String,
+        change: AidenChatTriageChange,
+        ifRevision: Int?,
+        idempotencyKey: UUID = UUID.randomUUID()
+    ): AidenChatTriageResult = executeRequest(
+        "/chats/$id/triage",
+        method = "POST",
+        idempotencyKey = idempotencyKey,
+        bodyJson = chatTriageRequestBody(change, ifRevision).toString()
+    ) { bytes ->
+        val result = json.decodeFromString<ChatTriageResponse>(String(bytes, Charsets.UTF_8))
+        if (result.chatId != id || result.revision < 1) {
+            throw AidenRemoteContractException.InvalidJson("Invalid chat triage response")
+        }
+        AidenChatTriageResult(
+            chatId = result.chatId,
+            revision = result.revision,
+            updatedAt = result.updatedAt,
+            pinnedAt = result.pinnedAt,
+            doneAt = result.doneAt,
+            snoozedUntil = result.snoozedUntil
+        )
+    }
 
     suspend fun moveChat(
         id: String,
@@ -949,6 +1031,32 @@ class AidenRemoteClient(
         botScope = AidenBotPrivateResponseScope.ChatProjection
     ) { bytes ->
         json.decodeFromString(String(bytes, Charsets.UTF_8))
+    }
+
+    /**
+     * Revision 53 (`chat:new-worktree`, with `git:write`): the Mac makes a worktree named from
+     * [text], the chat's first message, and moves the still-empty chat [id] into it. It sends
+     * nothing; the turn follows as usual. The same key and chat find the worktree an earlier
+     * attempt made.
+     */
+    suspend fun moveChatToNewWorktree(
+        id: String,
+        revision: String,
+        text: String,
+        idempotencyKey: UUID = UUID.randomUUID()
+    ): AidenChatNewWorktree {
+        AidenBotWire.validateIdentifier(id, "chatId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+        // A long message sends only its first 4,000 characters for the name.
+        val seed = AidenChatNewWorktree.branchSeed(text)
+        return executeRequest(
+            "/chats/$id/worktree",
+            method = "POST",
+            ifMatchRevision = revision,
+            idempotencyKey = idempotencyKey,
+            bodyJson = json.encodeToString(ChatNewWorktreeRequest(text = seed)),
+            // Fetching the base branch and checking it out can take a while.
+            requestTimeoutSeconds = 120
+        ) { bytes -> AidenChatNewWorktree.decode(String(bytes, Charsets.UTF_8), id) }
     }
 
     /**
@@ -1011,16 +1119,38 @@ class AidenRemoteClient(
         chat
     }
 
+    /**
+     * Stages one upload for the chat's next turn. With [rawImages] (this phone holds
+     * `attachments:raw`, revision 50) a PNG or JPEG picture goes as its own bytes; anything else
+     * keeps the JSON envelope. [onProgress] hears the share of the request body sent, 0 to 1.
+     */
     suspend fun uploadAttachment(
         chatId: String,
-        upload: AidenAttachmentUpload
-    ): AidenAttachmentReference = executeRequest(
-        "/chats/$chatId/attachments",
-        method = "POST",
-        bodyJson = json.encodeToString(upload),
-        acceptedStatus = setOf(201)
-    ) { bytes ->
-        json.decodeFromString(String(bytes, Charsets.UTF_8))
+        upload: AidenAttachmentUpload,
+        rawImages: Boolean = false,
+        onProgress: ((Float) -> Unit)? = null
+    ): AidenAttachmentReference {
+        val raw = if (rawImages) AidenRawAttachmentUpload.from(upload) else null
+        val body: ByteArray
+        val contentType: String
+        val headers = mutableMapOf<String, String>()
+        if (raw != null) {
+            body = raw.data
+            contentType = raw.mimeType
+            headers[AidenRawAttachmentUpload.NAME_HEADER] = raw.encodedName
+        } else {
+            body = json.encodeToString(upload).toByteArray(Charsets.UTF_8)
+            contentType = "application/json"
+        }
+        return executeRequest(
+            "/chats/$chatId/attachments",
+            method = "POST",
+            headers = headers,
+            acceptedStatus = setOf(201),
+            customBody = AidenProgressRequestBody(body, contentType.toMediaType(), onProgress)
+        ) { bytes ->
+            json.decodeFromString(String(bytes, Charsets.UTF_8))
+        }
     }
 
     suspend fun removeAttachment(chatId: String, attachmentId: String) =
@@ -1062,7 +1192,7 @@ class AidenRemoteClient(
                     AidenDiagnosticOutcome.FAILED,
                     if (response.code == 401 || response.code == 403) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
                 )
-                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes))
+                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
             }
             val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
             if (contentType != "image/jpeg" && contentType != "image/png") {
@@ -1138,7 +1268,7 @@ class AidenRemoteClient(
                     AidenDiagnosticOutcome.FAILED,
                     if (response.code == 401 || response.code == 403) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
                 )
-                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes))
+                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
             }
             val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
             if (contentType != "text/html") {
@@ -1193,7 +1323,7 @@ class AidenRemoteClient(
             httpClient.newCall(request).await().use { response ->
                 if (!response.isSuccessful) {
                     val bytes = try { response.body.readBounded(1_048_576) } catch (_: Exception) { ByteArray(0) }
-                    throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes))
+                    throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
                 }
                 val mimeType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
                 if (mimeType == null || mimeType !in AidenBrowserRecordingRecap.MIME_TYPES ||
@@ -1532,7 +1662,7 @@ class AidenRemoteClient(
                     if (!response.isSuccessful) {
                         val bytes = response.body?.bytes() ?: ByteArray(0)
                         val errorBody = parseError(response.code, bytes)
-                        throw AidenRemoteClientException.Server(response.code, errorBody)
+                        throw AidenRemoteClientException.Server(response.code, errorBody, AidenRetryAfter.parseHeader(response.header("Retry-After")))
                     }
                     onOpen(response.header("Aiden-Progress-Resumed") == "true")
                     val stream = response.body?.byteStream()
@@ -2191,7 +2321,7 @@ class AidenRemoteClient(
         val bytes = response.body?.bytes() ?: ByteArray(0)
         if (!response.isSuccessful) {
             val errorBody = parseError(response.code, bytes)
-            throw AidenRemoteClientException.Server(response.code, errorBody)
+            throw AidenRemoteClientException.Server(response.code, errorBody, AidenRetryAfter.parseHeader(response.header("Retry-After")))
         }
 
         val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
@@ -2228,7 +2358,7 @@ class AidenRemoteClient(
         httpClient.newCall(request).await().use { response ->
             if (!response.isSuccessful) {
                 val bytes = try { response.body.readBounded(1_048_576) } catch (_: Exception) { ByteArray(0) }
-                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes))
+                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
             }
             val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
             if (contentType !in AidenBotSessionWire.SHARED_IMAGE_MIME_TYPES ||
@@ -2530,7 +2660,7 @@ class AidenRemoteClient(
     suspend fun gitReview(workspaceId: String): AidenGitResult = executeRequest(
         "/workspaces/$workspaceId/git/review"
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2539,14 +2669,14 @@ class AidenRemoteClient(
         method = "POST",
         bodyJson = json.encodeToString(AidenGitDiffRequest(snapshotId = snapshotId, fileId = fileId))
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
     suspend fun gitBranches(workspaceId: String): AidenGitResult = executeRequest(
         "/workspaces/$workspaceId/git/branches"
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2562,7 +2692,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2578,7 +2708,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2601,7 +2731,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2628,7 +2758,7 @@ class AidenRemoteClient(
     suspend fun gitPushCapability(workspaceId: String): AidenGitResult = executeRequest(
         "/workspaces/$workspaceId/git/push-capability"
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2645,7 +2775,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2654,7 +2784,7 @@ class AidenRemoteClient(
         method = "POST",
         bodyJson = json.encodeToString(AidenGitCompareRequest(baseRef = baseRef))
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2663,14 +2793,14 @@ class AidenRemoteClient(
         method = "POST",
         bodyJson = json.encodeToString(AidenGitComparisonDiffRequest(comparisonId = comparisonId, fileId = fileId))
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
     suspend fun gitWorktrees(workspaceId: String): AidenGitResult = executeRequest(
         "/workspaces/$workspaceId/git/worktrees"
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2686,7 +2816,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2702,7 +2832,7 @@ class AidenRemoteClient(
         bodyJson = json.encodeToString(AidenForegroundConfirmation()),
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2863,11 +2993,23 @@ class AidenRemoteClient(
     private data class ChatCreateRequest(
         val workspaceId: String,
         val providerId: String? = null,
-        val modelId: String? = null
+        val modelId: String? = null,
+        /** Revision 51: a chat started under Chats gets a hidden folder of its own. Omitted otherwise. */
+        val noWorkspace: Boolean? = null
     )
 
     @Serializable
     private data class ChatUpdateRequest(val title: String)
+
+    @Serializable
+    private data class ChatTriageResponse(
+        val chatId: String,
+        val revision: Int,
+        @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant,
+        @Serializable(with = InstantIso8601Serializer::class) val pinnedAt: Instant? = null,
+        @Serializable(with = InstantIso8601Serializer::class) val doneAt: Instant? = null,
+        @Serializable(with = InstantIso8601Serializer::class) val snoozedUntil: Instant? = null
+    )
 
     /** Encodes to `{}` without a message id so the Mac reads through its newest message. */
     @Serializable
@@ -2883,6 +3025,9 @@ class AidenRemoteClient(
     /** Encodes to `{}` for an unfocused summary. */
     @Serializable
     private data class ChatForkSummaryRequest(val focus: String? = null)
+
+    @Serializable
+    private data class ChatNewWorktreeRequest(val text: String)
 
     @Serializable
     private data class ChatMoveRequest(
@@ -2995,7 +3140,7 @@ private suspend fun Call.await(): Response = suspendCancellableCoroutine { conti
     })
 }
 
-private data class BufferedHttpResponse(val code: Int, val bytes: ByteArray, val etag: String?)
+private data class BufferedHttpResponse(val code: Int, val bytes: ByteArray, val etag: String?, val retryAfter: String? = null)
 
 /** Keep cancellation connected to the socket until the body is consumed and closed. */
 @OptIn(DelicateCoroutinesApi::class)
@@ -3017,7 +3162,7 @@ private suspend fun Call.awaitBody(maximumBytes: Int?): BufferedHttpResponse = c
                             } else {
                                 it.body?.bytes() ?: ByteArray(0)
                             }
-                            BufferedHttpResponse(it.code, bytes, it.header("ETag"))
+                            BufferedHttpResponse(it.code, bytes, it.header("ETag"), it.header("Retry-After"))
                         }
                     } catch (error: Exception) {
                         continuation.resumeWithException(error)
@@ -3078,4 +3223,96 @@ private fun ResponseBody?.readBounded(maximumBytes: Int): ByteArray {
         }
     }
     return output.toByteArray()
+}
+
+/**
+ * The `POST /chats/{chatId}/triage` body: each field the change sets, a
+ * Snooze as an RFC 3339 millisecond UTC time or an explicit `null` to wake,
+ * and `ifRevision` (never below 0).
+ */
+internal fun chatTriageRequestBody(change: AidenChatTriageChange, ifRevision: Int?): JsonObject = buildJsonObject {
+    change.pinned?.let { put("pinned", it) }
+    change.done?.let { put("done", it) }
+    change.restoreDoneAt?.let { put("restoreDoneAt", InstantIso8601Serializer.millisecondFormat.format(it)) }
+    when (val snooze = change.snooze) {
+        is AidenChatTriageChange.Snooze.Until ->
+            put("snoozeUntil", InstantIso8601Serializer.millisecondFormat.format(snooze.at))
+        AidenChatTriageChange.Snooze.Wake -> put("snoozeUntil", kotlinx.serialization.json.JsonNull)
+        null -> Unit
+    }
+    ifRevision?.let { put("ifRevision", maxOf(0, it)) }
+}
+
+/**
+ * Revision 50 (`attachments:raw`): a PNG or JPEG picture sent to an upload route as its own
+ * bytes, its name percent-encoded UTF-8 in `Aiden-Attachment-Name`. Anything the raw route would
+ * refuse keeps the JSON envelope, so the Mac answers it as it always has.
+ */
+internal class AidenRawAttachmentUpload private constructor(
+    val mimeType: String,
+    val encodedName: String,
+    val data: ByteArray
+) {
+    companion object {
+        const val NAME_HEADER = "Aiden-Attachment-Name"
+        /** The largest picture a Mac takes (8 MiB). */
+        const val MAX_BYTES = 8 * 1024 * 1024
+        const val MAX_ENCODED_NAME_LENGTH = 2_048
+        private val MIME_TYPES = setOf("image/png", "image/jpeg")
+        private const val UNRESERVED = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+        private val HEX = "0123456789ABCDEF".toCharArray()
+
+        fun from(upload: AidenAttachmentUpload): AidenRawAttachmentUpload? {
+            if (upload !is AidenAttachmentUpload.Image || upload.mimeType !in MIME_TYPES) return null
+            val data = runCatching { Base64.getDecoder().decode(upload.data) }.getOrNull() ?: return null
+            if (data.isEmpty() || data.size > MAX_BYTES) return null
+            val name = encodeName(upload.name)
+            if (name.isEmpty() || name.length > MAX_ENCODED_NAME_LENGTH) return null
+            return AidenRawAttachmentUpload(upload.mimeType, name, data)
+        }
+
+        /** RFC 3986 percent-encoding of the UTF-8 bytes; only unreserved characters stay as they are. */
+        fun encodeName(name: String): String = buildString {
+            for (byte in name.toByteArray(Charsets.UTF_8)) {
+                val value = byte.toInt() and 0xff
+                val char = value.toChar()
+                if (value < 0x80 && char in UNRESERVED) {
+                    append(char)
+                } else {
+                    append('%').append(HEX[value shr 4]).append(HEX[value and 0x0f])
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A request body that reports how much of itself has gone, for an upload's progress bar. A retry
+ * on a fresh connection writes it again from the start; the bar only moves forward.
+ */
+internal class AidenProgressRequestBody(
+    private val bytes: ByteArray,
+    private val contentType: MediaType,
+    private val onProgress: ((Float) -> Unit)?
+) : RequestBody() {
+    override fun contentType(): MediaType = contentType
+    override fun contentLength(): Long = bytes.size.toLong()
+    override fun writeTo(sink: BufferedSink) {
+        if (onProgress == null || bytes.isEmpty()) {
+            sink.write(bytes)
+            return
+        }
+        var sent = 0
+        while (sent < bytes.size) {
+            val count = minOf(SEGMENT_BYTES, bytes.size - sent)
+            sink.write(bytes, sent, count)
+            sink.flush()
+            sent += count
+            onProgress.invoke(sent.toFloat() / bytes.size)
+        }
+    }
+
+    private companion object {
+        const val SEGMENT_BYTES = 64 * 1024
+    }
 }

@@ -81,6 +81,42 @@ export function browserNativeViewObstructed(
   });
 }
 
+function isElementNode(node: Node | EventTarget | null | undefined): node is Element {
+  return Boolean(node) && (node as Node).nodeType === 1;
+}
+
+function holdsOccluder(element: Element, occluders: readonly Node[]): boolean {
+  return element.matches(BROWSER_NATIVE_OCCLUDER_SELECTOR)
+    || occluders.some((occluder) => element.contains(occluder))
+    || element.querySelector(BROWSER_NATIVE_OCCLUDER_SELECTOR) !== null;
+}
+
+/**
+ * Whether a batch of body mutations can change the native view's slot or what
+ * covers it. Streaming transcript text and reveal styles touch neither, so they
+ * must not cost a layout read and an occluder scan every frame. `occluders` are
+ * the ones found visible on the last presentation.
+ */
+export function browserOcclusionMutated(records: readonly MutationRecord[], host: Node, occluders: readonly Node[]): boolean {
+  return records.some((record) => {
+    const target = record.target;
+    if (!isElementNode(target)) return false;
+    // The host's ancestors, and the siblings along that chain, decide where its slot is.
+    if (target.contains(host) || target.closest(BROWSER_NATIVE_OCCLUDER_SELECTOR)) return true;
+    if (record.type === "attributes") return Boolean(target.parentElement?.contains(host)) || holdsOccluder(target, occluders);
+    for (const nodes of [record.addedNodes, record.removedNodes]) {
+      for (const node of Array.from(nodes)) if (isElementNode(node) && holdsOccluder(node, occluders)) return true;
+    }
+    return false;
+  });
+}
+
+/** Whether a scroll can move the native view's slot or a visible occluder. */
+export function browserOcclusionScrolled(target: EventTarget | null, host: Node, occluders: readonly Node[]): boolean {
+  if (!isElementNode(target)) return true;
+  return target.contains(host) || occluders.some((occluder) => target.contains(occluder));
+}
+
 export function visibleBrowserNativeOccluders(root: ParentNode = document): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(BROWSER_NATIVE_OCCLUDER_SELECTOR)).filter((element) => {
     // A modal's `hideOthers` isolation (aria-hidden plus its `data-aria-hidden`

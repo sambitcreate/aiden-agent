@@ -14,7 +14,7 @@ import type { SpeechModelFamily, SpeechModelSpec } from "./local-speech-catalog.
 import { speechEngine } from "./local-speech-engine.js";
 import { LocalSpeechIdleUnloader } from "./local-speech-idle-unload.js";
 import { LocalSpeechLane } from "./local-speech-lane.js";
-import { isModelInstalled, listModels, modelDir, specFor } from "./local-speech-models.js";
+import { deleteModel, isModelInstalled, listModels, modelDir, specFor } from "./local-speech-models.js";
 import {
   LocalSpeechWorkerError,
   runWithCrashRetry,
@@ -175,8 +175,18 @@ export async function engineStatus(modelId?: string): Promise<EngineStatus> {
   if (known) return known;
   return withModelLease(async () => {
     try {
-      const status = await (await host.acquire()).status(metal ? family : undefined);
+      const reused = host.current();
+      const worker = await host.acquire();
+      const status = await worker.status(metal ? family : undefined);
       knownEngineStatus.set(key, status);
+      // A worker forked only for this probe holds no model. Retire it (through
+      // the lane, so it cannot kill a request that adopted it) instead of
+      // leaving a process resident until the idle unload, which may be off.
+      if (!reused) {
+        void lane.run(async () => {
+          if (host.current() === worker && host.heldModelId() === null) await host.retire();
+        });
+      }
       return status;
     } catch (error) {
       if (isolationUnavailable(error)) {
@@ -240,13 +250,28 @@ export function reconfigureLocalSpeechIdleUnload(): Promise<void> {
   return idleUnloader.reconfigure();
 }
 
+/** Must run inside the lane. Retires the worker when it holds `modelId`, including a load that failed part-way. */
+async function releaseHeldModel(modelId: string): Promise<void> {
+  if (modelState.loaded !== modelId && host.heldModelId() !== modelId) return;
+  // Releasing the process frees the native recognizer; a release frame would keep it allocated.
+  await host.retire();
+  speechEngine.release();
+  markUnloaded();
+}
+
 export async function releaseRecognizer(modelId: string): Promise<void> {
+  await lane.run(() => releaseHeldModel(modelId));
+}
+
+/**
+ * Releases `modelId` and removes its files inside the speech lane, so a queued
+ * warm-up or live-preview decode cannot load the model between the release and
+ * the delete.
+ */
+export async function deleteLocalSpeechModel(modelId: string): Promise<void> {
   await lane.run(async () => {
-    if (modelState.loaded !== modelId) return;
-    // Releasing the process frees the native recognizer; a release frame would keep it allocated.
-    await host.retire();
-    speechEngine.release();
-    markUnloaded();
+    await releaseHeldModel(modelId);
+    await deleteModel(modelId);
   });
 }
 

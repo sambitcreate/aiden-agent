@@ -16,12 +16,15 @@ import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSe
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { createChatStore } from "../../../main/services/chat-store-core.js";
 import { ChatActivityRegistry } from "../../../main/services/chat-activity-core.js";
+import type { ChatActivitySnapshot } from "../../../renderer/shared/chat-activity.js";
+import { HostRunRegistry } from "../../../main/services/host-run-registry.js";
+import { createHostRunRecorders } from "../../../main/services/host-runs.js";
 import type { ChatStartParams } from "../../../main/services/types.js";
 import type { ChatGenerationOwner } from "../../../main/services/chat-generation-owner.js";
 import type { UsageRequestSource } from "../../../main/services/usage-store-core.js";
 import { ChatTurnAdmission } from "../../../main/services/chat-turn-admission.js";
 import { ChatDeletionGate } from "../../../main/services/chat-deletion-gate.js";
-import { parseAttachments } from "../../../main/services/attachment-contract.js";
+import { parseAttachments, withReadableImages } from "../../../main/services/attachment-contract.js";
 import { createCliModelRuntime } from "./providers.ts";
 import { acquireLease } from "./state.ts";
 import { workspaceStore, accessFor } from "./workspaces.ts";
@@ -53,8 +56,14 @@ export function daemonApprovalSummary(toolName: string, input: unknown): string 
 export function createDaemonChats(agentDir: string) {
   let bots: CliBotGenerationRuntime | undefined;
   const root = join(agentDir, "daemon-chats"); mkdirSync(root, { recursive: true, mode: 0o700 });
-  const chatStore = createChatStore(async () => root);
-  const activity = new ChatActivityRegistry(() => {});
+  // Picture files of deleted chats are cleaned up a couple of minutes later, and once after start.
+  const chatStore = createChatStore(async () => root, undefined, { imageSweepDelayMs: 2 * 60 * 1000 });
+  chatStore.scheduleImageSweep();
+  const activityListeners = new Set<(snapshot: ChatActivitySnapshot) => void>();
+  const activity = new ChatActivityRegistry((snapshot) => { for (const listener of activityListeners) listener(snapshot); });
+  // The same run journal the desktop keeps: paired desktops observe and steer these runs (`runs:*`, `/host/events`).
+  const runs = new HostRunRegistry({ now: Date.now });
+  const recorders = createHostRunRecorders((_scope, message) => process.stderr.write(`aiden: ${message}\n`));
   const admission = new ChatTurnAdmission();
   const deletion = new ChatDeletionGate();
   const active = new Map<string, { streamId: string; ownerId: string; workspaceId?: string; abort: AbortController; cancellationOrigin?: GenerationCancellationOrigin; session?: AgentSession; settled: Promise<void>; finish(): void; release(): void }>();
@@ -62,10 +71,17 @@ export function createDaemonChats(agentDir: string) {
   const idleWaiters = new Map<string, Set<() => void>>();
   const wakeIdle = (id: string) => { for (const wake of idleWaiters.get(id) ?? []) wake(); idleWaiters.delete(id); };
   const approvals = new Map<string, { ownerId: string; resolve(allowed: boolean): void }>();
+  const settleApproval = (id: string, decision: "allow" | "deny", ownerId?: string) => {
+    const pending = approvals.get(id); if (!pending || (ownerId !== undefined && pending.ownerId !== ownerId)) return false;
+    recorders.recordRunAttentionResolved(runs, id, { kind: "approval", decision });
+    approvals.delete(id); pending.resolve(decision === "allow"); return true;
+  };
+  // Set once shutdown begins: no ingress (phone, Telegram, socket, Bot) may start a turn while it drains.
+  let closed = false;
   const sessionPath = (id: string) => join(root, "journals", `${createHash("sha256").update(id).digest("hex")}.jsonl`);
   const llmClient = {
     beginChatTurn(chatId: string, streamId: string, ownerId: string) {
-      if (deletion.isDeleting(chatId) || new Set([...reserved, ...active.keys()]).size >= 3) return null;
+      if (closed || deletion.isDeleting(chatId) || new Set([...reserved, ...active.keys()]).size >= 3) return null;
       const lease = admission.tryBegin(chatId, streamId, ownerId, active.has(chatId));
       if (lease) {
         reserved.add(chatId);
@@ -94,17 +110,22 @@ export function createDaemonChats(agentDir: string) {
     },
     /** A Bot the person paused: its reply ends as their Stop, and the chat is kept. */
     async stopChatWork(id: string) { await llmClient.cancelChat(id, "user_stop"); return llmClient.waitForChatIdle(id); },
-    approve(id: string, decision: "allow" | "deny", ownerId: string) {
-      const pending = approvals.get(id); if (!pending || pending.ownerId !== ownerId) return false;
-      approvals.delete(id); pending.resolve(decision === "allow"); return true;
-    },
+    approve: (id: string, decision: "allow" | "deny", ownerId: string) => settleApproval(id, decision, ownerId),
+    /** A paired desktop holding `runs:control` answers any run's approval, as the desktop host's own controls do. */
+    approveAsHost: (id: string, decision: "allow" | "deny") => settleApproval(id, decision),
     cancel(streamId: string, ownerId: string) {
       const pair = [...active.entries()].find(([, entry]) => entry.streamId === streamId && entry.ownerId === ownerId);
       if (!pair) return false;
-      void llmClient.cancelChat(pair[0], "user_stop"); return true;
+      void llmClient.cancelChat(pair[0], "user_stop").catch(() => {}); return true;
+    },
+    /** Stop a run by its stream id whoever started it (`runs:control`). */
+    cancelRun(streamId: string) {
+      const pair = [...active.entries()].find(([, entry]) => entry.streamId === streamId);
+      if (!pair) return false;
+      void llmClient.cancelChat(pair[0], "user_stop").catch(() => {}); return true;
     },
     async start(streamId: string, params: ChatStartParams, owner: ChatGenerationOwner, options: { usageSource: UsageRequestSource; turnId?: string; botAudienceId?: string; onTurnAccepted?(): void }) {
-      if (owner.isDestroyed() || !admission.owns(params.chatId, options.turnId ?? streamId, owner.documentId)) return false;
+      if (closed || owner.isDestroyed() || !admission.owns(params.chatId, options.turnId ?? streamId, owner.documentId)) return false;
       let finish!: () => void;
       const settled = new Promise<void>((resolve) => { finish = resolve; });
       let releaseFile: () => void;
@@ -112,9 +133,9 @@ export function createDaemonChats(agentDir: string) {
       catch (error) { admission.releaseMatching(params.chatId, options.turnId ?? streamId, owner.documentId); throw error; }
       const entry = { streamId, ownerId: owner.documentId, workspaceId: params.workspaceId, abort: new AbortController(), settled, finish,
         session: undefined as AgentSession | undefined,
-        release() { if (active.get(params.chatId) !== entry) return; active.delete(params.chatId); activity.settle(streamId); releaseFile(); finish(); wakeIdle(params.chatId); },
+        release() { if (active.get(params.chatId) !== entry) return; active.delete(params.chatId); activity.settle(streamId); recorders.recordRunSettled(runs, streamId); releaseFile(); finish(); wakeIdle(params.chatId); },
       };
-      const handedOff = admission.handoff(params.chatId, options.turnId ?? streamId, owner.documentId, () => { active.set(params.chatId, entry); activity.begin(streamId, params.chatId); });
+      const handedOff = admission.handoff(params.chatId, options.turnId ?? streamId, owner.documentId, () => { active.set(params.chatId, entry); activity.begin(streamId, params.chatId); recorders.recordRunBegin(runs, streamId, params.chatId, owner); });
       if (!handedOff) { releaseFile(); return false; }
       void perform(streamId, params, owner, options, entry).finally(entry.release).catch(() => {
         process.stderr.write("aiden: Could not deliver the terminal generation event.\n");
@@ -126,12 +147,17 @@ export function createDaemonChats(agentDir: string) {
       let unsubscribe = () => {};
       let botAdmission: BotRuntimeAuthorityAdmission | undefined;
       let removeBotAbort = () => {};
-      const disposeOwner = owner.onInvalidated(() => { entry.abort.abort(); void entry.session?.abort(); });
-      const timer = setTimeout(() => { entry.abort.abort(); void entry.session?.abort(); }, 300_000);
-      const send: typeof owner.send = (channel, payload) => { if (!owner.isDestroyed()) owner.send(channel, payload); };
+      const disposeOwner = owner.onInvalidated(() => { entry.abort.abort(); void entry.session?.abort().catch(() => {}); });
+      const timer = setTimeout(() => { entry.abort.abort(); void entry.session?.abort().catch(() => {}); }, 300_000);
+      // Every event also feeds the run journal, so a paired desktop sees the run even after its owner leaves.
+      const send: typeof owner.send = (channel, payload) => { recorders.recordRunNotification(runs, streamId, channel, payload); if (!owner.isDestroyed()) owner.send(channel, payload); };
       const produced: AssistantMessage[] = [];
       let content = "", separator = false, persisted = false;
       const timeline = new GenerationTimelineProjector(streamId, (value) => send("chat:timeline", { streamId, timeline: value }));
+      // Extensions open their resources (MCP pool, memory store) before the session exists; a turn that
+      // fails before then still runs their shutdown handlers and closers.
+      const shutdownHandlers: ((event: { type: "session_shutdown"; reason: "quit" }) => unknown)[] = [];
+      const closers: (() => Promise<void>)[] = [];
       try {
         const chat = await chatStore.get(params.chatId);
         if (!chat) throw new Error("The chat is unavailable.");
@@ -141,7 +167,7 @@ export function createDaemonChats(agentDir: string) {
           await bots.assertNotPaused(chat.botId);
           botAdmission = await bots.authority.admit({ audienceId: options.botAudienceId, botId: chat.botId, chatId: chat.id });
           assertBotRuntimeProviderSelection(botAdmission.authority.provider, { providerId: params.providerId, model: params.model });
-          const cancel = () => { entry.abort.abort(); void entry.session?.abort(); };
+          const cancel = () => { entry.abort.abort(); void entry.session?.abort().catch(() => {}); };
           botAdmission.signal.addEventListener("abort", cancel, { once: true });
           removeBotAbort = () => botAdmission?.signal.removeEventListener("abort", cancel);
           if (botAdmission.signal.aborted) cancel();
@@ -165,15 +191,17 @@ export function createDaemonChats(agentDir: string) {
         const registeredTools: { readonly name: string; readonly label?: string }[] = [];
         // Activity shows MCP tools by their server label, not the generated name.
         timeline.setToolLabels((toolName) => mcpToolActivityLabel([...botTools, ...registeredTools], toolName));
-        const extensions: InlineExtension[] = botAdmission || !workspace.folderPath ? [] : [
-          // A corrupt settings file or wedged shared DB must degrade to
-          // no-memory, never brick the generation (desktop parity: llm-client
-          // warns and continues without memory).
-          await createMemoryInlineExtension({ agentDir, workspaceRoot: cwd, readOnly: unattended })
-            .catch((error: unknown) => {
-              process.stderr.write(`[daemon-chats] memory unavailable: ${error instanceof Error ? error.message : error}\n`);
-              return { name: "aiden-memory", factory: () => undefined };
-            }),
+        // A corrupt settings file or wedged shared DB must degrade to
+        // no-memory, never brick the generation (desktop parity: llm-client
+        // warns and continues without memory).
+        const memory = botAdmission || !workspace.folderPath ? undefined : await createMemoryInlineExtension({ agentDir, workspaceRoot: cwd, readOnly: unattended })
+          .catch((error: unknown) => {
+            process.stderr.write(`[daemon-chats] memory unavailable: ${error instanceof Error ? error.message : error}\n`);
+            return { name: "aiden-memory", factory: () => undefined };
+          });
+        if (memory && "close" in memory && memory.close) closers.push(memory.close);
+        const extensions: InlineExtension[] = !memory ? [] : [
+          memory,
           createTodoInlineExtension({ latestContext: () => undefined }),
           createMcpExtension(agentDir),
           createAdvisorInlineExtension({ agentDir, latestContext: () => undefined }),
@@ -188,6 +216,10 @@ export function createDaemonChats(agentDir: string) {
           factory: (pi) => (typeof extension === "function" ? extension : extension.factory)(new Proxy(pi, { get(target, key, receiver) {
             if (key === "registerTool") return (tool: Parameters<typeof pi.registerTool>[0]) => {
               additionalNames.push(tool.name); registeredTools.push(tool); target.registerTool(tool);
+            };
+            if (key === "on") return (event: string, handler: (event: { type: "session_shutdown"; reason: "quit" }) => unknown) => {
+              if (event === "session_shutdown") shutdownHandlers.push(handler);
+              return (target.on as (event: string, handler: unknown) => void)(event, handler);
             };
             return Reflect.get(target, key, receiver);
           } })),
@@ -213,13 +245,17 @@ export function createDaemonChats(agentDir: string) {
               timeline.toolAwaitingApproval(event.toolCallId);
               const approvalId = `approval_${randomUUID()}`;
               const allowed = await new Promise<boolean>((resolve) => {
-                const settle = (result: boolean) => { clearTimeout(expiry); entry.abort.signal.removeEventListener("abort", cancel); approvals.delete(approvalId); resolve(result); };
-                const cancel = () => settle(false);
-                const expiry = setTimeout(cancel, 300_000);
+                const settle = (result: boolean) => { clearTimeout(expiry); entry.abort.signal.removeEventListener("abort", cancel); approvals.delete(approvalId); activity.resolveAttention(approvalId); resolve(result); };
+                const lapse = (decision: "expired" | "cancelled") => { if (approvals.has(approvalId)) recorders.recordRunAttentionResolved(runs, approvalId, { kind: "approval", decision }); settle(false); };
+                const cancel = () => lapse("cancelled");
+                const expiry = setTimeout(() => lapse("expired"), 300_000);
                 approvals.set(approvalId, { ownerId: owner.documentId, resolve: settle });
                 entry.abort.signal.addEventListener("abort", cancel, { once: true });
                 if (entry.abort.signal.aborted) cancel();
-                else send("chat:approval", { streamId, approvalId, toolCallId: event.toolCallId, toolName: event.toolName, summary: daemonApprovalSummary(event.toolName, event.input) });
+                else {
+                  activity.requestAttention(approvalId, streamId, "approval");
+                  send("chat:approval", { streamId, approvalId, toolCallId: event.toolCallId, toolName: event.toolName, summary: daemonApprovalSummary(event.toolName, event.input) });
+                }
               });
               await assertAuthority();
               if (!allowed || JSON.stringify(event.input) !== original || accessFor(agentDir, cwd) === "none") return { block: true, reason: "The tool request was denied, changed or expired." };
@@ -258,7 +294,7 @@ export function createDaemonChats(agentDir: string) {
         });
         const input = params.messages.at(-1) ?? chat.messages.at(-1);
         if (!input) throw new Error("A user message is required.");
-        const attachments = parseAttachments(input.attachments ?? []) ?? [];
+        const attachments = parseAttachments(withReadableImages(input.attachments)) ?? [];
         const text = [input.content, ...attachments.filter((item) => item.kind === "image" && !model.input.includes("image")).map((item) => `Attached image: ${visionAttachmentAlias(item)} (${item.name}). Use inspect_image to analyze it.`), ...attachments.filter((item) => item.kind === "text").map((item) => `Attachment: ${item.name}\n${item.text ?? ""}`)].join("\n\n");
         await assertAuthority();
         await session.prompt(text, { expandPromptTemplates: false, preflightResult: (accepted) => { if (accepted) options.onTurnAccepted?.(); }, images: (model.input.includes("image") ? attachments : []).flatMap((item) => item.kind === "image" && item.data ? [{ type: "image" as const, data: item.data, mimeType: item.mimeType }] : []) });
@@ -284,12 +320,17 @@ export function createDaemonChats(agentDir: string) {
         if (entry.session) {
           try { await entry.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); }
           finally { entry.session.dispose(); }
+        } else {
+          for (const handler of shutdownHandlers) await Promise.resolve().then(() => handler({ type: "session_shutdown", reason: "quit" })).catch(() => {});
         }
+        await Promise.allSettled(closers.map((close) => close()));
         for (const message of produced) await recordUsage(agentDir, options.usageSource, message).catch(() => {});
       }
   }
-  return { chatStore, llmClient, activity, admission, deletion, sessionPath,
+  return { chatStore, llmClient, activity, runs, admission, deletion, sessionPath,
+    /** Every activity change (a run began or ended, an approval was raised or settled). */
+    onActivityChange(listener: (snapshot: ChatActivitySnapshot) => void) { activityListeners.add(listener); return () => { activityListeners.delete(listener); }; },
     setBots(runtime: CliBotGenerationRuntime) { bots = runtime; },
-    async stop() { const ids = new Set([...reserved, ...active.keys()]); admission.releaseAll(); await Promise.allSettled([...ids].map((id) => llmClient.cancelChat(id, "application_shutdown"))); await Promise.all([...ids].map((id) => llmClient.waitForChatIdle(id))); },
+    async stop() { closed = true; const ids = new Set([...reserved, ...active.keys()]); admission.releaseAll(); await Promise.allSettled([...ids].map((id) => llmClient.cancelChat(id, "application_shutdown"))); await Promise.all([...ids].map((id) => llmClient.waitForChatIdle(id))); },
   };
 }

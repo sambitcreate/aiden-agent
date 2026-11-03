@@ -2,6 +2,8 @@ import { peerHostsApi } from "../ipc";
 import { parseChatForkLineageV1, type ChatForkLineageV1 } from "../../shared/chat-copy-contract";
 import type { ChatRunInputAdmissionResult } from "../../shared/chat-run-input";
 import type { PeerOperation } from "../../shared/peer-operation";
+import type { ChatTriageEntry, ChatTriagePatch, ChatTriageResult } from "../../shared/chat-triage";
+import { peerAttachmentContent, type PeerAttachmentContent } from "./remote-images";
 import { hostAvailability } from "../sidebar-remote-groups";
 import {
   mintPeerIdempotencyKey,
@@ -73,6 +75,7 @@ export function remoteHostCapabilities(host: Pick<PeerHostView, "features" | "ca
   if (features.has("run-streams-v1") && grants.has("runs:observe")) capabilities.add("observe");
   if (features.has("chat-read-state-v1") && grants.has("chat:read")) capabilities.add("markRead");
   if (features.has("chat-context-pressure-v1") && grants.has("chat:read")) capabilities.add("contextPressure");
+  if (features.has("inbox-signals-v1") && grants.has("chat:read")) capabilities.add("inboxSignals");
   if (grants.has("workspace:browse")) capabilities.add("browseFolders");
   if (grants.has("workspace:manage")) capabilities.add("createWorkspace");
   if (grants.has("chat:write")) {
@@ -81,6 +84,7 @@ export function remoteHostCapabilities(host: Pick<PeerHostView, "features" | "ca
     capabilities.add("remove");
     capabilities.add("attach");
     capabilities.add("createChat");
+    if (features.has("chat-triage-v1")) capabilities.add("triage");
     // The host checks both grants on every skill read and invocation.
     if (features.has("chat-skills-v1") && grants.has("skills:invoke")) capabilities.add("skills");
     // Bot grants are bound at pairing; a Bot chat also reads the Bot and writes a chat.
@@ -93,8 +97,10 @@ export function remoteHostCapabilities(host: Pick<PeerHostView, "features" | "ca
     if (features.has("run-control-v1") && grants.has("runs:control")) {
       capabilities.add("cancel");
       capabilities.add("respondApproval");
-      capabilities.add("answerQuestion");
-      capabilities.add("steer");
+      // Steering and answers also need the host to take run input and ask
+      // questions at all; an `aiden serve` host advertises neither token.
+      if (features.has("chat-question-prompts-v1")) capabilities.add("answerQuestion");
+      if (features.has("chat-run-input-v1")) capabilities.add("steer");
     }
   }
   return capabilities;
@@ -210,9 +216,37 @@ export function mapHostContextPressure(value: unknown, chatId: string): RemoteCo
 }
 
 /**
+ * Every adapter not yet disposed. A change one adapter makes or learns of
+ * reaches the others for the same host, so a chat renamed from a sidebar row
+ * rereads in the pane that has it open.
+ */
+const liveAdapters = new Set<RemoteHostAdapter>();
+
+/**
  * `HostChatAdapter` for a paired host, over the peer IPC. It never holds or
  * sees host credentials; main signs and sends every request.
  */
+function remoteTime(value: unknown): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const time = Date.parse(value);
+  return Number.isFinite(time) && time >= 0 ? time : undefined;
+}
+
+/** A host's triage answer (ISO times) as the epoch-ms entry the sidebar keeps. */
+export function remoteTriageEntry(value: Record<string, unknown>): ChatTriageEntry | null {
+  const revision = value.revision;
+  const updatedAt = remoteTime(value.updatedAt);
+  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1 || updatedAt === undefined) return null;
+  const entry: ChatTriageEntry = { revision, updatedAt };
+  const pinnedAt = remoteTime(value.pinnedAt);
+  const doneAt = remoteTime(value.doneAt);
+  const snoozedUntil = remoteTime(value.snoozedUntil);
+  if (pinnedAt !== undefined) entry.pinnedAt = pinnedAt;
+  if (doneAt !== undefined) entry.doneAt = doneAt;
+  if (snoozedUntil !== undefined) entry.snoozedUntil = snoozedUntil;
+  return entry;
+}
+
 export class RemoteHostAdapter implements HostChatAdapter {
   readonly hostId: string;
   private readonly transport: PeerHostTransport;
@@ -228,6 +262,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
     this.hostId = host.id;
     this.transport = transport;
     this.granted = remoteHostCapabilities(host);
+    liveAdapters.add(this);
     this.offHostState = transport.onHostState((status) => this.acceptStatus(status));
     this.initial = transport.statuses().then(
       (statuses) => {
@@ -261,6 +296,11 @@ export class RemoteHostAdapter implements HostChatAdapter {
   }
 
   private chatChanged(chatId: string): void {
+    if (this.disposed) return;
+    for (const adapter of [...liveAdapters]) if (adapter.hostId === this.hostId) adapter.notifyChatChanged(chatId);
+  }
+
+  private notifyChatChanged(chatId: string): void {
     if (this.disposed) return;
     for (const listener of [...this.chatListeners]) listener(chatId);
   }
@@ -314,6 +354,44 @@ export class RemoteHostAdapter implements HostChatAdapter {
     });
   }
 
+  /** A legacy row has no message ID. Capture its tail, then verify the list
+   * still describes the revision the person acted on before acknowledging it. */
+  async markSummaryRead(chatId: string, messageId?: string, revision?: string): Promise<HostChatResult<void>> {
+    if (messageId) return this.markRead(chatId, messageId);
+    return this.fenced(async () => {
+      const changed = { ok: false, error: { code: "failed", message: "Open the chat to mark its latest reply read." } } as const;
+      if (!revision) return changed;
+      let messageId: string | undefined;
+      if (this.granted.has("messagesWindow")) {
+        const window = await this.getMessagesWindow(chatId, { limit: 1 });
+        if (!window.ok) return window;
+        messageId = window.value.messages[window.value.messages.length - 1]?.id;
+      } else {
+        const chat = await this.transport.call(this.hostId, { operation: "chat", resourceId: chatId });
+        if (!chat.ok) return chat;
+        const detail = record(chat.value);
+        if (detail.id !== chatId || !Array.isArray(detail.messages)) return changed;
+        const tail = record(detail.messages[detail.messages.length - 1]);
+        messageId = typeof tail.id === "string" ? tail.id : undefined;
+      }
+      if (!messageId) return changed;
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      // A host snapshot holds at most 10,000 rows (100 default-sized pages).
+      do {
+        const page = await this.transport.call(this.hostId, { operation: "summaries", ...(cursor ? { cursor } : {}) });
+        if (!page.ok) return page;
+        const data = record(page.value);
+        const row = Array.isArray(data.summaries) ? data.summaries.find((item) => record(item).id === chatId) : undefined;
+        if (row) return record(row).revision === revision ? this.markRead(chatId, messageId) : changed;
+        cursor = typeof data.nextCursor === "string" ? data.nextCursor : undefined;
+        if (!cursor || seen.has(cursor)) break;
+        seen.add(cursor);
+      } while (seen.size < 100);
+      return changed;
+    });
+  }
+
   markRead(chatId: string, throughMessageId?: string): Promise<HostChatResult<void>> {
     return this.fenced(async () => {
       const outcome = await this.transport.call(this.hostId, {
@@ -325,6 +403,47 @@ export class RemoteHostAdapter implements HostChatAdapter {
       });
       return outcome.ok ? { ok: true, value: undefined } : outcome;
     });
+  }
+
+  /**
+   * Pins, marks done or snoozes a chat on its host. One key covers the
+   * action: a lost answer is retried once with the same key, so the host
+   * applies it at most once. A stale `ifRevision` comes back as a conflict
+   * carrying the host's current revision, not as an error.
+   */
+  async setTriage(chatId: string, patch: ChatTriagePatch, ifRevision?: number): Promise<ChatTriageResult> {
+    const body: Record<string, unknown> = {};
+    if (patch.pinned !== undefined) body.pinned = patch.pinned;
+    if (patch.done !== undefined) body.done = patch.done;
+    if (patch.restoreDoneAt !== undefined) body.restoreDoneAt = new Date(patch.restoreDoneAt).toISOString();
+    if (patch.snoozeUntil !== undefined) body.snoozeUntil = patch.snoozeUntil === null ? null : new Date(patch.snoozeUntil).toISOString();
+    if (ifRevision !== undefined) body.ifRevision = ifRevision;
+    const operation: PeerOperation = { operation: "setTriage", resourceId: chatId, body, idempotencyKey: mintPeerIdempotencyKey() };
+    const conflict = (error: PeerOperationError) =>
+      error.remoteCode === "revision_conflict"
+        ? { value: { conflict: Number(error.details?.currentRevision ?? Number.NaN) } }
+        : null;
+    let value: unknown;
+    try {
+      value = await this.mutate("triage", operation, conflict);
+    } catch (error) {
+      if (!(error instanceof HostChatControlError) || error.code !== "outcome_unknown") throw error;
+      value = await this.mutate("triage", operation, conflict);
+    }
+    const answer = record(value);
+    if ("conflict" in answer) {
+      // The refusal names the host's revision, not its entry: report just that rather than invent one.
+      const revision = answer.conflict;
+      return {
+        ok: false,
+        code: "revision_conflict",
+        entry: null,
+        ...(typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0 ? { currentRevision: revision } : {}),
+      };
+    }
+    const entry = remoteTriageEntry(answer);
+    if (!entry || answer.chatId !== chatId) throw new HostChatControlError({ code: "invalid_response", message: "The host's answer was incomplete." });
+    return { ok: true, entry };
   }
 
   /**
@@ -538,6 +657,15 @@ export class RemoteHostAdapter implements HostChatAdapter {
     return this.read("messagesWindow", { operation: "chat", resourceId: chatId }, mapHostChatLineage);
   }
 
+  /** One image's bytes, checked by the host against the chat; a host without the route answers `not_found`. */
+  attachmentContent(chatId: string, attachmentId: string): Promise<HostChatResult<PeerAttachmentContent>> {
+    return this.read(
+      "messagesWindow",
+      { operation: "attachmentContent", resourceId: chatId, itemId: attachmentId },
+      peerAttachmentContent,
+    );
+  }
+
   /** Runs a read the host must grant first, dropping its answer when the connection moved on. */
   private read<T>(capability: HostChatCapability, operation: PeerOperation, map: (value: unknown) => T): Promise<HostChatResult<T>> {
     if (!this.granted.has(capability))
@@ -676,6 +804,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
 
   dispose(): void {
     this.disposed = true;
+    liveAdapters.delete(this);
     this.offHostState();
     this.listeners.clear();
     this.chatListeners.clear();

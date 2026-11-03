@@ -34,6 +34,8 @@ const DESCRIPTION =
   "Ask the person 1-4 concise structured questions when a material choice cannot be inferred safely. " +
   "Each question needs 2-5 distinct options with short labels and useful descriptions. The app shows them as " +
   "quick replies and adds a custom answer and Skip automatically, so do not add Other or a skip option. " +
+  'If you recommend an option, list it first and end its label with "(Recommended)"; the app preselects it ' +
+  "(in a multi-select, mark each option you recommend). The marker counts toward the 60-character label limit. " +
   "The answer comes back as this tool's result; wait for it and do not guess.";
 
 export function botQuestionCandidate(botId: string, questions: BotQuestions): BotToolCandidate {

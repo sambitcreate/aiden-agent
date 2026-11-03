@@ -49,8 +49,10 @@ struct AidenCuaS1FormsHelper {
                     output.write(data)
                     output.write(Data([0x0A]))
                 } else {
+                    // Keep the request's id so only that request fails; an empty
+                    // id tells the client a request could not be read at all.
                     let fallback = CuaS1FormsResponse.failure(
-                        id: "",
+                        id: response.id,
                         code: .internalFailure,
                         message: "The form-fill helper could not encode its response."
                     )

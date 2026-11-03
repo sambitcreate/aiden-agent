@@ -93,6 +93,15 @@ test("does not steal commands from editable controls except explicit commands", 
     resolveCommandForKeyEvent(event("b", "KeyB"), bindings, { ...base, editable: true }),
     "sidebar.toggle",
   );
+  // Switching chats works from the message box, where focus usually is.
+  assert.equal(
+    resolveCommandForKeyEvent(event("3", "Digit3"), bindings, { ...base, editable: true }),
+    "chat.jump.3",
+  );
+  assert.equal(
+    resolveCommandForKeyEvent(event("}", "BracketRight", true), bindings, { ...base, editable: true }),
+    "chat.next",
+  );
   assert.equal(
     resolveCommandForKeyEvent(event("s", "KeyS"), bindings, {
       ...base,
@@ -203,4 +212,34 @@ test("studio commands never reserve a shortcut", () => {
   const bindings = effectiveBindings(undefined);
   assert.equal(bindings["design.open"], null);
   assert.equal(bindings["images.open"], null);
+});
+
+test("a key that matches no binding never reads the page-dependent context", () => {
+  const bindings = effectiveBindings(undefined);
+  const reads: string[] = [];
+  const context = Object.defineProperties({ ...base }, Object.fromEntries(
+    (["editable", "fileEditor", "terminal", "modal"] as const).map((name) => [
+      name,
+      { get: () => (reads.push(name), false) },
+    ]),
+  )) as CommandDispatchContext;
+  const typed = { key: "a", code: "KeyA", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false };
+  assert.equal(resolveCommandForKeyEvent(typed, bindings, context), null);
+  assert.equal(reads.length, 0, reads.join(", "));
+  // A real shortcut still consults the context before it runs.
+  assert.notEqual(resolveCommandForKeyEvent(event("k", "KeyK"), bindings, context), null);
+  assert.ok(reads.includes("modal"));
+});
+
+test("⌘/ opens the keyboard list from the message box too", () => {
+  const bindings = effectiveBindings(undefined);
+  assert.equal(
+    resolveCommandForKeyEvent(event("/", "Slash"), bindings, { ...base, editable: true }, "darwin"),
+    "shortcuts.show",
+  );
+  assert.equal(
+    resolveCommandForKeyEvent(event("/", "Slash"), bindings, { ...base, terminal: true }, "darwin"),
+    null,
+    "the terminal keeps it",
+  );
 });

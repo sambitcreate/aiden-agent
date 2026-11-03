@@ -9,6 +9,7 @@ import { MessageBubble } from "./message-bubble";
 import type { Attachment } from "../lib/types";
 import { worktreeProgressText } from "../lib/draft-git-menu";
 import type { WorktreeSendDecision, WorktreeSendView } from "../lib/draft-worktree-send";
+import { pauseWhenUnseen } from "../lib/offscreen-pause";
 
 export function DraftWorktreeSendView({
   text,
@@ -83,6 +84,7 @@ export function DraftWorktreeSendView({
           <Text
             variant="small"
             color="secondary"
+            ref={view.progress.phase === "ready" && view.status === "running" ? undefined : pauseWhenUnseen}
             className={
               view.progress.phase === "ready" && view.status === "running"
                 ? "min-w-0 truncate"

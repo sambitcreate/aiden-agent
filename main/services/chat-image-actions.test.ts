@@ -66,11 +66,48 @@ test("only an image stored in that chat can be saved or copied", async (t) => {
   ]) {
     await assert.rejects(invoke("chats:saveImageToDownloads", input));
     await assert.rejects(invoke("chats:copyImage", input));
+    await assert.rejects(invoke("chats:imageData", input));
   }
   assert.deepEqual(await fs.readdir(dir), []);
   assert.equal(clipboard.length, 0);
   assert.equal(await invoke("chats:copyImage", { chatId: "chat-1", attachmentId: "img" }), true);
   assert.deepEqual(clipboard, [Buffer.from(PNG, "base64")]);
+  assert.deepEqual(await invoke("chats:imageData", { chatId: "chat-1", attachmentId: "img" }), { data: PNG });
+});
+
+test("an image kept as a file is read from that file alone", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-image-actions-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
+  const reads: string[] = [];
+  const sha256 = "c".repeat(64);
+  registerChatImageActionHandlers({ handle: (channel, fn) => void handlers.set(channel, fn) }, {
+    getChat: async () => ({
+      messages: [{
+        id: "m1",
+        role: "assistant",
+        content: "",
+        createdAt: 1,
+        attachments: [
+          { id: "img", name: "Chart.png", mimeType: "image/png", kind: "image", size: 68, sha256 },
+          { id: "gone", name: "Gone.png", mimeType: "image/png", kind: "image", size: 68, sha256: "d".repeat(64) },
+        ],
+      }],
+    }),
+    readImage: async (hash, size) => {
+      reads.push(hash);
+      return hash === sha256 && size === 68 ? Buffer.from(PNG, "base64") : undefined;
+    },
+    downloadsDir: () => dir,
+    writeClipboardImage: () => undefined,
+    showItemInFolder: () => undefined,
+  });
+  const invoke = (channel: string, ...args: unknown[]) => Promise.resolve().then(() => handlers.get(channel)!({}, ...args));
+  assert.deepEqual(await invoke("chats:imageData", { chatId: "chat-1", attachmentId: "img" }), { data: PNG });
+  const saved = (await invoke("chats:saveImageToDownloads", { chatId: "chat-1", attachmentId: "img" })) as { path: string };
+  assert.deepEqual(await fs.readFile(saved.path), Buffer.from(PNG, "base64"));
+  await assert.rejects(invoke("chats:imageData", { chatId: "chat-1", attachmentId: "gone" }), /isn't saved/);
+  assert.deepEqual(reads, [sha256, sha256, "d".repeat(64)]);
 });
 
 test("file names lose separators, control characters and leading dots", () => {
@@ -78,6 +115,21 @@ test("file names lose separators, control characters and leading dots", () => {
   assert.equal(safeImageFileStem(".hidden\u0000name.jpg"), "hidden name");
   assert.equal(safeImageFileStem("..."), "Image");
   assert.equal(safeImageFileStem("x".repeat(400)).length, 120);
+});
+
+test("long names in 3- and 4-byte characters fit the 255-byte file name limit and are cut between characters", () => {
+  const zwj = String.fromCodePoint(0x200d);
+  const acute = String.fromCodePoint(0x0301);
+  for (const name of ["写真".repeat(100), "🌅".repeat(100), `👩🏽${zwj}🚀`.repeat(40), `e${acute}`.repeat(200)]) {
+    const stem = safeImageFileStem(`${name}.png`);
+    // The longest name saving can produce: stem, the " (999)" suffix and the longest extension.
+    assert.ok(Buffer.byteLength(`${stem} (999).heic`) <= 255, `${Buffer.byteLength(stem)} bytes`);
+    assert.ok(stem.length > 0 && name.startsWith(stem), "a prefix of the original name");
+    // The cut falls between whole graphemes: no lone surrogate, dangling joiner or bare letter.
+    const graphemes = (text: string) => [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].map((part) => part.segment);
+    const kept = graphemes(stem);
+    assert.deepEqual(kept, graphemes(name).slice(0, kept.length));
+  }
 });
 
 test("bidi overrides, isolates and C1 controls cannot disguise a saved file's name", () => {

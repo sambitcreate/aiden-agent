@@ -122,3 +122,9 @@ Plan: `docs/plans/completed/desktop-multi-host-control-plan.md` (with its PR 1â€
 - A disabled React Query still returns cached data: the context meter also checks the `contextPressure` capability before rendering.
 - `ProviderFailureActions.supports` limits a failure card's primary action; remote supports `try_again` and `continue` (compaction and provider sign-in happen on the host). Switch model opens the remote picker.
 - `ContextMeter` takes `ContextMeterPressure` (the 11 wire fields plus optional breakdown/anchor), so a remote projection renders without inventing `compressibleHistoryMessages`.
+
+## Paired-desktop connection diagnostics, 2026-10-21
+
+- PeerTransport keeps fixed DNS, refused, network, TLS and timeout categories; raw OS errors never enter renderer status. Actual request deadlines now report timeout rather than generic unavailability. Cancellation keeps its old unavailable result.
+- PeerHostManager preserves the category through retry backoff. Connections uses the last known route for actionable Tailscale or LAN recovery copy; alternate routes may have been tried. No network probes, grants, or shared Remote HTTP protocol changed. iOS and Android use their existing native connection diagnostics and do not consume this desktop IPC status.
+- Focused tests exercise a real request deadline, DNS lookup failure, supervisor recovery and route-specific presentation. Physical paired-machine acceptance remains separate.
