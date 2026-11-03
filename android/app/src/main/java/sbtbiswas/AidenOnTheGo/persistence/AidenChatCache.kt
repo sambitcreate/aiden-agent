@@ -197,12 +197,26 @@ class AidenChatCache(
         return summaries
     }
 
+    /**
+     * Saves [summaries] as the instance's rows. [merge], when given, runs
+     * under the cache lock just before the write, so rows another writer
+     * changed while this page was in flight (an Inbox swipe) can be kept
+     * over it in the same write.
+     */
     @Synchronized
     fun saveSummaries(
         summaries: List<AidenChatSummary>,
         instanceId: String,
         unchangedPrefixCount: Int = 0,
-        writeToken: Long = reserveChatWrite()
+        writeToken: Long = reserveChatWrite(),
+        merge: ((List<AidenChatSummary>) -> List<AidenChatSummary>)? = null
+    ): Boolean = writeSummaries(merge?.invoke(summaries) ?: summaries, instanceId, unchangedPrefixCount, writeToken)
+
+    private fun writeSummaries(
+        summaries: List<AidenChatSummary>,
+        instanceId: String,
+        unchangedPrefixCount: Int,
+        writeToken: Long
     ): Boolean {
         if (writeToken <= (purgeWriteTokens[instanceId] ?: 0L) ||
             writeToken < (summaryWriteTokens[instanceId] ?: 0L)) return false
@@ -321,11 +335,14 @@ class AidenChatCache(
         summaries.size <= maxSummaryCount &&
         summaries.map { it.id }.toSet().size == summaries.size
 
+    /** Apply a swipe to the current cached row without taking write priority from an in-flight list. */
     @Synchronized
-    fun upsertSummary(summary: AidenChatSummary, instanceId: String) {
-        val current = summariesForInstance(instanceId).associateBy { it.id }.toMutableMap()
-        current[summary.id] = summary
-        saveSummaries(current.values.toList(), instanceId)
+    fun updateSummary(id: String, instanceId: String, transform: (AidenChatSummary) -> AidenChatSummary) {
+        val rows = summariesForInstance(instanceId)
+        val current = rows.firstOrNull { it.id == id } ?: return
+        val updated = transform(current)
+        if (current != updated) saveSummaries(rows.map { if (it.id == id) updated else it }, instanceId,
+            writeToken = summaryWriteTokens[instanceId] ?: reserveChatWrite())
     }
 
     @Synchronized
@@ -394,9 +411,12 @@ class AidenChatCache(
                 // A freshly admitted chat is the one being viewed, so it is read;
                 // the server row state is kept until the next summary refresh.
                 // unread and lastRunFailed reset, so a viewed failure stops saying Failed.
+                // A chat detail carries no triage; the row's Inbox signals are kept,
+                // without the host placement that described the row before.
                 val existing = visibleSummaries[chat.id]
-                visibleSummaries[chat.id] = AidenChatSummary.fromChat(chat, existing?.activity ?: AidenChatSummaryActivity.IDLE)
+                val admitted = AidenChatSummary.fromChat(chat, existing?.activity ?: AidenChatSummaryActivity.IDLE)
                     .copy(rowStateWire = existing?.rowStateWire)
+                visibleSummaries[chat.id] = existing?.let(admitted::withInboxSignals)?.admittingReplies(chat) ?: admitted
             }
             publishSummaries(instanceId, visibleSummaries.values.toList())
         }

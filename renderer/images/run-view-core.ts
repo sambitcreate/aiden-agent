@@ -8,6 +8,7 @@ import type {
   RunSnapshot,
   RunSummary,
 } from "../shared/images/run-types";
+import type { GraphIssue } from "../shared/images/ipc-types";
 
 export function acceptSnapshot(current: RunSnapshot | null, next: RunSnapshot): RunSnapshot {
   if (!current) return next;
@@ -48,7 +49,7 @@ export function attemptDetail(attempt: AttemptSnapshot): string | null {
         : "Aiden quit before this was sent.";
     case "succeeded":
       if (attempt.cancelRequested) return "Finished before Stop took effect.";
-      return attempt.truncated ? "Extra images were dropped." : null;
+      return attempt.truncated ? "Some returned images were not kept." : null;
     default:
       return null;
   }
@@ -93,8 +94,10 @@ export function referenceSummary(request: ImageRunConsentRequest): string | null
   const parts: string[] = [];
   if (known > 0) parts.push(`${known} reference image${known === 1 ? "" : "s"} (${formatBytes(request.referenceBytes)})`);
   if (request.pendingReferenceCount > 0) {
-    const steps = request.pendingReferenceCount;
-    parts.push(`images from ${steps} earlier step${steps === 1 ? "" : "s"} in this run`);
+    // pendingReferenceCount is the worst case (each earlier Generate can return several images).
+    const steps = request.pendingReferenceSteps ?? 1;
+    const most = request.pendingReferenceCount;
+    parts.push(`up to ${most} image${most === 1 ? "" : "s"} from ${steps} earlier step${steps === 1 ? "" : "s"} in this run`);
   }
   return parts.join(" + ");
 }
@@ -148,8 +151,26 @@ export function outputsForNode(
   return current?.output ?? ownValue(latest, nodeId) ?? [];
 }
 
-export const START_ERROR_MESSAGES: Record<"expired" | "stale" | "model-unavailable", string> = {
+export const START_ERROR_MESSAGES: Record<"expired" | "stale" | "model-unavailable" | "too-many-runs", string> = {
   expired: "That approval expired. Choose Run again to review it.",
+  "too-many-runs": "Aiden is already running 4 image runs. Wait for one to finish or stop one, then try again.",
   stale: "The workflow changed after you reviewed it. Choose Run again to review the new plan.",
   "model-unavailable": "The chosen image model is no longer available. Choose another model.",
 };
+
+/**
+ * Notices for a run's graph issues. Several nodes can share a message (each missing its prompt),
+ * so each notice is keyed by its position and target and names the node it is about.
+ */
+export function issueNotices(
+  issues: readonly GraphIssue[],
+  nodeTitles: ReadonlyMap<string, string>,
+): { key: string; text: string }[] {
+  return issues.map((issue, index) => {
+    const title = issue.nodeId === undefined ? undefined : nodeTitles.get(issue.nodeId);
+    return {
+      key: `issue:${index}:${issue.nodeId ?? issue.edgeId ?? issue.code}`,
+      text: title ? `${title}: ${issue.message}` : issue.message,
+    };
+  });
+}

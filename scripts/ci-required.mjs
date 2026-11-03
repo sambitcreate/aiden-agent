@@ -19,7 +19,6 @@ export const REQUIRED_JOB_RULES = Object.freeze({
   ios: Object.freeze({ areas: Object.freeze(["ios"]) }),
   android: Object.freeze({ areas: Object.freeze(["android"]) }),
   "cli-linux": Object.freeze({ areas: Object.freeze(["cli"]) }),
-  "cli-playground": Object.freeze({ areas: Object.freeze(["cli"]) }),
 });
 
 const REQUIRED_JOB_NAMES = Object.freeze(Object.keys(REQUIRED_JOB_RULES));

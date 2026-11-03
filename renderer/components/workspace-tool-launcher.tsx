@@ -6,6 +6,7 @@ import {
   Globe,
   LayoutDashboard,
   List,
+  Minus,
   Plus,
   Smartphone,
   TerminalSquare,
@@ -142,7 +143,7 @@ export function WorkspaceToolLauncher({
             aria-expanded={more}
             onClick={() => setMore(!more)}
           >
-            <Plus className="size-4" />
+            {more ? <Minus className="size-4" /> : <Plus className="size-4" />}
             {more ? "Fewer tools" : "More tools…"}
           </Button>
         ) : null}

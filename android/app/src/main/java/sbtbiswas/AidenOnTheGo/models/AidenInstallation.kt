@@ -106,6 +106,10 @@ data class AidenServer(
     val supportsChatReadState: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_READ_STATE_FEATURE)
 
+    /** Inbox triage writes (`POST /chats/{chatId}/triage`); Done and Snooze appear only with it. */
+    val supportsChatTriage: Boolean
+        get() = features.contains(AidenRemoteProtocol.CHAT_TRIAGE_FEATURE)
+
     /**
      * `GET /chats/{chatId}/messages` pages that also carry the chat's metadata
      * (revisions 19 and 23). A revision-19 to 22 page has no title or model, so
@@ -210,6 +214,26 @@ data class AidenServer(
     /** Offered and held: show the Bot's "Needs you" cards and their actions. */
     val supportsBotIssues: Boolean
         get() = offersBotIssues && capabilities.contains(AidenRemoteCapability.BOT_ISSUES)
+
+    /** Offered and held (revision 49): a Workspace chat lists what it has running on the Mac. */
+    val supportsBackgroundJobs: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.CHAT_JOBS) == true &&
+            capabilities.contains(AidenRemoteCapability.CHAT_JOBS)
+
+    /** Offered and held (revision 50): pictures go to the upload routes as their own bytes. */
+    val supportsRawUploads: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.ATTACHMENTS_RAW) == true &&
+            capabilities.contains(AidenRemoteCapability.ATTACHMENTS_RAW)
+
+    /**
+     * Offered and held (revision 53), with `git:write` and `chat:write`: an empty Workspace chat
+     * may start in a new worktree on the Mac.
+     */
+    val supportsNewWorktrees: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.CHAT_NEW_WORKTREE) == true &&
+            capabilities.contains(AidenRemoteCapability.CHAT_NEW_WORKTREE) &&
+            capabilities.contains(AidenRemoteCapability.GIT_WRITE) &&
+            capabilities.contains(AidenRemoteCapability.CHAT_WRITE)
 
     /**
      * Chat messages may carry inline `visuals` (revision 28). Informational:

@@ -1,6 +1,6 @@
 import { randomInt } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, open, rm, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
   parseBotComputersSettingsPatch,
@@ -148,6 +148,7 @@ const START_DISK_BYTES = 5 * 1024 ** 3;
 const VNC_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
 /** The line Lume's detached launch writes to its log when it fails: the VM isn't coming up. */
 const LUME_LOG_ERROR = /^Error:/mu;
+const LOG_TAIL_BYTES = 16_384;
 
 function vncPassword(): string {
   let value = "";
@@ -353,12 +354,20 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     return parseLumeVmInfo(result.stdout);
   }
 
+  /** The log's last 16 KiB, read from the end: the launch watch polls it while Lume's log grows. */
   async function logTail(file: string): Promise<string> {
+    let handle: FileHandle | undefined;
     try {
-      const text = await readFile(file, "utf8");
-      return text.slice(-16_384);
+      handle = await open(file, "r");
+      const { size } = await handle.stat();
+      const length = Math.min(size, LOG_TAIL_BYTES);
+      const buffer = Buffer.alloc(length);
+      const { bytesRead } = await handle.read(buffer, 0, length, size - length);
+      return buffer.subarray(0, bytesRead).toString("utf8");
     } catch {
       return "";
+    } finally {
+      await handle?.close().catch(() => {});
     }
   }
 

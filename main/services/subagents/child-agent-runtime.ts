@@ -205,26 +205,35 @@ export class SubagentRuntimeRegistry {
   private childStreamOptions(sessionId: string, childRuntime: ResolvedModelRuntime, spec: SubagentChildSpec) {
     const options = buildAgentRuntimeOptions(sessionId, childRuntime);
     if (!options.streamFn || isAcpHarnessProvider(spec.runtime.provider.id)) return options;
+    const owner = { kind: "chat", id: spec.authority.chatId } as const;
+    const spending = this.spending;
+    const spendingMeter = spending ? createSpendingMeter({
+      spending,
+      owner,
+      refuse: true,
+      counts: () => spendCounts({
+        local: isLocalProviderDeployment(spec.runtime.provider),
+        provider: spec.runtime.provider,
+        models: spec.runtime.models,
+      }),
+    }) : undefined;
     let streamFn = options.streamFn;
     if (this.usageLimits) {
-      const limits = this.usageLimits({ kind: "chat", id: spec.authority.chatId }, spec.runtime.provider.label, {
+      const limits = this.usageLimits(owner, spec.runtime.provider.label, {
         observeFetch: childRuntime === spec.runtime,
       });
-      streamFn = withUsageLimitWait(streamFn, limits);
+      streamFn = withUsageLimitWait(streamFn, spending && spendingMeter ? {
+        ...limits,
+        beforeSendRefusal: async () => {
+          // The cap or shared chat spending can change while this request waits.
+          await spendingMeter.settled();
+          return (await limits.beforeSendRefusal?.()) ?? spending.refusal(owner);
+        },
+      } : limits);
     }
-    if (this.spending) {
-      // A helper's spending is its chat's. Over the limit, its next request is
-      // refused, so the helper stops and the chat ends after that step.
-      streamFn = createSpendingMeter({
-        spending: this.spending,
-        owner: { kind: "chat", id: spec.authority.chatId },
-        refuse: true,
-        counts: () => spendCounts({
-          local: isLocalProviderDeployment(spec.runtime.provider),
-          provider: spec.runtime.provider,
-          models: spec.runtime.models,
-        }),
-      }).wrap(streamFn);
+    if (spendingMeter) {
+      // A helper's spending is its chat's, including requests after a provider wait.
+      streamFn = spendingMeter.wrap(streamFn);
     }
     return { ...options, streamFn };
   }

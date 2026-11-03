@@ -2,7 +2,7 @@
 // executor supplies ledger writes and provider calls through hooks.
 import { topologicalWorkflowOrder, validateWorkflowGraph } from "../../../renderer/shared/images/ports.js";
 import type { OutputRef, RunScope, RunState } from "../../../renderer/shared/images/run-types.js";
-import type { ImageNodeType, WorkflowDocV1, WorkflowEdge, WorkflowNode } from "../../../renderer/shared/images/schema.js";
+import { IMAGE_WORKFLOW_LIMITS, type ImageNodeType, type WorkflowDocV1, type WorkflowEdge, type WorkflowNode } from "../../../renderer/shared/images/schema.js";
 
 export type NodeValue = { kind: "text"; text: string } | { kind: "images"; images: OutputRef[] };
 
@@ -24,8 +24,13 @@ export interface PlannedRequest {
   model: string;
   referenceCount: number;
   knownReferences: OutputRef[];
-  /** Reference inputs produced earlier in this same run; their images exist only after they finish. */
+  /**
+   * The most reference images that Generate steps earlier in this same run can supply. Their images
+   * exist only after they finish, so each counts as the per-request output cap, not as one.
+   */
   pendingReferenceCount: number;
+  /** The earlier Generate steps in this run that supply references. */
+  pendingReferenceSteps: number;
 }
 
 export interface RunPlan {
@@ -44,11 +49,34 @@ export interface PlanIssue {
   portId?: string;
 }
 
+/** What the image catalog says a model accepts. */
+export interface PlanModelCapability {
+  acceptsReferences: boolean;
+  /** The model's own per-request reference limit, when it is below Aiden's. */
+  maxReferences?: number;
+}
+
 export interface PlanContext {
   priorOutputs: Readonly<Record<string, readonly OutputRef[]>>;
   asset(assetId: string): OutputRef | undefined;
   maxRequests: number;
+  /** Undefined for a model the catalog does not list; the caller reports that model as unavailable. */
+  model?(provider: string, model: string): PlanModelCapability | undefined;
+  /** Stored size of a known reference image, for the request's reference byte bound. */
+  assetBytes?(assetId: string): number | undefined;
 }
+
+/**
+ * The bounds one image request is held to, matching the chat `generate_image` tool
+ * (pi-model-image-output.ts and resolvePiModelImageInputs in pi-model-tools.ts).
+ * Kept here so this planner stays free of the provider modules.
+ */
+export const IMAGE_REQUEST_BOUNDS = Object.freeze({
+  /** Images one provider request may return and the port keeps. */
+  maxOutputImages: 4,
+  maxReferenceBytes: 8 * 1024 * 1024,
+  maxReferencePixels: 40_000_000,
+});
 
 export type PlanResult = { ok: true; plan: RunPlan } | { ok: false; issues: PlanIssue[] };
 
@@ -151,17 +179,20 @@ export function planRun(doc: WorkflowDocV1, scope: RunScope, context: PlanContex
   const order = topologicalWorkflowOrder(doc).order.filter((id) => included.has(id));
   const steps = order.map((id) => toStep(nodes.get(id)!, incoming.get(id) ?? [], context));
   const stepById = new Map(steps.map((step) => [step.nodeId, step]));
+  const pendingSources = new Map<string, string[]>();
   const requests: PlannedRequest[] = steps
     .filter((step) => step.provider)
     .map((step) => {
       const knownReferences: OutputRef[] = [];
-      let pendingReferenceCount = 0;
+      const pendingFrom: string[] = [];
       for (const input of step.inputs) {
         if (input.port !== "references") continue;
         const value = seeded[input.source] ?? stepById.get(input.source)?.local;
         if (value?.kind === "images") knownReferences.push(...value.images);
-        else pendingReferenceCount += 1;
+        else pendingFrom.push(input.source);
       }
+      pendingSources.set(step.nodeId, pendingFrom);
+      const pendingReferenceCount = pendingFrom.length * IMAGE_REQUEST_BOUNDS.maxOutputImages;
       return {
         nodeId: step.nodeId,
         variant: step.variant,
@@ -170,11 +201,16 @@ export function planRun(doc: WorkflowDocV1, scope: RunScope, context: PlanContex
         referenceCount: knownReferences.length + pendingReferenceCount,
         knownReferences,
         pendingReferenceCount,
+        pendingReferenceSteps: pendingFrom.length,
       };
     });
   if (requests.length === 0) {
     return { ok: false, issues: [{ code: "no_requests", message: "Add a Generate Image node to run this workflow." }] };
   }
+  const referenceIssues = requests.flatMap((request) =>
+    referenceIssuesFor(request, pendingSources.get(request.nodeId) ?? [], nodes, context),
+  );
+  if (referenceIssues.length > 0) return { ok: false, issues: referenceIssues };
   if (requests.length > context.maxRequests) {
     return {
       ok: false,
@@ -187,6 +223,67 @@ export function planRun(doc: WorkflowDocV1, scope: RunScope, context: PlanContex
     };
   }
   return { ok: true, plan: { scope, steps, requests, seeded } };
+}
+
+function nodeName(node: WorkflowNode | undefined): string {
+  return `“${node?.title?.trim() || "Generate Image"}”`;
+}
+
+/**
+ * Refuses, before consent, a request that could never be sent: references into a model that takes
+ * none, more references than the model or Aiden allows in the worst case, or known references past
+ * the byte and pixel bounds the port enforces at send time.
+ */
+function referenceIssuesFor(
+  request: PlannedRequest,
+  pendingFrom: readonly string[],
+  nodes: ReadonlyMap<string, WorkflowNode>,
+  context: PlanContext,
+): PlanIssue[] {
+  if (request.referenceCount === 0) return [];
+  const issues: PlanIssue[] = [];
+  const nodeId = request.nodeId;
+  const capability = context.model?.(request.provider, request.model);
+  if (capability && !capability.acceptsReferences) {
+    issues.push({
+      code: "references_unsupported",
+      nodeId,
+      message: "This model does not accept reference images. Remove the reference connections or choose another model.",
+    });
+  } else {
+    const own = capability?.maxReferences;
+    const limit = own !== undefined && own > 0 ? Math.min(own, IMAGE_WORKFLOW_LIMITS.maxReferences) : IMAGE_WORKFLOW_LIMITS.maxReferences;
+    if (request.referenceCount > limit) {
+      const allowed = limit < IMAGE_WORKFLOW_LIMITS.maxReferences
+        ? `This model accepts at most ${limit} reference ${limit === 1 ? "image" : "images"}.`
+        : `Aiden sends at most ${limit} reference images per request.`;
+      const upstream = pendingFrom.length > 0
+        ? ` ${pendingFrom.map((id) => nodeName(nodes.get(id))).join(", ")} can ${pendingFrom.length > 1 ? "each " : ""}return up to ${IMAGE_REQUEST_BOUNDS.maxOutputImages} images.`
+        : "";
+      issues.push({
+        code: "too_many_references",
+        nodeId,
+        message: `This step could receive up to ${request.referenceCount} reference images.${upstream} ${allowed}`,
+      });
+    }
+  }
+  const bytes = request.knownReferences.reduce((sum, ref) => sum + (context.assetBytes?.(ref.assetId) ?? 0), 0);
+  if (bytes > IMAGE_REQUEST_BOUNDS.maxReferenceBytes) {
+    issues.push({
+      code: "reference_bytes",
+      nodeId,
+      message: `These reference images total ${(bytes / (1024 * 1024)).toFixed(1)} MiB. Aiden sends at most 8 MiB of reference images per request.`,
+    });
+  }
+  const pixels = request.knownReferences.reduce((sum, ref) => sum + ref.width * ref.height, 0);
+  if (pixels > IMAGE_REQUEST_BOUNDS.maxReferencePixels) {
+    issues.push({
+      code: "reference_pixels",
+      nodeId,
+      message: `These reference images total ${(pixels / 1_000_000).toFixed(1)} megapixels. Aiden sends at most 40 megapixels of reference images per request.`,
+    });
+  }
+  return issues;
 }
 
 /** What a consent approved: re-planning at start must reproduce it exactly. */

@@ -2,6 +2,7 @@ import * as React from "react";
 import type { ActivityMark } from "../shared/activity-marks";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import { cn } from "../lib/ui-utils";
+import { observeOffscreen } from "../lib/offscreen-pause";
 
 // Per-shape phase offsets (seconds) come from docs/activity-marks.md. They are
 // plain inline animation delays, so no custom properties are written per frame
@@ -113,29 +114,6 @@ function MarkShapes({ mark }: { mark: ActivityMark }) {
     case "helix-flat":
       return <Helix mark={mark} />;
   }
-}
-
-/**
- * One shared IntersectionObserver pauses every mark that scrolls out of view,
- * so long transcripts never tick animations nobody can see.
- */
-let sharedObserver: IntersectionObserver | null = null;
-function visibilityObserver(): IntersectionObserver | null {
-  if (typeof IntersectionObserver === "undefined") return null;
-  sharedObserver ??= new IntersectionObserver((entries) => {
-    for (const entry of entries) {
-      (entry.target as Element).toggleAttribute("data-offscreen", !entry.isIntersecting);
-    }
-  });
-  return sharedObserver;
-}
-
-/** Pause an element's animations while it is scrolled out of view (`data-offscreen`), on the shared observer. */
-export function observeOffscreen(node: Element): () => void {
-  const observer = visibilityObserver();
-  if (!observer) return () => undefined;
-  observer.observe(node);
-  return () => observer.unobserve(node);
 }
 
 function reduceMotionActive(): boolean {

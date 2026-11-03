@@ -452,3 +452,91 @@ test("the jump button is centred on the chat column the composer uses, not on th
   assert.equal(footerLayer.style.insetInlineEnd, "15px");
   assert.equal(jump.tabIndex, 0, "still reachable by keyboard");
 });
+
+test("small scrolls chained from an embedded frame keep the reader's place while the reply grows", () => {
+  const EmbeddedTranscript = ({ chunks }: { chunks: number }) => (
+    <ScrollArea autoScrollToBottom autoScrollDeps={[chunks]} streaming>
+      <iframe title="Interactive visual" sandbox="allow-scripts" />
+      <p>Reply chunk {chunks}</p>
+    </ScrollArea>
+  );
+  const view = render(<EmbeddedTranscript chunks={1} />);
+  const port = scrollport();
+  port.grow(40);
+  view.rerender(<EmbeddedTranscript chunks={2} />);
+  const initialBottom = port.bottom();
+
+  // Input inside a sandboxed frame never reaches the host's wheel listeners.
+  // Only the scroll chained out to the transcript is observable here.
+  port.moveTo(initialBottom - 0.5);
+  port.moveTo(initialBottom - 1);
+  port.moveTo(initialBottom - 1.5);
+  assert.equal(port.following(), false, "fractional upward movement accumulates");
+  port.grow(60);
+  view.rerender(<EmbeddedTranscript chunks={3} />);
+  assert.equal(port.top(), initialBottom - 1.5, "the next layout does not undo that scroll");
+
+  port.moveTo(port.bottom());
+  assert.equal(port.following(), true, "returning to the end resumes follow");
+});
+
+test("small chained scrolls add up even when a streaming chunk lands between them", () => {
+  const EmbeddedTranscript = ({ chunks }: { chunks: number }) => (
+    <ScrollArea autoScrollToBottom autoScrollDeps={[chunks]} streaming>
+      <iframe title="Interactive visual" sandbox="allow-scripts" />
+      <p>Reply chunk {chunks}</p>
+    </ScrollArea>
+  );
+  const view = render(<EmbeddedTranscript chunks={1} />);
+  const port = scrollport();
+  port.grow(40);
+  view.rerender(<EmbeddedTranscript chunks={2} />);
+
+  port.moveTo(port.bottom() - 0.5);
+  port.moveTo(port.bottom() - 1);
+  assert.equal(port.following(), true, "one pixel up is not yet a decision to read");
+  // A chunk arrives mid-gesture and the still-following view snaps to it.
+  port.grow(60);
+  view.rerender(<EmbeddedTranscript chunks={3} />);
+  assert.equal(port.top(), port.bottom());
+  port.moveTo(port.bottom() - 0.5);
+  assert.equal(port.following(), false, "the movement before the chunk still counts");
+  const place = port.top();
+  port.grow(60);
+  view.rerender(<EmbeddedTranscript chunks={4} />);
+  assert.equal(port.top(), place, "the next chunk leaves the reader's place alone");
+});
+
+test("opening another chat starts small upward movement over", () => {
+  const Chat = ({ chat, chunks }: { chat: string; chunks: number }) => (
+    <ScrollArea autoScrollToBottom autoScrollDeps={[chunks]} autoScrollResetKey={chat} streaming>
+      <iframe title="Interactive visual" sandbox="allow-scripts" />
+      <p>{chat} chunk {chunks}</p>
+    </ScrollArea>
+  );
+  const view = render(<Chat chat="first" chunks={1} />);
+  const port = scrollport();
+  port.grow(40);
+  view.rerender(<Chat chat="first" chunks={2} />);
+  port.moveTo(port.bottom() - 0.75);
+  assert.equal(port.following(), true);
+
+  port.grow(200);
+  view.rerender(<Chat chat="second" chunks={1} />);
+  assert.equal(port.top(), port.bottom(), "the new chat opens at its last line");
+  port.moveTo(port.bottom() - 0.5);
+  assert.equal(port.following(), true, "movement in the previous chat does not count toward this one");
+});
+
+test("a content-height clamp after an embedded visual shrinks keeps live follow armed", () => {
+  const view = render(<Transcript chunks={1} />);
+  const port = scrollport();
+  port.grow(40);
+  view.rerender(<Transcript chunks={2} />);
+  port.grow(-300);
+  port.moveTo(port.bottom());
+  assert.equal(port.following(), true, "the browser clamped the offset; no reader navigation occurred");
+  port.grow(80);
+  view.rerender(<Transcript chunks={3} />);
+  assert.equal(port.top(), port.bottom());
+});

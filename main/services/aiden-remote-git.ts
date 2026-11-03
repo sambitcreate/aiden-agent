@@ -48,7 +48,8 @@ export interface AidenRemoteGitFile {
 export type AidenRemoteGitProjection =
   | { kind: "review"; branch: string; uncommitted: number; files: AidenRemoteGitFile[] }
   | { kind: "diff"; displayPath: string; diff: string; truncated: boolean }
-  | { kind: "branches"; current: string; branches: string[] }
+  /** `unborn` marks a repository with no commits yet; its current branch is listed although it has none. */
+  | { kind: "branches"; current: string; branches: string[]; unborn?: true }
   | { kind: "comparison"; comparisonId: string; base: string; head: string; files: AidenRemoteGitFile[] }
   | { kind: "push-capability"; allowed: boolean; reason?: string; remote?: string; branch?: string }
   | { kind: "worktrees"; worktrees: Array<{ id: string; name: string; branch: string; managed: boolean }> }
@@ -428,6 +429,7 @@ export class AidenRemoteGitService {
           kind: "branches",
           current: safeString(branches.current ?? "HEAD", 500),
           branches: branches.branches.slice(0, 4_000).map((branch) => safeString(branch, 500)),
+          ...(branches.unborn ? { unborn: true as const } : {}),
         },
       };
     } catch (error) { mapGitError(error); }

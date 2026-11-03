@@ -9,6 +9,12 @@ export interface ImageModelOption {
   model: string;
   label: string;
   acceptsReferences: boolean;
+  /**
+   * Most reference images one request to this model may carry: the model's own
+   * per-request limit (e.g. 1 for single-image editors), never above Aiden's 4.
+   * Present only when `acceptsReferences` is true.
+   */
+  maxReferences?: number;
   textOutput: boolean;
   /** The default image model chosen in Settings → Image Generation. */
   isDefault?: boolean;
@@ -50,10 +56,33 @@ export type ImageGenerationResult =
     }
   | { kind: "failed"; code: ImageGenerationFailureCode; message: string; usage?: Usage };
 
+/**
+ * The local half of a request: model lookup and reference checks, with nothing sent.
+ * A refusal here never reached a provider, so it can never have been billed.
+ */
+export type ImageGenerationPreflight =
+  | {
+      kind: "ready";
+      /** Sends the checked request. Once called, the request may leave the machine. */
+      send(): Promise<ImageGenerationResult>;
+    }
+  | { kind: "failed"; code: ImageGenerationFailureCode; message: string };
+
 export interface ImageGenerationPort {
+  /** A registry that cannot load lists no models; only the caller's abort rejects. */
   listModels(signal?: AbortSignal): Promise<readonly ImageModelOption[]>;
-  /** Resolves provider outcomes as results; it never throws them. */
+  /** Every local check that cannot involve the network. Sends nothing. */
+  preflight(request: ImageGenerationRequest): Promise<ImageGenerationPreflight>;
+  /** preflight then send. Resolves provider outcomes as results; it never throws them. */
   generate(request: ImageGenerationRequest): Promise<ImageGenerationResult>;
+}
+
+/**
+ * The model name a consent sheet shows. A catalog-fetched name is provider-supplied,
+ * so the model id is added whenever it differs from the display name.
+ */
+export function imageModelConsentLabel(option: Pick<ImageModelOption, "label" | "model">): string {
+  return option.label === option.model ? option.model : `${option.label} (${option.model})`;
 }
 
 /**

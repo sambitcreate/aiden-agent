@@ -36,6 +36,8 @@ type RecorderOptions = TranscribeOptions;
 /** The provider is resolved at mic press; callers choose only the cloud model. */
 export interface VoiceRecorderOptions {
   model?: string;
+  /** The longest on-device recording kept, in 16 kHz samples. Defaults to main's on-device limit. */
+  maxRecordingSamples?: number;
 }
 
 export function useVoiceRecorder(onTranscript: (text: string) => void, options: VoiceRecorderOptions) {
@@ -147,7 +149,7 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
       streamRef.current = stream;
       chunksRef.current = [];
       setLiveTranscript({ committed: "", tentative: "" });
-      const recorder = await createVoiceRecorder(stream, selected.provider);
+      const recorder = await createVoiceRecorder(stream, selected.provider, optionsRef.current.maxRecordingSamples);
       if (!operationGate.isCurrent(token)) {
         if (recorder instanceof PcmRecorder) recorder.dispose();
         stopTracks();
@@ -277,6 +279,17 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
         }
       };
       recorderRef.current = recorder;
+      if (recorder instanceof PcmRecorder) {
+        // At the on-device limit the recorder drops further audio: stop and
+        // transcribe what was kept instead of looking like it still records.
+        // The limit can arrive before capture starts; the pending stop then
+        // ends it as soon as it does.
+        recorder.onlimit = () => {
+          if (!operationGate.isCurrent(token)) return;
+          pendingStopRef.current = true;
+          if (recorder.state === "recording") recorder.stop();
+        };
+      }
       if (recorder instanceof PcmRecorder && selected.provider === "local" && selected.localModel) {
         const preview = LocalLivePreview.start(selected.localModel, setLiveTranscript);
         localPreview = preview;

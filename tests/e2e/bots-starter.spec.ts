@@ -286,6 +286,8 @@ test("onboarding Start Chat creates the starter Bot and opens its chat when setu
   await expect(onboarding).toBeHidden();
 
   await expect(page.getByPlaceholder("Ask Chief of Staff")).toBeVisible();
+  // Ready to type in the Bot's chat straight away.
+  await expect(page.getByPlaceholder("Ask Chief of Staff")).toBeFocused();
   await expect(page.getByRole("button", { name: "Chief of Staff profile" })).toBeVisible();
   expect(
     await aiden.app.evaluate(() => (globalThis as unknown as { botOnboardingE2e: { created: number } }).botOnboardingE2e.created),

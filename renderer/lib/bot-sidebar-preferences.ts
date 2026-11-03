@@ -99,6 +99,20 @@ export function withBotViewed(
   };
 }
 
+/**
+ * The person marked the Bot's reply at `replyAt` read without opening its
+ * chat (the Inbox's Mark read). Only the seen reply moves, and only forward:
+ * the Bot's last view, which decides where `/bots` opens, stays as it was.
+ */
+export function withBotReplySeen(
+  preferences: BotSidebarPreferences,
+  botId: string,
+  replyAt: number | null,
+): BotSidebarPreferences {
+  if (replyAt === null || replyAt <= (preferences.seenReplyAt[botId] ?? 0)) return preferences;
+  return { ...preferences, seenReplyAt: newest({ ...preferences.seenReplyAt, [botId]: replyAt }) };
+}
+
 // An empty live set means the Bots list is loading, failed or stale, not that
 // every Bot was deleted, so it never prunes.
 export function withoutMissingBots(

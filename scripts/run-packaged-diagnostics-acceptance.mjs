@@ -118,6 +118,8 @@ for (const name of ["LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "PATH", "SHELL", "T
 Object.assign(environment, {
   AIDEN_CONFIG_DIR: config,
   AIDEN_RUNTIME_PROFILE: "production",
+  // Acceptance launches of a release build must not count as usage.
+  AIDEN_ANALYTICS: "0",
   HOME: root,
   XDG_CACHE_HOME: xdgCache,
   XDG_CONFIG_HOME: xdgConfig,

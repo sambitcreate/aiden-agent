@@ -1,3 +1,5 @@
+import type { FinishWorkspaceFollowThrough } from "./workspace-mutation-gate.js";
+import { workspaceCapabilityFields } from "./workspace-capabilities.js";
 import { MAX_PROVISIONED_BYTES } from "./managed-worktree-provisioner.js";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -135,13 +137,27 @@ export interface WorkspaceWorktreeApplicationDependencies {
     workspaceSubpath: string,
     signal?: AbortSignal,
   ): Promise<GitCreatedWorktree>;
+  /**
+   * Put back a deleted managed checkout at its recorded path and branch.
+   * Required only by `restoreDeleted`.
+   */
+  restoreDeletedCheckout?(
+    managed: ManagedWorktree,
+    root: string,
+    workspaceSubpath: string,
+    commit: (restored: GitCreatedWorktree) => Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<GitCreatedWorktree>;
   saveWorkspace(workspace: Workspace): Promise<Workspace>;
   removeWorkspace(workspaceId: string): Promise<void>;
   beginWorkspaceMutation(workspaceId: string): () => void;
   workspaceIsChanging(workspaceId: string): boolean;
   cancelWorkspaceOperations(workspaceId: string, exceptSignal: AbortSignal): Promise<void>;
   closeWorkspaceTerminals(workspaceId: string): Promise<void>;
+  /** Closes the worktree's Git metadata watcher; a later display read re-observes. */
+  closeWorkspaceGitWatcher?(workspaceId: string): void;
   cancelWorkspaceGeneration(workspaceId: string): Promise<void>;
+  closeWorkspaceFollowThrough?(workspaceId: string): Promise<FinishWorkspaceFollowThrough | void>;
   cancelWorkspaceSchedules(workspaceId: string): Promise<void>;
   resumeWorkspaceSchedules(workspaceId: string): Promise<void>;
   createWorkspaceId(): string;
@@ -223,6 +239,16 @@ class ManagedWorktreeSnapshotCleanupError extends Error {
  * Shared renderer/remote orchestration for Aiden-owned Git worktrees. All
  * filesystem and Git-admin identity is reloaded from persisted desktop state.
  */
+/**
+ * Room kept for `.worktreeinclude` copies: the provisioner's enforced
+ * maximum, so changing source files cannot outgrow a smaller, racy estimate.
+ * Provisioning is a no-op off macOS until the transfer helper gains a Linux
+ * port, so the reserve is only needed where it can actually run.
+ */
+function provisionedFilesReserve(): number {
+  return process.platform === "darwin" ? MAX_PROVISIONED_BYTES : 0;
+}
+
 export function createWorkspaceWorktreeApplicationService(
   dependencies: WorkspaceWorktreeApplicationDependencies,
 ) {
@@ -243,12 +269,8 @@ export function createWorkspaceWorktreeApplicationService(
     // Admit checkout allocation before creating its directory or Git branch.
     // ensureWorktreeRoot may already have created the empty managed root.
     const estimatedBytes = await dependencies.checkoutBytes(resolved.folderPath, start?.commit);
-    // Reserve the provisioner's enforced maximum, so changing source files
-    // cannot invalidate a smaller, racy pre-copy estimate. Provisioning is a
-    // no-op off macOS until the transfer helper gains a Linux port, so the
-    // reserve is only needed where provisioning can actually run.
-    const provisionedReserve =
-      process.platform === "darwin" ? MAX_PROVISIONED_BYTES : 0;
+    // Reserve room for the `.worktreeinclude` copies too.
+    const provisionedReserve = provisionedFilesReserve();
     const repository = await dependencies.repositoryPaths(resolved.folderPath);
     await dependencies.checkWorktreeAllocation(worktreeRoot, repository.commonDir, estimatedBytes + provisionedReserve);
     const worktree = await dependencies.createWorktree(
@@ -293,6 +315,8 @@ export function createWorkspaceWorktreeApplicationService(
       name: displayName(resolved.workspace, branch, requestedName),
       folderPath: worktree.workspacePath,
       permission: resolved.workspace.permission,
+      // A worktree starts with its project's skill and connector choices.
+      ...workspaceCapabilityFields(resolved.workspace),
       managedWorktree: {
         repositoryPath: worktree.repositoryPath,
         worktreePath: worktree.path,
@@ -451,6 +475,7 @@ export function createWorkspaceWorktreeApplicationService(
       const managed = workspace.managedWorktree;
       if (!managed) throw new Error("This workspace is not an Aiden-managed worktree.");
       const finishMutation = dependencies.beginWorkspaceMutation(workspaceId);
+      const followThroughChange: { finish?: FinishWorkspaceFollowThrough | void; committed: boolean } = { committed: false };
       try {
         await dependencies.cancelWorkspaceOperations(workspaceId, signal);
         const result = await withWorkspaceScheduleRestoration(
@@ -466,6 +491,7 @@ export function createWorkspaceWorktreeApplicationService(
           async ({ keepPaused }) => {
             await dependencies.closeWorkspaceTerminals(workspaceId);
             await dependencies.cancelWorkspaceGeneration(workspaceId);
+            followThroughChange.finish = await dependencies.closeWorkspaceFollowThrough?.(workspaceId);
             await dependencies.cancelWorkspaceSchedules(workspaceId);
 
             // Deletion policy classification. This advisory read happens before
@@ -663,7 +689,10 @@ export function createWorkspaceWorktreeApplicationService(
               workspacePathExists: () => dependencies.workspacePathExists(managed.worktreePath),
               worktreeRegistered: () => dependencies.managedWorktreeRegistered(managed),
               worktreeUsable: () => dependencies.managedWorktreeUsable(managed),
-              onDestructiveBoundary: keepPaused,
+              onDestructiveBoundary: () => {
+                followThroughChange.committed = true;
+                keepPaused();
+              },
               removeWorkspaceRecord: () => dependencies.removeWorkspace(workspaceId),
               reconciledResult: () => ({ branchDeleted: false }),
             });
@@ -676,7 +705,13 @@ export function createWorkspaceWorktreeApplicationService(
         dependencies.notifyChanged();
         return result;
       } finally {
-        finishMutation();
+        try {
+          await followThroughChange.finish?.(followThroughChange.committed);
+        } finally {
+          finishMutation();
+        }
+        // Local and Remote deletions both land here.
+        dependencies.closeWorkspaceGitWatcher?.(workspaceId);
       }
     },
   );
@@ -761,6 +796,7 @@ export function createWorkspaceWorktreeApplicationService(
           name: displayName(resolved.workspace, snapshot.branch, requestedName),
           folderPath: result.worktree.workspacePath,
           permission: resolved.workspace.permission,
+          ...workspaceCapabilityFields(resolved.workspace),
           managedWorktree: {
             repositoryPath: result.worktree.repositoryPath,
             worktreePath: result.worktree.path,
@@ -797,7 +833,98 @@ export function createWorkspaceWorktreeApplicationService(
     return operation;
   };
 
-  return { create, createFromBase, discardInterruptedWorktree, remove, restore };
+  /**
+   * A managed worktree whose folder was deleted outside Aiden: put its
+   * checkout back at the same path on its branch, as the branch stands now,
+   * and copy the `.worktreeinclude` files in again. Whatever was not
+   * committed went with the folder. The workspace keeps its id, so its chats
+   * carry on where they were.
+   */
+  const restoreDeleted = async (
+    owner: WorkspaceOperationDocumentOwner,
+    workspaceId: string,
+  ): Promise<Workspace> => {
+    const { restoreDeletedCheckout } = dependencies;
+    if (!restoreDeletedCheckout) throw new Error("Restoring a deleted worktree is unavailable.");
+    return dependencies.environment.runRecord(owner, workspaceId, async (workspace, signal) => {
+      // Taken before any await: runRecord has just checked that no other
+      // change (a Remove) holds the workspace, so none can slip in between.
+      const finishMutation = dependencies.beginWorkspaceMutation(workspaceId);
+      try {
+        const managed = workspace.managedWorktree;
+        if (!managed || !managed.worktreeGitDir || !managed.ownershipToken || !workspace.folderPath) {
+          throw new Error("This workspace is not a worktree Aiden can restore.");
+        }
+        if (workspace.permission === "none") {
+          throw new Error("This workspace has no folder access, so Aiden can't restore its worktree.");
+        }
+        if (await dependencies.workspacePathExists(managed.worktreePath)) {
+          throw new Error("The worktree folder is already there.");
+        }
+        const subpath = path.relative(managed.worktreePath, workspace.folderPath);
+        if (subpath.startsWith("..") || path.isAbsolute(subpath)) {
+          throw new Error("This workspace is not a worktree Aiden can restore.");
+        }
+        const root = await dependencies.ensureWorktreeRoot();
+        const record = (worktree: GitCreatedWorktree, provisionedFiles: string[]): Workspace => ({
+          ...workspace,
+          folderPath: worktree.workspacePath,
+          managedWorktree: {
+            ...managed,
+            worktreePath: worktree.path,
+            worktreeGitDir: worktree.worktreeGitDir,
+            ownershipToken: worktree.ownershipToken,
+            worktreeDevice: worktree.worktreeDevice,
+            worktreeInode: worktree.worktreeInode,
+            provisionedFiles,
+          },
+          updatedAt: dependencies.now(),
+        });
+        // Saved inside Git's lock: if the save fails, the new checkout is
+        // removed again and the record still matches the missing folder.
+        let saved: Workspace | undefined;
+        const worktree = await restoreDeletedCheckout(
+          managed,
+          root,
+          subpath,
+          async (restored) => {
+            saved = await dependencies.saveWorkspace(record(restored, []));
+          },
+          signal,
+        );
+        const provisionedFiles: string[] = [];
+        try {
+          // The same room check creation makes before copying: on a nearly
+          // full disk the checkout still comes back, without the copies.
+          await dependencies.checkCreateCapacity(worktree.path, provisionedFilesReserve());
+          await dependencies.provisionIncludedFiles({
+            sourceRoot: (await dependencies.repositoryPaths(managed.repositoryPath)).topLevel,
+            worktreePath: worktree.path,
+            signal,
+            onProvisioned: (relativePath) => provisionedFiles.push(relativePath),
+          });
+        } catch (error) {
+          // The checkout is back either way; a missing local file is easier
+          // to notice and fix than a worktree that stays gone.
+          dependencies.logError("git", "Aiden could not copy every .worktreeinclude file into a restored worktree.", error);
+        }
+        if (provisionedFiles.length) {
+          try {
+            saved = await dependencies.saveWorkspace(record(worktree, provisionedFiles));
+          } catch (error) {
+            // Unrecorded copies only make a later Remove ask before deleting them.
+            dependencies.logError("git", "Aiden could not record the files copied into a restored worktree.", error);
+          }
+        }
+        dependencies.notifyChanged();
+        return saved!;
+      } finally {
+        finishMutation();
+      }
+    });
+  };
+
+  return { create, createFromBase, discardInterruptedWorktree, remove, restore, restoreDeleted };
 }
 
 export type WorkspaceWorktreeApplicationService = ReturnType<

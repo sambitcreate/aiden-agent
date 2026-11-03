@@ -1,7 +1,7 @@
 import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Chat history CRUD IPC handlers.
 
-import { BrowserWindow, dialog, ipcMain, logger } from "../platform.js";
+import { BrowserWindow, dialog, ipcMain } from "../platform.js";
 import { chatStore } from "../services/chat-store.js";
 import { chatApplicationService } from "../services/chat-application-service-main.js";
 import { chatTitleService } from "../services/chat-title.js";
@@ -30,14 +30,8 @@ import {
   createFirstMessageCommitter,
   createWorktreeFirstMessageCommitter,
 } from "../services/chat-first-message-commit.js";
-import {
-  createFileFirstMessageWorktreeLedger,
-  createFirstMessageWorktreeCoordinator,
-} from "../services/first-message-worktree.js";
-import { workspaceWorktreeApplicationService } from "../services/workspace-worktree-application-service-main.js";
-import { ensureUserDataDir } from "../services/data-store.js";
+import { firstMessageWorktrees } from "../services/first-message-worktree-main.js";
 import type { Chat } from "../services/types.js";
-import path from "node:path";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import {
@@ -57,6 +51,8 @@ import {
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { chatActivityRegistry } from "../services/chat-activity.js";
 import { chatReadMarkers, markChatRead } from "../services/chat-read-markers-main.js";
+import { chatTriage } from "../services/chat-triage-main.js";
+import { setChatTriageFromRenderer } from "./chat-triage-params.js";
 import { contextLifecycleService } from "../services/context-lifecycle-service-main.js";
 import { forkSummaryService } from "../services/fork-summary-service-main.js";
 import { chatForkService } from "../services/chat-fork-service-main.js";
@@ -68,7 +64,8 @@ import { botApplicationService } from "../services/bot-application-service-main.
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "../services/pi-runtime-effect-store.js";
-import { chatReplyInterrupted } from "../services/interrupted-reply.js";
+import { chatReplyInterrupted, latestInterruptedRun } from "../services/interrupted-reply.js";
+import { interruptedWaits } from "../services/interrupted-waits-main.js";
 import { loadDurableTodoSnapshot } from "../services/rpiv-todo/snapshot.js";
 import {
   chatContextPressure,
@@ -87,7 +84,7 @@ export function registerChatHistoryHandlers(): void {
     },
     hostPlatformCapabilities,
     closeDeviceSessionsForChat,
-    chatReadMarkers,
+    chatTriage,
     rendererDocumentOwner,
     llmClient,
     unresolvedGuiArtifactMessage,
@@ -125,18 +122,6 @@ export function registerChatHistoryHandlers(): void {
     workspaceExists: async (workspaceId) => Boolean(await configStore.getWorkspace(workspaceId)),
     resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
   });
-  const firstMessageWorktrees = createFirstMessageWorktreeCoordinator({
-    ledger: createFileFirstMessageWorktreeLedger({
-      filePath: async () => path.join(await ensureUserDataDir(), "first-message-worktrees.json"),
-      logError: (message, error) => logger.error("git", message, error),
-    }),
-    createFromBase: (owner, sourceWorkspaceId, request) =>
-      workspaceWorktreeApplicationService.createFromBase(owner, sourceWorkspaceId, request),
-    discardInterruptedWorktree: (owner, sourceWorkspaceId, attempt) =>
-      workspaceWorktreeApplicationService.discardInterruptedWorktree(owner, sourceWorkspaceId, attempt),
-    getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
-    logError: (message, error) => logger.error("git", message, error),
-  });
   const commitFirstMessageInWorktree = createWorktreeFirstMessageCommitter({
     commit: commitFirstMessage,
     ensureWorktree: (request, seed, owner, onProgress) =>
@@ -173,6 +158,16 @@ export function registerChatHistoryHandlers(): void {
   let chatExportActive = false;
   ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
   ipcMain.handle("chats:readMarkers", () => chatReadMarkers.snapshot());
+  ipcMain.handle("chats:triage", () => chatTriage.snapshot());
+  ipcMain.handle("chats:setTriage", async (_event, id: unknown, patch: unknown, ifRevision?: unknown) =>
+    setChatTriageFromRenderer(
+      // The reconciled list the Remote triage route classifies chats from.
+      { chats: () => chatApplicationService.list(), triage: chatTriage },
+      id,
+      patch,
+      ifRevision,
+    ),
+  );
   ipcMain.handle("chats:markRead", async (_event, id: unknown, throughMessageId?: unknown) => {
     const chatId = asString(id, "id");
     if (throughMessageId !== undefined && (typeof throughMessageId !== "string" || !throughMessageId)) {
@@ -200,6 +195,27 @@ export function registerChatHistoryHandlers(): void {
       // Unreadable run history only hides the Resume offer.
       return false;
     }
+  });
+
+  // Saved waits too old to offer leave the disk at launch.
+  void interruptedWaits.prune().catch(() => undefined);
+
+  // The questions or approvals the interrupted reply was waiting on, questions first.
+  ipcMain.handle("chats:interruptedWaits", async (_event, id: unknown) => {
+    const chatId = asString(id, "id");
+    try {
+      await piRuntimeEffectStore.initialize();
+      const run = await latestInterruptedRun(piRuntimeEffectStore, chatId);
+      return run ? await interruptedWaits.forRun(chatId, run.startedAt) : [];
+    } catch {
+      // Unreadable history only leaves the plain Resume card.
+      return [];
+    }
+  });
+
+  ipcMain.handle("chats:dismissInterruptedWait", async (_event, id: unknown, waitId: unknown) => {
+    // The Inbox's Interrupted row and the Dock badge recount on a new activity revision.
+    if (await interruptedWaits.forget(asString(waitId, "waitId"), asString(id, "id"))) chatActivityRegistry.touch();
   });
 
   ipcMain.handle("chats:todoSnapshot", async (event, id: unknown) => {

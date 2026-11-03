@@ -13,17 +13,18 @@ import {
   FolderDown,
   FolderPlus,
   Keyboard,
+  MessageCircle,
   MessageSquare,
   Moon,
   Palette,
   RefreshCw,
   Search,
-  Server,
   Settings,
   Sun,
   Wrench,
 } from "lucide-react";
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList, toast } from "./ui";
+import { ProviderIcon } from "./provider-icon";
 import { cn } from "../lib/ui-utils";
 import { paletteCommands } from "../lib/command-system-core";
 import {
@@ -41,12 +42,14 @@ import {
   useAllRegularChats,
   useChats,
   useProviders,
+  useProvidersModelInfo,
   useSettings,
   queryKeys,
 } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useNewChatActions } from "../lib/new-chat-actions";
 import { newChatWorkspaceChoices } from "../lib/new-chat-workspaces";
+import { NO_WORKSPACE_LABEL, isNoWorkspace, noWorkspaceHome } from "../lib/no-workspace";
 import { useOpenWorkspacePathRow, useWorkspacePathIntake } from "../lib/use-workspace-path-intake";
 import type { WorkspacePathRow } from "../lib/workspace-menu";
 import { formatWorkspacePath, workspaceDisplayName } from "../lib/workspace-path-display";
@@ -59,7 +62,13 @@ import {
   useActiveChatModelTarget,
   useModelSelection,
 } from "../lib/use-model-selection";
-import { createModelEntries, isUsable, visibleModelEntries } from "../lib/model-picker-data";
+import {
+  createModelEntries,
+  isUsable,
+  modelInfoByValue,
+  visibleModelEntries,
+} from "../lib/model-picker-data";
+import type { Provider } from "../lib/types";
 import { availableSettingsDestinations } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import {
@@ -87,6 +96,8 @@ import {
   staticPaletteResult,
   type PaletteResult,
 } from "../lib/command-palette-results";
+
+const NO_PROVIDERS: Provider[] = [];
 
 const MODE_LABELS: Record<CommandPaletteMode, string> = {
   root: "Commands",
@@ -176,15 +187,20 @@ export function AppCommandPalette({
       return [];
     }
   });
+  // The same cached model names the composer's picker reads, so a model is named alike in both.
+  const modelInfo = useProvidersModelInfo(providers.data ?? NO_PROVIDERS);
   const models = React.useMemo(
     () =>
       settings.data
         ? visibleModelEntries(
-            createModelEntries(providers.data ?? []),
+            createModelEntries(
+              providers.data ?? [],
+              modelInfoByValue(providers.data ?? [], modelInfo.data),
+            ),
             settings.data?.hiddenModelsByProvider,
           )
         : [],
-    [providers.data, settings.data],
+    [providers.data, settings.data, modelInfo.data],
   );
   const unavailableModelProviders = React.useMemo(
     () => (providers.data ?? []).filter((provider) => !isUsable(provider)),
@@ -271,6 +287,9 @@ export function AppCommandPalette({
       })),
     [activeId, allChats.data, workspaces],
   );
+  const noWorkspaceHomeId = noWorkspaceHome(workspaces)?.id;
+  const noWorkspaceCurrent = isNoWorkspace(workspaces.find((workspace) => workspace.id === activeId));
+  const noWorkspaceResult = staticPaletteResult("No workspace just chat global settings");
   const openFolderResult = staticPaletteResult("Open folder… add workspace directory");
   const cloneResult = staticPaletteResult("Clone repository… git url github");
   // A typed path (`/`, `~`, `.`) is answered by one row: select, open or create.
@@ -317,7 +336,12 @@ export function AppCommandPalette({
     ],
     newChatIn: pathIntake.pathQuery
       ? pathRowResult ? [pathRowResult] : []
-      : [...workspaceResults.map(({ result }) => result), openFolderResult, cloneResult],
+      : [
+          ...workspaceResults.map(({ result }) => result),
+          ...(noWorkspaceHomeId ? [noWorkspaceResult] : []),
+          openFolderResult,
+          cloneResult,
+        ],
     models: providers.isLoading ? [] : providers.isError ? [modelRetryResult]
       : [...modelResults, ...unavailableResults].map(({ result }) => result),
     providers: [
@@ -887,10 +911,29 @@ export function AppCommandPalette({
                       ) : null}
                     </PaletteResultItem>
                   ))}
+                  {noWorkspaceHomeId ? (
+                    <PaletteResultItem
+                      result={noWorkspaceResult}
+                      onSelect={() => startChatIn(noWorkspaceHomeId)}
+                      aria-current={noWorkspaceCurrent ? "true" : undefined}
+                      className="mt-1 min-h-11 px-3"
+                    >
+                      <MessageCircle className="size-4 shrink-0 text-secondary" />
+                      <span className="flex min-w-0 flex-1 items-baseline gap-2">
+                        <span className="min-w-0 shrink truncate">{NO_WORKSPACE_LABEL}</span>
+                        <span className="min-w-0 flex-1 truncate text-small text-tertiary">
+                          Just chat, with your global settings
+                        </span>
+                      </span>
+                      {noWorkspaceCurrent ? (
+                        <span className="shrink-0 text-small text-tertiary">current</span>
+                      ) : null}
+                    </PaletteResultItem>
+                  ) : null}
                   <PaletteResultItem
                     result={openFolderResult}
                     onSelect={openFolderForChat}
-                    className="mt-1 min-h-11 px-3"
+                    className={noWorkspaceHomeId ? "min-h-11 px-3" : "mt-1 min-h-11 px-3"}
                   >
                     <FolderPlus className="size-4 shrink-0 text-secondary" />
                     <span className="min-w-0 flex-1 truncate">Open folder…</span>
@@ -937,7 +980,13 @@ export function AppCommandPalette({
                           aria-current={selected ? "true" : undefined}
                           className="min-h-11 px-3"
                         >
-                          <Bot className="size-4 shrink-0 text-secondary" />
+                          <ProviderIcon
+                            providerId={entry.providerId}
+                            providerLabel={entry.providerLabel}
+                            modelId={entry.model}
+                            artwork={entry.providerArtwork}
+                            className="size-4 text-secondary"
+                          />
                           <span className="min-w-0 flex-1 truncate">{entry.label}</span>
                           <ItemDetail>{entry.providerLabel}</ItemDetail>
                           {selected ? (
@@ -965,7 +1014,12 @@ export function AppCommandPalette({
                           }}
                           className="min-h-11 px-3"
                         >
-                          <Server className="size-4 shrink-0 text-secondary" />
+                          <ProviderIcon
+                            providerId={provider.id}
+                            providerLabel={provider.label}
+                            artwork={provider.artwork}
+                            className="size-4 text-secondary"
+                          />
                           <span className="min-w-0 flex-1 truncate">{provider.label} models</span>
                           <ItemDetail>
                             {provider.models.length > 0 ? "Setup needed" : "No models available"}
@@ -1023,7 +1077,12 @@ export function AppCommandPalette({
                       }}
                       className="min-h-11 px-3"
                     >
-                      <Server className="size-4 shrink-0 text-secondary" />
+                      <ProviderIcon
+                        providerId={provider.id}
+                        providerLabel={provider.label}
+                        artwork={provider.artwork}
+                        className="size-4 text-secondary"
+                      />
                       <span className="min-w-0 flex-1 truncate">{provider.label}</span>
                       <ItemDetail>
                         {provider.hasKey || !provider.needsKey ? "Connected" : "Setup needed"}

@@ -160,6 +160,8 @@ export async function runRebootMigrationPackagedAcceptance(suppliedApp) {
   Object.assign(environment, {
     AIDEN_CONFIG_DIR: portableConfig,
     AIDEN_RUNTIME_PROFILE: "production",
+    // Acceptance launches of a release build must not count as usage.
+    AIDEN_ANALYTICS: "0",
     AIDEN_SUBAGENTS_ENABLED: "1",
     AIDEN_SUBAGENTS_V2_ENABLED: "1",
     HOME: root,

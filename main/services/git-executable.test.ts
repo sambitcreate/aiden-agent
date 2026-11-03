@@ -45,7 +45,16 @@ test("Homebrew after the Apple shim works without developer tools", async () => 
 test("custom Git and non-macOS do not probe developer tools", async () => {
   const f = fixture({ "/custom/git": "/custom/git" });
   assert.equal(await resolveGitExecutable("/custom/git", "/workspace", {}, undefined, f.deps), "/custom/git");
-  assert.equal(await resolveGitExecutable("git", "/workspace", {}, undefined, { ...f.deps, platform: "linux" }), "git");
+  assert.equal(await resolveGitExecutable("git", "/workspace", { PATH: "/custom" }, undefined, { ...f.deps, platform: "linux" }), "/custom/git");
+  assert.equal(f.probes, 0);
+});
+
+test("Linux resolves Git from absolute PATH entries and never from the workspace", async () => {
+  const f = fixture({ "/workspace/git": "/workspace/git", "/usr/bin/git": "/usr/bin/git" });
+  const linux = { ...f.deps, platform: "linux" as const };
+  // On Linux /usr/bin/git is a real Git, not an installer shim.
+  assert.equal(await resolveGitExecutable("git", "/workspace", { PATH: ".::/usr/bin" }, undefined, linux), "/usr/bin/git");
+  await assert.rejects(resolveGitExecutable("git", "/workspace", { PATH: ":.:tools" }, undefined, linux), /Git is not installed/);
   assert.equal(f.probes, 0);
 });
 
@@ -198,9 +207,16 @@ test("concurrent commands share one resolution and one caller's cancellation doe
   assert.equal(f.inspected.filter((p) => p === "/usr/bin/git").length, 1);
 });
 
-test("memoized resolver leaves non-macOS binaries untouched", async () => {
+test("memoized resolver leaves Windows binaries to the OS lookup", async () => {
   const f = memoFixture({});
-  const resolve = createGitExecutableResolver({ ...f.deps, platform: "linux" });
+  const resolve = createGitExecutableResolver({ ...f.deps, platform: "win32" });
   assert.equal(await resolve("git", "/w", {}), "git");
   assert.deepEqual(f.inspected, []);
+});
+
+test("memoized resolver on Linux skips a workspace-relative PATH entry", async () => {
+  const f = memoFixture({ "/w/git": "/w/git", "/usr/bin/git": "/usr/bin/git" });
+  const resolve = createGitExecutableResolver({ ...f.deps, platform: "linux" });
+  assert.equal(await resolve("git", "/w", { PATH: ".:/usr/bin" }), "/usr/bin/git");
+  assert.ok(!f.inspected.includes("/w/git"));
 });

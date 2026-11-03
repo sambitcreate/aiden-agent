@@ -16,6 +16,7 @@ import { runCuaDriverCommand, terminateDirectChild } from "./process.js";
 import { CuaDriverSession } from "./session.js";
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
+const MAX_CLEANUP_RETRIES = 3;
 const MAX_BRIDGE_DIAGNOSTIC_BYTES = 8 * 1024;
 const MAX_READY_BYTES = 64 * 1024;
 
@@ -151,6 +152,7 @@ export class CuaDriverHost {
   private readonly shutdownController = new AbortController();
   private cleanupPromise: Promise<void> = Promise.resolve();
   private pendingCleanupDirectories = new Set<string>();
+  private readonly cleanupRetryFailures = new Map<string, number>();
 
   constructor(private readonly options: CuaDriverHostOptions) {
     const unsafeOptions = options as CuaDriverHostOptions & {
@@ -477,11 +479,23 @@ export class CuaDriverHost {
     };
   }
 
+  // A directory that keeps failing (for example EPERM after a permissions
+  // change) must not block every later session, so it is retried a bounded
+  // number of times and then left behind.
   private async retryPendingCleanup(): Promise<void> {
     await this.cleanupPromise;
     for (const directory of [...this.pendingCleanupDirectories]) {
-      await this.removeDirectory(directory);
+      try {
+        await this.removeDirectory(directory);
+      } catch {
+        const failures = (this.cleanupRetryFailures.get(directory) ?? 0) + 1;
+        if (failures < MAX_CLEANUP_RETRIES) {
+          this.cleanupRetryFailures.set(directory, failures);
+          continue;
+        }
+      }
       this.pendingCleanupDirectories.delete(directory);
+      this.cleanupRetryFailures.delete(directory);
     }
   }
 }

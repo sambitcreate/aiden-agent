@@ -89,3 +89,21 @@ test("a step the person stopped is a neutral line, never an issue or a block, an
   assert.equal(screen.queryByText(/Couldn’t/u), null);
   assert.equal(screen.queryByText(/blocked/iu), null);
 });
+
+test("next-message timing retains completed Detailed work without a live label, then folds", () => {
+  const { rerender } = render(<BotActivityRecap steps={TURN} durationMs={18_000} live={false} level="detailed" retainDetails />);
+  assert.ok(screen.getByRole("list", { name: "Steps" }));
+  assert.equal(screen.queryByText(/^Working/u), null);
+  rerender(<BotActivityRecap steps={TURN} durationMs={18_000} live={false} level="detailed" />);
+  assert.equal(screen.queryByRole("list", { name: "Steps" }), null);
+});
+
+test("global detail modes respect Bot Summary and explicit disclosure choices", () => {
+  const { rerender } = render(<BotActivityRecap steps={TURN} durationMs={18_000} live={false} level="summary" mode="verbose" />);
+  assert.equal(screen.queryByRole("list", { name: "Steps" }), null);
+  rerender(<BotActivityRecap steps={TURN} durationMs={18_000} live={false} level="detailed" mode="verbose" />);
+  assert.ok(screen.getByRole("list", { name: "Steps" }));
+  fireEvent.click(screen.getByRole("button"));
+  rerender(<BotActivityRecap steps={TURN} durationMs={18_000} live={false} level="detailed" mode="detailed" retainDetails />);
+  assert.equal(screen.queryByRole("list", { name: "Steps" }), null);
+});

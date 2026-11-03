@@ -87,6 +87,7 @@ test("script runner maps stdout, nonzero exit, timeout, output bounds, and cance
     const success = await runScheduledScript(ok, { cwd: files.root });
     assert.equal(success.stdout, "hello");
     assert.equal(success.exitCode, 0);
+    assert.equal(success.backgroundStopped, false);
     const failure = await runScheduledScript(fail, { cwd: files.root });
     assert.equal(failure.exitCode, 7);
     assert.equal(failure.stderr, "bad");
@@ -125,6 +126,55 @@ test("cancellation kills descendants even after the script leader exits", async 
     assert.equal((await result).aborted, true);
     assert.ok(Date.now() - startedAt < 3_000, "process group should settle after cancellation");
   } finally {
+    await files.cleanup();
+  }
+});
+
+test("a script that leaves a background job on its output still finishes", async () => {
+  if (process.platform === "win32") return;
+  const files = await fixture();
+  try {
+    const script = path.join(files.root, "daemon.sh");
+    await fs.writeFile(script, "#!/bin/bash\nsleep 30 &\necho started", { mode: 0o755 });
+    const startedAt = Date.now();
+    const result = await runScheduledScript(script, { cwd: files.root, timeoutMs: 35_000 });
+    assert.ok(Date.now() - startedAt < 10_000, "the run must not wait for the 30 s job or the timeout");
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.timedOut, false);
+    assert.equal(result.stdout.trim(), "started");
+    assert.equal(result.backgroundStopped, true, "the caller learns the background job was stopped");
+  } finally {
+    await files.cleanup();
+  }
+});
+
+test("scripts run without Aiden's own credentials and with the agent PATH", async () => {
+  if (process.platform === "win32") return;
+  const files = await fixture();
+  const saved = { secret: process.env.AIDEN_TELEGRAM_BOT_TOKEN, tooling: process.env.NPM_TOKEN, path: process.env.PATH };
+  try {
+    process.env.AIDEN_TELEGRAM_BOT_TOKEN = "aiden-secret";
+    process.env.NPM_TOKEN = "tooling-token";
+    process.env.PATH = "/usr/bin:/bin";
+    const script = path.join(files.root, "env.sh");
+    await fs.writeFile(
+      script,
+      '#!/bin/bash\nprintf "%s|%s|%s" "${AIDEN_TELEGRAM_BOT_TOKEN-unset}" "${NPM_TOKEN-unset}" "$PATH"',
+      { mode: 0o755 },
+    );
+    const result = await runScheduledScript(script, { cwd: files.root });
+    const [secret, tooling, scriptPath] = result.stdout.split("|");
+    assert.equal(secret, "unset");
+    assert.equal(tooling, "tooling-token");
+    if (process.platform === "darwin") {
+      // A GUI launch's short PATH is extended so Homebrew interpreters resolve.
+      assert.ok(scriptPath!.split(":").includes("/opt/homebrew/bin"));
+    }
+  } finally {
+    for (const [name, value] of [["AIDEN_TELEGRAM_BOT_TOKEN", saved.secret], ["NPM_TOKEN", saved.tooling], ["PATH", saved.path]] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
     await files.cleanup();
   }
 });

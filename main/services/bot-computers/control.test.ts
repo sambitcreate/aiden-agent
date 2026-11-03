@@ -123,6 +123,51 @@ test("one screen is cached per run and dropped when the computer stops or restar
   assert.deepEqual(closed, ["screen-1", "screen-2"]);
 });
 
+test("a caller leaving a shared screen open cancels only its own wait; the open ends when every caller has left", async () => {
+  const state = { running: true, port: 5900 };
+  const fake = fakeHost(state);
+  const closed: string[] = [];
+  const opens: Array<{ signal: AbortSignal | undefined; finish: () => void }> = [];
+  const sessions = createBotComputerSessions({ host: fake.host, control: createBotComputerControl() });
+  sessions.setScreenFactory(
+    (_connection, signal) =>
+      new Promise<BotComputerScreen>((resolve, reject) => {
+        const id = `screen-${opens.length + 1}`;
+        signal?.addEventListener("abort", () => reject(new Error("open cancelled")), { once: true });
+        opens.push({ signal, finish: () => resolve(screen(closed, id)) });
+      }),
+  );
+
+  // The Computer tab's grant starts the open; the Bot's call joins it.
+  const tab = new AbortController();
+  const tabWait = sessions.runningScreen("ada", tab.signal);
+  const bot = new AbortController();
+  const botWait = sessions.screen("ada", bot.signal);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(opens.length, 1, "one open for the run");
+  tab.abort();
+  await assert.rejects(tabWait, (error: unknown) => error instanceof BotComputerError && error.code === "cancelled");
+  assert.equal(opens[0].signal?.aborted, false, "the Bot is still waiting");
+  opens[0].finish();
+  const shared = await botWait;
+  assert.equal(await sessions.screen("ada"), shared);
+
+  // A new run's open that every caller abandons is cancelled and not cached.
+  state.port = 5901;
+  const only = new AbortController();
+  const abandoned = sessions.screen("ada", only.signal);
+  await new Promise((resolve) => setImmediate(resolve));
+  only.abort();
+  await assert.rejects(abandoned, (error: unknown) => error instanceof BotComputerError && error.code === "cancelled");
+  assert.equal(opens[1].signal?.aborted, true);
+  const next = sessions.screen("ada");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(opens.length, 3, "the abandoned open is not reused");
+  opens[2].finish();
+  await next;
+  assert.deepEqual(closed, ["screen-1"], "the first run's screen closed when its endpoint changed");
+});
+
 test("the pointer registry keeps the last valid action point and activity reaches listeners", () => {
   const fake = fakeHost({ running: true, port: 5900 });
   const activity = createBotComputerActivity();

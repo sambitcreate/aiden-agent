@@ -11,6 +11,14 @@ struct AidenIntentWorkspaceRecord: Codable, Equatable, Sendable {
     let id: String
     let instanceId: String
     let name: String
+    /// For the Chats entry: the hidden No workspace folders it stands for, so a link or Shortcut
+    /// that remembers one of them still finds Chats on a Mac that isn't the active one.
+    var groupedIDs: [String]? = nil
+
+    /// The catalog id a remembered workspace id is listed under: a hidden folder maps to Chats.
+    static func listedID(for workspaceID: String, in records: [AidenIntentWorkspaceRecord]) -> String {
+        records.first { $0.groupedIDs?.contains(workspaceID) == true }?.id ?? workspaceID
+    }
 }
 
 struct AidenIntentCatalogSnapshot: Codable, Equatable, Sendable {

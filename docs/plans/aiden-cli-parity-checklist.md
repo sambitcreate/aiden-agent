@@ -1,5 +1,7 @@
 # Aiden CLI — desktop feature parity checklist
 
+**2026-10-30: interactive CLI retired.** The CLI became a serve-only headless server ([plan](aiden-serve-only-cli.md)). Rows delivered through the TUI, slash commands, terminal widgets, themes, `aiden theme`, `aiden reset` or the first-run extension were removed with it; the server, Remote, Bots, scheduling, MCP and admin-command rows still apply. The checklist below is kept as history.
+
 Companion to [aiden-cli-plan.md](aiden-cli-plan.md). Compiled 2026-09-04 from three parallel
 inventories of the desktop app (chat/session, providers/settings, automation/remote). For each
 item: what it does, where it lives, whether the core is portable (no `electron` / `platform.js`

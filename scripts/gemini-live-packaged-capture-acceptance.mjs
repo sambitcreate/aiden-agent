@@ -204,6 +204,7 @@ async function runAcceptance() {
           ...process.env,
           AIDEN_CONFIG_DIR: configDir,
           AIDEN_RUNTIME_PROFILE: "production",
+          AIDEN_ANALYTICS: "0",
           [ACCEPTANCE_ENV]: "1",
           [TOKEN_ENV]: token,
           [PROFILE_ENV]: profile,

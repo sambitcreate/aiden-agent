@@ -1,6 +1,8 @@
 // Chat top bar pieces: the chat title menu, the workspace chip beside it, and
 // the compact workspace tool buttons on the trailing side.
 
+import { openWorkspaceSettings } from "./workspace-settings-dialog";
+import { workspaceHasOwnSettings } from "../lib/workspace-settings-view";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ChevronDown,
@@ -11,7 +13,9 @@ import {
   FolderGit2,
   FolderOpen,
   GitBranch,
+  MessageCircle,
   Pencil,
+  Settings2,
   SquareTerminal,
   Users,
 } from "lucide-react";
@@ -197,7 +201,7 @@ export function WorkspaceChip({
     menuOpen && isRepo && git?.hasRemote === true,
   );
   const githubUrl = identity.data ? githubRepositoryUrl(identity.data.canonicalKey) : null;
-  const Icon = isRepo ? FolderGit2 : Folder;
+  const Icon = isRepo ? FolderGit2 : workspace.noWorkspace ? MessageCircle : Folder;
 
   if (!folderPath) {
     return (
@@ -295,6 +299,15 @@ export function WorkspaceChip({
           <DropdownMenuItem onSelect={() => void copyToClipboard(branch, "Branch name")}>
             Copy branch name
           </DropdownMenuItem>
+        ) : null}
+        {workspaceHasOwnSettings(workspace) ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => openWorkspaceSettings(workspace.id)}>
+              <Settings2 aria-hidden="true" className="size-4" />
+              Workspace settings…
+            </DropdownMenuItem>
+          </>
         ) : null}
       </DropdownMenuContent>
     </DropdownMenu>

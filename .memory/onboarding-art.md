@@ -76,3 +76,8 @@ A gitignored throwaway at `tmp/onboarding-art-preview.html` renders the real gal
   and checks neighbours there, because hiding a tile makes two others adjacent.
 - `guided-setup.spec.ts` substitutes `app:getInfo` capabilities to render the Bot computers tile on an Apple
   silicon Mac (art and description under Reduce Motion) and its absence on an Intel Mac.
+
+## Off-screen pause (2026-10-29)
+Each gallery tile joins the shared off-screen observer (`pauseWhenUnseen` from `renderer/lib/offscreen-pause.ts`).
+`onboarding-art.css` pauses `.oa-art` animations under `.oa-tile[data-offscreen]` or `:root[data-document-hidden]`.
+Paused tiles are out of view, so nothing visible changes. Covered by `renderer/components/onboarding-feature-gallery.test.tsx`.

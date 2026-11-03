@@ -9,7 +9,11 @@ import {
   ATOMIC_PASTE_SCRIPT,
   createSecureInputPrefetch,
   detectMacSecureInput,
+  KEYSTROKE_SENT_MARKER,
+  PASTE_SCRIPT_HANDLERS,
+  PasteAfterKeystrokeError,
   pasteTranscript,
+  runAtomicMacPaste,
   runJxa,
   SECURE_INPUT_PROBE_SCRIPT,
   type PasteDeps,
@@ -32,7 +36,14 @@ function harness(overrides: Partial<PasteDeps> = {}) {
     },
     ...overrides,
   };
-  return { deps, clipboard: () => clipboard, pastedText: () => pastedText };
+  return {
+    deps,
+    clipboard: () => clipboard,
+    setClipboard: (value: unknown) => {
+      clipboard = value;
+    },
+    pastedText: () => pastedText,
+  };
 }
 
 test("native paste transaction preserves all pasteboard representations and rechecks focus", () => {
@@ -43,15 +54,35 @@ test("native paste transaction preserves all pasteboard representations and rech
   assert.match(ATOMIC_PASTE_SCRIPT, /quietWindow/);
   assert.match(ATOMIC_PASTE_SCRIPT, /is not transcriptText then return "pasted"/);
   assert.match(ATOMIC_PASTE_SCRIPT, /set the clipboard to previousClipboard/);
-  assert.match(
-    ATOMIC_PASTE_SCRIPT,
-    /deliveredValue is originalValue or deliveredValue does not contain transcriptText then return "copied"/,
-  );
-  assert.ok(
-    ATOMIC_PASTE_SCRIPT.indexOf("deliveredValue is originalValue") <
-      ATOMIC_PASTE_SCRIPT.indexOf("set the clipboard to previousClipboard"),
-  );
 });
+
+/** Runs the shared paste handlers under osascript with a test-only run handler. */
+async function runPasteHandlers(body: string, args: string[]) {
+  const script = `${PASTE_SCRIPT_HANDLERS}\n\non run argv\n${body}\nend run`;
+  return executeFile("/usr/bin/osascript", ["-e", script, "--", ...args]);
+}
+
+test(
+  "the delivery verdict counts only new, case-exact copies of the transcript",
+  { skip: process.platform !== "darwin" },
+  async () => {
+    const verdict = async (fieldValue: string, transcript: string, priorCount: number) =>
+      (
+        await runPasteHandlers(
+          "return my deliveryVerdict(item 1 of argv, item 2 of argv, (item 3 of argv) as integer)",
+          [fieldValue, transcript, String(priorCount)],
+        )
+      ).stdout.trim();
+    // A Terminal or field that already said "yes" before ⌘V is not a delivery.
+    assert.equal(await verdict("$ yes", "yes", 1), "unconfirmed");
+    assert.equal(await verdict("yes and yes", "yes", 1), "confirmed");
+    assert.equal(await verdict("first line", "first line", 0), "confirmed");
+    assert.equal(await verdict("Hello World", "hello world", 0), "unconfirmed");
+    assert.equal(await verdict("", "hello world", 0), "unconfirmed");
+    // The paste replaced a selected copy: the count did not rise, so it stays unconfirmed.
+    assert.equal(await verdict("hello world", "hello world", 1), "unconfirmed");
+  },
+);
 
 test(
   "native paste transaction is valid AppleScript",
@@ -59,12 +90,7 @@ test(
   async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "aiden-dictation-script-"));
     try {
-      await executeFile("/usr/bin/osacompile", [
-        "-o",
-        path.join(directory, "paste.scpt"),
-        "-e",
-        ATOMIC_PASTE_SCRIPT,
-      ]);
+      await executeFile("/usr/bin/osacompile", ["-o", path.join(directory, "paste.scpt"), "-e", ATOMIC_PASTE_SCRIPT]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -139,6 +165,58 @@ test("paste failures leave the transcript on the clipboard instead of throwing",
     message: "Check the field — transcript copied.",
   });
   assert.equal(subject.clipboard(), "hello world");
+});
+
+/**
+ * A paste transaction killed by its timeout after ⌘V, in an app that has not
+ * read the pasteboard yet. `lateCommandV` is that queued ⌘V landing later: it
+ * pastes whatever the clipboard holds by then.
+ */
+function killedAfterKeystroke() {
+  const timedOut = Object.assign(new Error("Command failed: osascript"), {
+    killed: true,
+    stderr: `${KEYSTROKE_SENT_MARKER}\n`,
+  });
+  const clipboardWrites: string[] = [];
+  const subject = harness({
+    // Like the real transaction: the transcript goes on the clipboard, ⌘V is sent, then the timeout kills it.
+    pasteWithPreservedClipboard: (text) =>
+      runAtomicMacPaste(text, async () => {
+        subject.setClipboard(text);
+        throw timedOut;
+      }),
+    writeClipboard: (text) => {
+      clipboardWrites.push(text);
+      subject.setClipboard(text);
+    },
+  });
+  subject.setClipboard("hunter2 (a password the person copied)");
+  return { subject, clipboardWrites, lateCommandV: () => subject.clipboard() };
+}
+
+test("a transaction killed after ⌘V never puts the previous clipboard back, whatever the field shows", async () => {
+  // The delivery path reads no field: matching text that predated the paste,
+  // or focus moved to another field holding the transcript, would read as
+  // delivered while the ⌘V is still queued, so neither may restore.
+  const killed = killedAfterKeystroke();
+  assert.deepEqual(await pasteTranscript("hello world", killed.subject.deps), {
+    outcome: "copied",
+    reason: "paste-unavailable",
+    message: "Check the field — transcript copied.",
+  });
+  assert.equal(killed.lateCommandV(), "hello world", "a late ⌘V pastes the transcript, never the previous clipboard");
+  assert.deepEqual(killed.clipboardWrites, [], "no write after the timeout, so a copy the person makes meanwhile survives");
+});
+
+test("a transaction killed before sending ⌘V still leaves the transcript on the clipboard", async () => {
+  const timedOut = Object.assign(new Error("Command failed: osascript"), { killed: true, stderr: "" });
+  const subject = harness({
+    pasteWithPreservedClipboard: (text) => runAtomicMacPaste(text, async () => Promise.reject(timedOut)),
+  });
+  const result = await pasteTranscript("hello world", subject.deps);
+  assert.equal(result.outcome, "copied");
+  assert.equal(subject.clipboard(), "hello world");
+  await assert.rejects(runAtomicMacPaste("x", async () => Promise.reject(timedOut)), (error) => !(error instanceof PasteAfterKeystrokeError));
 });
 
 test("active Secure Input keeps the transcript on the clipboard without sending a keystroke", async () => {

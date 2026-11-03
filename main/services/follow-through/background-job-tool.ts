@@ -49,7 +49,8 @@ function textResult(text: string, isError = false): AgentToolResult<null> {
 function statusLine(job: BackgroundJobView, now: number): string {
   const elapsed = formatDuration((job.endedAt ?? now) - job.startedAt);
   const state = job.state === "running" ? `running for ${elapsed}` : `${describeJobEnd(job)} after ${elapsed}`;
-  return `${job.id} · ${state} · ${backgroundJobLabel(job)}`;
+  const ports = job.ports?.length ? ` · listening on ${job.ports.map((port) => `localhost:${port}`).join(", ")}` : "";
+  return `${job.id} · ${state}${ports} · ${backgroundJobLabel(job)}`;
 }
 
 function outputBlock(output: string, truncated: boolean): string {

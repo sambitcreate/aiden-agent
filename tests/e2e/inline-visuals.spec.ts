@@ -4,7 +4,14 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
-type StoredAttachment = { id: string; mimeType: string; kind: string; size: number; data?: string };
+type StoredAttachment = { id: string; mimeType: string; kind: string; size: number; data?: string; sha256?: string };
+
+/** An image's bytes as base64: inline in older chats, otherwise from its file beside the chats. */
+async function storedImageData(root: string, attachment: StoredAttachment): Promise<string> {
+  if (attachment.data) return attachment.data;
+  const sha = attachment.sha256!;
+  return (await readFile(path.join(root, "chats", "images", sha.slice(0, 2), sha))).toString("base64");
+}
 type StoredMessage = {
   id: string;
   role: string;
@@ -85,11 +92,12 @@ test("a reply draws native and HTML visuals inline, and both get snapshots for p
     const attachment = message.attachments?.find((candidate) => candidate.id === ref.attachmentId);
     expect(attachment?.kind).toBe("image");
     expect(attachment?.mimeType).toBe("image/png");
-    const size = pngSize(attachment!.data!);
+    const data = await storedImageData(userDataDir, attachment!);
+    const size = pngSize(data);
     expect(size.width).toBeGreaterThanOrEqual(720);
     expect(size.height).toBeGreaterThan(64);
     await test.info().attach(`snapshot-${ref.visualId}.png`, {
-      body: Buffer.from(attachment!.data!, "base64"),
+      body: Buffer.from(data, "base64"),
       contentType: "image/png",
     });
   }
@@ -165,11 +173,11 @@ test("snapshots run guest HTML offline and keep everything down to its last marg
     expect(hits).toEqual([]);
 
     // Charts in a snapshot need the host libraries; the probe grows to 400px only if they loaded.
-    const libraries = pngSize((await snapshotOf("Libraries"))!.data!);
+    const libraries = pngSize(await storedImageData(userDataDir, (await snapshotOf("Libraries"))!));
     expect((libraries.height * 752) / libraries.width).toBeGreaterThanOrEqual(420);
 
     // Column width 720 plus 16px padding on each side, at the display's scale.
-    const size = pngSize((await tallSnapshot())!.data!);
+    const size = pngSize(await storedImageData(userDataDir, (await tallSnapshot())!));
     const cssHeight = (size.height * 752) / size.width;
     // 16 + 300 + one line of text + the 48px bottom margin + 16.
     expect(cssHeight).toBeGreaterThanOrEqual(395);
@@ -213,7 +221,7 @@ test("a runaway visual is abandoned at the snapshot timeout and the next visual 
   await expect.poll(async () => Boolean(await snapshotOf("Weekly total")), { timeout: 30_000 }).toBe(true);
   const attachment = (await snapshotOf("Weekly total"))!;
   expect(attachment.kind).toBe("image");
-  const size = pngSize(attachment.data!);
+  const size = pngSize(await storedImageData(userDataDir, attachment));
   expect(size.width).toBeGreaterThanOrEqual(720);
   expect(size.height).toBeGreaterThan(64);
 

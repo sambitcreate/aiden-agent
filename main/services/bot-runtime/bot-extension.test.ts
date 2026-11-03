@@ -700,7 +700,11 @@ test("(j) after SIGKILL while a rule hand-off waits, Resume asks again under the
   const fauxModels = createFauxModels([fauxAssistantMessage("thanks")]);
   const deps = recordingDeps({
     tools: [{ tool: gated, replay: "unsafe" }],
-    policy: RULE_HANDOFF,
+    // Resume finds a browser document the original wait never identified.
+    policy: () => ({ allowed: true, handoff: {
+      ...RULE_HANDOFF().handoff,
+      browserTarget: { workspaceId: "bot-home", tabId: "new", url: "https://shop.example/", documentRevision: "1", controlRevision: 0 },
+    } }),
     handoff: async () => ({ outcome: "done" }),
   });
   const { host, harness, conversation } = await reopenAfterKill(profile, "bot-handoff", deps, fauxModels);
@@ -709,6 +713,7 @@ test("(j) after SIGKILL while a rule hand-off waits, Resume asks again under the
     harness.resume();
     assert.equal((await (await harness.submission(placed!.id, ctx))!.wait(ctx)).status, "done");
     assert.deepEqual(deps.handoffs.map((request) => request.waitId), [childWaitId]);
+    assert.equal(deps.handoffs[0]?.browserTarget, undefined, "the old wait cannot bind to a newly found document");
     assert.deepEqual(gated.executions, []);
     assert.equal(deps.recordCalls.length, 1);
     const [result] = await toolResults(conversation);

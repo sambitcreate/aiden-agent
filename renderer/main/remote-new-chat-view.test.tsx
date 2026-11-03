@@ -96,6 +96,20 @@ test("a new chat on a paired Mac names that Mac and its project, model and machi
   assert.doesNotMatch(view.text, /first\.|Connecting to/u, "nothing holds the first message back");
 });
 
+test("the model chip shows the host provider's logo, as this Mac's own model chip does", () => {
+  const view = renderPane({
+    models: {
+      providers: [{ id: "zai-coding-cn", label: "Z.AI Coding CN", models: [{ id: "glm-5.3", label: "GLM 5.3", supportsImages: false, thinkingLevels: [], thinkingCanDisable: true, hidden: false }] }],
+      defaults: { providerId: "zai-coding-cn", modelId: "glm-5.3" },
+    },
+    model: { providerId: "zai-coding-cn", modelId: "glm-5.3" },
+  });
+  const chip = view.button(/^Model on Studio: GLM 5\.3$/u);
+  assert.ok(chip);
+  const marks = Array.from(chip.getElementsByTagName("*")).map((node) => node.getAttribute("data-provider-icon"));
+  assert.ok(marks.includes("zai-coding-cn"));
+});
+
 test("the new chat's composer sits on the column once, and the header chip names the Mac", () => {
   const view = renderPane();
   const chip = view.all.find((node) => node.hasAttribute("data-remote-host-chip"));

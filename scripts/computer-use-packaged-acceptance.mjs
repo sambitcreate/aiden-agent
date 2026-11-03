@@ -694,7 +694,7 @@ async function runAcceptance() {
 
     const executable = path.join(appPath, "Contents", "MacOS", "Aiden Agent");
     const child = spawn(executable, [`--user-data-dir=${userData}`], {
-      env: process.env,
+      env: { ...process.env, AIDEN_ANALYTICS: "0" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     if (!child.pid) throw new Error("The packaged Aiden process did not start.");

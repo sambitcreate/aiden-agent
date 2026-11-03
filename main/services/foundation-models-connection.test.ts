@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   FoundationModelsConnectionError,
   createFoundationModelsConnection,
+  createPendingHelperStops,
   parseFoundationModelsResponse,
   platformFoundationModelsStatus,
+  stopRecordedHelperProcess,
 } from "./foundation-models-connection-core.js";
 
 test("omits the Apple connection away from macOS", () => {
@@ -132,4 +134,70 @@ test("downgrades cached readiness after a native availability failure", async ()
   await assert.rejects(connection.generateTitle("Name this chat"), /temporarily unavailable/);
   assert.equal((await connection.status())?.state, "unavailable");
   assert.equal(calls, 2);
+});
+
+test("stopping the helper never signals a process that reused its recorded PID", async () => {
+  const helperApp = "/Applications/Aiden.app/Contents/Helpers/Aiden Foundation Models Helper.app";
+  const running = new Map<number, string>([
+    [4242, `${helperApp}/Contents/MacOS/Aiden Foundation Models Helper`],
+    [5151, "/usr/bin/vim"],
+    [6161, `${helperApp}.evil/Contents/MacOS/payload`],
+  ]);
+  const signalled: Array<[number, string]> = [];
+  const dependencies = {
+    readExecutable: async (pid: number) => running.get(pid) ?? null,
+    kill: (pid: number, signal: NodeJS.Signals) => {
+      signalled.push([pid, signal]);
+    },
+  };
+
+  assert.equal(await stopRecordedHelperProcess("4242\n", helperApp, dependencies), true);
+  assert.equal(await stopRecordedHelperProcess("5151", helperApp, dependencies), false);
+  assert.equal(await stopRecordedHelperProcess("6161", helperApp, dependencies), false);
+  assert.equal(await stopRecordedHelperProcess("7171", helperApp, dependencies), false, "an exited helper");
+  assert.equal(await stopRecordedHelperProcess("1", helperApp, dependencies), false);
+  assert.equal(await stopRecordedHelperProcess("42abc", helperApp, dependencies), false);
+  assert.deepEqual(signalled, [[4242, "SIGTERM"]]);
+});
+
+test("quit waits for a helper stop whose identity lookup is still running, within its budget", async () => {
+  const helperApp = "/Applications/Aiden.app/Contents/Helpers/Aiden Foundation Models Helper.app";
+  const signalled: number[] = [];
+  let finishLookup: (executable: string | null) => void = () => undefined;
+  const stops = createPendingHelperStops();
+  stops.track(
+    stopRecordedHelperProcess("4242", helperApp, {
+      readExecutable: () =>
+        new Promise((resolve) => {
+          finishLookup = resolve;
+        }),
+      kill: (pid) => {
+        signalled.push(pid);
+      },
+    }),
+  );
+
+  let settled: boolean | undefined;
+  const settling = stops.settleWithin(5_000).then((value) => {
+    settled = value;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, undefined, "shutdown must not finish before the helper is signalled");
+  assert.deepEqual(signalled, []);
+
+  finishLookup(`${helperApp}/Contents/MacOS/Aiden Foundation Models Helper`);
+  await settling;
+  assert.equal(settled, true);
+  assert.deepEqual(signalled, [4242]);
+
+  const wedged = createPendingHelperStops();
+  wedged.track(new Promise(() => undefined));
+  // The budget timer is unref'd so it never holds the process open; keep the test loop alive.
+  const keepAlive = setInterval(() => undefined, 1_000);
+  try {
+    assert.equal(await wedged.settleWithin(20), false, "a lookup that never answers cannot hold quit past the budget");
+  } finally {
+    clearInterval(keepAlive);
+  }
+  assert.equal(await createPendingHelperStops().settleWithin(20), true);
 });

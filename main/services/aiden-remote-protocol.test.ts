@@ -9,6 +9,7 @@ import {
 } from "./aiden-remote-protocol.js";
 import { BOT_AVATAR_COLORS, BOT_AVATAR_COLOR_HEX, BOT_AVATAR_FACE_HEX } from "../../renderer/shared/bots.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import { hostInboxPlacement, type HostInboxSignals } from "../../renderer/shared/inbox-state.js";
 import { BOT_ACTIVITY_PHASES, botActivityDisplay, botElapsedLabel } from "../../renderer/shared/bot-activity.js";
 import {
   parseAidenRemoteBotSession,
@@ -38,6 +39,13 @@ import {
   AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION,
   AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION,
   parseAidenRemoteSpendingStatus,
+  AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION,
+  AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION,
+  encodeAidenRemoteAttachmentName,
+  parseAidenRemoteBackgroundJobs,
+  AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION,
+  parseAidenRemoteChatNewWorktreeRequest,
+  parseAidenRemoteChatNewWorktreeResponse,
   AIDEN_REMOTE_BOT_ISSUE_MAX,
   AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
@@ -447,6 +455,9 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   revision19.messagesWindow = { chatId, revision, messages, hasOlder };
   delete revision19.chatFork;
   delete revision19.spending;
+  delete revision19.backgroundJobs;
+  delete revision19.rawUploads;
+  delete revision19.chatNewWorktree;
   // Bot chat activity is revision 30.
   delete revision19.botActivity;
   delete revision19.botActivityPrivacy;
@@ -569,7 +580,9 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats",
     "/chats/{chatId}",
     "/chats/{chatId}/read",
+    "/chats/{chatId}/triage",
     "/chats/{chatId}/move",
+    "/chats/{chatId}/worktree",
     "/chats/{chatId}/fork",
     "/chats/{chatId}/fork-summary/{action}",
     "/chats/{chatId}/tasks",
@@ -584,6 +597,8 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/attachments/{attachmentId}/content",
     "/chats/{chatId}/spending",
     "/chats/{chatId}/spending/allow-more",
+    "/chats/{chatId}/jobs",
+    "/chats/{chatId}/jobs/{jobId}/stop",
     "/chats/{chatId}/visuals/{visualId}/document",
     "/bots",
     "/bots/{botId}",
@@ -1330,6 +1345,8 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["/bots/{botId}/pause", "delete", "200", "BotSessionState"],
     ["/chats/{chatId}/spending", "get", "200", "SpendingStatus"],
     ["/chats/{chatId}/spending/allow-more", "post", "200", "SpendingStatus"],
+    ["/chats/{chatId}/jobs", "get", "200", "BackgroundJobs"],
+    ["/chats/{chatId}/jobs/{jobId}/stop", "post", "200", "BackgroundJobs"],
     ["/bots/{botId}/spending", "get", "200", "SpendingStatus"],
     ["/bots/{botId}/spending/allow-more", "post", "200", "SpendingStatus"],
     ["/bots/{botId}/routines", "get", "200", "BotRoutineList"],
@@ -1375,6 +1392,7 @@ test("mutation contracts require idempotency or revision preconditions", async (
 
   for (const [route, method] of [
     ["/workspaces", "post"],
+    ["/chats/{chatId}/triage", "post"],
     ["/chats", "post"],
     ["/chats/{chatId}/move", "post"],
     ["/chats/{chatId}/fork", "post"],
@@ -2863,6 +2881,9 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   );
   delete older.botHandoffs;
   delete older.spending;
+  delete older.backgroundJobs;
+  delete older.rawUploads;
+  delete older.chatNewWorktree;
   assert.equal(parseAidenRemoteContractFixture(older).botHandoffs, undefined);
 
   // The fixture guards its own invariants: a legacy view may not leak a holder word.
@@ -2875,6 +2896,37 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   assert.throws(() => parseAidenRemoteContractFixture(leakySnapshot), /must not carry hand-off or paused/u);
   const wrongCode = structuredClone(raw);
   wrongCode.botHandoffs.legacy.pausedError.error.code = "bot_paused";
+  assert.throws(() => parseAidenRemoteContractFixture(wrongCode), /operation_stale/u);
+});
+
+test("new worktree fixtures need their own revision, and a moved chat has no messages yet", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const fixture = parseAidenRemoteContractFixture(raw).chatNewWorktree!;
+  assert.equal(fixture.response.branch, "aiden/fix-the-login-bug");
+  assert.notEqual(fixture.response.chat.workspaceId, raw.chat.workspaceId, "the chat is in the worktree's workspace");
+
+  const older = structuredClone(raw);
+  older.contractRevision = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
+  assert.throws(
+    () => parseAidenRemoteContractFixture(older),
+    new RegExp(`require contract revision ${AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION}\\b`, "u"),
+  );
+  delete older.chatNewWorktree;
+  assert.equal(parseAidenRemoteContractFixture(older).chatNewWorktree, undefined);
+
+  assert.deepEqual(parseAidenRemoteChatNewWorktreeRequest({ text: "Fix it" }), { text: "Fix it" });
+  for (const request of [{}, { text: "   " }, { text: "x".repeat(4_001) }, { text: "Fix it", branch: "mine" }]) {
+    assert.throws(() => parseAidenRemoteChatNewWorktreeRequest(request), Error, JSON.stringify(request).slice(0, 40));
+  }
+  const response = raw.chatNewWorktree.response;
+  assert.throws(
+    () => parseAidenRemoteChatNewWorktreeResponse({ ...response, chat: { ...response.chat, messages: raw.chat.messages } }),
+    /no messages yet/u,
+  );
+  assert.throws(() => parseAidenRemoteChatNewWorktreeResponse({ ...response, path: "/Users/sam/x" }), /unsupported field/u);
+  const wrongCode = structuredClone(raw);
+  wrongCode.chatNewWorktree.notEmpty.error.code = "invalid_request";
   assert.throws(() => parseAidenRemoteContractFixture(wrongCode), /operation_stale/u);
 });
 
@@ -2893,6 +2945,9 @@ test("spending fixtures need their own revision, parse strictly, and refuse with
     new RegExp(`require contract revision ${AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION}\\b`, "u"),
   );
   delete older.spending;
+  delete older.backgroundJobs;
+  delete older.rawUploads;
+  delete older.chatNewWorktree;
   assert.equal(parseAidenRemoteContractFixture(older).spending, undefined);
 
   const status = raw.spending.bot;
@@ -2913,6 +2968,94 @@ test("spending fixtures need their own revision, parse strictly, and refuse with
   const wrongCode = structuredClone(raw);
   wrongCode.spending.refusal.error.code = "spending_limit";
   assert.throws(() => parseAidenRemoteContractFixture(wrongCode));
+});
+
+test("raw upload fixtures need their own revision, and every client spells a picture's name the same way", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const fixture = parseAidenRemoteContractFixture(raw).rawUploads!;
+  assert.equal(fixture.request.encodedName, "Caf%C3%A9%20photo.png");
+  assert.equal(fixture.response.size, Buffer.from(fixture.request.bodyBase64, "base64").length);
+  assert.equal(fixture.withoutGrant.error.code, "capability_denied");
+
+  // Only RFC 3986 unreserved characters stay as they are, so a name like
+  // "it's (1)!.png" is spelled alike by the Mac, iOS and Android.
+  assert.equal(encodeAidenRemoteAttachmentName("it's (1)*!.png"), "it%27s%20%281%29%2A%21.png");
+  assert.equal(encodeAidenRemoteAttachmentName("a-b_c.d~e.jpg"), "a-b_c.d~e.jpg");
+  assert.equal(decodeURIComponent(encodeAidenRemoteAttachmentName("写真 📷.jpeg")), "写真 📷.jpeg");
+
+  const older = structuredClone(raw);
+  // Sections from later revisions leave with the downgrade, so only this one is refused.
+  delete older.chatNewWorktree;
+  older.contractRevision = AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION - 1;
+  assert.throws(
+    () => parseAidenRemoteContractFixture(older),
+    new RegExp(`require contract revision ${AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION}\\b`, "u"),
+  );
+  delete older.rawUploads;
+  assert.equal(parseAidenRemoteContractFixture(older).rawUploads, undefined);
+
+  const bad = (change: (copy: any) => void) => {
+    const copy = structuredClone(raw);
+    change(copy.rawUploads);
+    return () => parseAidenRemoteContractFixture(copy);
+  };
+  assert.throws(bad((copy) => { copy.request.encodedName = encodeURIComponent("Café photo.png").replace("%20", "+"); }), /percent-encoded/u);
+  assert.throws(bad((copy) => { copy.request.contentLength += 1; }), /exact length/u);
+  assert.throws(bad((copy) => { copy.request.contentType = "image/gif"; }), /PNG or JPEG/u);
+  assert.throws(bad((copy) => { copy.response.size += 1; }), /describes the picture/u);
+  assert.throws(bad((copy) => { copy.withoutGrant.error.code = "forbidden"; }));
+});
+
+test("background job fixtures need their own revision, and the parser and schema refuse what a phone cannot show", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const fixture = parseAidenRemoteContractFixture(raw).backgroundJobs!;
+  assert.equal(fixture.list.jobs.filter((job) => job.state === "running").length, 2);
+  assert.equal(fixture.stop.response.jobs.find((job) => job.id === fixture.stop.jobId)?.state, "stopped");
+  assert.equal(fixture.notFound.error.code, "not_found");
+
+  const older = structuredClone(raw);
+  // Sections from later revisions leave with the downgrade, so only this one is refused.
+  delete older.chatNewWorktree;
+  older.contractRevision = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION - 1;
+  assert.throws(
+    () => parseAidenRemoteContractFixture(older),
+    new RegExp(`require contract revision ${AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION}\\b`, "u"),
+  );
+  delete older.backgroundJobs;
+  delete older.rawUploads;
+  assert.equal(parseAidenRemoteContractFixture(older).backgroundJobs, undefined);
+
+  const ajv = new Ajv2020({ strict: false });
+  const schema = ajv.compile({ $ref: "#/components/schemas/BackgroundJobs", components: spec.components });
+  for (const body of [raw.backgroundJobs.list, raw.backgroundJobs.stop.response]) {
+    assert.ok(schema(body), JSON.stringify(schema.errors));
+    assert.deepEqual(parseAidenRemoteBackgroundJobs(body), body);
+  }
+  const running = raw.backgroundJobs.list.jobs[0];
+  const failed = raw.backgroundJobs.list.jobs[2];
+  for (const [why, job, schemaRefuses] of [
+    ["a running job has no end time", { ...running, endedAt: failed.endedAt }, false],
+    ["an ended job has an end time", { ...failed, endedAt: undefined }, false],
+    ["an ended job serves no ports", { ...failed, ports: [5173] }, false],
+    ["a running job has no exit code", { ...running, exitCode: 0 }, false],
+    ["a stopped job says why", { ...failed, state: "stopped", exitCode: undefined }, false],
+    ["only a stopped job says why", { ...failed, endReason: "person" }, false],
+    ["a command's leftover cannot fail", { ...failed, fromCommand: true }, false],
+    ["ports are TCP ports", { ...running, ports: [70_000] }, true],
+    ["a few ports at most", { ...running, ports: [1, 2, 3, 4, 5, 6] }, true],
+    ["ids are job ids", { ...running, id: "job_1" }, true],
+    ["no unknown fields", { ...running, command: "npm run dev" }, true],
+  ] as const) {
+    const body = JSON.parse(JSON.stringify({ jobs: [job] }));
+    assert.throws(() => parseAidenRemoteBackgroundJobs(body), Error, why);
+    if (schemaRefuses) assert.equal(schema(body), false, why);
+  }
+  const twice = { jobs: [running, running] };
+  assert.throws(() => parseAidenRemoteBackgroundJobs(twice), /repeated/u);
 });
 
 test("Bot hand-off OpenAPI schemas accept the shared fixture and refuse what the parsers refuse", async () => {
@@ -2974,6 +3117,9 @@ test("Bot shared images need their own revision, and the schema and parser accep
   );
   delete older.botImages;
   delete older.spending;
+  delete older.backgroundJobs;
+  delete older.rawUploads;
+  delete older.chatNewWorktree;
   assert.equal(parseAidenRemoteContractFixture(older).botImages, undefined);
 
   const ajv = new Ajv2020({ strict: false });
@@ -3009,6 +3155,9 @@ test("browser recordings need their own revision, and a recording step carries o
   );
   delete older.browserRecordings;
   delete older.spending;
+  delete older.backgroundJobs;
+  delete older.rawUploads;
+  delete older.chatNewWorktree;
   assert.equal(parseAidenRemoteContractFixture(older).browserRecordings, undefined);
 
   const ajv = new Ajv2020({ strict: false });
@@ -3252,4 +3401,67 @@ test("the host's full context projection is reduced to the documented counts", (
   // A projection missing a counted field is refused rather than sent half-filled.
   const { staticTokens: _staticTokens, ...partial } = desktop;
   assert.throws(() => projectAidenRemoteContextPressure(partial));
+});
+
+test("revision 52 fixtures carry Inbox signals, and a stray or malformed signal fails closed", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, unknown>;
+  const fixture = parseAidenRemoteContractFixture(raw);
+  const byId = new Map(fixture.chatSummaries.summaries.map((summary) => [summary.id, summary]));
+  const waiting = byId.get("chat_fixture_summary_02");
+  assert.equal(waiting?.attentionSince, "2026-08-18T19:01:08.000Z");
+  assert.equal(waiting?.runStartedAt, "2026-08-18T19:01:00.000Z");
+  assert.equal(waiting?.triageRevision, undefined);
+  const pinned = byId.get("chat_fixture_summary_01");
+  assert.equal(pinned?.triageRevision, 3);
+  assert.equal(pinned?.pinnedAt, "2026-08-18T18:45:00.000Z");
+  assert.equal(pinned?.snoozedUntil, "2026-08-19T09:00:00.000Z");
+  assert.equal(pinned?.doneAt, undefined);
+  // The host's bucket: the waiting run orders by its wait, the unseen failure
+  // (which outranks its snooze) by its update time.
+  assert.equal(waiting?.inboxBucket, "needs_you");
+  assert.equal(waiting?.inboxSortAt, waiting?.attentionSince);
+  assert.equal(pinned?.inboxBucket, "needs_you");
+  assert.equal(pinned?.inboxSortAt, pinned?.updatedAt);
+  // Recomputed from each row's own fields, so a placement rule change fails the fixture.
+  const at = (value: string | undefined) => (value === undefined ? undefined : Date.parse(value));
+  const beforeSnoozeEnds = Date.parse(pinned!.snoozedUntil!) - 60_000;
+  for (const row of [waiting!, pinned!]) {
+    const placed = hostInboxPlacement(
+      Object.fromEntries(Object.entries({
+        rowState: row.rowState!,
+        unread: row.unread === true,
+        failed: row.lastRunFailed === true,
+        updatedAt: Date.parse(row.updatedAt),
+        lastAssistantAt: at(row.lastAssistantAt),
+        attentionSince: at(row.attentionSince),
+        runStartedAt: at(row.runStartedAt),
+        pinnedAt: at(row.pinnedAt),
+        doneAt: at(row.doneAt),
+        snoozedUntil: at(row.snoozedUntil),
+      }).filter(([, value]) => value !== undefined)) as unknown as HostInboxSignals,
+      beforeSnoozeEnds,
+    );
+    assert.deepEqual([row.inboxBucket, row.inboxSortAt], [placed.bucket, new Date(placed.sortAt).toISOString()], row.id);
+  }
+
+  const mutate = (change: (copy: Record<string, unknown>) => void) => {
+    const copy = structuredClone(raw);
+    change(copy);
+    return () => parseAidenRemoteContractFixture(copy);
+  };
+  const runState = (copy: Record<string, unknown>) => {
+    const events = copy.hostFeedEvents as Record<string, unknown>[];
+    return record(events.find((event) => event.type === "run.state")!.payload, "run.state payload");
+  };
+  const summary = (copy: Record<string, unknown>, id: string) => {
+    const page = record(copy.chatSummaries, "chatSummaries");
+    return (page.summaries as Record<string, unknown>[]).find((row) => row.id === id)!;
+  };
+  assert.throws(mutate((copy) => { runState(copy).state = "working"; }), /belongs to a waiting run/u);
+  assert.throws(mutate((copy) => { runState(copy).attentionSummary = " Allow a write operation?"; }), /must be trimmed/u);
+  assert.throws(mutate((copy) => { runState(copy).attentionSummary = "x".repeat(201); }));
+  assert.throws(mutate((copy) => { delete summary(copy, "chat_fixture_summary_01").triageRevision; }), /triage times need a triageRevision/u);
+  assert.throws(mutate((copy) => { summary(copy, "chat_fixture_summary_02").attentionSince = "yesterday"; }));
+  // A waiting run with no ask is still a waiting run.
+  assert.doesNotThrow(mutate((copy) => { delete runState(copy).attentionSummary; }));
 });

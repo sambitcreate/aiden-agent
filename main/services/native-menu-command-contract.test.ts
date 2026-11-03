@@ -5,7 +5,7 @@ import { COMMANDS } from "../../renderer/shared/keybindings";
 import { applicationMenuTemplate } from "./application-menu-core";
 
 test("catalog native-menu ownership exactly matches derived Electron accelerators", () => {
-  const delivered = new Set<string>();
+  let clicked: string | null = null;
   const menu = applicationMenuTemplate({
     platform: "darwin",
     appName: "Aiden Agent",
@@ -13,26 +13,32 @@ test("catalog native-menu ownership exactly matches derived Electron accelerator
     actions: {
       checkForUpdates() {},
       deliverCommand(commandId) {
-        delivered.add(commandId);
+        clicked = commandId;
       },
       reload() {},
     },
   });
+  // Items that only show a key (registerAccelerator: false) leave it to the
+  // renderer, so they must not be native-menu commands.
+  const owned = new Set<string>();
+  const shown = new Set<string>();
   const invokeItems = (items: typeof menu): void => {
     for (const item of items) {
       if (typeof item.click === "function") {
+        clicked = null;
         item.click({} as never, {} as never, {} as never);
+        if (clicked) (item.registerAccelerator === false ? shown : owned).add(clicked);
       }
       if (Array.isArray(item.submenu)) invokeItems(item.submenu);
     }
   };
   invokeItems(menu);
-  const menuCommandIds = [...delivered].sort();
   const catalogCommandIds = COMMANDS.filter((command) => command.nativeMenu)
     .map((command) => command.id)
     .sort();
 
-  assert.deepEqual(menuCommandIds, catalogCommandIds);
+  assert.deepEqual([...owned].sort(), catalogCommandIds);
+  for (const id of shown) assert.ok(!catalogCommandIds.includes(id as never), id);
 });
 
 test("shortcut recording removes the application menu before capture begins", () => {

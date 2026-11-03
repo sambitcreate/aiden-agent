@@ -17,6 +17,17 @@ enum AidenChatRole: String, Codable, Sendable {
 }
 
 struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
+    /// Whether the host counts this as a reply for the Inbox
+    /// (`lastAssistantAt`): an assistant message with visible text,
+    /// attachments, artifacts, visuals or app panels, or a failed turn.
+    var isInboxReply: Bool {
+        guard role == .assistant else { return false }
+        return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !(attachments ?? []).isEmpty || !(htmlArtifacts ?? []).isEmpty
+            || !(visuals ?? []).isEmpty || !(appPanels ?? []).isEmpty
+            || outcome?.status == .failed || timeline?.status == .failed
+    }
+
     var isReadAloudEligible: Bool {
         role == .assistant && outcome == nil && (timeline == nil || timeline?.status == .completed)
             && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1474,6 +1485,53 @@ enum AidenAgentActivityPresentation {
         return "Thought \(duration(durationMs > 0 ? durationMs : nil))"
     }
 
+    /// The line a collapsed, still-thinking reasoning row shows: the latest
+    /// sentence or line the model has finished, with Markdown markers removed.
+    /// Unfinished text is left out, so the row changes once per finished
+    /// thought instead of per token. Matches Aiden Agent's `latestReasoningLine`.
+    static func latestReasoningLine(_ text: String) -> String {
+        let scalars = Array(text.unicodeScalars)
+        var end = lastReasoningUnitEnd(scalars, before: scalars.count)
+        while end >= 0 {
+            let start = lastReasoningUnitEnd(scalars, before: end) + 1
+            var unit = String.UnicodeScalarView()
+            unit.append(contentsOf: scalars[start..<end])
+            let line = cleanReasoningLine(String(unit))
+            if !line.isEmpty { return line }
+            end = start - 1
+        }
+        return ""
+    }
+
+    private static let reasoningSentenceEnds: Set<Unicode.Scalar> = [".", "!", "?", "…"]
+    private static let reasoningClosers: Set<Unicode.Scalar> = ["\"", "'", ")", "]", "”", "’"]
+
+    /// The index of the whitespace that ends the last finished unit before
+    /// `before`, or -1. A unit ends at a line break, or at sentence punctuation
+    /// (and any closing quotes) that whitespace already follows.
+    private static func lastReasoningUnitEnd(_ scalars: [Unicode.Scalar], before: Int) -> Int {
+        var index = before - 1
+        while index >= 0 {
+            let scalar = scalars[index]
+            if scalar == "\n" { return index }
+            if scalar.properties.isWhitespace {
+                var mark = index - 1
+                while mark >= 0, reasoningClosers.contains(scalars[mark]) { mark -= 1 }
+                if mark >= 0, reasoningSentenceEnds.contains(scalars[mark]) { return index }
+            }
+            index -= 1
+        }
+        return -1
+    }
+
+    private static func cleanReasoningLine(_ line: String) -> String {
+        line
+            .replacingOccurrences(of: #"^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|[0-9]+[.)]\s+)"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\*\*|__|`"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     static func visualizingLabel(_ timeline: AidenGenerationTimeline?) -> String? {
         hasActiveToolStep(timeline, named: renderArtifactToolName) ? "Visualizing" : nil
     }
@@ -2315,32 +2373,6 @@ enum AidenChatRowState: String, Codable, Equatable, Sendable {
         }
     }
 
-    /// Triage rank used to order chat lists, most urgent first. Mirrors the
-    /// desktop Needs attention tiers: a chat blocked on the user outranks one
-    /// that is merely working, and everything else keeps its existing order.
-    var attentionRank: Int {
-        switch self {
-        case .needsApproval: 0
-        case .needsInput: 1
-        case .working: 2
-        case .idle: 3
-        }
-    }
-}
-
-/// Moves chats that need the user, then working chats, ahead of idle ones.
-/// Ties keep the incoming (recency) order, so rows do not jitter between
-/// refreshes.
-/// Unseen failures sit between chats blocked on the user and working chats,
-/// like the desktop Needs attention tiers.
-func aidenNeedsAttentionFirst(_ chats: [AidenChatSummary]) -> [AidenChatSummary] {
-    chats.enumerated()
-        .sorted { left, right in
-            let leftRank = left.element.attentionRank
-            let rightRank = right.element.attentionRank
-            return leftRank == rightRank ? left.offset < right.offset : leftRank < rightRank
-        }
-        .map(\.element)
 }
 
 struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
@@ -2362,6 +2394,10 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     /// Additive in contract revision 21: lineage for the fork glyph. Rows
     /// never carry the summary.
     var forkedFrom: AidenChatForkLineage?
+    /// Additive in contract revision 52: the Inbox times, triage, and
+    /// the host's `inboxBucket` / `inboxSortAt`. The phone places rows with
+    /// `AidenInbox.placement`, which falls back to local rules without them.
+    var inbox: AidenChatInboxSignals
 
     init(
         id: String,
@@ -2375,7 +2411,8 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         rowState: AidenChatRowState? = nil,
         unread: Bool = false,
         lastRunFailed: Bool = false,
-        forkedFrom: AidenChatForkLineage? = nil
+        forkedFrom: AidenChatForkLineage? = nil,
+        inbox: AidenChatInboxSignals = AidenChatInboxSignals()
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -2389,25 +2426,12 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         self.unread = unread
         self.lastRunFailed = lastRunFailed
         self.forkedFrom = forkedFrom?.withoutSummary
+        self.inbox = inbox
     }
 
     /// Failed replaces the unread dot only while the failed output is unseen,
     /// so opening the chat clears it together with the dot.
     var showsFailed: Bool { unread && lastRunFailed }
-
-    /// Triage rank for the whole row: approval, input, an idle chat whose
-    /// unseen output is a failed turn, working, then everything else.
-    var attentionRank: Int {
-        let state = displayRowState
-        switch state {
-        case .needsApproval, .needsInput:
-            return state.attentionRank
-        case .idle where showsFailed:
-            return 2
-        default:
-            return state.attentionRank + 1
-        }
-    }
 
     /// The row state to render. The local activity signal is authoritative for
     /// idleness (a prompt can only wait while a turn runs), while the server
@@ -2454,6 +2478,25 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         lastRunFailed = try values.decodeIfPresent(Bool.self, forKey: .lastRunFailed) ?? false
         forkedFrom = (try? values.decodeIfPresent(AidenChatForkLineage.self, forKey: .forkedFrom))?
             .withoutSummary
+        // Inbox fields: each is dropped on its own when absent or malformed, and
+        // a bucket is kept only with its sort time, so a newer host's bucket
+        // (or a buggy one) falls back to local placement.
+        func timestamp(_ key: CodingKeys) -> Date? {
+            ((try? values.decodeIfPresent(AidenRemoteTimestamp.self, forKey: key)) ?? nil)?.date
+        }
+        inbox = AidenChatInboxSignals(
+            bucket: ((try? values.decodeIfPresent(String.self, forKey: .inboxBucket)) ?? nil)
+                .flatMap(AidenInboxBucket.init(rawValue:)),
+            sortAt: timestamp(.inboxSortAt),
+            lastAssistantMessageId: try? values.decode(String.self, forKey: .lastAssistantMessageId),
+            lastAssistantAt: timestamp(.lastAssistantAt),
+            attentionSince: timestamp(.attentionSince),
+            runStartedAt: timestamp(.runStartedAt),
+            pinnedAt: timestamp(.pinnedAt),
+            doneAt: timestamp(.doneAt),
+            snoozedUntil: timestamp(.snoozedUntil),
+            triageRevision: (try? values.decodeIfPresent(Int.self, forKey: .triageRevision)) ?? nil
+        )
 
         try Self.requireIdentifier(id, forKey: .id, in: values)
         try Self.requireIdentifier(workspaceId, forKey: .workspaceId, in: values)
@@ -2483,6 +2526,32 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
         }
     }
 
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(workspaceId, forKey: .workspaceId)
+        try values.encode(title, forKey: .title)
+        try values.encode(titlePending, forKey: .titlePending)
+        try values.encode(createdAt, forKey: .createdAt)
+        try values.encode(updatedAt, forKey: .updatedAt)
+        try values.encode(revision, forKey: .revision)
+        try values.encode(activity, forKey: .activity)
+        try values.encodeIfPresent(rowState, forKey: .rowState)
+        try values.encode(unread, forKey: .unread)
+        try values.encode(lastRunFailed, forKey: .lastRunFailed)
+        try values.encodeIfPresent(forkedFrom, forKey: .forkedFrom)
+        try values.encodeIfPresent(inbox.bucket, forKey: .inboxBucket)
+        try values.encodeIfPresent(inbox.sortAt, forKey: .inboxSortAt)
+        try values.encodeIfPresent(inbox.lastAssistantMessageId, forKey: .lastAssistantMessageId)
+        try values.encodeIfPresent(inbox.lastAssistantAt, forKey: .lastAssistantAt)
+        try values.encodeIfPresent(inbox.attentionSince, forKey: .attentionSince)
+        try values.encodeIfPresent(inbox.runStartedAt, forKey: .runStartedAt)
+        try values.encodeIfPresent(inbox.pinnedAt, forKey: .pinnedAt)
+        try values.encodeIfPresent(inbox.doneAt, forKey: .doneAt)
+        try values.encodeIfPresent(inbox.snoozedUntil, forKey: .snoozedUntil)
+        try values.encodeIfPresent(inbox.triageRevision, forKey: .triageRevision)
+    }
+
     private static func requireIdentifier(
         _ value: String,
         forKey key: CodingKeys,
@@ -2497,6 +2566,10 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
                 debugDescription: "Expected a non-empty bounded Chat summary identifier."
             )
         }
+    }
+
+    static func isValidIdentifier(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= AidenRemoteProtocol.maxIdentifierLength && value.unicodeScalars.allSatisfy(isSafeIdentifierScalar)
     }
 
     private static func isValidRevision(_ value: String) -> Bool {
@@ -2542,6 +2615,8 @@ struct AidenChatSummary: Codable, Identifiable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, workspaceId, title, titlePending, createdAt, updatedAt, revision, activity
         case rowState, unread, lastRunFailed, forkedFrom
+        case inboxBucket, inboxSortAt, lastAssistantMessageId, lastAssistantAt, attentionSince, runStartedAt
+        case pinnedAt, doneAt, snoozedUntil, triageRevision
     }
 }
 
@@ -3548,6 +3623,13 @@ struct AidenQuestionComposerDraft {
     var customAnswers: [Int: String] = [:]
     var customOpen: Set<Int> = []
 
+    init() {}
+
+    /// Starts with the options the agent recommends already selected.
+    init(questions: [AidenRemoteQuestion]) {
+        selections = AidenQuestionAnswerDraft.recommendedSelections(for: questions)
+    }
+
     mutating func move(to index: Int, questions: [AidenRemoteQuestion]) {
         guard questions.indices.contains(index) else { return }
         activeIndex = index
@@ -3570,6 +3652,29 @@ struct AidenQuestionComposerDraft {
 /// draft wins over option selections for that question; questions left
 /// unaddressed are omitted so the host records them as skipped.
 enum AidenQuestionAnswerDraft {
+    /// The agent marks a recommended option by ending its label with
+    /// "(Recommended)". The full label stays the wire answer; the card shows
+    /// `text` with a separate tag. Desktop parity: parseRecommendedOptionLabel.
+    static func recommendedLabel(_ label: String) -> (text: String, recommended: Bool) {
+        guard let marker = label.range(
+            of: "(recommended)", options: [.caseInsensitive, .anchored, .backwards]
+        ) else { return (label, false) }
+        let text = String(label[..<marker.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? (label, false) : (text, true)
+    }
+
+    /// Starting selections: the first recommended option of a single choice,
+    /// or every recommended option of a multi-select.
+    static func recommendedSelections(for questions: [AidenRemoteQuestion]) -> [Int: Set<String>] {
+        var selections: [Int: Set<String>] = [:]
+        for (index, question) in questions.enumerated() {
+            let marked = question.options.map(\.label).filter { recommendedLabel($0).recommended }
+            guard let first = marked.first else { continue }
+            selections[index] = question.multiSelect ? Set(marked) : [first]
+        }
+        return selections
+    }
+
     static func answers(
         for questions: [AidenRemoteQuestion],
         selections: [Int: Set<String>],

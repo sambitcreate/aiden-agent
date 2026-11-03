@@ -181,3 +181,57 @@ test("follows survive a restart, and deleting a chat forgets its follows", async
   assert.equal(second.follows.list("chat-2").length, 1);
   assert.equal(second.persisted[second.persisted.length - 1], 1, "the deletion is saved");
 });
+
+for (const ending of ["stop", "access-changed", "shutdown"] as const) {
+  test(`a poll cancelled by ${ending} discards a late log and never reads the next one`, async () => {
+    let finishLog!: (text: string) => void;
+    let logSignal: AbortSignal | undefined;
+    const logs: string[] = [];
+    const posted: FollowNotice[] = [];
+    const follows = new PullRequestFollows({
+      now: () => T0,
+      chatWasAnswering: () => false,
+      persist: () => {},
+      post: (_chat, notice) => posted.push(notice),
+      reader: {
+        read: async () => ({ kind: "ok", observation: open({
+          checks: ["unit", "integration"].map((name) => ({ name, status: "failure", url: open().checks[0]!.url })),
+        }) }),
+        jobLogTail: async (_record, check, signal) => {
+          logs.push(check.name);
+          logSignal = signal;
+          return new Promise<string>((resolve) => { finishLog = resolve; });
+        },
+      },
+    });
+    follows.follow(input());
+    const polling = follows.kick();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(logs, ["unit"]);
+    if (ending === "shutdown") follows.shutdown();
+    else follows.stop("chat-1", input(), ending === "stop" ? "person" : ending);
+    assert.equal(logSignal?.aborted, true);
+    finishLog("late failure");
+    await polling;
+    assert.deepEqual(logs, ["unit"]);
+    assert.deepEqual(posted, []);
+    assert.equal(follows.all()[0]?.noticesSent, 0);
+  });
+}
+
+test("a workspace change suspends a due poll until commit or rollback", async () => {
+  const { follows, setAnswer, posted } = harness();
+  let finish!: (value: FollowReadResult) => void;
+  setAnswer(() => new Promise((resolve) => { finish = resolve; }));
+  follows.follow(input());
+  const resume = follows.pauseChats(["chat-1"]);
+  finish({ kind: "ok", observation: open() });
+  await follows.kick();
+  assert.equal(posted.length, 0);
+  assert.equal(follows.list("chat-1")[0]?.state, "following");
+  setAnswer(() => ({ kind: "ok", observation: open() }));
+  resume();
+  await follows.kick();
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0]?.chatId, "chat-1");
+});

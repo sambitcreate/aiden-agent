@@ -19,6 +19,7 @@ import type { ChatDone, ChatError, ScheduledRun, ScheduledTask } from "./types.j
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
+import { assertWorkspaceFolderPresent } from "./workspace-folder-presence.js";
 import { createScheduledChatClaim } from "./scheduled-chat-creation.js";
 import { firstVisibleModelForProvider } from "../../renderer/shared/model-visibility.js";
 import { canUseGeminiChatModel } from "../../renderer/shared/gemini-usage-scope.js";
@@ -189,7 +190,10 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       : undefined;
     if (task.workspaceId && !workspace) throw new Error("The task workspace no longer exists.");
     if (workspace?.permission === "none") throw new Error("The task workspace has No Access.");
-    if (workspace) await assertManagedWorktreeAdmission(workspace);
+    if (workspace) {
+      await assertWorkspaceFolderPresent(workspace);
+      await assertManagedWorktreeAdmission(workspace);
+    }
     const script = await resolveScheduledScript({
       script: task.script ?? "",
       workspaceRoot: workspace?.folderPath,
@@ -251,7 +255,10 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       : undefined;
     if (task.workspaceId && !workspace) throw new Error("The task workspace no longer exists.");
     if (workspace?.permission === "none") throw new Error("The task workspace has No Access.");
-    if (workspace) await assertManagedWorktreeAdmission(workspace);
+    if (workspace) {
+      await assertWorkspaceFolderPresent(workspace);
+      await assertManagedWorktreeAdmission(workspace);
+    }
     const settings = await configStore.getSettings();
     if (!task.providerId && isAcpHarnessProvider(settings.lastProviderId ?? "")) {
       throw new Error(

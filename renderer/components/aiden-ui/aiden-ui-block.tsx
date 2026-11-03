@@ -91,7 +91,7 @@ export interface AidenUiBlockProps {
   /** Called with the full local state after every change (callers debounce). */
   onStateChange?: (state: Record<string, unknown>) => void;
   /** The message's image attachments, for `<Image attachment="…">`. */
-  attachments?: readonly { id: string; mimeType: string; data?: string }[];
+  attachments?: readonly { id: string; mimeType: string; data?: string; url?: string }[];
   /** Offscreen snapshots draw the visual alone, without its caption row. */
   hideCaption?: boolean;
   /** A reply is running: confirming a follow-up adds it to the draft instead. */
@@ -234,8 +234,10 @@ function AidenUiVisualBody({
   const attachmentSource = React.useCallback(
     (id: string) => {
       const match = attachments?.find((attachment) => attachment.id === id);
-      if (!match?.data || !/^image\/(png|jpeg|gif|webp)$/u.test(match.mimeType)) return undefined;
-      return `data:${match.mimeType};base64,${match.data}`;
+      if (!match || !/^image\/(png|jpeg|gif|webp)$/u.test(match.mimeType)) return undefined;
+      if (match.data) return `data:${match.mimeType};base64,${match.data}`;
+      // An image stored beside the chat loads by its private link.
+      return match.url?.startsWith("aiden-attachment:") ? match.url : undefined;
     },
     [attachments],
   );

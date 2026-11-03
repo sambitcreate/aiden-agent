@@ -25,6 +25,26 @@ export type SnapshotVisual =
 const SNAPSHOT_IMAGE_MIME_TYPE = /^image\/(png|jpeg|gif|webp)$/u;
 
 /**
+ * Wait `ms`, or reject as soon as `signal` aborts. Each settle path removes the
+ * other, so a long capture's many short waits never pile abort listeners onto
+ * its signal, and an already-aborted signal rejects at once.
+ */
+export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new Error("Snapshot cancelled."));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("Snapshot cancelled."));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
  * The attachment ids a visual's `<Image>` nodes name literally. Returns `null`
  * when any `<Image>` takes its id from an expression (concatenation, data, or an
  * `<Each>` local): only the desktop's own evaluation can resolve those.
