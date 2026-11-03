@@ -77,6 +77,10 @@ When a paired computer is asleep or unreachable, its rows stay in the sidebar ma
 
 If a computer reached over the local network presents a different identity, Aiden blocks it and asks you to pair again rather than trust the new key. Use **Re-pair** from its **···** menu in **Control other devices**. Under the same menu, **Rename locally** changes the name only on this Mac, and **Forget** removes it from this Mac.
 
+## Chat models
+
+A chat with messages keeps its own model on iPhone and Android. Reopening or refreshing it adopts a model changed on the desktop unless you have an unsent model choice in that chat. An empty remembered-default store or an unavailable optional model catalog does not turn the cached model into a new choice. Picking a model in an existing chat leaves other chats and the new-chat default alone.
+
 ## Mobile usage summary
 
 The **Usage** row on the Aiden On The Go home screen reads aggregate usage from the paired Mac. It reflects Aiden Agent's device-local usage store and sends only aggregate request, token, activity, and estimated-cost totals to the phone. Chat content, workspace paths, and provider credentials are not included.
