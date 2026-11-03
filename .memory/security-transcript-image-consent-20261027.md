@@ -1,0 +1,23 @@
+# W8 external transcript image consent, 2026-10-27
+
+Implementation candidate on `feature/security-image-consent`, based on `025d0111f94e008f8ac54a2e2f97b11b6210247e`. Fresh review and hosted/package acceptance are separate gates.
+
+- Ordinary React Markdown previously emitted remote `<img src>` and permitted HTTP/HTTPS/protocol-relative image loads in streaming and restored replies. Native visual Markdown was already restricted. No separate Markdown gallery, CSS thumbnail, preload or sizing fetcher was found.
+- Shared `TranscriptImage` renders alt/site text and Load image without any image/preload/CSS URL. Only its click invokes `chat:loadTranscriptImage`; linked-image actions cancel the enclosing link's navigation. URL keys discard prior state immediately, and `imageScope` identifies the message. Main transcript scopes use the existing stable row key across live/history handoff; other Bot/subagent/notice/summary consumers carry their identity where reused.
+- Main returns verified raster data and dimensions, never a remote URL. `fetchPublicBytes` factors the existing `web-fetch-transport` socket-time DNS check, public-IP policy, credential-free URL parsing, redirect revalidation, decoded-body limit and timeout. The web-page text wrapper retains its contract. Image loads accept PNG/JPEG/WebP only with the existing signature, structure and decoder-dimension validator. SVG/GIF/BMP and relative sources are not admitted.
+- Limits: 8 MB decoded bytes, 20 seconds, 5 redirects, 16,384 edge, 20 million pixels. Main caps 4 simultaneous loads per document and 8 total; document invalidation aborts pending work and prevents delivery. No persistent setting, image cache or allow-all permission is added.
+- Generated image attachment previews remain raster data URIs and use bounded byte-header dimensions. Create Images authenticated asset grants retain their independent document-bound delivery. The Markdown sanitizer's data/blob/custom-scheme policy is unchanged.
+- Native inspection: `AidenMarkdownNoNetworkImageProvider` on iOS returns EmptyView; Android's formatter produces annotated text, with no Markdown image loader. No Remote contract or native implementation changes. Onboarding's image capability still describes generated/displayed attachments; no new setup choice or gallery tile is needed.
+
+Validation:
+
+- `npm run test:transcript-images`: 14 passed; focused transport, register-and-invoke IPC and mounted renderer cases, including a local HTTP fixture with zero requests before click, only the clicked path after click, URL/message/reset behavior, real live/history handoff, generated full-view preview and linked-image navigation suppression.
+- `npm run test:web-fetch`: 59 passed after byte-transport extraction.
+- Adjacent message/streaming/restricted-native-visual and authenticated asset suites: 78 passed. IPC inventory plus adjacent initial suites: 56 passed.
+- `npm run test:ci-policy`: 70 passed; all three new test files are in the root serial graph and CI registry. The new Playwright spec is discovered by the existing deterministic spec sharder.
+- `npm run type-check`, `npm run type-check:e2e`, and ESLint on touched TS/TSX files passed, including the final rerun after the linked-image and handoff test additions.
+- `npx playwright test tests/e2e/transcript-image-consent.spec.ts --config=playwright.config.ts --fail-on-flaky-tests`: passed. Uses an isolated Electron BrowserWindow with the actual production renderer components bundled by esbuild and a fixture-only Node transport adapter. Browser HTTP request observation stays empty before/after click; local server receives only the clicked request; image decodes to one pixel; keyboard Enter, streaming changes, message changes and reload are checked. This is component/network acceptance in Electron Chromium, not packaged full-app acceptance.
+- Android `:app:testDebugUnitTest` for `AidenChatVisualsContractTest`, `AidenWorkspaceEnvironmentTest`, `AidenRemoteClientTest`: 62 passed, no failures/errors.
+- iOS isolated simulator: four focused `AidenChatTests` Markdown/assistant-attachment tests passed, confirmed by xcresult summary. Receipt `/var/folders/g1/zzchcsk55fvfjq8bpg8w3qj00000gn/T/aiden-image-ios-9tk1xss3/Result.xcresult`. The created iPhone Duo simulator `110A8047-E071-4436-A17D-1864D0F3F0EF` was shut down and deleted; no existing simulator or physical-device data was used.
+
+Friction is in `.papercuts/security-image-consent.md`. Initial harness collection, missing standalone Chromium and CSS bundling failures were deterministic setup issues fixed before passing; no retries or relaxed assertions were added. Local `npm ci --ignore-scripts` made no lockfile changes.

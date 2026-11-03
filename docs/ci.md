@@ -72,7 +72,9 @@ superseded. Runner capacity can still cause queueing.
   formatting/tests/clippy and native helper production/test builds retain their
   execution modes. Registry validation checks both files and these prerequisites.
 - Electron files run across three isolated macOS runners with one worker each and
-  `--fail-on-flaky-tests`. File-duration weights come from hosted run 35667578649;
+  `--fail-on-flaky-tests`. File-duration weights come from hosted run 41534097337;
+  the cancelled shard's last file includes an allowance for its unfinished test.
+  A separate completed run checks the allocation against independent timings;
   newly discovered specs get a default weight and always run. Live-provider specs
   remain opt-in; production diagnostics run separately with the production profile.
 - Android retains unit tests, lint, test compilation and emulator coverage, with

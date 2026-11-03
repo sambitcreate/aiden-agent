@@ -12,6 +12,7 @@ import {
 } from "../lib/streaming-reveal";
 
 interface StreamingMarkdownRevealProps {
+  imageScope?: string;
   content: string;
   /** The turn ended: show everything now and hand over to the saved reply. */
   complete?: boolean;
@@ -22,6 +23,7 @@ interface StreamingMarkdownRevealProps {
 }
 
 export function StreamingMarkdownReveal({
+  imageScope,
   content,
   complete = false,
   closed = false,
@@ -117,7 +119,7 @@ export function StreamingMarkdownReveal({
       className={`streaming-reveal ${MARKDOWN_CLASSNAME}`}
       data-streaming={fadeDone ? undefined : ""}
     >
-      <MarkdownContent content={source} richLinks={richLinks} streaming={!complete} />
+      <MarkdownContent content={source} richLinks={richLinks} streaming={!complete} imageScope={imageScope} />
     </div>
   );
 }
