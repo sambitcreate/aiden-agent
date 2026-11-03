@@ -6556,6 +6556,106 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(receipt.models, ["fixture-vision"])
     }
 
+    func testWatchRoutesCarryOpaqueChoicesRevisionAndStableMutationBody() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-watches", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let watch = try AidenRemoteJSONDecoder.decode(AidenBotWatch.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(fixture["watch"])))
+        let sources = try AidenRemoteJSONDecoder.decode(AidenBotWatchSources.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(fixture["sources"])))
+        let choice = try XCTUnwrap(sources.choices.first)
+        let mutation = try XCTUnwrap(UUID(uuidString: watch.id))
+        let save = AidenBotWatchSaveRequest(name: watch.name, prompt: watch.prompt, condition: watch.condition,
+            everyMinutes: watch.everyMinutes, sourceChoiceId: choice.id, expectedRevision: nil, mutationId: mutation)
+        var paths: [String] = []
+        AidenRemoteMockURLProtocol.handler = { request in
+            let path = request.url!.path
+            paths.append(path)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-credential")
+            XCTAssertNil(request.url?.query)
+            let data = request.httpBody ?? self.readBodyStream(request.httpBodyStream)
+            let body = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            XCTAssertNil(body?["botId"]); XCTAssertNil(body?["toolArguments"])
+            let root: String
+            if path.hasSuffix("/sources") {
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(body?.count, 0)
+                root = "sources"
+            } else if path.hasSuffix("/test") {
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertNil(body?["mutationId"])
+                XCTAssertEqual(body?["id"] as? String, watch.id)
+                XCTAssertEqual(body?["expectedRevision"] as? String, watch.revision)
+                root = "test"
+            } else if path.hasSuffix("/enabled") {
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(body?["enabled"] as? Bool, false)
+                XCTAssertEqual(body?["expectedRevision"] as? String, watch.revision)
+                XCTAssertNotNil(UUID(uuidString: body?["mutationId"] as? String ?? ""))
+                root = "watch"
+            } else if path.hasSuffix("/run") || request.httpMethod == "DELETE" {
+                XCTAssertEqual(body?["expectedRevision"] as? String, watch.revision)
+                XCTAssertEqual(Set(body?.keys.map { $0 } ?? []), ["expectedRevision", "mutationId"])
+                root = path.hasSuffix("/run") ? "run" : "removal"
+            } else if request.httpMethod == "GET" {
+                XCTAssertNil(data)
+                root = "list"
+            } else {
+                XCTAssertEqual(body?["sourceChoiceId"] as? String, choice.id)
+                XCTAssertEqual(body?["mutationId"] as? String, mutation.uuidString)
+                XCTAssertEqual(body?["expectedRevision"] as? String, request.httpMethod == "PATCH" ? watch.revision : nil)
+                root = "watch"
+            }
+            let response = try JSONSerialization.data(withJSONObject: XCTUnwrap(fixture[root]))
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, response)
+        }
+        let client = makeClient()
+        _ = try await client.botWatches(botId: watch.botId)
+        _ = try await client.discoverBotWatchSources(botId: watch.botId)
+        _ = try await client.saveBotWatch(botId: watch.botId, id: nil, request: save)
+        _ = try await client.saveBotWatch(botId: watch.botId, id: watch.id, request: .init(name: watch.name, prompt: watch.prompt,
+            condition: watch.condition, everyMinutes: watch.everyMinutes, sourceChoiceId: choice.id,
+            expectedRevision: watch.revision, mutationId: mutation))
+        _ = try await client.setBotWatchEnabled(botId: watch.botId, id: watch.id,
+            request: .init(expectedRevision: watch.revision, mutationId: mutation, enabled: false))
+        _ = try await client.testBotWatch(botId: watch.botId, request: .saved(id: watch.id, expectedRevision: watch.revision))
+        _ = try await client.runBotWatch(botId: watch.botId, id: watch.id, request: .init(expectedRevision: watch.revision, mutationId: mutation))
+        _ = try await client.removeBotWatch(botId: watch.botId, id: watch.id, request: .init(expectedRevision: watch.revision, mutationId: mutation))
+        XCTAssertEqual(paths.count, 8)
+        XCTAssertTrue(paths.allSatisfy { $0.hasPrefix("/api/aiden/v1/bots/\(watch.botId)/watches") })
+    }
+
+    func testWatchReadRejectsCrossBotOwnershipAndNegotiatesOnlyAdvertisedCapability() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-watches", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        AidenRemoteMockURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+             try JSONSerialization.data(withJSONObject: XCTUnwrap(fixture["list"])))
+        }
+        do { _ = try await makeClient().botWatches(botId: "other-bot"); XCTFail("Cross-Bot views must fail closed") }
+        catch { if case AidenRemoteClientError.invalidResponse = error {} else { XCTFail("Unexpected failure: \(error)") } }
+        AidenRemoteMockURLProtocol.handler = { request in
+            let data = request.httpBody ?? self.readBodyStream(request.httpBodyStream)
+            let body = try JSONSerialization.jsonObject(with: XCTUnwrap(data)) as? [String: Any]
+            XCTAssertEqual(body?["accepts"] as? [String], ["bot:watches"])
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                Data(#"{"capabilities":["server:read","bot:read","bot:write","bot:watches"]}"#.utf8))
+        }
+        let granted = try await makeClient().updateDeviceCapabilities(accepts: [.botWatches])
+        XCTAssertTrue(granted.contains(.botWatches))
+    }
+
+    private func readBodyStream(_ stream: InputStream?) -> Data? {
+        guard let stream else { return nil }
+        stream.open(); defer { stream.close() }
+        var result = Data()
+        var bytes = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&bytes, maxLength: bytes.count)
+            guard count > 0 else { break }
+            result.append(contentsOf: bytes.prefix(count))
+        }
+        return result
+    }
+
     private func makeClient() -> AidenRemoteClient {
         AidenRemoteClient(
             endpoint: URL(string: "https://aiden.test/api/aiden/v1")!,

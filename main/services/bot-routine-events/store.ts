@@ -15,6 +15,8 @@ import {
 import { botIdFromDirectoryName } from "../bot-runtime/harness-host.js";
 import { botSessionDirectory, createKeyedSerial } from "../bot-routine-notes.js";
 import { writeJsonAtomic } from "../durable-fs.js";
+import { parseConnectorPrivate, parseConnectorBaseline, type BotConnectorWatchPrivate } from "./connector-types.js";
+import type { ConnectorWatchBaseline } from "./connector-watch-imcp.js";
 
 export const BOT_EVENT_ROUTINES_FILE = "event-routines.json";
 export const BOT_EVENT_ROUTINES_MAX = 16;
@@ -47,11 +49,15 @@ export interface BotEventRoutine {
   held?: BotEventReceipt;
   /** Accepted events whose run isn't recorded yet; replayed after a restart. */
   running?: BotEventReceipt[];
+  /** Private connector binding/receipts, never part of event-routine views. */
+  connector?: BotConnectorWatchPrivate;
   /** Watch routines only: what the last checks found. */
   watch?: BotWatchState;
 }
 
 export interface BotWatchState {
+  connectorBaseline?: ConnectorWatchBaseline;
+  connectorItemCount?: number;
   /** A detected change owed to the dispatcher; saved atomically with its baseline. */
   pending?: { eventId: string; payload: string; revision: number; nextAttemptAt: number };
   /** sha256 hex of the last good output's exact bytes; absent until the baseline. */
@@ -90,9 +96,12 @@ function parseWatchState(value: unknown): BotWatchState {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { failures: 0 };
   const record = value as Record<string, unknown>;
   const pending = watchPending(record.pending);
+  const connectorBaseline = parseConnectorBaseline(record.connectorBaseline);
   const time = (key: string) => typeof record[key] === "number" && Number.isFinite(record[key]) ? { [key]: record[key] as number } : {};
   return {
     ...(pending ? { pending } : {}),
+    ...(connectorBaseline ? { connectorBaseline } : {}),
+    ...(Number.isSafeInteger(record.connectorItemCount) && (record.connectorItemCount as number) >= 0 ? { connectorItemCount: record.connectorItemCount as number } : {}),
     ...(typeof record.hash === "string" && /^[a-f0-9]{64}$/u.test(record.hash) ? { hash: record.hash } : {}),
     ...(typeof record.snapshot === "string" ? { snapshot: record.snapshot.slice(0, BOT_WATCH_SNAPSHOT_CHARS) } : {}),
     ...time("sameSince"),
@@ -129,7 +138,7 @@ export function viewOf(routine: BotEventRoutine): BotEventRoutineView {
 }
 
 function watchView(state: BotWatchState): NonNullable<BotEventRoutineView["watch"]> {
-  const { hash: _hash, snapshot: _snapshot, unsettledFailure: _unsettled, pending: _pending, ...shown } = state;
+  const { hash: _hash, snapshot: _snapshot, unsettledFailure: _unsettled, pending: _pending, connectorBaseline: _baseline, connectorItemCount: _count, ...shown } = state;
   return shown;
 }
 
@@ -161,6 +170,8 @@ function parseRoutine(value: unknown, botId: string): BotEventRoutine | undefine
   } catch {
     return undefined;
   }
+  const connector = parseConnectorPrivate(record.connector);
+  if (trigger.kind === "watch" && trigger.source.type === "connector" && (!connector || trigger.source.watchId !== record.id)) return undefined;
   if (trigger.kind === "webhook" && (typeof record.tokenHash !== "string" || !/^[a-f0-9]{64}$/u.test(record.tokenHash))) return undefined;
   const seen = Array.isArray(record.seenEventIds)
     ? record.seenEventIds.filter((id): id is string => typeof id === "string").slice(-BOT_ROUTINE_EVENT_LIMITS.seenIds)
@@ -186,6 +197,7 @@ function parseRoutine(value: unknown, botId: string): BotEventRoutine | undefine
     updatedAt: record.updatedAt,
     ...(trigger.kind === "webhook" ? { tokenHash: record.tokenHash as string } : {}),
     ...(typeof record.sourceProposalId === "string" ? { sourceProposalId: record.sourceProposalId } : {}),
+    ...(connector ? { connector } : {}),
     seenEventIds: seen,
     ...(typeof record.lastRunAt === "number" ? { lastRunAt: record.lastRunAt } : {}),
     ...(day && typeof day.key === "string" && typeof day.count === "number" ? { day: { key: day.key, count: day.count } } : {}),
@@ -207,6 +219,9 @@ export interface BotEventRoutineInput {
 
 /** Only the Bot's accepted suggestion sets where a routine came from; the profile never does. */
 export interface BotEventRoutineCreateInput extends BotEventRoutineInput {
+  /** Host-only stable connector creation identity and private approved binding. */
+  id?: string;
+  connector?: BotConnectorWatchPrivate;
   sourceProposalId?: string;
 }
 
@@ -285,19 +300,24 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
      * its hash is stored. Creating from a suggestion that already made one
      * returns that routine, with no new token.
      */
-    create(botId: string, input: BotEventRoutineCreateInput): Promise<{ routine: BotEventRoutine; token?: string }> {
+    create(botId: string, input: BotEventRoutineCreateInput, validate?: (routines: readonly BotEventRoutine[]) => void): Promise<{ routine: BotEventRoutine; token?: string }> {
       return serial(botId, async () => {
         const clean = cleanInput(input);
-        const routines = await load(botId);
+        if (clean.trigger.kind === "watch" && clean.trigger.source.type === "connector" && (!input.connector || input.id !== clean.trigger.source.watchId)) throw new Error("A connector watch requires an approved host binding.");
+        const routines = (await load(botId)).filter((routine) => routine.connector?.deletedAt === undefined || routine.connector.deletedAt >= now() - 86_400_000);
+        if (routines.filter((routine) => routine.connector?.deletedAt !== undefined).length >= 128) throw new Error("Too many recent deleted connector watches. Try again tomorrow.");
+        const identified = input.id ? routines.find((routine) => routine.id === input.id) : undefined;
+        if (identified) return { routine: identified };
         const existing = input.sourceProposalId !== undefined
           ? routines.find((routine) => routine.sourceProposalId === input.sourceProposalId)
           : undefined;
         if (existing) return { routine: existing };
-        if (routines.length >= BOT_EVENT_ROUTINES_MAX) throw new Error("This Bot has as many event routines as it can keep.");
+        if (routines.filter((routine) => routine.connector?.deletedAt === undefined).length >= BOT_EVENT_ROUTINES_MAX) throw new Error("This Bot has as many event routines as it can keep.");
         const at = now();
         const minted = clean.trigger.kind === "webhook" ? mintBotWebhookToken() : undefined;
         const routine: BotEventRoutine = {
-          id: randomUUID(),
+          id: input.id ?? randomUUID(),
+          ...(input.connector ? { connector: input.connector } : {}),
           botId,
           ...clean,
           enabled: input.enabled ?? true,
@@ -309,7 +329,9 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
           // The first check takes the baseline soon after the person adds it.
           ...(clean.trigger.kind === "watch" ? { watch: freshWatch(at) } : {}),
         };
-        await save(botId, [...routines, routine]);
+        const next = [...routines, routine];
+        validate?.(next);
+        await save(botId, next);
         return { routine, ...(minted ? { token: minted.token } : {}) };
       });
     },
@@ -325,6 +347,7 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
         const index = routines.findIndex((routine) => routine.id === id);
         if (index < 0) throw new Error("This routine no longer exists.");
         const current = routines[index]!;
+        if (current.connector) throw new Error("Use the connector watch controls to edit this watch.");
         const clean = cleanInput({
           name: input.name ?? current.name,
           prompt: input.prompt ?? current.prompt,
@@ -357,6 +380,27 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
       });
     },
 
+    /** Internal activity reduction only; legacy external CRUD cannot edit connector watches. */
+    pause(botId: string, id: string): Promise<BotEventRoutine> {
+      return serial(botId, async () => {
+        const routines = await load(botId);
+        const index = routines.findIndex((routine) => routine.id === id && routine.connector?.deletedAt === undefined);
+        if (index < 0) throw new Error("This routine no longer exists.");
+        const current = routines[index]!;
+        if (!current.enabled) return current;
+        const revision = Math.max(now(), current.updatedAt + 1);
+        const next: BotEventRoutine = { ...current, enabled: false, updatedAt: revision };
+        if (current.watch) {
+          next.watch = { ...current.watch, ...(current.watch.pending ? { pending: { ...current.watch.pending, revision } } : {}) };
+          if (current.held?.watchRevision === current.updatedAt) next.held = { ...current.held, watchRevision: revision };
+          next.running = current.running?.filter((event) => event.watchRevision === current.updatedAt).map((event) => ({ ...event, watchRevision: revision }));
+        }
+        routines[index] = next;
+        await save(botId, routines);
+        return next;
+      });
+    },
+
     /** A new link for a webhook routine; the old one stops working. */
     rotateToken(botId: string, id: string): Promise<string> {
       return serial(botId, async () => {
@@ -373,6 +417,7 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
     remove(botId: string, id: string): Promise<boolean> {
       return serial(botId, async () => {
         const routines = await load(botId);
+        if (routines.some((routine) => routine.id === id && routine.connector)) throw new Error("Use the connector watch controls to delete this watch.");
         const kept = routines.filter((routine) => routine.id !== id);
         if (kept.length === routines.length) return false;
         await save(botId, kept);
@@ -389,12 +434,12 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
     },
 
     /** Read-modify-write one routine's bookkeeping under the Bot's lock. */
-    mutate<T>(botId: string, id: string, change: (routine: BotEventRoutine) => { next?: BotEventRoutine; result: T }): Promise<T | undefined> {
+    mutate<T>(botId: string, id: string, change: (routine: BotEventRoutine, routines: readonly BotEventRoutine[]) => { next?: BotEventRoutine; result: T }): Promise<T | undefined> {
       return serial(botId, async () => {
         const routines = await load(botId);
         const index = routines.findIndex((routine) => routine.id === id);
         if (index < 0) return undefined;
-        const { next, result } = change(structuredClone(routines[index]!));
+        const { next, result } = change(structuredClone(routines[index]!), routines);
         if (next) {
           routines[index] = next;
           await save(botId, routines);

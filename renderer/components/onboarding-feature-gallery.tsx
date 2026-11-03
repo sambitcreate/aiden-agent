@@ -15,6 +15,7 @@ import {
   Globe2,
   LayoutDashboard,
   Lightbulb,
+  Mail,
   MessageSquare,
   Mic2,
   Monitor,
@@ -248,6 +249,14 @@ export const onboardingFeatures: OnboardingFeature[] = [
     description:
       "Give a Bot its own macOS virtual machine, apart from your Mac. Watch it work in the Bot's Computer tab and take over anytime. Set it up in Settings → Bot computers; nothing downloads until you choose Set up.",
     icon: Monitor,
+    size: "standard",
+  },
+  {
+    id: "botWatches",
+    group: "control",
+    title: "Connected-app watches",
+    description: "Choose a supported connected source in a Bot’s Profile, test its matching metadata, and tell the Bot what to do when it changes. Checks continue while Aiden is running and the owning computer is awake. Manage them from desktop or a paired phone.",
+    icon: Mail,
     size: "standard",
   },
   {

@@ -698,6 +698,12 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/controls/{panelId}",
     "/bots/{botId}/session/images/{entryId}",
     "/chats/{chatId}/recordings/{recordingId}",
+    "/bots/{botId}/watches",
+    "/bots/{botId}/watches/sources",
+    "/bots/{botId}/watches/test",
+    "/bots/{botId}/watches/{watchId}",
+    "/bots/{botId}/watches/{watchId}/enabled",
+    "/bots/{botId}/watches/{watchId}/run",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
   assert.deepEqual(document.security, [{ deviceBearer: [], protocolVersion: [] }]);

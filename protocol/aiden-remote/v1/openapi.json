@@ -7214,6 +7214,371 @@
           }
         }
       }
+    },
+    "/bots/{botId}/watches": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "listBotConnectorWatches",
+        "description": "Contract revision54; requires negotiated bot:watches. Source discovery is explicit. Mutations carry a stable UUID mutationId and existing-resource expectedRevision in JSON. No credentials, raw tools or executable configuration are accepted.",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:watches"
+        ],
+        "responses": {
+          "200": {
+            "description": "Connector watch result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectorWatchList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createBotConnectorWatch",
+        "description": "Contract revision54; requires negotiated bot:watches. Source discovery is explicit. Mutations carry a stable UUID mutationId and existing-resource expectedRevision in JSON. No credentials, raw tools or executable configuration are accepted.",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:watches",
+          "bot:write"
+        ],
+        "responses": {
+          "201": {
+            "description": "Connector watch result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectorWatch"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotConnectorWatchCreateRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/watches/sources": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "discoverBotConnectorWatchSources",
+        "description": "Contract revision54; requires negotiated bot:watches. Source discovery is explicit. Mutations carry a stable UUID mutationId and existing-resource expectedRevision in JSON. No credentials, raw tools or executable configuration are accepted.",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:watches",
+          "bot:write"
+        ],
+        "responses": {
+          "200": {
+            "description": "Connector watch result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectorWatchSourceList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/watches/test": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "testBotConnectorWatch",
+        "description": "Contract revision54; requires negotiated bot:watches. Source discovery is explicit. Mutations carry a stable UUID mutationId and existing-resource expectedRevision in JSON. No credentials, raw tools or executable configuration are accepted.",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:watches",
+          "bot:write"
+        ],
+        "responses": {
+          "200": {
+            "description": "Connector watch result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectorWatchTestResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotConnectorWatchTestRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/watches/{watchId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "watchId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          }
+        }
+      ],
+      "patch": {
+        "operationId": "updateBotConnectorWatch",
+        "description": "Contract revision54; requires negotiated bot:watches. Source discovery is explicit. Mutations carry a stable UUID mutationId and existing-resource expectedRevision in JSON. No credentials, raw tools or executable configuration are accepted.",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:watches",
+          "bot:write"
+        ],
+        "responses": {
+          "200": {
+            "description": "Connector watch result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectorWatch"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotConnectorWatchUpdateRequest"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteBotConnectorWatch",
+        "description": "Contract revision54; requires negotiated bot:watches. Source discovery is explicit. Mutations carry a stable UUID mutationId and existing-resource expectedRevision in JSON. No credentials, raw tools or executable configuration are accepted.",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:watches",
+          "bot:write"
+        ],
+        "responses": {
+          "200": {
+            "description": "Connector watch result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectorWatchRemoval"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotConnectorWatchIdentityRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/watches/{watchId}/enabled": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "watchId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          }
+        }
+      ],
+      "post": {
+        "operationId": "enableBotConnectorWatch",
+        "description": "Contract revision54; requires negotiated bot:watches. Source discovery is explicit. Mutations carry a stable UUID mutationId and existing-resource expectedRevision in JSON. No credentials, raw tools or executable configuration are accepted.",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:watches",
+          "bot:write"
+        ],
+        "responses": {
+          "200": {
+            "description": "Connector watch result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectorWatch"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotConnectorWatchEnableRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/watches/{watchId}/run": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "watchId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          }
+        }
+      ],
+      "post": {
+        "operationId": "runBotConnectorWatch",
+        "description": "Contract revision54; requires negotiated bot:watches. Source discovery is explicit. Mutations carry a stable UUID mutationId and existing-resource expectedRevision in JSON. No credentials, raw tools or executable configuration are accepted.",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:watches",
+          "bot:write"
+        ],
+        "responses": {
+          "200": {
+            "description": "Connector watch result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotConnectorWatchRunResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotConnectorWatchIdentityRequest"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -7973,6 +8338,7 @@
                 "bot:handoff-on-mac",
                 "bot:images",
                 "bot:issues",
+                "bot:watches",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -8019,6 +8385,7 @@
                 "bot:handoff-on-mac",
                 "bot:images",
                 "bot:issues",
+                "bot:watches",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -8168,6 +8535,7 @@
                 "bot:handoff-on-mac",
                 "bot:images",
                 "bot:issues",
+                "bot:watches",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -8223,6 +8591,7 @@
                 "bot:handoff-on-mac",
                 "bot:images",
                 "bot:issues",
+                "bot:watches",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -18698,6 +19067,635 @@
           }
         },
         "additionalProperties": false
+      },
+      "BotConnectorWatchCondition": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "email"
+              },
+              "sender": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "x-aiden-utf16-max": 200
+              },
+              "subject": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "x-aiden-utf16-max": 200
+              },
+              "unreadOnly": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "unreadOnly"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "calendar"
+              },
+              "lookAheadMinutes": {
+                "type": "integer",
+                "minimum": 15,
+                "maximum": 1440
+              },
+              "timezone": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100,
+                "x-aiden-utf16-max": 100
+              }
+            },
+            "required": [
+              "kind",
+              "lookAheadMinutes",
+              "timezone"
+            ]
+          }
+        ]
+      },
+      "BotConnectorWatchSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "providerLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "x-aiden-utf16-max": 500
+          },
+          "accountLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "x-aiden-utf16-max": 500
+          },
+          "resourceLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "x-aiden-utf16-max": 500
+          }
+        },
+        "required": [
+          "providerLabel",
+          "accountLabel",
+          "resourceLabel"
+        ]
+      },
+      "BotConnectorWatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          },
+          "botId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "x-aiden-utf16-max": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[0-9]{1,32}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "x-aiden-utf16-max": 120
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32768,
+            "x-aiden-utf16-max": 32768
+          },
+          "templateId": {
+            "enum": [
+              "mail_messages",
+              "calendar_upcoming"
+            ]
+          },
+          "condition": {
+            "$ref": "#/components/schemas/BotConnectorWatchCondition"
+          },
+          "everyMinutes": {
+            "enum": [
+              15,
+              30,
+              60
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/BotConnectorWatchSource"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "waiting",
+              "empty",
+              "unchanged",
+              "changed",
+              "error",
+              "paused"
+            ]
+          },
+          "lastCheckAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "nextCheckAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastRunAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastError": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "x-aiden-utf16-max": 200
+          }
+        },
+        "required": [
+          "id",
+          "botId",
+          "revision",
+          "name",
+          "prompt",
+          "templateId",
+          "condition",
+          "everyMinutes",
+          "source",
+          "enabled",
+          "state"
+        ]
+      },
+      "BotConnectorWatchList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "supported": {
+            "type": "boolean"
+          },
+          "unavailableReason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "x-aiden-utf16-max": 200
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "enum": [
+                    "mail_messages",
+                    "calendar_upcoming"
+                  ]
+                },
+                "kind": {
+                  "enum": [
+                    "email",
+                    "calendar"
+                  ]
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500,
+                  "x-aiden-utf16-max": 500
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500,
+                  "x-aiden-utf16-max": 500
+                },
+                "available": {
+                  "type": "boolean"
+                },
+                "unavailableReason": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "x-aiden-utf16-max": 200
+                },
+                "intervals": {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      15,
+                      30,
+                      60
+                    ]
+                  },
+                  "maxItems": 3
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "title",
+                "description",
+                "available",
+                "intervals"
+              ]
+            },
+            "maxItems": 2
+          },
+          "watches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BotConnectorWatch"
+            },
+            "maxItems": 16
+          }
+        },
+        "required": [
+          "supported",
+          "templates",
+          "watches"
+        ]
+      },
+      "BotConnectorWatchSourceList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^[0-9a-fA-F-]{36}$",
+                  "maxLength": 36
+                },
+                "templateId": {
+                  "enum": [
+                    "mail_messages",
+                    "calendar_upcoming"
+                  ]
+                },
+                "providerLabel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500,
+                  "x-aiden-utf16-max": 500
+                },
+                "accountLabel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500,
+                  "x-aiden-utf16-max": 500
+                },
+                "resourceLabel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500,
+                  "x-aiden-utf16-max": 500
+                },
+                "available": {
+                  "type": "boolean"
+                },
+                "unavailableReason": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "x-aiden-utf16-max": 200
+                }
+              },
+              "required": [
+                "id",
+                "templateId",
+                "providerLabel",
+                "accountLabel",
+                "resourceLabel",
+                "available"
+              ]
+            },
+            "maxItems": 500
+          },
+          "unavailableReasons": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "x-aiden-utf16-max": 200
+            },
+            "maxItems": 16
+          }
+        },
+        "required": [
+          "choices",
+          "unavailableReasons"
+        ]
+      },
+      "BotConnectorWatchTestResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "checkedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "result": {
+            "enum": [
+              "baseline",
+              "empty",
+              "unchanged",
+              "changed"
+            ]
+          },
+          "itemCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 250
+          },
+          "changeCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 250
+          },
+          "preview": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "x-aiden-utf16-max": 500
+            },
+            "maxItems": 8
+          }
+        },
+        "required": [
+          "checkedAt",
+          "result",
+          "itemCount",
+          "changeCount",
+          "preview"
+        ]
+      },
+      "BotConnectorWatchRemoval": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^deleted:[0-9]{1,32}$"
+          },
+          "removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "removed"
+        ]
+      },
+      "BotConnectorWatchRunResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[0-9]{1,32}$"
+          },
+          "admitted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "admitted"
+        ]
+      },
+      "BotConnectorWatchCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "x-aiden-utf16-max": 120
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32768,
+            "x-aiden-utf16-max": 32768
+          },
+          "condition": {
+            "$ref": "#/components/schemas/BotConnectorWatchCondition"
+          },
+          "everyMinutes": {
+            "enum": [
+              15,
+              30,
+              60
+            ]
+          },
+          "sourceChoiceId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          },
+          "mutationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          }
+        },
+        "required": [
+          "name",
+          "prompt",
+          "condition",
+          "everyMinutes",
+          "sourceChoiceId",
+          "mutationId"
+        ]
+      },
+      "BotConnectorWatchUpdateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "x-aiden-utf16-max": 120
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32768,
+            "x-aiden-utf16-max": 32768
+          },
+          "condition": {
+            "$ref": "#/components/schemas/BotConnectorWatchCondition"
+          },
+          "everyMinutes": {
+            "enum": [
+              15,
+              30,
+              60
+            ]
+          },
+          "sourceChoiceId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          },
+          "mutationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^[0-9]{1,32}$"
+          }
+        },
+        "required": [
+          "name",
+          "prompt",
+          "condition",
+          "everyMinutes",
+          "mutationId",
+          "expectedRevision"
+        ]
+      },
+      "BotConnectorWatchIdentityRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mutationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^[0-9]{1,32}$"
+          }
+        },
+        "required": [
+          "mutationId",
+          "expectedRevision"
+        ]
+      },
+      "BotConnectorWatchEnableRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mutationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F-]{36}$",
+            "maxLength": 36
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^[0-9]{1,32}$"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mutationId",
+          "expectedRevision",
+          "enabled"
+        ]
+      },
+      "BotConnectorWatchTestRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^[0-9a-fA-F-]{36}$",
+                "maxLength": 36
+              },
+              "expectedRevision": {
+                "type": "string",
+                "pattern": "^[0-9]{1,32}$"
+              }
+            },
+            "required": [
+              "id",
+              "expectedRevision"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "sourceChoiceId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^[0-9a-fA-F-]{36}$",
+                "maxLength": 36
+              },
+              "condition": {
+                "$ref": "#/components/schemas/BotConnectorWatchCondition"
+              }
+            },
+            "required": [
+              "sourceChoiceId",
+              "condition"
+            ]
+          }
+        ]
       }
     }
   }

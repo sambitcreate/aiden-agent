@@ -61,6 +61,7 @@ import {
   resolveBotRuntimeApprovedRoots,
 } from "../bot-runtime-authority-main.js";
 import type { BotRuntimeAuthorityAdmission } from "../bot-runtime-authority.js";
+import { admitWithBotConnectorInventoryScope, botConnectorInventoryServer } from "../bot-connector-inventory-scope.js";
 import { botStore } from "../bot-store.js";
 import { botRoutineGuidance, withBotManagedWorkspace, withBotPersona, type BotWorkspacePromptAuthority } from "../bot-system-prompt.js";
 import { buildSystemPrompt } from "../chat-system-prompt.js";
@@ -159,7 +160,9 @@ async function canonicalChatId(botId: string): Promise<string> {
 
 async function admit(botId: string): Promise<BotRuntimeAuthorityAdmission> {
   const chatId = await canonicalChatId(botId);
-  return botRuntimeAuthority.admit({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, chatId });
+  const operation = () => botRuntimeAuthority.admit({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, chatId });
+  const selected = botConnectorInventoryServer();
+  return selected ? admitWithBotConnectorInventoryScope(selected, operation) : operation();
 }
 
 /**
@@ -173,6 +176,9 @@ export async function probeBotAdmission(botId: string): Promise<{ providerId: st
     modelId: admission.authority.provider.sourceModelId,
   }));
 }
+
+/** Host-owned connector read admission; this does not run a turn or grant new access. */
+export function admitBotConnectorWork(botId: string): Promise<BotRuntimeAuthorityAdmission> { return admit(botId); }
 
 /**
  * Shell access for one host process started outside a turn (a watch script):
@@ -796,7 +802,10 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     pauses: botPauses,
     spendingRefusal: async (botId) => spending.refusal({ kind: "bot", id: botId }, (await botStore.get(botId))?.name),
     // No memory review runs or writes its marker while the Bot is paused.
-    onPaused: (botId) => memoryReview.cancel(botId),
+    onPaused: async (botId) => {
+      memoryReview.cancel(botId);
+      (await import("../bot-routine-events/sources-main.js")).botConnectorWatches.pauseBot(botId);
+    },
     afterPaused: afterBotPaused,
     onUnpaused: afterBotUnpaused,
     deleteEffects: [

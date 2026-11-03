@@ -30,6 +30,7 @@ import { registerBotQuestionHandlers } from "./bot-questions.js";
 import { registerBotHandoffHandlers } from "./bot-handoffs.js";
 import { registerBotIssueHandlers } from "./bot-issues.js";
 import { registerBotHealthHandlers } from "./bot-health.js";
+import { registerBotConnectorWatchHandlers } from "./bot-connector-watches.js";
 import { registerBotEventRoutineHandlers } from "./bot-event-routines.js";
 import { registerBotLearningHandlers } from "./bot-learning.js";
 import { botHealthReports } from "../services/bot-health/health-main.js";
@@ -229,11 +230,16 @@ export function registerBotHandlers(): void {
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     issues: botIssues,
   });
+  registerBotConnectorWatchHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    requireOwner: (event) => { rendererDocumentOwner(event, () => new Error("This watch request came from an inactive renderer.")); },
+    service: async () => (await import("../services/bot-routine-events/sources-main.js")).botConnectorWatches,
+  });
   // Profile → When something happens: event routines and their links.
   registerBotEventRoutineHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     store: {
-      list: async (botId) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.list(botId),
+      list: async (botId) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.list(botId).then((rows) => rows.filter((row) => !row.connector)),
       create: async (botId, input) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.create(botId, input),
       update: async (botId, id, input) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.update(botId, id, input),
       remove: async (botId, id) => {

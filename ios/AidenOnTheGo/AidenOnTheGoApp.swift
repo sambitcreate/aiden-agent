@@ -82,6 +82,7 @@ struct AidenOnTheGoApp: App {
     @State private var appearance = AidenAppearanceStore()
 
     init() {
+        AidenBotWatchDraftStore.shared.prepareExistingStorage()
         aidenBotImagePlaygroundCleanupAfterProcessLaunch()
         AidenMetricDiagnosticSubscriber.shared.start()
         AidenScheduledRunNotifier.installPresentationDelegate()

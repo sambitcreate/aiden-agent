@@ -459,6 +459,8 @@ object AidenBotPrivateResponseValidator {
         parent: kotlinx.serialization.json.JsonObject
     ): Boolean {
         if (key != "prompt") return false
+        if (root == "botWatch") return parentPath.isEmpty()
+        if (root == "botWatches") return parentPath == listOf("watches", "[]")
         if (root == "botRoutineSuggestions") return parentPath == listOf("suggestions", "[]")
         if (root !in botSessionRoots) return false
         val type = (parent["type"] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
@@ -478,6 +480,7 @@ object AidenBotPrivateResponseValidator {
         if (key == "reasoning" && root in listOf("chat", "chatProjection") &&
             (parentPath == listOf("messages", "[]") ||
                 parentPath == listOf("chats", "[]", "messages", "[]")) && regularChat) return true
+        if (root == "botWatchTest" && key == "result" && parentPath.isEmpty()) return true
         // Revision 42: the issue act route's receipt is `{ result: ... }`, not a tool result.
         if (root == "botIssues" && key == "result") {
             return parentPath.isEmpty() ||
@@ -533,6 +536,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         val SCHEDULE_WRITE = AidenRemoteCapability("schedule:write")
         val BOT_READ = AidenRemoteCapability("bot:read")
         val BOT_WRITE = AidenRemoteCapability("bot:write")
+        val BOT_WATCHES = AidenRemoteCapability("bot:watches")
         val TASKS_READ = AidenRemoteCapability("tasks:read")
         val AGENTS_READ = AidenRemoteCapability("agents:read")
         val QUESTIONS_RESPOND = AidenRemoteCapability("questions:respond")
@@ -671,12 +675,12 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
-            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + listOf(BOT_WATCHES)
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
         val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
-            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + listOf(BOT_WATCHES)
     }
 }
 

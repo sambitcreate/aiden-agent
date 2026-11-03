@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Contract revision 54 (`bot:watches`): a supporting paired host adds **Watches** to Bot profiles. Discover safe account/resource choices, create and edit typed watches, pause or resume, preview a test check, delete, or explicitly Run now. Polling and execution stay on the host. Calendar remains unavailable until exact-account and occurrence guarantees are available. Protected device-only drafts and frozen unresolved requests survive disconnect and restart, with stale-revision review and the original mutation identity retained for an explicit retry.
+
 - Stream recovery keeps a host-requested retry delay across a temporary network loss, counting time asleep toward the wait.
 
 - Leaving a Bot chat while a send is being cancelled keeps the message available to retry with its original key, even if the connection returns a receipt during cancellation.

@@ -152,6 +152,7 @@ const intervalMs = (routine: BotEventRoutine) =>
 
 export function createBotWatches(dependencies: BotWatchDependencies) {
   const timers = new Map<string, { key: string; timer: { cancel(): void } }>();
+  const checkWork = new Set<Promise<BotWatchOutcome>>();
   const inFlight = new Map<string, { revision: number; abort: AbortController }>();
   let generation = 0;
   let disposed = false;
@@ -235,7 +236,7 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
   }
 
   /** One check of one watch; exported for tests and for the timer. */
-  async function checkNow(botId: string, id: string): Promise<BotWatchOutcome> {
+  async function performCheckNow(botId: string, id: string): Promise<BotWatchOutcome> {
     if (disposed || inFlight.has(id)) return "skipped";
     const epoch = generation;
     const abort = new AbortController();
@@ -271,6 +272,7 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
         check = { ok: false, error: "The check couldn't run." };
       }
       if (!live(epoch) || abort.signal.aborted || await dependencies.isPaused(botId)) return "skipped";
+      if (!check.ok && check.skipped) return "skipped";
       const nextCheckAt = checkedAt + every;
       type Decision = { outcome: BotWatchOutcome; routine: BotEventRoutine; hadFailure: boolean };
       const decision = await dependencies.store.mutate<Decision | undefined>(botId, id, (fresh) => {
@@ -281,10 +283,25 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
         const hadFailure = state.failures > 0 || state.lastResult === "error" || state.unsettledFailure === true;
         if (!check.ok) {
           const failures = state.failures + 1;
-          const pause = failures >= BOT_WATCH_LIMITS.failuresBeforePause;
+          const pause = check.pause === true || failures >= BOT_WATCH_LIMITS.failuresBeforePause;
           const watch: BotWatchState = { ...state, failures, lastError: check.error.slice(0, 200), lastResult: "error", lastCheckAt: checkedAt, nextCheckAt };
           const next: BotEventRoutine = { ...fresh, watch, ...(pause ? { enabled: false } : {}) };
           return { next, result: { outcome: pause ? "paused" : "error", routine: next, hadFailure } };
+        }
+        if (check.connector) {
+          const semantic = check.connector;
+          const hash = botWatchHash(check.bytes);
+          const { lastError: _error, unsettledFailure: _failure, pending: _oldPending, ...rest } = state;
+          const watch: BotWatchState = { ...rest, failures: 0, hash, connectorBaseline: semantic.baseline,
+            connectorItemCount: semantic.itemCount, lastCheckAt: checkedAt, nextCheckAt };
+          if (!state.connectorBaseline || semantic.changeCount === 0) {
+            const outcome = state.connectorBaseline ? "no_change" as const : "baseline" as const;
+            return { next: { ...fresh, watch: { ...watch, lastResult: outcome } }, result: { outcome, routine: { ...fresh, watch }, hadFailure } };
+          }
+          const pending = { eventId: `${hash.slice(0, 24)}-${checkedAt.toString(36)}`, payload: semantic.payload,
+            revision: fresh.updatedAt, nextAttemptAt: checkedAt };
+          const next = { ...fresh, watch: { ...watch, pending, sameSince: checkedAt, lastResult: "changed" as const } };
+          return { next, result: { outcome: "changed", routine: next, hadFailure } };
         }
         const hash = botWatchHash(check.bytes);
         const text = new TextDecoder("utf-8", { fatal: false }).decode(check.bytes);
@@ -330,6 +347,13 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
     }
   }
 
+  function checkNow(botId: string, id: string): Promise<BotWatchOutcome> {
+    const work = performCheckNow(botId, id);
+    checkWork.add(work);
+    void work.then(() => checkWork.delete(work), () => checkWork.delete(work));
+    return work;
+  }
+
   let rearming: Promise<void> = Promise.resolve();
 
   async function rearmOnce(epoch: number): Promise<void> {
@@ -356,6 +380,8 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
 
   return {
     checkNow,
+    /** Checks already started, including their durable hand-offs, have settled. */
+    async idle(): Promise<void> { while (checkWork.size) await Promise.allSettled([...checkWork]); },
     /** Serialized: arms one timer per enabled watch at its persisted next-check time; never checks by itself. */
     rearm(): Promise<void> {
       const epoch = generation;

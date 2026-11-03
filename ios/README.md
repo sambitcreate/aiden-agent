@@ -6,6 +6,10 @@ If the selected computer is unavailable, choose **Switch connection** in the rec
 
 Public new-chat links wait through connection readiness, then require confirmation of their installation and workspace and never start dictation. iOS App Intents use a one-shot foreground action inside the app process, so the intentional voice shortcut remains available. Existing-chat widget and notification links only navigate. Unsent composer drafts and unresolved-send records remain protected device-only storage and are excluded from backups, including stores from older versions during app startup without opening a chat; backup restore does not migrate them.
 
+On hosts that offer and grant `bot:watches`, open a Bot’s profile → **Watches** to discover sources, create or edit a watch, pause or resume it, test a check, delete it, or explicitly **Run now**. Sources use host-produced provider, account and resource labels; connector bindings and credentials stay on the host. Discovery happens only when you tap **Discover sources** or **Refresh sources**. The host reports unavailable templates and repair guidance; Calendar watches remain unavailable until the host can bind an exact account safely.
+
+Watches execute on the paired host while Aiden is open and the host is awake. A test shows a bounded preview without advancing the watch baseline or running the Bot. Drafts and unresolved requests stay in this phone’s protected, backup-excluded private storage across editor close, disconnect and app restart; removing or replacing the pairing purges them. Stale saves retain the draft and require review of the latest host revision. An unknown write outcome freezes further changes until a host read confirms it or an explicit retry reuses the same request identity. Older hosts and pairings without `bot:watches` keep their existing profile.
+
 The product and protocol sources of truth are:
 
 - [`PROJECT_SPEC.md`](PROJECT_SPEC.md)

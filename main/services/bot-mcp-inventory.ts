@@ -9,6 +9,7 @@ import {
   type SubagentMcpRemoteTool,
 } from "./subagents/subagent-mcp-read.js";
 import type { SubagentMcpScopeV2 } from "./subagents/authority-v2.js";
+import { botConnectorInventoryServer } from "./bot-connector-inventory-scope.js";
 
 type BotMcpScopeTools = SubagentMcpScopeV2["tools"];
 
@@ -194,9 +195,12 @@ export function createBotMcpScopeCache(options: BotMcpScopeCacheOptions = {}): B
     server: McpServer,
     connectionFingerprint: string,
     currentGeneration: number,
+    connectorScope: string | undefined,
     inspect: (server: McpServer, signal: AbortSignal) => Promise<readonly SubagentMcpRemoteTool[]>,
   ): Promise<BotMcpScopeTools> => {
-    const key = JSON.stringify([server.id, connectionFingerprint, currentGeneration]);
+    // An unattended watch must never inherit an in-progress foreground
+    // inspection that may be creating a fresh authenticated transport.
+    const key = JSON.stringify([server.id, connectionFingerprint, currentGeneration, connectorScope ?? null]);
     const existing = inflight.get(key);
     if (existing) return existing;
     const controller = new AbortController();
@@ -240,7 +244,9 @@ export function createBotMcpScopeCache(options: BotMcpScopeCacheOptions = {}): B
       ) {
         return entry.tools;
       }
-      return raceAbort(flight(server, connectionFingerprint, currentGeneration, inspect), signal);
+      const selected = botConnectorInventoryServer();
+      if (selected && selected !== server.id) throw new Error("Unattended watch admission cannot discover another connector.");
+      return raceAbort(flight(server, connectionFingerprint, currentGeneration, selected, inspect), signal);
     },
     lastGood(serverId, connectionFingerprint) {
       const entry = entries.get(serverId);

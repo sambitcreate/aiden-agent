@@ -2044,6 +2044,72 @@ class AidenRemoteClient(
         ) { }
     }
 
+    // Connector watches: all bodies are bounded person-facing DTOs, never connector arguments.
+    private fun botWatchPath(botId: String, id: String? = null): String {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        id?.let(AidenBotWatchWire::uuid)
+        return "/bots/$botId/watches" + (id?.let { "/$it" } ?: "")
+    }
+
+    suspend fun botWatches(botId: String): AidenBotWatchList = executeRequest(
+        botWatchPath(botId), botScope = AidenBotPrivateResponseScope.Root("botWatches")
+    ) { bytes ->
+        decodeBotWire(AidenBotWatchList.serializer(), String(bytes, Charsets.UTF_8)).also { list ->
+            if (list.watches.any { it.botId != botId }) throw AidenRemoteClientException.InvalidResponse()
+        }
+    }
+
+    suspend fun botWatchSources(botId: String): AidenBotWatchSourceList = executeRequest(
+        botWatchPath(botId) + "/sources", method = "POST", bodyJson = "{}", retryConnectionFailure = false,
+        botScope = AidenBotPrivateResponseScope.Root("botWatchSources")
+    ) { bytes -> decodeBotWire(AidenBotWatchSourceList.serializer(), String(bytes, Charsets.UTF_8)) }
+
+    suspend fun saveBotWatch(botId: String, id: String?, request: AidenBotWatchSaveRequest): AidenBotWatch {
+        if ((id == null && (request.sourceChoiceId == null || request.expectedRevision != null)) ||
+            (id != null && request.expectedRevision == null)) throw AidenBotContractException.InvalidField("watch.revision")
+        return executeRequest(
+            botWatchPath(botId, id), method = if (id == null) "POST" else "PATCH",
+            bodyJson = botJson.encodeToString(AidenBotWatchSaveRequest.serializer(), request),
+            retryConnectionFailure = false, acceptedStatus = setOf(200, 201),
+            botScope = AidenBotPrivateResponseScope.Root("botWatch")
+        ) { bytes ->
+            decodeBotWire(AidenBotWatch.serializer(), String(bytes, Charsets.UTF_8)).also {
+                if (it.botId != botId || it.id != (id ?: request.mutationId)) throw AidenRemoteClientException.InvalidResponse()
+            }
+        }
+    }
+
+    suspend fun enableBotWatch(botId: String, id: String, request: AidenBotWatchMutation): AidenBotWatch {
+        if (request.enabled == null) throw AidenBotContractException.InvalidField("enabled")
+        return executeRequest(
+            botWatchPath(botId, id) + "/enabled", method = "POST",
+            bodyJson = botJson.encodeToString(AidenBotWatchMutation.serializer(), request), retryConnectionFailure = false,
+            botScope = AidenBotPrivateResponseScope.Root("botWatch")
+        ) { bytes -> decodeBotWire(AidenBotWatch.serializer(), String(bytes, Charsets.UTF_8)).also {
+            if (it.id != id || it.botId != botId) throw AidenRemoteClientException.InvalidResponse()
+        } }
+    }
+
+    suspend fun deleteBotWatch(botId: String, id: String, request: AidenBotWatchMutation): AidenBotWatchRemoval = executeRequest(
+        botWatchPath(botId, id), method = "DELETE",
+        bodyJson = botJson.encodeToString(AidenBotWatchMutation.serializer(), request), retryConnectionFailure = false,
+        botScope = AidenBotPrivateResponseScope.Root("botWatchRemoval")
+    ) { bytes -> decodeBotWire(AidenBotWatchRemoval.serializer(), String(bytes, Charsets.UTF_8)).also {
+        if (it.id != id) throw AidenRemoteClientException.InvalidResponse()
+    } }
+
+    suspend fun testBotWatch(botId: String, request: AidenBotWatchTestRequest): AidenBotWatchTestResult = executeRequest(
+        botWatchPath(botId) + "/test", method = "POST", bodyJson = botJson.encodeToString(AidenBotWatchTestRequest.serializer(), request),
+        retryConnectionFailure = false, botScope = AidenBotPrivateResponseScope.Root("botWatchTest")
+    ) { bytes -> decodeBotWire(AidenBotWatchTestResult.serializer(), String(bytes, Charsets.UTF_8)) }
+
+    suspend fun runBotWatch(botId: String, id: String, request: AidenBotWatchMutation): AidenBotWatchRunResult = executeRequest(
+        botWatchPath(botId, id) + "/run", method = "POST", bodyJson = botJson.encodeToString(AidenBotWatchMutation.serializer(), request),
+        retryConnectionFailure = false, acceptedStatus = setOf(200, 202), botScope = AidenBotPrivateResponseScope.Root("botWatchRun")
+    ) { bytes -> decodeBotWire(AidenBotWatchRunResult.serializer(), String(bytes, Charsets.UTF_8)).also {
+        if (it.id != id) throw AidenRemoteClientException.InvalidResponse()
+    } }
+
     // --- Revision 25: connection requests (`bot-connection-requests-v1`) ---
 
     suspend fun requestBotConnection(

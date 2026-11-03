@@ -130,7 +130,9 @@ function harness(options: { paused?: () => boolean; runFails?: boolean } = {}) {
   const issues: Array<{ kind: "paused" | "recovered"; id: string; error?: string }> = [];
   /** What each saved check told the profile: its result and whether the watch is on. */
   const announced: Array<{ lastResult: string | undefined; enabled: boolean }> = [];
-  const makeWatches = (overrides: Partial<BotWatchDependencies> = {}) => createBotWatches({
+  const watchInstances: ReturnType<typeof createBotWatches>[] = [];
+  const makeWatches = (overrides: Partial<BotWatchDependencies> = {}) => {
+    const instance = createBotWatches({
     routines: () => store.all(),
     store,
     check: async () => {
@@ -149,10 +151,14 @@ function harness(options: { paused?: () => boolean; runFails?: boolean } = {}) {
     now: () => clock.at,
     setTimer,
     ...overrides,
-  });
+    });
+    watchInstances.push(instance);
+    return instance;
+  };
   const watches = makeWatches();
   const settle = async () => {
-    for (let round = 0; round < 10; round += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    await Promise.all(watchInstances.map((instance) => instance.idle()));
+    await dispatcher.idle();
   };
   /** Moves the clock and fires every timer that is due, in order. */
   const advance = async (by: number) => {
@@ -552,7 +558,7 @@ test("revocation during the durable claim save starts no model; replay rechecks 
   const authority = new AbortController();
   const store = {
     ...h.store,
-    async mutate<T>(botId: string, id: string, change: (value: BotEventRoutine) => { next?: BotEventRoutine; result: T }) {
+    async mutate<T>(botId: string, id: string, change: (value: BotEventRoutine, routines: readonly BotEventRoutine[]) => { next?: BotEventRoutine; result: T }) {
       const result = await h.store.mutate(botId, id, change);
       authority.abort();
       return result;

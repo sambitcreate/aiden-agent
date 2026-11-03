@@ -482,6 +482,11 @@ struct AidenServer: Codable, Equatable, Sendable {
         offersBotIssues && capabilities.contains(.botIssues)
     }
 
+    var supportsBotWatches: Bool {
+        serverCapabilities?.contains(.botWatches) == true
+            && capabilities.contains(.botWatches) && capabilities.contains(.botRead)
+    }
+
     /// The Mac announces `bot-activity-v1`, whatever this device holds.
     var announcesBotActivity: Bool {
         features.contains(Self.botActivityFeature)
@@ -1564,7 +1569,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
-            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues,
+            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues, .botWatches,
             .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw, .chatNewWorktree,
         ])
         guard !accepts.isEmpty,
@@ -2628,6 +2633,70 @@ final class AidenRemoteClient: @unchecked Sendable {
             headers: idempotencyHeaders(idempotencyKey),
             acceptedStatus: [200, 202]
         )
+    }
+
+    // MARK: Connector watches (`bot:watches`)
+
+    func botWatches(botId: String) async throws -> AidenBotWatchList {
+        try validateBotIdentifier(botId)
+        let list: AidenBotWatchList = try await send(method: "GET", path: ["bots", botId, "watches"])
+        guard list.watches.allSatisfy({ $0.botId == botId }) else { throw AidenRemoteClientError.invalidResponse }
+        return list
+    }
+
+    /// Foreground only: loading the list never discovers connector resources.
+    func discoverBotWatchSources(botId: String) async throws -> AidenBotWatchSources {
+        try validateBotIdentifier(botId)
+        return try await send(method: "POST", path: ["bots", botId, "watches", "sources"], body: [String: String]())
+    }
+
+    func saveBotWatch(botId: String, id: String?, request: AidenBotWatchSaveRequest) async throws -> AidenBotWatch {
+        try validateBotIdentifier(botId)
+        try request.validate(isCreate: id == nil)
+        if let id { try AidenBotWatchWire.uuid(id) }
+        let path = ["bots", botId, "watches"] + (id.map { [$0] } ?? [])
+        let watch: AidenBotWatch = try await send(method: id == nil ? "POST" : "PATCH", path: path,
+                                                body: request, acceptedStatus: [200, 201])
+        guard watch.botId == botId,
+              UUID(uuidString: watch.id) == (id.flatMap(UUID.init(uuidString:)) ?? request.mutationId) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return watch
+    }
+
+    func setBotWatchEnabled(botId: String, id: String, request: AidenBotWatchActionRequest) async throws -> AidenBotWatch {
+        try validateBotWatchAction(botId: botId, id: id, request: request)
+        guard request.enabled != nil else { throw AidenRemoteClientError.invalidResponse }
+        let watch: AidenBotWatch = try await send(method: "POST", path: ["bots", botId, "watches", id, "enabled"], body: request)
+        guard watch.botId == botId, watch.id == id else { throw AidenRemoteClientError.invalidResponse }
+        return watch
+    }
+
+    func removeBotWatch(botId: String, id: String, request: AidenBotWatchActionRequest) async throws -> AidenBotWatchRemoval {
+        try validateBotWatchAction(botId: botId, id: id, request: request)
+        guard request.enabled == nil else { throw AidenRemoteClientError.invalidResponse }
+        let result: AidenBotWatchRemoval = try await send(method: "DELETE", path: ["bots", botId, "watches", id], body: request)
+        guard result.id == id else { throw AidenRemoteClientError.invalidResponse }
+        return result
+    }
+
+    func testBotWatch(botId: String, request: AidenBotWatchTestRequest) async throws -> AidenBotWatchTestResult {
+        try validateBotIdentifier(botId)
+        return try await send(method: "POST", path: ["bots", botId, "watches", "test"], body: request)
+    }
+
+    func runBotWatch(botId: String, id: String, request: AidenBotWatchActionRequest) async throws -> AidenBotWatchRunResult {
+        try validateBotWatchAction(botId: botId, id: id, request: request)
+        guard request.enabled == nil else { throw AidenRemoteClientError.invalidResponse }
+        let result: AidenBotWatchRunResult = try await send(method: "POST", path: ["bots", botId, "watches", id, "run"], body: request)
+        guard result.id == id else { throw AidenRemoteClientError.invalidResponse }
+        return result
+    }
+
+    private func validateBotWatchAction(botId: String, id: String, request: AidenBotWatchActionRequest) throws {
+        try validateBotIdentifier(botId)
+        try AidenBotWatchWire.uuid(id)
+        try AidenBotWatchWire.revision(request.expectedRevision)
     }
 
     // MARK: Routines (`bot-routines-v1`)

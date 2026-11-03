@@ -17,7 +17,7 @@ import { BOT_WATCH_LIMITS, parseBotWatchUrl, type BotWatchSource } from "../../.
 import { isPathInside } from "../../shared/path-containment.js";
 import { runScheduledScript, type ScriptProcessResult } from "../schedule-script.js";
 
-export type BotWatchCheck = { ok: true; bytes: Uint8Array } | { ok: false; error: string };
+export type BotWatchCheck = { ok: true; bytes: Uint8Array; connector?: { baseline: import("./connector-watch-imcp.js").ConnectorWatchBaseline; itemCount: number; changeCount: number; payload: string } } | { ok: false; error: string; pause?: boolean; skipped?: boolean };
 
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -179,6 +179,7 @@ export function checkBotWatchSource(
   options: { authorize: BotWatchScriptAuthorizer; fetch?: FetchLike; run?: BotWatchScriptRunner; signal?: AbortSignal },
 ): Promise<BotWatchCheck> {
   if (source.type === "url") return fetchBotWatchUrl(source.url, { ...(options.fetch ? { fetch: options.fetch } : {}), signal: options.signal });
+  if (source.type === "connector") return Promise.resolve(failed("Connector watches require the owning host service."));
   return home().then(
     (folder) => runBotWatchScript(folder, source.script, { authorize: options.authorize, ...(options.run ? { run: options.run } : {}), signal: options.signal }),
     () => failed("Aiden couldn't find the Bot's folder."),

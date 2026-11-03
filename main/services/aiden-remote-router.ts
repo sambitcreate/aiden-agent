@@ -1,3 +1,5 @@
+import type { BotConnectorWatchService } from "./bot-routine-events/connector-service.js";
+import { BotConnectorWatchError, connectorFields } from "./bot-routine-events/connector-service.js";
 import { PEER_PROJECT_CLONE_FEATURE } from "../../renderer/shared/peer-project-clone.js";
 import type { remoteAppControls } from "./aiden-remote-app-controls.js";
 import type { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
@@ -48,6 +50,7 @@ import {
   AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
   AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
+  AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
   AIDEN_REMOTE_BOT_ACTIVITY_FEATURE,
   AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE,
   AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
@@ -273,6 +276,7 @@ export interface AidenRemoteRouterDependencies {
     >;
   files?: Pick<AidenRemoteFileService, "list" | "read" | "write"> & Partial<Pick<AidenRemoteFileService, "children">>;
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
+  botWatches?: Pick<BotConnectorWatchService, "list" | "discoverSources" | "create" | "update" | "setEnabled" | "remove" | "testCheck" | "runNow">;
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
   schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
   appControls?: typeof remoteAppControls;
@@ -435,6 +439,7 @@ export type AidenRemoteRouteLabel =
   | "botHandoffOpenOnMac"
   | "botPause"
   | "botIssueAct"
+  | "botWatches"
   | "botRoutines"
   | "botConnectionRequests"
   | "botMemory"
@@ -535,6 +540,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   botHandoffOpenOnMac: ["/bots/:botId/handoffs/:waitId/open-on-mac"],
   botPause: ["/bots/:botId/pause"],
   botIssueAct: ["/bots/:botId/issues/:issueId/act"],
+  botWatches: ["/bots/:botId/watches", "/bots/:botId/watches/sources", "/bots/:botId/watches/test", "/bots/:botId/watches/:watchId", "/bots/:botId/watches/:watchId/enabled", "/bots/:botId/watches/:watchId/run"],
   botRoutines: ["/bots/:botId/routines", "/bots/:botId/routines/:routineId"],
   botConnectionRequests: ["/bots/:botId/connection-requests"],
   botMemory: ["/bots/:botId/memory", "/bots/:botId/memory/edits"],
@@ -2083,6 +2089,20 @@ function writeBotDetail(
   writeJson(response, status, visible);
 }
 
+function botWatchesWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  const port = dependencies.botWatches;
+  return !!port && (["list", "discoverSources", "create", "update", "setEnabled", "remove", "testCheck", "runNow"] as const).every((key) => typeof port[key] === "function");
+}
+async function callBotWatch<T>(operation: () => Promise<T>): Promise<T> {
+  try { return await operation(); } catch (error) {
+    if (!(error instanceof BotConnectorWatchError)) throw error;
+    const code = error.code === "unavailable" ? "capability_denied" : error.code;
+    const status = code === "not_found" ? 404 : code === "invalid_request" ? 400 : code === "capability_denied" ? 403 : code === "idempotency_capacity" ? 429 : 409;
+    throw new AidenRemoteServiceError(code, error.message, status, code === "idempotency_capacity",
+      typeof error.details?.currentRevision === "string" ? { currentRevision: error.details.currentRevision } : undefined);
+  }
+}
+
 function advertisedServerCapabilities(
   device: AidenRemoteRouterAuthenticatedDevice,
   dependencies: AidenRemoteRouterDependencies,
@@ -2108,6 +2128,7 @@ function advertisedServerCapabilities(
     ...(device.acceptsBotCapabilities === true && botImagesWired(dependencies)
       ? AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES
       : []),
+    ...(device.acceptsBotCapabilities === true && botWatchesWired(dependencies) ? AIDEN_REMOTE_BOT_WATCH_CAPABILITIES : []),
     // Revision 42: offered only while the issue act route is wired.
     ...(device.acceptsBotCapabilities === true && botIssuesWired(dependencies)
       ? AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES
@@ -3101,6 +3122,52 @@ export function createAidenRemoteRequestHandler(
           handoffs: holdsBotHandoffs(device, dependencies),
         }));
         return;
+      }
+      const watchListMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches$/u.exec(path);
+      const watchSourcesMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches\/sources$/u.exec(path);
+      const watchTestMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches\/test$/u.exec(path);
+      const watchItemMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches\/([A-Za-z0-9._:-]{1,160})$/u.exec(path);
+      const watchEnabledMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches\/([A-Za-z0-9._:-]{1,160})\/enabled$/u.exec(path);
+      const watchRunMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches\/([A-Za-z0-9._:-]{1,160})\/run$/u.exec(path);
+      const botWatchesMatch = watchEnabledMatch ? [...watchEnabledMatch, "enabled"] : watchRunMatch ? [...watchRunMatch, "run"]
+        : watchSourcesMatch ? [...watchSourcesMatch, "sources"] : watchTestMatch ? [...watchTestMatch, "test"] : watchItemMatch ?? watchListMatch;
+      if (botWatchesMatch) {
+        requireNoQuery(query); route = "botWatches";
+        if (!botWatchesWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Connector watches are not served by this host.", 404);
+        const device = await authenticate(request, dependencies.devices, request.method === "GET" ? "bot:read" : "bot:write");
+        deviceIdSuffix = device.id.slice(-8); requireDeviceCapabilities(device, ["bot:read", "bot:watches"]);
+        if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
+        const service = dependencies.botWatches!; const botId = botWatchesMatch[1]!; const id = botWatchesMatch[2]; const action = botWatchesMatch[3];
+        if (!id && request.method === "GET") { writeJson(response, 200, await callBotWatch(() => service.list(botId))); return; }
+        const body = await readJsonBody(request);
+        if (id === "sources" && request.method === "POST" && !action) {
+          connectorFields(body, []); writeJson(response, 200, await callBotWatch(() => service.discoverSources(botId))); return;
+        }
+        if (id === "test" && request.method === "POST" && !action) {
+          const fields = connectorFields(body, ["id", "expectedRevision", "sourceChoiceId", "condition"]);
+          writeJson(response, 200, await callBotWatch(() => service.testCheck({ ...fields, botId } as Parameters<typeof service.testCheck>[0]))); return;
+        }
+        if (!id && request.method === "POST") {
+          const fields = connectorFields(body, ["mutationId", "sourceChoiceId", "name", "prompt", "condition", "everyMinutes"]);
+          writeJson(response, 201, await callBotWatch(() => service.create({ ...fields, botId } as Parameters<typeof service.create>[0]))); return;
+        }
+        if (id && !action && request.method === "PATCH") {
+          const fields = connectorFields(body, ["expectedRevision", "mutationId", "sourceChoiceId", "name", "prompt", "condition", "everyMinutes"]);
+          writeJson(response, 200, await callBotWatch(() => service.update({ ...fields, botId, id } as Parameters<typeof service.update>[0]))); return;
+        }
+        if (id && !action && request.method === "DELETE") {
+          const fields = connectorFields(body, ["expectedRevision", "mutationId"]);
+          writeJson(response, 200, await callBotWatch(() => service.remove({ ...fields, botId, id } as Parameters<typeof service.remove>[0]))); return;
+        }
+        if (id && action === "enabled" && request.method === "POST") {
+          const fields = connectorFields(body, ["expectedRevision", "mutationId", "enabled"]);
+          writeJson(response, 200, await callBotWatch(() => service.setEnabled({ ...fields, botId, id } as Parameters<typeof service.setEnabled>[0]))); return;
+        }
+        if (id && action === "run" && request.method === "POST") {
+          const fields = connectorFields(body, ["expectedRevision", "mutationId"]);
+          writeJson(response, 200, await callBotWatch(() => service.runNow({ ...fields, botId, id } as Parameters<typeof service.runNow>[0]))); return;
+        }
+        throw new AidenRemoteServiceError("not_found", "This connector watch route does not exist.", 404);
       }
       const botRoutinesMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routines$/u.exec(path);
       if (botRoutinesMatch && request.method === "GET") {
@@ -4840,7 +4907,7 @@ export function createAidenRemoteRequestHandler(
         logRequest(response.statusCode);
       })
       .catch((error: unknown) => {
-        const safe = asAidenRemoteServiceError(error);
+        const safe = asAidenRemoteServiceError(error instanceof BotConnectorWatchError ? new AidenRemoteServiceError(error.code === "unavailable" ? "capability_denied" : error.code, error.message, error.code === "invalid_request" ? 400 : 403) : error);
         if (!response.headersSent) writeError(response, id, safe);
         else response.destroy();
         logRequest(safe.status, { errorCode: safe.code });
@@ -4897,7 +4964,7 @@ export function createAidenRemoteUpgradeHandler(
         });
       })
       .catch((error: unknown) => {
-        const safe = asAidenRemoteServiceError(error);
+        const safe = asAidenRemoteServiceError(error instanceof BotConnectorWatchError ? new AidenRemoteServiceError(error.code === "unavailable" ? "capability_denied" : error.code, error.message, error.code === "invalid_request" ? 400 : 403) : error);
         refuseUpgrade(socket, safe.status, safe.status === 404 ? "Not Found" : "Refused");
         dependencies.log({
           requestId: id,

@@ -25,6 +25,7 @@ import { BotCharacterCard } from "./bot-character-card";
 import { BotComputerSection } from "./bot-computer-section";
 import { BotHealthSection } from "./bot-health-section";
 import { BotEventRoutines } from "./bot-event-routines";
+import { BotConnectorWatches } from "./bot-connector-watches";
 import { updateBotIdentity, type BotIdentityPatch } from "./bot-identity";
 import { BotPageShell } from "./bot-page-shell";
 import { setBotPaused } from "./bot-menu";
@@ -327,6 +328,7 @@ export function BotProfile({
       <BotCharacterCard avatar={bot.avatar} onChange={(avatar) => void save({ avatar }).catch(() => undefined)} />
       <BotRoutines bot={bot} />
       <BotEventRoutines bot={bot} />
+      <BotConnectorWatches bot={bot} />
       <BotHealthSection bot={bot} />
       <BotSpendingSection bot={bot} />
       <BotRules bot={bot} />

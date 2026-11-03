@@ -204,6 +204,11 @@ data class AidenServer(
     val supportsBotImages: Boolean
         get() = offersBotImages && capabilities.contains(AidenRemoteCapability.BOT_IMAGES)
 
+    /** Offered and held (revision 54): this phone can inspect connector watches. */
+    val supportsBotWatches: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_WATCHES) == true &&
+            capabilities.contains(AidenRemoteCapability.BOT_WATCHES) && capabilities.contains(AidenRemoteCapability.BOT_READ)
+
     /**
      * The Mac offers `bot:issues` (revision 42). There is no `/server` feature token: the offer
      * in `serverCapabilities` is the whole signal, and this phone asks for it in a call of its own.

@@ -212,6 +212,17 @@ internal suspend fun aidenRequestBotImages(
         stillCurrent
     )
 
+/** Revision 54: watches are negotiated alone only when the host offers them. */
+internal suspend fun aidenRequestBotWatches(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
+    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_WATCHES, server, installation))
+        listOf(AidenRemoteCapability.BOT_WATCHES) else emptyList(), client, stillCurrent
+)
+
 /**
  * Revision 42: asks [server] for `bot:issues` alone, exactly as
  * [aidenRequestScheduleCards] asks for `schedule:cards`. A Mac that refuses it (400 or 404)
@@ -345,6 +356,7 @@ class AidenRemoteCoordinator(
     val scheduledCache = AidenScheduledTaskCache(File(storageDir, "scheduled_tasks_cache"))
     val usageCache = AidenUsageCache(File(storageDir, "usage_cache"))
     val botCache = AidenBotCache(storageDir)
+    val botWatchJournals = sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournalStore(installationStore.secureStore)
     /** Bot chats' last transcripts and unsent messages (R14, R17), purged with the pairing. */
     val botSessionStore = File(botOutboxDir, "BotOutbox-v1").let { dir ->
         botOutboxIo?.let { AidenBotSessionStore(dir, io = it) } ?: AidenBotSessionStore(dir)
@@ -641,13 +653,18 @@ class AidenRemoteCoordinator(
                     server = jobsServer,
                     request = ::aidenRequestRawUploads
                 )
-                // Revision 53: `chat:new-worktree` goes alone too, last.
-                val negotiatedServer = negotiateSoloCapability(
+                // Revision 53: `chat:new-worktree` goes alone too.
+                val worktreeServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
                     server = rawUploadsServer,
                     request = ::aidenRequestChatNewWorktree
+                )
+                // Revision 54: `bot:watches` goes alone, without another feature token.
+                val negotiatedServer = negotiateSoloCapability(
+                    generation = generation, installation = installation, client = newClient,
+                    server = worktreeServer, request = ::aidenRequestBotWatches
                 )
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(
@@ -722,7 +739,9 @@ class AidenRemoteCoordinator(
             // explicit revocation response should invalidate this pairing.
             if (error.statusCode == 401 ||
                 error.body.code == sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode.CREDENTIAL_REVOKED
-            ) throw error
+            ) {
+                throw error
+            }
             server
         } catch (_: Exception) {
             server
@@ -808,6 +827,7 @@ class AidenRemoteCoordinator(
         scheduledCache.purge(installation.instanceId)
         usageCache.purge(installation.instanceId)
         readSnapshotCache.purge(installation.instanceId)
+        botWatchJournals.purge(installation.instanceId, installation.deviceId, installation.createdAt)
         botCache.purge(installation.instanceId, installation.deviceId)
         botSessionStore.purgeInstance(installation.instanceId)
         chatCache.purge(installation.instanceId)

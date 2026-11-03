@@ -160,7 +160,7 @@ async function productionSourceFiles(directory: string): Promise<ts.SourceFile[]
   for (const entry of entries) {
     const target = path.join(directory, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name !== "fixtures") sourceFiles.push(...(await productionSourceFiles(target)));
+      if (entry.name !== "fixtures" && entry.name !== "test-support") sourceFiles.push(...(await productionSourceFiles(target)));
       continue;
     }
     if (!entry.isFile() || !entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) {

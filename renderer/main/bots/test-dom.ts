@@ -99,6 +99,7 @@ export function installBotTestDom(): Window {
 
 /** Answers for reads every Bot surface makes, unless a test overrides them. */
 const BOT_TEST_IPC_DEFAULTS: Record<string, (...args: unknown[]) => unknown> = {
+  "bots:connectorWatches:list": () => ({ supported: true, templates: [], watches: [] }),
   "bots:getCanonicalPhoto": () => null,
   // The model picker reads custom connection artwork from the providers list.
   "providers:list": () => [],

@@ -66,6 +66,7 @@ function draftOf(routine: BotEventRoutineView): Draft {
   if (routine.trigger.kind === "file_change") return { ...draft, folder: routine.trigger.folder };
   if (routine.trigger.kind !== "watch") return draft;
   const { source, everyMinutes } = routine.trigger;
+  if (source.type === "connector") return draft;
   return source.type === "url"
     ? { ...draft, watchType: "url", url: source.url, everyMinutes }
     : { ...draft, watchType: "script", script: source.script, everyMinutes };

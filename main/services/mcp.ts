@@ -1,8 +1,9 @@
+import { botConnectorInventoryServer } from "./bot-connector-inventory-scope.js";
 import { mcpProviderAuthenticatedFetch } from "./mcp-provider-auth.js";
 import { admitMcpProviderAuthServers, withMcpProviderOperation, type McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
 import { inspectInitializedMcpStatus } from "./mcp-status.js";
 import { mcpLiveStatus, recordMcpConnectionLifecycle } from "./mcp-status-events.js";
-import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage, readGuardedMcpInventory, MCP_TOOL_INVENTORY_TTL_MS } from "./mcp-tool-inventory.js";
+import { boundedMcpToolPageReader, guardedMcpToolCall, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage, readGuardedMcpInventory, MCP_TOOL_INVENTORY_TTL_MS } from "./mcp-tool-inventory.js";
 import { createHash } from "node:crypto";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 import { snapshotMcpServerInstructions } from "./mcp-server-instructions.js";
@@ -87,6 +88,8 @@ import {
 /** Cached connections with no activity for this long are closed. */
 const MCP_IDLE_CONNECTION_MS = 10 * 60_000;
 const MCP_IDLE_SWEEP_MS = 60_000;
+
+export { withBotConnectorInventoryScope } from "./bot-connector-inventory-scope.js";
 
 /**
  * Resolve a server record into connection-ready form. For built-in presets
@@ -246,6 +249,11 @@ export async function inspectConfiguredMcpToolsForBotCatalog(
   signal: AbortSignal,
 ): Promise<readonly SubagentMcpRemoteTool[]> {
   if (server.authProvider) throw new Error("Provider-authenticated MCP is unavailable to Bots.");
+  const watchedServer = botConnectorInventoryServer();
+  if (watchedServer) {
+    if (watchedServer !== server.id) throw new Error("Unattended watch admission cannot discover another connector.");
+    return withBotConnectorMcpClient(server, signal, (client) => client.list());
+  }
   const lease = mcpConfigurationLeases.acquire(server.id);
   const operationSignal = AbortSignal.any([signal, lease.signal]);
   const isCurrent = () => {
@@ -435,6 +443,31 @@ class McpManager {
   private stopIdleSweep(): void {
     if (this.idleSweep) clearInterval(this.idleSweep);
     this.idleSweep = undefined;
+  }
+
+  hasExistingConnector(id: string): boolean { return this.clients.peekConnected(id) !== undefined; }
+
+  /** An accepted watch may keep an existing approved session; it never reconnects it. */
+  retainExistingConnector(id: string): (() => void) | undefined {
+    if (!this.clients.peekConnected(id)) return undefined;
+    return this.activity.begin(id);
+  }
+
+  async withExistingConnectorClient<T>(server: McpServer, signal: AbortSignal, operation: (port: BotConnectorMcpClientPort) => Promise<T>): Promise<T> {
+    const client = this.clients.peekConnected(server.id);
+    if (!client) throw new Error("Connect iMCP in the foreground first. Watches never create a new approval session.");
+    const generation = this.connectionGeneration(server.id);
+    const lease = mcpConfigurationLeases.acquire(server.id);
+    const currentSignal = AbortSignal.any([signal, lease.signal]);
+    const assertCurrent = () => { lease.assertCurrent(); currentSignal.throwIfAborted(); this.assertGeneration(server.id, generation); if (!this.clients.isConnected(server.id, client)) throw new Error("The approved connector session ended."); return true; };
+    const end = this.activity.begin(server.id);
+    try {
+      return await withConfiguredMcp(server.id, mcpRuntimeConnectionSnapshot(server), async () => {
+        let inventory: McpInventory | undefined;
+        return operation({ list: async () => { assertCurrent(); inventory = await this.cachedInventory(server, generation, client, currentSignal, true); assertCurrent(); return inventory.tools.map(mcpRemoteToolDescriptor); },
+          call: async (name, args) => { assertCurrent(); if (!inventory) throw new Error("Connector metadata was not checked."); return guardedMcpToolCall(inventory.guard, client, { name, arguments: args }, botMcpRequestOptions(currentSignal)); } });
+      }, assertCurrent);
+    } finally { end(); }
   }
 
   async closeIdleConnections(): Promise<void> {
@@ -870,4 +903,14 @@ export async function collectMcpAgentTools(
     strict: options.strict,
     onUnavailable,
   });
+}
+
+export interface BotConnectorMcpClientPort {
+  list(): Promise<readonly SubagentMcpRemoteTool[]>;
+  call(name: string, args: Record<string, unknown>): Promise<unknown>;
+}
+/** An approved live session only: no child creation, reconnect, credential resolution or sign-in. */
+export function withBotConnectorMcpClient<T>(server: McpServer, signal: AbortSignal, operation: (port: BotConnectorMcpClientPort) => Promise<T>): Promise<T> {
+  if (server.presetId !== "imcp" || server.authProvider || server.transport !== "stdio") throw new Error("Unsupported connector watch transport.");
+  return mcpManager.withExistingConnectorClient(server, signal, operation);
 }

@@ -1,4 +1,6 @@
 import type { PeerProjectSource } from "../shared/peer-project-clone";
+import { BOT_CONNECTOR_WATCH_CHANNELS as watchChannels } from "../shared/bot-connector-watches";
+import type * as ConnectorWatch from "../shared/bot-connector-watches";
 import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
 import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
 import type { ChatPendingAttention } from "../shared/chat-pending-attention";
@@ -1898,6 +1900,20 @@ export const botsApi = {
     /** Calls `listener` with the Bot's id when its routines change or a watch saves a check. */
     onChanged: (listener: (botId: string) => void) =>
       onNotification<{ botId?: unknown }>("bots:eventRoutines:changed", (payload) => {
+        if (typeof payload?.botId === "string") listener(payload.botId);
+      }),
+  },
+  connectorWatches: {
+    list: (botId: string) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchList>>(watchChannels.list, { botId }),
+    discoverSources: (botId: string) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchSourceList>>(watchChannels.discoverSources, { botId }),
+    create: (input: ConnectorWatch.BotConnectorWatchCreateInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchView>>(watchChannels.create, input),
+    update: (input: ConnectorWatch.BotConnectorWatchUpdateInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchView>>(watchChannels.update, input),
+    setEnabled: (input: ConnectorWatch.BotConnectorWatchEnableInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchView>>(watchChannels.setEnabled, input),
+    remove: (input: ConnectorWatch.BotConnectorWatchIdentityInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchRemoval>>(watchChannels.remove, input),
+    testCheck: (input: ConnectorWatch.BotConnectorWatchTestInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchTestResult>>(watchChannels.testCheck, input),
+    runNow: (input: ConnectorWatch.BotConnectorWatchIdentityInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchRunResult>>(watchChannels.runNow, input),
+    onChanged: (listener: (botId: string) => void) =>
+      onNotification<{ botId?: unknown }>(watchChannels.changed, (payload) => {
         if (typeof payload?.botId === "string") listener(payload.botId);
       }),
   },

@@ -772,7 +772,11 @@
         "renderer/shared/workspace-intake.test.ts",
         "renderer/shared/worktree-on-send.test.ts",
         "scripts/bot-inbox-writer.test.mjs",
-        "scripts/subagent-run-store.test.mjs"
+        "scripts/subagent-run-store.test.mjs",
+        "main/services/bot-routine-events/connector-service.test.ts",
+        "main/services/aiden-remote-bot-watches.test.ts",
+        "main/handlers/bot-connector-watches.test.ts",
+        "main/services/bot-routine-events/connector-bindings.test.ts"
       ],
       "preserved": [
         "worktree-remover-native",
@@ -794,6 +798,7 @@
         "renderer/main/bots/bot-interruptions-page.test.tsx",
         "renderer/components/bots/routine-proposal-card.test.tsx",
         "renderer/main/bots/bot-event-routines.test.tsx",
+        "renderer/main/bots/bot-connector-watches.test.tsx",
         "renderer/components/bots/skill-proposal-card.test.tsx",
         "renderer/main/bots/bot-learning-page.test.tsx",
         "main/handlers/bot-event-routines.test.ts",

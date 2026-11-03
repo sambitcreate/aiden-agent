@@ -2,6 +2,7 @@ import type * as React from "react";
 import type { BotAvatarColor } from "../../shared/bots";
 import type { KeyboardPlatform } from "../../shared/keybindings";
 import type { ArtProps } from "./art-kit";
+import { BotWatchesArt } from "./bot-watches-art";
 import {
   BrowserArt,
   ComputerUseArt,
@@ -75,6 +76,7 @@ export const FEATURE_ART = {
   mcp: { tint: "mint", Art: McpConnectorsArt },
   geminiLive: { tint: "lilac", Art: AidenLiveArt },
   bots: { tint: "peach", Art: BotsArt },
+  botWatches: { tint: "rose", Art: BotWatchesArt },
   botComputers: { tint: "aqua", Art: BotComputersArt },
   schedules: { tint: "mint", Art: ScheduledAutomationsArt },
   voice: { tint: "coral", Art: VoiceDictationArt },
