@@ -253,24 +253,35 @@ test("built CLI transport rejects excessive encodings and remains usable", async
   t.after(() => { server.closeAllConnections(); server.close(); });
   const endpoint = `http://127.0.0.1:${server.address().port}`;
   const resultFile = path.join(agentDir, "transport-result.json");
-  const extension = path.join(agentDir, "transport-probe.mjs");
-  writeFileSync(extension, `import { writeFileSync } from "node:fs";
-export default function (pi) { pi.on("session_start", async () => {
-  let refused = false;
-  try { await fetch(${JSON.stringify(endpoint + "/excessive")}); } catch { refused = true; }
-  const text = await (await fetch(${JSON.stringify(endpoint + "/healthy")})).text();
-  writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({ refused, text }));
-}); }`);
-  const child = spawn(process.execPath, [cli, "--mode", "rpc", "--no-session", "--extension", extension], {
+  // The serve-only CLI has no extension or RPC entry to run code in, so the
+  // probe is preloaded into the CLI process and fetches when the command
+  // exits, after the bundled runtime has loaded and could have replaced the
+  // global fetch or dispatcher.
+  const probe = path.join(agentDir, "transport-probe.mjs");
+  writeFileSync(probe, `import { writeFileSync } from "node:fs";
+const exit = process.exit.bind(process);
+let probing = false;
+process.exit = (code) => {
+  if (probing) return;
+  probing = true;
+  (async () => {
+    let refused = false;
+    try { await fetch(${JSON.stringify(endpoint + "/excessive")}); } catch { refused = true; }
+    const text = await (await fetch(${JSON.stringify(endpoint + "/healthy")})).text();
+    writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({ refused, text }));
+  })().finally(() => exit(code));
+};`);
+  const child = spawn(process.execPath, ["--import", pathToFileURL(probe).href, cli, "app", "status"], {
     env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", HTTP_PROXY: "", HTTPS_PROXY: "", ALL_PROXY: "", NO_PROXY: "*" },
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe"],
   });
   t.after(() => { if (child.exitCode === null) child.kill("SIGKILL"); });
-  let stderr = ""; child.stdout.resume(); child.stderr.on("data", (chunk) => { stderr += chunk; });
-  const completion = once(child, "close");
-  child.stdin.end('{"id":"transport","type":"get_state"}\n');
-  const [code] = await completion;
+  let stdout = ""; let stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const [code] = await once(child, "close");
   assert.equal(code, 0, stderr);
+  assert.ok(Array.isArray(JSON.parse(stdout)), stdout);
   assert.deepEqual(JSON.parse(readFileSync(resultFile, "utf8")), { refused: true, text: "transport remains usable" });
   assert.deepEqual(requests, ["/excessive", "/healthy"]);
 });
