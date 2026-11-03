@@ -1,3 +1,4 @@
+import { isDraftChatId } from "./chat-identity";
 import { isSafeSubagentIdentifier } from "./subagent-runs";
 
 export interface ChatActivitySnapshot {
@@ -13,30 +14,30 @@ function isRevision(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-/** undefined: absent or empty; null: present but invalid. */
-function optionalIds(value: unknown): string[] | null | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value) || !value.every(isSafeSubagentIdentifier)) return null;
-  return value.length > 0 ? [...new Set(value)] : undefined;
+/** A filtered, unlisted UUID can belong to a Bot outside the regular chat index. */
+function activityIds(value: unknown, known?: ReadonlySet<string>): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const ids = new Set<string>();
+  for (const id of value) {
+    if (isDraftChatId(id) && known?.has(id)) ids.add(id);
+    else if (isSafeSubagentIdentifier(id)) ids.add(id);
+    else if (!known || !isDraftChatId(id)) return null;
+  }
+  return [...ids];
 }
 
-export function parseChatActivitySnapshot(value: unknown): ChatActivitySnapshot | null {
+export function parseChatActivitySnapshot(value: unknown, knownChatIds?: ReadonlySet<string>): ChatActivitySnapshot | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
-  if (
-    !isRevision(candidate.revision) ||
-    !Array.isArray(candidate.activeChatIds) ||
-    !candidate.activeChatIds.every(isSafeSubagentIdentifier)
-  ) {
-    return null;
-  }
-  const approvalChatIds = optionalIds(candidate.approvalChatIds);
-  const inputChatIds = optionalIds(candidate.inputChatIds);
-  if (approvalChatIds === null || inputChatIds === null) return null;
+  if (!isRevision(candidate.revision)) return null;
+  const activeChatIds = activityIds(candidate.activeChatIds, knownChatIds);
+  const approvalChatIds = candidate.approvalChatIds === undefined ? [] : activityIds(candidate.approvalChatIds, knownChatIds);
+  const inputChatIds = candidate.inputChatIds === undefined ? [] : activityIds(candidate.inputChatIds, knownChatIds);
+  if (!activeChatIds || !approvalChatIds || !inputChatIds) return null;
   return {
     revision: candidate.revision,
-    activeChatIds: [...new Set(candidate.activeChatIds)],
-    ...(approvalChatIds ? { approvalChatIds } : {}),
-    ...(inputChatIds ? { inputChatIds } : {}),
+    activeChatIds,
+    ...(approvalChatIds.length ? { approvalChatIds } : {}),
+    ...(inputChatIds.length ? { inputChatIds } : {}),
   };
 }

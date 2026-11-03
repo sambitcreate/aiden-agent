@@ -1,3 +1,4 @@
+import { isLocalChatOwnerId } from "../shared/chat-identity";
 import { replaceEqualDeep } from "@tanstack/react-query";
 import type { Chat, ChatMessage, ChatReadResponse } from "./types";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
@@ -267,14 +268,19 @@ function parseTerminalStreamId(payload: unknown): string | null {
   return isSafeSubagentIdentifier(streamId) ? streamId : null;
 }
 
-function isChatSnapshot(candidate: unknown): candidate is Chat {
+/** A requested read or a retained local stream supplies the expected owner. */
+function isReadChatId(id: unknown, requestedId?: string): id is string {
+  if (requestedId === undefined) return isSafeSubagentIdentifier(id);
+  return id === requestedId && isLocalChatOwnerId(id);
+}
+
+function isChatSnapshot(candidate: unknown, requestedId?: string): candidate is Chat {
   if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
     return false;
   }
   const chat = candidate as Record<string, unknown>;
   return (
-    typeof chat.id === "string" &&
-    isSafeSubagentIdentifier(chat.id) &&
+    isReadChatId(chat.id, requestedId) &&
     typeof chat.title === "string" &&
     typeof chat.createdAt === "number" &&
     Number.isFinite(chat.createdAt) &&
@@ -291,16 +297,17 @@ function parseTerminalChatNotification(payload: unknown): TerminalChatNotificati
   }
   const candidate = payload as Record<string, unknown>;
   if (candidate.chat === undefined) return { streamId };
-  if (!isChatSnapshot(candidate.chat)) return null;
+  const owner = detachedLifecycleStreams.get(streamId);
+  if (!isChatSnapshot(candidate.chat, owner?.chatId)) return null;
   return { streamId, chat: candidate.chat as Chat };
 }
 
 /** Validate the bounded, content-free reconciliation metadata from main. */
-export function parseChatReadResponse(payload: unknown): ChatReadResponse | null {
+export function parseChatReadResponse(payload: unknown, requestedId: string): ChatReadResponse | null {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null;
   const candidate = payload as Record<string, unknown>;
   if (
-    (candidate.chat !== null && !isChatSnapshot(candidate.chat)) ||
+    (candidate.chat !== null && !isChatSnapshot(candidate.chat, requestedId)) ||
     typeof candidate.imageArtifactRecoveryPending !== "boolean" ||
     typeof candidate.imageArtifactRecoveryUnavailable !== "boolean"
   ) {
@@ -323,9 +330,9 @@ export function parseChatReadResponse(payload: unknown): ChatReadResponse | null
   }
   const reconciliation = candidate.reconciliation as Record<string, unknown>;
   if (
-    !isSafeSubagentIdentifier(reconciliation.chatId) ||
+    !isReadChatId(reconciliation.chatId, requestedId) ||
     !isSafeSubagentIdentifier(reconciliation.workspaceId) ||
-    (candidate.chat !== null && (candidate.chat as Chat).id !== reconciliation.chatId)
+    (candidate.chat !== null && persistedChatWorkspaceId((candidate.chat as Chat).workspaceId) !== reconciliation.workspaceId)
   ) {
     return null;
   }
@@ -382,7 +389,7 @@ export function rememberDetachedLifecycleStream(
 ): void {
   if (
     !isSafeSubagentIdentifier(owner.streamId) ||
-    !isSafeSubagentIdentifier(owner.chatId) ||
+    !isLocalChatOwnerId(owner.chatId) ||
     !isSafeSubagentIdentifier(owner.workspaceId)
   ) {
     return;
@@ -514,7 +521,7 @@ export function publishObservedRunProjection(
 ): boolean {
   if (
     !isSafeSubagentIdentifier(owner.streamId) ||
-    !isSafeSubagentIdentifier(owner.chatId) ||
+    !isLocalChatOwnerId(owner.chatId) ||
     !isSafeSubagentIdentifier(owner.workspaceId)
   ) {
     return false;
@@ -633,7 +640,7 @@ export function clearInactiveDetachedLifecycleChat(
   activeChatIds: ReadonlySet<string>,
 ): boolean {
   if (
-    !isSafeSubagentIdentifier(owner.chatId) ||
+    !isLocalChatOwnerId(owner.chatId) ||
     !isSafeSubagentIdentifier(owner.workspaceId) ||
     !owner.streamIds.every(isSafeSubagentIdentifier) ||
     activeChatIds.has(owner.chatId)
@@ -654,7 +661,7 @@ export function clearSettledDetachedLifecycleStreams(
   settledStreamIds: readonly string[],
 ): boolean {
   if (
-    !isSafeSubagentIdentifier(owner.chatId) ||
+    !isLocalChatOwnerId(owner.chatId) ||
     !isSafeSubagentIdentifier(owner.workspaceId) ||
     !owner.streamIds.every(isSafeSubagentIdentifier)
   ) {
@@ -779,8 +786,8 @@ function requestChatReadReconciliation(owner: ChatReadReconciliation): void {
  * completed an exact authoritative cache refetch. This closes the gap where a
  * settlement broadcast predates passive listener registration.
  */
-export function rememberChatReadReconciliation(owner: ChatReadReconciliation): void {
-  if (!isSafeSubagentIdentifier(owner.chatId) || !isSafeSubagentIdentifier(owner.workspaceId)) {
+export function rememberChatReadReconciliation(owner: ChatReadReconciliation, requestedId: string): void {
+  if (!isReadChatId(owner.chatId, requestedId) || !isSafeSubagentIdentifier(owner.workspaceId)) {
     return;
   }
   const normalized = {
