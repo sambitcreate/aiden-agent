@@ -8,6 +8,15 @@ import {
 
 const flush = async () => { await Promise.resolve(); };
 
+test("new drafts can participate in privacy-filtered lifecycle events", (t) => {
+  const accepted = "550e8400-e29b-41d4-a716-446655440000";
+  const random = t.mock.method(crypto, "randomUUID", () => accepted);
+  random.mock.mockImplementationOnce(() => "d2492706-6417-42f1-974d-0c12a2fad0b4");
+  const draft = createChatDraft("workspace-a");
+  assert.equal(draft.chat.id, accepted);
+  discardChatDraft(draft.chat.id);
+});
+
 test("leaving an unsent draft drops its renderer-only state", async () => {
   const draft = createChatDraft("workspace-a");
   const release = retainChatDraft(draft.chat.id);

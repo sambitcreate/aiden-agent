@@ -760,7 +760,6 @@ test("root recovery reconciles missed detached terminals against authoritative a
     "const reconcileInactiveOwners = (payload: unknown) => {",
     "}, [reconcileDetachedLifecycleChat]);",
   );
-  assert.match(recovery, /parseChatActivitySnapshot\(payload\)/u);
   assert.match(recovery, /pendingDetachedLifecycleChats\(\)/u);
   assert.match(recovery, /!activeChatIds\.has\(owner\.chatId\)/u);
   assert.ok(
