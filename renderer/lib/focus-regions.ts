@@ -53,6 +53,12 @@ function regionEntry(element: HTMLElement): HTMLElement | null {
   return candidates.find((candidate): candidate is HTMLElement => candidate !== null && shown(candidate)) ?? null;
 }
 
+/** Where focus would land in `region` (its entry point), if the area is on screen. */
+export function focusRegionEntry(region: FocusRegion, root: ParentNode = document): HTMLElement | null {
+  const element = focusRegionElement(region, root);
+  return element ? regionEntry(element) : null;
+}
+
 /** Move focus into `region`. False when the page has no such area or it holds nothing to focus. */
 export function focusRegion(region: FocusRegion, root: ParentNode = document): boolean {
   const element = focusRegionElement(region, root);

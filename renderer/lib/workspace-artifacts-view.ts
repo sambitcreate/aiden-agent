@@ -108,3 +108,15 @@ export function revealsWorkspaceArtifact(
 export function workspaceArtifactChangeRequest(view: WorkspaceArtifactView): string {
   return `Update the "${view.artifact.visual.title}" artifact (id ${view.artifact.id}): `;
 }
+
+/**
+ * The chat request a New page dialog drafts from what the person wants the
+ * page to show. Empty when there is nothing to ask for.
+ */
+export function workspaceArtifactNewPageRequest(subject: string): string {
+  const trimmed = subject.trim().replace(/[.\s]+$/u, "");
+  if (!trimmed) return "";
+  // "Open pull requests" reads as "shows open pull requests"; "CI status" keeps its capitals.
+  const lowered = /^\p{Lu}\p{Ll}/u.test(trimmed) ? trimmed[0]!.toLowerCase() + trimmed.slice(1) : trimmed;
+  return `Make a workspace artifact page that shows ${lowered}.`;
+}

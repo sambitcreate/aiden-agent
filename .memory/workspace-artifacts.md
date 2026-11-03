@@ -3,7 +3,7 @@
 Built in PR #554 on `claude/project-thread-7xf9t3`. The user guide is `docs/workspace-artifacts.md`, and the decisions are in `docs/plans/workspace-artifacts-plan.md` ("As built").
 
 Owner decisions:
-- The Artifacts tab shows only once the workspace has a page.
+- The Artifacts tab shows only once the workspace has a page. (Relaxed 2026-11-03 by the New page entry, below: the launcher offers it once the list loads. Confirm with the owner.)
 - The workspace owns its pages, and the person deletes them from the tab or by asking Aiden.
 - Access follows chat behavior.
 - Desktop only (macOS and Linux) for v1: no CLI, Bots, Telegram, phones or Remote protocol change.
@@ -34,7 +34,7 @@ Adopted from a review of DeepSeek Creator Mode's plugin skill (Notion: "DeepSeek
 - Under Ask the card shows `preview: {kind: "command"}` with the resolved command; its digest is `runApprovalDigest(pageDigest, command)`, so an allowed card covers that exact command on that exact page. A save card's digest can't authorize a run. No card when there's no folder, permission is none, or the page's commands were never allowed (the call then refuses). Under Full it runs with no card; "only when asked" is skill guidance only.
 - A failed command throws, so the chat shows the call as failed. The card label is "Artifact" and the timeline says "Run artifact action".
 - `llm-client.ts` carries the card's preview through `artifactApprovalPreview` next to `artifactApprovalDigest`.
-- Planned next: revision history with Restore (built 2026-11-03, below), a New page entry point, then export/import (an imported page arrives with its approval cleared).
+- Planned next: revision history with Restore (built 2026-11-03, below), a New page entry point (built 2026-11-03, below), then export/import (an imported page arrives with its approval cleared).
 
 ## Revision history (2026-11-03)
 
@@ -47,3 +47,12 @@ Adopted from a review of DeepSeek Creator Mode's plugin skill (Notion: "DeepSeek
 - IPC `workspaces:artifacts:history` and `workspaces:artifacts:restore`; restore validates with `isWorkspaceArtifactRevision` and passes no write options, so the renderer can never approve through it.
 - Tool `operation: "restore"` (`id`, `revision`). Under Ask a card like update's ("Restore revision N of the artifact …") appears when the restored commands exist and differ from `approvedDigest`; its digest is the restored commands' digest. `assertSourcesRunnable` applies. Create, update and restore share the `afterSave` tail (first refresh + page check). Timeline label "Restore artifact".
 - Panel: **Earlier versions…** (lucide `History`) opens a dialog keyed by artifact id like rename/delete. After a restore it calls `refreshAtRevision(n)`; `useArtifactRefresh` re-reads once the view reaches revision n, if the page may run. The row buttons use `aria-disabled` rather than `disabled` while a restore runs. The dialog is keyed by artifact id (a restore running for another page shows nothing), forgets its list on close, and after a restore the header closes it only if it is still open on the restored page; `refreshAtRevision(artifactId, n)` names the restored page. Restore buttons look disabled through `aria-disabled:` classes locally: the shared `Button` was not taught `aria-disabled` styling because device-viewer and Model Pad rely on aria-disabled buttons staying hoverable for their reasons, and busy-send-button already dims its wrapper. In jsdom, a `waitFor` on any Radix dialog closing asynchronously spun forever; the tests settle with `act` + a short timeout instead.
+
+## New page entry (2026-11-03)
+
+- **New page…** is the empty state's accent button and the first page-menu item (lucide `FilePlus2`, then a separator). Both open `NewArtifactPageDialog` in `artifacts-panel.tsx`: a labelled field ("What should it show?"), four suggestion chips (shared `Button variant="muted" size="small"`, no borders) that fill the field, and **Draft in chat**.
+- The panel only hands a string up through `onDraftNewPage(request)`; `workspaceArtifactNewPageRequest` (`renderer/lib/workspace-artifacts-view.ts`) builds "Make a workspace artifact page that shows <subject>." (trims, drops trailing dots, lowercases a capitalised first word but keeps acronyms like "CI"/"TODO"). Without `onDraftNewPage` no entry is shown.
+- `environment-panel.tsx` stages it with `stageComposerText` into the active chat only when that chat belongs to the active workspace (same rule as `artifactChat`), and never calls `sendPromptToChat`. With no such chat it passes `newPageUnavailable`, so the confirm is disabled with the reason under the field (Ask Aiden's toast-only fallback was not reused, because a disabled button can say why up front).
+- Focus: after a draft the dialog's `returnFocus` targets `focusRegionEntry("composer")` (new export in `renderer/lib/focus-regions.ts`, the composer textarea's `data-focus-region-entry`), falling back to the opener. A mounted composer still shows its existing "A visual added a follow-up to your draft." toast for any staged text.
+- Reachability: the launcher's `artifacts` flag is now `workspaceId matches && artifacts.loaded` (was `views.length > 0`). The close-on-empty effect already left a launcher-opened tab alone when the previous count was 0 for the same workspace; it still closes on the last delete and on a workspace switch to one without pages.
+- The onboarding gallery tile ("Ask for a page you'll come back to…") was left as is; it doesn't contradict the flow.

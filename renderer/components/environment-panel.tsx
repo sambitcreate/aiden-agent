@@ -174,7 +174,11 @@ export interface EnvironmentPanelContextValue {
   tab: EnvironmentPanelTab;
   subagentsEnabled: boolean;
   devicesEnabled: boolean;
-  /** The active workspace's artifacts; the Artifacts tab exists only while there is one. */
+  /**
+   * The active workspace's artifacts. The launcher offers the tab once the list
+   * has loaded; with no pages it shows how to start one, and it closes when the
+   * last page is deleted or the workspace changes.
+   */
   artifacts: WorkspaceArtifactsState;
   selectedArtifactId: string | null;
   selectArtifact: (artifactId: string) => void;
@@ -650,8 +654,9 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     const previous = artifactsSeenRef.current;
     const count = artifacts.views.length;
     artifactsSeenRef.current = { workspaceId: artifacts.workspaceId, count };
-    // The tab exists only while the workspace has a page: it closes when the
-    // last one is deleted, or on a workspace that has none.
+    // The tab closes when the last page is deleted, or on a workspace that has
+    // none. Opened from the launcher on an empty workspace, it stays to show
+    // how to start a page.
     const emptied = previous?.workspaceId !== artifacts.workspaceId || previous.count > 0;
     if (count === 0 && emptied && artifactsTabOpen) dispatchSurface({ type: "close-tab", tab: "artifacts" });
   }, [activeId, artifacts.error, artifacts.loaded, artifacts.views.length, artifacts.workspaceId, artifactsTabOpen]);
@@ -1458,9 +1463,11 @@ function EnvironmentPanelSurface({
     if (!chatId) toast.error("Open a chat in this workspace first.");
     return chatId;
   };
+  // New page drafts into the chat beside the tab, which must belong to this workspace.
+  const newPageChatId = active && panel.activeChat.workspaceId === active.id ? panel.activeChat.chatId : null;
   const viewBodies: Record<EnvironmentPanelTab, () => React.ReactNode> = {
     "new-tab": () => (
-      <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} artifacts={Boolean(active) && panel.artifacts.workspaceId === active?.id && panel.artifacts.views.length > 0} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
+      <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} artifacts={Boolean(active) && panel.artifacts.workspaceId === active?.id && panel.artifacts.loaded} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
     ),
     context: () => <ChatContextPanel details={panel.contextDetails} />,
     artifacts: () => (
@@ -1481,6 +1488,11 @@ function EnvironmentPanelSurface({
           // A confirmed follow-up sends through the chat's own path; compose only fills its composer.
           if (action.kind === "compose" || !sendPromptToChat(chatId, action.text)) stageComposerText(chatId, action.text);
         }}
+        onDraftNewPage={(request) => {
+          // Only ever staged: the person reads the request and sends it.
+          if (newPageChatId) stageComposerText(newPageChatId, request);
+        }}
+        newPageUnavailable={newPageChatId ? null : "Open a chat in this workspace first, then draft the page there."}
       />
     ),
     terminal: () => <TerminalSideTarget presented={presented && panel.tab === "terminal"} />,

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { History, MessageSquarePlus, MoreHorizontal, Pencil, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
+import { FilePlus2, History, MessageSquarePlus, MoreHorizontal, Pencil, Plus, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 import { AidenUiBlock, type AidenUiAction } from "./aiden-ui/aiden-ui-block";
 import {
   AlertDialog,
@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
   EmptyState,
   Input,
+  Label,
   Select,
   SelectContent,
   SelectItem,
@@ -22,6 +23,7 @@ import {
   toast,
 } from "./ui";
 import { workspaceArtifactsApi } from "../lib/ipc";
+import { focusRegionEntry } from "../lib/focus-regions";
 import { formatRelativeTime } from "../lib/relative-time";
 import { cn } from "../lib/ui-utils";
 import type { Workspace } from "../lib/types";
@@ -30,6 +32,7 @@ import {
   pickWorkspaceArtifact,
   workspaceArtifactPage,
   workspaceArtifactCanRefresh,
+  workspaceArtifactNewPageRequest,
   workspaceArtifactPageAccess,
   workspaceArtifactProblems,
   workspaceArtifactRevisionWaitsForApproval,
@@ -58,6 +61,28 @@ export interface ArtifactsPanelProps {
   onAskAiden: (view: WorkspaceArtifactView) => void;
   /** Follow-ups and composer text the page hands to the chat; buttons (`run`) are handled here. */
   onAction?: (view: WorkspaceArtifactView, action: AidenUiAction) => void;
+  /**
+   * Stages a request for a new page in the active chat's composer, never
+   * sending it. Without it the panel offers no New page entry.
+   */
+  onDraftNewPage?: (request: string) => void;
+  /** Why there is no chat to draft into right now; New page explains this instead of drafting. */
+  newPageUnavailable?: string | null;
+}
+
+/** Ideas the New page dialog offers, each filling its field. */
+const NEW_ARTIFACT_PAGE_SUGGESTIONS = [
+  "Open pull requests",
+  "CI status on main",
+  "TODO board from TODO.md",
+  "Release checklist",
+] as const;
+
+const NEW_PAGE_SUBJECT_MAX_CHARS = 500;
+
+interface NewPageEntry {
+  draft: (request: string) => void;
+  unavailable: string | null;
 }
 
 /**
@@ -66,11 +91,25 @@ export interface ArtifactsPanelProps {
  * as inline visuals; everything around it (switching, approval, rename,
  * delete) is Aiden's own UI.
  */
-export function ArtifactsPanel({ workspace, active, artifacts, selectedId, onSelect, onAskAiden, onAction }: ArtifactsPanelProps) {
+export function ArtifactsPanel({
+  workspace,
+  active,
+  artifacts,
+  selectedId,
+  onSelect,
+  onAskAiden,
+  onAction,
+  onDraftNewPage,
+  newPageUnavailable = null,
+}: ArtifactsPanelProps) {
   const current = artifacts.workspaceId === (workspace?.id ?? null);
   const views = current ? artifacts.views : [];
   const activeId = pickWorkspaceArtifact(views, selectedId);
   const view = views.find((entry) => entry.artifact.id === activeId) ?? null;
+  const newPage = React.useMemo<NewPageEntry | null>(
+    () => (onDraftNewPage ? { draft: onDraftNewPage, unavailable: newPageUnavailable } : null),
+    [newPageUnavailable, onDraftNewPage],
+  );
 
   if (!workspace) {
     return <EmptyState className="h-full" title="No workspace" description="Choose a workspace to see its artifacts." />;
@@ -86,11 +125,7 @@ export function ArtifactsPanel({ workspace, active, artifacts, selectedId, onSel
         action={<Button size="small" onClick={artifacts.reload}>Try again</Button>}
       />
     ) : (
-      <EmptyState
-        className="h-full"
-        title="No artifacts yet"
-        description="Ask Aiden to make one, like a page of this repository's open pull requests."
-      />
+      <ArtifactsEmptyState newPage={newPage} />
     );
   }
   return (
@@ -102,6 +137,7 @@ export function ArtifactsPanel({ workspace, active, artifacts, selectedId, onSel
       onSelect={onSelect}
       onAskAiden={onAskAiden}
       onAction={onAction}
+      newPage={newPage}
       artifactsError={artifacts.error}
       onRetry={artifacts.reload}
       onStateSaved={artifacts.rememberState}
@@ -193,6 +229,7 @@ function ArtifactView({
   onSelect,
   onAskAiden,
   onAction,
+  newPage,
   artifactsError,
   onRetry,
   onStateSaved,
@@ -204,6 +241,7 @@ function ArtifactView({
   onSelect: (artifactId: string) => void;
   onAskAiden: (view: WorkspaceArtifactView) => void;
   onAction?: (view: WorkspaceArtifactView, action: AidenUiAction) => void;
+  newPage: NewPageEntry | null;
   artifactsError: string | null;
   onRetry: () => void;
   onStateSaved: (artifactId: string, state: Record<string, unknown>) => void;
@@ -228,6 +266,7 @@ function ArtifactView({
         refresh={refresh}
         onSelect={onSelect}
         onAskAiden={onAskAiden}
+        newPage={newPage}
       />
       <div ref={pageRef} tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none" data-artifact-page={view.artifact.id}>
         {artifactsError ? (
@@ -402,6 +441,117 @@ function ArtifactsSkeleton() {
   );
 }
 
+function ArtifactsEmptyState({ newPage }: { newPage: NewPageEntry | null }) {
+  const [open, setOpen] = React.useState(false);
+  const buttonRef = React.useRef<HTMLButtonElement | null>(null);
+  return (
+    <>
+      <EmptyState
+        className="h-full"
+        title="No artifacts yet"
+        description={
+          newPage
+            ? "Pages Aiden keeps for this workspace, like its open pull requests or CI on main. Ask in chat, or start one here."
+            : "Ask Aiden to make one, like a page of this repository's open pull requests."
+        }
+        action={
+          newPage ? (
+            <Button ref={buttonRef} variant="accent" size="small" onClick={() => setOpen(true)}>
+              <Plus aria-hidden="true" />
+              New page…
+            </Button>
+          ) : undefined
+        }
+      />
+      {newPage ? (
+        <NewArtifactPageDialog open={open} onOpenChange={setOpen} newPage={newPage} returnFocus={() => buttonRef.current} />
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Starts a page by drafting the request in the chat. The dialog never builds
+ * or sends anything: the person reads the drafted text and sends it.
+ */
+function NewArtifactPageDialog({
+  open,
+  onOpenChange,
+  newPage,
+  returnFocus,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  newPage: NewPageEntry;
+  returnFocus: () => HTMLElement | null;
+}) {
+  const [subject, setSubject] = React.useState("");
+  const inputRef = React.useRef<HTMLInputElement | null>(null);
+  // Set when the request was drafted, so focus follows it to the message box.
+  const draftedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!open) return;
+    setSubject("");
+    draftedRef.current = false;
+  }, [open]);
+  const request = workspaceArtifactNewPageRequest(subject);
+  const inputId = React.useId();
+  const noteId = React.useId();
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="New artifact page"
+      description="Aiden drafts the request in your chat. Review it there, then send."
+      confirmLabel="Draft in chat"
+      confirmDisabled={!request || newPage.unavailable !== null}
+      submitOnEnter
+      onConfirm={() => {
+        if (!request || newPage.unavailable !== null) return;
+        newPage.draft(request);
+        draftedRef.current = true;
+        onOpenChange(false);
+      }}
+      returnFocus={() => (draftedRef.current ? focusRegionEntry("composer") : null) ?? returnFocus()}
+    >
+      <Label htmlFor={inputId} className="mb-1.5 text-small-strong font-medium">
+        What should it show?
+      </Label>
+      <Input
+        ref={inputRef}
+        id={inputId}
+        value={subject}
+        maxLength={NEW_PAGE_SUBJECT_MAX_CHARS}
+        placeholder="For example, failing tests on this branch"
+        aria-describedby={newPage.unavailable ? noteId : undefined}
+        onChange={(event) => setSubject(event.target.value)}
+        autoFocus
+      />
+      <div role="group" aria-label="Suggestions" className="mt-3 flex flex-wrap gap-2">
+        {NEW_ARTIFACT_PAGE_SUGGESTIONS.map((suggestion) => (
+          <Button
+            key={suggestion}
+            variant="muted"
+            size="small"
+            className="text-small font-normal"
+            onClick={() => {
+              setSubject(suggestion);
+              inputRef.current?.focus();
+            }}
+          >
+            {suggestion}
+          </Button>
+        ))}
+      </div>
+      {newPage.unavailable ? (
+        <Text id={noteId} variant="small" color="secondary" as="p" className="mt-3">
+          {newPage.unavailable}
+        </Text>
+      ) : null}
+    </Dialog>
+  );
+}
+
 function ArtifactsHeader({
   workspace,
   views,
@@ -409,6 +559,7 @@ function ArtifactsHeader({
   refresh,
   onSelect,
   onAskAiden,
+  newPage,
 }: {
   workspace: Workspace;
   views: readonly WorkspaceArtifactView[];
@@ -416,7 +567,10 @@ function ArtifactsHeader({
   refresh: ReturnType<typeof useArtifactRefresh>;
   onSelect: (artifactId: string) => void;
   onAskAiden: (view: WorkspaceArtifactView) => void;
+  newPage: NewPageEntry | null;
 }) {
+  // A new page belongs to the workspace, not to the page shown, so this dialog stays open across pages.
+  const [creating, setCreating] = React.useState(false);
   // Each dialog belongs to the page it was opened on, and closes if another page takes its place.
   const [renaming, setRenaming] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState<string | null>(null);
@@ -481,6 +635,15 @@ function ArtifactsHeader({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">
+          {newPage ? (
+            <>
+              <DropdownMenuItem onSelect={() => setCreating(true)}>
+                <FilePlus2 aria-hidden="true" />
+                New page…
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          ) : null}
           <DropdownMenuItem onSelect={() => onAskAiden(view)}>
             <MessageSquarePlus aria-hidden="true" />
             Ask Aiden to change this
@@ -500,6 +663,9 @@ function ArtifactsHeader({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      {newPage ? (
+        <NewArtifactPageDialog open={creating} onOpenChange={setCreating} newPage={newPage} returnFocus={() => menuTriggerRef.current} />
+      ) : null}
       <RenameArtifactDialog
         open={renaming === artifactId}
         onOpenChange={(open) => setRenaming(open ? artifactId : null)}

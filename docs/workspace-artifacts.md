@@ -4,9 +4,14 @@ Workspace artifacts are small interactive pages that Aiden builds for a workspac
 
 They are a desktop feature on macOS and Linux. The CLI, Bots, Telegram and the iOS and Android apps do not have them.
 
-## Asking for one
+## Starting one
 
-Ask in any chat in a workspace, for example "make me an artifact that shows the open PRs for this repo". Aiden uses the built-in **aiden-artifacts** skill and the `workspace_artifact` tool. It lists the workspace's pages first, so it updates an existing page rather than making a near-duplicate. The Artifacts tab opens on the new page beside the chat that made it.
+There are two ways to start a page, and both end in the chat:
+
+- Ask in any chat in a workspace, for example "make me an artifact that shows the open PRs for this repo".
+- Choose **New page…** in the Artifacts tab: the button on its empty state, or the first item in the page menu. Say what the page should show, or pick one of the suggestions (open pull requests, CI status on main, a TODO board from `TODO.md`, a release checklist), and choose **Draft in chat**. Aiden puts a request such as "Make a workspace artifact page that shows open pull requests." in the message box of the chat beside the tab and moves focus there. It never sends it: read it, change it if you like, and send it yourself. With no chat open in the workspace, Draft in chat is off and says to open one first.
+
+The Artifacts tab never builds a page itself. Aiden uses the built-in **aiden-artifacts** skill and the `workspace_artifact` tool. It lists the workspace's pages first, so it updates an existing page rather than making a near-duplicate. The Artifacts tab opens on the new page beside the chat that made it.
 
 Aiden builds a small working page first and checks it before adding more. Each save refreshes the page's sources once and draws the page with that data, the way the tab would. The result tells Aiden about:
 
@@ -16,7 +21,7 @@ Aiden builds a small working page first and checks it before adding more. Each s
 
 Aiden fixes those with another update. It doesn't press a button that changes something just to test it. The check only sees what the page draws with this data, so it also says what it couldn't cover: a source that didn't load, a list that was empty, an `<If>` branch hidden with this data, or a page too large to draw in full. Reads behind a guard, such as `<If test={$pulls.error}>` or `$x.note || "none"`, are not flagged. The check is a hint for Aiden, not a guarantee that the page is right.
 
-The tab exists only once the workspace has a page. It appears in the tools launcher next to the terminal, files and browser, and it closes when the last page is deleted.
+The tab is in the tools launcher next to the terminal, files and browser once the workspace's pages have loaded, including before there are any: a workspace without pages shows the empty state with **New page…**. The tab closes when the last page is deleted, and when you switch to a workspace without pages.
 
 ## How pages get their data
 
@@ -63,7 +68,7 @@ Changing a workspace's access cancels any refresh or button already running. Com
 
 ## Managing pages
 
-The page header has a switcher between pages, the time of the last refresh, **Refresh**, and a menu with **Ask Aiden to change this**, **Rename**, **Earlier versions** and **Delete**. Delete asks for confirmation first. Aiden deletes a page only when the person asks, and its delete always shows an approval card.
+The page header has a switcher between pages, the time of the last refresh, **Refresh**, and a menu with **New page…**, **Ask Aiden to change this**, **Rename**, **Earlier versions** and **Delete**. Delete asks for confirmation first. Aiden deletes a page only when the person asks, and its delete always shows an approval card.
 
 Pages and their saved data are stored on the device under Aiden's user data folder (`workspace-artifacts/`), not in the repository, and they are not part of portable settings. Removing a workspace removes its pages.
 
