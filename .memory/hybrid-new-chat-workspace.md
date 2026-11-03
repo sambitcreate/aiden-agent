@@ -1,6 +1,6 @@
 # Hybrid new chat and composer context — 2026-10-15
 
-Phases 1–4 implemented (3b UI included); Phase 5 (paired Macs, phones) open. Plan: `docs/plans/hybrid-new-chat-workspace-plan.md`. Prototype: `docs/plans/assets/hybrid-new-chat-prototype.html`.
+Phases 1–4 implemented (3b UI included). Phase 5: phones done (New worktree chip, `POST /chats/{chatId}/worktree`, `chat:new-worktree`, PR #648); paired Macs still open. Plan: `docs/plans/hybrid-new-chat-workspace-plan.md`. Prototype: `docs/plans/assets/hybrid-new-chat-prototype.html`.
 
 ## Decisions (owner-approved direction)
 - The owner chose the "Hybrid" option over a Codex-style chip bar and a T3-style "ask first" picker. ⌘N stays an instant draft in the workspace being viewed. Choosing or adding a workspace happens inside the draft: from the headline name, the composer chip, or ⌘⇧N "New chat in…".
@@ -15,7 +15,7 @@ Phases 1–4 implemented (3b UI included); Phase 5 (paired Macs, phones) open. P
 - `ChatPullRequestsChip` renders unconditionally in the composer context bar. It reads "Pull Requests" even on drafts and plain folders.
 - The whole bar is hidden after the first message (`autoHideComposerContext`).
 - ⌘O is already `workspace.openPreferredEditor`, so Open folder uses ⌘⇧O. ⌘⇧N is free.
-- Remote worktree creation (`aiden-remote-git`) is used by the phones. Creating worktrees on send for remote targets needs a Remote revision plus iOS and Android work (plan Phase 5).
+- Remote worktree creation (`aiden-remote-git`) is used by the phones. Phones make a worktree for an empty chat's first message through `POST /chats/{chatId}/worktree`, which shares the desktop's first-message coordinator (`first-message-worktree-main.ts`, key `phone-chat:<chatId>`). Paired Macs still need their own step (plan Phase 5).
 
 ## Phase 2 main process (implemented 2026-10-15)
 - `main/services/workspace-intake.ts` (pure `parseWorkspacePathInput`, inspect/open/previewClone/clone service), `main/services/git-clone-runner.ts` (spawned `git clone`), `main/handlers/workspace-intake.ts` (DI handler registration, wired from `registerWorkspaceHandlers`), shared contract and `parseCloneUrl` in `renderer/shared/workspace-intake.ts`.

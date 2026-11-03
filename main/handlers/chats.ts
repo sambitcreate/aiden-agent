@@ -2,7 +2,7 @@ import { workspaceApplicationService } from "../services/workspace-application-s
 import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Chat history CRUD IPC handlers.
 
-import { BrowserWindow, dialog, ipcMain, logger } from "../platform.js";
+import { BrowserWindow, dialog, ipcMain } from "../platform.js";
 import { chatStore } from "../services/chat-store.js";
 import { chatApplicationService } from "../services/chat-application-service-main.js";
 import { chatTitleService } from "../services/chat-title.js";
@@ -31,14 +31,8 @@ import {
   createFirstMessageCommitter,
   createWorktreeFirstMessageCommitter,
 } from "../services/chat-first-message-commit.js";
-import {
-  createFileFirstMessageWorktreeLedger,
-  createFirstMessageWorktreeCoordinator,
-} from "../services/first-message-worktree.js";
-import { workspaceWorktreeApplicationService } from "../services/workspace-worktree-application-service-main.js";
-import { ensureUserDataDir } from "../services/data-store.js";
+import { firstMessageWorktrees } from "../services/first-message-worktree-main.js";
 import type { Chat } from "../services/types.js";
-import path from "node:path";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import {
@@ -137,18 +131,6 @@ export function registerChatHistoryHandlers(): void {
       await workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId);
       ipcMain.broadcast("workspaces:changed", {});
     },
-  });
-  const firstMessageWorktrees = createFirstMessageWorktreeCoordinator({
-    ledger: createFileFirstMessageWorktreeLedger({
-      filePath: async () => path.join(await ensureUserDataDir(), "first-message-worktrees.json"),
-      logError: (message, error) => logger.error("git", message, error),
-    }),
-    createFromBase: (owner, sourceWorkspaceId, request) =>
-      workspaceWorktreeApplicationService.createFromBase(owner, sourceWorkspaceId, request),
-    discardInterruptedWorktree: (owner, sourceWorkspaceId, attempt) =>
-      workspaceWorktreeApplicationService.discardInterruptedWorktree(owner, sourceWorkspaceId, attempt),
-    getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
-    logError: (message, error) => logger.error("git", message, error),
   });
   const commitFirstMessageInWorktree = createWorktreeFirstMessageCommitter({
     commit: commitFirstMessage,
