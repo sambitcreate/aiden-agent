@@ -2,6 +2,14 @@
 
 Status: implemented on `feature/bots-memory-soul` (not committed by Track B). Spec: `docs/superpowers/specs/2026-10-09-bot-memory-soul-proactivity-design.md` §11, §14. Plan: `docs/plans/2026-10-09-bot-memory-soul-proactivity.md` Track B.
 
+## Held-event test clock sequencing — 2026-11-04
+
+The local full proactive run in `/tmp/aiden-calendar-activated-proactive-fixed.log` passed 504/505 but omitted `e5` from `events.test.ts`'s expected `e1,e2,e3,e4,e6,e5` sequence. The fake clock's `advance` fired the 25-minute timer and guessed its store work had finished after 20 ms. If that read was still pending when the clock advanced to 26 minutes, `releaseHeld` then armed its 26-minute retry as a due-now fake timer after the harness had already snapshotted due timers. No later clock advance fired it. A real timer would run that due-now callback; no production dispatcher defect was established.
+
+A controlled delayed mutation reproduced the exact missing-`e5` assertion against the old test (`/tmp/aiden-event-held-delayed-red.test.mts`, `/tmp/aiden-event-held-delayed-red.log`). The registered test now deliberately gates the timer mutation, verifies `idle()` stays pending, releases it, and drains the dispatcher before advancing time. The first four runs remain held until explicitly finished; `e6` and `e5` finish so the production drain can establish durable state. The test rejects `e5` one millisecond before the gap ends, requires the exact original order at the boundary, and checks no held/running receipt remains with six daily claims. The harness no longer sleeps 20 ms to guess async completion. No production, ordering assertion, timeout or retry policy changed.
+
+The full events suite passed 26/26 (`/tmp/aiden-event-held-fixed-events.log`), then the original full proactive command passed 505/505 with no skips (`/tmp/aiden-event-held-fixed-proactive.log`). A narrow TypeScript project inheriting the actual root ES2020/strict options and scoped ESLint both passed (`/tmp/aiden-event-held-fixed-{types,eslint}.log`); diff checks passed. No hosted jobs, profile or live-app actions occurred.
+
 ## Routine notes (`routine_notes`)
 - Store: `main/services/bot-routine-notes.ts`, file `<profile>/bots/<botDirectoryName>/routine-notes.json` (`{ [taskId]: { [key]: {value, updatedAt} } }`), caps 16 keys / 64-char key / 2,000-char value / 8,000 bytes per routine; a write over a cap returns `notes_full` and changes nothing. Per-Bot serial writes, `writeJsonAtomic`.
 - Render: `Notes you kept from earlier runs of this routine:\n- key: value`, prepended to that routine's own input by `botRoutineMessage(prompt, notes)`; `""` when empty. `botRoutinePromptOf(text)` strips the notes block and the `[SILENT]` rule (Remote routine bubbles use it; desktop rows can too).

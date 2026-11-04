@@ -130,6 +130,14 @@ before relaunching and checking the switch again. A filesystem regression also
 requires malformed JSON and other read errors to fail. This changes no product
 behavior, test timeout, retry policy or flaky-test gate.
 
+The local proactive suite also exposed a fake-clock ordering failure in the
+held-event gap test on 2026-11-04. A fixed 20 ms pause could expire before a
+timer's store read finished; the next clock advance then missed a retry timer
+registered afterward. The test now gates that read deliberately and waits for
+the dispatcher's drain before advancing again. It checks the full five-minute
+boundary, exact run order and settled durable receipts without a timing guess.
+The production event dispatcher and its limits are unchanged.
+
 Release workflows, signing/notarization, publication and repository protection
 settings remain unchanged. The previous draft's release-admission rewrite has
 been removed to keep release hardening separate from this CI rollout.

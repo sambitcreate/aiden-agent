@@ -139,13 +139,14 @@ function dispatcherHarness(store: ReturnType<typeof createBotEventRoutineStore>,
       return { cancel: () => { timer.cancelled = true; } };
     },
   });
-  const advance = async (to: number) => {
+  // Firing timers does not finish their asynchronous store work. Await the
+  // dispatcher's drain or the expected run before moving the clock again.
+  const advance = (to: number) => {
     clock.at = to;
     for (const timer of timers.filter((entry) => !entry.cancelled && entry.at <= to)) {
       timer.cancelled = true;
       timer.fn();
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
   };
   return { dispatcher, runs, clock, advance };
 }
@@ -222,23 +223,60 @@ test("a held event released after a newer one ran still waits out the 5-minute g
   const store = createBotEventRoutineStore({ profileDir: fixedProfile() });
   const { routine } = await store.create("bot-a", { name: "Hook", prompt: "React.", trigger: { kind: "webhook" } });
   const finish: Array<() => void> = [];
-  const h = dispatcherHarness(store, () => new Promise<void>((resolve) => finish.push(resolve)));
+  let holdNextMutation = false;
+  let mutationEntered!: () => void;
+  let releaseMutation!: () => void;
+  const entered = new Promise<void>((resolve) => { mutationEntered = resolve; });
+  const mutationGate = new Promise<void>((resolve) => { releaseMutation = resolve; });
+  const delayedStore: typeof store = {
+    ...store,
+    mutate: async (botId, id, change, guard) => {
+      if (holdNextMutation) {
+        holdNextMutation = false;
+        mutationEntered();
+        await mutationGate;
+      }
+      return store.mutate(botId, id, change, guard);
+    },
+  };
+  const h = dispatcherHarness(delayedStore, (event) => ["e5", "e6"].includes(event.eventId)
+    ? Promise.resolve()
+    : new Promise<void>((resolve) => finish.push(resolve)));
   const start = h.clock.at;
   for (const id of ["e1", "e2", "e3", "e4"]) {
     assert.equal(await h.dispatcher.emit("bot-a", routine.id, { eventId: id, payload: id }), "queued");
     h.clock.at += 5 * MIN;
   }
   assert.equal(await h.dispatcher.emit("bot-a", routine.id, { eventId: "e5", payload: "e5" }), "held");
-  for (let attempt = 0; attempt < 200 && finish.length < 4; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(finish.length, 4);
   finish.splice(0).forEach((resolve) => resolve());
-  for (let attempt = 0; attempt < 200 && (await store.list("bot-a"))[0]?.running; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  await h.dispatcher.idle();
+  assert.equal((await store.list("bot-a"))[0]?.running, undefined);
   h.clock.at = start + 21 * MIN;
   assert.equal(await h.dispatcher.emit("bot-a", routine.id, { eventId: "e6", payload: "e6" }), "queued");
-  await h.advance(start + 25 * MIN);
-  assert.equal(h.runs.some((run) => run.eventId === "e5"), false, "only a minute after e6, so it waits");
-  await h.advance(start + 26 * MIN);
-  for (let attempt = 0; attempt < 200 && !h.runs.some((run) => run.eventId === "e5"); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  await h.dispatcher.idle();
+  holdNextMutation = true;
+  h.advance(start + 25 * MIN);
+  await entered;
+  let drained = false;
+  const draining = h.dispatcher.idle().then(() => { drained = true; });
+  await Promise.resolve();
+  assert.equal(drained, false, "the timer's store read must finish before the fake clock advances again");
+  assert.equal((await store.list("bot-a"))[0]?.held?.eventId, "e5");
+  releaseMutation();
+  await draining;
+  assert.equal(h.runs.some((run) => run.eventId === "e5"), false, "only four minutes after e6, so it waits");
+  h.advance(start + 26 * MIN - 1);
+  await h.dispatcher.idle();
+  assert.equal(h.runs.some((run) => run.eventId === "e5"), false, "the full gap is required");
+  h.advance(start + 26 * MIN);
+  await h.dispatcher.idle();
   assert.deepEqual(h.runs.map((run) => run.eventId), ["e1", "e2", "e3", "e4", "e6", "e5"]);
+  const saved = (await store.list("bot-a"))[0]!;
+  assert.equal(saved.held, undefined);
+  assert.equal(saved.running, undefined);
+  assert.equal(saved.lastRunAt, start + 26 * MIN);
+  assert.equal(saved.day?.count, 6);
 });
 
 test("the 25th event of the day is refused, and a disabled routine refuses events", async () => {
