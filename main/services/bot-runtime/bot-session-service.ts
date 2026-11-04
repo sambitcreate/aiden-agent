@@ -49,6 +49,7 @@ import {
   type BotExtensionDeps,
   type BotReadmission,
   type BotRegistry,
+  type BotTurnContext,
 } from "./bot-extension.js";
 import { writeFileAtomic } from "../durable-fs.js";
 import {
@@ -541,16 +542,16 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
   /**
    * Bind the Bot's current model and reload its extension before anything runs.
-   * The registry always holds the attended tool set: the input may queue behind
-   * other turns, so its own ingress rules are applied when its run makes each
-   * request and call (`turnAllows` in `bot-extension.ts`), never here.
+   * An idle Bot message can prepare its own tool set. Queued input keeps the
+   * attended set so it cannot narrow another turn. Each request and call still
+   * applies its own ingress rules (`turnAllows` in `bot-extension.ts`).
    */
-  async function prepareToRun(botId: string, conversation: Conversation, registry: BotRegistry): Promise<void> {
+  async function prepareToRun(botId: string, conversation: Conversation, registry: BotRegistry, turn?: BotTurnContext): Promise<void> {
     const resolved = await modelFor(botId);
     if (resolved.kind === "none") throw new BotSessionError("needs_model");
     if (resolved.kind === "error") throw new BotSessionError("model_error", resolved.message, resolved.authority);
     const model = resolved.ref;
-    await registry.refresh();
+    await registry.refresh(turn);
     const agent = await conversation.agent(ctx);
     if (agent.model?.provider !== model.provider || agent.model?.modelId !== model.modelId) {
       await conversation.configure({ model }, ctx);
@@ -764,7 +765,10 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         const before = await currentState(botId);
         if (before.kind === "interrupted" && input.ifNotInterrupted) throw new BotSessionError("bot_paused");
         if (input.ifIdle && before.kind !== "idle") throw new BotSessionError("bot_busy");
-        await prepareToRun(botId, conversation, registry);
+        // Bot-message provenance was validated before entering the serial.
+        // Narrow only an idle Bot's preparation, never an existing person's run.
+        await prepareToRun(botId, conversation, registry,
+          input.botMessage && before.kind === "idle" ? { requestId: input.requestId } : undefined);
         if (before.kind === "interrupted") {
           await dismissPaused(conversation, before.submissionId);
           blocked.delete(botId);
