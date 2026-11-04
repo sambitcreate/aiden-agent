@@ -7,6 +7,7 @@ import { compileComposioWatchInputSchema, composioWatchSchemaDiagnosticDialect, 
 import { buildComposioCalendarExecutorRequest, parseComposioCalendarExecutorResponse, type ComposioCalendarRead } from "./connector-watch-composio.js";
 import type { ComposioCalendarContract } from "./composio-calendar-host-port.js";
 import { ComposioCalendarOutputSchemaError, normalizeComposioCalendarOutputSchema, type ComposioCalendarReferenceFailure } from "./composio-calendar-output-schema.js";
+import { CALENDAR_OUTPUT_COMPATIBILITY_VERSION, calendarOutputValidationCopy } from "./composio-calendar-output-compatibility.js";
 
 export const CALENDAR_SCHEMA_SLUGS = ["GOOGLECALENDAR_LIST_CALENDARS", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_EVENTS_GET"] as const;
 type ObjectValue = Record<string, unknown>;
@@ -177,7 +178,7 @@ function fieldDeclarationFacts(error: ErrorObject, schema: unknown): FieldDeclar
   try { keys = error.schemaPath.slice(2).split("/").map((key) => decodeURIComponent(key).replace(/~1/gu, "/").replace(/~0/gu, "~")); } catch { return undefined; }
   // Branch/item constraints need more interpretation than a direct property's
   // declaration. Do not invent field metadata for an ambiguous location.
-  if (keys.at(-1) !== "type" || keys.at(-3) !== "properties") return undefined;
+  if (keys[keys.length - 1] !== "type" || keys[keys.length - 3] !== "properties") return undefined;
   let parent = schema;
   let composed = false;
   for (const key of keys.slice(0, -3)) {
@@ -189,7 +190,7 @@ function fieldDeclarationFacts(error: ErrorObject, schema: unknown): FieldDeclar
     const descriptor = parent !== null && typeof parent === "object" ? Object.getOwnPropertyDescriptor(parent, key) : undefined;
     parent = descriptor && "value" in descriptor ? descriptor.value : undefined;
   }
-  const object = optionalObject(parent), properties = optionalObject(object?.properties), name = keys.at(-2)!;
+  const object = optionalObject(parent), properties = optionalObject(object?.properties), name = keys[keys.length - 2]!;
   const propertyDescriptor = properties ? Object.getOwnPropertyDescriptor(properties, name) : undefined;
   const field = propertyDescriptor && "value" in propertyDescriptor ? optionalObject(propertyDescriptor.value) : undefined;
   if (!object || !field) return undefined;
@@ -298,7 +299,7 @@ export function verifyCalendarContract(metadata: readonly SubagentMcpRemoteTool[
     outputValidators.set(slug, compileCalendarOutput(output, operation));
     hashes.push(digest({ input, output }));
   }
-  const contract: ComposioCalendarContract = { revision: "composio-calendar-v1", executorSchemaHash: digest({ input: executor.inputSchema, output: executor.outputSchema ?? null, outputSource: executorOutputSource, hostOutputVersion: HOST_EXECUTOR_OUTPUT_VERSION, hostOutput: HOST_EXECUTOR_OUTPUT, accountRefusalVersion: ACCOUNT_REFUSAL_VERSION }), readSchemaHashes: { listCalendars: hashes[0]!, listEvents: hashes[1]!, getEvent: hashes[2]! } };
+  const contract: ComposioCalendarContract = { revision: "composio-calendar-v1", executorSchemaHash: digest({ input: executor.inputSchema, output: executor.outputSchema ?? null, outputSource: executorOutputSource, hostOutputVersion: HOST_EXECUTOR_OUTPUT_VERSION, hostOutput: HOST_EXECUTOR_OUTPUT, accountRefusalVersion: ACCOUNT_REFUSAL_VERSION, outputCompatibilityVersion: CALENDAR_OUTPUT_COMPATIBILITY_VERSION }), readSchemaHashes: { listCalendars: hashes[0]!, listEvents: hashes[1]!, getEvent: hashes[2]! } };
   if (expected && digest(expected) !== digest(contract)) return fail("schema_drift", "changed");
   Object.freeze(contract.readSchemaHashes); Object.freeze(contract);
   const validateExecutorOutput = (response: unknown, operation?: ComposioCalendarRead["kind"]): void => {
@@ -330,7 +331,7 @@ export function verifyCalendarContract(metadata: readonly SubagentMcpRemoteTool[
       const item = buildComposioCalendarExecutorRequest(read).tools[0];
       const upstream = parseComposioCalendarExecutorResponse(boundedCalendarContractJson(response), read);
       const validator = outputValidators.get(item.tool_slug)!;
-      if (!validator(upstream)) return validationFailure("read_response", validator, { operation: read.kind, direction: "output" }, undefined, upstream);
+      if (!validator(calendarOutputValidationCopy(validator.schema, upstream))) return validationFailure("read_response", validator, { operation: read.kind, direction: "output" }, undefined, upstream);
     },
   });
 }

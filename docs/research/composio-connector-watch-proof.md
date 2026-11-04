@@ -224,3 +224,10 @@ The check then sent one explicit real-account Calendar-list read. Its executor e
 Closed output-type diagnostics (`af8001af8`) were clear after Sol high review with 167 independent cases. Immutable pre-Open-work snapshot `2c140d68a` passed its build, 384 focused cases, a final 62-case test refresh, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793778505773`) again passed exact invalid-account refusal and reached one successful real-account Calendar-list response. Upstream validation identified expected string / actual null at the classified path data / other. No raw property name or value was retained, and no event or GET read ran.
 
 Diagnostic recognition of known ASCII case/snake aliases and safely derived required/default/nullable declaration facts is under review. Acceptance remains unchanged until the affected field and its meaning are established.
+
+
+### V20 direct optional null metadata — 2026-11-04
+
+Known-field alias and conservative declaration diagnostics (`91c758655`) were clear after a Sol high fix/review loop: 175 independent cases and five deeper composition controls. An initial diagnostic P2 could infer nullability through composed schemas; the corrected version reports unknown or omits ambiguous branch facts without changing validation. Immutable pre-Open-work snapshot `3271223de` passed its build, 392 focused cases, signed/native preflight and isolated startup.
+
+The owner-authorized actual check (`checkedAt:1793779492891`) again passed invalid-account refusal, then rejected one Calendar-list output null where its schema declares an optional string, no default and no null allowance. Its property name remains outside the known diagnostic vocabulary. No events or GET ran. A bounded compatibility step treating null as absence only for declared optional string metadata unused by every semantic/authority guard is being implemented and reviewed separately; meaningful fields and incomplete-result checks remain strict.

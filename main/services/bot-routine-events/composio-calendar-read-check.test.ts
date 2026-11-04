@@ -58,6 +58,28 @@ test("a real-account list type mismatch preserves completed negative proof and s
   assert.equal("privateProof" in publicComposioCalendarReadCheckResult(result), false);
 });
 
+test("inert metadata compatibility preserves original semantic source and exact event/GET verification", async () => {
+  const f = fixture(), original = f.port.readCalendar!;
+  f.schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = { type: "object", properties: {
+    successful: { type: "boolean" }, error: { type: "null" }, data: { type: "object", properties: { aux_note: { type: "string" }, items: { type: "array", items: { type: "object" } } } },
+  } } as never;
+  let returned: unknown, before: unknown;
+  f.port.readCalendar = async (read, session) => {
+    const reply = await original(read, session) as ReturnType<typeof syntheticCalendarExecutor>;
+    if (read.accountId === actualAccount && read.kind === "listCalendars") {
+      const item = reply.data.results[0]!; assert.ok("response" in item);
+      item.response = { successful: true, error: null, data: { ...(item.response as object), aux_note: null } };
+      returned = reply; before = structuredClone(reply);
+    }
+    return reply;
+  };
+  const result = await checkComposioCalendarRead(f.port, options());
+  assert.equal(result.code, "verified"); assert.equal(result.available, false); assert.deepEqual(returned, before);
+  assert.deepEqual(result.privateProof.counts, { activeAccounts: 1, calendars: 1, events: 1, gets: 1 });
+  assert.equal(f.reads[1]!.accountId, actualAccount); assert.equal(f.reads.length, 4);
+  for (const secret of ["aux_note", actualAccount, "calendar@example.test", observedEvent.id]) assert.equal(JSON.stringify(result).includes(secret), false);
+});
+
 test("coherent MCP error JSON proves only an exact known failed-account item", async () => {
   for (const [error, accepted] of [["CONNECTED_ACCOUNT_NOT_FOUND", true], ["No active connected account found", false], ["Account ca_private_secret not found", false], ["permission denied", false]] as const) {
     const f = fixture(), original = f.port.readCalendar!; delete f.metadata[2]!.outputSchema;

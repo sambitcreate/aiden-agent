@@ -4,6 +4,7 @@ import { buildCalendarSchemasRequest, buildCalendarSearchRequest, CALENDAR_SCHEM
 import { syntheticCalendarExecutor, syntheticCalendarMetadata, syntheticCalendarSchemas } from "./composio-calendar-test-support.js";
 import { compileComposioWatchInputSchema, type ComposioWatchSchemaCompileFacts } from "./connector-watch-composio-probe.js";
 import { normalizeComposioCalendarOutputSchema } from "./composio-calendar-output-schema.js";
+import { calendarOutputValidationCopy } from "./composio-calendar-output-compatibility.js";
 
 test("contract validates all three fixed read schemas and one account-selected executor item", () => {
   const metadata = syntheticCalendarMetadata();
@@ -170,6 +171,102 @@ test("declarations inside alternative schema branches never claim global nullabi
     assert.equal(failure.facts!.typeMismatch!.declaration, undefined);
     verified.response(read, syntheticCalendarExecutor(read, { data: { items: null } }));
   });
+});
+
+test("declared optional inert null string metadata validates without changing the original Calendar response", () => {
+  const schemas = syntheticCalendarSchemas();
+  schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = { type: "object", properties: {
+    successful: { type: "boolean" }, error: { type: "null" },
+    data: { type: "object", properties: { items: { type: "array", items: { type: "object" } }, aux_note: { type: "string" } }, required: ["items"], additionalProperties: false },
+  }, required: ["successful", "data"], additionalProperties: false } as never;
+  const read = { kind: "listCalendars" as const, accountId: "explicit-account" };
+  const response = { successful: true, error: null, data: { items: [{ id: "explicit-calendar", accessRole: "reader", summary: "Calendar" }], aux_note: null } };
+  const reply = syntheticCalendarExecutor(read, response), before = structuredClone(reply);
+  verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, reply);
+  assert.deepEqual(reply, before); assert.equal(response.data.aux_note, null); assert.equal(reply.data.results.length, 1);
+});
+
+test("inert null compatibility never removes authority, cursor, error or partial metadata", () => {
+  for (const key of ["id", "connected_account_id", "accessRole", "status", "summary", "location", "start", "end", "dateTime", "recurringEventId", "originalStartTime", "error", "successful", "items", "response", "total_count", "nextPageToken", "next_sync_token", "nextCursor", "has_more", "truncated", "remote_file_info"]) {
+    const schemas = syntheticCalendarSchemas();
+    schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = { type: "object", properties: { [key]: { type: "string" } } } as never;
+    const read = { kind: "listCalendars" as const, accountId: "account" };
+    assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, syntheticCalendarExecutor(read, { [key]: null })));
+  }
+});
+
+test("plural semantic and correlation metadata remains subject to the original string validator", async (t) => {
+  for (const nested of [false, true]) await t.test(nested ? "immediate data" : "response root", () => {
+    for (const key of ["permissions", "credentials", "grants", "scopes", "correlation", "correlations", "correlation_key", "correlationkeys", "requestCorrelation", "errors", "counts", "accounts", "calendars", "events", "cursors", "tokens", "pages", "continuations", "timestamps", "dates", "times", "roles", "statuses", "summaries", "locations", "recurrences", "defaults", "responses", "results", "signatures"]) {
+      const field = { type: "object", properties: { [key]: { type: "string" } } };
+      const schemas = syntheticCalendarSchemas();
+      schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = (nested ? { type: "object", properties: { data: field } } : field) as never;
+      const read = { kind: "listCalendars" as const, accountId: "account" }, value = nested ? { data: { [key]: null } } : { [key]: null };
+      const verified = verifyCalendarContract(syntheticCalendarMetadata(), schemas);
+      assert.throws(() => verified.response(read, syntheticCalendarExecutor(read, value)), (error) => error instanceof ComposioCalendarContractError && error.stage === "read_response");
+    }
+  });
+});
+
+test("case and underscore variants cannot disguise protected plural metadata", async (t) => {
+  for (const nested of [false, true]) await t.test(nested ? "immediate data" : "response root", () => {
+    for (const key of ["GrAnts", "PerMISSIONS", "CreDentials", "sCOpes", "ErRors", "CoUnts", "Gra_nts", "Cor_reLATIONS"]) {
+      const field = { type: "object", properties: { [key]: { type: "string" } } };
+      const schemas = syntheticCalendarSchemas();
+      schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = (nested ? { type: "object", properties: { data: field } } : field) as never;
+      const read = { kind: "listCalendars" as const, accountId: "account" }, response = nested ? { data: { [key]: null } } : { [key]: null };
+      assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, syntheticCalendarExecutor(read, response)), (error) => error instanceof ComposioCalendarContractError && error.stage === "read_response");
+    }
+  });
+});
+
+test("irregular compound names cannot conceal a literal protected term", async (t) => {
+  for (const nested of [false, true]) await t.test(nested ? "immediate data" : "response root", () => {
+    for (const key of ["PerMISSIONS_note", "GrAnts_hint", "CreDentials_state", "CoUnt_text", "vendorGrAntsHint", "vendorPerMISSIONSNote", "vendorCreDentialsState", "vendorCoUntText", "hintPerMIS_SIONSSuffix", "vendor_note"]) {
+      const field = { type: "object", properties: { [key]: { type: "string" } } };
+      const schemas = syntheticCalendarSchemas();
+      schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = (nested ? { type: "object", properties: { data: field } } : field) as never;
+      const read = { kind: "listCalendars" as const, accountId: "account" }, response = nested ? { data: { [key]: null } } : { [key]: null };
+      assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, syntheticCalendarExecutor(read, response)), (error) => error instanceof ComposioCalendarContractError && error.stage === "read_response");
+    }
+  });
+});
+
+test("inert null output handling refuses required, undeclared, composed, constrained and non-null invalid data", () => {
+  const read = { kind: "listCalendars" as const, accountId: "account" };
+  for (const [schema, response] of [
+    [{ type: "object", properties: { aux_note: { type: "string" } }, required: ["aux_note"] }, { aux_note: null }],
+    [{ type: "object", properties: {}, additionalProperties: false }, { aux_note: null }],
+    [{ type: "object", properties: { aux_note: { type: "string" } } }, { aux_note: 7 }],
+    [{ type: "object", properties: { aux_note: { type: "object" } } }, { aux_note: null }],
+    [{ type: "object", properties: { aux_note: { type: "string", default: "private-default-data" } } }, { aux_note: null }],
+    [{ type: "object", properties: { aux_note: { type: "string", enum: ["ready"] } } }, { aux_note: null }],
+    [{ type: "object", properties: { aux_note: { type: "string" } }, allOf: [{ type: "object" }] }, { aux_note: null }],
+    [{ type: "object", properties: { aux_note: { type: "string" } }, maxProperties: 1 }, { aux_note: null }],
+    [{ type: "object", properties: { data: { type: "object", properties: { aux_note: { type: "string" } }, anyOf: [{ type: "object" }] } } }, { data: { aux_note: null } }],
+    [{ type: "object", properties: { items: { type: "array", items: { type: "string" } } } }, { items: [null] }],
+    [{ type: "object", properties: { items: { type: "array", items: { type: "object", properties: { aux_note: { type: "string" } } } } } }, { items: [{ aux_note: null }] }],
+    [{ type: "object", properties: { container: { type: "object", properties: { aux_note: { type: "string" } } } } }, { container: { aux_note: null } }],
+  ] as const) {
+    const schemas = syntheticCalendarSchemas(); schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = schema as never;
+    assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, syntheticCalendarExecutor(read, response)));
+  }
+  const unsafe = syntheticCalendarSchemas();
+  unsafe.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = { type: "object", properties: { aux_note: { type: "string", pattern: "(a+)+$" } } } as never;
+  assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), unsafe), "original unsafe schemas fail before output compatibility is considered");
+});
+
+test("the bounded validation copy preserves undeclared fields, arrays, originals and accessor refusal", () => {
+  const schema = { type: "object", properties: { aux_note: { type: "string" }, data: { type: "object", properties: { helper_note: { type: "string", default: null } } } } };
+  const original = { aux_note: null, undeclared: null, data: { helper_note: null, items: [{ aux_note: null, id: "private-calendar" }] } };
+  const copy = calendarOutputValidationCopy(schema, original) as typeof original;
+  assert.equal(Object.prototype.hasOwnProperty.call(copy, "aux_note"), false); assert.equal(Object.prototype.hasOwnProperty.call(copy.data, "helper_note"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(copy, "undeclared"), true); assert.deepEqual(JSON.parse(JSON.stringify(copy.data.items)), original.data.items);
+  assert.equal(original.aux_note, null); assert.equal(original.data.helper_note, null); assert.notEqual(copy.data.items, original.data.items);
+  let accessed = false;
+  const accessor = Object.defineProperty({}, "aux_note", { enumerable: true, get() { accessed = true; return null; } });
+  assert.throws(() => calendarOutputValidationCopy(schema, accessor)); assert.equal(accessed, false);
+  assert.throws(() => calendarOutputValidationCopy(schema, { aux_note: "x".repeat(256 * 1024) }));
 });
 
 test("present executor output uses the restricted compiler before requests, including genuine failure representation", () => {
