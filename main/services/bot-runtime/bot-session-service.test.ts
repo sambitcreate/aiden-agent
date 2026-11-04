@@ -1,3 +1,8 @@
+import { createBotLiveProjection, type BotLiveProjection } from "./live-projection.js";
+import { createBotPlans, type BotPlans } from "../bot-plans/plans.js";
+import { createBotPlanLifecycle } from "../bot-plans/lifecycle.js";
+import { botPlanProposalFingerprint, type BotPlanProposal } from "../bot-plans/validate.js";
+import { createBotRunAccess } from "./bot-run-access.js";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
@@ -1144,4 +1149,173 @@ test("issue status append remains one durable entry across marker failures and s
     assert.deepEqual(Object.keys(entries[0]!.data as object).sort(), ["effectId", "issueId", "resolution", "resolvedAt"], "host metadata adds only dedupe identity, never private access authorization");
     assert.equal(faux.calls(), 0, "repairs never run inference");
   } finally { await runtime.shutdown(); }
+});
+
+
+test("stop calls onStopped after aborting the running tool and before publishing settled state", async () => {
+  const order: string[] = [];
+  const hold = countingTool("hold", async (_params, signal) => {
+    signal!.addEventListener("abort", () => order.push("aborted"), { once: true });
+    return blockingUntilAborted(signal);
+  });
+  const service = await serviceFor(tempProfile(), createFauxModels([fauxAssistantMessage([fauxToolCall("hold", { text: "wait" })], { stopReason: "toolUse" })]), {
+    extension: recordingDeps({ tools: [{ tool: hold, replay: "unsafe" }] }),
+    onStopped: (botId) => order.push(`stopped:${botId}`),
+    onStateChange: (_botId, state) => { if (state.kind !== "running") order.push(`state:${state.kind}`); },
+  });
+  try {
+    await service.stop("bot:a");
+    assert.deepEqual(order, [], "idle Stop has no stop callback");
+    await service.send("bot:a", { text: "Work", requestId: "desk-stop-plan" });
+    await waitFor(() => hold.executions.length === 1, { what: "running tool" });
+    order.length = 0;
+    assert.deepEqual(await service.stop("bot:a"), { kind: "idle" });
+    assert.deepEqual(order, ["aborted", "stopped:bot:a", "state:idle"]);
+    await service.stop("bot:a");
+    assert.deepEqual(order, ["aborted", "stopped:bot:a", "state:idle"]);
+  } finally { await service.shutdown(); }
+});
+
+test("dismiss calls onStopped once after the interrupted turn settles, before publishing, and never on no-op or replay", async () => {
+  const profile = tempProfile();
+  const submissionId = await killMidStream(profile);
+  const order: string[] = [];
+  let inspected: Promise<unknown[]> | undefined;
+  const service = await serviceFor(profile, createFauxModels([fauxAssistantMessage("must not run")]), {
+    onStopped: (botId) => { order.push(`stopped:${botId}`); inspected = notices(service, botId); },
+    onStateChange: (_botId, state) => { if (state.kind === "idle") order.push("state:idle"); },
+  });
+  try {
+    await service.initialize();
+    order.length = 0;
+    await service.stop("bot:killed");
+    assert.deepEqual(order, [], "Stop on interrupted is a no-op");
+    assert.deepEqual(await service.dismiss("bot:killed", "dismiss-plan"), { kind: "idle" });
+    assert.deepEqual(order, ["stopped:bot:killed", "state:idle"]);
+    assert.deepEqual(await inspected, [{ notice: "interrupted", submissionId }], "dismissal is already durable at the hook");
+    await service.dismiss("bot:killed", "dismiss-plan");
+    await service.dismiss("bot:killed", "another-dismiss");
+    assert.deepEqual(order, ["stopped:bot:killed", "state:idle"]);
+  } finally { await service.shutdown(); }
+});
+
+
+function sessionPlanStore(profileDir: string) {
+  const access = createBotRunAccess({ now: Date.now });
+  const options = { profileDir, knownBot: async () => true, revalidate: async () => {}, revokeAccess: (botId: string, planId: string) => access.revokeOwner(botId, { kind: "plan", id: planId }) };
+  const plans = createBotPlans(options);
+  async function approve(botId: string, requestId: string) {
+    const proposal: BotPlanProposal = { title: "Calendar job", why: "Finish the task", steps: ["Do the work", "Finish the task"], items: [{ id: "i1", kind: "shell" }], authorization: { policyRevision: "policy", bindingRevision: "binding", proposalFingerprint: "", rules: [] } };
+    proposal.authorization.proposalFingerprint = botPlanProposalFingerprint(proposal);
+    const result = plans.request({ botId, planId: "p1", toolCallId: "plan-call", proposal, requestIds: [requestId], signal: undefined });
+    assert.equal((await plans.current(botId))?.status, "pending");
+    assert.equal(await plans.respond(botId, "p1", "approve"), "done");
+    assert.equal((await result).status, "approved");
+    assert.equal(await plans.grantFreshAccess(botId, "p1", async () => {
+      access.grant(botId, { requestIds: [requestId], target: "folder", key: "/Plan", root: "/Plan", label: "Plan folder", identity: { device: "1", inode: "2" }, policyRevision: "policy", access: "write", owner: { kind: "plan", id: "p1" }, grantedAt: Date.now(), expiresAt: Date.now() + 60_000 });
+    }), true);
+    access.grant(botId, { requestIds: ["other-task"], target: "folder", key: "/Other", root: "/Other", label: "Other task", identity: { device: "1", inode: "3" }, policyRevision: "policy", access: "read", owner: { kind: "access", id: "other" }, grantedAt: Date.now(), expiresAt: Date.now() + 60_000 });
+    assert.equal(access.location(botId, [requestId], "policy")?.root, "/Plan");
+  }
+  return { plans, access, approve, restart: () => createBotPlans(options) };
+}
+
+/** The main wiring is deliberately void: plan persistence never blocks the session serial. */
+function sessionPlanCallbacks(plans: BotPlans) {
+  const pending: Promise<void>[] = [];
+  const lifecycle = createBotPlanLifecycle({ plans: { endRuns: (botId, reason) => {
+    const operation = plans.endRuns(botId, reason); pending.push(operation); return operation;
+  } } });
+  return {
+    callbacks: {
+      onStopped: lifecycle.stopped,
+      onStateChange: lifecycle.stateChanged,
+    },
+    onRunSettled: lifecycle.settled,
+    async settled() { await Promise.all(pending); },
+  };
+}
+
+test("real Stop ends a live plan and revokes only its grant before subsequent use", async () => {
+  const profile = tempProfile();
+  const store = sessionPlanStore(profile);
+  const hooks = sessionPlanCallbacks(store.plans);
+  const hold = countingTool("hold", (_params, signal) => blockingUntilAborted(signal));
+  const service = await serviceFor(profile, createFauxModels([fauxAssistantMessage([fauxToolCall("hold", { text: "wait" })], { stopReason: "toolUse" })]), { extension: recordingDeps({ tools: [{ tool: hold, replay: "unsafe" }] }), ...hooks.callbacks });
+  try {
+    await service.send("bot:a", { text: "Work", requestId: "desk-plan-run" });
+    await waitFor(() => hold.executions.length === 1, { what: "running tool" });
+    await store.approve("bot:a", "desk-plan-run");
+    await service.stop("bot:a");
+    await hooks.settled();
+    assert.equal((await store.plans.current("bot:a"))?.status, "stopped");
+    assert.equal(store.access.location("bot:a", ["desk-plan-run"], "policy"), undefined);
+    assert.equal(store.access.location("bot:a", ["other-task"], "policy")?.root, "/Other");
+  } finally { await service.shutdown(); }
+});
+
+test("recovered unfinished approval survives observation, Dismiss ends it and revokes its own grant", async () => {
+  const profile = tempProfile();
+  const submissionId = await killMidStream(profile);
+  const store = sessionPlanStore(profile);
+  await store.approve("bot:killed", "req-killed");
+  const restored = store.restart();
+  const hooks = sessionPlanCallbacks(restored);
+  const models = createFauxModels([fauxAssistantMessage("must not run")]);
+  const service = await serviceFor(profile, models, hooks.callbacks);
+  try {
+    assert.deepEqual(await service.state("bot:killed"), { kind: "idle" }, "initial state precedes unfinished-run recovery");
+    assert.equal((await restored.current("bot:killed"))?.status, "active");
+    await service.initialize();
+    assert.deepEqual(await service.state("bot:killed"), { kind: "interrupted", submissionId });
+    await hooks.settled();
+    assert.equal((await restored.current("bot:killed"))?.status, "active", "opening and initial observations do not finish recovered approval");
+    await service.stop("bot:killed");
+    assert.equal((await restored.current("bot:killed"))?.status, "active", "idle/interrupted Stop is a no-op");
+    await service.dismiss("bot:killed", "dismiss-plan-lifecycle");
+    await hooks.settled();
+    assert.equal((await restored.current("bot:killed"))?.status, "stopped");
+    assert.equal(store.access.location("bot:killed", ["req-killed"], "policy"), undefined);
+    assert.equal(store.access.location("bot:killed", ["other-task"], "policy")?.root, "/Other");
+    assert.equal(models.calls(), 0);
+  } finally { await service.shutdown(); }
+});
+
+test("natural completion ends a real plan after a running observation and revokes its grant", async () => {
+  const profile = tempProfile();
+  const store = sessionPlanStore(profile);
+  const hooks = sessionPlanCallbacks(store.plans);
+  let finish!: (value: string) => void;
+  const held = new Promise<string>((resolve) => { finish = resolve; });
+  const hold = countingTool("hold", () => held);
+  const models = createFauxModels([fauxAssistantMessage([fauxToolCall("hold", { text: "wait" })], { stopReason: "toolUse" }), fauxAssistantMessage("Done")]);
+  let projection: BotLiveProjection | undefined;
+  const service = await serviceFor(profile, models, { extension: recordingDeps({ tools: [{ tool: hold, replay: "unsafe" }] }), ...hooks.callbacks,
+    onStateChange: (botId, state) => { hooks.callbacks.onStateChange(botId, state); projection?.notifyState(botId, state); },
+  });
+  projection = createBotLiveProjection({ conversation: (id) => service.conversation(id), state: (id) => service.state(id), quietInputs: (id, ids) => service.quietInputs(id, ids), plan: (id) => store.plans.current(id), onRunSettled: hooks.onRunSettled });
+  try {
+    const sent = await service.send("bot:a", { text: "Work", requestId: "desk-plan-complete" });
+    await waitFor(() => hold.executions.length === 1, { what: "running tool" });
+    await store.approve("bot:a", "desk-plan-complete");
+    const events: import("../../../renderer/shared/bot-live.js").BotLiveEvent[] = [];
+    const subscription = await projection.subscribe("bot:a", { send: (event) => { events.push(event); } });
+    assert.equal(subscription.snapshot.plan?.status, "active");
+    for (const privateKey of ["authorization", "requestIds", "proposal", "toolCallId", "policyRevision", "bindingRevision", "proposalFingerprint"]) {
+      assert.equal(privateKey in subscription.snapshot.plan!, false, `${privateKey} stays main-only`);
+    }
+    await projection.refreshPlan("bot:a");
+    await store.plans.markStep("bot:a", ["desk-plan-complete"], 1, "done");
+    await projection.refreshPlan("bot:a");
+    await waitFor(() => events.some((event) => event.type === "plan"), { what: "real public plan event" });
+    const planEvent = events.find((event) => event.type === "plan")!;
+    assert.equal(JSON.stringify(planEvent).includes("desk-plan-complete"), false, "raw request identity never enters the plan event");
+    finish("Finished the work");
+    assert.equal((await service.awaitReply("bot:a", sent.submissionId, new AbortController().signal)).kind, "completed");
+    await waitFor(async () => (await store.plans.current("bot:a"))?.status === "finished", { what: "projection observes natural completion and ends the plan" });
+    await hooks.settled();
+    assert.equal((await store.plans.current("bot:a"))?.status, "finished");
+    assert.equal(store.access.location("bot:a", ["desk-plan-complete"], "policy"), undefined);
+    assert.equal(store.access.location("bot:a", ["other-task"], "policy")?.root, "/Other");
+  } finally { await projection.close(); await service.shutdown(); }
 });

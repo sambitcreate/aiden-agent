@@ -1,3 +1,4 @@
+import type { BotPlanView } from "../../../renderer/shared/bot-plans.js";
 import { createBotAccessRequests } from "./bot-access-requests.js";
 import { accessRequestPrompt } from "./test-support/access-request-fixtures.js";
 import assert from "node:assert/strict";
@@ -2274,5 +2275,89 @@ test("access requests opened without a feed and settled without refresh are caug
     assert.equal(settled.snapshot.accessRequest, null);
     await waitFor(() => tape.view?.accessRequest === null, { what: "subscribe catch-up" });
     first.unsubscribe(); settled.unsubscribe();
+  } finally { await live.close(); }
+});
+
+
+function planView(overrides: Partial<BotPlanView> = {}): BotPlanView {
+  return { planId: "p1", botId: "bot:a", status: "pending", title: "Organize the calendar", why: "Make time for the work",
+    steps: [{ text: "Create the events", status: "pending" }], items: [{ id: "i1", line: "Calendar · create events (up to 5)", details: ["Create event"], used: 0, max: 5 }], revision: 1, ...overrides };
+}
+
+test("plan events update only the plan and sequence, including clear and stale/gap handling", () => {
+  const snapshot: BotLiveSnapshot = { botId: "bot:a", epoch: "e1", seq: 10, entries: [{ id: "u1", type: "user", text: "Please help", imageCount: 0 }], partial: "Working", state: { kind: "idle" }, question: null, activity: null, queued: [] };
+  const event: BotLiveEvent = { botId: "bot:a", epoch: "e1", seq: 11, type: "plan", plan: planView() };
+  const applied = applyBotLiveEvent(snapshot, event);
+  assert.deepEqual(applied, { ...snapshot, seq: 11, plan: event.plan });
+  assert.equal(applied!.entries, snapshot.entries);
+  assert.equal(applyBotLiveEvent(applied!, event), applied);
+  assert.equal(applyBotLiveEvent(snapshot, { ...event, seq: 12 }), null);
+  assert.deepEqual(applyBotLiveEvent(applied!, { ...event, seq: 12, plan: null }), { ...snapshot, seq: 12, plan: null });
+});
+
+test("a plan change pushes one event per identity or revision and clearing removes it", async () => {
+  let plan: BotPlanView | null = planView();
+  const live = await start(createFauxModels([]), { projection: { plan: async () => plan } });
+  try {
+    const tape = recorder();
+    const first = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(first.snapshot);
+    assert.deepEqual(first.snapshot.plan, plan);
+    await live.projection.refreshPlan("bot:a");
+    assert.equal(tape.events.filter((event) => event.type === "plan").length, 0);
+    plan = planView({ revision: 2, status: "active" });
+    await live.projection.refreshPlan("bot:a");
+    await waitFor(() => tape.events.filter((event) => event.type === "plan").length === 1, { what: "revised plan event" });
+    assert.equal(tape.view?.plan?.status, "active");
+    await live.projection.refreshPlan("bot:a");
+    plan = planView({ planId: "p2", revision: 2 });
+    await live.projection.refreshPlan("bot:a");
+    plan = null;
+    await live.projection.refreshPlan("bot:a");
+    await live.projection.refreshPlan("bot:a");
+    await waitFor(() => tape.events.filter((event) => event.type === "plan").length === 3, { what: "replacement and clear" });
+    assert.equal(tape.view?.plan, null);
+    assert.equal(tape.gaps, 0);
+  } finally { await live.close(); }
+});
+
+test("pending plans need the person offscreen and subscribe catches unannounced changes", async () => {
+  let plan: BotPlanView | null = planView();
+  const live = await start(createFauxModels([]), { projection: { plan: async () => plan } });
+  try {
+    for (const status of ["pending", "active", "finished", "stopped", "expired"] as const) {
+      plan = planView({ status });
+      assert.equal(await live.projection.needsYou("bot:a"), status === "pending");
+      assert.equal((await live.projection.inboxSignals("bot:a")).needsYou, status === "pending");
+      assert.equal((await live.projection.summary("bot:a")).needsYou, status === "pending");
+    }
+    plan = planView();
+    const tape = recorder();
+    const first = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(first.snapshot);
+    assert.equal(first.snapshot.plan?.status, "pending");
+    plan = planView({ status: "active", revision: 2 });
+    assert.equal((await live.projection.summary("bot:a")).needsYou, false, "attention rereads even an open feed");
+    const late = await live.projection.subscribe("bot:a", { send() {} });
+    assert.equal(late.snapshot.plan?.status, "active");
+    await waitFor(() => tape.view?.plan?.status === "active", { what: "subscribe catches the plan up" });
+  } finally { await live.close(); }
+});
+
+test("a pending plan makes a running reply wait for the person until approved", async () => {
+  let plan: BotPlanView | null = null;
+  const live = await start(createFauxModels([slowAnswer()], { tokensPerSecond: 40 }), { projection: { plan: async () => plan } });
+  try {
+    const tape = recorder();
+    const subscription = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(subscription.snapshot);
+    await live.service.send("bot:a", { text: "Help", requestId: "desk-plan" });
+    await waitFor(() => tape.view?.activity !== null, { what: "running activity" });
+    plan = planView();
+    await live.projection.refreshPlan("bot:a");
+    await waitFor(() => tape.view?.activity?.phase === "waiting", { what: "plan waiting activity" });
+    plan = planView({ status: "active", revision: 2 });
+    await live.projection.refreshPlan("bot:a");
+    await waitFor(() => tape.view?.activity?.phase !== "waiting", { what: "approved plan releases activity" });
   } finally { await live.close(); }
 });

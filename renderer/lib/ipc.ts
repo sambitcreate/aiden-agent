@@ -1,4 +1,5 @@
 import type { PeerProjectSource } from "../shared/peer-project-clone";
+import { BOT_PLAN_CHANNELS, type BotPlanDecision } from "../shared/bot-plans.js";
 import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
 import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
 import type { ChatPendingAttention } from "../shared/chat-pending-attention";
@@ -1789,6 +1790,9 @@ export const botsApi = {
   /** Answer only the offered choice for this live authorization attempt. */
   answerAccessRequest: (botId: string, waitId: string, choice: import("../shared/bot-access-requests").BotAccessChoice) =>
     invoke<{ answered: boolean; savedForFuture?: true }>("bots:answerAccessRequest", { botId, waitId, choice }),
+  /** Answer or stop the exact plan shown by the host. */
+  respondPlan: (input: { botId: string; planId: string; decision: BotPlanDecision }) =>
+    invoke<{ result: "done" | "not_waiting" }>(BOT_PLAN_CHANNELS.respond, input),
   /**
    * Answer the Bot's hand-off card by its wait id with Done or Skip, and an
    * optional note; `answered` is false once the card is no longer waiting.

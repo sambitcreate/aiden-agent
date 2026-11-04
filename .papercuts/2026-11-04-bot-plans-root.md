@@ -19,3 +19,7 @@
 - Authority adapter worker ended at selected-model capacity after its final 21-test/type/lint run. Preserved all shared edits, read its exact source/tests, and parent reran 21 tests and scoped lint successfully. No duplicate implementation or model switch was needed.
 
 - Gate4 reviewers accepted c9fc2045d, but identified misleading replay/step copy, pending-card precedence, avoidable identity scans and a site grammar mismatch. Root captured four behavioral core/validation failures before adding plan-specific reads, truthful conflicting/final step replay outcomes and early hostname refusal. The tool worker handles replay cleanup and sequential step scheduling while keeping the conservative core termination fence.
+
+- Task6 real lifecycle tests caught two main-wiring hazards: pre-recovery idle would end saved approval, and natural completion only reaches projection onRunSettled. Added a pure lifecycle adapter shared by production and integration tests, preserving recovery and routing actual settlement without a session-to-plan await.
+- A final informational steer after the Task6 worker stopped returned thread_not_sendable. No retry or new turn was needed; the handoff was already complete and root owns integration.
+- A combined UI-reference read exceeded the output budget. Recovered the relevant button, approval, motion and verification sections with bounded reads before Task7.

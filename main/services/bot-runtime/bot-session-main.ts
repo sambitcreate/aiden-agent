@@ -2,6 +2,7 @@ import { botMessages, disposeBotMessages } from "../bot-messages/messages-main.j
 import { botMessageTurnOf } from "../../../renderer/shared/bot-messages.js";
 import { botPlans, configureBotPlanAuthority } from "../bot-plans/plans-main.js";
 import { createBotPlanAuthority } from "../bot-plans/authority.js";
+import { createBotPlanLifecycle } from "../bot-plans/lifecycle.js";
 // Production wiring of the durable Bot runtime.
 //
 // One `BotSessionRuntime` per process, created after Bot storage and the
@@ -650,6 +651,17 @@ const stopAccessRequestProjection = botAccessRequests.onChange((botId) => {
   );
 });
 
+const stopPlanProjection = botPlans.onChange((botId) => {
+  void liveProjection?.refreshPlan(botId).catch((error: unknown) =>
+    logger.warn("bots", `Bot ${botId} plan view report.`, error),
+  );
+});
+
+const planLifecycle = createBotPlanLifecycle({
+  plans: botPlans,
+  onError: (botId, error) => logger.warn("bots", `Bot ${botId} plan lifecycle report.`, error),
+});
+
 // A card that opens while no Aiden window is focused also says so in a Mac
 // notification ("Ada needs you to: …"); clicking it opens the Bot's chat.
 const handoffNotifier = createBotHandoffNotifier({
@@ -699,6 +711,7 @@ const stopBotAttention = wireBotAttention({
   approvals: botApprovals,
   handoffs: botHandoffs,
   accessRequests: botAccessRequests,
+  plans: botPlans,
   issues: botIssues,
   broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
 });
@@ -836,11 +849,15 @@ export function botLiveProjection(): BotLiveProjection {
     question: (botId) => botQuestions.pending(botId)[0] ?? null,
     handoff: (botId) => botHandoffs.pending(botId)[0] ?? null,
     accessRequest: (botId) => botAccessRequests.pending(botId)[0] ?? null,
+    plan: (botId) => botPlans.current(botId),
     approvalPending: (botId) => botApprovals.pending(botId).length > 0,
     issuePending: async (botId) => (await botIssues.list(botId, { open: true })).length > 0,
     connectCardStatus,
     runStarts: botRunStarts,
-    onRunSettled: broadcastState,
+    onRunSettled: (botId, state) => {
+      planLifecycle.settled(botId, state);
+      broadcastState(botId, state);
+    },
     onError: (botId, error) => logger.warn("bots", `Bot ${botId} live view report.`, error),
   });
   return liveProjection;
@@ -902,6 +919,7 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       deleteRoutines,
       forgetDeliveries,
       (botId) => botMessages().forgetBot(botId),
+      (botId) => { planLifecycle.forget(botId); return botPlans.forgetBot(botId); },
       (botId) => botIssues.forgetBot(botId),
       (botId) => botPauses.forgetBot(botId),
       // Its rules file goes, and no later edit can bring its directory back.
@@ -914,8 +932,10 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     ],
     // Announced only here, after the session resumed, never by a route ahead of `resume`.
     onResumed: (botId) => botTurnIntents.announce(botId, "resuming"),
+    onStopped: (botId) => planLifecycle.stopped(botId),
     onStateChange: (botId, state) => {
       if (botRunEnded(state)) botRunAccess.clearBot(botId);
+      planLifecycle.stateChanged(botId, state);
       broadcastState(botId, state);
       botLiveProjection().notifyState(botId, state);
       for (const listener of stateListeners) {
@@ -964,6 +984,8 @@ export function initializeBotSessionRuntime(): Promise<void> {
 }
 
 export async function shutdownBotSessionRuntime(): Promise<void> {
+  stopPlanProjection();
+  planLifecycle.clear();
   stopAccessRequestProjection();
   stopAccessRequestNotifications();
   stopBotAttention();

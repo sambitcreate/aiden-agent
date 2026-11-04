@@ -409,7 +409,7 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
   - `botsApi.respondPlan({botId, planId, decision}): Promise<{ result: "done" | "not_waiting" }>`
   - `registerBotPlanHandlers<Event>(deps: { handle(channel, handler): void; plans: Pick<BotPlans, "respond"> }): void`
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - In `live-projection.test.ts`, with a fake `plan` dep:
     - `a plan change pushes a plan event`: a revision bump with the same `planId` emits one `plan` event, and the same revision emits none.
     - `a pending plan makes the Bot need you`: `needsYou(botId) === true` while pending and false once `active`.
@@ -417,10 +417,10 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
     - `stop calls onStopped after aborting a running reply`.
     - `stop on an idle Bot doesn't call it`.
   - In `main/handlers/bot-plans.test.ts` (register-and-invoke with a fake `handle`): `respond forwards a parsed decision` and `a malformed request throws`.
-- [ ] **Step 2: Run them and see them fail.** `npx tsx --test main/services/bot-runtime/live-projection.test.ts main/services/bot-runtime/bot-session-service.test.ts main/handlers/bot-plans.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement** the wiring.
-- [ ] **Step 4: Run** the same tests, then `npm run test:bot-runtime` and `npm run test:bot-pause`. Expected: PASS.
-- [ ] **Step 5: Register and commit:** "Show Bot plans live and end them on Stop".
+- [x] **Step 2: Run them and see them fail.** `npx tsx --test main/services/bot-runtime/live-projection.test.ts main/services/bot-runtime/bot-session-service.test.ts main/handlers/bot-plans.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement** the wiring.
+- [x] **Step 4: Run** the same tests, then `npm run test:bot-runtime` and `npm run test:bot-pause`. Expected: PASS.
+- [x] **Step 5: Register and commit:** "Show Bot plans live and end them on Stop".
 
 ### Task 7: The plan card on the Mac
 
@@ -570,3 +570,21 @@ Worker evidence: focused tools/policy/extension93, plans115, runtime393, whole t
 Root inspected all source/test changes and independently verified the combined correction: plans115, runtime393, Bots992, rules62 and registry15 passed, as did whole-project types, scoped lint for9 TypeScript files and whitespace checks. Rebuilt CLI:268 files/27MiB,186 tests with183 passed and3 existing PTY skips, plus CLI types passed. Production startup/access-card Cua E2E passed1. Logs use `/tmp/bot-plan-c-r1-parent-{plans,runtime,bots,rules,types,lint,registry}.log`, `/tmp/bot-plan-c-r1-cli-{build,tests,types}.log`, and `/tmp/bot-plan-c-r1-startup-cua.log`. The earlier access84/messaging89/pause34 runs belong to c9fc2045d and have not been relabeled as correction-head evidence.
 
 All six R1 Lows have concrete corrections and behavioral coverage. No R1 finding was rejected. The conservative cap-reservation and queued-termination contracts are unchanged. Fresh Opus5.5medium and DeepSeekV4.1Flashhigh correction reviews must read the original brief, both full R1 reports, dispositions and this delta before C6 begins. No source acceptance of the new checkpoint, phone/device, live-model, packaging or hosted-CI outcome is implied yet.
+
+
+### Gate 4 correction accepted, Task 6 started, 2026-11-04
+
+Both fresh reviewers accepted `054e953fa25e13ca98dafb994d9872ce2db626c3` with no blocking, important or Low correctness findings. All six R1 Lows are closed. Full reports are `/tmp/aiden-bot-plan-c-opus-r2.md` and `/tmp/aiden-bot-plan-c-deepseek-r2.md`. Accepted observations about conservative reservations, indefinite hash receipts, serialized revalidation/revocation latency and failed-write overlays remain documented. No physical/live/package/hosted-CI acceptance is implied.
+
+Task6 has started. The root's strict IPC handler has a missing-module RED and three passing real-store register/invoke tests for approval/decline/Stop, wrong-Bot/plan answers and malformed payloads (`/tmp/bot-plan-c-task6-ipc-{red,green}.log`). Production wiring supplies plan projection/attention, a change subscription with teardown, Stop/dismiss and idle termination, and deletion before final data erasure. Plan termination is fired with error reporting and is never awaited under the session serializer. Live-state/session behavior and final integration are still in progress. Tasks7–9/D remain pending.
+
+
+### Task 6 complete locally, 2026-11-04
+
+Live snapshots/events expose only BotPlanView. Pending plans contribute Waiting for you/Needs you, including offscreen summary and inbox reads. Identity/revision changes and clear events are serialized per feed; plan attention broadcasts only botId and subscriptions have teardown. The strict desktop response IPC is registered and the renderer wrapper forwards only botId/planId/decision. The new handler and lifecycle tests are registered in test:bot-plans and the CI lane.
+
+Real lifecycle tests caught an integration hazard: a service can report idle before recovering an unfinished run, and natural completion reaches projection onRunSettled rather than service.awaitReply. The new pure bot-plans/lifecycle.ts adapter preserves initial idle approval, ends observed running-to-idle or actual projection settlement, routes successful Stop/Dismiss to stopped, reports asynchronous persistence failures and never awaits a plan serial in a session callback. Main and the real service/projection integration tests use this same adapter. Delete forgets plans before data erasure; shutdown clears ephemeral grants/observation while leaving recoverable stored approvals intact.
+
+Parent final validation: plans123, runtime403, pause34, registry15, full types and scoped lint15 files passed. Real combined session/lifecycle/IPC tests passed46. Rebuilt CLI268 files/27MiB and full186 tests with183 passed/3 existing PTY skips, plus CLI types, passed. Cua production startup/access-card E2E passed1. Logs: `/tmp/bot-plan-c-task6-parent-{plans,runtime,pause,types,lint,registry}.log`, `/tmp/bot-plan-c-task6-root-lifecycle-integrated.log`, `/tmp/bot-plan-c-task6-cli-{build,tests,types}.log`, `/tmp/bot-plan-c-task6-startup-cua.log`. Root IPC/lifecycle missing-module REDs are `/tmp/bot-plan-c-task6-{ipc,lifecycle}-red.log`; worker behavioral REDs and all fixture corrections are documented in `/tmp/aiden-bot-plan-c-task6-live-handoff.md`.
+
+No Remote/native DTO or revision changed. The Mac card is Task7, capability-gated Remote/native support is Task8, and complete C review remains Gate5 after Task9. No new phone, physical-device, live-provider, package/release or hosted-CI acceptance is claimed.
