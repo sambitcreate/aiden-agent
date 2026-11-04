@@ -180,3 +180,19 @@ for (const toolName of ["calendar__create_event", "computer_use"]) {
     assert.deepEqual(bridge.pending(), [], "remembered classes remain fenced by the damaged evidence");
   });
 }
+
+
+for (const prepared of [false, true]) {
+  test(`bridge: expiry settles a held automatic release without waiting for its callback (prepared=${prepared})`, async () => {
+    const bridge = createBotApprovals({ publish() {} });
+    let complete!: (value: BotApprovalDecision | undefined) => void;
+    const pending = bridge.request({ ...rememberedRequest(), prepareAllowListRelease: () =>
+      new Promise<BotApprovalDecision | undefined>(resolve => { complete = resolve; }) });
+    const releasing = bridge.releaseFromAllowList("w1", grant);
+    assert.equal(bridge.decide("w1", "deny", undefined, "expiry"), true);
+    assert.deepEqual(await pending, { id: "w1", authorizationFingerprint: "fp-w1", answer: "deny", source: "expiry" });
+    assert.equal(bridge.pending().length, 0);
+    complete(prepared ? { id: "automatic", authorizationFingerprint: "new", answer: "allow", source: "allow_list" } : undefined);
+    assert.equal(await releasing, false);
+  });
+}

@@ -25,7 +25,7 @@ you removed. See [Allowed without asking](bot-rules.md#allowed-without-asking).
 
 ## What an approval covers
 
-The grant applies to the file tools and the folder shown on the card. It does not grant a connection, browser sign-in, computer control or permission to approve another card. Protected Aiden storage stays protected, including during temporary Home or whole-Mac access and recursive file searches.
+The grant applies to the file tools and the folder shown on the card. It does not grant a connection, browser sign-in, computer control or permission to approve another card. Bot file tools cannot overwrite Aiden’s remembered approvals or folder-publication journal. Protected Aiden storage stays protected, including during temporary Home or whole-Mac access and recursive file searches.
 
 The model supplies a requested path, but the host resolves it and checks the real folder. A file path resolves to its containing folder. A symlink into Aiden's private storage is refused. If the folder is inside a larger approved root, Always is not offered for the larger root instead. Aiden does not widen the requested folder.
 

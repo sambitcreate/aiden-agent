@@ -29,7 +29,6 @@ import { createBotPlanLifecycle } from "../bot-plans/lifecycle.js";
 // schedules the background review, and compaction flushes memory and steers
 // its summary.
 
-import * as path from "node:path";
 import { app, BrowserWindow, ipcMain, logger, Notification, powerMonitor } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
 import { setBotFileToolProtectedRoots, setBotFileToolTemporaryPrivateRoots } from "../bot-file-tool-router.js";
@@ -43,13 +42,6 @@ import type { SpendingOwner } from "../spending-core.js";
 import { botRoutineTaskIdOf } from "../scheduled-bot-routines.js";
 import { isLocalModelProvider } from "../usage-accounting.js";
 import { aidenConfigDir } from "../aiden-config-dir.js";
-import { IMAGE_GENERATION_SETTINGS_FILE } from "../image-generation/settings-store.js";
-import {
-  LOCAL_CONFIG_FILENAME,
-  PORTABLE_CONFIG_FILENAME,
-  PROVIDER_MODEL_CACHE_FILENAME,
-  SETTINGS_FILENAME,
-} from "../portable-config-core.js";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
@@ -57,7 +49,7 @@ import { connectionSourceIdFor, resolveConnectCardStatus } from "../bot-runtime-
 import { botRoutinesGoAhead, defaultBotRules } from "../../../renderer/shared/bot-rules.js";
 import { botApplicationService } from "../bot-application-service-main.js";
 import { botCapabilityStore, botManagedWorkspace, botServiceRoot } from "../bot-capability-services-main.js";
-import { botServiceProtectedRoot } from "../bot-protected-settings.js";
+import { desktopBotProtectedRoots } from "../bot-desktop-protected-settings.js";
 import { configStore } from "../config-store.js";
 import { createBotConnectionDismissalStore } from "../bot-connection-dismissals.js";
 import { botPauses, isBotPaused } from "../bot-pause-main.js";
@@ -134,16 +126,7 @@ const profileDir = () => app.getPath("userData");
 // Aiden's settings files and Bot storage (definitions, access state, pauses;
 // not the Bots' own homes) are fenced the same way, so a Bot cannot change app
 // settings or its own access by editing them.
-setBotFileToolProtectedRoots(() => [
-  path.join(profileDir(), "bots"),
-  path.join(profileDir(), "bots.json"),
-  botServiceProtectedRoot(botServiceRoot()),
-  path.join(aidenConfigDir(), PORTABLE_CONFIG_FILENAME),
-  path.join(profileDir(), SETTINGS_FILENAME),
-  path.join(profileDir(), LOCAL_CONFIG_FILENAME),
-  path.join(profileDir(), PROVIDER_MODEL_CACHE_FILENAME),
-  path.join(profileDir(), IMAGE_GENERATION_SETTINGS_FILE),
-]);
+setBotFileToolProtectedRoots(() => desktopBotProtectedRoots(profileDir(), aidenConfigDir(), botServiceRoot()));
 // Temporary Home/whole-Mac access must not expose any app-private store.
 setBotFileToolTemporaryPrivateRoots(() => botAccessPrivateRoots(profileDir(), aidenConfigDir()));
 // A Bot's replies and routines wait out provider usage limits like a chat's.

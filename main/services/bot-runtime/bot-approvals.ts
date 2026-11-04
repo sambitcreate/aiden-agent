@@ -145,7 +145,8 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
     request, requestOutcome: request,
     decide(id, decision, scope, source = "person") {
       const state = waiting.get(id);
-      if (!state || state.claimed) return false;
+      // Expiry grants nothing and must be able to withdraw a release held across an await.
+      if (!state || (state.claimed && !(source === "expiry" && decision === "deny"))) return false;
       state.claimed = true; state.source = source;
       if (state.prompt) state.prompt.decisionSource = source;
       return coordinator.decideAsHost(id, decision === "allow", scope ? { scope } : undefined);

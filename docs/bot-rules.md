@@ -136,14 +136,18 @@ Use **Allowed without asking** on a Bot's Profile to review and remove app actio
 
 Choosing Always saves that allowance for this Bot. Allow once keeps the card
 for next time; when an offer was present, the Bot may mention the option in
-one short sentence, at most once a week for that class. Expiry and automatic
+one short sentence, at most once a week for that class. Decisions on a
+Bot-message turn still count, but do not send or consume that hint because the
+reply goes to another Bot. Expiry and automatic
 answers do not count as your approvals or denials. A denial withholds an
 offer for 14 days. Transport retries and recovery do not count a choice twice.
 
 Remembered entries follow current access, rules, routine behavior and approved
 plan coverage. They apply to eligible calls on every turn kind, but never
 provide a new tool or override a locked rule, a rule-made ask, a hand-off or
-Computer Use on your Mac. If rules or page binding change while a card waits,
+Computer Use on your Mac. Actions on payment-provider hosts, including payment
+subdomains of an otherwise eligible site, never use remembered approval or
+offer Always. If rules or page binding change while a card waits,
 Aiden checks again before saving Always or running the action. If saving
 fails, the current one-time answer still applies; it does not promise a saved
 entry.
@@ -162,7 +166,9 @@ count. Home or another folder without an Always choice never offers the nudge.
 The CLI host has no remembered-approval port. Counts, saved entries and replay
 receipts stay in the host profile; recovery acknowledges history and never
 recreates removed access. If remembered-approval evidence is damaged,
-remembered approvals fail closed. Rule-made and Computer Use cards still work.
+remembered approvals fail closed. Bot file tools cannot write the remembered
+approval store or folder-publication journal, including through symlinks or
+codemode. Rule-made and Computer Use cards still work.
 Deleting a Bot preserves the damaged evidence and continues removing that Bot’s
 data; a genuine storage-write failure still requires deletion to be retried.
 

@@ -155,6 +155,8 @@ export interface BotAllowListRelease {
  * consentRevision atomically at first publication; current-book reads cannot replace it. */
 export interface BotApprovalSettlementInput {
   botId: string;
+  /** Host-owned turn routing. Bot-message replies cannot deliver the nudge to the person. */
+  hintEligible?: boolean;
   remember: NonNullable<BotApprovalRequirement["remember"]>;
   requirements?: BotApprovalRequirements;
   decision: BotApprovalDecision;
@@ -849,7 +851,8 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       fingerprint = evidenceOf(approval).authorizationFingerprint;
     }
     if (answer.id !== memo.waitId || answer.authorizationFingerprint !== fingerprint) return { block: "This approval decision belongs to another authorization attempt." };
-    if (expired(await runOwner(api, context))) return { block: "This Bot message expired. The approval window ended." };
+    const settlementOwner = await runOwner(api, context);
+    if (expired(settlementOwner)) return { block: "This Bot message expired. The approval window ended." };
     const cacheKey = `aiden.approval.settled:${answer.id}:${answer.authorizationFingerprint}`;
     let settlement: BotApprovalSettlement = {};
     if (capturedRemember && deps.settleApproval) {
@@ -882,6 +885,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         let result: BotApprovalSettlement;
         try {
           result = await deps.settleApproval(structuredClone({ botId, remember: capturedRemember,
+            hintEligible: !settlementOwner.inputs.some(input => { const turn = botMessageTurnOf(input.requestId); return turn.kind === "message" || turn.kind === "reply"; }),
             ...(requirements ? { requirements } : {}), decision: answer }), validation?.context);
         } catch (error) {
           if (publicationChanged) return authorizeTool(call, api, context, true, attempt + 1);

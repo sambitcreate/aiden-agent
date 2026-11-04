@@ -43,3 +43,12 @@ test("unsupported surfaces, tools, identities and URLs have no class", () => {
   }
   assert.equal(botApprovalTargetOf("browser_type", { surface: "browser", tool: "browser_click", url: "https://amazon.com" }), undefined);
 });
+
+
+test("payment providers never become remembered classes, while ordinary sibling sites stay eligible", () => {
+  for (const host of ["pay.google.com", "checkout.shopify.com", "pay.shopify.com", "paypal.com", "pay.google.com."]) {
+    assert.equal(botApprovalTargetOf("browser_click", { surface: "browser", tool: "browser_click", url: `https://${host}/checkout` }), undefined, host);
+  }
+  assert.deepEqual(botApprovalTargetOf("browser_click", { surface: "browser", tool: "browser_click", url: "https://mail.google.com/inbox" })?.target,
+    { kind: "site", host: "mail.google.com", action: "click" });
+});

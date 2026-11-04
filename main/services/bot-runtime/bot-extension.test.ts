@@ -1730,3 +1730,31 @@ for (const answer of ["allow", "deny"] as const) {
     } finally { await harness.close(ctx); }
   });
 }
+
+
+for (const kind of ["person", "request", "reply"] as const) {
+  test(`D: hint eligibility follows the actual host input routing (${kind})`, async () => {
+    const tool = countingTool("calendar__create_event");
+    const deps = recordingDeps({ tools: [{ tool, replay: "unsafe" }], policy: () => ({ allowed: true,
+      approval: { summary: "Create event", remember: { target: D_TARGET, title: "Create event", offer: { count: 3 } } } }) });
+    let eligible: boolean | undefined;
+    const extended = { ...deps, now: () => 1, settleApproval: async (input: import("./bot-extension.js").BotApprovalSettlementInput) => {
+      eligible = input.hintEligible;
+      return input.hintEligible === false ? {} : { hint: "Aiden note: Tell the person" };
+    } };
+    const faux = createFauxModels([fauxAssistantMessage([fauxToolCall(tool.name, { text: "event" })], { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
+    const { harness, root } = await memoryHarness(extended, faux);
+    const deliveryId = "00112233-4455-4677-8899-aabbccddeeff";
+    try {
+      await (await root.submit({ type: "input", content: "Create an event",
+        ...(kind === "person" ? { requestId: "person-input" } : {
+          requestId: kind === "request" ? `bot:J:1:${deliveryId}` : `botreply:${deliveryId}`,
+          entry: { kind: "aiden.bot-message-input", data: { kind, deliveryId, botId: "J", botName: "Jester", text: "Create an event", deadline: 100 } },
+        }),
+      }, ctx)).wait(ctx);
+      assert.equal(eligible, kind === "person");
+      assert.equal(tool.executions.length, 1);
+      assert.equal(resultText((await toolResults(root))[0]).includes("Aiden note:"), kind === "person");
+    } finally { await harness.close(ctx); }
+  });
+}

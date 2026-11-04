@@ -119,9 +119,9 @@ export function createBotAllowList(deps: BotAllowListDeps): BotAllowList {
         place: "Allowed without asking on your profile" });
       const hint = !savedDecision && remember.offer && decision.source === "person" && decision.answer === "allow" ? await hintDisplay() : undefined;
       const result = await deps.tallies.record(botId, target, { ...decision, offered: prior?.offered ?? !!remember.offer,
-        ...(publicationContext ? { publicationContext } : {}) }, { origin: "live", replayOffer: "stored", ...(hint ? { hint } : {}) });
+        ...(publicationContext ? { publicationContext } : {}) }, { origin: "live", replayOffer: "stored", hintEligible: input.hintEligible ?? true, ...(hint ? { hint } : {}) });
       if (!always) {
-        if (decision.source !== "person" || decision.answer !== "allow" || result.hintCount === undefined) return {};
+        if (input.hintEligible === false || decision.source !== "person" || decision.answer !== "allow" || result.hintCount === undefined) return {};
         return { hint: result.hint ?? botApprovalNudgeHint({ ...(hint ?? await hintDisplay()), count: result.hintCount }) };
       }
       let guardRefused = false;

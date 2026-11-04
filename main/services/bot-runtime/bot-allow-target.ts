@@ -1,5 +1,6 @@
 import type { BotApprovalRuleTarget } from "../../../renderer/shared/tool-approval-scope.js";
 import type { BotClassifiableAction } from "../bot-rules/classify.js";
+import { isPaymentHost } from "../bot-rules/words.js";
 import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
 
 const EXCLUDED = new Set([COMPUTER_USE_TOOL_NAME, "computer", "computer_shell", "run_command", "share_image"]);
@@ -20,6 +21,7 @@ export function botApprovalTargetOf(
   try {
     const url = new URL(action.url);
     if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    if (isPaymentHost(url.hostname)) return undefined;
     const host = url.hostname.toLowerCase().replace(/^www\./u, "");
     if (!host || host.length > 253 || !/^[a-z0-9.-]+$/u.test(host)) return undefined;
     const verb = { browser_click: "click", browser_type: "type", browser_press: "press" } as const;

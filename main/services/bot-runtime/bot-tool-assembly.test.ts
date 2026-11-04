@@ -2223,3 +2223,63 @@ for (const drift of ["none", "rules", "authority", "page", "ingress", "revoked",
     } finally { await harness.close(ctx); }
   });
 }
+
+
+for (const saved of [true, false]) {
+  test(`allow list: payment-host clicks always ask without consulting saved consent or repeat counts (saved=${saved})`, async () => {
+    const book = allowBook();
+    if (!saved) book.remove();
+    const f = allowFixture(book, { toolName: "browser_click", approvalFor: async () => ({
+      approval: { summary: "Click Confirm" },
+      action: { surface: "browser", tool: "browser_click", url: "https://pay.google.com/checkout", field: { accessibleName: "Confirm" } },
+      browserTarget: { workspaceId: "browser", tabId: "t1", url: "https://pay.google.com/checkout", documentRevision: "d1", controlRevision: 0 },
+    }) });
+    await runAllowed(f, 4);
+    assert.equal(f.tool.executions.length, 4, "each action runs only after its ordinary approval");
+    assert.equal(f.deps.approvals.length, 4);
+    assert.ok(f.deps.approvals.every(card => card.always === undefined));
+    assert.deepEqual(book.calls, [], "no matches, offers, counts or usage on payment hosts");
+    const decision = await f.deps.checkPolicy("bot-1", "browser_click", f.check);
+    assert.ok(decision.allowed && decision.approval);
+    assert.equal(decision.approval.remember, undefined);
+  });
+}
+
+test("allow list: ordinary mail subdomains retain remembered browser consent", async () => {
+  const f = allowFixture(allowBook(), { toolName: "browser_click", approvalFor: async () => ({
+    approval: { summary: "Click Archive" },
+    action: { surface: "browser", tool: "browser_click", url: "https://mail.google.com/inbox" },
+    browserTarget: { workspaceId: "browser", tabId: "t1", url: "https://mail.google.com/inbox", documentRevision: "d1", controlRevision: 0 },
+  }) });
+  await runAllowed(f);
+  assert.equal(f.tool.executions.length, 1);
+  assert.equal(f.deps.approvals.length, 0);
+  assert.deepEqual(f.book.uses, [["bot-1", "r1"]]);
+});
+
+
+test("allow list: actual saved payment entries cannot suppress cards while a saved mail entry still does", async () => {
+  let document = emptyToolApprovalRulesDocument(), id = 0;
+  const store: ToolApprovalRuleStore = { load: async () => structuredClone(document), update: async mutation => {
+    const draft = structuredClone(document), result = await mutation(draft); document = draft; return result;
+  } };
+  const rules = new ToolApprovalRuleBook(store, () => new Date("2026-11-04T12:00:00Z"), () => `rule${++id}`, { knownBot: async () => true });
+  for (const host of ["pay.google.com", "checkout.shopify.com", "mail.google.com"]) {
+    const target = { kind: "site", host, action: "click" } as const;
+    assert.equal((await rules.grantBot("bot-1", target, `Click on ${host}`, `saved-${host}`)).status, "published");
+    assert.ok(await rules.matchBot("bot-1", target));
+    const book = allowBook();
+    book.port = { consentRevision: (...args) => rules.botConsentRevision(...args), match: (...args) => rules.matchBot(...args),
+      offer: async () => ({ count: 3 }), used: (...args) => rules.recordBotUse(...args) };
+    const f = allowFixture(book, { toolName: "browser_click", approvalFor: async () => ({
+      approval: { summary: "Click Confirm" }, action: { surface: "browser", tool: "browser_click", url: `https://${host}/` },
+      browserTarget: { workspaceId: "browser", tabId: "t1", url: `https://${host}/`, documentRevision: "d1", controlRevision: 0 },
+    }) });
+    await runAllowed(f);
+    assert.equal(f.tool.executions.length, 1);
+    const payment = host !== "mail.google.com";
+    assert.equal(f.deps.approvals.length, payment ? 1 : 0, host);
+    assert.ok(f.deps.approvals.every(card => card.always === undefined));
+    assert.equal((await rules.matchBot("bot-1", target))?.uses, payment ? 0 : 1, host);
+  }
+});

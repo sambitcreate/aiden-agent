@@ -39,6 +39,8 @@ export function botApprovalNudgeHint(input: BotApprovalHintContext & { count: nu
 }
 export interface BotApprovalTallyResult { counted: boolean; hintCount?: number; hint?: string }
 export interface BotApprovalRecordingContext {
+  /** A person decision still counts when its task reply goes to another Bot, but cannot consume the hint. */
+  hintEligible?: boolean;
   /** Main-only provenance of this bookkeeping call, independent of event time. Defaults to live. */
   origin?: "live" | "historical";
   /** A recomputed card offer is not new person consent. All other receipt identity checks remain strict. */
@@ -339,8 +341,9 @@ export function createBotApprovalTallies(options: { profileDir(): string; now?()
         answer: decision.answer, source: decision.source, offered: decision.offered };
       const decidedAt = decision.decidedAt;
       const origin = recordingContext?.origin ?? "live", replayOffer = recordingContext?.replayOffer;
+      const hintEligible = recordingContext?.hintEligible ?? true;
       const hint = recordingContext?.hint ? { ...recordingContext.hint } : undefined;
-      if ((origin !== "live" && origin !== "historical") || (replayOffer !== undefined && replayOffer !== "stored") ||
+      if (typeof hintEligible !== "boolean" || (origin !== "live" && origin !== "historical") || (replayOffer !== undefined && replayOffer !== "stored") ||
         (hint && (!safePublicationDisplay(hint.label) || !safePublicationDisplay(hint.choice) ||
           (hint.place !== undefined && !safePublicationDisplay(hint.place))))) throw new Error("Invalid Bot approval recording context.");
       let publicationContext: BotApprovalPublicationContext | undefined;
@@ -376,7 +379,7 @@ export function createBotApprovalTallies(options: { profileDir(): string; now?()
           ...(publicationContext ? { publicationContext } : {}),
           ...(captured.source === "person" && captured.answer === "allow_always" ? { publication: "pending" as const } : {}) };
         if (captured.source === "person") {
-          if (captured.answer === "allow" && captured.offered && origin === "live" && at <= observedAt &&
+          if (captured.answer === "allow" && captured.offered && origin === "live" && hintEligible && at <= observedAt &&
             at >= observedAt - BOT_APPROVAL_NUDGE_WINDOW_MS && allowed.length >= BOT_APPROVAL_NUDGE_THRESHOLD && !denied &&
             (hintedAt === undefined || at - hintedAt >= BOT_APPROVAL_HINT_COOLDOWN_MS)) {
             result.hintCount = allowed.length + 1;

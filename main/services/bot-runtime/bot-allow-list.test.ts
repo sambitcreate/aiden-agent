@@ -435,3 +435,16 @@ for (const action of ["click", "type", "press"] as const) {
     assert.ok(rule!.label.length <= 200);
   });
 }
+
+
+test("service: a Bot-message decision counts but leaves the weekly person hint available", async t => {
+  const f = await fixture(t); await f.seed();
+  const botTurn = { ...await f.input("bot-turn-fourth", "allow", true), hintEligible: false };
+  assert.deepEqual(await f.service.settle(botTurn), {});
+  assert.deepEqual(await f.service.offer("bot", CAL), { count: 4 });
+  assert.deepEqual(await createBotAllowList(f.deps).settle(botTurn), {});
+  const personTurn = { ...await f.input("person-fifth", "allow", true), hintEligible: true };
+  const result = await f.service.settle(personTurn);
+  assert.match(result.hint!, /5 times in the last 14 days/u);
+  assert.deepEqual(await createBotAllowList(f.deps).settle(personTurn), result);
+});
