@@ -2,10 +2,7 @@
 
 ## Unreleased
 
-### 2026-11-04 — Verified Calendar watch support
-
-- Supporting Mac and Linux Electron hosts now offer Composio Calendar sources after authenticated exact-account/list/events/GET acceptance. Existing Watches controls can discover, preview and manage those sources; no new native contract revision is needed. iMCP Mail remains Mac-only.
-- Watch diagnostics report only their own inspection/check outcome and do not authorize a source or change its availability.
+- **2026-11-04 — Verified Calendar watch support.** Supporting Mac and Linux Electron hosts now offer Composio Calendar sources after authenticated exact-account/list/events/GET acceptance. Existing Watches controls can discover, preview and manage those sources; no new native contract revision is needed. iMCP Mail remains Mac-only. Watch diagnostics report only their own inspection/check outcome and do not authorize a source or change its availability.
 
 
 - Remote revision 56: full per-routine model, thinking and explicit fallback management for existing scheduled, event and connected-app watch routines; host-projected choices and recent chosen/actual model and timing facts. Protected drafts and frozen CAS requests survive disconnect/restart, and stale choices require review. Interrupted-work Resume checks unconfirmed provider cost and requires explicit acknowledgement when needed; unknown requests keep their exact interrupted-submission and cost-receipt preconditions, consent body and UUID. A stale confirmation cannot authorize a newer unconfirmed cost on the same interrupted submission. Resume preflight and consent are scoped to one active, visible chat visit while background hand-off updates continue. First typed unknown/in-flight outcomes retain the exact pending Resume even on HTTP 409. Pending Resume blocks capability-loss fallback, and replayed historical receipts reconcile current session state passively. Profile unpause and older-host wire behavior remain unchanged.
