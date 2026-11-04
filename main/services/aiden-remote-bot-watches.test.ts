@@ -11,11 +11,14 @@ import { AIDEN_REMOTE_CONTRACT_REVISION, type AidenRemoteCapability } from "./ai
 import { BotConnectorWatchError, createBotConnectorWatchService } from "./bot-routine-events/connector-service.js";
 import { createBotEventRoutineStore } from "./bot-routine-events/store.js";
 import type { BotConnectorWatchBinding } from "./bot-routine-events/connector-types.js";
+import { electronConnectorWatchRemotePorts } from "./bot-routine-events/connector-watch-startup.js";
+import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 
 const fixture = JSON.parse(readFileSync(new URL("../../protocol/aiden-remote/v1/fixtures/bot-watches.json", import.meta.url), "utf8"));
 const token = "a".repeat(43);
-async function server(t: test.TestContext, options: { wired?: boolean; capabilities?: AidenRemoteCapability[]; accepted?: boolean; watches?: NonNullable<AidenRemoteRouterDependencies["botWatches"]>; authorization?: { revoked: boolean; capabilities: AidenRemoteCapability[] } } = {}) {
+async function server(t: test.TestContext, options: { host?: { bots: boolean }; wired?: boolean; capabilities?: AidenRemoteCapability[]; accepted?: boolean; watches?: NonNullable<AidenRemoteRouterDependencies["botWatches"]>; authorization?: { revoked: boolean; capabilities: AidenRemoteCapability[] } } = {}) {
   let calls = 0;
+  let loads = 0;
   const watches: NonNullable<AidenRemoteRouterDependencies["botWatches"]> = {
     list: async () => { calls++; return structuredClone(fixture.list); },
     discoverSources: async () => { calls++; return structuredClone(fixture.sources); },
@@ -23,15 +26,30 @@ async function server(t: test.TestContext, options: { wired?: boolean; capabilit
     update: async () => { throw new BotConnectorWatchError("revision_conflict", "Refresh this watch.", { currentRevision: fixture.watch.revision }); },
     setEnabled: async () => structuredClone(fixture.watch), remove: async () => structuredClone(fixture.removal), testCheck: async () => structuredClone(fixture.test), runNow: async () => structuredClone(fixture.run),
   };
+  const watchPorts = options.host ? await electronConnectorWatchRemotePorts(options.host, async () => { loads++; return options.watches ?? watches; })
+    : options.wired === false ? {} : { botWatches: options.watches ?? watches };
   const handler = createAidenRemoteRequestHandler({ instanceId: "instance-test", displayName: () => "Host", appVersion: "0.63.0", devices: {
     acquireDeviceAuthorization: () => () => {}, authenticate: async (credential) => credential === token ? { id: "device-test", type: "iphone", revoked: options.authorization?.revoked ?? false, acceptsBotCapabilities: options.accepted ?? true,
       capabilities: new Set(options.authorization?.capabilities ?? options.capabilities ?? ["server:read", "bot:read", "bot:write", "bot:watches"]) } : null,
-  }, pairing: { exchange: async () => { throw new Error("unused"); } }, connectionMode: () => "lan", now: Date.now, log() {}, ...(options.wired === false ? {} : { botWatches: options.watches ?? watches }) });
+  }, pairing: { exchange: async () => { throw new Error("unused"); } }, connectionMode: () => "lan", now: Date.now, log() {}, ...watchPorts });
   const app = createServer(handler); await new Promise<void>((resolve) => app.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => { app.close(() => resolve()); app.closeAllConnections(); }));
   const address = app.address(); if (!address || typeof address === "string") throw new Error("No listener");
-  return { calls: () => calls, request: (path: string, method = "GET", body?: unknown, signal?: AbortSignal) => fetch(`http://127.0.0.1:${address.port}/api/aiden/v1${path}`, { method, signal, headers: { authorization: `Bearer ${token}`, "aiden-protocol-version": "1", ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }) };
+  return { calls: () => calls, loads: () => loads, request: (path: string, method = "GET", body?: unknown, signal?: AbortSignal) => fetch(`http://127.0.0.1:${address.port}/api/aiden/v1${path}`, { method, signal, headers: { authorization: `Bearer ${token}`, "aiden-protocol-version": "1", ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }) };
 }
+
+test("Electron watch routes are available on Mac and Linux Bots hosts without loading them on unsupported hosts", async (t) => {
+  for (const host of [hostPlatformCapabilities("darwin", "arm64"), hostPlatformCapabilities("linux", "x64"), hostPlatformCapabilities("linux", "arm64"), hostPlatformCapabilities("win32", "x64"), { bots: false }]) {
+    const api = await server(t, { host });
+    const info = await (await api.request("/server")).json();
+    assert.equal(info.serverCapabilities.includes("bot:watches"), host.bots);
+    assert.equal(api.loads(), host.bots ? 1 : 0);
+    assert.equal(api.calls(), 0, "loading route ports and negotiating never discovers or reads a source");
+    const response = await api.request("/bots/bot_fixture/watches");
+    assert.equal(response.status, host.bots ? 200 : 404);
+    assert.equal(api.calls(), host.bots ? 1 : 0);
+  }
+});
 
 test("new watch capability is advertised only with complete host routes and a Bot-negotiating device", async (t) => {
   assert.equal(AIDEN_REMOTE_CONTRACT_REVISION, fixture.contractRevision);

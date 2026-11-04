@@ -410,8 +410,12 @@ test("public projection derives fixed messages/status and cannot expose private 
   const result = await checkComposioCalendarRead(fixture().port, options());
   const projected = publicComposioCalendarReadCheckResult({ ...result, message: "untrusted secret", available: false });
   assert.equal("privateProof" in projected, false); assert.equal(projected.message.includes("untrusted"), false); assert.equal(projected.available, false);
+  assert.equal(projected.message, "Calendar's exact-account read check passed.");
+  const empty = publicComposioCalendarReadCheckResult({ code: "get_proof_incomplete" });
+  assert.equal(empty.message, "The Calendar read check could not finish because no eligible timed event was available in the next 24 hours.");
   const malformed = publicComposioCalendarReadCheckResult({ checkedAt: NaN, code: "invented" as never, status: "verified" });
   assert.equal(malformed.checkedAt, 0); assert.equal(malformed.code, "inspection_failed"); assert.equal(malformed.status, "unavailable");
+  assert.equal(malformed.message, "Calendar's exact-account reads could not be verified.");
 });
 
 test("explicit null response permits negative proof but an app-data object never does", async () => {

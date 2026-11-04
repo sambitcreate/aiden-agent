@@ -290,6 +290,7 @@ test("the public projection contains only safe facts even if a caller attaches p
   const view = publicComposioWatchProbeResult({ ...result, secret: "credential-fixture" } as ComposioWatchProbeResult);
   assert.deepEqual(Object.keys(view).sort(), ["available", "checkedAt", "code", "message", "status"]);
   assert.equal(view.checkedAt, 321); assert.equal(view.available, false);
+  assert.equal(view.message, "Composio’s watch schemas were inspected. This metadata check does not verify account routing.");
   assert.ok(!JSON.stringify(view).includes("SchemaHash")); assert.ok(!JSON.stringify(view).includes("credential-fixture"));
   const invalid = publicComposioWatchProbeResult({ ...result, code: "credential-fixture", status: "credential-fixture", checkedAt: Infinity } as unknown as ComposioWatchProbeResult);
   assert.equal(invalid.code, "inspection_failed"); assert.equal(invalid.status, "unavailable"); assert.equal(invalid.checkedAt, 0);

@@ -3,7 +3,7 @@ import test from "node:test";
 import { verifyCalendarContract } from "./composio-calendar-contract.js";
 import { syntheticCalendarMetadata, syntheticCalendarSchemas } from "./composio-calendar-test-support.js";
 import {
-  COMPOSIO_CALENDAR_ADAPTER, buildComposioCalendarExecutorRequest, discoverComposioCalendarSources,
+  buildComposioCalendarExecutorRequest, discoverComposioCalendarSources,
   parseComposioCalendarBaseline, readComposioCalendarWatch,
   type ComposioCalendarBaseline, type ComposioCalendarDiscoveryPort, type ComposioCalendarRead,
   type ComposioCalendarReadPort, type ComposioCalendarSource,
@@ -47,8 +47,7 @@ function validatedPages<T extends { port: ComposioCalendarReadPort }>(value: T, 
   return value;
 }
 
-test("Calendar remains gated and its builder emits one explicit-account curated read", () => {
-  assert.equal(COMPOSIO_CALENDAR_ADAPTER.available, false);
+test("Calendar's builder emits one explicit-account curated read", () => {
   const request = buildComposioCalendarExecutorRequest({ kind: "listEvents", accountId: "chosen_account", calendarId: "explicit@example.test", timeMin: "2026-11-03T15:00:00Z", timeMax: "2026-11-03T16:00:00Z", timezone: "UTC", pageToken: "opaque==/cursor" });
   assert.equal(request.tools.length, 1); assert.equal(request.sync_response_to_workbench, false);
   assert.equal(request.tools[0].account, "chosen_account"); assert.equal(request.tools[0].tool_slug, "GOOGLECALENDAR_EVENTS_LIST");

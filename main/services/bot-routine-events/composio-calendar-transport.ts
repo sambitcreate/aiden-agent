@@ -1,5 +1,5 @@
-// Reviewed composition candidate only. Nothing installs this transport or derives
-// authority from a saved diagnostic. Host installation remains a separate gate.
+// Trusted Electron startup installs this lazy transport. Saved diagnostics never
+// authorize it; current source admission and schema checks fence every read.
 import type { ComposioCalendarHostTransport } from "./composio-calendar-host-port.js";
 import { boundedCalendarContractJson, verifyCalendarContract } from "./composio-calendar-contract.js";
 

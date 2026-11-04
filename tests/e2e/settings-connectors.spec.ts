@@ -113,8 +113,8 @@ test("Composio metadata and Calendar read checks are separate explicit Settings 
       "mcp:liveStatus": () => [{ serverId: saved.id, state: "connected", toolCount: 1 }],
       "mcp:save": () => { state.composioSaves!++; return saved; },
       "mcp:composioWatch:inspect": (_event, input) => {
-        if (input && typeof input === "object" && (input as { calendarRead?: unknown }).calendarRead === true) { state.composioReads!++; return { message: "Calendar read check completed." }; }
-        state.composioChecks!++; return { available: false, checkedAt: 1, status: "inspected", code: "account_routing_unverified", message: "Composio’s watch schemas were inspected. Exact account routing is not verified, so these watches remain unavailable." };
+        if (input && typeof input === "object" && (input as { calendarRead?: unknown }).calendarRead === true) { state.composioReads!++; return { message: "Calendar's exact-account read check passed." }; }
+        state.composioChecks!++; return { available: false, checkedAt: 1, status: "inspected", code: "account_routing_unverified", message: "Composio’s watch schemas were inspected. This metadata check does not verify account routing." };
       },
     };
     for (const [channel, handler] of Object.entries(handlers)) { ipcMain.removeHandler(channel); ipcMain.handle(channel, handler); }
@@ -130,12 +130,12 @@ test("Composio metadata and Calendar read checks are separate explicit Settings 
   await expect(tools.getByRole("switch")).toHaveCount(1);
   expect(await aiden.app.evaluate(() => (globalThis as { composioChecks?: number }).composioChecks)).toBe(0);
   await page.getByRole("button", { name: "Check watch support", exact: true }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Exact account routing is not verified" })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "This metadata check does not verify account routing" })).toBeVisible();
   expect(await aiden.app.evaluate(() => (globalThis as { composioChecks?: number }).composioChecks)).toBe(1);
   expect(await aiden.app.evaluate(() => (globalThis as { composioReads?: number }).composioReads)).toBe(0);
   await expect(page.getByText(/read your Calendar list and preview up to one day of events/u)).toBeVisible();
   await page.getByRole("button", { name: "Check Calendar reads", exact: true }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Calendar read check completed." })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "Calendar's exact-account read check passed." })).toBeVisible();
   expect(await aiden.app.evaluate(() => (globalThis as { composioReads?: number }).composioReads)).toBe(1);
   expect(await aiden.app.evaluate(() => (globalThis as { composioSaves?: number }).composioSaves)).toBe(0);
   await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(600, 900));

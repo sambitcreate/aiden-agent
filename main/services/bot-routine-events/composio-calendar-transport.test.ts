@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
+import fsPromises from "node:fs/promises";
+import http from "node:http";
+import https from "node:https";
+import childProcess from "node:child_process";
 import { verifyCalendarContract } from "./composio-calendar-contract.js";
 import { createComposioCalendarTransport } from "./composio-calendar-transport.js";
 import type { ComposioCalendarTransportContext } from "./composio-calendar-host-port.js";
 import { syntheticCalendarExecutor, syntheticCalendarMetadata, syntheticCalendarSchemas } from "./composio-calendar-test-support.js";
 import type { ComposioCalendarRead } from "./connector-watch-composio.js";
+import { installElectronConnectorWatchTransport } from "./connector-watch-startup.js";
+import { composioCalendarHostTransport } from "./composio-calendar-host-port.js";
 
 const request: ComposioCalendarRead = { kind: "listEvents", accountId: "explicit-account", calendarId: "explicit@example.test", timeMin: "2026-11-04T15:00:00Z", timeMax: "2026-11-04T16:00:00Z", timezone: "UTC" };
 function fixture() {
@@ -13,6 +20,37 @@ function fixture() {
   const context: ComposioCalendarTransportContext = { phase: "background", metadata, signal: new AbortController().signal, async assertCurrent() {}, async getSchemas() { schemas++; return response; }, async execute(read) { executions.push(read); return syntheticCalendarExecutor(read, { items: [] }); }, async currentAccounts() { searches++; throw new Error("Search cannot run in the background"); } };
   return { context, response, executions, expected: verifyCalendarContract(metadata, response).contract, counts: () => ({ searches, schemas }) };
 }
+test("Electron startup installs one lazy transport without file, credential, network or child-process work", async (t) => {
+  const f = fixture();
+  const io: string[] = [];
+  const forbidden = (name: string) => () => { io.push(name); throw new Error(`Unexpected startup I/O: ${name}`); };
+  let installed: ReturnType<typeof composioCalendarHostTransport>;
+  try {
+    t.mock.method(globalThis, "fetch", forbidden("fetch"));
+    t.mock.method(http, "request", forbidden("http"));
+    t.mock.method(https, "request", forbidden("https"));
+    t.mock.method(childProcess, "spawn", forbidden("spawn"));
+    t.mock.method(fs, "readFileSync", forbidden("readFileSync"));
+    t.mock.method(fs, "writeFileSync", forbidden("writeFileSync"));
+    t.mock.method(fsPromises, "readFile", forbidden("readFile"));
+    t.mock.method(fsPromises, "writeFile", forbidden("writeFile"));
+    t.mock.method(fsPromises, "mkdir", forbidden("mkdir"));
+    installElectronConnectorWatchTransport(false);
+    assert.equal(composioCalendarHostTransport(), undefined, "unsupported hosts install nothing");
+    installElectronConnectorWatchTransport(true);
+    installed = composioCalendarHostTransport();
+    assert.ok(installed);
+    installElectronConnectorWatchTransport(true);
+    assert.equal(composioCalendarHostTransport(), installed, "repeated startup preserves the exact transport");
+    assert.deepEqual(f.counts(), { searches: 0, schemas: 0 });
+    assert.deepEqual(f.executions, []);
+  } finally { t.mock.restoreAll(); }
+  assert.deepEqual(io, []);
+  const ready = await installed!.prepare(f.context, f.expected);
+  await ready.port.read(request, f.context.signal);
+  assert.equal(f.executions.length, 1, "the registered transport still performs the admitted fixed read when requested");
+  assert.deepEqual(f.counts(), { searches: 0, schemas: 2 });
+});
 test("background prepare/read revalidates fixed schemas and never Search", async () => {
   const f = fixture(), transport = createComposioCalendarTransport();
   const ready = await transport.prepare(f.context, f.expected);

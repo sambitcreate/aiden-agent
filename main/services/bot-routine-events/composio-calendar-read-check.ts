@@ -65,13 +65,13 @@ export interface ComposioCalendarReadCheckPort {
   readCalendar?(read: ComposioCalendarRead, sessionId?: string): Promise<unknown>;
 }
 function message(code: ComposioCalendarReadCheckCode): string {
-  if (code === "verified") return "Calendar's exact-account read check passed. Watch availability still requires the reviewed host integration.";
-  if (code === "get_proof_incomplete") return "Calendar's event GET proof is incomplete because no eligible timed event was available. Calendar watches remain unavailable.";
+  if (code === "verified") return "Calendar's exact-account read check passed.";
+  if (code === "get_proof_incomplete") return "The Calendar read check could not finish because no eligible timed event was available in the next 24 hours.";
   if (code === "needs_account_selection") return "More than one Calendar account is active. Choose an account before testing reads.";
   if (code === "no_active_account") return "No active Calendar account was returned. Review existing access in Composio.";
   if (code === "cancelled") return "Calendar read check was cancelled.";
   if (code === "timed_out") return "Calendar read check timed out. Try again in the foreground.";
-  return "Calendar's exact-account reads could not be verified. Calendar watches remain unavailable.";
+  return "Calendar's exact-account reads could not be verified.";
 }
 /** Fixed public projection; a diagnostic record can never enable this feature. */
 export function publicComposioCalendarReadCheckResult(value: Partial<ComposioCalendarReadCheckPublicResult>): ComposioCalendarReadCheckPublicResult {

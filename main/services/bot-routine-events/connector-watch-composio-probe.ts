@@ -126,7 +126,7 @@ export function publicComposioWatchProbeResult(result: ComposioWatchProbeResult)
   const status = code === "account_routing_unverified" ? "inspected" : code === "cancelled" ? "cancelled" : "unavailable";
   return { available: false, checkedAt: Number.isSafeInteger(result.checkedAt) && result.checkedAt >= 0 ? result.checkedAt : 0, status, code,
     message: status === "inspected"
-      ? "Composio’s watch schemas were inspected. Exact account routing is not verified, so these watches remain unavailable."
+      ? "Composio’s watch schemas were inspected. This metadata check does not verify account routing."
       : status === "cancelled" ? "Composio inspection was cancelled."
         : "Composio’s watch schema information is unavailable. Review its existing setup on this computer and try again." };
 }

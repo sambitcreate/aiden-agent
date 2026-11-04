@@ -1,12 +1,10 @@
-// GATED, offline Calendar translation. This module has no transport, credentials,
-// service grant or production availability. Fixtures establish candidate semantics,
-// not proof of the installed executor's account routing or response representation.
+// Pure Calendar translation. The host owns the guarded transport, current
+// schemas and source authority; this module never opens a connection or grants access.
 import { createHash } from "node:crypto";
 import { copyBoundedJson, utf8Size } from "../bounded-json.js";
 import { boundedConnectorText, connectorTextIsWellFormed } from "./connector-text.js";
 import { compareImcpWatch, connectorWatchJson, type ConnectorWatchChange, type ConnectorWatchItem } from "./connector-watch-imcp.js";
 
-export const COMPOSIO_CALENDAR_ADAPTER = Object.freeze({ revision: "composio-calendar-v1", available: false as const });
 export interface ComposioCalendarSource {
   accountId: string;
   calendarId: string;
@@ -111,8 +109,8 @@ export function parseComposioCalendarExecutorResponse(value: unknown, read: Comp
 }
 function executorResult(value: unknown, read: ComposioCalendarRead): RecordValue {
   const response = parseComposioCalendarExecutorResponse(value, read);
-  // Candidate forms are explicit and non-overlapping. Both remain gated until
-  // the installed operation's real output contract is independently accepted.
+  // Response forms are explicit and non-overlapping. The host validates each
+  // against the installed operation's current accepted output contract.
   if (response.successful !== undefined) {
     if (response.items !== undefined || response.id !== undefined || ["calendars", "calendarList", "calendar_list", "events"].some((key) => Object.prototype.hasOwnProperty.call(response, key))) return fail();
     const inner = action(response); noPartial(inner, true);

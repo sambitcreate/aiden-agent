@@ -137,7 +137,7 @@ test("ordinary host list/startup/watch checks never inspect Composio; only expli
   await assert.rejects(fs.stat(f.file), { code: "ENOENT" });
   const sources = await f.service.discoverSources(BOT);
   assert.equal(f.opened, 1); assert.equal(f.listed, 2); assert.equal(sources.choices.length, 0);
-  assert.match(sources.unavailableReasons[0]!, /Exact account routing is not verified/u);
+  assert.match(sources.unavailableReasons[0]!, /This metadata check does not verify account routing/u);
   assert.equal((await f.service.list(BOT)).templates.find((template) => template.id === "calendar_upcoming")!.available, false);
 });
 

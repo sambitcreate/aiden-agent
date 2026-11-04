@@ -16,7 +16,6 @@ import {
   LayoutDashboard,
   Lightbulb,
   ListTodo,
-  Mail,
   MessageSquare,
   Mic2,
   Monitor,
@@ -256,8 +255,8 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "botWatches",
     group: "control",
     title: "Connected-app watches",
-    description: "Choose a supported connected source in a Bot’s Profile, test its matching metadata, and tell the Bot what to do when it changes. Checks continue while Aiden is running and the owning computer is awake. Manage them from desktop or a paired phone.",
-    icon: Mail,
+    description: "Watch upcoming Calendar events on Mac or Linux, or a Mail mailbox on Mac. Choose the connected source in a Bot’s Profile, preview its matching metadata, and tell the Bot what to do. Checks continue while Aiden is running and the computer is awake. Manage them from desktop or a paired phone.",
+    icon: CalendarClock,
     size: "standard",
   },
   {

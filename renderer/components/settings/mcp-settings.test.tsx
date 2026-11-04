@@ -848,7 +848,7 @@ test("Composio has one service switch; explicit allowance replaces old individua
 
 test("Composio watch support inspection is explicit and never changes Bot or service access", async () => {
   const server = serverFromPreset(MCP_PRESETS.find((entry) => entry.id === "composio")!);
-  const message = "Composio’s watch schemas were inspected. Exact account routing is not verified, so these watches remain unavailable.";
+  const message = "Composio’s watch schemas were inspected. This metadata check does not verify account routing.";
   let release!: () => void;
   const pending = new Promise<void>((resolve) => { release = resolve; });
   const calls = mount({

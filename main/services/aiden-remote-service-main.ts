@@ -180,6 +180,7 @@ import {
   readUnderFreshBotRuntimeInventoryLease,
 } from "./bot-runtime-inventory-lease.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
+import { electronConnectorWatchRemotePorts } from "./bot-routine-events/connector-watch-startup.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
 import { AidenRemoteHostFeedService, hostFeedBotSignals } from "./aiden-remote-host-feed.js";
 import { createAidenRemoteHostFeedSource } from "./aiden-remote-host-feed-source.js";
@@ -1178,6 +1179,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             usage: usageStore,
             speech,
             readAloud,
+            ...await electronConnectorWatchRemotePorts({ bots: botsSupported }, async () =>
+              (await import("./bot-routine-events/sources-main.js")).botConnectorWatches),
             ...(botsSupported
               ? {
                   botFiles,
@@ -1186,7 +1189,6 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   botOpenWork: (await import("./bot-open-work/service-main.js")).botOpenWork,
                   botRoutineModels: { ...(await import("./bot-routine-models-main.js")).botRoutineModels, resumeStatus: async (botId: string) => (await (await import("./bot-runtime/bot-session-main.js")).botSessionRuntime()).executionResumeStatus(botId) },
                   botPeers: (await import("./bot-peers/service-main.js")).botPeers,
-                  ...(process.platform === "darwin" ? { botWatches: (await import("./bot-routine-events/sources-main.js")).botConnectorWatches } : {}),
                 }
               : {}),
             hostFeed,
