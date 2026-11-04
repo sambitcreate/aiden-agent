@@ -1,3 +1,5 @@
+import { createBotAccessRequests } from "./bot-access-requests.js";
+import { accessRequestPrompt } from "./test-support/access-request-fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createBotApprovals } from "./bot-approvals.js";
@@ -34,6 +36,7 @@ function setup() {
   const questions = createBotQuestions();
   const approvals = createBotApprovals({ publish() {}, withdraw() {} });
   const handoffs = createBotHandoffs();
+  const accessRequests = createBotAccessRequests();
   const issues = createBotIssueService({
     store: memoryIssueStore(),
     appendEntry: async () => undefined,
@@ -51,10 +54,11 @@ function setup() {
     questions,
     approvals,
     handoffs,
+    accessRequests,
     issues,
     broadcast: (channel, payload) => void sent.push({ channel, payload }),
   });
-  return { questions, approvals, handoffs, issues, sent, stop };
+  return { questions, approvals, handoffs, accessRequests, issues, sent, stop };
 }
 
 function handOff(handoffs: ReturnType<typeof createBotHandoffs>, botId: string, waitId: string, signal?: AbortSignal) {
@@ -215,4 +219,24 @@ test("an issue raised and settled each tell the sidebar, with only the Bot id", 
   stop();
   await issues.raise({ ...raised, dedupeKey: "routine:r2:failed", routineId: "r2" });
   assert.equal(sent.length, 2, "nothing is broadcast after the unsubscribe");
+});
+
+test("an access request opening, answer and withdrawal broadcast only the Bot id and cleanup stops it", async () => {
+  const { accessRequests, sent, stop } = setup();
+  const asked = accessRequests.request(accessRequestPrompt());
+  const waitId = accessRequests.pending()[0]!.waitId;
+  assert.deepEqual(sent, [{ channel: "bots:attention", payload: { botId: "bot:a" } }]);
+  await accessRequests.answer("bot:a", waitId, "not_now", async () => {});
+  await asked;
+  assert.deepEqual(sent[1], sent[0]);
+  const controller = new AbortController();
+  const withdrawn = accessRequests.request(accessRequestPrompt({ signal: controller.signal }));
+  controller.abort();
+  await assert.rejects(withdrawn);
+  assert.equal(sent.length, 4);
+  stop();
+  const later = accessRequests.request(accessRequestPrompt());
+  await accessRequests.answer("bot:a", accessRequests.pending()[0]!.waitId, "not_now", async () => {});
+  await later;
+  assert.equal(sent.length, 4);
 });

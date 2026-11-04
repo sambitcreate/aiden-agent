@@ -88,6 +88,33 @@ test("Bot file tools default to home and route an exact approved location", asyn
   }
 });
 
+test("late locations resolve per call and retain read, identity, privacy and redaction guards", async () => {
+  const value = await fixture();
+  try {
+    const stat = await fs.stat(value.documents, { bigint: true });
+    let location: import("./bot-file-tool-router.js").BotFileToolLocation | undefined;
+    const tools = buildBotFileTools({
+      defaultLocation: { id: "home", label: "Bot folder", root: value.home },
+      lateLocation: { id: "run.access", label: "Allowed for this task", resolve: async () => location },
+      protectedRoots: () => [value.outside],
+    });
+    const read = byName(tools, "read_file"), write = byName(tools, "write_file"), edit = byName(tools, "edit_file");
+    await assert.rejects(read.execute("r", { path: "identity.txt", location: "run.access" }), /Ask with request_access first/u);
+    location = { id: "run.access", label: "Allowed for this task", root: value.documents, access: "read", expectedIdentity: { device: String(stat.dev), inode: String(stat.ino) } };
+    assert.equal(textContent(await read.execute("r", { path: "identity.txt", location: "run.access" })), "documents");
+    await assert.rejects(write.execute("w", { path: "identity.txt", content: "changed", location: "run.access" }), /reading this folder only/u);
+    await assert.rejects(edit.execute("e", { path: "identity.txt", old_string: "documents", new_string: "changed", location: "run.access" }), /reading this folder only/u);
+    await write.execute("w", { path: "independent.txt", content: "fixed authority" });
+    assert.equal(await fs.readFile(path.join(value.home, "independent.txt"), "utf8"), "fixed authority");
+    await assert.rejects(read.execute("r", { path: "missing", location: "run.access" }), (error: Error) => !error.message.includes(value.documents));
+    location = { ...location, expectedIdentity: { device: String(stat.dev), inode: String(stat.ino + 1n) } };
+    await assert.rejects(read.execute("r", { path: "identity.txt", location: "run.access" }), /identity|changed|replaced/iu);
+    location = { id: "run.access", label: "Allowed for this task", root: "/", access: "write" };
+    await assert.rejects(write.execute("w", { path: path.join(value.outside, "forbidden.txt"), content: "x", location: "run.access" }), /cannot change them/u);
+    await assert.rejects(write.execute("w", { path: path.join(value.documents, ".agents/skill.txt"), content: "x", location: "run.access" }), /Skills need/u);
+  } finally { await fs.rm(value.parent, { recursive: true, force: true }); }
+});
+
 test("a full-Mac write into a Bot's session or memory files is refused, however the path is reached", async () => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-file-router-protected-"));
   const bots = path.join(parent, "profile", "bots");

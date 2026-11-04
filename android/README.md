@@ -9,3 +9,5 @@ Bot messages use existing labelled transcript rows, including bounded saved answ
 See the [Remote API guide](../docs/aiden-remote-api-v1.md) and [shared contract fixtures](../protocol/aiden-remote/v1/fixtures/contract.json).
 
 Run focused JVM tests from this directory with `./gradlew :app:testDebugUnitTest`. Simulator and JVM checks do not constitute physical-device or release acceptance.
+
+Hosts that announce Remote revision 55's `bot:access-requests` are asked for that capability in a separate foreground connection negotiation. Bot chats then show bounded access cards with only the host's offered **Not now**, **Always for this folder**, and **Allow once** actions. Whole-Mac cards offer no persistent grant. Answers keep the same idempotency key and body after an uncertain response. An expired card stays dismissed; other failures restore it unless a newer feed update has replaced it. Access-needed issue cards may offer **Allow this folder** for a persistable folder. Older hosts keep their existing behavior.

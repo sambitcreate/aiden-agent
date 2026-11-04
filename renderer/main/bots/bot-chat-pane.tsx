@@ -1,3 +1,5 @@
+import { AccessRequestCard } from "../../components/bots/access-request-card";
+import { useBotAccessRequestActions } from "./use-bot-access-request-actions";
 // A Bot's one conversation, rendered from the durable projection (`useBotLive`).
 // Sends go through `bots:send` with a fresh request UUID per message, so a retried
 // send never doubles. Stop, Resume and Dismiss map to their runtime actions.
@@ -1040,6 +1042,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const approvals = useBotApprovals(botId);
   const [answering, setAnswering] = React.useState(false);
   const findBar = useChatFind(botId);
+  const accessRequestActions = useBotAccessRequestActions(botId, live.snapshot?.accessRequest?.waitId);
   const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
 
   // The Bot's routines, read only when its chat shows a wake-up chip.
@@ -1119,6 +1122,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         approvals.prompts.length,
         snapshot?.question?.waitId,
         snapshot?.handoff?.waitId,
+        snapshot?.accessRequest?.waitId,
         snapshot?.activity?.phase,
         snapshot?.queued?.length ?? 0,
         pendingSends.length,
@@ -1179,6 +1183,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   }
 
   const question = snapshot.question;
+  const accessRequest = snapshot.accessRequest ?? null;
   const handoff = snapshot.handoff ?? null;
   const signInWaits = handoff?.kind === "sign_in";
   // A sign-in or a password-or-code card is answered on the card alone: whatever is typed here would reach the Bot.
@@ -1518,8 +1523,12 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const footer = (
     <div className="flex flex-col">
-      {approvals.prompts.length > 0 || handoff ? (
+      {approvals.prompts.length > 0 || handoff || accessRequest ? (
         <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2">
+          {accessRequest ? (
+            <AccessRequestCard key={accessRequest.waitId} request={accessRequest} botName={current.name} avatar={current.avatar}
+              busy={accessRequestActions.busy} onAnswer={(choice) => void accessRequestActions.answer(accessRequest, choice)} />
+          ) : null}
           {handoff ? (
             <HandoffCard
               key={handoff.waitId}

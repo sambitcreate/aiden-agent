@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import * as fs from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
+import { AidenRemoteStateRegistry, createDefaultAidenRemoteState } from "./aiden-remote-state.js";
+import { AidenRemoteApprovedRootService } from "./aiden-remote-approved-roots.js";
+import { fileBotFolderGrantJournal } from "./bot-folder-grant-journal.js";
 import {
   BOT_FULL_ACCESS_NOTICE_VERSION,
   type BotAccessUpdate,
@@ -22,6 +28,146 @@ import {
   createBotApplicationService,
   type BotApplicationDependencies,
 } from "./bot-application-service.js";
+
+async function folderFixture(t: import("node:test").TestContext) {
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "bot-folder-grant-")));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const folderPath = path.join(directory, "Taxes"), privateRoot = path.join(directory, "private");
+  await fs.mkdir(folderPath); await fs.mkdir(privateRoot);
+  const owner = bot("bot:folder");
+  const app = fixture({ bots: [owner] }); await app.service.initialize();
+  const policy = await app.service.updateBotAccess({ audienceId: "device:a", botId: owner.id, expectedRevision: app.policies.get(owner.id)!.revision, access: {
+    accessMode: "custom", catalogRevision: CATALOG_REVISION, custom: { providerId: "provider:opaque", modelId: "model:opaque", fileScopeIds: ["scope:home"], shellEnabled: false, connectionIds: ["keep:connection"], skillIds: ["keep:skill"], otherCapabilityIds: [] },
+  } });
+  let document = createDefaultAidenRemoteState();
+  const state = new AidenRemoteStateRegistry({ load: async () => document, save: async (next) => { document = structuredClone(next); } });
+  const roots = new AidenRemoteApprovedRootService(state, { homeDirectory: () => directory, now: Date.now, randomBytes: (await import("node:crypto")).randomBytes });
+  const journal = fileBotFolderGrantJournal(() => privateRoot);
+  const counts = { adds: 0, removes: 0, saves: 0 };
+  app.deps.approvedFolders = {
+    list: async () => (await state.snapshot()).approvedRoots,
+    add: async (folder, input) => { counts.adds++; return roots.addLocalFolder(folder, { ...input, botsOnly: true }); },
+    removeOwned: async (rootId, operationId) => { counts.removes++; return roots.removeLocalRoot(rootId, operationId); },
+    withInventoryLock: (action) => roots.withInventoryLock(action),
+    journal, target: { homeDirectory: () => directory, privateRoots: () => [privateRoot] },
+  };
+  const snapshot = app.deps.catalog.snapshot.bind(app.deps.catalog);
+  app.deps.catalog.snapshot = async (input) => {
+    const value = await snapshot(input);
+    const extra = (await state.snapshot()).approvedRoots.map((root) => ({ sourceId: root.id, scopeFingerprint: "a".repeat(64), exactFingerprint: "b".repeat(64), option: { id: `scope:${root.id}`, label: root.label, available: true, kind: "approved_location" as const } }));
+    return { ...value, catalog: { ...value.catalog, fileScopes: [...value.catalog.fileScopes, ...extra.map((entry) => entry.option)] }, resources: { ...value.resources, fileScopes: extra } };
+  };
+  const bind = app.deps.catalog.bindCustom.bind(app.deps.catalog);
+  app.deps.catalog.bindCustom = async (input) => ({ ...await bind(input), fileScopes: input.snapshot!.resources.fileScopes.filter((scope) => input.selection.fileScopeIds.includes(scope.option.id)) });
+  const save = app.deps.capabilityStore.updateBotPolicy.bind(app.deps.capabilityStore);
+  app.deps.capabilityStore.updateBotPolicy = async (input) => { counts.saves++; input.assertCurrent?.(); return save(input); };
+  const stat = await fs.stat(folderPath, { bigint: true });
+  const input = { audienceId: "device:a", botId: owner.id, folderPath, expectedRevision: policy.revision, expectedIdentity: { device: String(stat.dev), inode: String(stat.ino) }, operationId: "folder-attempt-1" };
+  return { ...app, directory, folderPath, privateRoot, owner, roots, state, journal, counts, input };
+}
+
+test("grantBotFolder adds exactly one Bot-only root, preserves selection and returns its publication receipt", async (t) => {
+  const app = await folderFixture(t);
+  assert.equal(await app.service.grantBotFolder(app.input), "added");
+  const roots = (await app.state.snapshot()).approvedRoots;
+  assert.equal(roots.length, 1); assert.equal(roots[0]!.botsOnly, true);
+  const policy = app.policies.get(app.owner.id)!;
+  assert.deepEqual(policy.custom?.fileScopeIds, ["scope:home", `scope:${roots[0]!.id}`]);
+  assert.deepEqual(policy.custom?.connectionIds, ["keep:connection"]);
+  assert.deepEqual(policy.custom?.skillIds, ["keep:skill"]);
+  assert.equal(await app.service.botFolderGrantPolicyRevision(app.owner.id, app.input.operationId), policy.revision);
+  assert.equal(await app.service.grantBotFolder(app.input), "already_allowed");
+  assert.deepEqual(app.counts, { adds: 1, removes: 0, saves: 1 });
+  await assert.rejects(app.service.grantBotFolder({ ...app.input, folderPath: app.directory }), /another request/u);
+});
+test("grantBotFolder reuses an exact root and never compensates a reused root on save failure", async (t) => {
+  const app = await folderFixture(t);
+  const root = await app.roots.addLocalFolder(app.folderPath);
+  app.deps.capabilityStore.updateBotPolicy = async () => { throw new Error("save failed"); };
+  await assert.rejects(app.service.grantBotFolder({ ...app.input, rootId: root.id }), /save failed/u);
+  assert.equal(app.counts.adds, 0); assert.equal(app.counts.removes, 0);
+  assert.equal((await app.state.snapshot()).approvedRoots[0]!.id, root.id);
+});
+test("drift, stale policy, Files off, private links, directory replacement and overlap write nothing", async (t) => {
+  for (const scenario of ["drift", "stale", "off", "full", "private", "inode", "covered", "overlap"] as const) {
+    const app = await folderFixture(t);
+    if (scenario === "drift") app.botBindings.set(app.owner.id, { version: 1, drifted: true });
+    if (scenario === "stale") app.policies.set(app.owner.id, { ...app.policies.get(app.owner.id)!, revision: "different" });
+    if (scenario === "off") app.policies.set(app.owner.id, { ...app.policies.get(app.owner.id)!, accessMode: "custom", custom: { ...app.policies.get(app.owner.id)!.custom!, fileScopeIds: [] } });
+    if (scenario === "full") app.policies.set(app.owner.id, { ...app.policies.get(app.owner.id)!, accessMode: "full", custom: undefined });
+    if (scenario === "private") { await fs.rename(app.folderPath, app.folderPath + "old"); await fs.symlink(app.privateRoot, app.folderPath); }
+    if (scenario === "inode") { await fs.rename(app.folderPath, app.folderPath + "old"); await fs.mkdir(app.folderPath); }
+    if (scenario === "covered") await app.roots.addLocalFolder(app.directory, { confirmHomeDirectory: true });
+    if (scenario === "overlap") { const sub = path.join(app.folderPath, "sub"); await fs.mkdir(sub); await app.roots.addLocalFolder(sub); }
+    await assert.rejects(app.service.grantBotFolder(app.input), scenario === "drift" ? /Review it in the Bot's settings first/u : /changed/u, scenario);
+    assert.equal(app.counts.adds, 0, scenario); assert.equal(app.counts.saves, 0, scenario);
+  }
+});
+test("a failed save compensates its new root; a crash before publication recovers the preallocated root exactly once", async (t) => {
+  const app = await folderFixture(t);
+  app.deps.capabilityStore.updateBotPolicy = async () => { throw new Error("save failed"); };
+  await assert.rejects(app.service.grantBotFolder(app.input), /save failed/u);
+  assert.equal((await app.state.snapshot()).approvedRoots.length, 0);
+  assert.equal((await app.journal.list())[0]!.state, "rolled_back");
+  const add = app.deps.approvedFolders!.add;
+  app.deps.approvedFolders!.add = async (...args) => { await add(...args); throw new Error("crash after root creation"); };
+  const remove = app.deps.approvedFolders!.removeOwned;
+  app.deps.approvedFolders!.removeOwned = async () => { throw new Error("process stopped before compensation"); };
+  await assert.rejects(app.service.grantBotFolder({ ...app.input, operationId: "crash-attempt" }), /process stopped/u);
+  assert.equal((await app.state.snapshot()).approvedRoots.length, 1);
+  await assert.rejects(app.service.updateBot({ id: app.owner.id, expectedRevision: app.owner.revision, name: "Should not save", instructions: app.owner.instructions, avatar: app.owner.avatar }), /paused until Aiden restarts/u);
+  app.deps.approvedFolders!.removeOwned = remove;
+  await createBotApplicationService(app.deps).initialize();
+  assert.equal((await app.state.snapshot()).approvedRoots.length, 0);
+  assert.equal((await app.journal.list()).find((entry) => entry.input.operationId === "crash-attempt")!.state, "rolled_back");
+});
+test("a crash after policy publication retains the committed root and never issues another policy save", async (t) => {
+  const app = await folderFixture(t);
+  const save = app.deps.capabilityStore.updateBotPolicy;
+  app.deps.capabilityStore.updateBotPolicy = async (input) => { await save(input); throw new Error("crash after publish"); };
+  assert.equal(await app.service.grantBotFolder(app.input), "added", "recovery acknowledges the verified commit rather than reporting a failed approval with hidden authority");
+  assert.equal((await app.journal.list())[0]!.state, "committed");
+  assert.equal((await app.state.snapshot()).approvedRoots.length, 1);
+  assert.equal(await app.service.grantBotFolder(app.input), "already_allowed");
+  assert.equal(app.counts.saves, 1); assert.equal(app.counts.removes, 0);
+  const stat = await fs.stat(path.join(app.privateRoot, "bot-folder-grants.json"));
+  assert.equal(stat.mode & 0o777, 0o600);
+});
+
+test("inventory changes and path replacement at binding refuse publication and compensate only owned roots", async (t) => {
+  for (const scenario of ["inventory", "inode"] as const) {
+    const app = await folderFixture(t);
+    if (scenario === "inventory") {
+      let stale = false;
+      app.deps.inventoryLeases = { acquire: () => ({ assertCurrent() { if (stale) throw new Error("inventory revoked"); }, release() {} }) };
+      const add = app.deps.approvedFolders!.add;
+      app.deps.approvedFolders!.add = async (...args) => { const result = await add(...args); stale = true; return result; };
+    } else {
+      const bind = app.deps.catalog.bindCustom;
+      app.deps.catalog.bindCustom = async (input) => { const result = await bind(input); await fs.rename(app.folderPath, app.folderPath + "old"); await fs.mkdir(app.folderPath); return result; };
+    }
+    await assert.rejects(app.service.grantBotFolder(app.input), /revoked|changed/u);
+    assert.equal(app.counts.saves, 0);
+    assert.equal((await app.state.snapshot()).approvedRoots.length, 0);
+    assert.equal(app.counts.removes, 1);
+  }
+});
+test("compensation preserves an operation-owned root already committed to another Bot", async (t) => {
+  const app = await folderFixture(t);
+  const other = bot("bot:shared"); app.bots.push(other);
+  const add = app.deps.approvedFolders!.add;
+  app.deps.approvedFolders!.add = async (...args) => {
+    const root = await add(...args);
+    const policy = app.policies.get(app.owner.id)!;
+    app.policies.set(other.id, { ...policy, botId: other.id, accessMode: "custom", custom: { ...policy.custom!, fileScopeIds: ["scope:home", `scope:${root.id}`] } });
+    app.botBindings.set(other.id, { fileScopes: [{ sourceId: root.id, option: { id: `scope:${root.id}`, kind: "approved_location" } }] });
+    throw new Error("save interrupted");
+  };
+  await assert.rejects(app.service.grantBotFolder(app.input), /save interrupted/u);
+  assert.equal((await app.state.snapshot()).approvedRoots.length, 1);
+  assert.equal(app.counts.removes, 0);
+  assert.equal((await app.journal.list())[0]!.state, "rolled_back");
+});
 
 const WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
 const CATALOG_REVISION = "catalog:1";

@@ -863,6 +863,7 @@ final class AidenRemoteCoordinator {
         [.attachmentsRaw],
         [.chatNewWorktree],
         [.botMessaging],
+        [.botAccessRequests],
     ]
 
     /// Existing pairings predate the progress opt-in field. Upgrade them only

@@ -80,17 +80,18 @@
   - Buttons: `"Not now"`, `"Always for this folder"`, `"Allow once"`.
   - Result lines: `"Allowed {label} once"`, `"Always allowed {label}"`, `"Not now: {label}"`.
 
-- [ ] **Step 1: Write the failing tests** in `bot-access-requests.test.ts`:
+- [x] **Step 1: Write the failing tests** in `bot-access-requests.test.ts`:
   - `whole Mac is only ever Allow once`: `botAccessChoicesFor({target: "whole_mac", alwaysOffered: true})` deep-equals `["not_now", "once"]`.
   - `a folder offers Always only when allowed`: `{target: "folder", alwaysOffered: true}` gives `["not_now", "always", "once"]`, and `false` gives `["not_now", "once"]`.
   - `the parser refuses a whole-Mac card that offers always`: `botPendingAccessRequestOf({...valid, target: "whole_mac", choices: ["not_now", "once", "always"]})` is `null`.
   - `the parser refuses unknown keys, a blank why, and a why over 400 characters`.
   - `titles read as the card says`: `botAccessCardTitle("Ada", {target: "folder", label: "Taxes"}) === "Ada wants to use Taxes"`.
   - `parseBotAccessChoice` accepts the three choices and rejects `"allow"`.
-- [ ] **Step 2: Run and see them fail.** `npx tsx --test renderer/shared/bot-access-requests.test.ts`. Expected: FAIL, module not found.
-- [ ] **Step 3: Implement.** `why` and `label` go through `withoutBotHandoffControls` (`renderer/shared/bot-handoffs.ts`) before the bounds are checked. Bounds use `isBoundedBotText`.
-- [ ] **Step 4: Run.** Expected: PASS.
-- [ ] **Step 5: Register `test:bot-access` and the CI lane, then commit:** "Add the Bot access-request contract".
+- [x] **Step 2: Run and see them fail.** `npx tsx --test renderer/shared/bot-access-requests.test.ts`. Expected: FAIL, module not found.
+- [x] **Step 3: Implement.** `why` and `label` go through `withoutBotHandoffControls` (`renderer/shared/bot-handoffs.ts`) before the bounds are checked. Bounds use `isBoundedBotText`.
+- [x] **Step 4: Run.** Expected: PASS.
+- [x] **Step 5: Register `test:bot-access` and the CI lane, then commit:** "Add the Bot access-request contract".
+
 
 ### Task 2: Resolve what the Bot asked for
 
@@ -132,7 +133,7 @@
     - `home` for the home folder itself.
     - `new` otherwise.
 
-- [ ] **Step 1: Write the failing tests** with `mkdtemp` folders and a fake home:
+- [x] **Step 1: Write the failing tests** with `mkdtemp` folders and a fake home:
   - `a file resolves to its folder`: requesting `<tmp>/Taxes/2025.pdf` gives `kind: "folder"`, `root: <real tmp>/Taxes`, `label: "Taxes"`.
   - `a symlink into Aiden's storage is refused` (Review Focus 4). `<tmp>/link -> <private>/bots/x` gives `{kind: "refused", reason: "private"}`.
   - `a folder inside an approved root never offers Always` (Review Focus 2). With roots `[{id: "root_a", folderPath: <tmp>/Documents}]`, requesting `<tmp>/Documents/Taxes` gives `always.kind === "none"` and `reason === "covered"`.
@@ -141,10 +142,11 @@
   - `the home folder is Allow once only`: this gives `reason: "home"`.
   - `~ paths expand and relative paths are refused`.
   - `coveredByBotLocations` is true for a subfolder of a location root, and false for a sibling whose name shares a prefix (`/a/b` against `/a/bc`).
-- [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-access-target.test.ts`.
-- [ ] **Step 3: Implement** with the default filesystem from `node:fs/promises` (`stat` with `{ bigint: true }`), as `aiden-remote-approved-roots.ts` does.
-- [ ] **Step 4: Run.** Expected: PASS.
-- [ ] **Step 5: Register and commit:** "Resolve the folder a Bot asks for".
+- [x] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-access-target.test.ts`.
+- [x] **Step 3: Implement** with the default filesystem from `node:fs/promises` (`stat` with `{ bigint: true }`), as `aiden-remote-approved-roots.ts` does.
+- [x] **Step 4: Run.** Expected: PASS.
+- [x] **Step 5: Register and commit:** "Resolve the folder a Bot asks for".
+
 
 ### Task 3: Allow once is the run's own location
 
@@ -202,7 +204,7 @@
 - `BotToolSourceDeps.policyRevision(botId: string): Promise<string>`. In `bot-session-main.ts`, this is `(await botCapabilityStore.getBotPolicy(botId)).revision`.
 - Exported singleton in `bot-tool-sources-main.ts`: `export const botRunAccess = createBotRunAccess({ now: Date.now })`.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - In `bot-run-access.test.ts`:
     - `a grant serves only its own run` (Review Focus 1). A grant for `["r1"]` gives a location for `["r1"]` and for `["r1", "r2"]` (a steer joined), and `undefined` for `["r3"]`.
     - `a changed policy revision drops the grant` (Review Focus 3).
@@ -216,10 +218,11 @@
     - `an unresolved late location explains how to ask`;
     - `a late Full Mac location still refuses writes into protected roots`.
   - In `bot-file-candidates.test.ts`, `a bound file tool uses run access only for the run it serves`. Use a fake `call.runRequestIds` and a real `createBotRunAccess`.
-- [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-run-access.test.ts main/services/bot-file-tool-router.test.ts main/services/bot-runtime/bot-file-candidates.test.ts`.
-- [ ] **Step 3: Implement** the store, the router's `lateLocation` and the candidate input, then wire them in tool sources and session main.
-- [ ] **Step 4: Run** the three files and `npm run test:bot-runtime`. Expected: PASS.
-- [ ] **Step 5: Register and commit:** "Give a Bot's run the folder the person allowed once".
+- [x] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-run-access.test.ts main/services/bot-file-tool-router.test.ts main/services/bot-runtime/bot-file-candidates.test.ts`.
+- [x] **Step 3: Implement** the store, the router's `lateLocation` and the candidate input, then wire them in tool sources and session main.
+- [x] **Step 4: Run** the three files and `npm run test:bot-runtime`. Expected: PASS.
+- [x] **Step 5: Register and commit:** "Give a Bot's run the folder the person allowed once".
+
 
 ### Task 4: Always for this folder (`grantBotFolder`)
 
@@ -260,7 +263,7 @@
     - `fileScopeIds: nextBotFileScopeIds(policy.custom.fileScopeIds, snapshot.catalog.fileScopes, option.id, true)` (`renderer/shared/bot-capabilities.ts:472`, which keeps `bot_home`).
   - The connection grant keeps its current message, so `refuseDriftedGrants: true` reads as before.
 
-- [ ] **Step 1: Write the failing tests**, with the existing fakes for `grantBotConnection`:
+- [x] **Step 1: Write the failing tests**, with the existing fakes for `grantBotConnection`:
   - `grantBotFolder adds one approved location and keeps the rest`. After the call, the saved `custom.fileScopeIds` holds the earlier ids plus the new option id, and `bot_home`'s id is still there.
   - `grantBotFolder reuses an exact approved root`: `approvedFolders.add` is never called.
   - `grantBotFolder refuses drifted grants with no write and no new root` (Review Focus 3). The save count and the `add` count both stay 0, and it rejects with the message above.
@@ -270,10 +273,11 @@
   - `a folder allowed for a Bot isn't browsable from a phone`: after `add(path, {botsOnly: true})`, `listRoots(deviceId)` has no entry for it, and browsing its root id is refused the same way as an unknown root. The Bot catalog's `listApprovedLocations` still lists it.
   - `approving the same folder for phones clears the mark`: a later plain `addLocalFolder(path)` returns the same root, and `listRoots` now shows it.
   - `the connection grant's drift message is unchanged`. Extend the existing drift test for `grantBotConnection`.
-- [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-application-service.test.ts`.
-- [ ] **Step 3: Implement and wire.**
-- [ ] **Step 4: Run** the file and `npm run test:bots`. Expected: PASS.
-- [ ] **Step 5: Commit:** "Let the person add a folder to a Bot's access".
+- [x] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-application-service.test.ts`.
+- [x] **Step 3: Implement and wire.**
+- [x] **Step 4: Run** the file and `npm run test:bots`. Expected: PASS.
+- [x] **Step 5: Commit:** "Let the person add a folder to a Bot's access".
+
 
 ### Task 5: The access-request bridge and its answer
 
@@ -324,17 +328,18 @@
   - `once` validates and issues a run grant under the captured revision. `always` calls `botApplicationService.grantBotFolder` with the captured revision/identity and stable `operationId = waitId` for this authorization attempt, then issues the run grant under the resulting validated policy revision. Both use `prompt.authorization`, not current values substituted for the original authorization.
   - It then broadcasts `bots:changed`, as `grantBotConnection` does (`bot-session-main.ts:769`).
 
-- [ ] **Step 1: Write the failing tests** in `bot-access-requests.test.ts`:
+- [x] **Step 1: Write the failing tests** in `bot-access-requests.test.ts`:
   - `the first valid answer wins`.
   - `always is refused on a card that does not offer it`: the result is `invalid` and the card is still pending.
   - `a failing Always keeps the card open` (Review Focus 3): the `always` callback throws, `answer` rejects, and `pending(botId)` still lists the card.
   - `a second answer while Always is running is not_waiting`.
   - `pending never exposes the authorization snapshot`: neither `grant` nor `authorization` is in `pending()` items. The intentionally displayed bounded `place` remains.
   - `abort withdraws the card and rejects with the reason`.
-- [ ] **Step 2: Run and see them fail.**
-- [ ] **Step 3: Implement both files.**
-- [ ] **Step 4: Run.** Expected: PASS.
-- [ ] **Step 5: Register and commit:** "Hold Bot access requests until the person answers".
+- [x] **Step 2: Run and see them fail.**
+- [x] **Step 3: Implement both files.**
+- [x] **Step 4: Run.** Expected: PASS.
+- [x] **Step 5: Register and commit:** "Hold Bot access requests until the person answers".
+
 
 ### Task 6: `access_needed` Bot issues
 
@@ -361,17 +366,18 @@
   - `act` with `allow_folder` claims the issue, revalidates its stored authorization snapshot as Always does, calls `allowFolder` with the stable issue id as operation id, and settles it `fixed`. An issue can outlive its original run, so persistent authorization validates the captured policy and filesystem identity without reviving that run or issuing an Allow once grant. Never project the authorization snapshot to a phone. If the call throws, the claim is released, as `resume_routine` does.
   - An issue without `access.folderPath` never offers `allow_folder`.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - In `service.test.ts`:
     - `allow_folder grants the stored folder once and settles as fixed`: the fake `allowFolder` is called once with the issue's `folderPath`.
     - `allow_folder on an issue without a folder is invalid`.
     - `a failed grant leaves the issue open`.
   - In `bot-issue-card.test.tsx`, `an access issue offers Allow this folder and calls onAct with allow_folder`.
   - In `aiden-remote-bot-session.test.ts`, `access_needed issues are not sent to bot:issues devices`.
-- [ ] **Step 2: Run and see them fail.**
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** `npx tsx --test main/services/bot-issues/service.test.ts renderer/components/bots/bot-issue-card.test.tsx main/services/aiden-remote-bot-session.test.ts`. Expected: PASS.
-- [ ] **Step 5: Commit:** "Raise a Needs you issue when a Bot needs a folder on an unattended turn".
+- [ ] **Step 2: Run and see them fail.** Not captured: the first Task 6 behavioral run already passed 116 tests in `/tmp/bot-access-task6.log`. This is an evidence limitation, not a claimed red run.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run** `npx tsx --test main/services/bot-issues/service.test.ts renderer/components/bots/bot-issue-card.test.tsx main/services/aiden-remote-bot-session.test.ts`. Expected: PASS.
+- [x] **Step 5: Commit:** "Raise a Needs you issue when a Bot needs a folder on an unattended turn".
+
 
 ### Task 7: The `request_access` tool and its policy
 
@@ -434,7 +440,7 @@
      - `once` or `always`: use the bridge's already-validated grant, bound to `owner: {kind: "access", id: attempt.waitId}`. Never re-grant using a newly read revision after the answer. The text is `"The person allowed {label} for this task. Use the file tools with location \"run.access\" to reach it."` Always adds `" It stays allowed from your next task."`
      - `not_now`: call `runAccess.decline`. The text is `"The person said not now. Carry on without {label} and tell them what you couldn't do."`
 
-- [ ] **Step 1: Write the failing tests** in `bot-access-request-tool.test.ts`, with fake deps and a real `createBotAccessRequests` and `createBotRunAccess`:
+- [x] **Step 1: Write the failing tests** in `bot-access-request-tool.test.ts`, with fake deps and a real `createBotAccessRequests` and `createBotRunAccess`:
   - `asks once and grants the run on Allow once`. Answer `once` through the bridge. The result details are `{outcome: "once"}`, and `runAccess.location(botId, ["r1"], rev)` has the folder's root.
   - `Resume reapproves under a new attempt id`: Allow once, quit, then Resume the same logical request. A new card has a fresh waitId. Answer Not now, or Allow once again; each is a new person decision, while retransmissions of either answer count only once. Late answers to the old attempt are refused. Both native clients reuse an idempotency key only within one attempt and mint a new key for the new card.
   - `a whole-Mac card never offers Always`: the pending card's `choices` deep-equal `["not_now", "once"]`.
@@ -444,13 +450,14 @@
   - Approve a Plan C outside-folder read grant, then call `request_access` for that same folder. A new card appears and write/edit stay blocked until approval. Allow once upgrades to a validated write grant; Not now keeps the original read-only grant usable and does not widen it. Repeat through a phone answer.
   - `Stop withdraws the card and records no answer`: abort the signal, and `execute` rejects.
   - While a card waits, edit the policy or replace the folder; stale once/always answers grant nothing on desktop and Remote. A fresh request is required for changed authority. The result never substitutes the latest policy revision into the old card.
-- [ ] **Step 2: Extend `bot-tool-policy.test.ts`:**
+- [x] **Step 2: Extend `bot-tool-policy.test.ts`:**
   - `request_access is offered to a scoped Custom Bot and refused for Full access, Full Mac and Files off`;
   - `botRunUnattended is true when any input is routine, Telegram or bot`.
-- [ ] **Step 3: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-access-request-tool.test.ts main/services/bot-runtime/bot-tool-policy.test.ts`.
-- [ ] **Step 4: Implement and wire.** `currentLocations` admits fresh through `deps.admit(botId)` and releases the admission in `finally`.
-- [ ] **Step 5: Run** the files and `npm run test:bot-handoffs`. Expected: PASS.
-- [ ] **Step 6: Register and commit:** "Let a Bot ask to use a folder outside its own".
+- [x] **Step 3: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-access-request-tool.test.ts main/services/bot-runtime/bot-tool-policy.test.ts`.
+- [x] **Step 4: Implement and wire.** `currentLocations` admits fresh through `deps.admit(botId)` and releases the admission in `finally`.
+- [x] **Step 5: Run** the files and `npm run test:bot-handoffs`. Expected: PASS.
+- [x] **Step 6: Register and commit:** "Let a Bot ask to use a folder outside its own".
+
 
 ### Task 8: The desktop card
 
@@ -496,7 +503,7 @@
   - All buttons are disabled while an answer is in flight. A thrown answer, such as an Always drift refusal, toasts its message and keeps the card.
   - The composer is unchanged.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - In `access-request-card.test.tsx`:
     - `a folder card shows its title, place and why, and three buttons in order`;
     - `a whole-Mac card has no Always`;
@@ -508,10 +515,10 @@
   - Extend the `live-projection` suite: `a waiting access request makes the Bot need the person, and its answer clears it`.
   - Extend the `bot-attention` suite: `an access request broadcasts bots:attention`.
   - Extend the `bot-handoff-notifications` suite: `an access card notifies once, only when no window is focused`.
-- [ ] **Step 2: Run and see them fail.**
-- [ ] **Step 3: Implement.** Reuse the in-flight counting pattern from `use-bot-handoff-actions.ts` for `busy`.
-- [ ] **Step 4: Run** `npx tsx --test renderer/components/bots/access-request-card.test.tsx main/handlers/bot-access-requests.test.ts main/services/bot-runtime/live-projection.test.ts main/services/bot-runtime/bot-attention.test.ts main/services/bot-runtime/bot-handoff-notifications.test.ts`, and `npm run test:bot-handoffs`. Expected: PASS.
-- [ ] **Step 5: Register and commit:** "Show a Bot's access request in its chat".
+- [x] **Step 2: Run and see them fail.**
+- [x] **Step 3: Implement.** Reuse the in-flight counting pattern from `use-bot-handoff-actions.ts` for `busy`.
+- [x] **Step 4: Run** `npx tsx --test renderer/components/bots/access-request-card.test.tsx main/handlers/bot-access-requests.test.ts main/services/bot-runtime/live-projection.test.ts main/services/bot-runtime/bot-attention.test.ts main/services/bot-runtime/bot-handoff-notifications.test.ts`, and `npm run test:bot-handoffs`. Expected: PASS.
+- [x] **Step 5: Register and commit:** "Show a Bot's access request in its chat". Registration is complete; staging and commits remain parent-owned.
 
 ### Task 9: Phones (Remote `bot:access-requests`)
 
@@ -562,22 +569,22 @@
   - Paired desktops are a legacy audience in this revision and see that line.
   - The route needs `bot:read`, `bot:write` and `bot:access-requests`. It calls `answerBotAccessRequest`.
 
-- [ ] **Step 1: Failing host tests:**
+- [x] **Step 1: Failing host tests:**
   - `the access card is sent only to bot:access-requests devices; others get one notice line that a snapshot removes when it settles`;
   - `answer always reaches answerBotAccessRequest once per Idempotency-Key`;
   - `a choice the card doesn't offer is 400`;
   - `an answered card is access_request_expired`;
   - `access_needed issues reach holders and never bot:issues-only devices`;
   - `the server feature list stays within AIDEN_REMOTE_MAX_SERVER_FEATURES`.
-- [ ] **Step 2: Implement the host side and the fixtures.**
-- [ ] **Step 3: Native clients.**
+- [x] **Step 2: Implement the host side and the fixtures.**
+- [x] **Step 3: Native clients.**
   - Negotiate `bot:access-requests` in its own `POST /device/capabilities` call, only when the host lists it. A 400 or 404 is ignored (`.memory/bot-handoffs-clients.md`).
   - Decode `accessRequest`, render a card with the offered buttons, and post the answer with a per-`waitId` Idempotency-Key that is kept across a lost response.
   - Claim the card optimistically. On `access_request_expired`, it stays gone. On any other failure it comes back with `"That answer wasn't sent. Please try again."`.
   - Decode `access_needed` and `allow_folder`.
   - Tests: decode the fixture section; tapping each button posts the right body; a whole-Mac card shows no Always.
-- [ ] **Step 4: Run** `npx tsx --test main/services/aiden-remote-bot-session.test.ts main/services/aiden-remote-protocol.test.ts main/services/aiden-remote-operation-contract.test.ts`, the iOS focused tests (the command in `ios/README.md`), and `./gradlew :app:testDebugUnitTest --tests '*AidenBotAccessRequests*' --tests '*AidenBotIssue*'`. Expected: PASS.
-- [ ] **Step 5: Commit:** "Answer Bot access requests from phones".
+- [x] **Step 4: Run** `npx tsx --test main/services/aiden-remote-bot-session.test.ts main/services/aiden-remote-protocol.test.ts main/services/aiden-remote-operation-contract.test.ts`, the iOS focused tests (the command in `ios/README.md`), and `./gradlew :app:testDebugUnitTest --tests '*AidenBotAccessRequests*' --tests '*AidenBotIssue*'`. Expected: PASS.
+- [x] **Step 5: Commit:** "Answer Bot access requests from phones".
 
 ### Task 10: Docs, memory, plan index and onboarding check
 
@@ -595,7 +602,343 @@
   - known limits: paired desktops see the notice line, and there is no CLI tool.
 - Modify: `.memory/bot-durable-runtime.md` (one line under Connections, linking the folder grant beside "Add to this Bot")
 
-- [ ] **Step 1: Search for stale claims.** Run `rg -n "approved location|Custom access|request_access|hand_off" README.md PRODUCT.md docs/*.md packages/cli/README.md`, and fix each statement this plan made stale.
-- [ ] **Step 2: Onboarding review.** New Bots keep Full access and never see this tool, so `renderer/components/onboarding-feature-gallery.tsx` and the onboarding flow stay unchanged. Record that decision in the PR description.
-- [ ] **Step 3: Run** `npm run test:bot-access`, `npm run test:bot-handoffs`, `npm run test:bot-runtime`, `npm run test:bots` and `node --test scripts/ci-test-registry.test.mjs`. Expected: PASS.
-- [ ] **Step 4: Commit:** "Document Bot access requests".
+- [x] **Step 1: Search for stale claims.** Run `rg -n "approved location|Custom access|request_access|hand_off" README.md PRODUCT.md docs/*.md packages/cli/README.md`, and fix each statement this plan made stale.
+- [x] **Step 2: Onboarding review.** New Bots keep Full access and never see this tool, so `renderer/components/onboarding-feature-gallery.tsx` and the onboarding flow stay unchanged. Record that decision in the PR description.
+- [x] **Step 3: Run** `npm run test:bot-access`, `npm run test:bot-handoffs`, `npm run test:bot-runtime`, `npm run test:bots` and `node --test scripts/ci-test-registry.test.mjs`. Expected: PASS.
+- [x] **Step 4: Commit:** "Document Bot access requests".
+
+## Backend implementation handoff, Tasks 1–7, 2026-11-03
+
+Implemented in the shared checkout on `feature/bot-access-requests` from
+`feefcc26eda414ac937d5aefab1441c0c92d0638`, without commits, staging, branch
+changes, dependency changes, live-model calls or window-opening commands.
+Tasks 8–10, complete-phase acceptance, commits and PR work belong to the parent.
+Commit checklist steps above remain open intentionally. Task 6's first combined
+check already passed after the coupled implementation; it has no claimed red-first
+run. Other initial failures and their fixes are in the dedicated papercut log.
+
+### Files by task
+
+- Task 1: `renderer/shared/bot-access-requests.ts` and `.test.ts`, `package.json`,
+  `scripts/ci-test-registry.json`.
+- Task 2: `main/services/bot-runtime/bot-access-target.ts` and `.test.ts`.
+- Task 3: `main/services/bot-runtime/bot-run-access.ts` and `.test.ts`,
+  `main/services/bot-file-tool-router.ts` and `.test.ts`,
+  `main/services/bot-runtime/bot-file-candidates.ts` and `.test.ts`,
+  `main/services/bot-runtime/bot-tool-sources-main.ts`,
+  `main/services/bot-runtime/bot-session-main.ts`.
+- Task 4: `main/services/bot-folder-grant-journal.ts`,
+  `main/services/bot-application-service.ts`, `.test.ts` and `-main.ts`,
+  `main/services/aiden-remote-state.ts`,
+  `main/services/aiden-remote-approved-roots.ts` and `.test.ts`,
+  `main/services/aiden-remote-workspace-browser.ts` and `.test.ts`,
+  `main/services/aiden-remote-service.ts` and `.test.ts`,
+  `main/handlers/aiden-remote.ts`.
+- Task 5: `main/services/bot-runtime/bot-access-requests.ts`, `.test.ts` and
+  `-main.ts`, `main/services/bot-runtime/bot-access-authorization.ts`.
+- Task 6: `renderer/shared/bot-issues.ts`, `main/services/bot-issues/service.ts`,
+  `.test.ts` and `service-main.ts`, `main/handlers/bot-issues.ts` and `.test.ts`,
+  `renderer/components/bots/bot-issue-card.tsx` and `.test.tsx`,
+  `main/services/aiden-remote-bot-issues.ts`,
+  `main/services/aiden-remote-bot-session.test.ts`.
+- Task 7: `main/services/bot-runtime/bot-access-request-tool.ts` and `.test.ts`,
+  `main/services/bot-runtime/bot-tool-policy.ts` and `.test.ts`,
+  `main/services/bot-runtime/bot-tool-sources-main.ts`,
+  `renderer/shared/bot-activity.ts`.
+- Tracking: this plan and `.papercuts/2026-11-03-bot-access-backend.md`.
+  Parent-owned initial edits to project memory, the master plan and plan index
+  were preserved.
+
+### Root ownership, recovery and authorization contracts
+
+The minimal approved-folder list/add port cannot implement safe compensation.
+`BotApplicationDependencies.approvedFolders` therefore additionally supplies
+`removeOwned`, reentrant `withInventoryLock`, private/home target dependencies
+and a durable journal. Ordinary access saves and normal phone-root approvals
+use that same root-inventory lock. The private `bot-folder-grants.json` file is
+atomic and mode 0600. An intent preallocates its root id before root creation;
+`AidenRemoteApprovedRoot.botGrantOperationId` records ownership alongside
+`botsOnly: true`. Compensation compares both markers, checks committed Bot
+bindings, and removes approval records only, never filesystem folders. Recovery
+runs at initialization and before another grant. Reused or shared roots survive.
+An error after actual policy publication is acknowledged only after recovery
+verifies that committed binding and its exact revision. A compensation error
+fences further Bot mutations in that live service until startup repair.
+
+`grantBotFolder` validates the captured policy, canonical directory, device/inode
+and root inventory before creation and again before publication. It uses the
+same access-save path and drift refusal as connection grants. The optional live
+owner fence also runs at publication. `botFolderGrantPolicyRevision(botId,
+operationId)` returns the verified journal publication revision; answer handlers
+never read and adopt an arbitrary newer policy revision.
+
+`BotAccessAuthorization` is shared as a type and strict persisted-data parser,
+then re-exported from the main bridge. It additionally carries an optional root
+inventory fingerprint. The main-only prompt owner contains its live signal,
+deadline and validator. The public pending/get projections contain neither the
+owner, logical request id, authorization nor grant. A live unchanged attempt
+reuses its wait id; abort/restart, changed requirements and deliberate reapproval
+allocate a fresh id. The memo holds only the logical request id. No settled
+person decision is reused to recreate an ephemeral grant.
+
+Issue authorization stays in the private store and is omitted from list and
+transcript projections. Folder actions keep their issue open until the journaled
+grant succeeds, claim concurrent taps in memory and retry with the issue id as
+operation id. They do not resume the original run or create run access.
+Long canonical paths use a SHA-256 dedupe suffix when the literal key would
+exceed the existing 400-character issue bound.
+
+### Parent integration seams
+
+- Task 8 imports `botAccessRequests` and `answerBotAccessRequest` from
+  `main/services/bot-runtime/bot-access-requests-main.ts`. The existing
+  `pending(botId)`, `get`, and `onChange` methods expose only public cards.
+  Add access-request snapshots/events, projection refresh/needs-you, attention,
+  notification and desktop IPC/card wiring. This worker changed session main
+  only for policy-revision injection, terminal-state clearing and shutdown
+  clearing. Bot deletion also clears via tool-source forget; shutdown clears
+  interrupted grants as well.
+- Task 9 must explicitly opt Remote parsers into the new shared vocabulary with
+  `botIssueKindOf(value, true)` and `botIssueActionOf(value, true)`, together with
+  the new capability gate and DTO revision. Their default calls deliberately
+  remain legacy-safe. `toRemoteBotIssue(s)` currently filters `access_needed`
+  unconditionally, before applying the legacy issue limit. No protocol, router,
+  session contract, iOS, Android or CLI source was changed.
+- Task 10 owns product docs, project memory, plan inventory and full integration
+  and review. No onboarding change was made. New Bots retain Full access.
+  Main/CLI bundled-source validation and native acceptance remain parent-owned.
+
+### Local validation
+
+All commands were headless; no live Aiden inference/network acceptance or
+physical-device evidence is claimed. Full Remote verification requires
+`/opt/homebrew/opt/openssl@3/bin` ahead of OpenSSL 4.1 for the existing physical
+spike fixture. The focused Remote run below used that PATH.
+
+- `npm run test:bot-access`: 31 passed, including real-harness steer/queue scope,
+  direct and nested read/write enforcement, Allow once then quit before durable
+  result commit followed by a fresh Resume decision, and real issue persistence.
+  Log: `/tmp/bot-access-final-access5.log`.
+- `npm run test:bot-runtime`: 347 passed.
+  Log: `/tmp/bot-access-final-runtime.log`.
+- `npm run test:bots`: 980 passed.
+  Log: `/tmp/bot-access-final-bots.log`.
+- `npm run test:bot-rules`: 61 passed; `test:bot-pause`: 34 passed;
+  `test:bot-handoffs`: 67 passed; `test:bot-issues`: 29 passed.
+  Logs: `/tmp/bot-access-final-rules.log`, `/tmp/bot-access-final-pause.log`,
+  `/tmp/bot-access-final-handoffs.log`, `/tmp/bot-access-final-issues.log`.
+- Focused approved-roots, workspace-browser, Bot session, Remote service and
+  Remote state tests: 220 passed, one existing skip.
+  Log: `/tmp/bot-access-final-remote-focused.log`.
+- `npm run test:ci:registry`: 15 passed. Every new test file is in
+  `test:bot-access` and the lane holding main Bot handoff tests;
+  `pretest:bot-access` builds lease-flock and `test:serial` includes the suite.
+  Log: `/tmp/bot-access-final-registry.log`.
+- `npm run test:bot-messaging`: 89 passed.
+  Log: `/tmp/bot-access-final-messaging.log`.
+- A final combined backend pass covered application, router, candidates, issues,
+  issue handlers/card and tool policy: 115 passed.
+  Log: `/tmp/bot-access-final-backend.log`. Later application and candidate
+  checks passed 63 and 2 respectively after the final recovery/pin guards.
+  Logs: `/tmp/bot-access-final-application2.log`,
+  `/tmp/bot-access-final-candidates.log`.
+- Type-check, scoped ESLint and whitespace validation passed.
+  Logs: `/tmp/bot-access-final-types7.log`, `/tmp/bot-access-final-lint5.log`.
+
+These are local implementation checks, not phase B acceptance. The dedicated
+papercut file is ignored by the checkout's Git rules and was not staged.
+
+
+## Desktop implementation handoff, Task 8, 2026-11-03
+
+Implemented in the shared checkout on `feature/bot-access-requests` at
+`feefcc26e`, preserving the uncommitted Tasks 1–7 backend. No staging, commits,
+pushes, PRs, branch changes, nested agents, dependencies, pins, live-provider
+calls or window-opening commands. Parent owns E2E, product docs, project memory,
+Task 9, Task 10, phase acceptance and reviews. Step 5 above stays open only for
+its parent-owned commit.
+
+### Files owned by Task 8
+
+- New desktop IPC: `main/handlers/bot-access-requests.ts` and `.test.ts`.
+  Updated `main/handlers/bot-params.ts` and `main/handlers/bots.ts`.
+- New UI: `renderer/components/bots/access-request-card.tsx` and `.test.tsx`;
+  `renderer/main/bots/use-bot-access-request-actions.ts` and `.test.tsx`.
+  Updated `renderer/main/bots/bot-chat-pane.tsx` and `.test.tsx`,
+  `renderer/lib/ipc.ts` and `renderer/shared/bot-live.ts`.
+- Public projection: `main/services/bot-runtime/live-projection.ts` and
+  `.test.ts`; updated the typed projection fake in `main/handlers/bot-live.test.ts`.
+- Host attention and notifications: `main/services/bot-runtime/bot-attention.ts`
+  and `.test.ts`, `bot-handoff-notifications.ts` and `.test.ts`, plus
+  `bot-session-main.ts`. Backend policy-revision injection, terminal-state
+  clearing and shutdown run-access clearing remain intact. The watchdog now
+  recognizes an access request as waiting on the person too.
+- Shared private test prompt: `main/services/bot-runtime/test-support/access-request-fixtures.ts`.
+- Registration: all three new test files are in `test:bot-access`, reached by
+  `test:serial`, and in the CI lane containing the main handoff tests.
+  `package.json` and `scripts/ci-test-registry.json` preserve backend entries.
+- Tracking: this plan and `.papercuts/2026-11-03-bot-access-desktop.md`.
+  Parent-owned documents, memory, Remote/native/CLI code and E2E were not edited.
+
+### Desktop and Task 9 contracts
+
+- Desktop IPC is `bots:answerAccessRequest` with exactly one body
+  `{ botId, waitId, choice }`. Its parser rejects extra keys, malformed ids,
+  over-bound ids and unknown choices before invoking the answer port. Production
+  registration calls the existing `answerBotAccessRequest` singleton, which
+  authorizes or throws its server message; the renderer grants nothing.
+- `BotLiveSnapshot.accessRequest?: BotPendingAccessRequest | null` and
+  `{ type: "access_request", accessRequest }` events carry only the bridge's
+  public `pending/get` projection. No grant, authorization, logical request id or
+  live owner is projected. `applyBotLiveEvent` handles the event with the existing
+  epoch/sequence checks. Feed creation, serialized refresh, subscribe catch-up,
+  activity waiting, `needsYou`, summary and inbox signals all include the card.
+- The card's accessible group name is exactly `botAccessCardTitle(botName,
+  request)`, matching the parent's E2E contract. The Bot avatar, FolderOpen or
+  Laptop icon, folder-only place, reason and offered choices use BotNoticeCard
+  and shared Button treatments. Choice order is preserved and the last is
+  primary. Every choice disables while any answer for that Bot and `waitId`
+  remains in flight. Other Bots and later attempts stay independent.
+- Cards are removed by authoritative host snapshots/events, including settled
+  or expired cards. A receipt never fabricates approval or optimistically hides
+  authorization failure. Errors toast the server message and unlock the card;
+  `answered: false` reports that the card was answered or closed. The composer
+  is unchanged. An extra renderer-reload experiment was removed after a headless
+  timeout; accepted code follows existing host projection delivery and catch-up.
+- `watchBotAccessRequests` feeds a second `createBotHandoffNotifier`. The notifier
+  accepts public access requests alongside handoffs and derives the access title
+  after its single Bot-name lookup. It claims `waitId` before awaiting the name,
+  rechecks pending identity and focus afterward, and announces each attempt once.
+  Attention broadcasts only the Bot id. New projection/notification listeners and
+  attention wiring unsubscribe on runtime shutdown.
+- Task 9 still owns capability negotiation, Remote DTO/session frames and legacy
+  notices, route/idempotency, protocol revision/fixtures, native cards and client
+  tests. No Task 9 wire semantics or CLI tool were added. It can consume the
+  shared public optional/nullable snapshot/event contract and existing singleton
+  answer entry directly, keeping reapproval keyed by the fresh `waitId`.
+
+### Local verification
+
+- Initial new IPC/card tests failed for missing implementation, as expected:
+  `/tmp/bot-access-desktop-red.log`.
+- `npm run test:bot-access`: 40 passed.
+  `/tmp/bot-access-desktop-access.log`.
+- `npm run test:bot-handoffs`: 69 passed, including access notification focus,
+  dedupe, settlement/name races and watcher cleanup.
+  `/tmp/bot-access-desktop-handoffs.log`.
+- Focused IPC/card/actions/attention/notifier run: 25 passed.
+  `/tmp/bot-access-desktop-unit.log`.
+- Projection, desktop live IPC and chat suites: 146 passed.
+  `/tmp/bot-access-desktop-projection-chat.log`.
+- Final card/actions/chat run after UI refinements: 84 passed.
+  `/tmp/bot-access-desktop-ui-final2.log`.
+- Final access-specific chat tests, including an expired/not-waiting card removed
+  by a fresh host snapshot: 2 passed.
+  `/tmp/bot-access-desktop-expired-final.log`.
+- CI registry: 15 passed. `/tmp/bot-access-desktop-registry.log`.
+- Type-check and scoped ESLint passed. Logs:
+  `/tmp/bot-access-desktop-types-final2.log`,
+  `/tmp/bot-access-desktop-lint-final.log`,
+  `/tmp/bot-access-desktop-lint-final2.log`. Final whitespace validation passed. No retries or production test timeouts were
+  weakened; exploratory failures and fixes are in the papercut log.
+
+These are headless local checks, not visual, native, live-model or complete-phase
+acceptance. The parent-owned Cua E2E spec checks actual Tab behavior and light/dark
+narrow layouts. This worker did not run it.
+
+## Remote host implementation handoff, Task 9, 2026-11-04
+
+Implemented in the shared checkout without staging, commits, pushes, branch
+changes, delegation, dependency changes or live inference/catalog calls. Existing
+backend, desktop, root startup/E2E and native-worker edits were preserved.
+
+### Scoped host checklist
+
+- [x] Revision 55 DTOs, strict card/answer/receipt parsers, capability vocabulary,
+  session snapshot and SSE access-request shapes, and canonical fixtures.
+- [x] Wired-host capability advertisement and negotiation, answer route, all
+  three required grants, required idempotency key, stable replay after a lost
+  response, unoffered-choice refusal and settled-request expiry.
+- [x] Serialized holder projection and legacy assistant notice/removal snapshots.
+  Paired desktops keep their legacy reducer behavior and advance unexpected
+  access-request frames without exposing a raw phone card.
+- [x] Capability-aware access issue cards, actions, summary counts and alerts.
+  Legacy issues are filtered before their own projection limit. No private
+  authorization or grant data enters any Remote payload.
+- [x] Durable alert audience marker and producer/funnel/log/feed coverage,
+  including deferred flush and restart after issue-store pruning.
+- [x] OpenAPI and `docs/aiden-remote-api-v1.md` updated in this scope. Existing
+  fixture/OpenAPI formatting retained. No server feature token was added.
+- [ ] Native acceptance, complete phase B review, Task 10, phase status and commit
+  remain with the native worker and parent.
+
+### Owned files and integration contracts
+
+Host files are `main/services/aiden-remote-protocol.ts` and `.test.ts`,
+`aiden-remote-router.ts` and `.test.ts`, `aiden-remote-bot-session.ts` and
+`.test.ts`, `aiden-remote-bot-issues.ts`, and `aiden-remote-service-main.ts`.
+The parent additionally authorized the exhaustive legacy reducer case/test in
+`renderer/lib/hosts/remote-bot-session.ts` and `.test.ts`, and the alert retention
+seams in `bot-routine-notifications.ts` and `.test.ts`,
+`bot-delivery/log.ts`, `bot-delivery/funnel.ts` and `.test.ts`, plus the access
+issue delivery producer in `bot-issues/service.ts` and `.test.ts`. Only the new
+marker and its test were added to the already modified issue service files.
+Protocol artifacts are `protocol/aiden-remote/v1/openapi.json` and
+`fixtures/contract.json`; the scoped API guide is `docs/aiden-remote-api-v1.md`.
+No new test files need CI registration.
+
+The session service takes the public bridge `pending/get/onChange` port and an
+`answerAccessRequest` port. Production calls the existing
+`answerBotAccessRequest` singleton entry. The answer ledger uses device, route,
+Bot, wait id and key, checks the offered choice inside its idempotent action,
+and replays `{ answered: true }` after settlement. Refusals before any answer
+remain retryable under the same key; a changed body conflicts. Request changes
+refresh on the projector lane and the new listener unsubscribes on close.
+
+`botAccessRequests` sits beside `botHandoffs` in the canonical fixture. Its keys
+are `capability`, `folder`, `wholeMac`, `session`, `events`, `answer`, `expired`,
+`issue`, and `legacy` with `session`, `events`, `settledSession`. All fixture
+revision markers, including host health, are 55. Private field and legacy
+holder-field injection tests fail closed. The revision is provisional against
+main and must still be rechecked by the parent before merge.
+
+For alerts, an access issue's persisted kind produces
+`requiredCapability: "bot:access-requests"` on its delivery obligation. The
+funnel writes that marker atomically in the delivery row and retains it through
+flush/restart; the feed suppresses marked alerts for nonholders even after the
+issue record is pruned. The marker never crosses the API. An injected issue-kind
+lookup also filters current unmarked access rows; unmarked historical ordinary
+rows retain their behavior. No authorization or filesystem path is duplicated
+into this marker.
+
+### Local verification
+
+- Eight existing behavioral suites passed together: **357 passed, zero failed**.
+  They cover protocol, operation ledger, real HTTP router, serialized session
+  projector, notification feed, delivery funnel, issue producer and paired
+  desktop reducer. Log: `/tmp/bot-access-remote-host-final-tests.log`.
+- After correcting test fixture types, all affected access cases passed again:
+  **9 passed, zero failed**. Log:
+  `/tmp/bot-access-remote-host-final-cases2.log`.
+- `npm run type-check` passed after the test-fixture corrections. Log:
+  `/tmp/bot-access-remote-host-final-types3.log`.
+- Scoped ESLint passed for all 17 changed TypeScript files. Log:
+  `/tmp/bot-access-remote-host-final-lint2.log`.
+- Whitespace validation passed. Papercuts are recorded in the ignored workspace
+  `.papercuts/2026-11-04-bot-access-remote-host.md`.
+
+These are headless local host checks. No native-device, visual, live-provider,
+packaged-app or full phase acceptance is claimed by this worker. Parent Cua,
+CLI and native-worker evidence is deliberately kept in their own handoffs.
+
+## Parent integration checkpoint, 2026-11-04
+
+Tasks 1–10 are implemented and recorded in the phase B checkpoint commit. The original per-task commit labels above describe the planned boundaries; the parent assembled the workers' uncommitted changes into one phase commit. Full B acceptance still requires both independent reviewers at the same frozen SHA. Task 6's initial failing run was not captured and stays unchecked.
+
+The parent fixed an actual production startup cycle in `bot-access-requests-main`: answer-only application, authority and tool-source imports are lazy, so the bridge initializes before the runtime subscribes. Temporary stack/output probes were removed. The actual Cua card test passes in light 1280px and dark 600px, with keyboard order/focus, busy answer barrier, failed Always toast/card retention, once/Not now host-driven removal, whole-Mac no-Always and zero inference traffic. Log `/tmp/bot-access-e2e-cua-final.log`; screenshots were visually inspected. The mock profile substitutes only the projected Bot feed, not the card/hooks/IPC behavior.
+
+Parent checks passed: access 40, runtime 350, Bots 982, handoffs 69, rules 61, messaging 89, registry 15. Full Remote passed peer 175 with one existing skip, main 1035 with one existing skip, LAN spike 7 and tail 29, using OpenSSL 3 for the existing transport fixture. Logs `/tmp/bot-access-parent-{runtime,bots,handoffs,rules,messaging,registry,remote}.log`. CLI build produced 268 files/27.0 MiB; its complete suite passed 183 with 3 existing PTY skips and no failures, and CLI type-check passed. Logs `/tmp/bot-access-cli-{build,tests,types-final}.log`. Host's final root type-check and scoped lint passed after correcting test-fixture types, as recorded above.
+
+Native Task 9 passed iOS 158 tests with two environment skips and Android 115 tests. iOS result `/tmp/aiden-bot-access-ios-phase-b.xcresult`, log `/tmp/task9-ios-grant-fix.log`. Android lint and instrumented-test compilation passed; no emulator was attached, so Compose UI tests were not executed. Android lint has 0 errors, 51 warnings and 5 hints. iOS physical pinning/signed-Keychain checks skipped; compiler, main-thread runtime and missing-Keychain-entitlement warnings remain unclaimed as resolved. No physical-device, live-provider, package, release or exact-head hosted CI acceptance is claimed.
+
+Onboarding/tour reviewed and unchanged: new Bots still start with Full access; this is an advanced Custom-access workflow. No dependency, lockfile or Pi pin changes. Docs, project memory, CLI absence, old-client behavior, notification/count capability filtering and durable retention are updated together.

@@ -1786,6 +1786,9 @@ export const botsApi = {
    */
   answerQuestion: (botId: string, waitId: string, answer: import("../shared/ask-user-question").AskUserQuestionResponseV1) =>
     invoke<{ answered: boolean }>("bots:answerQuestion", { botId, waitId, answer }),
+  /** Answer only the offered choice for this live authorization attempt. */
+  answerAccessRequest: (botId: string, waitId: string, choice: import("../shared/bot-access-requests").BotAccessChoice) =>
+    invoke<{ answered: boolean }>("bots:answerAccessRequest", { botId, waitId, choice }),
   /**
    * Answer the Bot's hand-off card by its wait id with Done or Skip, and an
    * optional note; `answered` is false once the card is no longer waiting.

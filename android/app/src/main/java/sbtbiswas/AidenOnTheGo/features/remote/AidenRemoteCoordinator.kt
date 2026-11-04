@@ -127,6 +127,17 @@ internal fun aidenShouldRequestBotImages(server: AidenServer, installation: Aide
  * Revision 42: a Mac that offers `bot:issues` in `serverCapabilities` is asked for it,
  * in a call of its own after every other negotiation, unless [installation] already holds it.
  */
+internal fun aidenShouldRequestBotAccessRequests(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ACCESS_REQUESTS, server, installation)
+
+internal suspend fun aidenRequestBotAccessRequests(
+    client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
+    if (aidenShouldRequestBotAccessRequests(server, installation)) listOf(AidenRemoteCapability.BOT_ACCESS_REQUESTS) else emptyList(),
+    client, stillCurrent
+)
+
 internal fun aidenShouldRequestBotIssues(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ISSUES, server, installation)
 
@@ -636,11 +647,15 @@ class AidenRemoteCoordinator(
                     request = ::aidenRequestBotIssues
                 )
                 // Revision 49: `chat:jobs` goes alone too.
+                val accessServer = negotiateSoloCapability(
+                    generation = generation, installation = installation, client = newClient,
+                    server = issuesServer, request = ::aidenRequestBotAccessRequests
+                )
                 val jobsServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
-                    server = issuesServer,
+                    server = accessServer,
                     request = ::aidenRequestChatJobs
                 )
                 // Revision 50: `attachments:raw` goes alone too.

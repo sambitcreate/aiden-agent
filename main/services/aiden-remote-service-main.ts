@@ -144,6 +144,7 @@ import {
 } from "./aiden-remote-bot-session.js";
 import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
 import { botQuestions } from "./bot-runtime/bot-questions-main.js";
+import { botAccessRequests, answerBotAccessRequest } from "./bot-runtime/bot-access-requests-main.js";
 import { botHandoffs } from "./bot-runtime/bot-handoffs-main.js";
 import { botRunStarts, botTurnIntents } from "./bot-runtime/bot-turn-intents-main.js";
 import { botMutationGate } from "./bot-mutation-gate.js";
@@ -973,6 +974,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 approvals: botApprovals,
                 // Revision 37: phones answer hand-offs through the desktop's own bridge.
                 handoffs: botHandoffs,
+                accessRequests: botAccessRequests,
+                answerAccessRequest: answerBotAccessRequest,
                 // Revision 42: the desktop's own issue service raises, settles and acts.
                 issues: botIssues,
                 openHandoffOnMac: async (botId, waitId) => {
@@ -1037,6 +1040,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 proposals: botRoutineProposals,
                 routineNotifications: createBotNotificationFeed({
                   log: botDeliveryLog,
+                  issueKind: async (botId, issueId) => (await botIssues.list(botId)).find((issue) => issue.id === issueId)?.kind,
                   botName: async (botId) => (await botStore.get(botId))?.name,
                 }),
               })

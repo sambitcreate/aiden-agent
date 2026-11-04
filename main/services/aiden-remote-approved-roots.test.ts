@@ -8,6 +8,7 @@ import {
   verifyApprovedRootIdentity,
 } from "./aiden-remote-approved-roots.js";
 import { AidenRemoteStateRegistry, createDefaultAidenRemoteState } from "./aiden-remote-state.js";
+import { AidenRemoteWorkspaceBrowserService } from "./aiden-remote-workspace-browser.js";
 
 async function fixture() {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-approved-root-"));
@@ -23,6 +24,23 @@ async function fixture() {
   });
   return { directory, state, service };
 }
+
+test("Bot-only approvals remain in inventory but invisible to browsing until an ordinary phone approval", async () => {
+  const app = await fixture();
+  try {
+    const folder = path.join(app.directory, "Taxes"); await fs.mkdir(folder);
+    const root = await app.service.addLocalFolder(folder, { botsOnly: true, operationId: "bot-attempt" });
+    const browser = new AidenRemoteWorkspaceBrowserService({ instanceId: "test-instance", state: app.state, approvalStore: app.directory });
+    assert.equal((await app.state.snapshot()).approvedRoots[0]!.botsOnly, true);
+    assert.deepEqual((await browser.listRoots("phone")).roots, []);
+    assert.equal((await app.service.addLocalFolder(folder, { botsOnly: true })).id, root.id);
+    const ordinary = await app.service.addLocalFolder(folder);
+    assert.equal(ordinary.id, root.id); assert.equal(ordinary.botsOnly, undefined);
+    assert.equal(ordinary.botGrantOperationId, undefined);
+    assert.equal((await browser.listRoots("phone")).roots[0]!.id, root.id);
+    assert.equal(await app.service.removeLocalRoot(root.id, "bot-attempt"), false, "compensation never removes a root shared with phones");
+  } finally { await fs.rm(app.directory, { recursive: true, force: true }); }
+});
 
 test("approved roots canonicalize symlinks and persist filesystem identity without exposing it remotely", async () => {
   const app = await fixture();
@@ -42,7 +60,7 @@ test("approved roots canonicalize symlinks and persist filesystem identity witho
   }
 });
 
-test("approved roots reject duplicates, nested overlap, files, and filesystem root", async () => {
+test("approved roots reuse exact folders and reject nested overlap, files, and filesystem root", async () => {
   const app = await fixture();
   try {
     const parent = path.join(app.directory, "parent");
@@ -50,8 +68,8 @@ test("approved roots reject duplicates, nested overlap, files, and filesystem ro
     const file = path.join(app.directory, "file.txt");
     await fs.mkdir(child, { recursive: true });
     await fs.writeFile(file, "x");
-    await app.service.addLocalFolder(parent);
-    await assert.rejects(app.service.addLocalFolder(parent), /already covered/u);
+    const root = await app.service.addLocalFolder(parent);
+    assert.equal((await app.service.addLocalFolder(parent)).id, root.id);
     await assert.rejects(app.service.addLocalFolder(child), /already covered/u);
     await assert.rejects(app.service.addLocalFolder(file), /must be a directory/u);
     await assert.rejects(app.service.addLocalFolder(path.parse(app.directory).root), /filesystem root/u);

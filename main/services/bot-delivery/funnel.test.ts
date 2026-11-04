@@ -309,3 +309,13 @@ test('bot_message final delivery is durable and deduplicated',async t=>{
  assert.equal(h.calls.mac.length,1);assert.equal(h.calls.telegram.length,1);
  assert.equal((await h.log.list(input.botId))[0]?.class,'bot_message');
 });
+
+test("a deferred access issue retains its audience gate when flushed from the durable log", async (t) => {
+  const h = await harness({ decide: async () => ({ kind: "defer", until: NOW + HOUR }) }); t.after(h.cleanup);
+  await h.funnel.deliver({ botId: "bot:scout", class: "issue", dedupeKey: "issue:access_gate", title: "Allow Reports", body: "Prepare a summary.", status: "info", requiredCapability: "bot:access-requests" });
+  assert.equal(h.calls.mac.length, 0);
+  await h.funnel.flush(NOW + HOUR);
+  assert.equal(h.calls.mac.length, 1);
+  assert.equal(h.calls.mac[0]!.requiredCapability, "bot:access-requests");
+  assert.equal((await h.log.find("bot:scout", "issue:access_gate"))?.requiredCapability, "bot:access-requests");
+});

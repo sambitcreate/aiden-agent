@@ -390,7 +390,9 @@ struct AidenBotSessionChatView: View {
                         ForEach(model.outgoing) { message in
                             outgoingBubble(message, model: model)
                         }
-                        ForEach(model.openIssues) { issue in
+                        ForEach(model.openIssues.filter { issue in
+                            issue.isAvailable(accessRequests: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAccessRequests) == true)
+                        }) { issue in
                             // Revision 42: a "Needs you" card from the host.
                             AidenBotIssueCardView(
                                 issue: issue,
@@ -725,6 +727,13 @@ struct AidenBotSessionChatView: View {
                 )
                 .disabled(!canRespondToApprovals || !model.canAnswerApproval)
                 .id(approval.waitId)
+            }
+            if let request = model.accessRequest,
+               coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAccessRequests) == true {
+                AidenBotAccessRequestCard(request: request, botName: bot?.name ?? "Bot",
+                    canAnswer: canWrite && model.canAnswerAccessRequest,
+                    onAnswer: { choice in Task { await model.answerAccessRequest(choice) } })
+                    .id(request.waitId)
             }
             if let handoff = model.handoff {
                 // Revision 37: the step the Bot handed back. A sign-in is
@@ -1452,6 +1461,7 @@ struct AidenBotIssueCardView: View {
         case .routineFailed: "clock.badge.exclamationmark"
         case .routinePaused: "pause.circle"
         case .runStalled: "hourglass"
+        case .accessNeeded: "folder"
         }
     }
 

@@ -43,6 +43,8 @@ export interface BotIssueService {
 }
 
 export interface BotIssueServiceActions {
+  /** Absent hosts fail closed; only the desktop main wiring supplies persistent grants. */
+  allowFolder?(botId: string, access: { folderPath: string; rootId?: string; authorization: import("../../../renderer/shared/bot-access-requests.js").BotAccessAuthorization }, operationId: string): Promise<"added" | "already_allowed">;
   /** Turn the Bot's routine back on through the routine service's own write. */
   resumeRoutine(botId: string, id: string): Promise<BotIssueResumeResult>;
   stopRun(botId: string): Promise<void>;
@@ -120,10 +122,12 @@ function buildIssue(
     title: bound(input.title.replace(/\s+/gu, " "), BOT_ISSUE_LIMITS.titleChars) || "Needs you",
     body: bound(input.body, BOT_ISSUE_LIMITS.bodyChars),
     ...(input.routineId === undefined ? {} : { routineId: input.routineId }),
+    ...(input.access === undefined ? {} : { access: structuredClone(input.access) }),
     actions: input.actions.slice(0, 2),
     createdAt: at,
   };
   if (botIssueOf(issue, input.botId) === null) throw new Error("This issue can’t be stored.");
+  if (issue.actions.some((action) => action.kind === "allow_folder") && !issue.access?.folderPath) throw new Error("Only a persistable folder can offer Allow this folder.");
   return issue;
 }
 
@@ -147,6 +151,10 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
    * attempt settles, so a later raise can still repair a failure.
    */
   const raising = new Map<string, Promise<BotIssue>>();
+  // Folder effects are journaled by the application service. Keep the card
+  // open until that commit succeeds, so a process exit before the effect can
+  // never leave a falsely fixed issue. A restart can retry the same issue id.
+  const allowingFolders = new Set<string>();
   const raiseKeyOf = (botId: string, dedupeKey: string) => `${botId}\u0000${dedupeKey}`;
 
   const notify = (botId: string) => {
@@ -206,6 +214,7 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
       if (!issue.actions.some((offered) => sameAction(offered, action))) {
         return { issues, result: "invalid" };
       }
+      if (action.kind === "allow_folder" && (!issue.access?.folderPath || !dependencies.actions.allowFolder || issue.access.authorization.target !== "folder" || !issue.access.authorization.choices.includes("always"))) return { issues, result: "invalid" };
       const next = [...issues];
       next[index] = { ...issue, resolvedAt: dependencies.now(), resolution };
       return { issues: next, result: next[index]! };
@@ -283,6 +292,7 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
       await dependencies.funnel.deliver({
         botId: input.botId,
         class: "issue",
+        ...(issue.kind === "access_needed" ? { requiredCapability: "bot:access-requests" as const } : {}),
         dedupeKey: `issue:${issue.id}`,
         title: issue.title,
         body: issue.body,
@@ -315,6 +325,26 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
     },
 
     async act(botId, issueId, action) {
+      if (action.kind === "allow_folder") {
+        const key = JSON.stringify([botId, issueId]);
+        if (allowingFolders.has(key)) return "not_open";
+        allowingFolders.add(key);
+        try {
+          const issue = (await dependencies.store.read(botId)).find((row) => row.id === issueId);
+          if (!issue || !isOpen(issue)) return "not_open";
+          const access = issue.access;
+          if (!issue.actions.some((offered) => sameAction(offered, action)) || !access?.folderPath || !dependencies.actions.allowFolder || access.authorization.target !== "folder" || !access.authorization.choices.includes("always")) return "invalid";
+          await dependencies.actions.allowFolder(botId, { folderPath: access.folderPath, ...(access.rootId ? { rootId: access.rootId } : {}), authorization: access.authorization }, issue.id);
+          const fixed = await dependencies.store.change(botId, (issues) => {
+            const current = issues.find((row) => row.id === issueId);
+            if (!current || !isOpen(current)) return { issues, result: undefined };
+            const settled = { ...current, resolvedAt: dependencies.now(), resolution: "fixed" as const };
+            return { issues: issues.map((row) => row.id === issueId ? settled : row), result: settled };
+          });
+          if (fixed) await dependencies.appendEntry(botId, BOT_ISSUE_STATUS_ENTRY_KIND, statusEntry(fixed));
+          notify(botId); return "done";
+        } finally { allowingFolders.delete(key); }
+      }
       // Opening a surface is not a fix and changes no Bot state, so these two
       // answer the card without settling it (and without a claim to release).
       if (action.kind === "open_settings" || action.kind === "open_chat") {

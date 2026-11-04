@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -485,7 +486,9 @@ private fun AidenBotSessionContent(
                     )
                 }
                 // Revision 42 (`bot:issues`): the host's "Needs you" cards.
-                items(ui.openIssues, key = { "issue-${it.id}" }) { issue ->
+                items(ui.openIssues.filter { issue ->
+                    issue.isAvailable(accessRequests = coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.BOT_ACCESS_REQUESTS) == true)
+                }, key = { "issue-${it.id}" }) { issue ->
                     AidenBotIssueCard(
                         issue = issue,
                         canAct = canWriteBots,
@@ -552,6 +555,15 @@ private fun AidenBotSessionContent(
                         AidenBotApprovalCard(approval, enabled = !ui.isRespondingToApproval) { decision ->
                             scope.launch { controller.respondToApproval(decision) }
                         }
+                    }
+                }
+                ui.session?.accessRequest?.takeIf {
+                    coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.BOT_ACCESS_REQUESTS) == true
+                }?.let { request ->
+                    item(key = "access-${request.waitId}") {
+                        AidenBotAccessRequestCard(request, botName,
+                            canAnswer = canWriteBots && ui.isConnected && !ui.isAnsweringAccessRequest,
+                            onAnswer = { choice -> scope.launch { controller.answerAccessRequest(choice) } })
                     }
                 }
                 ui.handoff?.let { handoff ->
@@ -983,6 +995,7 @@ fun aidenBotIssueActionLabel(action: AidenBotIssueAction): String = when (action
     AidenBotIssueActionKind.RESUME_ROUTINE -> stringResource(R.string.bot_issue_resume_routine)
     AidenBotIssueActionKind.STOP_RUN -> stringResource(R.string.bot_issue_stop)
     AidenBotIssueActionKind.KEEP_WAITING -> stringResource(R.string.bot_issue_keep_waiting)
+    AidenBotIssueActionKind.ALLOW_FOLDER -> stringResource(R.string.bot_issue_allow_folder)
 }
 
 @Composable

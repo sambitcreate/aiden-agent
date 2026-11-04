@@ -7,6 +7,8 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { buildBotFileTools, type BotFileToolLocation } from "../bot-file-tool-router.js";
 import type { BotToolCandidate } from "./bot-tool-assembly.js";
+import type { BotToolCall } from "./tool-adapter.js";
+import { BOT_RUN_ACCESS_LOCATION_ID, BOT_RUN_ACCESS_LOCATION_LABEL } from "../../../renderer/shared/bot-access-requests.js";
 import { botTurnOf } from "./bot-tool-policy.js";
 
 export interface BotFileCandidateInput {
@@ -14,14 +16,16 @@ export interface BotFileCandidateInput {
   routine: boolean;
   /** Journals one file a routine run wrote with write_file or edit_file, as the write left it. */
   recordOwnWrite(absolutePath: string): void | Promise<void>;
+  runAccess?: { resolve(call: BotToolCall): Promise<BotFileToolLocation | undefined> };
 }
 
 export function botFileCandidates(locations: readonly BotFileToolLocation[], input: BotFileCandidateInput): BotToolCandidate[] {
   if (locations.length === 0) return [];
-  const build = (routine: boolean) =>
+  const build = (routine: boolean, call?: BotToolCall) =>
     buildBotFileTools({
       defaultLocation: locations[0]!,
       additionalLocations: locations.slice(1),
+      ...(input.runAccess ? { lateLocation: { id: BOT_RUN_ACCESS_LOCATION_ID, label: BOT_RUN_ACCESS_LOCATION_LABEL, resolve: () => call ? input.runAccess!.resolve(call) : Promise.resolve(undefined) } } : {}),
       ...(routine ? { onWrite: input.recordOwnWrite } : {}),
     });
   const offered = build(input.routine);
@@ -33,7 +37,7 @@ export function botFileCandidates(locations: readonly BotFileToolLocation[], inp
       async execute(toolCallId, params, signal, onUpdate) {
         const routine =
           input.routine || ((await call.runRequestIds?.()) ?? []).some((requestId) => botTurnOf(requestId).routine);
-        const target = routine ? (routineTools ??= build(true))[index]! : tool;
+        const target = input.runAccess ? build(routine, call)[index]! : routine ? (routineTools ??= build(true))[index]! : tool;
         return target.execute(toolCallId, params, signal, onUpdate);
       },
     }),

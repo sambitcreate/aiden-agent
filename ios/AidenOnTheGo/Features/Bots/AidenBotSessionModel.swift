@@ -55,7 +55,7 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
 /// the chat reopens a feed that opened without one
 /// (`AidenBotSessionModel.reopenFeed()`; Android parity).
 func aidenBotSessionFeedGrants(_ installation: AidenInstallation?) -> Set<AidenRemoteCapability> {
-    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages].filter { installation?.hasNegotiatedAccess(to: $0) == true })
+    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages, .botAccessRequests].filter { installation?.hasNegotiatedAccess(to: $0) == true })
 }
 
 /// How a Bot chat is opened. A host advertising `bot-durable-session-v1`
@@ -132,6 +132,7 @@ protocol AidenBotSessionTransport: Sendable {
     ) async throws -> AidenAttachmentReference
     func removeBotAttachment(botId: String, attachmentId: String) async throws
     /// Revision 37 (`bot:handoffs`): Done or Skip for the waiting hand-off.
+    func answerBotAccessRequest(botId: String, waitId: String, request: AidenBotAccessAnswerRequest, idempotencyKey: UUID) async throws -> AidenBotAccessAnswerReceipt
     func answerBotHandoff(
         botId: String,
         waitId: String,
@@ -174,6 +175,9 @@ extension AidenBotSessionTransport {
     func removeBotAttachment(botId: String, attachmentId: String) async throws {}
 
     /// A transport without hand-offs refuses them, as a Mac without `bot:handoffs` does.
+    func answerBotAccessRequest(botId: String, waitId: String, request: AidenBotAccessAnswerRequest, idempotencyKey: UUID) async throws -> AidenBotAccessAnswerReceipt {
+        throw AidenRemoteClientError.invalidResponse
+    }
     func answerBotHandoff(
         botId: String,
         waitId: String,
@@ -1167,7 +1171,7 @@ final class AidenBotSessionModel {
         case send, resume, dismiss, stop, answerQuestion, answerApproval, retry
         /// Revision 37 (`bot:handoffs`). Pausing is the Bot profile's own
         /// call, made without showing a pause the Mac hasn't confirmed.
-        case answerHandoff, openHandoffOnMac, unpause
+        case answerHandoff, answerAccessRequest, openHandoffOnMac, unpause
         /// Revision 42 (`bot:issues`): one action a "Needs you" card offers.
         case actIssue
     }
@@ -1196,6 +1200,7 @@ final class AidenBotSessionModel {
     private(set) var approval: AidenRemoteBotApproval?
     /// Revision 37 (`bot:handoffs`): the hand-off the Bot is waiting on, or nil.
     private(set) var handoff: AidenRemoteBotHandoff?
+    private(set) var accessRequest: AidenRemoteBotAccessRequest?
     /// Revision 42 (`bot:issues`): the Bot's "Needs you" cards, oldest first.
     private(set) var issues: [AidenRemoteBotIssue] = []
     /// The card an action is on its way for, so its buttons wait.
@@ -1258,6 +1263,8 @@ final class AidenBotSessionModel {
     @ObservationIgnored private let retryDelays: [Duration]
     @ObservationIgnored private var retainedQuestion: (waitId: String, request: AidenQuestionRespondRequest, key: UUID)?
     @ObservationIgnored private var retainedApproval: (waitId: String, decision: AidenApprovalDecision, key: UUID)?
+    @ObservationIgnored private var retainedAccessAnswer: (waitId: String, request: AidenBotAccessAnswerRequest, key: UUID)?
+    @ObservationIgnored private var accessRequestWrites = 0
     @ObservationIgnored private var retainedHandoff: (waitId: String, request: AidenBotHandoffAnswerRequest, key: UUID)?
     @ObservationIgnored private var retainedHandoffOpen: (waitId: String, key: UUID)?
     /// Revision 42: the request UUID of a card action, kept per card and action
@@ -1624,6 +1631,9 @@ final class AidenBotSessionModel {
             handoffWrites += 1
             if next?.waitId != handoffMacPrompt?.waitId { handoffMacPrompt = nil }
             if let next, next.waitId != previous { onHandoffArrived?(next) }
+        case let .accessRequest(next):
+            accessRequest = next
+            accessRequestWrites += 1
         case let .issues(next):
             issues = next
             issueWrites += 1
@@ -1707,6 +1717,8 @@ final class AidenBotSessionModel {
         question = session.question
         approval = session.approval
         handoff = session.handoff
+        accessRequest = session.accessRequest
+        accessRequestWrites += 1
         issues = session.issues
         questionWrites += 1
         approvalWrites += 1
@@ -2180,6 +2192,7 @@ final class AidenBotSessionModel {
         case .resumeRoutine: AidenBotSessionCopy.issueResumeRoutine
         case .stopRun: AidenBotSessionCopy.issueStop
         case .keepWaiting: AidenBotSessionCopy.issueKeepWaiting
+        case .allowFolder: "Allow this folder"
         }
     }
 
@@ -2248,6 +2261,41 @@ final class AidenBotSessionModel {
             restore()
             if error is CancellationError { return false }
             errorMessage = AidenBotSessionCopy.issueNotSent
+            return false
+        }
+    }
+
+    var canAnswerAccessRequest: Bool {
+        hasLoaded && accessRequest != nil && !inFlight.contains(.answerAccessRequest)
+    }
+
+    /// An uncertain answer retains its original body and key, even if the person taps another choice.
+    func answerAccessRequest(_ choice: AidenBotAccessChoice) async -> Bool {
+        guard canAnswerAccessRequest, let shown = accessRequest, shown.choices.contains(choice) else { return false }
+        let retained = retainedAccessAnswer.flatMap { $0.waitId == shown.waitId ? $0 : nil }
+        let request = retained?.request ?? AidenBotAccessAnswerRequest(choice: choice)
+        let key = retained?.key ?? UUID()
+        retainedAccessAnswer = (shown.waitId, request, key)
+        let mark = accessRequestWrites
+        accessRequest = nil
+        inFlight.insert(.answerAccessRequest)
+        defer { inFlight.remove(.answerAccessRequest) }
+        do {
+            _ = try await aidenBotWithin(requestLimit) { [transport, botID] in
+                try await transport.answerBotAccessRequest(botId: botID, waitId: shown.waitId, request: request, idempotencyKey: key)
+            }
+            retainedAccessAnswer = nil
+            if accessRequest?.waitId == shown.waitId { accessRequest = nil }
+            return true
+        } catch {
+            if !aidenBotSessionFailureIsAmbiguous(error) { retainedAccessAnswer = nil }
+            if case let AidenRemoteClientError.server(_, body) = error, body.code.rawValue == "access_request_expired" {
+                if accessRequest?.waitId == shown.waitId { accessRequest = nil }
+                errorMessage = "That card was already answered or closed."
+                return false
+            }
+            if accessRequestWrites == mark { accessRequest = shown }
+            errorMessage = "That answer wasn't sent. Please try again."
             return false
         }
     }

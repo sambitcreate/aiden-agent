@@ -1,3 +1,5 @@
+import { createBotAccessRequests } from "./bot-runtime/bot-access-requests.js";
+import { accessRequestPrompt } from "./bot-runtime/test-support/access-request-fixtures.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -1518,7 +1520,7 @@ function activityBots() {
 /** Serve one Bot's SSE stream to a device with these opt-ins; keep the raw data lines too. */
 async function openAudienceStream(
   service: AidenRemoteBotSessionService,
-  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean },
+  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean; accessRequests?: boolean },
   botId = BOT_ID,
 ) {
   const server = createServer((_request, response) => {
@@ -3659,6 +3661,20 @@ function issueSession(
   });
 }
 
+test("access_needed issues and their private authorization never reach bot:issues-only devices", async () => {
+  const access: BotIssue = { ...ISSUE_CARD, id: "issue_access", kind: "access_needed", actions: [{ kind: "allow_folder" }], access: { label: "Taxes", folderPath: "/private/Taxes", authorization: { policyRevision: "private-revision", requestIds: ["routine:private:1"], target: "folder", root: "/private/Taxes", identity: { device: "1", inode: "2" }, choices: ["not_now", "always", "once"] } } };
+  const host = issueHost({ cards: [access, ISSUE_CARD] });
+  const service = issueSession(host.service);
+  try {
+    const session = await service.session(BOT_ID, ISSUES_HOLDER);
+    assert.deepEqual(session.issues?.map((issue) => issue.id), [ISSUE_CARD.id]);
+    const serialized = JSON.stringify(session);
+    assert.equal(serialized.includes("private-revision"), false);
+    assert.equal(serialized.includes("/private/Taxes"), false);
+    assert.equal(serialized.includes("issue_access"), false);
+  } finally { await service.close(); }
+});
+
 test("issues are omitted unless bot:issues is negotiated, and a settled card reaches holders at its own seq", async () => {
   const host = issueHost();
   const service = issueSession(host.service);
@@ -3839,4 +3855,94 @@ test("Bot messaging projects to existing labelled messages, including bounded sa
     {type: "message", id: "entry_6", role: "user", text: "My own message", createdAt: new Date(2).toISOString()},
     {type: "message", id: "entry_7", role: "user", label: "COS replied", text: "Current Bot answer", createdAt: new Date(3).toISOString()},
   ]);
+});
+
+// Revision 55: public access requests and capability-aware issue projection.
+function accessSession(options: { issues?: ReturnType<typeof issueHost>["service"] } = {}) {
+  const accessRequests = createBotAccessRequests();
+  let authorizations = 0;
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(), runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+    accessRequests, ...options,
+    answerAccessRequest: async (botId, waitId, choice) => ({ answered: await accessRequests.answer(botId, waitId, choice, async () => { authorizations += 1; }) === "answered" }),
+  });
+  return { service, accessRequests, authorizations: () => authorizations };
+}
+
+test("access requests reach holders, while legacy phones and paired desktops fold notice removal to a fresh snapshot", async () => {
+  const { service, accessRequests } = accessSession();
+  const holder = await openAudienceStream(service, { accessRequests: true });
+  const legacy = await openAudienceStream(service, {});
+  try {
+    await holder.until(() => holder.frames.length === 1, "holder snapshot");
+    await legacy.until(() => legacy.frames.length === 1, "legacy snapshot");
+    const asked = accessRequests.request(accessRequestPrompt({ botId: BOT_ID }));
+    const card = accessRequests.pending(BOT_ID)[0]!;
+    await holder.until(() => holder.frames.some((frame) => frame.type === "access_request"), "access frame");
+    await legacy.until(() => legacy.frames.some((frame) => frame.type === "entry"), "legacy access notice");
+    assert.equal((await service.session(BOT_ID, { accessRequests: true })).accessRequest?.waitId, card.waitId);
+    assert.equal(holder.raw.join("").includes("authorization"), false);
+    assert.equal(holder.raw.join("").includes("folderPath"), false);
+    const read = await service.session(BOT_ID);
+    assert.equal("accessRequest" in read, false);
+    assert.deepEqual(last(read.entries), { type: "message", role: "assistant", id: `access-notice:${card.waitId}`, text: "Planner needs you on your Mac: allow access to Taxes" });
+    assert.deepEqual(reducedView(legacy.frames), remoteBotSessionView(read));
+    await service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-001", { choice: "once" });
+    assert.equal((await asked).choice, "once");
+    await legacy.until(() => last(legacy.frames)?.type === "snapshot", "notice removed by snapshot");
+    await holder.until(() => last(holder.frames)?.payload.accessRequest === null, "holder card removed");
+    assert.deepEqual(reducedView(legacy.frames), remoteBotSessionView(await service.session(BOT_ID)));
+    assert.equal(reducedView(legacy.frames).snapshot.entries.some((entry) => entry.id.startsWith("access-notice:")), false);
+    assert.ok(gapless(holder.frames)); assert.ok(gapless(legacy.frames));
+  } finally { await holder.close(); await legacy.close(); await service.close(); }
+});
+
+test("access answer replay survives a lost response and never authorizes twice; unoffered and settled choices are refused", async () => {
+  const { service, accessRequests, authorizations } = accessSession();
+  const asked = accessRequests.request(accessRequestPrompt({ botId: BOT_ID }));
+  const card = accessRequests.pending(BOT_ID)[0]!;
+  try {
+    await service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-002", { choice: "always" }); // response lost
+    assert.deepEqual(await service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-002", { choice: "always" }), { answered: true });
+    assert.equal(authorizations(), 1);
+    assert.equal((await asked).choice, "always");
+    await assert.rejects(service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-003", { choice: "once" }), (e: { code?: string }) => e.code === "access_request_expired");
+    await assert.rejects(service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-002", { choice: "not_now" }), (e: { code?: string }) => e.code === "idempotency_conflict");
+    const whole = accessRequests.request(accessRequestPrompt({ botId: BOT_ID, logicalRequestId: "whole", target: "whole_mac", label: "your whole Mac", place: undefined, choices: ["not_now", "once"], grant: undefined, authorization: { policyRevision: "rev-1", requestIds: ["run-1"], target: "whole_mac", root: "/", choices: ["not_now", "once"] } }));
+    const wholeId = accessRequests.pending(BOT_ID)[0]!.waitId;
+    await assert.rejects(service.answerAccessRequest(DEVICE_ID, BOT_ID, wholeId, "access-answer-key-004", { choice: "always" }), (e: { code?: string; status?: number }) => e.code === "invalid_request" && e.status === 400);
+    assert.equal(accessRequests.pending(BOT_ID).length, 1);
+    await service.answerAccessRequest(DEVICE_ID, BOT_ID, wholeId, "access-answer-key-004", { choice: "not_now" });
+    assert.equal((await whole).choice, "not_now");
+  } finally { await service.close(); }
+});
+
+test("access issues and allow_folder reach holders only, including settled issue events", async () => {
+  const access: BotIssue = { ...ISSUE_CARD, id: "issue_access_holder", kind: "access_needed", actions: [{ kind: "allow_folder" }], access: { label: "Taxes", folderPath: "/private/Taxes", authorization: accessRequestPrompt().authorization } };
+  const host = issueHost({ cards: [access, ISSUE_CARD] });
+  const { service } = accessSession({ issues: host.service });
+  const holder = await openAudienceStream(service, { issues: true, accessRequests: true });
+  const old = await openAudienceStream(service, { issues: true });
+  try {
+    await holder.until(() => holder.frames.length === 1, "holder issues"); await old.until(() => old.frames.length === 1, "legacy issues");
+    assert.deepEqual((await service.session(BOT_ID, { issues: true, accessRequests: true })).issues?.map((i) => i.kind), ["run_stalled", "access_needed"]);
+    assert.equal(holder.raw.join("").includes("/private/Taxes"), false);
+    assert.equal(old.raw.join("").includes("access_needed"), false);
+    await assert.rejects(service.actIssue(DEVICE_ID, BOT_ID, access.id, "access-issue-key-001", { action: { kind: "allow_folder" } }), (e: { code?: string }) => e.code === "capability_denied");
+    assert.deepEqual(await service.actIssue(DEVICE_ID, BOT_ID, access.id, "access-issue-key-001", { action: { kind: "allow_folder" } }, { accessRequests: true }), { result: "done" });
+    host.settle(access.id);
+    await holder.until(() => holder.frames.some((f) => f.type === "issues"), "settled access issue");
+    await old.until(() => old.frames.some((f) => f.type === "issues"), "legacy issues advance");
+    assert.equal(old.raw.join("").includes("access_needed"), false);
+    assert.equal(old.raw.join("").includes("allow_folder"), false);
+  } finally { await holder.close(); await old.close(); await service.close(); }
+});
+
+test("public open issue counts exclude hidden access requests for nonholders", async () => {
+  const host = issueHost({ cards: [ISSUE_CARD, { ...ISSUE_CARD, id: "issue_access_count", kind: "access_needed" }, { ...ISSUE_CARD, id: "issue_settled_count", resolvedAt: 123 }] });
+  const { service } = accessSession({ issues: host.service });
+  try {
+    assert.equal(await service.openIssueCount(BOT_ID), 1);
+    assert.equal(await service.openIssueCount(BOT_ID, { accessRequests: true }), 2);
+  } finally { await service.close(); }
 });

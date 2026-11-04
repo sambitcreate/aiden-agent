@@ -61,6 +61,12 @@ test("bots:issues:act carries the offered action to the service and reports it s
     },
   ]);
 });
+test("desktop issue actions opt into allow_folder without accepting model-supplied authorization", async () => {
+  const { invoke, acts } = setup();
+  await assert.rejects(invoke(BOT_ISSUE_CHANNELS.act, act({ action: { kind: "allow_folder", authorization: { policyRevision: "fake" } } })), /Invalid bot issue/u);
+  assert.deepEqual(await invoke(BOT_ISSUE_CHANNELS.act, act({ action: { kind: "allow_folder" } })), { result: "done" });
+  assert.deepEqual(acts[0]!.action, { kind: "allow_folder" });
+});
 
 test("bots:issues:act rejects unknown action kinds", async () => {
   const { invoke, acts } = setup();

@@ -2,18 +2,22 @@
 //
 // An issue is host-owned: the host writes it, settles it, and offers the
 // person at most two actions. The chat card, the sidebar's "Needs you" state
-// and the delivery funnel all read these values; a Bot's own model never
-// raises one. Later tasks raise them for failed routines, pre-flight checks
-// and stuck runs.
+// and the delivery funnel all read these values. Runtime failures and the
+// request_access tool can ask the host to raise one. Only the host captures
+// authorization; the model cannot grant access or answer an issue.
 
-export type BotIssueKind = "preflight_failed" | "routine_failed" | "routine_paused" | "run_stalled";
+import { botAccessAuthorizationOf, BOT_ACCESS_LABEL_MAX_CHARS, type BotAccessAuthorization } from "./bot-access-requests.js";
+
+export type BotIssueKind = "preflight_failed" | "routine_failed" | "routine_paused" | "run_stalled" | "access_needed";
 
 export type BotIssueAction =
   | { kind: "open_settings"; section: "model" | "access" | "connections" | "providers" }
   | { kind: "resume_routine"; routineId: string }
   | { kind: "stop_run" }
   | { kind: "keep_waiting" }
-  | { kind: "open_chat" };
+  | { kind: "open_chat" }
+  | { kind: "allow_folder" };
+// A saved folder approval never resumes the issue's original run.
 
 export type BotIssueResolution = "fixed" | "dismissed" | "superseded";
 
@@ -25,6 +29,8 @@ export interface BotIssue {
   title: string;
   body: string;
   routineId?: string;
+  /** Private store only. Never included in transcript, desktop or Remote projections. */
+  access?: { label: string; folderPath?: string; rootId?: string; authorization: BotAccessAuthorization };
   /** 0–2 actions, in the order the card offers them; the last one is primary. */
   actions: BotIssueAction[];
   createdAt: number;
@@ -55,6 +61,7 @@ const ISSUE_KINDS: ReadonlySet<string> = new Set<BotIssueKind>([
   "routine_failed",
   "routine_paused",
   "run_stalled",
+  "access_needed",
 ]);
 
 const ISSUE_RESOLUTIONS: ReadonlySet<string> = new Set<BotIssueResolution>([
@@ -102,8 +109,13 @@ function timestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-export function botIssueKindOf(value: unknown): BotIssueKind | null {
-  return typeof value === "string" && ISSUE_KINDS.has(value) ? (value as BotIssueKind) : null;
+type IssueKindForAccess<Access extends boolean> = Access extends true ? BotIssueKind : Exclude<BotIssueKind, "access_needed">;
+type IssueActionForAccess<Access extends boolean> = Access extends true ? BotIssueAction : Exclude<BotIssueAction, { kind: "allow_folder" }>;
+
+/** Legacy wire parsers keep their closed vocabulary until explicitly opted in. */
+export function botIssueKindOf<Access extends boolean = false>(value: unknown, accessRequests?: Access): IssueKindForAccess<Access> | null {
+  if (value === "access_needed" && !accessRequests) return null;
+  return typeof value === "string" && ISSUE_KINDS.has(value) ? (value as IssueKindForAccess<Access>) : null;
 }
 
 export function botIssueResolutionOf(value: unknown): BotIssueResolution | null {
@@ -113,7 +125,11 @@ export function botIssueResolutionOf(value: unknown): BotIssueResolution | null 
 }
 
 /** One action exactly as a card offers it, or null when it is not the current shape. */
-export function botIssueActionOf(value: unknown): BotIssueAction | null {
+export function botIssueActionOf<Access extends boolean = false>(value: unknown, accessRequests?: Access): IssueActionForAccess<Access> | null {
+  return parseIssueAction(value, accessRequests === true) as IssueActionForAccess<Access> | null;
+}
+
+function parseIssueAction(value: unknown, accessRequests: boolean): BotIssueAction | null {
   const kind = record(value)?.kind;
   if (typeof kind !== "string") return null;
   switch (kind) {
@@ -135,6 +151,8 @@ export function botIssueActionOf(value: unknown): BotIssueAction | null {
     case "keep_waiting":
     case "open_chat":
       return exact(value, ["kind"]) ? { kind } : null;
+    case "allow_folder":
+      return accessRequests && exact(value, ["kind"]) ? { kind } : null;
     default:
       return null;
   }
@@ -150,7 +168,7 @@ export function botIssueOf(value: unknown, botId?: string): BotIssue | null {
   if (typeof fields.id !== "string" || !ISSUE_ID.test(fields.id)) return null;
   if (typeof fields.botId !== "string" || !ISSUE_ID.test(fields.botId)) return null;
   if (botId !== undefined && fields.botId !== botId) return null;
-  const kind = botIssueKindOf(fields.kind);
+  const kind = botIssueKindOf(fields.kind, true);
   const dedupeKey = text(fields.dedupeKey, 400);
   const title = text(fields.title, BOT_ISSUE_LIMITS.titleChars);
   const body = text(fields.body, BOT_ISSUE_LIMITS.bodyChars, true);
@@ -164,11 +182,21 @@ export function botIssueOf(value: unknown, botId?: string): BotIssue | null {
   if (!Array.isArray(fields.actions) || fields.actions.length > 2) return null;
   const actions: BotIssueAction[] = [];
   for (const item of fields.actions) {
-    const action = botIssueActionOf(item);
+    const action = botIssueActionOf(item, true);
     if (action === null) return null;
     actions.push(action);
   }
   const resolvedAt = fields.resolvedAt === undefined ? undefined : timestamp(fields.resolvedAt);
+  let access: BotIssue["access"];
+  if (fields.access !== undefined) {
+    const value = exact(fields.access, ["label", "folderPath", "rootId", "authorization"]);
+    const authorization = botAccessAuthorizationOf(value?.authorization);
+    const label = text(value?.label, BOT_ACCESS_LABEL_MAX_CHARS);
+    if (kind !== "access_needed" || !value || !authorization || !label) return null;
+    if (value.folderPath !== undefined && (authorization.target !== "folder" || value.folderPath !== authorization.root || !authorization.choices.includes("always") || value.rootId !== authorization.rootId)) return null;
+    if (value.rootId !== undefined && value.folderPath === undefined) return null;
+    access = { label, authorization, ...(value.folderPath === undefined ? {} : { folderPath: value.folderPath as string }), ...(value.rootId === undefined ? {} : { rootId: value.rootId as string }) };
+  }
   if (fields.resolvedAt !== undefined && resolvedAt === undefined) return null;
   const resolution = fields.resolution === undefined ? undefined : botIssueResolutionOf(fields.resolution);
   if (resolution === null) return null;
@@ -183,6 +211,7 @@ export function botIssueOf(value: unknown, botId?: string): BotIssue | null {
     body,
     ...(typeof fields.routineId === "string" ? { routineId: fields.routineId } : {}),
     actions,
+    ...(access ? { access } : {}),
     createdAt,
     ...(resolvedAt === undefined ? {} : { resolvedAt }),
     ...(resolution === undefined ? {} : { resolution }),

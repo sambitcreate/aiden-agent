@@ -1,6 +1,6 @@
 # Bots that work together: implementation plan
 
-Status: implementation in progress (2026-11-03). Phase A Tasks 1–11 are implemented, locally verified across desktop, Remote, CLI, iOS and Android, and accepted by Opus 5.5 medium and OpenCode Go DeepSeek V4.1 Flash high at `dc89b16ce` in full-A round 4. Phase B access requests are next; C and D remain pending. The A implementation is on `feature/bot-messaging`, with main `a5c5db8b1` merged. PRs, final Astra review and exact-head CI are still pending.
+Status: implementation in progress (2026-11-03). Phase A Tasks 1–11 are implemented, locally verified across desktop, Remote, CLI, iOS and Android, and accepted by Opus 5.5 medium and OpenCode Go DeepSeek V4.1 Flash high at `dc89b16ce` in full-A round 4. Phase B access requests are implemented and locally validated on the stacked `feature/bot-access-requests` branch, with its independent phase gate pending; C and D remain pending. The A implementation is on `feature/bot-messaging`, with main `a5c5db8b1` merged. PRs, final Astra review and exact-head CI are still pending.
 
 This is the master plan. It records the owner's decisions and how the four detailed plans fit together. Research and design: [bot-to-bot-messaging-research.md](bot-to-bot-messaging-research.md).
 

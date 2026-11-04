@@ -1,3 +1,5 @@
+import { botAccessCardTitle, type BotPendingAccessRequest } from "../../../renderer/shared/bot-access-requests.js";
+import type { BotAccessRequests } from "./bot-access-requests.js";
 // The Mac notification for a hand-off card (plan §4.1, blueprint G24):
 // "Ada needs you to: Enter the 2FA code for your bank". It is posted when a
 // card opens while no Aiden window is focused, once per `waitId`, and clicking
@@ -36,7 +38,7 @@ export interface BotHandoffNotifierDeps {
 
 export interface BotHandoffNotifier {
   /** A card opened. Resolves true when a notification was shown for it. */
-  opened(prompt: BotPendingHandoff): Promise<boolean>;
+  opened(prompt: BotPendingHandoff | BotPendingAccessRequest): Promise<boolean>;
 }
 
 /** "Ada needs you to: <action>", on one line, at most 120 characters. */
@@ -73,7 +75,7 @@ export function createBotHandoffNotifier(deps: BotHandoffNotifierDeps): BotHando
         if (deps.isAppFocused()) return false;
         deps.show({
           title: name,
-          body: botHandoffNotificationBody(name, prompt.action),
+          body: botHandoffNotificationBody(name, "choices" in prompt ? botAccessCardTitle(name, prompt) : prompt.action),
           onClick: () => {
             // Capture both synchronous throws and asynchronous navigation failures.
             void Promise.resolve()
@@ -102,5 +104,15 @@ export function watchBotHandoffs(
 ): () => void {
   return handoffs.onChange((botId) => {
     for (const prompt of handoffs.pending(botId)) void notifier.opened(prompt);
+  });
+}
+
+/** Access cards share delivery, focus rechecks and attempt-id deduplication. */
+export function watchBotAccessRequests(
+  requests: Pick<BotAccessRequests, "onChange" | "pending">,
+  notifier: BotHandoffNotifier,
+): () => void {
+  return requests.onChange((botId) => {
+    for (const request of requests.pending(botId)) void notifier.opened(request);
   });
 }

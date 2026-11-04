@@ -14,6 +14,7 @@ const KIND_LOOK: Record<BotIssueKind, { icon: React.ReactNode; tone: BotNoticeTo
   routine_failed: { icon: <CircleAlert />, tone: "red" },
   routine_paused: { icon: <Pause />, tone: "neutral" },
   run_stalled: { icon: <Clock />, tone: "warning" },
+  access_needed: { icon: <CircleAlert />, tone: "warning" },
 };
 
 const RESOLVED_LINE: Record<BotIssueResolution, string> = {
@@ -44,6 +45,8 @@ export function botIssueActionLabel(action: BotIssueAction): string {
       return "Keep waiting";
     case "open_chat":
       return "Open chat";
+    case "allow_folder":
+      return "Allow this folder";
   }
 }
 

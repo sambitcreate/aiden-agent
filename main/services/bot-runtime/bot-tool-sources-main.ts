@@ -37,7 +37,7 @@ import type { ComputerUseController } from "../computer-use/controller.js";
 import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
 import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
-import { logger } from "../../platform.js";
+import { app, logger } from "../../platform.js";
 import { mcpPresetKeyBinding } from "../mcp-credential-cleanup-core.js";
 import { hasOAuthTokens } from "../mcp-oauth.js";
 import { presetSecretId } from "../mcp-presets.js";
@@ -84,6 +84,13 @@ import { createBotComputerToolState, type BotComputerToolState } from "../bot-co
 import { BOT_COMPUTER_SHELL_TOOL_NAME, BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
 import { botOwnWrites } from "../bot-routine-events/own-writes.js";
 import { botFileCandidates } from "./bot-file-candidates.js";
+import { createBotRunAccess } from "./bot-run-access.js";
+import { botAccessRequestCandidate } from "./bot-access-request-tool.js";
+import { botAccessRequests } from "./bot-access-requests-main.js";
+import { resolveBotAccessTarget } from "./bot-access-target.js";
+import os from "node:os";
+
+export const botRunAccess = createBotRunAccess({ now: Date.now });
 
 const BOT_HOME_LOCATION_ID = "builtin.bot_home.v1";
 
@@ -94,6 +101,7 @@ export interface BotToolSourceDeps {
   imageInput(botId: string): Promise<boolean>;
   /** A fresh admission, used by tools that revalidate during their own effect. */
   admit(botId: string): Promise<BotAdmission>;
+  policyRevision(botId: string): Promise<string>;
   dismissals: Pick<BotConnectionDismissalStore, "isDismissed">;
   /**
    * The Bot's own Custom access leaves this connection out: the same check its
@@ -425,6 +433,10 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         ...botFileCandidates(await botFileLocations(admission), {
           routine: routineRun,
           recordOwnWrite: (written) => botOwnWrites.record(botId, written),
+          ...(authority.accessMode === "custom" && authority.files.mode === "scoped" ? { runAccess: { resolve: async (call: import("./tool-adapter.js").BotToolCall) => {
+            await call.assertRunActive?.();
+            return botRunAccess.location(botId, await call.runRequestIds?.() ?? [], await deps.policyRevision(botId));
+          } } } : {}),
         }),
       );
       if (authority.files.botHome) tools.push(shareImageCandidate(authority));
@@ -496,6 +508,18 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       const signInOnComputer = has("computer") && facts.hasComputer;
       // A step in the Bot's own browser or on its computer: Open brings that forward, and phones finish it on the Mac.
       tools.push(botHandoffCandidate(botId, botHandoffs, { targets: { browser: has("browser"), computer: signInOnComputer } }));
+      if (authority.accessMode === "custom" && authority.files.mode === "scoped") tools.push(botAccessRequestCandidate(botId, {
+        requests: botAccessRequests, runAccess: botRunAccess, policyRevision: deps.policyRevision,
+        resolveTarget: (requested) => resolveBotAccessTarget(requested, { homeDirectory: os.homedir, privateRoots: () => [app.getPath("userData")], approvedRoots: async () => (await (await import("../aiden-remote-service-main.js")).getAidenRemoteRuntime()).state.snapshot().then((state) => state.approvedRoots) }),
+        currentLocations: async () => {
+          const fresh = await deps.admit(botId);
+          try {
+            if (fresh.authority.accessMode !== "custom" || fresh.authority.files.mode !== "scoped") throw new Error("This Bot's access changed. Ask for access again.");
+            await fresh.revalidateBeforeEffect(); return await botFileLocations(fresh);
+          } finally { fresh.release(); }
+        },
+        raiseIssue: async (input) => (await import("../bot-issues/service-main.js")).botIssues.raise(input),
+      }));
       // Needs the Browser or a computer in the Bot's access; the verdict keeps it off otherwise.
       tools.push(
         signInCandidate(botId, botHandoffs, {
@@ -543,12 +567,14 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
     },
 
     async shutdown() {
+      botRunAccess.clearAll();
       botBrowser.shutdown();
       await Promise.all([...controllers.keys()].map(closeController));
       await botComputerToolState?.shutdown();
     },
 
     async forgetBot(botId) {
+      botRunAccess.clearBot(botId);
       await closeController(botId);
       // The host deletes the Bot's computer on its own Delete Bot step.
       botComputerToolState?.forget(botId);

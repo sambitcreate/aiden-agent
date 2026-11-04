@@ -339,3 +339,13 @@ test("a burst of unreadable frames during a read becomes one follow-up read, and
   assert.equal(pending.length, 3);
   follower.stop();
 });
+
+test("paired desktops advance access request frames without exposing a phone card", () => {
+  const card = { waitId: "access-55", target: "folder" as const, label: "Reports", place: "~/Reports", why: "Summarize reports.", choices: ["not_now", "once"] as Array<"not_now" | "once"> };
+  const view = remoteBotSessionView(session({ accessRequest: card }));
+  assert.equal(view.snapshot.accessRequest, undefined);
+  const next = applyRemoteBotSessionEvent(view, event(5, { type: "access_request", payload: { accessRequest: card } }));
+  assert.equal(next?.snapshot.seq, 5);
+  assert.equal(next?.snapshot.accessRequest, undefined);
+  assert.deepEqual(next?.snapshot.entries, view.snapshot.entries);
+});

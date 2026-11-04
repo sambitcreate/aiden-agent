@@ -94,6 +94,7 @@ const TOOL_PHASES: ReadonlyMap<string, BotToolPhase> = new Map<string, BotToolPh
   ["routine_notes", "routine"],
   ["ask_user_question", "waiting"],
   ["hand_off", "waiting"],
+  ["request_access", "waiting"],
   ["sign_in", "waiting"],
 ]);
 
@@ -101,6 +102,7 @@ const TOOL_PHASES: ReadonlyMap<string, BotToolPhase> = new Map<string, BotToolPh
 const TOOL_STEP_LABELS: ReadonlyMap<string, string> = new Map<string, string>([
   ["codemode", "Ran a script"],
   ["hand_off", "Handed you a step"],
+  ["request_access", "Asked you for access"],
   ["sign_in", "Asked you to sign in"],
 ]);
 

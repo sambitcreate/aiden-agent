@@ -1884,6 +1884,19 @@ class AidenRemoteClient(
      * makes a retried answer replay the same receipt; `handoff_expired` means the card was
      * already answered or closed.
      */
+    suspend fun answerBotAccessRequest(
+        botId: String, waitId: String, request: AidenBotAccessAnswerRequest, idempotencyKey: UUID
+    ): AidenBotAccessAnswerReceipt {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        AidenBotHandoffWire.validateWaitId(waitId)
+        return executeRequest(
+            "/bots/$botId/access-requests/$waitId/answer", method = "POST",
+            bodyJson = botJson.encodeToString(AidenBotAccessAnswerRequest.serializer(), request),
+            idempotencyKey = idempotencyKey, retryConnectionFailure = false, acceptedStatus = setOf(200),
+            botScope = AidenBotPrivateResponseScope.Root("botAccessAnswer")
+        ) { bytes -> decodeBotWire(AidenBotAccessAnswerReceipt.serializer(), String(bytes, Charsets.UTF_8)) }
+    }
+
     suspend fun answerBotHandoff(
         botId: String,
         waitId: String,

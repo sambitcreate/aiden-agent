@@ -58,6 +58,7 @@ function setup(
     resume?: () => Promise<BotIssueResumeResult>;
     /** Hold chat writes until the test releases them, so a raise can start mid-attempt. */
     holdAppends?: boolean;
+    allowFolder?: import("./service.js").BotIssueServiceActions["allowFolder"];
   } = {},
 ) {
   const profile = tempProfile();
@@ -103,6 +104,7 @@ function setup(
       },
     },
     actions: {
+      ...(options.allowFolder ? { allowFolder: options.allowFolder } : {}),
       resumeRoutine: async (botId, id) => {
         calls.push(`resume:${botId}:${id}`);
         return options.resume ? await options.resume() : "resumed";
@@ -138,6 +140,50 @@ function setup(
     },
   };
 }
+
+const ACCESS_ISSUE = {
+  botId: BOT_ID, kind: "access_needed" as const, dedupeKey: "access:folder:/Taxes", title: "Needs Taxes", body: "Prepare a return", actions: [{ kind: "allow_folder" as const }],
+  access: { label: "Taxes", folderPath: "/Taxes", authorization: { policyRevision: "original-rev", requestIds: ["routine:r1:1"], target: "folder" as const, root: "/Taxes", identity: { device: "1", inode: "2" }, choices: ["not_now", "always", "once"] as const } },
+};
+test("allow_folder claims the saved authorization once, keeps the card open until committed and strips private data", async () => {
+  let release!: () => void, called!: () => void;
+  const entered = new Promise<void>((resolve) => { called = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const calls: unknown[] = [];
+  const app = setup({ allowFolder: async (...args) => { calls.push(args); called(); await gate; return "added"; } });
+  const issue = await app.issues.raise(ACCESS_ISSUE);
+  assert.equal("access" in issue, false);
+  assert.equal(JSON.stringify(app.appends).includes("authorization"), false);
+  const first = app.issues.act(BOT_ID, issue.id, { kind: "allow_folder" });
+  await entered;
+  assert.equal((await app.issues.list(BOT_ID, { open: true })).length, 1, "a crash before commit leaves the decision answerable");
+  assert.equal(await app.issues.act(BOT_ID, issue.id, { kind: "allow_folder" }), "not_open");
+  release(); assert.equal(await first, "done");
+  assert.deepEqual(calls, [[BOT_ID, { folderPath: "/Taxes", authorization: ACCESS_ISSUE.access.authorization }, issue.id]]);
+  assert.equal((await app.issues.list(BOT_ID))[0]!.resolution, "fixed");
+  assert.equal(await app.issues.act(BOT_ID, issue.id, { kind: "allow_folder" }), "not_open");
+  assert.equal((await app.store.read(BOT_ID))[0]!.access?.authorization.policyRevision, "original-rev");
+  assert.equal(JSON.stringify(await app.issues.list(BOT_ID)).includes("authorization"), false);
+});
+test("a failed folder grant leaves the issue open and retry uses the same operation id", async () => {
+  let count = 0; const operations: string[] = [];
+  const app = setup({ allowFolder: async (_botId, access, operationId) => {
+    operations.push(operationId); assert.equal(access.authorization.policyRevision, "original-rev");
+    if (++count === 1) throw new Error("saved policy changed"); return "already_allowed";
+  } });
+  const issue = await app.issues.raise(ACCESS_ISSUE);
+  await assert.rejects(app.issues.act(BOT_ID, issue.id, { kind: "allow_folder" }), /saved policy changed/u);
+  assert.equal((await app.issues.list(BOT_ID, { open: true })).length, 1);
+  assert.equal(await app.issues.act(BOT_ID, issue.id, { kind: "allow_folder" }), "done");
+  assert.deepEqual(operations, [issue.id, issue.id]);
+});
+test("Whole Mac issues offer settings only and cannot run allow_folder", async () => {
+  const app = setup({ allowFolder: async () => { throw new Error("must never grant"); } });
+  const issue = await app.issues.raise({ ...ACCESS_ISSUE, actions: [{ kind: "open_settings", section: "access" }], access: { label: "your whole Mac", authorization: { policyRevision: "rev1", requestIds: ["routine:r1:1"], target: "whole_mac", root: "/", choices: ["not_now", "once"] } } });
+  assert.equal(await app.issues.act(BOT_ID, issue.id, { kind: "allow_folder" }), "invalid");
+  await assert.rejects(app.issues.raise({ ...ACCESS_ISSUE, dedupeKey: "bad-access", access: { ...ACCESS_ISSUE.access, folderPath: undefined } }), /persistable folder/u);
+  assert.equal((await app.issues.list(BOT_ID, { open: true })).length, 1);
+});
 
 function statusEntries(appends: readonly Appended[]) {
   return appends.filter((entry) => entry.kind === BOT_ISSUE_STATUS_ENTRY_KIND);
@@ -428,4 +474,15 @@ test("deleting a routine settles the issues that asked about it", async () => {
   assert.deepEqual(statusEntries(harness.appends).map((entry) => entry.data), [
     { issueId: paused.id, resolution: "dismissed", resolvedAt: settled?.resolvedAt },
   ]);
+});
+
+test("an access issue's delivery obligation carries its durable audience gate without authorization", async () => {
+  const app = setup();
+  await app.issues.raise(ACCESS_ISSUE);
+  assert.equal(app.deliveries.length, 1);
+  assert.equal(app.deliveries[0]!.requiredCapability, "bot:access-requests");
+  assert.equal(JSON.stringify(app.deliveries).includes("authorization"), false);
+  assert.equal(JSON.stringify(app.deliveries).includes("/Taxes"), false);
+  await app.issues.raise(ISSUE);
+  assert.equal(app.deliveries[1]!.requiredCapability, undefined);
 });

@@ -1,5 +1,9 @@
 import { newChatUuid } from "../../renderer/shared/chat-identity.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { nextBotFileScopeIds } from "../../renderer/shared/bot-capabilities.js";
+import { botAccessRootInventoryRevision, resolveBotAccessTarget, type BotAccessTargetDeps } from "./bot-runtime/bot-access-target.js";
+import type { AidenRemoteApprovedRoot } from "./aiden-remote-state.js";
+import type { BotFolderGrantInput, BotFolderGrantJournal, BotFolderGrantRecord } from "./bot-folder-grant-journal.js";
 import { BotRuntimeInventoryLeaseInvalidError } from "./bot-runtime-inventory-lease.js";
 import type {
   BotAccessUpdate,
@@ -122,6 +126,20 @@ type CatalogPort = Pick<
 > & Partial<Pick<BotCapabilityCatalogMainService, "bindProviderModel">>;
 
 export interface BotApplicationDependencies {
+  /**
+   * Root ownership is durable before policy publication. The lock also covers
+   * ordinary access saves and phone approvals, so compensation cannot race a
+   * second Bot selecting the root. removeOwned must compare the operation id
+   * and botsOnly marker atomically and must never delete the filesystem folder.
+   */
+  approvedFolders?: {
+    list(): Promise<readonly AidenRemoteApprovedRoot[]>;
+    add(folderPath: string, input: { operationId: string; rootId: string; expectedIdentity: { device: string; inode: string }; assertCurrent(): void }): Promise<{ id: string }>;
+    removeOwned(rootId: string, operationId: string): Promise<boolean>;
+    withInventoryLock<T>(action: () => Promise<T>): Promise<T>;
+    target: Pick<BotAccessTargetDeps, "homeDirectory" | "privateRoots">;
+    journal: BotFolderGrantJournal;
+  };
   botStore: BotStorePort;
   chatStore: ChatStorePort;
   capabilityStore: CapabilityStorePort;
@@ -164,6 +182,15 @@ export interface BotApplicationDependencies {
   mintChatId?(): string;
   mintOperationId?(): string;
 }
+
+interface UpdateBotAccessInput {
+  audienceId: string;
+  botId: string;
+  expectedRevision: string;
+  access: BotAccessUpdate;
+  refuseDriftedGrants?: boolean | { message: string };
+}
+export const BOT_FOLDER_GRANT_DRIFT_MESSAGE = "Some of this Bot's access changed since you last saved it. Review it in the Bot's settings first.";
 
 export interface CreateBotApplicationInput {
   audienceId: string;
@@ -772,6 +799,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
 
   const initialize = async (): Promise<void> => {
     await deps.capabilityStore.initialize();
+    await recoverFolderGrants();
     for (const operation of await deps.lifecycleJournal.listPending()) {
       await deps.mutationGate.run(operation.botId, () => reconcileOperation(operation));
     }
@@ -1177,7 +1205,439 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     }
   };
 
+  const withFolderInventoryLock = <T>(action: () => Promise<T>): Promise<T> =>
+    deps.approvedFolders ? deps.approvedFolders.withInventoryLock(action) : action();
+
+  const saveBotAccess = async (
+    input: UpdateBotAccessInput,
+    guard?: { assertCurrent(): void; validate(): Promise<void> },
+  ) => {
+    await ensureOperational();
+    return withFolderInventoryLock(() =>
+      runBotMutation(input.botId, async () => {
+        await activeBot(input.botId);
+        return withFreshInventoryLease(async (leaseAssert) => {
+          const assertCurrent = () => {
+            leaseAssert();
+            guard?.assertCurrent();
+          };
+          const currentChat = await canonicalChatForBot(input.botId);
+          const snapshot = await snapshotForAudience(input.audienceId, input.botId, [
+            ...(currentChat ? retainedBotProviderForChat(currentChat) : []),
+            ...(await retainedVisionProvider(input.botId)),
+          ]);
+          // Audience-safe IDs are revalidated against this exact fresh snapshot.
+          // A stale client revision can therefore be rebased without accepting a
+          // removed or changed provider, model, connection, skill, or file scope.
+          const access: BotAccessUpdate = withCurrentCatalogRevision(
+            input.access,
+            snapshot.catalog.revision,
+          );
+          await guard?.validate();
+          if (guard) assertCurrent();
+          const savedBinding = await deps.capabilityStore.getBotBinding(input.botId);
+          if (
+            input.refuseDriftedGrants &&
+            savedBinding &&
+            (
+              await deps.catalog.reconcile(savedBinding, {
+                audienceId: input.audienceId,
+                botId: input.botId,
+                snapshot,
+              })
+            ).state !== "ready"
+          ) {
+            throw new Error(
+              typeof input.refuseDriftedGrants === "object"
+                ? input.refuseDriftedGrants.message
+                : "Some of this Bot's access changed since you last saved it. Review it in the Bot's settings, then add this app there.",
+            );
+          }
+          const binding =
+            access.accessMode === "custom"
+              ? await deps.catalog.bindCustom({
+                  audienceId: input.audienceId,
+                  botId: input.botId,
+                  selection: access.custom,
+                  catalogRevision: access.catalogRevision,
+                  retainedBindings: savedBinding ? [savedBinding] : [],
+                  snapshot,
+                })
+              : undefined;
+          const modelBinding =
+            access.accessMode === "full" && access.providerId && access.modelId
+              ? (
+                  await deps.catalog.bindCustom({
+                    audienceId: input.audienceId,
+                    botId: input.botId,
+                    selection: {
+                      providerId: access.providerId,
+                      modelId: access.modelId,
+                      fileScopeIds: [],
+                      shellEnabled: false,
+                      connectionIds: [],
+                      skillIds: [],
+                      otherCapabilityIds: [],
+                    },
+                    catalogRevision: access.catalogRevision,
+                    snapshot,
+                  })
+                ).provider
+              : undefined;
+          const visionModelBinding = access.visionModel
+            ? await bindVisionModel({
+                audienceId: input.audienceId,
+                botId: input.botId,
+                providerId: access.visionModel.providerId,
+                modelId: access.visionModel.modelId,
+                catalogRevision: access.catalogRevision,
+                requireImages: true,
+                snapshot,
+              })
+            : undefined;
+          const currentModel = await deps.capabilityStore.getBotModelAuthority(input.botId);
+          const selectedProvider = binding?.provider ?? modelBinding ?? currentModel?.binding;
+          const needsMirror = Boolean(
+            currentChat &&
+            selectedProvider &&
+            (currentChat.providerId !== selectedProvider.sourceProviderId ||
+              currentChat.model !== selectedProvider.sourceModelId),
+          );
+          let operation =
+            needsMirror && currentChat
+              ? await beginPending({
+                  operationId: mintOperationId(),
+                  kind: "update_model",
+                  botId: input.botId,
+                  subject: {
+                    chatId: currentChat.id,
+                    expectedRevision: input.expectedRevision,
+                  },
+                })
+              : undefined;
+          let result;
+          try {
+            await guard?.validate();
+            assertCurrent();
+            result = await deps.capabilityStore.updateBotPolicy({
+              botId: input.botId,
+              expectedRevision: input.expectedRevision,
+              catalog: snapshot.catalog,
+              access,
+              ...(binding ? { binding } : {}),
+              ...(modelBinding ? { modelBinding } : {}),
+              ...(visionModelBinding ? { visionModelBinding } : {}),
+              ...(currentChat ? { canonicalChatId: currentChat.id } : {}),
+              assertCurrent,
+            });
+          } catch (error) {
+            if (operation) {
+              await deps.lifecycleJournal.rollback(operation.operationId, operation.stage);
+            }
+            throw error;
+          }
+          if (operation) {
+            try {
+              await finishUpdateModel(operation);
+            } catch {
+              await reconcileVisibleCommit(operation, async () => {
+                const authority = await deps.capabilityStore.getBotModelAuthority(input.botId);
+                const chat = await deps.chatStore.get(currentChat!.id);
+                if (
+                  !authority ||
+                  !chat ||
+                  chat.botId !== input.botId ||
+                  chat.providerId !== authority.binding.sourceProviderId ||
+                  chat.model !== authority.binding.sourceModelId
+                ) {
+                  throw new Error("The Bot model mirror could not be verified after recovery.");
+                }
+              });
+            }
+          }
+          return result;
+        });
+      }),
+    );
+  };
+
+  const folderRootSelected = async (botId: string, rootId: string): Promise<boolean> => {
+    if (!(await deps.botStore.get(botId))) return false;
+    const policy = await deps.capabilityStore.getBotPolicy(botId);
+    if (policy.accessMode !== "custom") return false;
+    const binding = await deps.capabilityStore.getBotBinding(botId);
+    return (binding?.fileScopes ?? []).some(
+      (scope) =>
+        scope.sourceId === rootId &&
+        scope.option.kind === "approved_location" &&
+        policy.custom.fileScopeIds.includes(scope.option.id),
+    );
+  };
+
+  const recoverFolderRecord = async (record: BotFolderGrantRecord): Promise<void> => {
+    const folders = deps.approvedFolders!;
+    if (record.state !== "pending") return;
+    if (await folderRootSelected(record.input.botId, record.rootId)) {
+      const policy = await deps.capabilityStore.getBotPolicy(record.input.botId);
+      const binding = await deps.capabilityStore.getBotBinding(record.input.botId);
+      const optionId = binding!.fileScopes.find((scope) => scope.sourceId === record.rootId)!.option
+        .id;
+      await folders.journal.put({
+        ...record,
+        state: "committed",
+        optionId,
+        resultRevision: policy.revision,
+      });
+      return;
+    }
+    if (record.ownsRoot) {
+      let shared = false;
+      for (const bot of await deps.botStore.list())
+        if (await folderRootSelected(bot.id, record.rootId)) {
+          shared = true;
+          break;
+        }
+      if (!shared) await folders.removeOwned(record.rootId, record.input.operationId);
+    }
+    await folders.journal.put({ ...record, state: "rolled_back" });
+  };
+
+  const recoverFolderGrants = async (): Promise<void> => {
+    const folders = deps.approvedFolders;
+    if (!folders) return;
+    await folders.withInventoryLock(async () => {
+      for (const record of await folders.journal.list()) await recoverFolderRecord(record);
+    });
+  };
+
+  const validateFolder = async (input: BotFolderGrantInput, allowedRootId?: string) => {
+    const folders = deps.approvedFolders!;
+    const target = await resolveBotAccessTarget(input.folderPath, {
+      ...folders.target,
+      approvedRoots: folders.list,
+    });
+    const inventory = (await folders.list()).filter(
+      (root) => input.rootId !== undefined || root.id !== allowedRootId,
+    );
+    if (
+      input.expectedInventoryRevision &&
+      botAccessRootInventoryRevision(inventory) !== input.expectedInventoryRevision
+    )
+      throw new Error("The approved folders changed. Ask for access again.");
+    if (
+      target.kind !== "folder" ||
+      target.root !== input.folderPath ||
+      target.device !== input.expectedIdentity.device ||
+      target.inode !== input.expectedIdentity.inode
+    )
+      throw new Error("That folder changed. Ask for access again.");
+    if (
+      target.always.kind === "none" ||
+      (target.always.kind === "existing" && target.always.rootId !== allowedRootId) ||
+      (allowedRootId && target.always.kind !== "existing")
+    )
+      throw new Error("The approved folders changed. Ask for access again.");
+    if (allowedRootId) {
+      const root = (await folders.list()).find((entry) => entry.id === allowedRootId);
+      if (
+        !root ||
+        root.folderPath !== target.root ||
+        root.device !== target.device ||
+        root.inode !== target.inode
+      )
+        throw new Error("That folder changed. Ask for access again.");
+    }
+    return target;
+  };
+
+  const grantBotFolder = async (
+    input: BotFolderGrantInput,
+    owner?: { assertCurrent(): void },
+  ): Promise<"added" | "already_allowed"> => {
+    await ensureOperational();
+    const folders = deps.approvedFolders;
+    if (!folders) throw new Error("That folder can't be added right now.");
+    // Freeze caller-owned values before the first awaited authorization check.
+    input = structuredClone(input);
+    return folders.withInventoryLock(async () => {
+      await recoverFolderGrants();
+      const prior = (await folders.journal.list()).find(
+        (entry) => entry.input.operationId === input.operationId,
+      );
+      if (prior && JSON.stringify(prior.input) !== JSON.stringify(input))
+        throw new Error("That folder approval belongs to another request.");
+      if (prior?.state === "committed") {
+        const policy = await deps.capabilityStore.getBotPolicy(input.botId);
+        if (
+          policy.revision !== prior.resultRevision ||
+          !(await folderRootSelected(input.botId, prior.rootId))
+        )
+          throw new Error("This Bot's access changed. Ask for access again.");
+        await validateFolder(input, prior.rootId);
+        return "already_allowed";
+      }
+      return withFreshInventoryLease(async (leaseAssert) => {
+        const assertCurrent = () => {
+          leaseAssert();
+          owner?.assertCurrent();
+        };
+        await activeBot(input.botId);
+        const policy = await deps.capabilityStore.getBotPolicy(input.botId);
+        const requirePolicy = async () => {
+          const current = await deps.capabilityStore.getBotPolicy(input.botId);
+          if (
+            current.revision !== input.expectedRevision ||
+            current.accessMode !== "custom" ||
+            !current.custom.fileScopeIds.length
+          )
+            throw new Error("This Bot's access changed. Ask for access again.");
+        };
+        await requirePolicy();
+        if (policy.accessMode !== "custom")
+          throw new Error("This Bot's access changed. Ask for access again.");
+        await validateFolder(input, input.rootId);
+        const chat = await canonicalChatForBot(input.botId);
+        const snapshot = await snapshotForAudience(input.audienceId, input.botId, [
+          ...(chat ? retainedBotProviderForChat(chat) : []),
+          ...(await retainedVisionProvider(input.botId)),
+        ]);
+        if (
+          snapshot.catalog.fileScopes.some(
+            (option) =>
+              option.kind === "full_mac" && policy.custom.fileScopeIds.includes(option.id),
+          )
+        )
+          throw new Error("This Bot's access changed. Ask for access again.");
+        const savedBinding = await deps.capabilityStore.getBotBinding(input.botId);
+        if (
+          !savedBinding ||
+          (
+            await deps.catalog.reconcile(savedBinding, {
+              audienceId: input.audienceId,
+              botId: input.botId,
+              snapshot,
+            })
+          ).state !== "ready"
+        )
+          throw new Error(BOT_FOLDER_GRANT_DRIFT_MESSAGE);
+        assertCurrent();
+        const rootId =
+          input.rootId ??
+          `root_${createHash("sha256").update(input.operationId).digest("base64url")}`;
+        let record: BotFolderGrantRecord = {
+          input,
+          rootId,
+          ownsRoot: !input.rootId,
+          state: "pending",
+        };
+        await folders.journal.put(record);
+        try {
+          await requirePolicy();
+          await validateFolder(input, input.rootId);
+          assertCurrent();
+          if (!input.rootId) {
+            const root = await folders.add(input.folderPath, {
+              operationId: input.operationId,
+              rootId,
+              expectedIdentity: input.expectedIdentity,
+              assertCurrent,
+            });
+            if (root.id !== rootId)
+              throw new Error("The approved folders changed. Ask for access again.");
+          }
+          await requirePolicy();
+          await validateFolder(input, rootId);
+          assertCurrent();
+          const fresh = await snapshotForAudience(input.audienceId, input.botId, [
+            ...(chat ? retainedBotProviderForChat(chat) : []),
+            ...(await retainedVisionProvider(input.botId)),
+          ]);
+          const option = fresh.resources.fileScopes.find(
+            (scope) => scope.sourceId === rootId && scope.option.kind === "approved_location",
+          )?.option;
+          if (!option?.available) throw new Error("That folder can't be added right now.");
+          record = { ...record, optionId: option.id };
+          await folders.journal.put(record);
+          if (policy.custom.fileScopeIds.includes(option.id)) {
+            await folders.journal.put({
+              ...record,
+              state: "committed",
+              resultRevision: policy.revision,
+            });
+            return "already_allowed";
+          }
+          const updated = await saveBotAccess(
+            {
+              audienceId: input.audienceId,
+              botId: input.botId,
+              expectedRevision: input.expectedRevision,
+              refuseDriftedGrants: { message: BOT_FOLDER_GRANT_DRIFT_MESSAGE },
+              access: {
+                accessMode: "custom",
+                catalogRevision: fresh.catalog.revision,
+                custom: {
+                  ...policy.custom,
+                  fileScopeIds: nextBotFileScopeIds(
+                    policy.custom.fileScopeIds,
+                    fresh.catalog.fileScopes,
+                    option.id,
+                    true,
+                  ),
+                },
+              },
+            },
+            {
+              assertCurrent,
+              validate: async () => {
+                await requirePolicy();
+                await validateFolder(input, rootId);
+              },
+            },
+          );
+          await folders.journal.put({
+            ...record,
+            state: "committed",
+            resultRevision: updated.revision,
+          });
+          return "added";
+        } catch (error) {
+          // Also handles save() throwing after publication. Recovery observes the
+          // actual bound root before deciding to retain or compensate it.
+          try {
+            await recoverFolderRecord(record);
+          } catch (recoveryError) {
+            // A pending owned root must not become selectable through another
+            // Bot mutation while compensation cannot finish. Startup repairs
+            // the journal before this service accepts any further changes.
+            recoveryFailure = recoveryError;
+            throw recoveryError;
+          }
+          const recovered = (await folders.journal.list()).find(
+            (entry) => entry.input.operationId === input.operationId,
+          );
+          if (recovered?.state === "committed") {
+            const current = await deps.capabilityStore.getBotPolicy(input.botId);
+            if (
+              current.revision === recovered.resultRevision &&
+              (await folderRootSelected(input.botId, recovered.rootId))
+            )
+              return "added";
+          }
+          throw error;
+        }
+      });
+    });
+  };
+
   const service = {
+    grantBotFolder,
+    /** The exact publication receipt; answer handlers never adopt a fresh revision. */
+    async botFolderGrantPolicyRevision(botId: string, operationId: string): Promise<string> {
+      const record = (await deps.approvedFolders?.journal.list())?.find((entry) => entry.input.operationId === operationId && entry.input.botId === botId && entry.state === "committed");
+      const policy = await deps.capabilityStore.getBotPolicy(botId);
+      if (!record?.resultRevision || record.resultRevision !== policy.revision || !await folderRootSelected(botId, record.rootId)) throw new Error("This Bot's access changed. Ask for access again.");
+      return record.resultRevision;
+    },
     initialize: ensureOperational,
 
     async list() {
@@ -1256,148 +1716,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       });
     },
 
-    async updateBotAccess(input: {
-      audienceId: string;
-      botId: string;
-      expectedRevision: string;
-      access: BotAccessUpdate;
-      /**
-       * Refuse, writing nothing, when the saved Custom grants no longer match
-       * the snapshot this save binds against (checked on every retry).
-       */
-      refuseDriftedGrants?: boolean;
-    }) {
-      await ensureOperational();
-      return runBotMutation(input.botId, async () => {
-        await activeBot(input.botId);
-        return withFreshInventoryLease(async (assertCurrent) => {
-          const currentChat = await canonicalChatForBot(input.botId);
-          const snapshot = await snapshotForAudience(
-            input.audienceId,
-            input.botId,
-            [
-              ...(currentChat ? retainedBotProviderForChat(currentChat) : []),
-              ...(await retainedVisionProvider(input.botId)),
-            ],
-          );
-          // Audience-safe IDs are revalidated against this exact fresh snapshot.
-          // A stale client revision can therefore be rebased without accepting a
-          // removed or changed provider, model, connection, skill, or file scope.
-          const access: BotAccessUpdate = withCurrentCatalogRevision(
-            input.access,
-            snapshot.catalog.revision,
-          );
-          const savedBinding = await deps.capabilityStore.getBotBinding(input.botId);
-          if (
-            input.refuseDriftedGrants &&
-            savedBinding &&
-            (await deps.catalog.reconcile(savedBinding, {
-              audienceId: input.audienceId,
-              botId: input.botId,
-              snapshot,
-            })).state !== "ready"
-          ) {
-            throw new Error(
-              "Some of this Bot's access changed since you last saved it. Review it in the Bot's settings, then add this app there.",
-            );
-          }
-          const binding = access.accessMode === "custom"
-            ? await deps.catalog.bindCustom({
-                audienceId: input.audienceId,
-                botId: input.botId,
-                selection: access.custom,
-                catalogRevision: access.catalogRevision,
-                retainedBindings: savedBinding ? [savedBinding] : [],
-                snapshot,
-              })
-            : undefined;
-          const modelBinding = access.accessMode === "full" && access.providerId && access.modelId
-            ? (await deps.catalog.bindCustom({
-                audienceId: input.audienceId,
-                botId: input.botId,
-                selection: {
-                  providerId: access.providerId,
-                  modelId: access.modelId,
-                  fileScopeIds: [],
-                  shellEnabled: false,
-                  connectionIds: [],
-                  skillIds: [],
-                  otherCapabilityIds: [],
-                },
-                catalogRevision: access.catalogRevision,
-                snapshot,
-              })).provider
-            : undefined;
-          const visionModelBinding = access.visionModel
-            ? await bindVisionModel({
-                audienceId: input.audienceId,
-                botId: input.botId,
-                providerId: access.visionModel.providerId,
-                modelId: access.visionModel.modelId,
-                catalogRevision: access.catalogRevision,
-                requireImages: true,
-                snapshot,
-              })
-            : undefined;
-          const currentModel = await deps.capabilityStore.getBotModelAuthority(input.botId);
-          const selectedProvider = binding?.provider ?? modelBinding ?? currentModel?.binding;
-          const needsMirror = Boolean(
-            currentChat && selectedProvider &&
-            (currentChat.providerId !== selectedProvider.sourceProviderId ||
-              currentChat.model !== selectedProvider.sourceModelId),
-          );
-          let operation = needsMirror && currentChat
-            ? await beginPending({
-                operationId: mintOperationId(),
-                kind: "update_model",
-                botId: input.botId,
-                subject: {
-                  chatId: currentChat.id,
-                  expectedRevision: input.expectedRevision,
-                },
-              })
-            : undefined;
-          let result;
-          try {
-            assertCurrent();
-            result = await deps.capabilityStore.updateBotPolicy({
-              botId: input.botId,
-              expectedRevision: input.expectedRevision,
-              catalog: snapshot.catalog,
-              access,
-              ...(binding ? { binding } : {}),
-              ...(modelBinding ? { modelBinding } : {}),
-              ...(visionModelBinding ? { visionModelBinding } : {}),
-              ...(currentChat ? { canonicalChatId: currentChat.id } : {}),
-              assertCurrent,
-            });
-          } catch (error) {
-            if (operation) {
-              await deps.lifecycleJournal.rollback(operation.operationId, operation.stage);
-            }
-            throw error;
-          }
-          if (operation) {
-            try {
-              await finishUpdateModel(operation);
-            } catch {
-              await reconcileVisibleCommit(operation, async () => {
-                const authority = await deps.capabilityStore.getBotModelAuthority(input.botId);
-                const chat = await deps.chatStore.get(currentChat!.id);
-                if (
-                  !authority || !chat || chat.botId !== input.botId ||
-                  chat.providerId !== authority.binding.sourceProviderId ||
-                  chat.model !== authority.binding.sourceModelId
-                ) {
-                  throw new Error("The Bot model mirror could not be verified after recovery.");
-                }
-              });
-            }
-          }
-          return result;
-        });
-      });
-    },
+    updateBotAccess: (input: UpdateBotAccessInput) => saveBotAccess(input),
 
     /**
      * Hard-delete the Bot's photo, managed home, access, chat rows and record

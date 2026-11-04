@@ -1,4 +1,5 @@
 import { BOT_MESSAGE_TOOL_NAME, botMessageChainOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
+import { BOT_REQUEST_ACCESS_TOOL_NAME } from "../../../renderer/shared/bot-access-requests.js";
 // Which tools a Bot may use, and which need the person's approval.
 //
 // This is the legacy Bot classification from `llm-client.ts`
@@ -85,6 +86,11 @@ export function botTurnOf(requestId: string | undefined): Required<BotToolTurn> 
   };
 }
 
+/** Use the shared turn classifier, including A's message and reply kinds. */
+export function botRunUnattended(requestIds: readonly (string | undefined)[]): boolean {
+  return requestIds.some((id) => { const turn = botTurnOf(id); return turn.routine || turn.telegram || turn.botMessage; });
+}
+
 const UNATTENDED_WITHHELD = new Set<string>([
   ASK_USER_QUESTION_TOOL_NAME,
   ROUTINE_TOOL,
@@ -106,6 +112,7 @@ const UNATTENDED_WITHHELD = new Set<string>([
  * every input allows it.
  */
 export function botIngressAllowsTool(name: string, requestIds: readonly (string | undefined)[]): boolean {
+  if (name === BOT_REQUEST_ACCESS_TOOL_NAME) return requestIds.length > 0 && requestIds.every((id) => !botTurnOf(id).intro);
   if (name === BOT_MESSAGE_TOOL_NAME) return botMessageChainOf(requestIds).canSend;
   // A routine's notepad belongs to routine runs alone: a person's turn, or a
   // run a person's message joined, never sees it.
@@ -146,6 +153,10 @@ export async function botToolVerdict(
   args?: unknown,
 ): Promise<BotToolVerdict> {
   const { authority } = facts;
+  if (name === BOT_REQUEST_ACCESS_TOOL_NAME) {
+    if (authority.accessMode !== "custom" || authority.files.mode === "full_mac") return { allowed: false, reason: "This Bot can already use your whole Mac." };
+    return verdict(authority.files.mode === "scoped", "File access is off for this Bot.");
+  }
   if (name === BOT_MESSAGE_TOOL_NAME) return verdict(!turn.telegram && !turn.routine, "Messaging other Bots is off for this turn.");
   if (turn.botMessage && (UNATTENDED_WITHHELD.has(name) || name === WAKE_UP_TOOL)) return {allowed: false, reason: "This tool is not available on a Bot-message turn."};
   if (name === INSPECT_IMAGE_TOOL_NAME) {

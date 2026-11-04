@@ -27,12 +27,14 @@ export interface BotFileToolLocation {
   readonly root: string;
   /** Optional main-only identity captured by the authority resolver. */
   readonly expectedIdentity?: PinnedWorkspaceRootIdentity;
+  readonly access?: "read" | "write";
 }
 
 export interface BotFileToolRouterOptions {
   /** Omission of `location` always resolves to this exact enabled location. */
   readonly defaultLocation: BotFileToolLocation;
   readonly additionalLocations?: readonly BotFileToolLocation[];
+  readonly lateLocation?: { readonly id: string; readonly label: string; resolve(): Promise<BotFileToolLocation | undefined> };
   /**
    * Absolute directories no write may land in, whatever location is used.
    * Defaults to the process-wide roots (`setBotFileToolProtectedRoots`).
@@ -153,6 +155,7 @@ function safeLabel(label: string): boolean {
 }
 
 function checkedLocation(location: BotFileToolLocation, role: string): BotFileToolLocation {
+  if (location.access !== undefined && location.access !== "read" && location.access !== "write") throw new Error(`${role} must specify read or write access.`);
   if (!SAFE_OPAQUE_LOCATION_ID.test(location.id)) {
     throw new Error(`${role} must have a safe opaque location id.`);
   }
@@ -173,6 +176,7 @@ function checkedLocation(location: BotFileToolLocation, role: string): BotFileTo
     id: location.id,
     label: location.label,
     root: path.resolve(location.root),
+    ...(location.access === undefined ? {} : { access: location.access }),
     ...(location.expectedIdentity
       ? { expectedIdentity: Object.freeze({ ...location.expectedIdentity }) }
       : {}),
@@ -244,7 +248,7 @@ function unknownLocationError(): Error {
   return new Error("That file location is not enabled for this Bot chat.");
 }
 
-function redactLocationRoots(error: unknown, locations: readonly PreparedLocation[]): Error {
+function redactLocationRoots(error: unknown, locations: readonly BotFileToolLocation[]): Error {
   if (!(error instanceof Error)) return new Error("The Bot file operation failed.");
   let message = error.message;
   for (const { root } of locations) {
@@ -290,6 +294,10 @@ export function buildBotFileTools(options: BotFileToolRouterOptions): AgentTool[
   }));
   const byId = new Map(prepared.map((location) => [location.id, location] as const));
   const schemaLocations = prepared.map(({ id, label }) => ({ id, label }));
+  if (options.lateLocation) {
+    if (ids.has(options.lateLocation.id) || !SAFE_OPAQUE_LOCATION_ID.test(options.lateLocation.id) || !safeLabel(options.lateLocation.label)) throw new Error("Invalid late Bot file location.");
+    schemaLocations.push({ id: options.lateLocation.id, label: options.lateLocation.label });
+  }
 
   return BOT_FILE_TOOL_NAMES.map((name) => {
     const defaultTool = prepared[0]!.tools.get(name)!;
@@ -308,10 +316,18 @@ export function buildBotFileTools(options: BotFileToolRouterOptions): AgentTool[
         if (suppliedLocation !== undefined && typeof suppliedLocation !== "string") {
           throw unknownLocationError();
         }
-        const selected = byId.get(suppliedLocation ?? defaultLocation.id);
+        let selected = byId.get(suppliedLocation ?? defaultLocation.id);
+        if (!selected && suppliedLocation === options.lateLocation?.id) {
+          const resolved = await options.lateLocation!.resolve();
+          if (!resolved) throw new Error("Nothing extra is allowed for this task yet. Ask with request_access first.");
+          if (resolved.id !== suppliedLocation) throw unknownLocationError();
+          const checked = checkedLocation(resolved, "Task location");
+          selected = { ...checked, tools: underlyingTools(checked, options.fileMutatorBinary) };
+        }
         if (!selected) throw unknownLocationError();
         const underlying = selected.tools.get(name);
         if (!underlying) throw unknownLocationError();
+        if (WRITING_TOOLS.has(name) && selected.access === "read") throw new Error("This task allows reading this folder only. Ask with request_access before changing it.");
         if (
           WRITING_TOOLS.has(name) &&
           (await writesIntoProtectedRoot(selected.root, underlyingParams, (options.protectedRoots ?? processProtectedRoots)()))
@@ -327,7 +343,7 @@ export function buildBotFileTools(options: BotFileToolRouterOptions): AgentTool[
         try {
           result = await underlying.execute(toolCallId, underlyingParams, signal, onUpdate);
         } catch (error) {
-          throw redactLocationRoots(error, prepared);
+          throw redactLocationRoots(error, [...prepared, selected]);
         }
         if (options.onWrite && WRITING_TOOLS.has(name) && typeof underlyingParams.path === "string") {
           const written = await realTarget(path.resolve(selected.root, underlyingParams.path)).catch(() => undefined);

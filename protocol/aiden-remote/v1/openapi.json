@@ -7254,6 +7254,68 @@
         "summary": "Set whether Bots can message each other",
         "description": "Revision 54. Requires bot:write and negotiated bot:messaging. Exact boolean enabled. Changes gate new sends only; accepted deliveries finish. No inference or catalog access."
       }
+    },
+    "/bots/{botId}/access-requests/{waitId}/answer": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "name": "waitId",
+          "in": "path",
+          "required": true,
+          "description": "The current access request waitId.",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "answerBotAccessRequest",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:access-requests"
+        ],
+        "description": "Revision 55. Answer an offered access choice. Requires Idempotency-Key; a repeat replays the receipt even after the card settles or a response is lost. An unoffered choice is 400 invalid_request. A settled or expired request is 409 access_request_expired. Unwired hosts return 404.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotAccessAnswerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The host authorized and settled the answer, or replayed its original receipt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotAccessAnswerReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -8012,6 +8074,7 @@
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:access-requests",
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
@@ -8059,6 +8122,7 @@
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:access-requests",
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
@@ -8209,6 +8273,7 @@
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:access-requests",
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
@@ -8265,6 +8330,7 @@
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:access-requests",
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
@@ -15027,7 +15093,8 @@
           "memory_blocked",
           "routine_proposal_not_found",
           "bot_paused",
-          "handoff_expired"
+          "handoff_expired",
+          "access_request_expired"
         ]
       },
       "ErrorDetails": {
@@ -17106,6 +17173,17 @@
             "items": {
               "$ref": "#/components/schemas/BotIssue"
             }
+          },
+          "accessRequest": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BotAccessRequest"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Revision 55. Present only for bot:access-requests holders."
           }
         },
         "unevaluatedProperties": false
@@ -17134,7 +17212,8 @@
               "preflight_failed",
               "routine_failed",
               "routine_paused",
-              "run_stalled"
+              "run_stalled",
+              "access_needed"
             ]
           },
           "title": {
@@ -17202,7 +17281,8 @@
               "open_chat",
               "resume_routine",
               "stop_run",
-              "keep_waiting"
+              "keep_waiting",
+              "allow_folder"
             ]
           },
           "routineId": {
@@ -17213,7 +17293,8 @@
             "description": "Present exactly on resume_routine."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "allow_folder requires bot:access-requests beside bot:issues."
       },
       "BotIssueActRequest": {
         "type": "object",
@@ -17358,11 +17439,12 @@
               "queued",
               "handoff",
               "issues",
-              "closed"
+              "closed",
+              "access_request"
             ]
           },
           "payload": {
-            "description": "handoff (contract revision 37, only for devices holding bot:handoffs) carries { handoff: BotHandoff | null }. issues (contract revision 42, only for devices holding bot:issues) carries { issues: BotIssue[] }. At the same seq, other devices get a state frame, so their sequence still advances.",
+            "description": "handoff (contract revision 37, only for devices holding bot:handoffs) carries { handoff: BotHandoff | null }. issues (contract revision 42, only for devices holding bot:issues) carries { issues: BotIssue[] }. At the same seq, other devices get a state frame, so their sequence still advances. Revision 55 access_request carries {accessRequest: BotAccessRequest | null} only for bot:access-requests holders. Legacy phones and paired desktops receive an assistant access-notice entry, removed by an authoritative snapshot on settlement or replacement.",
             "type": "object"
           }
         },
@@ -18833,6 +18915,151 @@
           }
         },
         "additionalProperties": false
+      },
+      "BotAccessRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "waitId",
+          "target",
+          "label",
+          "why",
+          "choices"
+        ],
+        "properties": {
+          "waitId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9-]{1,64}$"
+          },
+          "target": {
+            "type": "string",
+            "enum": [
+              "folder",
+              "whole_mac"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "allOf": [
+              {
+                "pattern": "\\S"
+              },
+              {
+                "not": {
+                  "pattern": "[\\u0000-\\u001f\\u007f-\\u009f]"
+                }
+              }
+            ]
+          },
+          "place": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^(~/|/)"
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400,
+            "allOf": [
+              {
+                "pattern": "\\S"
+              },
+              {
+                "not": {
+                  "pattern": "[\\u0000-\\u001f\\u007f-\\u009f]"
+                }
+              }
+            ]
+          },
+          "choices": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 3,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "not_now",
+                "always",
+                "once"
+              ]
+            },
+            "enum": [
+              [
+                "not_now",
+                "once"
+              ],
+              [
+                "not_now",
+                "always",
+                "once"
+              ]
+            ]
+          }
+        },
+        "description": "Revision 55, bot:access-requests holders only. Public display card; no authorization, root identity, tool call or logical request id. Exact choices in order are [not_now, once] or, for a persistable folder, [not_now, always, once]. Whole Mac has label 'your whole Mac' and no place or always. Nonblank text, no control characters. place is a bounded display path, never an API identifier.",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "target": {
+                  "const": "whole_mac"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "label": {
+                  "const": "your whole Mac"
+                },
+                "choices": {
+                  "const": [
+                    "not_now",
+                    "once"
+                  ]
+                }
+              },
+              "not": {
+                "required": [
+                  "place"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "BotAccessAnswerRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "choice"
+        ],
+        "properties": {
+          "choice": {
+            "type": "string",
+            "enum": [
+              "once",
+              "always",
+              "not_now"
+            ]
+          }
+        }
+      },
+      "BotAccessAnswerReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "answered"
+        ],
+        "properties": {
+          "answered": {
+            "type": "boolean",
+            "const": true
+          }
+        }
       }
     }
   }

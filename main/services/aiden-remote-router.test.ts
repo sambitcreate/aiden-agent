@@ -19,6 +19,7 @@ import type { AidenRemoteRetainedBotChatAuthorizationRequest } from "./aiden-rem
 import {
   AIDEN_REMOTE_CONTRACT_REVISION,
   AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
+  AIDEN_REMOTE_MAX_SERVER_FEATURES,
   parseAidenRemoteSpendingStatus,
   parseAidenRemoteBackgroundJobs,
   parseAidenRemoteChatNewWorktreeResponse,
@@ -283,6 +284,7 @@ async function fixture(options: {
               capability !== "bot:handoff-notes" &&
               capability !== "bot:images" &&
               capability !== "bot:issues" &&
+              capability !== "bot:access-requests" &&
               capability !== "schedule:cards" &&
               capability !== "chat:jobs" &&
               capability !== "attachments:raw" &&
@@ -7167,4 +7169,48 @@ test("Bot messaging fields and settings require negotiation and write authority"
     assert.equal((await fetch(`${readOnly.base}/bots/messaging`, {method: "PUT", headers: {authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "content-type": "application/json"}, body: '{"enabled":false}'})).status, 403);
     assert.equal(readOnly.calls.some(c => c.startsWith("bots:messaging:")), false);
   } finally { await readOnly.close(); }
+});
+
+test("access routes negotiate only when wired and require every grant plus an idempotency key", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "content-type": "application/json" };
+  const seen: unknown[] = [];
+  const sessions = { ...recordingIssueSessions([], true), supportsAccessRequests: true, openIssueCount: async () => 1, answerAccessRequest: async (...args: unknown[]) => { seen.push(args); return { answered: true as const }; } };
+  for (const [caps, wired, expected] of [
+    [["server:read", "bot:read", "bot:write", "bot:access-requests"], true, 200],
+    [["server:read", "bot:read", "bot:write"], true, 403],
+    [["server:read", "bot:read", "bot:access-requests"], true, 403],
+    [["server:read", "bot:write", "bot:access-requests"], true, 403],
+    [["server:read", "bot:read", "bot:write", "bot:access-requests"], false, 404],
+  ] as const) {
+    const app = await fixture({ capabilities: [...caps], acceptsBotCapabilities: true, deviceType: "iphone", botSessions: { ...sessions, supportsAccessRequests: wired } });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.serverCapabilities.includes("bot:access-requests"), wired);
+      const response = await fetch(`${app.base}/bots/bot-1/access-requests/access-55/answer`, { method: "POST", headers: { ...headers, "idempotency-key": "access-answer-route-55" }, body: JSON.stringify({ choice: "always" }) });
+      assert.equal(response.status, expected);
+      if (expected === 200) {
+        assert.deepEqual(await response.json(), { answered: true });
+        const missing = await fetch(`${app.base}/bots/bot-1/access-requests/access-55/answer`, { method: "POST", headers, body: JSON.stringify({ choice: "once" }) });
+        assert.equal(missing.status, 400);
+      }
+      const negotiated = await fetch(`${app.base}/device/capabilities`, { method: "POST", headers, body: JSON.stringify({ accepts: ["bot:access-requests"] }) });
+      assert.equal(negotiated.status, wired ? 200 : 404);
+      assert.ok(server.features.length <= AIDEN_REMOTE_MAX_SERVER_FEATURES);
+    } finally { await app.close(); }
+  }
+  assert.equal(seen.length, 1);
+  assert.deepEqual((seen[0] as unknown[]).slice(1), ["bot-1", "access-55", "access-answer-route-55", { choice: "always" }]);
+});
+
+test("Bot list and detail counts project only issues visible to the device", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  for (const access of [true, false]) {
+    const app = await fixture({ capabilities: ["server:read", "bot:read", "bot:issues", ...(access ? ["bot:access-requests" as const] : [])], acceptsBotCapabilities: true, botIssueCount: 3, botSessions: { ...recordingIssueSessions([], true), supportsAccessRequests: true, answerAccessRequest: async () => ({ answered: true as const }), openIssueCount: async () => 1 } });
+    try {
+      const list = await (await fetch(`${app.base}/bots`, { headers })).json();
+      assert.equal(list.bots[0].issueCount, access ? 3 : 1);
+      const detail = await (await fetch(`${app.base}/bots/${list.bots[0].id}`, { headers })).json();
+      assert.equal(detail.issueCount, access ? 3 : 1);
+    } finally { await app.close(); }
+  }
 });
