@@ -120,6 +120,16 @@ run projects roughly 10–11 minutes. This adds one runner's setup cost in excha
 for headroom. It changes neither test timeouts nor retries; exact-head hosted CI
 must still pass.
 
+The Linux x64 job in run [41801806234](https://github.com/sambitcreate/aiden-agent/actions/runs/41801806234/job/126479810811)
+failed the flaky-test gate on 2026-11-04: the Usage data persistence check read a
+fresh profile's `settings.json` before it existed, then passed on its existing
+retry. The switch updates optimistically, so its unchecked state does not prove
+that the first settings write has finished. That test now treats only `ENOENT`
+as a pending poll result and still requires persisted `analytics.enabled: false`
+before relaunching and checking the switch again. A filesystem regression also
+requires malformed JSON and other read errors to fail. This changes no product
+behavior, test timeout, retry policy or flaky-test gate.
+
 Release workflows, signing/notarization, publication and repository protection
 settings remain unchanged. The previous draft's release-admission rewrite has
 been removed to keep release hardening separate from this CI rollout.
