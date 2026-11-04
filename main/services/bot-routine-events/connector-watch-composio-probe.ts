@@ -61,6 +61,7 @@ interface ResponseValueFacts {
   safeInteger?: boolean;
 }
 type AccountShapeFacts = Pick<ResponseValueFacts, "type" | "count">;
+type DefinitionToolkitClassification = "exact_known" | "matching_known_case_variant" | "other";
 interface ConnectionMetadataShape {
   kind: ComposioWatchProbeKind | "other";
   accounts: AccountShapeFacts;
@@ -72,6 +73,8 @@ export interface ComposioWatchProbeResponseRejection {
   calls: { searchStarted: boolean; searchReturned: boolean; schemasStarted: boolean; schemasReturned: boolean };
   inventory: { initialComplete: boolean; refreshedComplete: boolean };
   value?: ResponseValueFacts;
+  /** Relative to the immutable requested kind, never a returned namespace. */
+  toolkitClassification?: DefinitionToolkitClassification;
   envelope?: { value: ResponseValueFacts; fields: Record<"isError" | "content" | "structuredContent", ResponseValueFacts>; firstContent?: { value: ResponseValueFacts; typeIsText: boolean; text: ResponseValueFacts; textJson: "absent" | "valid" | "invalid" } };
   action?: Record<"successful" | "success" | "error" | "data" | "result" | "response", ResponseValueFacts>;
   data?: Record<"results" | "tool_schemas" | "toolkit_connection_statuses" | "time_info" | "next_steps_guidance" | "session" | "success" | "not_found", ResponseValueFacts>;
@@ -88,6 +91,7 @@ export interface ComposioWatchProbePrivateProof {
     slug: string;
     inputSchemaHash: string;
     outputSchemaHash?: string;
+    toolkitClassification?: DefinitionToolkitClassification;
     /** Known vocabulary only; unknown keys, examples and defaults are never retained. */
     inputFields: string[];
   }[];
@@ -173,6 +177,11 @@ function accountIdFormat(value: unknown): NonNullable<ConnectionMetadataShape["f
   if (/^ca_[A-Za-z0-9]{8,128}$/u.test(value)) return "ca_id";
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value)) return "uuid";
   return "other";
+}
+function definitionToolkitClassification(value: unknown, kind: ComposioWatchProbeKind): DefinitionToolkitClassification {
+  const expected = kind === "email" ? "gmail" : "googlecalendar";
+  if (value === expected) return "exact_known";
+  return typeof value === "string" && /^[A-Za-z]+$/u.test(value) && value.toLowerCase() === expected ? "matching_known_case_variant" : "other";
 }
 function connectionMetadataShape(status: RecordValue, toolkit: string): ConnectionMetadataShape {
   const first = Array.isArray(status.accounts) && status.accounts.length ? status.accounts[0] : undefined;
@@ -297,11 +306,13 @@ export async function inspectComposioWatchSchemas(port: ComposioWatchProbePort, 
   let responseStage: ResponseStage = "search_response", responseTool: ComposioWatchProbeTool = SEARCH;
   let responseEnvelope: unknown, responseAction: unknown, responseData: unknown;
   let responseEntry: ComposioWatchProbeResponseRejection["entry"], responseRejection: ComposioWatchProbeResponseRejection | undefined;
+  let toolkitClassification: DefinitionToolkitClassification | undefined;
   function responseFail(code: ComposioWatchProbeCode, field: ResponseField, reason: ResponseReason, value?: unknown): never {
     responseRejection = { stage: responseStage, tool: responseTool, field, reason, calls: { ...calls }, inventory: { ...inventoryComplete }, value: responseValueFacts(value),
       ...(responseEnvelope === undefined ? {} : { envelope: responseEnvelopeFacts(responseEnvelope) }),
       ...(responseAction === undefined ? {} : { action: responseFields(responseAction, ["successful", "success", "error", "data", "result", "response"]) }),
       ...(responseData === undefined ? {} : { data: responseFields(responseData, ["results", "tool_schemas", "toolkit_connection_statuses", "time_info", "next_steps_guidance", "session", "success", "not_found"]) }),
+      ...(toolkitClassification === undefined ? {} : { toolkitClassification }),
       ...(responseEntry === undefined ? {} : { entry: responseEntry }) };
     return fail(code);
   }
@@ -366,7 +377,7 @@ export async function inspectComposioWatchSchemas(port: ComposioWatchProbePort, 
     if (!meta.validate(args)) rejectMeta(name, "argument_validation", meta.schema, meta.validate.errors?.[0]?.keyword);
     await current();
     responseTool = name; responseStage = name === SEARCH ? "search_response" : "get_schemas_response";
-    responseEnvelope = undefined; responseAction = undefined; responseData = undefined; responseEntry = undefined;
+    responseEnvelope = undefined; responseAction = undefined; responseData = undefined; responseEntry = undefined; toolkitClassification = undefined;
     if (name === SEARCH) calls.searchStarted = true; else calls.schemasStarted = true;
     let raw: unknown;
     try { raw = await port.call(name, args, controller.signal); } catch { controller.signal.throwIfAborted(); return responseFail("inspection_failed", "response", "call_failed"); }
@@ -485,10 +496,12 @@ export async function inspectComposioWatchSchemas(port: ComposioWatchProbePort, 
     if (Object.keys(definitions).some((slug) => !requested.has(slug))) responseFail("schemas_incomplete", "tool_schemas", "unexpected_definition", definitions);
     const candidates: ComposioWatchProbePrivateProof["candidates"] = [];
     for (const [slug, kind] of requested) {
+      toolkitClassification = undefined;
       responseEntry = responseFields(definitions[slug], ["tool_slug", "toolkit", "hasFullSchema", "schemaRef", "input_schema", "output_schema"]);
       const definition = responseRecord(definitions[slug], "definition");
       if (definition.tool_slug !== slug) responseFail("schemas_incomplete", "definition.tool_slug", "unexpected_value", definition.tool_slug);
-      if (definition.toolkit !== (kind === "email" ? "gmail" : "googlecalendar")) responseFail("schemas_incomplete", "definition.toolkit", "unexpected_value", definition.toolkit);
+      toolkitClassification = definitionToolkitClassification(definition.toolkit, kind);
+      if (toolkitClassification === "other") responseFail("schemas_incomplete", "definition.toolkit", "unexpected_value", definition.toolkit);
       if (definition.hasFullSchema === false) responseFail("schemas_incomplete", "definition.hasFullSchema", "incomplete", definition.hasFullSchema);
       if (definition.schemaRef !== undefined) responseFail("schemas_incomplete", "definition.schemaRef", "incomplete", definition.schemaRef);
       const input = responseRecord(definition.input_schema, "input_schema");
@@ -497,7 +510,7 @@ export async function inspectComposioWatchSchemas(port: ComposioWatchProbePort, 
       if (!input.properties) responseFail("invalid_response", "input_schema.properties", "expected_object", input.properties);
       const properties = responseRecord(input.properties, "input_schema.properties");
       const output = definition.output_schema === undefined ? undefined : responseRecord(definition.output_schema, "output_schema");
-      candidates.push({ kind, slug, inputSchemaHash: hash(input), ...(output ? { outputSchemaHash: hash(output) } : {}), inputFields: Object.keys(properties).filter((field) => FIELD_NAMES.has(field)).sort() });
+      candidates.push({ kind, slug, toolkitClassification, inputSchemaHash: hash(input), ...(output ? { outputSchemaHash: hash(output) } : {}), inputFields: Object.keys(properties).filter((field) => FIELD_NAMES.has(field)).sort() });
     }
     const executor = fresh.get(EXECUTE)?.schema;
     const executorItem = property(executor, "tools")?.items;

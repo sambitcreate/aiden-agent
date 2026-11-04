@@ -229,6 +229,62 @@ test("account diagnostics classify only fixed ID syntax and exact ACTIVE status 
   });
 });
 
+test("GetSchemas toolkit labels match only the requested fixed namespace across ASCII case variants", async (t) => {
+  for (const labels of [["gmail", "googlecalendar"], ["GMAIL", "GOOGLECALENDAR"], ["GmAiL", "GoogleCalendar"]]) await t.test(labels.join("+"), async () => {
+    const h = harness(), call = h.port.call;
+    h.port.call = async (tool, args, signal) => {
+      const response = await call(tool, args, signal) as { data: { tool_schemas: Record<string, Record<string, unknown>> } };
+      if (tool === SCHEMAS) { response.data.tool_schemas.GMAIL_FETCH_EMAILS!.toolkit = labels[0]; response.data.tool_schemas.GOOGLECALENDAR_EVENTS_LIST!.toolkit = labels[1]; }
+      return response;
+    };
+    const inspected = await inspectComposioWatchSchemas(h.port, { kind: "both" });
+    assert.equal(inspected.code, "account_routing_unverified"); assert.equal(inspected.available, false);
+    assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH, SCHEMAS]); assert.deepEqual(h.calls[1].args.tool_slugs, ["GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_EVENTS_LIST"]);
+    assert.deepEqual(inspected.privateProof?.candidates.map((candidate) => [candidate.kind, candidate.slug]), [["email", "GMAIL_FETCH_EMAILS"], ["calendar", "GOOGLECALENDAR_EVENTS_LIST"]]);
+    assert.deepEqual(inspected.privateProof?.candidates.map((candidate) => candidate.toolkitClassification), labels[0] === "gmail" ? ["exact_known", "exact_known"] : ["matching_known_case_variant", "matching_known_case_variant"]);
+  });
+});
+
+test("GetSchemas rejects cross-toolkit and non-ASCII or padded label lookalikes without retaining their values", async (t) => {
+  for (const kind of ["email", "calendar"] as const) {
+    const labels = kind === "email" ? ["googlecalendar", "GOOGLECALENDAR", " gmail", "gmail ", "gmаil", "gmaıl", "gmail_v2", "private-toolkit-name"] : ["gmail", "GMAIL", "googlecalendar ", "google-calendar", "gοοglecalendar", "private-calendar-toolkit"];
+    for (const label of labels) await t.test(`${kind}/${label}`, async () => {
+      const h = harness(), call = h.port.call;
+      h.port.call = async (tool, args, signal) => {
+        const response = await call(tool, args, signal) as { data: { tool_schemas: Record<string, Record<string, unknown>> } };
+        if (tool === SCHEMAS) response.data.tool_schemas[slugs[kind]]!.toolkit = label;
+        return response;
+      };
+      const inspected = await inspectComposioWatchSchemas(h.port, { kind }), diagnostic = inspected.privateProof?.responseRejection;
+      assert.equal(inspected.code, "schemas_incomplete"); assert.equal(inspected.available, false); assert.equal(diagnostic?.field, "definition.toolkit"); assert.equal(diagnostic?.toolkitClassification, "other");
+      assert.deepEqual(inspected.privateProof?.candidates, []); assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH, SCHEMAS]);
+      assert.ok(!JSON.stringify(inspected).includes(JSON.stringify(label))); assert.ok(!JSON.stringify(publicComposioWatchProbeResult(inspected)).includes("toolkitClassification"));
+    });
+  }
+});
+
+test("fixed toolkit classification diagnoses later schema failure and never repairs a different slug", async () => {
+  for (const [label, classification] of [["gmail", "exact_known"], ["GMAIL", "matching_known_case_variant"]]) {
+    const h = harness(), call = h.port.call;
+    h.port.call = async (tool, args, signal) => {
+      const response = await call(tool, args, signal) as { data: { tool_schemas: Record<string, Record<string, unknown>> } };
+      if (tool === SCHEMAS) { const definition = response.data.tool_schemas.GMAIL_FETCH_EMAILS!; definition.toolkit = label; definition.input_schema = { type: "array" }; }
+      return response;
+    };
+    const inspected = await inspectComposioWatchSchemas(h.port, { kind: "email" });
+    assert.equal(inspected.code, "invalid_response"); assert.equal(inspected.privateProof?.responseRejection?.field, "input_schema.type"); assert.equal(inspected.privateProof?.responseRejection?.toolkitClassification, classification);
+    assert.equal(inspected.available, false); assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH, SCHEMAS]);
+  }
+  const h = harness(), call = h.port.call;
+  h.port.call = async (tool, args, signal) => {
+    const response = await call(tool, args, signal) as { data: { tool_schemas: Record<string, Record<string, unknown>> } };
+    if (tool === SCHEMAS) { response.data.tool_schemas.GMAIL_FETCH_EMAILS!.toolkit = "GMAIL"; response.data.tool_schemas.GMAIL_FETCH_EMAILS!.tool_slug = "GMAIL_GET_PROFILE"; }
+    return response;
+  };
+  const inspected = await inspectComposioWatchSchemas(h.port, { kind: "email" });
+  assert.equal(inspected.code, "schemas_incomplete"); assert.equal(inspected.privateProof?.responseRejection?.field, "definition.tool_slug"); assert.equal(inspected.available, false);
+});
+
 test("the public projection contains only safe facts even if a caller attaches private extras", async () => {
   const h = harness(); const result = await inspectComposioWatchSchemas(h.port, { kind: "email", now: () => 321 });
   const view = publicComposioWatchProbeResult({ ...result, secret: "credential-fixture" } as ComposioWatchProbeResult);
