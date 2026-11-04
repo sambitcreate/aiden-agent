@@ -37,6 +37,7 @@ interface CollectionFacts {
   declaredArray: boolean | "unknown";
   count?: number;
   first: { value: ValueType; fields: Record<typeof RECORD_FIELDS[number], ValueType> };
+  itemSchema?: { context: SchemaContext; objectType: ReturnType<typeof declaredType>; arrayComposition: boolean; arrayValueConstraint: boolean; arrayDefault: "missing" | "null" | "other"; recordDefault: "missing" | "null" | "other" };
 }
 interface LocationFacts {
   value: ValueType;
@@ -83,7 +84,12 @@ export function composioCalendarPageShapeFacts(compiledSchema: unknown, response
       const array = record[key], first = Array.isArray(array) ? array[0] : undefined, firstObject = object(first), field = object(properties?.[key]);
       const fields = {} as Record<typeof RECORD_FIELDS[number], ValueType>;
       for (const name of RECORD_FIELDS) fields[name] = valueType(firstObject?.[name]);
-      collections[key] = { value: valueType(array), declaredArray: uncertain ? "unknown" : field?.type === "array" || (Array.isArray(field?.type) && field.type.includes("array")), ...(Array.isArray(array) ? { count: Math.min(array.length, 501) } : {}), first: { value: valueType(first), fields } };
+      const item = object(field?.items);
+      collections[key] = { value: valueType(array), declaredArray: uncertain ? "unknown" : field?.type === "array" || (Array.isArray(field?.type) && field.type.includes("array")), ...(Array.isArray(array) ? { count: Math.min(array.length, 501) } : {}), first: { value: valueType(first), fields }, ...(field?.items !== undefined ? { itemSchema: {
+        context: schemaContext(field.items), objectType: declaredType(item?.type, "object"), arrayComposition: ["anyOf", "oneOf", "allOf"].some((keyword) => field[keyword] !== undefined), arrayValueConstraint: field.enum !== undefined || field.const !== undefined || field.uniqueItems !== undefined,
+        arrayDefault: !own(field, "default") ? "missing" as const : field.default === null ? "null" as const : "other" as const,
+        recordDefault: !item || !own(item, "default") ? "missing" as const : item.default === null ? "null" as const : "other" as const,
+      } } : {}) };
     }
     locations[location] = {
       value: valueType(value), successful: { type: valueType(record.successful), outcome: outcome(record.successful) }, successfull: { type: valueType(record.successfull), outcome: outcome(record.successfull) },

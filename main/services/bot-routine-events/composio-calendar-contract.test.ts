@@ -187,6 +187,87 @@ test("declared optional inert null string metadata validates without changing th
   assert.deepEqual(reply, before); assert.equal(response.data.aux_note, null); assert.equal(reply.data.results.length, 1);
 });
 
+test("direct declared page-record null metadata validates only for the known list collections", () => {
+  for (const [kind, collection] of [["listCalendars", "items"], ["listCalendars", "calendars"], ["listEvents", "items"]] as const) for (const wrapped of [false, true]) {
+    const schemas = syntheticCalendarSchemas(), slug = kind === "listCalendars" ? "GOOGLECALENDAR_LIST_CALENDARS" : "GOOGLECALENDAR_EVENTS_LIST";
+    const page = { type: "object", properties: { [collection]: { type: "array", minItems: 1, maxItems: 2, items: { type: "object", properties: { id: { type: "string" }, aux_note: { type: "string" }, aux_hint: { type: "string", default: null } }, required: ["id"] } } } };
+    schemas.data.tool_schemas[slug]!.output_schema = (wrapped ? { type: "object", properties: { successful: { type: "boolean" }, data: page } } : page) as never;
+    const read = kind === "listCalendars" ? { kind, accountId: "account" } : { kind, accountId: "account", calendarId: "calendar", timeMin: "2026-11-03T15:00:00Z", timeMax: "2026-11-03T16:00:00Z", timezone: "UTC" };
+    const payload = { [collection]: [{ id: "first", aux_note: null, aux_hint: null }, { id: "second", aux_note: null, aux_hint: null }] }, response = wrapped ? { successful: true, data: payload } : payload;
+    const reply = syntheticCalendarExecutor(read, response), before = structuredClone(reply);
+    verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, reply); assert.deepEqual(reply, before);
+  }
+});
+
+test("page-record omission preserves protected fields and declared required/default/type boundaries", () => {
+  const read = { kind: "listEvents" as const, accountId: "account", calendarId: "calendar", timeMin: "2026-11-03T15:00:00Z", timeMax: "2026-11-03T16:00:00Z", timezone: "UTC" };
+  for (const key of ["id", "status", "summary", "location", "start", "end", "dateTime", "recurringEventId", "originalStartTime", "nextPageToken", "error", "PerMISSIONS_note", "vendorGrAntsHint"]) {
+    const schemas = syntheticCalendarSchemas(); schemas.data.tool_schemas.GOOGLECALENDAR_EVENTS_LIST!.output_schema = { type: "object", properties: { items: { type: "array", items: { type: "object", properties: { [key]: { type: "string" } } } } } } as never;
+    assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, syntheticCalendarExecutor(read, { items: [{ [key]: null }] })));
+  }
+  for (const [field, entry, extra] of [
+    [{ type: "string" }, { aux_note: null }, { required: ["aux_note"] }],
+    [{ type: "string", default: "private-default-event" }, { aux_note: null }, {}],
+    [{ type: "string", enum: ["ready"] }, { aux_note: null }, {}],
+    [{ type: "string", const: "ready" }, { aux_note: null }, {}],
+    [{ type: ["string"] }, { aux_note: null }, {}],
+    [{ type: "object" }, { aux_note: null }, {}],
+    [{ type: "string" }, { aux_note: 7 }, {}],
+    [{ type: "string" }, { aux_note: null, undeclared: null }, { additionalProperties: false }],
+    [{ type: "string" }, { aux_note: null }, { allOf: [{ type: "object" }] }],
+    [{ type: "string" }, { aux_note: null }, { maxProperties: 1 }],
+    [{ type: "string" }, { aux_note: null }, { default: { id: "private-default-event" } }],
+  ] as const) {
+    const schemas = syntheticCalendarSchemas(); schemas.data.tool_schemas.GOOGLECALENDAR_EVENTS_LIST!.output_schema = { type: "object", properties: { items: { type: "array", items: { type: "object", properties: { aux_note: field }, ...extra } } } } as never;
+    assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, syntheticCalendarExecutor(read, { items: [entry] })));
+  }
+});
+
+test("record metadata compatibility cannot erase array constraints, nested values or operation boundaries", () => {
+  const read = { kind: "listEvents" as const, accountId: "account", calendarId: "calendar", timeMin: "2026-11-03T15:00:00Z", timeMax: "2026-11-03T16:00:00Z", timezone: "UTC" };
+  const item = { type: "object", properties: { aux_note: { type: "string" } } };
+  for (const [array, entries] of [
+    [{ type: "array", items: item, minItems: 2 }, [{ aux_note: null }]],
+    [{ type: "array", items: item, maxItems: 0 }, [{ aux_note: null }]],
+    [{ type: "array", items: item, uniqueItems: true }, [{ aux_note: null }, { aux_note: null }]],
+    [{ type: "array", items: item, enum: [[{}]] }, [{ aux_note: null }]],
+    [{ type: "array", items: item, const: [{}] }, [{ aux_note: null }]],
+    [{ type: "array", items: item, allOf: [{ type: "array" }] }, [{ aux_note: null }]],
+    [{ type: "array", items: item, default: [{ id: "private-default-event" }] }, [{ aux_note: null }]],
+    [{ type: ["array"], items: item }, [{ aux_note: null }]],
+    [{ type: "array", items: { ...item, type: ["object"] } }, [{ aux_note: null }]],
+    [{ type: "array", items: item }, [null]],
+    [{ type: "array", items: { type: "object", properties: { start: item } } }, [{ start: { aux_note: null } }]],
+    [{ type: "array", items: { type: "object", properties: { attendees: { type: "array", items: item } } } }, [{ attendees: [{ aux_note: null }] }]],
+  ] as const) {
+    const schemas = syntheticCalendarSchemas(); schemas.data.tool_schemas.GOOGLECALENDAR_EVENTS_LIST!.output_schema = { type: "object", properties: { items: array } } as never;
+    assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, syntheticCalendarExecutor(read, { items: entries })));
+  }
+  const get = { kind: "getEvent" as const, accountId: "account", calendarId: "calendar", eventId: "event", timezone: "UTC" };
+  const schemas = syntheticCalendarSchemas(); schemas.data.tool_schemas.GOOGLECALENDAR_EVENTS_GET!.output_schema = { type: "object", properties: { items: { type: "array", items: item } } } as never;
+  assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(get, syntheticCalendarExecutor(get, { items: [{ aux_note: null }] })));
+  const unknown = syntheticCalendarSchemas(); unknown.data.tool_schemas.GOOGLECALENDAR_EVENTS_LIST!.output_schema = { type: "object", properties: {}, additionalProperties: { type: "array", items: item } } as never;
+  assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), unknown).response(read, syntheticCalendarExecutor(read, { items: [{ aux_note: null }] })));
+});
+
+test("record compatibility refusal retains only closed item-schema eligibility facts", () => {
+  const schemas = syntheticCalendarSchemas();
+  schemas.data.tool_schemas.GOOGLECALENDAR_EVENTS_LIST!.output_schema = { type: "object", properties: { items: { type: "array", default: [{ id: "private-default-event" }], items: { type: ["object"], properties: { aux_note: { type: "string" } }, default: { id: "private-record-default" } } } } } as never;
+  const read = { kind: "listEvents" as const, accountId: "account", calendarId: "calendar", timeMin: "2026-11-03T15:00:00Z", timeMax: "2026-11-03T16:00:00Z", timezone: "UTC" };
+  let failure: unknown;
+  try { verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, syntheticCalendarExecutor(read, { items: [{ aux_note: null }] })); } catch (error) { failure = error; }
+  assert.ok(failure instanceof ComposioCalendarContractError);
+  assert.deepEqual(failure.facts!.pageShape!.locations!.root.collections.items.itemSchema, { context: "non_object", objectType: "singleton_array", arrayComposition: false, arrayValueConstraint: false, arrayDefault: "other", recordDefault: "other" });
+  for (const secret of ["private-default-event", "private-record-default", "aux_note"]) assert.equal(JSON.stringify(failure.facts).includes(secret), false);
+});
+
+test("uniqueness-constrained record arrays remain untouched by null omission", () => {
+  const schema = { type: "object", properties: { items: { type: "array", uniqueItems: true, items: { type: "object", properties: { id: { type: "string" }, aux_note: { type: "string" } } } } } };
+  const original = { items: [{ id: "one", aux_note: null }, { id: "two", aux_note: null }] };
+  const copy = calendarOutputValidationCopy(schema, original, "listEvents");
+  assert.deepEqual(JSON.parse(JSON.stringify(copy)), original);
+});
+
 test("optional null page cursors validate only in known list page contexts without changing the reply", () => {
   for (const kind of ["listCalendars", "listEvents"] as const) for (const wrapped of [false, true]) for (const key of ["nextPageToken", "next_page_token"]) {
     const read = kind === "listCalendars" ? { kind, accountId: "account" } : { kind, accountId: "account", calendarId: "calendar", timeMin: "2026-11-03T15:00:00Z", timeMax: "2026-11-03T16:00:00Z", timezone: "UTC" };
@@ -360,7 +441,6 @@ test("inert null output handling refuses required, undeclared, composed, constra
     [{ type: "object", properties: { aux_note: { type: "string" } }, maxProperties: 1 }, { aux_note: null }],
     [{ type: "object", properties: { data: { type: "object", properties: { aux_note: { type: "string" } }, anyOf: [{ type: "object" }] } } }, { data: { aux_note: null } }],
     [{ type: "object", properties: { items: { type: "array", items: { type: "string" } } } }, { items: [null] }],
-    [{ type: "object", properties: { items: { type: "array", items: { type: "object", properties: { aux_note: { type: "string" } } } } } }, { items: [{ aux_note: null }] }],
     [{ type: "object", properties: { container: { type: "object", properties: { aux_note: { type: "string" } } } } }, { container: { aux_note: null } }],
   ] as const) {
     const schemas = syntheticCalendarSchemas(); schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = schema as never;

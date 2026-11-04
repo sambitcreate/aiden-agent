@@ -2,7 +2,7 @@
 // response. New semantic/guard fields require reviewing this protected policy.
 import { copyBoundedJson, utf8Size } from "../bounded-json.js";
 
-export const CALENDAR_OUTPUT_COMPATIBILITY_VERSION = "optional-null-and-calendar-collection-v3";
+export const CALENDAR_OUTPUT_COMPATIBILITY_VERSION = "optional-null-page-records-v4";
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as ObjectValue : undefined;
 const own = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key);
@@ -74,6 +74,20 @@ function omitNullPageEnd(value: ObjectValue, schema: ObjectValue, operation: "li
   if (!(collections.length === 1 && collections[0] === "items" && Array.isArray(value.items)) && !(operation === "listCalendars" && declaredCalendars(value, schema))) return;
   for (const key of ["nextPageToken", "next_page_token"]) if (value[key] === null && optionalPlainString(schema, key)) delete value[key];
 }
+const ARRAY_KEYS = new Set(["type", "items", "minItems", "maxItems", "title", "description", "default", "examples", "deprecated", "$comment"]);
+function omitPageRecordNulls(value: ObjectValue, schema: ObjectValue, operation: "listCalendars" | "listEvents"): void {
+  const collections = COLLECTIONS.filter((key) => own(value, key));
+  if (collections.length !== 1) return;
+  const key = collections[0]!;
+  if (key !== "items" && !(operation === "listCalendars" && key === "calendars" && declaredCalendars(value, schema))) return;
+  const records = value[key], array = object(object(schema.properties)?.[key]);
+  if (!Array.isArray(records) || !array || array.type !== "array" || Object.keys(array).some((keyword) => !ARRAY_KEYS.has(keyword)) || (own(array, "default") && array.default !== null)) return;
+  const itemSchema = simpleObjectSchema(array.items);
+  if (!itemSchema || (own(itemSchema, "default") && itemSchema.default !== null)) return;
+  // Array entries, length/order and nested values remain untouched. The original
+  // array's min/max/unique constraints still run in the unchanged validator.
+  for (const entry of records) { const record = object(entry); if (record) omitInertNulls(record, itemSchema); }
+}
 function bounded(value: unknown): unknown {
   const copy = copyBoundedJson(value, { maxNodes: 12_000, maxDepth: 18, maxSize: 256 * 1024, measure: utf8Size });
   if (copy === undefined || Buffer.byteLength(JSON.stringify(copy), "utf8") > 256 * 1024) throw new Error("Calendar output exceeded validation bounds.");
@@ -81,7 +95,8 @@ function bounded(value: unknown): unknown {
 }
 /** Call only AFTER the original output schema and every unused definition have
  * passed restricted compilation/audit. No defaults or schema edits are applied.
- * Never descends into arrays, item/event objects, or arbitrary nested objects. */
+ * Only direct records of a declared simple page array receive record metadata
+ * compatibility; their nested objects/arrays and all whole entries stay intact. */
 export function calendarOutputValidationCopy(compiledSchema: unknown, response: unknown, operation?: "listCalendars" | "listEvents" | "getEvent"): unknown {
   const schema = simpleObjectSchema(bounded(compiledSchema)), copy = bounded(response), root = object(copy);
   if (!schema || !root) return copy;
@@ -93,7 +108,7 @@ export function calendarOutputValidationCopy(compiledSchema: unknown, response: 
     // These are exactly the two page representations consumed by the semantic
     // reader. It still receives the original cursors, including null/conflicts.
     const page = pageContext(root, schema);
-    if (page) omitNullPageEnd(page.value, page.schema, operation);
+    if (page) { omitNullPageEnd(page.value, page.schema, operation); omitPageRecordNulls(page.value, page.schema, operation); }
   }
   return copy;
 }

@@ -118,6 +118,27 @@ test("current declared calendars collection completes exact-account discovery an
   for (const secret of [actualAccount, "calendar@example.test", "Private calendar", observedEvent.id]) assert.equal(JSON.stringify(result).includes(secret), false);
 });
 
+test("optional inert null event-record strings preserve the original observed event and complete exact GET proof", async () => {
+  const f = fixture(), original = f.port.readCalendar!;
+  f.schemas.data.tool_schemas.GOOGLECALENDAR_EVENTS_LIST!.output_schema = { type: "object", properties: { successful: { type: "boolean" }, data: { type: "object", properties: { items: {
+    type: "array", minItems: 0, maxItems: 50, items: { type: "object", properties: { id: { type: "string" }, status: { type: "string" }, summary: { type: "string" }, start: { type: "object" }, end: { type: "object" }, aux_note: { type: "string" } }, required: ["id", "status", "start", "end"] },
+  } } } } } as never;
+  let returned: unknown, before: unknown;
+  f.port.readCalendar = async (read, session) => {
+    const reply = await original(read, session) as ReturnType<typeof syntheticCalendarExecutor>;
+    if (read.accountId === actualAccount && read.kind === "listEvents") {
+      const item = reply.data.results[0]!; assert.ok("response" in item);
+      item.response = { successful: true, data: { items: [{ ...observedEvent, aux_note: null }] } }; returned = reply; before = structuredClone(reply);
+    }
+    return reply;
+  };
+  const result = await checkComposioCalendarRead(f.port, options());
+  assert.equal(result.code, "verified"); assert.equal(result.available, false); assert.equal(result.privateProof.invalidAccountRejected, true);
+  assert.deepEqual(result.privateProof.counts, { activeAccounts: 1, calendars: 1, events: 1, gets: 1 }); assert.deepEqual(returned, before);
+  const get = f.reads[3]!; assert.equal(get.kind, "getEvent"); if (get.kind === "getEvent") assert.equal(get.eventId, observedEvent.id);
+  for (const secret of ["aux_note", actualAccount, observedEvent.id, observedEvent.summary]) assert.equal(JSON.stringify(result).includes(secret), false);
+});
+
 test("coherent MCP error JSON proves only an exact known failed-account item", async () => {
   for (const [error, accepted] of [["CONNECTED_ACCOUNT_NOT_FOUND", true], ["No active connected account found", false], ["Account ca_private_secret not found", false], ["permission denied", false]] as const) {
     const f = fixture(), original = f.port.readCalendar!; delete f.metadata[2]!.outputSchema;

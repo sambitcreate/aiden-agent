@@ -252,3 +252,10 @@ Closed page-shape and schema-context diagnostics are being added to identify the
 Closed page/schema diagnostics (`9dd2765a1`) were clear after Sol high review: 196 independent cases, bounded projection and actual private-publication controls. Immutable pre-Open-work snapshot `abb76d8cd` passed its build, 413 focused cases, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793783873882`) again passed exact invalid-account refusal. Its successful Calendar-list output has a simple object data schema declaring a `calendars` array, rather than `items`, and an optional plain-string `next_page_token` returning null. The first collection record exposes the expected string `id`, `accessRole` and `summary` fields. No raw identities or content were retained.
 
 A curated Calendar-list collection correction is being implemented and reviewed; other aliases, event-list/GET collection changes and generic coercion remain excluded. No events or GET ran, and Calendar remains gated.
+
+
+### V24 accepted Calendar sources and first event-list response — 2026-11-04
+
+The declared Calendar-list representation (`03cf8f2d3`) was clear after Sol high review: 200 independent cases and 24 adversarial source-reader controls. Immutable pre-Open-work snapshot `398c24c8b` passed its build, 417 focused cases, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793784760705`) passed exact invalid-account refusal and parsed seven readable Calendar sources. The event list uses the existing declared `items` collection with string identity/status/summary and object start/end fields. Upstream validation then rejected an optional string null in a direct event record; its name remains outside the retained vocabulary. No GET ran.
+
+The validation-only inert-metadata policy is being extended to explicitly declared simple page-item records, preserving original replies, meaningful fields and all semantic guards. Calendar remains gated until matching event GET acceptance completes.
