@@ -71,3 +71,6 @@
 
 - Gate6Opusr3 accepted eaa4ae9b0 with one desktop display Low. Root fixing row-only controls/bidi/whitespace directly before final program review.
 - Pre-PR fetch found main advanced to581aee4f8 through docs-onlyPR724, no protocol/runtime changes; Remote remains53. Will merge main intoA then carry the merge throughB/C/D, preserving all branch histories.
+
+- Docs-only main581aee4f8 merged bottom-up intoA/B/C/D without conflicts, leaving other worktrees untouched. Final imported-helper startup exercised by5Cua cases/retries0, allpass. FullBots1013/types/registry15 andCLIbuild/typespass.
+- One overbroad git-show of the protocol file produced truncated output. Rechecked only exact revision declaration lines through Python; main remains53, no pin or fixture change needed.
