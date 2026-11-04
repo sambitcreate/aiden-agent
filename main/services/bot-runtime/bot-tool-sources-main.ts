@@ -90,6 +90,7 @@ import { botAccessRequests } from "./bot-access-requests-main.js";
 import { botAccessPrivateRoots, resolveBotAccessTarget } from "./bot-access-target.js";
 import { aidenConfigDir } from "../aiden-config-dir.js";
 import os from "node:os";
+import { proposePlanCandidate, planStepCandidate, type BotPlanToolDeps } from "./bot-plan-tools.js";
 
 export const botRunAccess = createBotRunAccess({ now: Date.now });
 
@@ -111,6 +112,8 @@ export interface BotToolSourceDeps {
   botLacksConnection?(botId: string, sourceId: string): Promise<boolean>;
   /** The Bot's name, for what its browser tells the person. */
   botName?(botId: string): Promise<string | undefined>;
+  /** Desktop-only plan cards and coverage. The CLI does not supply this port. */
+  planTools?: BotPlanToolDeps;
 }
 
 type ProductionFacts = BotToolFactsWithSkills;
@@ -437,7 +440,10 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
           recordOwnWrite: (written) => botOwnWrites.record(botId, written),
           ...(authority.accessMode === "custom" && authority.files.mode === "scoped" ? { runAccess: { resolve: async (call: import("./tool-adapter.js").BotToolCall) => {
             await call.assertRunActive?.();
-            return botRunAccess.location(botId, await call.runRequestIds?.() ?? [], await deps.policyRevision(botId));
+            // Named ingress IDs remain unchanged; unnamed person inputs use
+            // the same durable host identities as their plan-owned grant.
+            const ids = call.runInputIds ? await call.runInputIds() : await call.runRequestIds?.() ?? [];
+            return botRunAccess.location(botId, ids, await deps.policyRevision(botId));
           } }, savedAccess: { resolve: (call: import("./tool-adapter.js").BotToolCall) =>
             botSavedLocationForCall(botId, { runAccess: botRunAccess, policyRevision: deps.policyRevision }, call) } } : {}),
         }),
@@ -511,6 +517,10 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       const signInOnComputer = has("computer") && facts.hasComputer;
       // A step in the Bot's own browser or on its computer: Open brings that forward, and phones finish it on the Mac.
       tools.push(botHandoffCandidate(botId, botHandoffs, { targets: { browser: has("browser"), computer: signInOnComputer } }));
+      if (deps.planTools) tools.push(
+        proposePlanCandidate(botId, deps.planTools),
+        planStepCandidate(botId, deps.planTools.plans),
+      );
       if (authority.accessMode === "custom" && authority.files.mode === "scoped") tools.push(botAccessRequestCandidate(botId, {
         requests: botAccessRequests, runAccess: botRunAccess, policyRevision: deps.policyRevision, boundLocations: boundFileLocations,
         resolveTarget: (requested) => resolveBotAccessTarget(requested, { homeDirectory: os.homedir, privateRoots: () => botAccessPrivateRoots(app.getPath("userData"), aidenConfigDir()), approvedRoots: async () => (await (await import("../aiden-remote-service-main.js")).getAidenRemoteRuntime()).state.snapshot().then((state) => state.approvedRoots) }),

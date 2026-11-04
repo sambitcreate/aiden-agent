@@ -1,4 +1,5 @@
-import { BOT_MESSAGE_TOOL_NAME, botMessageChainOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
+import { BOT_MESSAGE_TOOL_NAME, botMessageChainOf, botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
+import { BOT_PLAN_STEP_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME } from "../../../renderer/shared/bot-plans.js";
 import { BOT_REQUEST_ACCESS_TOOL_NAME } from "../../../renderer/shared/bot-access-requests.js";
 // Which tools a Bot may use, and which need the person's approval.
 //
@@ -112,6 +113,10 @@ const UNATTENDED_WITHHELD = new Set<string>([
  * every input allows it.
  */
 export function botIngressAllowsTool(name: string, requestIds: readonly (string | undefined)[]): boolean {
+  if (name === BOT_PROPOSE_PLAN_TOOL_NAME || name === BOT_PLAN_STEP_TOOL_NAME) return requestIds.length > 0 && requestIds.every(id => {
+    const kind = botMessageTurnOf(id).kind;
+    return kind === "person" || kind === "message";
+  });
   if (name === BOT_REQUEST_ACCESS_TOOL_NAME) return requestIds.length > 0 && requestIds.every((id) => !botTurnOf(id).intro);
   if (name === BOT_MESSAGE_TOOL_NAME) return botMessageChainOf(requestIds).canSend;
   // A routine's notepad belongs to routine runs alone: a person's turn, or a
@@ -153,6 +158,7 @@ export async function botToolVerdict(
   args?: unknown,
 ): Promise<BotToolVerdict> {
   const { authority } = facts;
+  if (name === BOT_PROPOSE_PLAN_TOOL_NAME || name === BOT_PLAN_STEP_TOOL_NAME) return verdict(turn.telegram !== true && turn.routine !== true, "Plans are off for this Bot turn.");
   if (name === BOT_REQUEST_ACCESS_TOOL_NAME) {
     if (authority.accessMode !== "custom" || authority.files.mode === "full_mac") return { allowed: false, reason: "This Bot can already use your whole Mac." };
     return verdict(authority.files.mode === "scoped", "File access is off for this Bot.");

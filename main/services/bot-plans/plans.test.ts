@@ -539,3 +539,61 @@ test("a production-minted Bot can approve, replay after restart and reserve its 
     await assert.rejects(plans.request({ ...r, botId: invalid }), /Invalid plan request/u);
   }
 });
+
+test("a delivery deadline limits stored approval and cannot be renewed by replay", async (t) => {
+  const f = await fixture(t);
+  const r = { ...request(), deadline: 1100 };
+  const result = await approve(f.plans, r);
+  assert.deepEqual(result, { status: "approved", fresh: true, expiresAt: 1100 });
+  const restarted = createBotPlans(f.options);
+  t.after(() => restarted.forgetBot("b"));
+  assert.deepEqual(await restarted.request(r), { status: "approved", fresh: false, expiresAt: 1100 });
+  await assert.rejects(restarted.request({ ...r, deadline: 1200 }), /identity/u);
+  f.setTime(1099);
+  assert.ok(await restarted.cover("b", check("before-delivery-deadline")));
+  f.setTime(1100);
+  assert.equal(await restarted.cover("b", check("at-delivery-deadline")), undefined);
+  assert.equal((await restarted.current("b"))?.status, "expired");
+  assert.deepEqual(await restarted.request(r), { status: "ended" });
+});
+
+test("a delivery deadline reached while a plan waits cannot publish approval", async (t) => {
+  const f = await fixture(t);
+  const r = { ...request(), deadline: 1100 };
+  const w = await waiting(f.plans, r);
+  f.setTime(1100);
+  assert.equal(await f.plans.respond("b", "p1", "approve"), "not_waiting");
+  assert.deepEqual(await w.result, { status: "ended" });
+  assert.equal(await f.plans.current("b"), null);
+  await assert.rejects(access(f.file));
+});
+
+test("a queued Stop prevents fresh folder installation while its store read awaits", async (t) => {
+  const f = await fixture(t);
+  await approve(f.plans);
+  const entered = deferred(), release = deferred();
+  let hold = true, installations = 0;
+  f.options.knownBot = async () => {
+    if (hold) { hold = false; entered.resolve(); await release.promise; }
+    return true;
+  };
+  const installation = f.plans.grantFreshAccess("b", "p1", async () => { installations++; });
+  await entered.promise;
+  const stop = f.plans.respond("b", "p1", "stop");
+  release.resolve();
+  assert.equal(await installation, false);
+  await stop;
+  assert.equal(installations, 0);
+  assert.equal((await f.plans.current("b"))?.status, "stopped");
+});
+
+test("fresh folder installation revalidates captured plan binding before applying authority", async (t) => {
+  const f = await fixture(t);
+  await approve(f.plans);
+  let installations = 0;
+  f.setValidator(async () => { throw new Error("Provider or effective rules changed"); });
+  await assert.rejects(f.plans.grantFreshAccess("b", "p1", async () => { installations++; }), /effective rules changed/u);
+  assert.equal(installations, 0);
+  assert.equal((await f.plans.current("b"))?.status, "stopped");
+  assert.deepEqual(f.revoked, ["p1"]);
+});

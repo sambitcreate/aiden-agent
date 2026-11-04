@@ -10,3 +10,10 @@
 
 - Integration found C shared response/store Bot ID regex rejected production `bot:<uuid>` IDs. Requested real-mint behavioral red and reuse of the existing path-safe shared guard before Gate4.
 - Unlabelled person inputs cannot use numeric submission IDs alone for persistent plan ownership because recovery can reuse them. Proposed separate durable host UUID identities; raw request IDs remain the provenance authority.
+
+- Bot delivery expiry was not stored in the core request. Captured two failures for 60-minute renewal and approval at a spent delivery deadline, then added a private deadline field bound into replay identity and persisted expiry.
+- Fresh folder installation needed the same queued Stop intent check as tool admission. A held store-read test reproduced installation after Stop was requested; installation now refuses that pending termination.
+
+- Initial fresh-grant Stop fix also changed an already-started grant callback return, failing the existing serialized-grant test. Kept that assertion and narrowed the intent check to before invocation; an already-started callback completes, then Stop revokes it under the serial.
+
+- Authority adapter worker ended at selected-model capacity after its final 21-test/type/lint run. Preserved all shared edits, read its exact source/tests, and parent reran 21 tests and scoped lint successfully. No duplicate implementation or model switch was needed.

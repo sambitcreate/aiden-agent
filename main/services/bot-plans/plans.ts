@@ -14,7 +14,7 @@ export interface BotPlanRecord {
   planId: string; botId: string; toolCallId: string; proposal: BotPlanProposal;
   requestIds: string[]; status: Exclude<BotPlanStatus, "pending">;
   steps: BotPlanStepStatus[]; from?: string;
-  approvedAt: number; expiresAt: number; endedAt?: number; revision: number;
+  approvedAt: number; expiresAt: number; deadline?: number; endedAt?: number; revision: number;
   counted: Record<string, { operationFingerprint: string; itemIds: string[]; admittedAt?: number }>;
 }
 /** No display/private proposal data. Until a host task-settlement port exists these are never pruned. */
@@ -24,7 +24,7 @@ export interface BotPlanReceipt {
 }
 export interface BotPlanRequest {
   botId: string; planId: string; toolCallId: string; proposal: BotPlanProposal;
-  requestIds: readonly string[]; from?: string; signal: AbortSignal | undefined;
+  requestIds: readonly string[]; from?: string; deadline?: number; signal: AbortSignal | undefined;
 }
 export type BotPlanStepOutcome = "marked" | "finished" | "no_plan" | "no_step";
 export interface BotPlanPermit { planId: string; botId: string; executionId: string; operationFingerprint: string }
@@ -53,8 +53,8 @@ const digest = (text: string) => createHash("sha256").update(text).digest("hex")
 const boundedIdentity = (value: unknown, max: number): value is string => typeof value === "string" && !!value.trim() && value.length <= max && !/[\p{Cc}\p{Cf}]/u.test(value);
 const keyOf = (botId: string, planId: string) => JSON.stringify([botId, planId]);
 const has = (object: object, key: string) => Object.prototype.hasOwnProperty.call(object, key);
-const identity = (r: Pick<BotPlanRequest, "botId" | "planId" | "toolCallId" | "proposal" | "requestIds" | "from">) => digest(JSON.stringify([
-  r.botId, r.planId, r.toolCallId, botPlanProposalFingerprint(r.proposal), [...r.requestIds].sort(), r.from ?? null,
+const identity = (r: Pick<BotPlanRequest, "botId" | "planId" | "toolCallId" | "proposal" | "requestIds" | "from" | "deadline">) => digest(JSON.stringify([
+  r.botId, r.planId, r.toolCallId, botPlanProposalFingerprint(r.proposal), [...r.requestIds].sort(), r.from ?? null, r.deadline ?? null,
 ]));
 function usage(plan: BotPlanRecord, except?: string): Map<string, number> {
   const used = new Map<string, number>();
@@ -231,7 +231,7 @@ export function createBotPlans(options: BotPlansOptions): BotPlans {
     async request(input) {
       const copy: BotPlanRequest = { ...input, proposal: structuredClone(input.proposal), requestIds: [...input.requestIds] };
       if (!isPathSafeBotCapabilityId(copy.botId, BOT_LIMITS.idChars) || !/^[A-Za-z0-9-]{1,64}$/u.test(copy.planId) ||
-          !copy.toolCallId || copy.toolCallId.length > 256 || !copy.requestIds.length || copy.requestIds.length > 256 || copy.requestIds.some((id) => typeof id !== "string" || !id.trim() || id.length > 256) || new Set(copy.requestIds).size !== copy.requestIds.length || !isBotPlanProposal(copy.proposal) || (copy.from !== undefined && (!copy.from.trim() || [...copy.from].length > 120))) throw new Error("Invalid plan request or proposal identity.");
+          !copy.toolCallId || copy.toolCallId.length > 256 || !copy.requestIds.length || copy.requestIds.length > 256 || copy.requestIds.some((id) => typeof id !== "string" || !id.trim() || id.length > 256) || new Set(copy.requestIds).size !== copy.requestIds.length || !isBotPlanProposal(copy.proposal) || (copy.from !== undefined && (!copy.from.trim() || [...copy.from].length > 120)) || (copy.deadline !== undefined && (!Number.isFinite(copy.deadline) || copy.deadline < 0))) throw new Error("Invalid plan request or proposal identity.");
       const result = await serial(copy.botId, async (): Promise<{ result: RequestResult } | { pending: Promise<RequestResult> }> => {
         const file = await load(copy.botId);
         if (unreadable.has(copy.botId)) throw new Error("The plan store is unreadable or invalid.");
@@ -242,6 +242,7 @@ export function createBotPlans(options: BotPlansOptions): BotPlans {
           if ((saved ? identity(saved) : receipt!.identityFingerprint) !== fingerprint) throw new Error("The plan replay identity changed.");
           return { result: saved?.status === "active" ? { status: "approved", fresh: false, expiresAt: saved.expiresAt } : { status: "ended" } };
         }
+        if (copy.deadline !== undefined && now() >= copy.deadline) return { result: { status: "ended" } };
         const previous = waiting.get(copy.botId);
         if (previous?.request.planId === copy.planId) {
           if (previous.identity !== fingerprint) throw new Error("The waiting plan replay identity changed.");
@@ -259,10 +260,17 @@ export function createBotPlans(options: BotPlansOptions): BotPlans {
       return serial(botId, async () => {
         const file = await load(botId), plan = file?.plans.find((p) => p.planId === planId && p.status === "active");
         const key = keyOf(botId, planId);
-        if (!plan || !fresh.has(key)) return false;
+        if (!plan || !fresh.has(key) || terminating.has(botId)) return false;
         const signal = fresh.get(key); fresh.delete(key);
         if (signal?.aborted) return false;
         try {
+          await options.revalidate(botId, structuredClone(plan.proposal));
+          if (terminating.has(botId)) return false;
+          if (deleted.has(botId) || signal?.aborted || now() >= plan.expiresAt || now() < plan.approvedAt) {
+            rememberEnd(plan, now() >= plan.expiresAt ? "expired" : "stopped");
+            if (!deleted.has(botId)) await save(botId, file!);
+            emit(botId); return false;
+          }
           await apply();
           if (!await available(botId) || signal?.aborted || now() >= plan.expiresAt || now() < plan.approvedAt) {
             rememberEnd(plan, now() >= plan.expiresAt ? "expired" : "stopped");
@@ -291,7 +299,10 @@ export function createBotPlans(options: BotPlansOptions): BotPlans {
         if (decision !== "approve") return "not_waiting";
         if (wait.request.signal?.aborted) { settle(wait, { status: "ended" }); emit(botId); return "not_waiting"; }
         const approvedAt = now();
-        const record: BotPlanRecord = { planId, botId, toolCallId: wait.request.toolCallId, proposal: structuredClone(wait.request.proposal), requestIds: [...wait.request.requestIds], status: "active", steps: wait.request.proposal.steps.map(() => "pending"), approvedAt, expiresAt: approvedAt + BOT_PLAN_MAX_MS, revision: 2, counted: {}, ...(wait.request.from === undefined ? {} : { from: wait.request.from }) };
+        if (wait.request.deadline !== undefined && approvedAt >= wait.request.deadline) {
+          settle(wait, { status: "ended" }); emit(botId); return "not_waiting";
+        }
+        const record: BotPlanRecord = { planId, botId, toolCallId: wait.request.toolCallId, proposal: structuredClone(wait.request.proposal), requestIds: [...wait.request.requestIds], status: "active", steps: wait.request.proposal.steps.map(() => "pending"), approvedAt, expiresAt: Math.min(approvedAt + BOT_PLAN_MAX_MS, wait.request.deadline ?? Infinity), revision: 2, counted: {}, ...(wait.request.from === undefined ? {} : { from: wait.request.from }), ...(wait.request.deadline === undefined ? {} : { deadline: wait.request.deadline }) };
         const previous = file.plans.filter((p) => p.status === "active");
         try {
           // Stage first, then validate the exact captured snapshot at publication.

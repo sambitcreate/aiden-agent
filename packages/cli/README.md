@@ -120,6 +120,8 @@ Phones and Macs paired with the server see its workspaces, chats, Bots, schedule
 
 The desktop-only `request_access` tool is not offered by the CLI host. Its Bots use their saved Custom file grants; temporary Allow once cards and Always-for-folder requests require the desktop host. See [Bot access requests](../../docs/bot-access-requests.md).
 
+CLI Bots also omit `propose_plan` and `plan_step`. The CLI supplies no plan coverage port and does not advertise `bot:plans`; ordinary tool approvals remain required.
+
 - `aiden bots list|get|catalog|notice|acknowledge|create|update|access` use the shared notice, revision and capability contracts.
 - `aiden bots pause <id>` and `bots unpause <id>` pause a Bot as a whole: running turns stop and new ones, including manual routine runs, are refused until it is unpaused.
 - **Durable Bot sessions** are an explicit profile switch: run `aiden bots enable-durable`, then restart the server. The switch privately backs up legacy Bot chats and journals, leaves their originals intact, and starts fresh durable conversations. Send/Resume/Dismiss, memory edits, routines, presets and approvals reuse the desktop cores; `bots session|send|resume|dismiss|stop|delete|approvals|approve` drive them. For a send, use a UUID or another request ID of up to 200 letters, digits, dots, underscores or hyphens. Until the switch is enabled, paired desktops cannot list the server's Bots and phones use them through the older workspace chat routes. See [durable Bot ownership, migration, recovery and feature boundaries](../../docs/cli-durable-bots.md).

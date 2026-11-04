@@ -227,12 +227,12 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
     planId: string; botId: string; toolCallId: string; proposal: BotPlanProposal;
     requestIds: string[]; status: Exclude<BotPlanStatus, "pending">;
     steps: BotPlanStepStatus[]; from?: string;
-    approvedAt: number; expiresAt: number; endedAt?: number; revision: number;
+    approvedAt: number; expiresAt: number; deadline?: number; endedAt?: number; revision: number;
     counted: Record<string, { operationFingerprint: string; itemIds: string[]; admittedAt?: number }>; // executionId → reservation/admission
   }
   export interface BotPlanRequest {
     botId: string; planId: string; toolCallId: string; proposal: BotPlanProposal;
-    requestIds: readonly string[]; from?: string; signal: AbortSignal | undefined;
+    requestIds: readonly string[]; from?: string; deadline?: number; signal: AbortSignal | undefined;
   }
   export type BotPlanStepOutcome = "marked" | "finished" | "no_plan" | "no_step";
   export interface BotPlanPermit {
@@ -348,8 +348,8 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
   ```ts
   export const BOT_PLAN_MEMO = "aiden.plan";
   export interface BotPlanToolDeps {
-    plans: Pick<BotPlans, "request" | "markStep" | "grantFreshAccess" | "respond">;
-    validate(botId: string, input: unknown): Promise<BotPlanValidation>;  // fresh admission + facts + rules + access
+    plans: Pick<BotPlans, "request" | "markStep" | "grantFreshAccess" | "respond" | "current">;
+    validate(botId: string, input: unknown, call?: BotToolCall): Promise<BotPlanValidation>;  // fresh admission + facts + rules + access
     access?: BotPlanAccessPort;
     botTurns?: BotPlanBotTurnPort;
     botName(botId: string): Promise<string | undefined>;
@@ -374,7 +374,7 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
   - `plan_step`: `Step ${n} marked ${status}.`, `All steps are marked; the plan has ended.`, `No approved plan is running in this turn.`, or `This plan has no step ${n}.`
 - Ingress: in `botIngressAllowsTool`, both tools are allowed only when every `botMessageTurnOf(requestId).kind` is `person` or `message`, with A's host provenance/deadline checks also passing. They are withheld on `routine:`, `tg:`, intro and `botreply:` inputs. In `botToolVerdict`: `verdict(turn.telegram !== true && turn.routine !== true, "Plans are off for this Bot turn.")`.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - In `bot-plan-tools.test.ts`, with a fake `BotPlans` and a `BotToolCall` stub with a real memo map:
     - `an invalid plan throws its problems and shows no card`.
     - `approved returns the approval text and grants outside folders once`: the real B router receives a fresh, plan-owned pinned write grant. Repeat with read: read succeeds and write/edit fail, including codemode calls.
@@ -383,13 +383,13 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
     - `a bot: turn announces once and gives up at the delivery deadline`: with `originOf` set and `deadline = now + 50`, the notice is published once, the wait expires at that deadline, and replay re-reads the same durable deadline without publishing a duplicate or creating an unlimited wait.
     - `plan_step maps each outcome to its text`.
   - In `bot-tool-policy.test.ts`: `plan tools follow ingress`. `botIngressAllowsTool("propose_plan", [id])` is true for `undefined` and `botMessageRequestId("jester", 1, validUuid)`, and false for `"routine:x"`, `"tg:1"`, `botReplyRequestId(validUuid)`, the intro prefix and malformed `"bot:jester:1:d1"`. The same holds for `plan_step`.
-- [ ] **Step 2: Run them and see them fail.** `npx tsx --test main/services/bot-runtime/bot-plan-tools.test.ts main/services/bot-runtime/bot-tool-policy.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement** the tools, the policy branches and the wiring:
+- [x] **Step 2: Run them and see them fail.** `npx tsx --test main/services/bot-runtime/bot-plan-tools.test.ts main/services/bot-runtime/bot-tool-policy.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement** the tools, the policy branches and the wiring:
   - `validate` admits with `deps.admit`, reads `sources.facts`, that admission's policy/binding revisions, B's scoped authorization and `botRules.rules`, then releases. The approval-time validator rechecks the same captured identities.
   - `access` is wired to Plan B's exports when present.
   - `botTurns` is wired to Plan A's courier when present.
-- [ ] **Step 4: Run the tests,** then `npm run test:bot-runtime`. Expected: PASS.
-- [ ] **Step 5: Register and commit:** "Let Bots propose a plan and tick its steps".
+- [x] **Step 4: Run the tests,** then `npm run test:bot-runtime`. Expected: PASS.
+- [x] **Step 5: Register and commit:** "Let Bots propose a plan and tick its steps".
 
 ### Task 6: Desktop wiring: the live view, Needs you, Stop and IPC
 
@@ -529,3 +529,19 @@ Task 4 complete locally. Covered approvals now carry invocation-local permits to
 Raw request IDs remain the ingress authority. Separate host input identities use durable UUID bookkeeping for unlabeled inputs, survive restart and are not reused by a recovered database. The entries remain hidden from transcript and memory projection. Three existing memory fixtures were completed with real host metadata; their assertions were preserved.
 
 Worker runtime 391, focused/memory 153, browser 36, rules 62, registry 15, types, scoped lint and whitespace checks passed. Parent reran the 153 focused/memory tests successfully at `/tmp/bot-plan-c-task4-parent-focused.log`. Meaningful reds covered missing coverage, restored onAllow invalidation, new rule drift and same-URL browser document replacement. Handoff `/tmp/aiden-bot-plan-c-task4-handoff.md` includes exact logs and files. Task 5 must bind complete effective rule-set identity in final admission revalidation, use host input identities consistently for plan/folder ownership and preserve raw IDs for provenance. No Gate 4 or whole-phase acceptance is implied.
+
+
+Task 5 integration adds a main-only optional delivery deadline to the plan request/record and replay identity. An approved plan expires at the earlier of that immutable deadline and the 60-minute plan maximum; approval at a spent deadline creates no active record. Two behavioral red failures are captured at `/tmp/bot-plan-c-delivery-deadline-red.log`, with corrected core coverage at `/tmp/bot-plan-c-delivery-deadline-green.log`. A held-read test also caught fresh folder installation starting after Stop was requested. The installation checks queued termination before invoking its callback; an already-started callback retains its original serialized completion behavior, then Stop revokes it. The corrected core suite passes 41 at `/tmp/bot-plan-c-fresh-grant-stop-green2.log`. Root wiring lint and registry 15 pass. Full Task 5 checks remain in progress.
+
+
+### Task 5 checkpoint, 2026-11-04
+
+Tasks 1–5 are implemented and registered. Task5 tools retain immutable original proposal, ownership, attribution and delivery deadline in durable task memos, reread A's authoritative delivery window on every execution, and install a plan-owned B folder only for the one fresh approval. Stored approval cannot recreate temporary access. Final active-plan checks and actionable request_access recovery are covered by real durable restart tests, including restart after folder installation but before the tool result commits. Both tools remain model-only; unnamed person inputs use the runtime's host identities, while raw request IDs keep deciding ingress.
+
+The production authority adapter binds the full admitted authority and complete effective rule set. It snapshots mutable arguments before awaiting, validates mapped owner IDs and exact B policy/path/inode/target-relative inventory, and performs final admission and target checks before synchronous grant installation. Core grantFreshAccess additionally revalidates the captured full proposal before installing a folder; a behavioral red caught a changed binding otherwise reaching that callback. The corrected core has 42 tests. No session singleton is imported by the adapter or tool module.
+
+Parent validation: plan suite **102**, runtime **391**, Bots **992**, access **84**, messaging **89**, rules **62**, pause **34**, registry **15**, full type-check and scoped ESLint (27 TypeScript files) all passed. Production startup and the existing access-card interaction passed **1 Cua E2E**. The CLI build, all **183 tests with 3 existing PTY skips**, and CLI type-check passed; the real fake-SSE Ping/Pong case asserts it offers none of request_access/propose_plan/plan_step. No C phone contract changed at this gate.
+
+Evidence: `/tmp/aiden-bot-plan-c-task5-handoff.md`, `/tmp/bot-plan-c-task5-parent-{plans-final,runtime,bots,access,messaging,rules,pause,registry-final,types-final,lint-final}.log`, `/tmp/bot-plan-c-startup-cua.log`, `/tmp/bot-plan-c-cli-{build,tests,types}.log`. Tool reds include missing implementation/ingress, expired-approved replay wording and concurrent changed-argument replay (`/tmp/bot-plan-tools-task5-*-red.log`). Adapter mutation/inventory audit reds are `/tmp/bot-plan-authority-audit-red.log`; captured-binding-before-grant red is `/tmp/bot-plan-c-fresh-grant-binding-red.log`.
+
+Gate 4 is pending independent Opus 5.5 medium and OpenCode Go DeepSeek V4.1 Flash high reviews of the same committed checkpoint. Tasks 6–9 and D remain gated. These results establish local source/test behavior, not physical-device, live-provider, package/release or hosted-CI acceptance.

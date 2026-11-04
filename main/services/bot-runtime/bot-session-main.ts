@@ -1,4 +1,7 @@
 import { botMessages, disposeBotMessages } from "../bot-messages/messages-main.js";
+import { botMessageTurnOf } from "../../../renderer/shared/bot-messages.js";
+import { botPlans, configureBotPlanAuthority } from "../bot-plans/plans-main.js";
+import { createBotPlanAuthority } from "../bot-plans/authority.js";
 // Production wiring of the durable Bot runtime.
 //
 // One `BotSessionRuntime` per process, created after Bot storage and the
@@ -29,7 +32,8 @@ import * as path from "node:path";
 import { app, BrowserWindow, ipcMain, logger, Notification, powerMonitor } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
 import { setBotFileToolProtectedRoots, setBotFileToolTemporaryPrivateRoots } from "../bot-file-tool-router.js";
-import { botAccessPrivateRoots } from "./bot-access-target.js";
+import { botAccessPrivateRoots, resolveBotAccessTarget } from "./bot-access-target.js";
+import os from "node:os";
 import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 import { usageLimits } from "../usage-limit-main.js";
 import { spending } from "../spending-main.js";
@@ -102,7 +106,7 @@ import {
   type BotSessionState,
 } from "./bot-session-service.js";
 import { createBotToolAssembly } from "./bot-tool-assembly.js";
-import { botRunAccess, createBotToolSources, isConnected, ruleHandoffTarget } from "./bot-tool-sources-main.js";
+import { botRunAccess, botFileLocations, createBotToolSources, isConnected, ruleHandoffTarget } from "./bot-tool-sources-main.js";
 import { botRunEnded } from "./bot-run-access.js";
 import { botMemory as memory } from "../bot-memory/bot-memory-main.js";
 import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory/compaction.js";
@@ -241,7 +245,50 @@ const toolSources = createBotToolSources({
   dismissals,
   botLacksConnection: (botId, sourceId) => botApplicationService.botLacksConnection(botId, sourceId),
   botName: async (botId) => (await botStore.get(botId))?.name,
+  planTools: {
+    plans: botPlans,
+    validate: (botId, input, call) => planAuthority.validate(botId, input, call),
+    access: {
+      scopeOf: (...args) => planAuthority.access.scopeOf(...args),
+      allowOnce: (...args) => planAuthority.access.allowOnce(...args),
+      revokePlan: (...args) => planAuthority.access.revokePlan(...args),
+    },
+    botName: async (botId) => (await botStore.get(botId))?.name,
+    botTurns: {
+      originOf: (ids) => {
+        for (const id of ids) {
+          const turn = botMessageTurnOf(id);
+          if (turn.kind === "message") return { originBotId: turn.fromBotId };
+        }
+        return undefined;
+      },
+      announceWaiting: async (...args) => {
+        try { return await botMessages().announceWaiting(...args); }
+        catch (error) {
+          logger.warn("bots", "The Bot plan's message delivery is unavailable.", error);
+          return undefined;
+        }
+      },
+    },
+  },
 });
+
+// Closures above are invoked only for a live tool call, after this wiring is
+// complete. Keep the process-wide plan bridge free of session import cycles.
+const planAuthority = createBotPlanAuthority({
+  admit,
+  facts: (botId, admission) => toolSources.facts(botId, admission),
+  rules: (botId) => botRules.rules(botId),
+  locations: botFileLocations,
+  resolveTarget: (requested) => resolveBotAccessTarget(requested, {
+    homeDirectory: os.homedir,
+    privateRoots: () => botAccessPrivateRoots(profileDir(), aidenConfigDir()),
+    approvedRoots: async () => (await (await import("../aiden-remote-service-main.js")).getAidenRemoteRuntime()).state
+      .snapshot().then((state) => state.approvedRoots),
+  }),
+  runAccess: botRunAccess,
+});
+configureBotPlanAuthority({ revalidate: planAuthority.revalidate, revokeAccess: planAuthority.revokeAccess });
 
 const tools = createBotToolAssembly({
   admit,
@@ -249,6 +296,7 @@ const tools = createBotToolAssembly({
   rules: (botId) => botRules.rules(botId),
   botName: async (botId) => (await botStore.get(botId))?.name,
   routinesGoAhead: async () => botRoutinesGoAhead(await configStore.getSettings()),
+  plans: botPlans,
 });
 
 /** The Bot's rules for its prompt; the defaults when the file can't be read (calls still fail closed). */

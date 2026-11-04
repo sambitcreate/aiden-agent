@@ -2175,6 +2175,10 @@ test("durable CLI Bots can message each other", async (t) => {
   assert.equal(reply.text, "Pong");
   assert.ok(requests[0].tools.some((tool) => tool.function.name === "message_bot"));
   assert.ok(requests.find((request) => JSON.stringify(request.messages.at(-1).content).includes("<bot_reply")).tools.every((tool) => tool.function.name !== "message_bot"));
+  const offeredNames = new Set(requests.flatMap((request) => request.tools.map((tool) => tool.function.name)));
+  assert.equal(offeredNames.has("request_access"), false, "CLI has no temporary-access cards");
+  assert.equal(offeredNames.has("propose_plan"), false, "CLI does not host plan approvals");
+  assert.equal(offeredNames.has("plan_step"), false, "CLI does not install plan tools");
   assert.equal(statSync(join(dir, "bots/bot-messages.json")).mode & 0o777, 0o600);
 
   // Exercise the actual CLI HTTPS adapter, including an older paired device.
