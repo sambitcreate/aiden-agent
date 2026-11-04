@@ -3,6 +3,7 @@ import test from "node:test";
 import { checkComposioCalendarRead, publicComposioCalendarReadCheckResult, type ComposioCalendarReadCheckPort } from "./composio-calendar-read-check.js";
 import { syntheticCalendarExecutor, syntheticCalendarMetadata, syntheticCalendarSchemas, syntheticCalendarSearch } from "./composio-calendar-test-support.js";
 import type { ComposioCalendarRead } from "./connector-watch-composio.js";
+import { McpError } from "@earendil-works/pi-mcp";
 
 const NOW = Date.parse("2026-11-04T15:00:00Z");
 const actualAccount = "ca_syntheticactive00001";
@@ -202,4 +203,79 @@ test("local-reference failure proof contains no target names, pointers, fragment
   assert.equal(result.privateProof.contractFailure!.facts!.operation, "listEvents"); assert.equal(result.privateProof.contractFailure!.facts!.keyword, "$ref");
   assert.equal(f.reads.length, 0); assert.equal(result.privateProof.calls.invalidAccount, false);
   for (const secret of ["private_missing_target", "private_other_target", "#/$defs/", "private schema prose"]) assert.equal(JSON.stringify(result).includes(secret), false);
+});
+
+test("thrown RPC failures retain only closed numeric-code and text categories, never negative routing proof", async () => {
+  for (const [code, category] of [[-32700, "parse_error"], [-32600, "invalid_request"], [-32601, "method_not_found"], [-32602, "invalid_params"], [-32603, "internal_error"], [-32033, "server_error"], [987654321, "other_integer"]] as const) {
+    const f = fixture(), marker = "private-rpc-account-calendar-credential";
+    f.port.readCalendar = async () => { throw new McpError(code, `Invalid arguments for ${marker}`, { accountId: marker, response: marker }); };
+    const result = await checkComposioCalendarRead(f.port, options());
+    assert.equal(result.code, "invalid_response"); assert.equal(result.privateProof.readFailure?.stage, "send");
+    assert.deepEqual(result.privateProof.readFailure?.error, { category: "rpc", rpcCode: category, rpcErrorDataPresent: true, textCategory: "invalid_arguments" });
+    assert.equal(result.privateProof.invalidAccountRejected, false); assert.equal(result.privateProof.calls.calendars, 0); assert.equal(result.privateProof.calls.events, 0); assert.equal(result.privateProof.calls.get, false);
+    assert.equal(JSON.stringify(result).includes(marker), false); assert.equal(JSON.stringify(result).includes(String(code)), false);
+    assert.equal("readFailure" in publicComposioCalendarReadCheckResult(result), false);
+  }
+});
+
+test("an MCP text error is distinguished from RPC throws without retaining its content or accepting account failure", async () => {
+  for (const isError of [true, false, undefined]) {
+    const f = fixture(), marker = "private-account-user-and-calendar";
+    f.port.readCalendar = async () => ({ ...(isError === undefined ? {} : { isError }), content: [{ type: "text", text: `Account ${marker} not found` }] });
+    const result = await checkComposioCalendarRead(f.port, options()), diagnostic = result.privateProof.readFailure;
+    assert.equal(diagnostic?.stage, "validation"); assert.equal(diagnostic?.validation, "calendar");
+    assert.equal(diagnostic?.reply?.isError, isError === undefined ? "missing" : isError ? "true" : "false"); assert.equal(diagnostic?.reply?.contentCount, 1); assert.equal(diagnostic?.reply?.firstContent?.textJson, "invalid");
+    assert.equal(diagnostic?.reply?.errorTextCategory, "account_not_found"); assert.equal(diagnostic?.reply?.action?.successful, "missing");
+    assert.equal(result.privateProof.invalidAccountRejected, false); assert.equal(result.privateProof.calls.calendars, 0); assert.equal(result.privateProof.calls.get, false);
+    assert.equal(JSON.stringify(result).includes(marker), false); assert.ok(Buffer.byteLength(JSON.stringify(result)) < 32 * 1024);
+  }
+});
+
+test("common account and connection failure wording changes diagnostics only, never routing acceptance", async () => {
+  for (const message of ["No active connected account found", "CONNECTED_ACCOUNT_NOT_FOUND", "Unknown connected_account", "No active connection exists"]) {
+    const f = fixture();
+    f.port.readCalendar = async () => { throw new McpError(-32000, message + " private-account-identity"); };
+    const result = await checkComposioCalendarRead(f.port, options());
+    assert.equal(result.privateProof.readFailure?.error.textCategory, "account_not_found");
+    assert.equal(result.privateProof.invalidAccountRejected, false); assert.equal(result.privateProof.calls.calendars, 0); assert.equal(result.privateProof.calls.get, false);
+    assert.equal(JSON.stringify(result).includes(message), false); assert.equal(JSON.stringify(result).includes("private-account-identity"), false);
+  }
+});
+
+test("structured MCP errors expose known action/result types without retaining error data or unknown names", async () => {
+  const f = fixture(), marker = "private-structured-account-event-and-unknown-field";
+  f.port.readCalendar = async () => ({ isError: true, content: [], structuredContent: { successful: false, error: marker, data: { results: [{ tool_slug: marker, index: 987654321, error: "Connected account not found", response: { [marker]: marker } }], [marker]: marker } } });
+  const result = await checkComposioCalendarRead(f.port, options()), facts = result.privateProof.readFailure?.reply;
+  assert.equal(facts?.actionSource, "structured"); assert.deepEqual(facts?.action, { successful: "boolean", error: "string", data: "object" });
+  assert.equal(facts?.data?.results, "array"); assert.deepEqual(facts?.firstResult, { value: "object", tool_slug: "string", index: "number", error: "string", response: "object" });
+  assert.equal(result.privateProof.invalidAccountRejected, false); assert.equal(result.privateProof.calls.calendars, 0);
+  assert.equal(JSON.stringify(result).includes(marker), false); assert.equal(JSON.stringify(result).includes("987654321"), false);
+});
+
+test("cancellation during a noncooperative executor throw keeps the returned proof stable and prevents later reads", async () => {
+  const f = fixture(), controller = new AbortController();
+  let enter!: () => void, release!: () => void, calls = 0;
+  const entered = new Promise<void>((resolve) => { enter = resolve; }), held = new Promise<void>((resolve) => { release = resolve; });
+  f.port.readCalendar = async () => { calls++; enter(); await held; throw new McpError(-32000, "No account found: private-late-error"); };
+  const pending = checkComposioCalendarRead(f.port, { ...options(), signal: controller.signal });
+  await entered; controller.abort();
+  const result = await pending, frozen = JSON.stringify(result);
+  assert.equal(result.code, "cancelled"); assert.equal(result.privateProof.invalidAccountRejected, false); assert.equal(result.privateProof.calls.calendars, 0); assert.equal(result.privateProof.calls.get, false);
+  release(); await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1); assert.equal(JSON.stringify(result), frozen); assert.equal(frozen.includes("private-late-error"), false);
+});
+
+test("reply and error accessors never run while projecting failed Calendar reads", async () => {
+  let getters = 0;
+  const thrown = new McpError(-32602, "unused");
+  Object.defineProperty(thrown, "message", { get() { getters++; return "private error"; } });
+  Object.defineProperty(thrown, "code", { get() { getters++; return -32602; } });
+  const f = fixture(); f.port.readCalendar = async () => { throw thrown; };
+  const result = await checkComposioCalendarRead(f.port, options());
+  assert.deepEqual(result.privateProof.readFailure?.error, { category: "rpc", rpcCode: "missing_or_invalid", rpcErrorDataPresent: false, textCategory: "missing" });
+  const reply = Object.defineProperty({}, "successful", { enumerable: true, get() { getters++; return true; } });
+  f.port.readCalendar = async () => reply;
+  const invalid = await checkComposioCalendarRead(f.port, options());
+  assert.equal(invalid.code, "limit_exceeded"); assert.deepEqual(invalid.privateProof.readFailure?.reply, { bounded: false, value: "object" });
+  assert.equal(getters, 0);
 });

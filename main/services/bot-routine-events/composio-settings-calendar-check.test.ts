@@ -10,6 +10,7 @@ import { botConnectorForegroundLifetime, botConnectorInventoryServer } from "../
 import { syntheticCalendarExecutor, syntheticCalendarMetadata, syntheticCalendarSchemas, syntheticCalendarSearch } from "./composio-calendar-test-support.js";
 import { COMPOSIO_CALENDAR_READ_CHECK_FILE, createComposioSettingsCalendarReadCheck, saveComposioCalendarReadCheck } from "./composio-settings-calendar-check.js";
 import type { ComposioCalendarReadCheckResult } from "./composio-calendar-read-check.js";
+import { McpError } from "@earendil-works/pi-mcp";
 
 const lifetime = () => ({ signal: new AbortController().signal, assertCurrent() {} });
 async function fixture(t: test.TestContext) {
@@ -17,6 +18,7 @@ async function fixture(t: test.TestContext) {
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const server = serverFromPreset(getMcpPreset("composio")!);
   let clients = 0, reads = 0;
+  let executorFailure: unknown;
   let published: ComposioCalendarReadCheckResult | undefined;
   let beforePublish = async () => {};
   const check = createComposioSettingsCalendarReadCheck({
@@ -30,6 +32,7 @@ async function fixture(t: test.TestContext) {
         call: async (tool) => tool === "COMPOSIO_SEARCH_TOOLS" ? syntheticCalendarSearch() : syntheticCalendarSchemas(),
         readCalendar: async (read) => {
           reads++;
+          if (executorFailure !== undefined) throw executorFailure;
           if (read.accountId !== "ca_syntheticactive00001") return syntheticCalendarExecutor(read, undefined, "Connected account not found");
           const event = { id: "private-event-id", status: "confirmed", summary: "Private meeting title", start: { dateTime: "2026-11-04T12:30:00Z" }, end: { dateTime: "2026-11-04T12:45:00Z" } };
           return syntheticCalendarExecutor(read, read.kind === "listCalendars" ? { items: [{ id: "explicit-calendar@example.test", accessRole: "reader", summary: "Private calendar label" }] } : read.kind === "listEvents" ? { items: [event] } : event);
@@ -39,7 +42,7 @@ async function fixture(t: test.TestContext) {
     publish: async (result, current) => { await beforePublish(); await saveComposioCalendarReadCheck(directory, result, current); published = result; },
     now: () => Date.parse("2026-11-04T12:00:00Z"),
   });
-  return { directory, server, check, get clients() { return clients; }, get reads() { return reads; }, get published() { return published; }, beforePublish: (callback: typeof beforePublish) => { beforePublish = callback; } };
+  return { directory, server, check, get clients() { return clients; }, get reads() { return reads; }, get published() { return published; }, failRead: (failure: unknown) => { executorFailure = failure; }, beforePublish: (callback: typeof beforePublish) => { beforePublish = callback; } };
 }
 
 test("explicit Settings Calendar check preserves service settings and publishes only private structural proof", async (t) => {
@@ -55,6 +58,19 @@ test("explicit Settings Calendar check preserves service settings and publishes 
     assert.ok(!retained.includes(secret)); assert.ok(!JSON.stringify(result).includes(secret));
   }
   assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+});
+
+test("Settings privately persists closed RPC failure facts without error payloads or public diagnostics", async (t) => {
+  const f = await fixture(t), marker = "private-rpc-message-account-credential-and-data";
+  f.failRead(new McpError(-32033, `Account ${marker} not found`, { account_id: marker, provider_response: marker }));
+  const result = await f.check(lifetime());
+  assert.equal(f.reads, 1); assert.equal(f.published?.privateProof.invalidAccountRejected, false);
+  const file = path.join(f.directory, COMPOSIO_CALENDAR_READ_CHECK_FILE), retained = await fs.readFile(file, "utf8"), proof = JSON.parse(retained).privateProof;
+  assert.equal(proof.readFailure.stage, "send");
+  assert.deepEqual(proof.readFailure.error, { category: "rpc", rpcCode: "server_error", rpcErrorDataPresent: true, textCategory: "account_not_found" });
+  assert.equal(retained.includes(marker), false); assert.equal(retained.includes("-32033"), false);
+  assert.ok(Buffer.byteLength(retained) < 32 * 1024); assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+  assert.deepEqual(Object.keys(result), ["message"]); assert.equal(JSON.stringify(result).includes("readFailure"), false);
 });
 
 test("disabled and restricted Composio never constructs the Calendar read client", async (t) => {

@@ -14,6 +14,9 @@ import { withBotConnectorInventoryScope } from "../bot-connector-inventory-scope
 import { withForegroundComposioSettingsClientCore, type ForegroundComposioClient, type ForegroundComposioSettingsClientPort } from "../foreground-composio-settings-client.js";
 import { registerComposioWatchInspection } from "../../handlers/composio-watch-inspection.js";
 import { COMPOSIO_SETTINGS_INSPECTION_FILE, createComposioSettingsInspection, saveComposioSettingsInspection } from "./composio-settings-inspection.js";
+import { McpError } from "@earendil-works/pi-mcp";
+import { composioCalendarReadFailure, type ComposioCalendarReadFailure } from "./composio-calendar-call-diagnostics.js";
+import { syntheticCalendarMetadata, syntheticCalendarSchemas } from "./composio-calendar-test-support.js";
 
 const SEARCH = "COMPOSIO_SEARCH_TOOLS", SCHEMAS = "COMPOSIO_GET_TOOL_SCHEMAS";
 const marker = "synthetic-private-account-or-instructions";
@@ -263,6 +266,40 @@ test("typed foreground reads require full schemas returned by this client and lo
     assert.equal(prepared, true, "the requested invalidation boundary follows successfully returned full schemas");
     assert.equal(f.sent.filter((name) => name === "COMPOSIO_MULTI_EXECUTE_TOOL").length, boundary === "read" ? 1 : 0);
     assert.equal(await fs.readFile(f.permissionFile, "utf8"), "original grant data");
+    assert.equal(f.closed, 1);
+  });
+});
+
+test("typed Calendar failures distinguish actual RPC send, malformed reply and both validation boundaries", async (t) => {
+  for (const boundary of ["send", "reply", "mcp", "calendar", "text"] as const) await t.test(boundary, async (t) => {
+    let diagnostic: ComposioCalendarReadFailure | undefined;
+    const privateMarker = "private-live-response-and-credential";
+    const rpcFailure = new McpError(-32602, `Invalid parameters for ${privateMarker}`, { credentials: privateMarker });
+    const f = await fixture(t, undefined, async (port) => {
+      await port.list();
+      await port.call(SCHEMAS, { tool_slugs: ["GOOGLECALENDAR_LIST_CALENDARS", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_EVENTS_GET"] });
+      let caught: unknown;
+      try { await port.readCalendar!({ kind: "listCalendars", accountId: "exact-account" }); } catch (error) { caught = error; }
+      assert.ok(caught);
+      if (boundary === "send") assert.equal(caught, rpcFailure, "real error identity remains unchanged");
+      diagnostic = composioCalendarReadFailure(caught, "admission");
+    });
+    f.changeMetadata((tools) => {
+      const current = syntheticCalendarMetadata();
+      delete current[2]!.outputSchema;
+      if (boundary === "mcp") current[2]!.outputSchema = { type: "object", required: ["successful", "data", "not_in_the_reply"], properties: { successful: { type: "boolean" }, data: { type: "object" }, not_in_the_reply: { type: "boolean" } } };
+      tools.splice(0, tools.length, ...current as unknown as typeof tools);
+    });
+    f.callBarrier(async (tool) => { if (tool === "COMPOSIO_MULTI_EXECUTE_TOOL" && boundary === "send") throw rpcFailure; });
+    f.changeReply((tool, reply) => tool === SCHEMAS ? { content: [], structuredContent: syntheticCalendarSchemas() } : tool !== "COMPOSIO_MULTI_EXECUTE_TOOL" ? reply : boundary === "reply" ? { content: privateMarker } : boundary === "calendar" || boundary === "text" ? { ...(boundary === "calendar" ? { isError: true } : {}), content: [{ type: "text", text: `Account ${privateMarker} not found` }] } : reply);
+    await f.inspect(owner());
+    assert.equal(diagnostic?.stage, boundary === "mcp" || boundary === "calendar" || boundary === "text" ? "validation" : boundary);
+    if (boundary === "send") { assert.equal(diagnostic?.error.category, "rpc"); assert.equal(diagnostic?.error.rpcCode, "invalid_params"); assert.equal(diagnostic?.reply, undefined); }
+    if (boundary === "reply") assert.equal(diagnostic?.reply?.content, "string");
+    if (boundary === "mcp") { assert.equal(diagnostic?.validation, "mcp"); assert.equal(diagnostic?.reply?.action?.successful, "boolean"); }
+    if (boundary === "calendar" || boundary === "text") { assert.equal(diagnostic?.validation, "calendar"); assert.equal(diagnostic?.reply?.isError, boundary === "calendar" ? "true" : "missing"); assert.equal(diagnostic?.reply?.firstContent?.textJson, "invalid"); assert.equal(diagnostic?.reply?.errorTextCategory, "account_not_found"); }
+    assert.equal(f.sent.filter((tool) => tool === "COMPOSIO_MULTI_EXECUTE_TOOL").length, 1);
+    assert.equal(JSON.stringify(diagnostic).includes(privateMarker), false); assert.equal(JSON.stringify(diagnostic).includes("not_in_the_reply"), false);
     assert.equal(f.closed, 1);
   });
 });

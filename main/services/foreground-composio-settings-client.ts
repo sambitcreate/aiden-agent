@@ -7,12 +7,13 @@ import { mcpRuntimeConnectionSnapshot, sameMcpRuntimeConnection } from "./mcp-cr
 import type { GenerationBoundConnectionAttempts } from "./generation-bound-connection-cache.js";
 import type { McpConfigurationLease } from "./mcp-config-lease.js";
 import type { McpRequester } from "./mcp-client.js";
-import { COMPOSIO_WATCH_INVENTORY_LIMITS, MCP_TOOL_LIST_CHANGED, createMcpToolCallGuard, guardedMcpToolCall, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
+import { COMPOSIO_WATCH_INVENTORY_LIMITS, MCP_TOOL_LIST_CHANGED, callMcpTool, createMcpToolCallGuard, guardedMcpToolCall, listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
 import type { BotConnectorMcpClientPort } from "./mcp.js";
 import type { McpServer } from "./types.js";
 import { boundedCalendarContractJson, CALENDAR_SCHEMA_SLUGS, verifyCalendarContract } from "./bot-routine-events/composio-calendar-contract.js";
 import type { ComposioCalendarRead } from "./bot-routine-events/connector-watch-composio.js";
 import type { SubagentMcpRemoteTool } from "./subagents/subagent-mcp-read.js";
+import { recordComposioCalendarReadFailure, type ComposioCalendarReadFailure } from "./bot-routine-events/composio-calendar-call-diagnostics.js";
 
 export interface ForegroundComposioSettingsClientPort extends BotConnectorMcpClientPort {
   assertCurrent(): Promise<void>;
@@ -114,23 +115,37 @@ export async function withForegroundComposioSettingsClientCore<Client extends Fo
           return result;
         },
         readCalendar: async (read, sessionId) => {
-          await current(); active();
-          if (!guard || calendarSchemas === undefined) throw new Error("Calendar's current read schemas have not been verified.");
-          // Compile lazily only for the explicit typed read, from schemas this
-          // same client returned. Callers cannot supply a schema or saved proof.
-          calendar ??= verifyCalendarContract(metadata, calendarSchemas);
-          const callCalendar = calendar, callGuard = guard, epoch = calendarEpoch;
-          const argumentsValue = callCalendar.request(read, sessionId);
-          const readGuard = createMcpToolCallGuard(metadata, () => {
-            active();
-            if (epoch !== calendarEpoch || guard !== callGuard || calendar !== callCalendar) throw new Error("Calendar's current read schemas changed.");
-            callGuard.assertCallable("COMPOSIO_MULTI_EXECUTE_TOOL");
-          });
-          await current(); active();
-          const result = await guardedMcpToolCall(readGuard, client, { name: "COMPOSIO_MULTI_EXECUTE_TOOL", arguments: argumentsValue }, { signal, timeoutMs: 10_000 });
-          await current(); readGuard.assertCallable("COMPOSIO_MULTI_EXECUTE_TOOL");
-          callCalendar.executorResponse(result);
-          return result;
+          let stage: ComposioCalendarReadFailure["stage"] = "admission", reply: unknown;
+          let validation: ComposioCalendarReadFailure["validation"];
+          try {
+            await current(); active();
+            if (!guard || calendarSchemas === undefined) throw new Error("Calendar's current read schemas have not been verified.");
+            // Compile lazily only for the explicit typed read, from schemas this
+            // same client returned. Callers cannot supply a schema or saved proof.
+            calendar ??= verifyCalendarContract(metadata, calendarSchemas);
+            const callCalendar = calendar, callGuard = guard, epoch = calendarEpoch;
+            const argumentsValue = callCalendar.request(read, sessionId);
+            const readGuard = createMcpToolCallGuard(metadata, () => {
+              active();
+              if (epoch !== calendarEpoch || guard !== callGuard || calendar !== callCalendar) throw new Error("Calendar's current read schemas changed.");
+              callGuard.assertCallable("COMPOSIO_MULTI_EXECUTE_TOOL");
+            });
+            await current(); active();
+            const observed: McpRequester = { request: async <Result>(...args: Parameters<McpRequester["request"]>) => {
+              stage = "send";
+              const response = await client.request<Result>(...args);
+              stage = "reply"; reply = response; return response;
+            } };
+            // The ordinary guarded-call sequence, observed only for this typed read.
+            readGuard.assertCallable("COMPOSIO_MULTI_EXECUTE_TOOL");
+            const result = await callMcpTool(observed, { name: "COMPOSIO_MULTI_EXECUTE_TOOL", arguments: argumentsValue }, { signal, timeoutMs: 10_000, beforeSend: () => readGuard.assertCallable("COMPOSIO_MULTI_EXECUTE_TOOL") });
+            stage = "validation"; validation = "mcp";
+            readGuard.validateResult("COMPOSIO_MULTI_EXECUTE_TOOL", result);
+            await current(); readGuard.assertCallable("COMPOSIO_MULTI_EXECUTE_TOOL");
+            validation = "calendar";
+            callCalendar.executorResponse(result);
+            return result;
+          } catch (error) { throw recordComposioCalendarReadFailure(error, stage, reply, validation); }
         },
       });
       await current(); active(); return result;

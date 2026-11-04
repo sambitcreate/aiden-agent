@@ -6,6 +6,7 @@ import type { SubagentMcpRemoteTool } from "../subagents/subagent-mcp-read.js";
 import type { ComposioCalendarContract } from "./composio-calendar-host-port.js";
 import { buildCalendarSchemasRequest, buildCalendarSearchRequest, calendarContractAction, calendarContractObject, ComposioCalendarContractError, verifyCalendarContract, type ComposioCalendarExecutorOutputSource } from "./composio-calendar-contract.js";
 import { discoverComposioCalendarSources, normalizeComposioCalendarEventGet, parseComposioCalendarAccounts, readComposioCalendarWatch, type ComposioCalendarRead } from "./connector-watch-composio.js";
+import { composioCalendarReadFailure, type ComposioCalendarReadFailure } from "./composio-calendar-call-diagnostics.js";
 
 export const COMPOSIO_CALENDAR_READ_CHECK_CODES = ["verified", "get_proof_incomplete", "needs_account_selection", "no_active_account", "unsupported_contract", "invalid_account_unverified", "source_unavailable", "invalid_response", "limit_exceeded", "access_changed", "cancelled", "timed_out", "inspection_failed"] as const;
 export type ComposioCalendarReadCheckCode = typeof COMPOSIO_CALENDAR_READ_CHECK_CODES[number];
@@ -29,6 +30,7 @@ export interface ComposioCalendarReadCheckProof {
   contract?: ComposioCalendarContract;
   executorOutputSource?: ComposioCalendarExecutorOutputSource;
   negative?: NegativeShape;
+  readFailure?: ComposioCalendarReadFailure;
   contractFailure?: { stage: ComposioCalendarContractError["stage"]; reason: ComposioCalendarContractError["reason"]; facts?: ComposioCalendarContractError["facts"]; field?: ComposioCalendarContractError["field"] };
 }
 export interface ComposioCalendarReadCheckPublicResult {
@@ -137,17 +139,28 @@ export async function checkComposioCalendarRead(raw: ComposioCalendarReadCheckPo
     if (active.length === 0) reject("no_active_account", "no_account");
     if (active.length !== 1) reject("needs_account_selection", "multiple_accounts");
     if (!raw.readCalendar) reject("unsupported_contract", "missing");
-    const readCalendar = raw.readCalendar.bind(raw);
+    const rawRead = raw.readCalendar.bind(raw);
+    const readCalendar = async (read: ComposioCalendarRead, validate: (reply: unknown) => void): Promise<unknown> => {
+      let reply: unknown, returned = false;
+      try {
+        reply = await call(() => rawRead(read, sessionId)); returned = true;
+        const copy = bounded(reply); validate(copy); return copy;
+      } catch (error) {
+        proof.readFailure = composioCalendarReadFailure(error, returned ? "validation" : "send", reply, returned ? "calendar" : undefined);
+        throw error;
+      }
+    };
     proof.stage = "invalid_account";
     const invalidId = `ca_${randomBytes(16).toString("hex")}`;
     if (active.some((account) => account.id === invalidId)) reject("invalid_account_unverified", "routing_unverified");
     const negative: ComposioCalendarRead = { kind: "listCalendars", accountId: invalidId };
     verified.request(negative, sessionId); // Client refusal is not routing proof.
     proof.calls.invalidAccount = true;
-    const negativeReply = bounded(await call(() => readCalendar(negative, sessionId)));
-    const blocked = accountSelectionFailure(negativeReply); proof.negative = negativeShape(negativeReply, blocked);
-    verified.executorResponse(negativeReply);
-    if (blocked !== "none") reject("invalid_account_unverified", "routing_unverified");
+    await readCalendar(negative, (reply) => {
+      const blocked = accountSelectionFailure(reply); proof.negative = negativeShape(reply, blocked);
+      verified.executorResponse(reply);
+      if (blocked !== "none") reject("invalid_account_unverified", "routing_unverified");
+    });
     proof.invalidAccountRejected = true;
     const port = {
       assertCurrent: async (read: ComposioCalendarRead) => { await current(); verified.request(read, sessionId); },
@@ -156,8 +169,7 @@ export async function checkComposioCalendarRead(raw: ComposioCalendarReadCheckPo
         verified.request(read, sessionId);
         proof.stage = read.kind === "listCalendars" ? "calendars" : read.kind === "getEvent" ? "event_get" : "events";
         if (read.kind === "listCalendars") proof.calls.calendars++; else if (read.kind === "getEvent") proof.calls.get = true; else proof.calls.events++;
-        const result = bounded(await call(() => readCalendar(read, sessionId)));
-        verified.response(read, result); return result;
+        return readCalendar(read, (reply) => verified.response(read, reply));
       },
     };
     const sources = await discoverComposioCalendarSources({ ...port, assertDiscoveryCurrent: current, currentAccounts: async () => accountReply }, signal);
