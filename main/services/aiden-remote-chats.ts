@@ -1,4 +1,5 @@
 import { agentNoticeDisplayText, parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
+import { reportChatMessageSent } from "./analytics/analytics-feature-reports.js";
 import { parseAppControlPanels, REMOTE_APP_CONTROL_TOPICS } from "../../renderer/shared/app-controls.js";
 import {
   createHash,
@@ -122,6 +123,7 @@ import {
 } from "../../renderer/shared/slash-commands.js";
 import {
   prepareSkillInvocationForAppend,
+  reportSkillUsed,
   requireSkillInvocationWorkspace,
   type PreparedSkillInvocation,
 } from "./skill-invocation-turn.js";
@@ -1458,6 +1460,7 @@ export class AidenRemoteChatService {
       noWorkspace?: {
         target(workspaceId: string): Promise<string>;
         release(workspaceId: string): Promise<void>;
+        isHidden?(workspaceId: string): Promise<boolean>;
       };
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
@@ -2919,6 +2922,7 @@ export class AidenRemoteChatService {
             });
             appended = true;
             appendedChat = chat;
+            if (preparedSkill) reportSkillUsed(preparedSkill.provenance);
             // The person wrote in it, so a snoozed chat is back. Never blocks
             // or fails the send; Pin and Done are left alone.
             void this.options.triage?.wake?.(chatId).catch(() => undefined);
@@ -2929,6 +2933,16 @@ export class AidenRemoteChatService {
               surface,
               owner.owner,
             );
+            if (started) {
+              reportChatMessageSent({
+                providerId: selection.providerId,
+                model: selection.modelId,
+                thinkingLevel: parsed.thinkingLevel,
+                origin: "phone",
+                inWorkspace: async () =>
+                  workspaceId !== undefined && !(await this.options.noWorkspace?.isHidden?.(workspaceId)),
+              });
+            }
             if (!started && !accepted) {
               turn.release();
               this.options.streams.markStartError(

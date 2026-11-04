@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
+import * as analyticsFeatureReports from "./analytics/analytics-feature-reports.js";
+import * as analyticsIds from "./analytics/analytics-ids.js";
+import * as analyticsReport from "./analytics/analytics-report.js";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import * as crypto from "node:crypto";
@@ -257,6 +261,9 @@ async function executionHarness(
       get: async () => ({ name: "Planner", interruptions: { quietHours: { enabled: false, start: "22:00", end: "07:00" }, dailyLimit: 20 } }),
     },
   };
+  ports["./analytics/analytics-report.js"] = analyticsReport;
+  ports["./analytics/analytics-ids.js"] = analyticsIds;
+  ports["./analytics/analytics-feature-reports.js"] = analyticsFeatureReports;
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL("./schedule-execution.ts", import.meta.url))],
     bundle: true,
@@ -402,4 +409,17 @@ test("real execution preserves task errors and silent results independently of d
   assert.equal(silent.records.length, 1);
   assert.equal(silent.warnings.length, 0);
   assert.equal(silent.broadcasts.filter(({ channel }) => channel === "schedule:updated").length, 1);
+});
+
+test("a finished task run counts once by its result and what started it", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const script = task({ mode: "script", permission: "full", script: "/synthetic/script.sh" });
+  await (await executionHarness({})).execution.run(script);
+  await (await executionHarness({ scriptFailure: true })).execution.run(script, undefined, { kind: "automatic", fireTime: 1 });
+  await (await executionHarness({ output: "" })).execution.run(script, undefined, { kind: "manual", key: "run-3" });
+  assert.deepEqual(sent, [
+    { event: "scheduled_task_ran", props: { trigger: "manual", result: "success" } },
+    { event: "scheduled_task_ran", props: { trigger: "automatic", result: "failed" } },
+    { event: "scheduled_task_ran", props: { trigger: "manual", result: "silent" } },
+  ]);
 });

@@ -1,3 +1,4 @@
+import { reportChatMessageSent } from "../analytics/analytics-feature-reports.js";
 import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
 // The Bot turn path: every ingress (desktop, Remote, Telegram, routines)
 // reaches a Bot's one durable conversation through this service.
@@ -536,7 +537,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
    * other turns, so its own ingress rules are applied when its run makes each
    * request and call (`turnAllows` in `bot-extension.ts`), never here.
    */
-  async function prepareToRun(botId: string, conversation: Conversation, registry: BotRegistry): Promise<void> {
+  async function prepareToRun(botId: string, conversation: Conversation, registry: BotRegistry): Promise<ModelRef> {
     const resolved = await modelFor(botId);
     if (resolved.kind === "none") throw new BotSessionError("needs_model");
     if (resolved.kind === "error") throw new BotSessionError("model_error", resolved.message, resolved.authority);
@@ -546,6 +547,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     if (agent.model?.provider !== model.provider || agent.model?.modelId !== model.modelId) {
       await conversation.configure({ model }, ctx);
     }
+    return model;
   }
 
   /** Abort the paused turn without running it, and mark its partial answer interrupted. */
@@ -747,7 +749,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
         const before = await currentState(botId);
         if (before.kind === "interrupted" && input.ifNotInterrupted) throw new BotSessionError("bot_paused");
-        await prepareToRun(botId, conversation, registry);
+        const model = await prepareToRun(botId, conversation, registry);
         if (before.kind === "interrupted") {
           await dismissPaused(conversation, before.submissionId);
           blocked.delete(botId);
@@ -769,6 +771,15 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
           ctx,
         );
         if (input.hidden === true) hiddenSubmissions.add(String(submission.id));
+        // A routine's input and the hidden self-intro are not the person's message.
+        if (input.label === undefined && input.hidden !== true) {
+          reportChatMessageSent({
+            providerId: model.provider,
+            model: model.modelId,
+            origin: "bot",
+            inWorkspace: () => false,
+          });
+        }
         requireHost().touch(botId);
         publish(botId, await currentState(botId));
         return { submissionId: String(submission.id), deduped: false };

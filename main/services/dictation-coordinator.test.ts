@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import type { DictationStatePayload } from "../../renderer/shared/dictation.js";
 import {
   DictationCoordinator,
@@ -906,4 +907,20 @@ test("a pill recreated ahead of time must report ready before recording starts",
   assert.equal(subject.coordinator.currentStage, "starting");
   await subject.coordinator.ready();
   assert.equal(subject.coordinator.currentStage, "recording");
+});
+
+test("a dictation that reached the text field counts once by its engine, and a discarded one counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const dictate = async (text: string) => {
+    const voice = { kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true } as const;
+    const subject = harness({ resolveVoice: async () => ({ ok: true, voice }) });
+    await subject.coordinator.ready();
+    await subject.coordinator.toggle();
+    await subject.coordinator.toggle();
+    await subject.coordinator.result(text, subject.coordinator.currentOperationId!);
+  };
+  await dictate("   ");
+  assert.deepEqual(sent, []);
+  await dictate("hello");
+  assert.deepEqual(sent, [{ event: "voice_used", props: { mode: "dictation", engine: "local" } }]);
 });

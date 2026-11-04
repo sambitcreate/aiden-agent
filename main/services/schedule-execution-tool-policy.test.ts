@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import * as crypto from "node:crypto";
 import * as path from "node:path";
 import test from "node:test";
+import { analyticsSettled, captureAnalyticsEvents } from "./analytics/test-support.js";
+import * as analyticsFeatureReports from "./analytics/analytics-feature-reports.js";
+import * as analyticsIds from "./analytics/analytics-ids.js";
+import * as analyticsReport from "./analytics/analytics-report.js";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import * as acpHarness from "../../renderer/shared/acp-harness.js";
@@ -117,6 +121,9 @@ async function executionHarness(webSearch: () => Promise<{ ready?: boolean }>) {
     "../../renderer/shared/gemini-usage-scope.js": geminiUsageScope,
     "../../renderer/shared/acp-harness.js": acpHarness,
   };
+  ports["./analytics/analytics-report.js"] = analyticsReport;
+  ports["./analytics/analytics-ids.js"] = analyticsIds;
+  ports["./analytics/analytics-feature-reports.js"] = analyticsFeatureReports;
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL("./schedule-execution.ts", import.meta.url))],
     bundle: true,
@@ -209,4 +216,15 @@ test("an unattended Assistant run carries its approved provider fingerprint into
   );
   assert.equal(params.mode, "assistant-unattended");
   assert.equal(options.providerFingerprint, FINGERPRINT);
+});
+
+test("a scheduled run counts its one generated message as coming from the schedule", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const h = await executionHarness(notReady);
+  await h.run(task({ permission: "full", mcpServerIds: [] }));
+  await analyticsSettled();
+  assert.deepEqual(
+    sent.filter(({ event }) => event === "chat_message_sent").map(({ props }) => props?.origin),
+    ["schedule"],
+  );
 });

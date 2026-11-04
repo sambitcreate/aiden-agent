@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { analyticsSettled, captureAnalyticsEvents } from "./analytics/test-support.js";
 import type { Chat, ChatMessage } from "./types.js";
 import {
   AidenRemoteChatService,
@@ -3317,4 +3318,59 @@ test("context pressure is null when the host cannot project, and Bot chats and u
   const unwired = fixture(chat());
   assert.equal(unwired.service.supportsContextPressure, false);
   await assert.rejects(unwired.service.contextPressure("chat-1"), hasCode("not_found", 404));
+});
+
+test("a phone's message counts once for the turn it started, and a turn that never starts counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const failed = fixture(chat(), { startThrows: true });
+  await failed.service.startTurn("device-1", "chat-1", "counted-turn-00000001", { text: "hello" }).catch(() => undefined);
+  await analyticsSettled();
+  assert.deepEqual(sent.filter(({ event }) => event === "chat_message_sent"), []);
+
+  const app = fixture(chat({ workspaceId: "workspace-9" }));
+  const accepted = await app.service.startTurn("device-1", "chat-1", "counted-turn-00000002", { text: "hello" });
+  assert.equal(accepted.status, "accepted");
+  await analyticsSettled();
+  assert.deepEqual(sent, [{
+    event: "chat_message_sent",
+    props: { provider_id: "custom", model_id: "custom", in_workspace: true, thinking: "other", origin: "phone" },
+  }]);
+});
+
+test("a phone's message in a hidden No workspace folder is not counted as in a workspace", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const app = fixture(chat({ workspaceId: "workspace-9" }), {
+    noWorkspace: {
+      target: async (workspaceId) => workspaceId,
+      release: async () => undefined,
+      isHidden: async () => true,
+    },
+  });
+  await app.service.startTurn("device-1", "chat-1", "counted-turn-00000003", { text: "hello" });
+  await analyticsSettled();
+  assert.equal(sent[0]?.props?.in_workspace, false);
+});
+
+test("a phone's skill turn counts its skill once", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const invocationId = `sk1_${"a".repeat(43)}`;
+  const app = fixture(chat({ workspaceId: "workspace-9" }), {
+    deviceSupportsSkillInvocation: async () => true,
+    resolveSkillInvocation: async () => ({
+      stableId: "skill:review",
+      name: "review-code",
+      description: "Review changes.",
+      instructions: "Review the diff carefully.",
+      source: "workspace",
+      enabled: true,
+      available: true,
+      invocationId,
+      toolKey: "skill_review_code",
+    }),
+  });
+  await app.service.startTurn("device-1", "chat-1", "counted-turn-00000004", {
+    text: "check this diff",
+    skill: { version: 1, invocationId, displayName: "review-code", source: "workspace" },
+  });
+  assert.deepEqual(sent.filter(({ event }) => event === "skill_used"), [{ event: "skill_used", props: { source: "user" } }]);
 });

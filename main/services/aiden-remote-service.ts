@@ -1288,7 +1288,7 @@ export class AidenRemoteService {
       state,
       this.tlsIdentity,
     );
-    const pairing = this.pairing.begin(endpoint, serverSpkiSha256);
+    const pairing = this.pairing.begin(endpoint, serverSpkiSha256, transport);
     try {
       const qrPayload = this.pairingQrPayload(pairing.bootstrap, transport);
       this.pairing.sealManualPayload(pairing.sessionId, qrPayload);

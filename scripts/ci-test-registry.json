@@ -235,6 +235,7 @@
         "main/services/analytics/analytics-consent.test.ts",
         "main/services/analytics/analytics-core.test.ts",
         "main/services/analytics/analytics-crash.test.ts",
+        "main/services/analytics/analytics-feature-reports.test.ts",
         "main/services/analytics/analytics-sanitize.test.ts",
         "main/services/analytics/analytics-service.test.ts",
         "main/handlers/analytics.test.ts",

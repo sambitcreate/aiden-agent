@@ -28,7 +28,7 @@ const version = { kind: "version" } as const;
 export const COUNT_BUCKETS = ["0", "1", "2-3", "4-10", "11+"] as const;
 export const UPTIME_BUCKETS = ["<1m", "1-10m", "10-60m", "1h+"] as const;
 
-const RUN_TRIGGERS = enumProp("automatic", "manual", "catch_up", "retry", "file_change", "webhook");
+const RUN_TRIGGERS = enumProp("automatic", "manual", "catch_up", "retry", "file_change", "webhook", "watch");
 
 export const ANALYTICS_EVENTS = {
   // Who's using it
@@ -43,7 +43,7 @@ export const ANALYTICS_EVENTS = {
     provider_id: id,
     model_id: id,
     in_workspace: bool,
-    thinking: enumProp("off", "minimal", "low", "medium", "high", "xhigh", "other"),
+    thinking: enumProp("off", "minimal", "low", "medium", "high", "xhigh", "max", "other"),
     origin: enumProp("desktop", "phone", "bot", "schedule"),
   },
   chat_created: { workspace_kind: enumProp("folder", "scratch", "worktree", "none") },
@@ -64,7 +64,7 @@ export const ANALYTICS_EVENTS = {
   computer_use_enabled: {},
   bot_computer_set_up: { element_control: bool },
   terminal_opened: {},
-  git_commit: { pushed: bool },
+  git_commit: {},
   worktree_created: {},
 
   // Crashes without a JavaScript stack (process gone, unclean exit)

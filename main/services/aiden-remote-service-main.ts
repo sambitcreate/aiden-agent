@@ -652,6 +652,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               return workspace ? workspaceFolderRemoteRefusal(workspace) : undefined;
             },
             noWorkspace: {
+              isHidden: async (workspaceId) => (await configStore.getWorkspace(workspaceId))?.noWorkspace === true,
               // The desktop's sidebar lists a chat only once it knows the chat's workspace, so a
               // hidden record made or removed here is announced like any other workspace change.
               target: async (workspaceId) => {
@@ -1003,7 +1004,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                     const { botStarter } = await import("./bot-runtime/bot-starter-main.js");
                     const result = await botStarter().startFromPreset(presetId, {
                       // Created for the phone's audience; the key is remembered by the shared starter.
-                      createBot: (bot, botId) => botApplicationService.createBot({ audienceId, botId, bot }),
+                      createBot: (bot, botId, presetId) => botApplicationService.createBot({ audienceId, botId, bot, presetId }),
                     });
                     return { botId: result.bot.id, created: result.created };
                   },

@@ -3,6 +3,7 @@ import type { AppSettings } from "./types.js";
 import type { LocalModel, LocalModelDownloadState } from "./local-speech-downloads.js";
 import type { UsageRequestRecord } from "./usage-store-core.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { validateAidenRemotePcm16Base64 } from "./aiden-remote-speech-codec.js";
 import { AidenRemoteSpeechLane } from "./aiden-remote-speech-lane.js";
 import { completeAidenRemoteSpeechTranscription } from "./aiden-remote-speech-transcription.js";
@@ -169,10 +170,12 @@ export class AidenRemoteSpeechServiceCore {
       // decodes base64 to PCM16 once in main and hands those samples to the
       // speech worker, which normalizes them and runs inference in isolation.
       const pcmBase64 = validateAidenRemotePcm16Base64(value.pcmBase64);
-      return completeAidenRemoteSpeechTranscription(pcmBase64, id, {
+      const transcript = await completeAidenRemoteSpeechTranscription(pcmBase64, id, {
         transcribe: this.dependencies.transcribePcm16Base64,
         recordUsage: (usage) => this.dependencies.recordUsage(usage),
       });
+      reportAnalyticsEvent("voice_used", { mode: "dictation", engine: "local" });
+      return transcript;
     });
   }
 }

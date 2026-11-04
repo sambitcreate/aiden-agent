@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, test } from "node:test";
+import { analyticsSettled, captureAnalyticsEvents } from "../analytics/test-support.js";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentSystemPrompt, getCurrentTools, type Message } from "@earendil-works/pi-ai";
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
@@ -805,6 +806,33 @@ test("an open session keeps its memory snapshot; reopening after the idle close 
     await new Promise((resolve) => setTimeout(resolve, 300));
     await turn("desk-3");
     assert.ok(sections[2]!.includes("Has a dog."), "the reopened session reads current memory");
+  } finally {
+    await service.shutdown();
+  }
+});
+
+test("a person's message to a Bot counts once; a repeat, a routine and a refused send do not", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const fauxModels = createFauxModels([fauxAssistantMessage("hi"), fauxAssistantMessage("[SILENT]")]);
+  let model: ModelRef | null = FAUX_MODEL_REF;
+  const service = await serviceFor(tempProfile(), fauxModels, { resolveModel: async () => model });
+  try {
+    const first = await service.send("bot:a", { text: "hello", requestId: "desk-1" });
+    await service.send("bot:a", { text: "hello", requestId: "desk-1" });
+    await service.awaitReply("bot:a", first.submissionId, new AbortController().signal);
+    await analyticsSettled();
+    assert.deepEqual(sent, [{
+      event: "chat_message_sent",
+      props: { provider_id: "custom", model_id: "custom", in_workspace: false, thinking: "other", origin: "bot" },
+    }]);
+
+    sent.length = 0;
+    const routine = await service.send("bot:a", { text: "new?", requestId: "routine:t1:1", label: "Inbox check" });
+    await service.awaitReply("bot:a", routine.submissionId, new AbortController().signal);
+    model = null;
+    await assert.rejects(service.send("bot:a", { text: "hi", requestId: "desk-2" }));
+    await analyticsSettled();
+    assert.deepEqual(sent, []);
   } finally {
     await service.shutdown();
   }

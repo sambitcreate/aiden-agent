@@ -174,3 +174,12 @@ test("throwing generation registration fails closed until the owner releases", (
   lease.release();
   assert.equal(admission.isAdmitted("chat-a"), false);
 });
+
+test("a send is counted once, and only for a turn that actually started", async () => {
+  const counted: ChatStartParams[] = [];
+  const dependencies = { startTitle: () => undefined, onStarted: (input: ChatStartParams) => counted.push(input) };
+  await startGenerationAndMaybeTitle({ ...dependencies, start: async () => false }, "stream-1", params);
+  assert.deepEqual(counted, []);
+  await startGenerationAndMaybeTitle({ ...dependencies, start: async () => true }, "stream-1", params);
+  assert.deepEqual(counted, [params]);
+});

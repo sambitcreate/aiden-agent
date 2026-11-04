@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { analyticsSettled, captureAnalyticsEvents } from "./analytics/test-support.js";
 import {
   BOT_FULL_ACCESS_NOTICE_VERSION,
   type BotAccessUpdate,
@@ -2266,4 +2267,30 @@ test("disabled Full Bot catalog retains only its own saved chat-reduction skill 
   assert.deepEqual(paused.resources.skills, [], "presentation IDs never become executable resources");
   assert.deepEqual((await app.service.capabilityCatalog("device:a")).skills, []);
   assert.doesNotMatch(JSON.stringify(result), /other-bot|sourceId|instructions/u);
+});
+
+test("a created Bot counts once with its preset and how many there are, and a failed one counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const app = fixture();
+  await app.service.initialize();
+  await app.service.createBot({
+    audienceId: "device:a",
+    presetId: "a-preset-this-build-does-not-ship",
+    bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
+  });
+  await analyticsSettled();
+  assert.deepEqual(sent, [{ event: "bot_created", props: { preset_id: "custom", bot_count: "1" } }]);
+
+  sent.length = 0;
+  const failing = fixture({ failIdentityCreate: true });
+  await failing.service.initialize();
+  await assert.rejects(
+    failing.service.createBot({
+      audienceId: "device:a",
+      bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
+    }),
+    /identity failed/u,
+  );
+  await analyticsSettled();
+  assert.deepEqual(sent, []);
 });

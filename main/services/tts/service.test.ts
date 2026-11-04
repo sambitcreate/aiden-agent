@@ -1,6 +1,7 @@
 import { AidenRemoteTtsService } from "../aiden-remote-tts.js";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureAnalyticsEvents } from "../analytics/test-support.js";
 import {
   createTtsService,
   TtsStartError,
@@ -1074,4 +1075,16 @@ test("uncertain start failures keep their anti-rebilling fence after reclamation
     for (const i of [0, 1]) await assert.rejects(remote.start(authority(i), { ...startRequest(h), requestId: "new-request" }), /expired/u);
     assert.equal(h.provider.calls.length, 0);
   } finally { remote.close(); }
+});
+
+test("starting read aloud counts once, and a refused start counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const disabled = harness({ enabled: false });
+  await assert.rejects(disabled.service.start(disabled.owner(), startRequest(disabled)));
+  assert.deepEqual(sent, []);
+
+  const h = harness({ enabled: true });
+  await h.service.start(h.owner(), startRequest(h));
+  await flush();
+  assert.deepEqual(sent, [{ event: "voice_used", props: { mode: "read_aloud", engine: "cloud" } }]);
 });

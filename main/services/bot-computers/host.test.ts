@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSy
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { analyticsSettled, captureAnalyticsEvents } from "../analytics/test-support.js";
 
 import type { BoundedProcessOptions, BoundedProcessResult } from "./bounded-process.js";
 import { createGuestCuaDriverHostFactory } from "./guest-driver.js";
@@ -1720,4 +1721,22 @@ test("a guest driver that can't be installed leaves a working base that acts on 
     assert.match(status.kind === "ready" ? (status.elementControlNote ?? "") : "", /couldn't install its helper/u);
     assert.equal(guest.bridges.length, 0, "no guest session without a driver");
   }, guest.overrides);
+});
+
+test("a finished Set up counts once, and one that failed counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  await withHost(
+    async (context) => {
+      await assert.rejects(context.host.setUp());
+      await analyticsSettled();
+    },
+    { resources: { freeDiskBytes: async () => 1_000, availableMemoryBytes: async () => 64 * 1024 ** 3 } },
+  );
+  assert.deepEqual(sent, []);
+
+  await withHost(async (context) => {
+    await setUp(context);
+    await analyticsSettled();
+    assert.deepEqual(sent, [{ event: "bot_computer_set_up", props: { element_control: false } }]);
+  });
 });

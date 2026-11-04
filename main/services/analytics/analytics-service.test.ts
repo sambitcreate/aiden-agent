@@ -473,3 +473,17 @@ test("quitting flushes what is queued and a clean exit clears the run marker", a
   assert.deepEqual(h.transports[0]!.sent.map((message) => message.event), ["app_opened", "app_active"]);
   assert.equal(existsSync(join(h.runDirectory, RUN_MARKER_FILE)), false);
 });
+
+test("a feature event reaches the transport only while sending is allowed", async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  await h.service.start();
+  h.service.track("terminal_opened", {});
+  assert.deepEqual(h.names(), [], "nothing is sent before the notice has been shown");
+
+  await h.service.markNoticeShown();
+  h.service.track("terminal_opened", {});
+  h.service.track("provider_connected", { provider_id: "anthropic", auth: "key" });
+  assert.deepEqual(h.names(), ["app_opened", "app_active", "terminal_opened", "provider_connected"]);
+  assert.equal(h.events().at(-1)!.properties.$process_person_profile, false);
+});

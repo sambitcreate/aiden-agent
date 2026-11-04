@@ -12,7 +12,7 @@ import {
 } from "./analytics-consent.js";
 import { createAnalyticsCore, validateOutgoingEvent, type AnalyticsCore, type AnalyticsMessage } from "./analytics-core.js";
 import { beginRun, deletePendingCrash, endRun } from "./analytics-crash.js";
-import type { AnalyticsEventProps, AnalyticsSuperProperties } from "./analytics-events.js";
+import type { AnalyticsEventName, AnalyticsEventProps, AnalyticsSuperProperties } from "./analytics-events.js";
 
 // Lifecycle of product analytics in the desktop main process: read consent,
 // create the transport only once sending is allowed, send the "who's using it"
@@ -62,6 +62,9 @@ export interface AnalyticsService {
   // is its Turn off button.
   markNoticeShown(choice?: { readonly enabled?: boolean }, isCurrent?: () => boolean): Promise<AnalyticsStatus>;
   onboardingFinished(outcome: OnboardingOutcome, providerId?: string): Promise<void>;
+  // A feature event, dropped unless sending is allowed right now. Synchronous
+  // and never throws, so the action it observes neither waits nor fails.
+  track<E extends AnalyticsEventName>(event: E, props: AnalyticsEventProps<E>): void;
   // Sends what is queued within the timeout, then stops the transport.
   shutdown(timeoutMs?: number): Promise<void>;
   // Synchronous last step of a clean quit: the next launch is not a crash.
@@ -378,6 +381,10 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
           log("Onboarding analytics could not be recorded.", error);
         }
       });
+    },
+
+    track(event, props) {
+      core?.track(event, props);
     },
 
     async shutdown(timeoutMs = 1_500) {
