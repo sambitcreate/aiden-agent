@@ -12,28 +12,26 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { ChatMeta, Workspace } from "./types.js";
 import {
-  classifyThread,
-  classifyWorktree,
   createStorageScanBudget,
   measurePathBytes,
   orderCategories,
   planStorageCleanup,
   recheckWorktreeRemoval,
-  threadProtectionReason,
-  worktreeProtectionReason,
   DEFAULT_STORAGE_SCAN_LIMITS,
   type StorageScanBudget,
   type StorageScanBudgetLimits,
-  type ThreadFacts,
-  type WorktreeFacts,
 } from "./storage-usage-core.js";
 import { storageCategoryPaths } from "./storage-profile-inventory.js";
 import {
   assembleStorageReport,
+  classifyThread,
+  classifyWorktree,
   DEFAULT_STORAGE_INACTIVE_DAYS,
   emptyStorageReport,
   STORAGE_CATEGORY_IDS,
   STORAGE_INACTIVE_DAYS,
+  threadProtectionReason,
+  worktreeProtectionReason,
   type StorageCategoryUsage,
   type StorageCleanupPreview,
   type StorageCleanupResult,
@@ -42,7 +40,9 @@ import {
   type StorageItem,
   type StorageReport,
   type StorageScanState,
+  type StorageThreadFacts,
   type StorageThreadView,
+  type StorageWorktreeFacts,
   type StorageWorktreeView,
 } from "../../renderer/shared/storage.js";
 
@@ -205,7 +205,7 @@ export function createStorageUsageService(
           workspace.createdAt ?? 0,
           lastChatAt.get(workspace.id) ?? 0,
         ) || null;
-      const facts: WorktreeFacts = {
+      const facts: StorageWorktreeFacts = {
         workspaceId: workspace.id,
         name: workspace.name,
         branch: tree.branch,
@@ -252,7 +252,7 @@ export function createStorageUsageService(
           .catch(() => undefined);
         if (contents) bytes += attributedImageBytes(contents.toString("utf8"), imageSizes);
       }
-      const facts: ThreadFacts = {
+      const facts: StorageThreadFacts = {
         chatId: chat.id,
         title: chat.title,
         bytes,

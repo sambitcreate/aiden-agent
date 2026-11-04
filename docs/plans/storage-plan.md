@@ -44,7 +44,7 @@ Seven categories: worktrees, worktree snapshots, threads, artifacts, logs, cache
 
 ### Classification
 
-`main/services/storage-usage-core.ts` is a pure module over already-read facts, which is what makes the safety rules testable without Electron, Git, or a profile.
+The protection rules (`worktreeProtectionReason`, `threadProtectionReason`) and the classifiers live in `renderer/shared/storage.ts`, and the planner in `main/services/storage-usage-core.ts` is a pure module over already-read facts — which is what makes the safety rules testable without Electron, Git, or a profile.
 
 `worktreeProtectionReason` returns the first block, most conservative first: `unknown-git-state`, `active`, `changing`, `uncommitted`, `unpushed`. `unknown-git-state` leading the order is deliberate: a Git read that failed must never be read as "clean".
 

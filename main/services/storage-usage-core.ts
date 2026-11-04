@@ -7,9 +7,9 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
-  storageIdleDays,
   storageInactiveCutoff,
   STORAGE_CATEGORY_IDS,
+  worktreeProtectionReason,
   type StorageCategoryId,
   type StorageCategoryUsage,
   type StorageCleanupPreview,
@@ -17,7 +17,6 @@ import {
   type StorageCleanupSkipped,
   type StorageInactiveDays,
   type StorageItem,
-  type StorageProtectionReason,
   type StorageReport,
   type StorageThreadView,
   type StorageWorktreeView,
@@ -177,98 +176,6 @@ export async function measurePaths(
   return { bytes, files, truncated };
 }
 
-export interface WorktreeFacts {
-  workspaceId: string;
-  name: string;
-  branch: string;
-  bytes: number;
-  /** Newest of the workspace record and its newest chat; null when unrecorded. */
-  lastUsedAt: number | null;
-  /** Changed and untracked entries Git reported. */
-  uncommitted: number;
-  /** Commits that exist only on this machine. */
-  unpushed: number;
-  /** A chat on this worktree is generating or waiting on the person. */
-  active: boolean;
-  /** Aiden is currently creating or removing it. */
-  changing: boolean;
-  /** False when Git could not be read, so the worktree is never treated as safe. */
-  gitStateKnown: boolean;
-}
-
-/**
- * Safety decision for one worktree. A worktree is removable only when every
- * fact is known and shows no local work and no live use.
- */
-export function classifyWorktree(
-  facts: WorktreeFacts,
-  now: number,
-): StorageWorktreeView {
-  const view: StorageWorktreeView = {
-    workspaceId: facts.workspaceId,
-    name: facts.name,
-    branch: facts.branch,
-    bytes: facts.bytes,
-    lastUsedAt: facts.lastUsedAt,
-    idleDays: storageIdleDays(facts.lastUsedAt, now),
-    uncommitted: facts.uncommitted,
-    unpushed: facts.unpushed,
-    protected: false,
-  };
-  const reason = worktreeProtectionReason(facts);
-  if (reason) {
-    view.protected = true;
-    view.protectionReason = reason;
-  }
-  return view;
-}
-
-/** The first blocking reason, most conservative first. Null means removable. */
-export function worktreeProtectionReason(facts: WorktreeFacts): StorageProtectionReason | null {
-  if (!facts.gitStateKnown) return "unknown-git-state";
-  if (facts.active) return "active";
-  if (facts.changing) return "changing";
-  if (facts.uncommitted > 0) return "uncommitted";
-  if (facts.unpushed > 0) return "unpushed";
-  return null;
-}
-
-export interface ThreadFacts {
-  chatId: string;
-  title: string;
-  bytes: number;
-  lastUsedAt: number;
-  active: boolean;
-  /** Pinned in the Inbox: the person asked to keep it handy. */
-  pinned: boolean;
-  /** Owned by another Aiden surface (a Bot's conversation, a Design project). */
-  owned: boolean;
-}
-
-export function classifyThread(facts: ThreadFacts, now: number): StorageThreadView {
-  const view: StorageThreadView = {
-    chatId: facts.chatId,
-    title: facts.title,
-    bytes: facts.bytes,
-    lastUsedAt: facts.lastUsedAt,
-    idleDays: storageIdleDays(facts.lastUsedAt, now) ?? 0,
-    protected: false,
-  };
-  const reason = threadProtectionReason(facts);
-  if (reason) {
-    view.protected = true;
-    view.protectionReason = reason;
-  }
-  return view;
-}
-
-export function threadProtectionReason(facts: ThreadFacts): StorageProtectionReason | null {
-  if (facts.owned) return "owned";
-  if (facts.active) return "active";
-  if (facts.pinned) return "pinned";
-  return null;
-}
-
 interface CleanupSelection {
   inactiveDays: StorageInactiveDays;
   now: number;
@@ -426,11 +333,7 @@ export function planStorageCleanup(
  * Re-check one worktree against live facts immediately before removal. Returns
  * the reason it must be kept, or null when it is still safe to remove.
  */
-export function recheckWorktreeRemoval(
-  facts: WorktreeFacts,
-): StorageProtectionReason | null {
-  return worktreeProtectionReason(facts);
-}
+export const recheckWorktreeRemoval = worktreeProtectionReason;
 
 export const STORAGE_CATEGORY_ORDER: readonly StorageCategoryId[] = STORAGE_CATEGORY_IDS;
 

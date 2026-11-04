@@ -10,8 +10,6 @@ import * as path from "node:path";
 import test from "node:test";
 
 import {
-  classifyThread,
-  classifyWorktree,
   createStorageScanBudget,
   measurePathBytes,
   orderCategories,
@@ -19,24 +17,26 @@ import {
   planThreadCleanup,
   planWorktreeCleanup,
   recheckWorktreeRemoval,
-  threadProtectionReason,
-  worktreeProtectionReason,
-  type ThreadFacts,
-  type WorktreeFacts,
 } from "./storage-usage-core.js";
 import {
   assembleStorageReport,
+  classifyThread,
+  classifyWorktree,
   DEFAULT_STORAGE_INACTIVE_DAYS,
   DEFAULT_THREAD_INACTIVE_DAYS,
   emptyStorageReport,
   formatStorageBytes,
+  threadProtectionReason,
+  worktreeProtectionReason,
   parseStorageCleanupRequest,
   storageIdleDays,
   storageInactiveCutoff,
   storageSharePercent,
   type StorageCleanupPreview,
   type StorageReport,
+  type StorageThreadFacts,
   type StorageThreadView,
+  type StorageWorktreeFacts,
   type StorageWorktreeView,
 } from "../../renderer/shared/storage.js";
 
@@ -52,7 +52,7 @@ async function writeFileWithBytes(file: string, bytes: number): Promise<void> {
   await fs.writeFile(file, Buffer.alloc(bytes, 0x61));
 }
 
-function worktreeFacts(overrides: Partial<WorktreeFacts> = {}): WorktreeFacts {
+function worktreeFacts(overrides: Partial<StorageWorktreeFacts> = {}): StorageWorktreeFacts {
   return {
     workspaceId: "ws-1",
     name: "Repo · feature",
@@ -68,7 +68,7 @@ function worktreeFacts(overrides: Partial<WorktreeFacts> = {}): WorktreeFacts {
   };
 }
 
-function threadFacts(overrides: Partial<ThreadFacts> = {}): ThreadFacts {
+function threadFacts(overrides: Partial<StorageThreadFacts> = {}): StorageThreadFacts {
   return {
     chatId: "chat-1",
     title: "Old chat",

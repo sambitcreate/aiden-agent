@@ -129,6 +129,103 @@ export interface StorageThreadView {
   protectionReason?: StorageProtectionReason;
 }
 
+/** Facts about one worktree, as read from Git and the workspace record. */
+export interface StorageWorktreeFacts {
+  workspaceId: string;
+  name: string;
+  branch: string;
+  bytes: number;
+  /** Newest of the workspace record and its newest chat; null when unrecorded. */
+  lastUsedAt: number | null;
+  /** Changed and untracked entries Git reported. */
+  uncommitted: number;
+  /** Commits that exist only on this machine. */
+  unpushed: number;
+  /** A chat on this worktree is generating or waiting on the person. */
+  active: boolean;
+  /** Aiden is currently creating or removing it. */
+  changing: boolean;
+  /** False when Git could not be read, so the worktree is never treated as safe. */
+  gitStateKnown: boolean;
+}
+
+/**
+ * The first reason a worktree must be kept, most conservative first. Null means
+ * it is safe to remove.
+ *
+ * `unknown-git-state` leads on purpose: a Git read that failed must never be
+ * read as "clean", so a scan failure keeps the worktree rather than guessing.
+ */
+export function worktreeProtectionReason(
+  facts: StorageWorktreeFacts,
+): StorageProtectionReason | null {
+  if (!facts.gitStateKnown) return "unknown-git-state";
+  if (facts.active) return "active";
+  if (facts.changing) return "changing";
+  if (facts.uncommitted > 0) return "uncommitted";
+  if (facts.unpushed > 0) return "unpushed";
+  return null;
+}
+
+export function classifyWorktree(facts: StorageWorktreeFacts, now: number): StorageWorktreeView {
+  const view: StorageWorktreeView = {
+    workspaceId: facts.workspaceId,
+    name: facts.name,
+    branch: facts.branch,
+    bytes: facts.bytes,
+    lastUsedAt: facts.lastUsedAt,
+    idleDays: storageIdleDays(facts.lastUsedAt, now),
+    uncommitted: facts.uncommitted,
+    unpushed: facts.unpushed,
+    protected: false,
+  };
+  const reason = worktreeProtectionReason(facts);
+  if (reason) {
+    view.protected = true;
+    view.protectionReason = reason;
+  }
+  return view;
+}
+
+/** Facts about one thread, as read from the chat index and live activity. */
+export interface StorageThreadFacts {
+  chatId: string;
+  title: string;
+  bytes: number;
+  lastUsedAt: number;
+  active: boolean;
+  /** Pinned in the Inbox: the person asked to keep it handy. */
+  pinned: boolean;
+  /** Owned by another Aiden surface (a Bot's conversation, a Design project). */
+  owned: boolean;
+}
+
+export function threadProtectionReason(
+  facts: StorageThreadFacts,
+): StorageProtectionReason | null {
+  if (facts.owned) return "owned";
+  if (facts.active) return "active";
+  if (facts.pinned) return "pinned";
+  return null;
+}
+
+export function classifyThread(facts: StorageThreadFacts, now: number): StorageThreadView {
+  const view: StorageThreadView = {
+    chatId: facts.chatId,
+    title: facts.title,
+    bytes: facts.bytes,
+    lastUsedAt: facts.lastUsedAt,
+    idleDays: storageIdleDays(facts.lastUsedAt, now) ?? 0,
+    protected: false,
+  };
+  const reason = threadProtectionReason(facts);
+  if (reason) {
+    view.protected = true;
+    view.protectionReason = reason;
+  }
+  return view;
+}
+
 export type StorageScanStatus = "idle" | "scanning" | "ready" | "failed";
 
 export interface StorageScanState {

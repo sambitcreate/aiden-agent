@@ -38,7 +38,7 @@ A thread's own bytes are its transcript plus the chat images it names by content
 
 ## Safety rules
 
-Two pure functions in `main/services/storage-usage-core.ts` decide everything: `worktreeProtectionReason` and `threadProtectionReason`. Both return the first blocking reason, or null when the item is removable.
+Two pure functions decide everything: `worktreeProtectionReason` and `threadProtectionReason`, in `renderer/shared/storage.ts` so the page, the tests, and main share one definition. Both return the first blocking reason, or null when the item is removable.
 
 A worktree is kept when:
 
@@ -89,7 +89,7 @@ Aiden On The Go does not show disk usage. The scan measures the desktop host's p
 
 ## Tests
 
-- `main/services/storage-usage-core.test.ts` — measured bytes with a real temp directory, symlinks, budget truncation, category ordering, byte formatting, and every protection and planning rule, including that naming a protected item explicitly still keeps it.
+- `main/services/storage-usage-core.test.ts` — measured bytes with a real temp directory, symlinks, budget truncation, category ordering, byte formatting, and every protection and planning rule, including that naming a protected item explicitly still keeps it. The protection functions themselves live in `renderer/shared/storage.ts` and are asserted here.
 - `main/services/storage-usage.test.ts` — the service over injected ports: a cold read never waits on a walk, the cache is reused, worktrees and threads are classified from Git and activity facts, and cleanup refuses worktrees and chats that gain local work or a live run after the preview.
 - `renderer/components/settings/storage-settings.test.tsx` — the page: total, bar, largest items, the review dialog's contents, what cleanup sends, and the scan states.
 
