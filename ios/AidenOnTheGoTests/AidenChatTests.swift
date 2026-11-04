@@ -3216,12 +3216,16 @@ final class AidenChatTests: XCTestCase {
         let rosterHeld = expectation(description: "first roster read held")
         AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/agents") { rosterHeld.fulfill() }
         let loading = Task { await model.load(observeProgress: true) }
-        await fulfillment(of: [rosterHeld], timeout: 3)
         // The opening lookup is answered before the run registers on the Mac,
-        // and the run registers before the first roster arrives.
+        // and the run registers before the held roster response is delivered.
         try await waitForCondition("opening lookup answered") {
             fixture.currentRunRequests == 1 && !model.isLookingForForeignRun
         }
+        // Loading restores local state and fetches the transcript/catalog before
+        // starting either lookup. The roster deadline starts once that setup
+        // has finished, while its response is still deliberately held.
+        await fulfillment(of: [rosterHeld], timeout: 3)
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.heldRequestEpochs, [AidenChatProgressLifecycleURLProtocol.epoch])
         fixture.startRun()
         AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
         await loading.value
@@ -3244,12 +3248,13 @@ final class AidenChatTests: XCTestCase {
         let rosterHeld = expectation(description: "first roster read held")
         AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/agents") { rosterHeld.fulfill() }
         let loading = Task { await model.load(observeProgress: true) }
-        await fulfillment(of: [rosterHeld], timeout: 3)
         try await waitForCondition("opening lookup answered") {
             fixture.currentRunRequests == 1 && !model.isLookingForForeignRun
         }
+        await fulfillment(of: [rosterHeld], timeout: 3)
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.heldRequestEpochs, [AidenChatProgressLifecycleURLProtocol.epoch])
         // A run starts and finishes on the Mac after the load read the
-        // transcript, and before the first roster arrives.
+        // transcript, and before the held roster response is delivered.
         fixture.startRun()
         AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
         await loading.value
