@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { copyBoundedJson, utf8Size } from "../bounded-json.js";
 import type { SubagentMcpRemoteTool } from "../subagents/subagent-mcp-read.js";
 import type { ComposioCalendarContract } from "./composio-calendar-host-port.js";
-import { buildCalendarSchemasRequest, buildCalendarSearchRequest, calendarContractAction, calendarContractObject, ComposioCalendarContractError, verifyCalendarContract, type ComposioCalendarExecutorOutputSource } from "./composio-calendar-contract.js";
+import { buildCalendarSchemasRequest, buildCalendarSearchRequest, calendarContractAction, calendarContractExecutorAction, calendarContractObject, ComposioCalendarContractError, verifyCalendarContract, type ComposioCalendarExecutorOutputSource } from "./composio-calendar-contract.js";
 import { discoverComposioCalendarSources, normalizeComposioCalendarEventGet, parseComposioCalendarAccounts, readComposioCalendarWatch, type ComposioCalendarRead } from "./connector-watch-composio.js";
 import { composioCalendarReadFailure, type ComposioCalendarReadFailure } from "./composio-calendar-call-diagnostics.js";
 
@@ -71,7 +71,7 @@ function reject(code: ComposioCalendarReadCheckCode, reason: Reason): never { th
 function negativeShape(value: unknown, blockedField: NegativeBlock): NegativeShape {
   const type = (value: unknown): ValueType => value === undefined ? "missing" : value === null ? "null" : Array.isArray(value) ? "array" : ["object", "string", "number", "boolean"].includes(typeof value) ? typeof value as ValueType : "other";
   const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  let action: Record<string, unknown> = {}; try { action = calendarContractAction(value); } catch { /* Shape remains explicitly missing. */ }
+  let action: Record<string, unknown> = {}; try { action = calendarContractExecutorAction(value); } catch { /* Shape remains explicitly missing. */ }
   const data = record(action.data), first = Array.isArray(data.results) ? data.results[0] : undefined, result = record(first);
   const count = (value: unknown): number | undefined => Number.isSafeInteger(value) && (value as number) >= 0 ? Math.min(value as number, 12_001) : undefined;
   const error = typeof result.error === "string" ? result.error : undefined;
@@ -80,9 +80,9 @@ function negativeShape(value: unknown, blockedField: NegativeBlock): NegativeSha
 }
 function accountSelectionFailure(value: unknown): NegativeBlock {
   try {
-    const action = calendarContractAction(value);
+    const action = calendarContractExecutorAction(value);
     if (Object.keys(action).some((key) => !["successful", "data", "error"].includes(key))) return "unexpected_action_field";
-    if (action.successful !== true || (action.error !== undefined && action.error !== null && action.error !== "")) return "envelope";
+    if (typeof action.successful !== "boolean" || (action.error !== undefined && action.error !== null && (typeof action.error !== "string" || action.error.length > 4_096))) return "envelope";
     const data = calendarContractObject(action.data);
     if (Object.keys(data).some((key) => !["results", "total_count", "success_count", "error_count", "session", "next_steps", "remote_file_info"].includes(key))) return "unexpected_data_field";
     if (data.remote_file_info !== undefined && data.remote_file_info !== null) return "remote_file_info";

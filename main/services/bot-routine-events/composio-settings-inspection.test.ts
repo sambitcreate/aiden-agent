@@ -16,7 +16,7 @@ import { registerComposioWatchInspection } from "../../handlers/composio-watch-i
 import { COMPOSIO_SETTINGS_INSPECTION_FILE, createComposioSettingsInspection, saveComposioSettingsInspection } from "./composio-settings-inspection.js";
 import { McpError } from "@earendil-works/pi-mcp";
 import { composioCalendarReadFailure, type ComposioCalendarReadFailure } from "./composio-calendar-call-diagnostics.js";
-import { syntheticCalendarMetadata, syntheticCalendarSchemas } from "./composio-calendar-test-support.js";
+import { syntheticCalendarExecutor, syntheticCalendarMetadata, syntheticCalendarSchemas } from "./composio-calendar-test-support.js";
 
 const SEARCH = "COMPOSIO_SEARCH_TOOLS", SCHEMAS = "COMPOSIO_GET_TOOL_SCHEMAS";
 const marker = "synthetic-private-account-or-instructions";
@@ -302,6 +302,24 @@ test("typed Calendar failures distinguish actual RPC send, malformed reply and b
     assert.equal(JSON.stringify(diagnostic).includes(privateMarker), false); assert.equal(JSON.stringify(diagnostic).includes("not_in_the_reply"), false);
     assert.equal(f.closed, 1);
   });
+});
+
+test("typed Calendar client returns coherent MCP failed-item JSON for the separate exact-account oracle", async (t) => {
+  const read = { kind: "listCalendars" as const, accountId: "ca_generatedinvalid00001" };
+  const action = { ...syntheticCalendarExecutor(read, undefined, "CONNECTED_ACCOUNT_NOT_FOUND"), successful: false, error: "One operation failed" };
+  const envelope = { isError: true, content: [{ type: "text", text: JSON.stringify(action) }] };
+  let returned: unknown;
+  const f = await fixture(t, undefined, async (port) => {
+    await port.list();
+    await port.call(SCHEMAS, { tool_slugs: ["GOOGLECALENDAR_LIST_CALENDARS", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_EVENTS_GET"] });
+    returned = await port.readCalendar!(read);
+  });
+  f.changeMetadata((tools) => { const current = syntheticCalendarMetadata(); delete current[2]!.outputSchema; tools.splice(0, tools.length, ...current as unknown as typeof tools); });
+  f.changeReply((tool, reply) => tool === SCHEMAS ? { content: [], structuredContent: syntheticCalendarSchemas() } : tool === "COMPOSIO_MULTI_EXECUTE_TOOL" ? envelope : reply);
+  await f.inspect(owner());
+  assert.deepEqual(returned, envelope);
+  assert.equal(f.sent.filter((tool) => tool === "COMPOSIO_MULTI_EXECUTE_TOOL").length, 1);
+  assert.equal(f.closed, 1);
 });
 
 test("a deadline during noncooperative credential lookup closes the disposable client and prevents late I/O", async (t) => {

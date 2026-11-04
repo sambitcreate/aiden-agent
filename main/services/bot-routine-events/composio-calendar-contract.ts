@@ -14,7 +14,7 @@ const EXECUTOR = "COMPOSIO_MULTI_EXECUTE_TOOL";
 const SEARCH = "COMPOSIO_SEARCH_TOOLS";
 const SCHEMAS = "COMPOSIO_GET_TOOL_SCHEMAS";
 export type ComposioCalendarExecutorOutputSource = "declared" | "host_contract";
-const HOST_EXECUTOR_OUTPUT_VERSION = "calendar-single-read-output-v1";
+const HOST_EXECUTOR_OUTPUT_VERSION = "calendar-single-read-output-v2";
 // MCP outputSchema is optional. This fixed contract applies ALWAYS; a declared
 // schema can only narrow it. No vendor schema can enable batching or partial data.
 const hostObject = (properties: ObjectValue, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
@@ -27,7 +27,12 @@ const dataSchema = (success: boolean) => hostObject({
   remote_file_info: { type: "null" }, next_steps: { type: ["string", "null"], maxLength: 4_096 },
   session: { anyOf: [{ type: "null" }, hostObject({ id: { type: "string", maxLength: 256 }, instructions: { type: "string", maxLength: 4_096 } })] },
 }, ["results", "total_count", "success_count", "error_count"]);
-const HOST_EXECUTOR_OUTPUT = hostObject({ successful: { type: "boolean", const: true }, error: emptyError, data: { oneOf: [dataSchema(true), dataSchema(false)] } }, ["successful", "data"]);
+const HOST_EXECUTOR_OUTPUT = { type: "object", properties: {}, oneOf: [
+  hostObject({ successful: { type: "boolean", const: true }, error: emptyError, data: dataSchema(true) }, ["successful", "data"]),
+  // A tool-level failure can set successful:false and provide an action error.
+  // Only a complete failed item with NO application response is eligible.
+  hostObject({ successful: { type: "boolean" }, error: { anyOf: [{ type: "null" }, { type: "string", maxLength: 4_096 }] }, data: dataSchema(false) }, ["successful", "data"]),
+] };
 export interface ComposioCalendarFailureFacts {
   keyword: ComposioWatchSchemaCompileFacts["keyword"];
   dialect: ComposioWatchSchemaCompileFacts["dialect"];
@@ -58,6 +63,21 @@ export function calendarContractAction(value: unknown): ObjectValue {
   const { content, ...withoutEmptyContent } = envelope;
   const action = calendarContractObject(connectorWatchJson(Array.isArray(content) && content.length === 0 && envelope.structuredContent !== undefined ? withoutEmptyContent : envelope));
   for (const field of ["remote_file_info", "remoteFileInfo", "truncated", "has_more", "hasMore", "nextCursor", "next_cursor", "nextPageToken", "next_page_token"]) if (action[field] !== undefined && action[field] !== null && action[field] !== false && action[field] !== "") return fail("schemas", "invalid");
+  return action;
+}
+/** Calendar executor failures can legitimately use MCP's isError flag. Decode
+ * that representation only for a coherent failed item; this never establishes
+ * account rejection or a successful read. All other callers stay strict. */
+export function calendarContractExecutorAction(value: unknown): ObjectValue {
+  const envelope = calendarContractObject(boundedCalendarContractJson(value));
+  const action = calendarContractAction(envelope.isError === true ? { ...envelope, isError: false } : envelope);
+  if (envelope.isError === true) {
+    const data = optionalObject(action.data), results = data?.results;
+    const result = Array.isArray(results) && results.length === 1 ? optionalObject(results[0]) : undefined;
+    if (data?.total_count !== 1 || data.success_count !== 0 || data.error_count !== 1 || !result ||
+        typeof result.error !== "string" || !result.error.trim() || result.error.length > 4_096 ||
+        (result.response !== undefined && result.response !== null)) return fail("executor", "invalid", "executor_output");
+  }
   return action;
 }
 export function calendarContractData(value: unknown): ObjectValue {
@@ -162,7 +182,7 @@ export function verifyCalendarContract(metadata: readonly SubagentMcpRemoteTool[
   if (expected && digest(expected) !== digest(contract)) return fail("schema_drift", "changed");
   Object.freeze(contract.readSchemaHashes); Object.freeze(contract);
   const validateExecutorOutput = (response: unknown, operation?: ComposioCalendarRead["kind"]): void => {
-    const action = calendarContractAction(response);
+    const action = calendarContractExecutorAction(response);
     if (!hostOutputValidator(action)) return validationFailure("executor", hostOutputValidator, { ...(operation ? { operation } : {}), direction: "output" }, "executor_output");
     if (executorOutputValidator && !executorOutputValidator(action)) return validationFailure("executor", executorOutputValidator, { ...(operation ? { operation } : {}), direction: "output" }, "executor_output");
     const data = calendarContractObject(action.data), result = calendarContractObject((data.results as unknown[])[0]);

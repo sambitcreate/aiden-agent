@@ -110,6 +110,32 @@ test("host result invariants apply even when a declared output schema permits an
   for (const reply of [contradictory, withPayload, offloaded, wrongIndex, extraResult]) assert.throws(() => verified.executorResponse(reply));
 });
 
+test("Calendar executor accepts a complete MCP error JSON failure without making it a successful read", () => {
+  const metadata = syntheticCalendarMetadata(); delete metadata[2]!.outputSchema;
+  const verified = verifyCalendarContract(metadata, syntheticCalendarSchemas()), read = { kind: "listCalendars" as const, accountId: "generated-invalid-account" };
+  const failure = { ...syntheticCalendarExecutor(read, undefined, "Connected account not found"), successful: false, error: "One operation failed" };
+  const envelope = { isError: true, content: [{ type: "text", text: JSON.stringify(failure) }] };
+  verified.executorResponse(envelope);
+  verified.executorResponse({ isError: true, structuredContent: failure });
+  assert.throws(() => verified.response(read, envelope));
+  for (const mutate of [
+    (value: typeof failure) => { value.data.success_count = 1; },
+    (value: typeof failure) => { Object.assign(value.data.results[0]!, { response: { items: [] } }); },
+    (value: typeof failure) => { value.data.results[0]!.index = 1; },
+    (value: typeof failure) => { Object.assign(value.data, { remote_file_info: { path: "private" } }); },
+  ]) {
+    const changed = structuredClone(failure); mutate(changed);
+    assert.throws(() => verified.executorResponse({ isError: true, content: [{ type: "text", text: JSON.stringify(changed) }] }));
+  }
+  const success = syntheticCalendarExecutor(read, { items: [] });
+  assert.throws(() => verified.executorResponse({ isError: true, structuredContent: success }));
+  assert.throws(() => verified.response(read, { ...success, successful: false }));
+  assert.throws(() => verified.executorResponse({ ...envelope, structuredContent: success }));
+  const declared = syntheticCalendarMetadata();
+  Object.assign((declared[2]!.outputSchema as { properties: { successful: object } }).properties.successful, { const: true });
+  assert.throws(() => verifyCalendarContract(declared, syntheticCalendarSchemas()).executorResponse(envelope), "a declared output still narrows failures");
+});
+
 test("closed compilation diagnostics distinguish definitions, unknown keywords and schema compiler failures", () => {
   for (const [extra, keyword, rejectionReason] of [
     [{ $defs: [] }, "$defs", "schema_structure"],

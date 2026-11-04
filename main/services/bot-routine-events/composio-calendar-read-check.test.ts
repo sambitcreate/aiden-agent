@@ -41,6 +41,46 @@ test("foreground check proves unknown-account rejection before explicit-account/
   assert.deepEqual(result.privateProof.counts, { activeAccounts: 1, calendars: 1, events: 1, gets: 1 }); assert.equal(result.privateProof.calls.get, true);
 });
 
+test("coherent MCP error JSON proves only an exact known failed-account item", async () => {
+  for (const [error, accepted] of [["CONNECTED_ACCOUNT_NOT_FOUND", true], ["No active connected account found", false], ["Account ca_private_secret not found", false], ["permission denied", false]] as const) {
+    const f = fixture(), original = f.port.readCalendar!; delete f.metadata[2]!.outputSchema;
+    f.port.readCalendar = async (read, session) => {
+      if (read.accountId === actualAccount) return original(read, session);
+      f.reads.push(read);
+      const action = { ...syntheticCalendarExecutor(read, undefined, error), successful: false, error: "Operation failed" };
+      return { isError: true, content: [{ type: "text", text: JSON.stringify(action) }] };
+    };
+    const result = await checkComposioCalendarRead(f.port, options());
+    assert.equal(result.code, accepted ? "verified" : "invalid_account_unverified");
+    assert.equal(result.privateProof.invalidAccountRejected, accepted);
+    assert.equal(result.privateProof.negative!.result.slugMatches, true); assert.equal(result.privateProof.negative!.result.indexMatches, true);
+    assert.equal(result.privateProof.negative!.data.errorCount, 1);
+    assert.equal(f.reads.length, accepted ? 4 : 1);
+    assert.equal(JSON.stringify(result).includes("ca_private_secret"), false);
+  }
+});
+
+test("MCP error flag cannot hide an invalid correlation, payload or success behind an exact account error", async () => {
+  for (const mutate of [
+    (action: Record<string, unknown>) => { (action.data as { results: { tool_slug: string }[] }).results[0]!.tool_slug = "GOOGLECALENDAR_EVENTS_LIST"; },
+    (action: Record<string, unknown>) => { (action.data as { results: { index: number }[] }).results[0]!.index = 1; },
+    (action: Record<string, unknown>) => { Object.assign((action.data as { results: object[] }).results[0]!, { response: { items: [{ id: "default-account-leak" }] } }); },
+    (action: Record<string, unknown>) => { Object.assign(action.data as object, { total_count: 2, success_count: 1 }); },
+  ]) {
+    const f = fixture(); delete f.metadata[2]!.outputSchema;
+    f.port.readCalendar = async (read) => {
+      f.reads.push(read);
+      const action = { ...syntheticCalendarExecutor(read, undefined, "CONNECTED_ACCOUNT_NOT_FOUND"), successful: false, error: "Failed" };
+      mutate(action);
+      return { isError: true, content: [{ type: "text", text: JSON.stringify(action) }] };
+    };
+    const result = await checkComposioCalendarRead(f.port, options());
+    assert.notEqual(result.code, "verified"); assert.equal(result.privateProof.invalidAccountRejected, false);
+    assert.equal(f.reads.length, 1); assert.equal(result.privateProof.calls.calendars, 0); assert.equal(result.privateProof.calls.events, 0); assert.equal(result.privateProof.calls.get, false);
+    assert.equal(JSON.stringify(result).includes("default-account-leak"), false);
+  }
+});
+
 test("multiple or missing ACTIVE accounts perform no executor read and never choose a default", async () => {
   for (const ids of [[], [actualAccount, "ca_another_account"]]) {
     const f = fixture(); f.port.call = async (tool) => tool === "COMPOSIO_SEARCH_TOOLS" ? syntheticCalendarSearch(ids) : f.schemas;
