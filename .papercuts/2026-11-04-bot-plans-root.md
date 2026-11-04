@@ -23,3 +23,5 @@
 - Task6 real lifecycle tests caught two main-wiring hazards: pre-recovery idle would end saved approval, and natural completion only reaches projection onRunSettled. Added a pure lifecycle adapter shared by production and integration tests, preserving recovery and routing actual settlement without a session-to-plan await.
 - A final informational steer after the Task6 worker stopped returned thread_not_sendable. No retry or new turn was needed; the handoff was already complete and root owns integration.
 - A combined UI-reference read exceeded the output budget. Recovered the relevant button, approval, motion and verification sections with bounded reads before Task7.
+
+- Task7 first Cua attempt reached the pending card but failed its composer locator: readiness changes the placeholder, so Ask Planner is absent while Send is held. Used the actual textarea for draft/Enter assertions, preserving the behavioral oracle. Failure log /tmp/bot-plan-c-task7-cua.log.

@@ -9,6 +9,7 @@ import { mountWithBotRouter } from "./test-providers";
 import { toast } from "../../components/ui";
 import { botFixture } from "./test-fixtures";
 import type { BotLiveSnapshot, BotTranscriptEntry } from "../../shared/bot-live";
+import type { BotPlanView } from "../../shared/bot-plans";
 import { BOT_SIDEBAR_PREFERENCES_KEY, parseBotSidebarPreferences } from "../../lib/bot-sidebar-preferences";
 
 afterEach(cleanup);
@@ -1824,3 +1825,116 @@ test("a no-longer-waiting access answer shows no success and its fresh host proj
     screen.getByPlaceholderText("Ask Planner");
   } finally { errors.restore(); }
 });
+
+const CHAT_PLAN: BotPlanView = {
+  botId: "bot-1", planId: "plan-1", revision: 1, status: "pending", from: "Jester",
+  title: "Prepare the team calendar", why: "Keep everyone ready for next week.",
+  steps: [{ text: "Create the team event", status: "pending" }],
+  items: [{ id: "i1", line: "Google Calendar · create events (up to 5)", details: ["Create an event"], used: 0, max: 5 }],
+};
+
+function emitPlan(plan: BotPlanView | null, seq: number) {
+  act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq, type: "plan", plan }));
+}
+
+test("a pending plan renders above the other cards and composer, gates Send and Approve calls respondPlan once", async () => {
+  let release!: (result: { result: "done" }) => void;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ plan: CHAT_PLAN, handoff: BANK_HANDOFF, accessRequest: {
+      botId: "bot-1", waitId: "access-1", toolCallId: "tool-access", target: "folder", label: "Team",
+      place: "~/Documents/Team", why: "Read the brief.", choices: ["not_now", "once"],
+    } }),
+    "bots:pendingApprovals": () => [{ botId: "bot-1", waitId: "approval-1", toolCallId: "tool-approval", toolName: "shell", summary: "Run a command" }],
+    "bots:plans:respond": () => new Promise((resolve) => { release = resolve; }),
+  });
+  const plan = await screen.findByRole("group", { name: "Jester asked Planner to do this" });
+  const composer = document.querySelector("textarea")!;
+  for (const later of [
+    await screen.findByRole("group", { name: "Planner needs you" }),
+    screen.getByRole("group", { name: "Planner wants to use Team" }),
+    await screen.findByRole("group", { name: "Planner needs approval" }),
+    composer,
+  ]) assert.ok(plan.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true);
+  fireEvent.change(composer, { target: { value: "Do something else" } });
+  fireEvent.keyDown(composer, { key: "Enter" });
+  assert.equal(calls.some((call) => call.channel === "bots:send" || call.channel === "bots:answerHandoff"), false);
+  const approve = within(plan).getByRole("button", { name: "Approve plan" });
+  fireEvent.click(approve);
+  fireEvent.click(approve);
+  fireEvent.click(within(plan).getByRole("button", { name: "Not now" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:plans:respond").length, 1));
+  assert.deepEqual(calls.find((call) => call.channel === "bots:plans:respond")!.args, [{ botId: "bot-1", planId: "plan-1", decision: "approve" }]);
+  assert.equal((approve as HTMLButtonElement).disabled, true);
+  await act(async () => release({ result: "done" }));
+  assert.ok(screen.getByRole("group", { name: "Jester asked Planner to do this" }));
+  assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true, "a response receipt does not invent plan settlement");
+});
+
+test("only a pending plan gates the composer; active, ended and cleared host events release it", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ plan: CHAT_PLAN }),
+    "bots:send": () => ({ submissionId: "s1", deduped: false }),
+  });
+  await screen.findByRole("button", { name: "Approve plan" });
+  assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true);
+  emitPlan({ ...CHAT_PLAN, status: "active", revision: 2, expiresAt: Date.now() + 600_000 }, 1);
+  const box = await screen.findByPlaceholderText("Ask Planner") as HTMLTextAreaElement;
+  assert.equal(box.disabled, false);
+  screen.getByRole("button", { name: "Stop plan" });
+  fireEvent.change(box, { target: { value: "A normal message" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
+  emitPlan({ ...CHAT_PLAN, status: "finished", revision: 3 }, 2);
+  await screen.findByText("Plan ended · 0 of 1 steps");
+  fireEvent.change(box, { target: { value: "After the plan" } });
+  const endedSend = screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement;
+  assert.equal(endedSend.disabled, false);
+  fireEvent.click(endedSend);
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 2));
+  emitPlan(null, 3);
+  await waitFor(() => assert.equal(screen.queryByText(/Plan ended/u), null));
+  assert.equal(box.disabled, false);
+});
+
+test("a not_waiting plan answer stays truthful, keeps the card and can be retried after a host failure", async () => {
+  let attempts = 0;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ plan: CHAT_PLAN }),
+    "bots:plans:respond": () => {
+      if (++attempts === 1) return { result: "not_waiting" };
+      if (attempts === 2) throw new Error("Error invoking remote method 'bots:plans:respond': Error: Access changed. Ask for a new plan.");
+      return { result: "done" };
+    },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Approve plan" }));
+  assert.equal((await screen.findByRole("alert")).textContent, "That plan was already answered or closed.");
+  const approve = screen.getByRole("button", { name: "Approve plan" }) as HTMLButtonElement;
+  assert.equal(approve.disabled, false);
+  fireEvent.click(approve);
+  await waitFor(() => assert.equal(screen.getByRole("alert").textContent, "Access changed. Ask for a new plan."));
+  assert.equal(approve.disabled, false);
+  await act(async () => fireEvent.click(approve));
+  assert.equal(screen.queryByRole("alert"), null);
+  assert.equal(attempts, 3);
+  assert.ok(screen.getByRole("button", { name: "Not now" }));
+  assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true);
+  assert.equal(calls.some((call) => call.channel === "bots:send"), false);
+});
+
+for (const [label, decision, status] of [["Not now", "not_now", "pending"], ["Stop plan", "stop", "active"]] as const) {
+  test(`the plan's ${label} forwards the exact IPC decision and waits for the host event`, async () => {
+    const calls = await mountChat({
+      "bots:live:subscribe": () => snapshot({ plan: { ...CHAT_PLAN, status } }),
+      "bots:plans:respond": () => ({ result: "done" }),
+    });
+    await act(async () => fireEvent.click(await screen.findByRole("button", { name: label })));
+    assert.deepEqual(calls.filter((call) => call.channel === "bots:plans:respond").map((call) => call.args), [
+      [{ botId: "bot-1", planId: "plan-1", decision }],
+    ]);
+    screen.getByText("Prepare the team calendar");
+    emitPlan(null, 1);
+    await waitFor(() => assert.equal(screen.queryByText("Prepare the team calendar"), null));
+    assert.equal(document.querySelector("textarea")!.disabled, false);
+  });
+}

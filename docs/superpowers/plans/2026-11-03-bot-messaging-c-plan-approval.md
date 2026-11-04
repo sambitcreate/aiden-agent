@@ -436,17 +436,17 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
   - Active: the same card as a checklist, with a check icon for done, a dash icon for skipped and an empty circle for pending (each with an accessible label), `Approved · ends in N min` (minutes left, from `expiresAt`), each counted item's `used of max used`, and **Stop plan**.
   - Ended (finished, stopped or expired): one compact line, `Plan ended · ${done} of ${total} steps`.
 
-- [ ] **Step 1: Write the failing tests** (Testing Library):
+- [x] **Step 1: Write the failing tests** (Testing Library):
   - `a pending plan shows its steps and one line per item`.
   - `Show details reveals the exact actions`: the details text is absent until the button is pressed. The button has `aria-expanded`.
   - `Approve plan and Not now respond once each`: a double click sends one `approve`, and the buttons disable while it is on its way.
   - `an active plan ticks steps and offers Stop plan`.
   - `an ended plan is one line`.
   - `keyboard: Tab reaches Approve plan first and Enter activates it`.
-- [ ] **Step 2: Run them and see them fail.** `npx tsx --test renderer/components/bots/plan-card.test.tsx`. Expected: FAIL.
-- [ ] **Step 3: Implement** the card from the shared Bot notice card, with squircle buttons and tokens only. Extend `bot-chat-pane.test.tsx` with one case, `a pending plan renders above the composer and Approve calls respondPlan`.
-- [ ] **Step 4: Run** `npx tsx --test renderer/components/bots/plan-card.test.tsx renderer/main/bots/bot-chat-pane.test.tsx`. Expected: PASS.
-- [ ] **Step 5: Register and commit:** "Add the Bot plan card".
+- [x] **Step 2: Run them and see them fail.** `npx tsx --test renderer/components/bots/plan-card.test.tsx`. Expected: FAIL.
+- [x] **Step 3: Implement** the card from the shared Bot notice card, with squircle buttons and tokens only. Extend `bot-chat-pane.test.tsx` with one case, `a pending plan renders above the composer and Approve calls respondPlan`.
+- [x] **Step 4: Run** `npx tsx --test renderer/components/bots/plan-card.test.tsx renderer/main/bots/bot-chat-pane.test.tsx`. Expected: PASS.
+- [x] **Step 5: Register and commit:** "Add the Bot plan card".
 
 ### Task 8: Phones: Remote revision, iOS and Android
 
@@ -588,3 +588,15 @@ Real lifecycle tests caught an integration hazard: a service can report idle bef
 Parent final validation: plans123, runtime403, pause34, registry15, full types and scoped lint15 files passed. Real combined session/lifecycle/IPC tests passed46. Rebuilt CLI268 files/27MiB and full186 tests with183 passed/3 existing PTY skips, plus CLI types, passed. Cua production startup/access-card E2E passed1. Logs: `/tmp/bot-plan-c-task6-parent-{plans,runtime,pause,types,lint,registry}.log`, `/tmp/bot-plan-c-task6-root-lifecycle-integrated.log`, `/tmp/bot-plan-c-task6-cli-{build,tests,types}.log`, `/tmp/bot-plan-c-task6-startup-cua.log`. Root IPC/lifecycle missing-module REDs are `/tmp/bot-plan-c-task6-{ipc,lifecycle}-red.log`; worker behavioral REDs and all fixture corrections are documented in `/tmp/aiden-bot-plan-c-task6-live-handoff.md`.
 
 No Remote/native DTO or revision changed. The Mac card is Task7, capability-gated Remote/native support is Task8, and complete C review remains Gate5 after Task9. No new phone, physical-device, live-provider, package/release or hosted-CI acceptance is claimed.
+
+
+### Task 7 started, 2026-11-04
+
+Task6 is committed at `d2471eb30`. A bounded UI worker owns the new plan card and existing chat-pane implementation/tests, following graphical-ui, Aiden tokens and the mandatory ChatGPT inspiration/specimen references. Root prepared `tests/e2e/bot-plans.spec.ts` against a substituted public host feed, with real renderer controls/IPC/composer and light/dark wide/narrow captures. It has not run yet; source readiness, unit/interaction checks and Cua validation remain pending. No Task8 wire/native code has started.
+
+
+### Task 7 complete locally, 2026-11-04
+
+The Mac plan card uses the existing Bot notice surface, avatar, buttons and semantic tokens. Pending plans show attribution, reason, ordered steps and coverage with a details disclosure; active plans show accessible step states, remaining time, counts and Stop; ended plans show one compact progress line. Responses have a synchronous duplicate guard, retryable inline errors and plan-isolated local state. Only the host changes or removes a card. A pending plan blocks Send/Enter while preserving an editable draft.
+
+Worker meaningful missing-module and pane behavioral REDs are `/tmp/bot-plan-c-task7-{card,pane}-red.log`. Parent plans137, focused UI98, registry15, whole types, scoped lint and whitespace passed. The registered new card suite is part of test:bot-plans and the renderer CI lane. Cua interaction/visual acceptance passed1 in `/tmp/bot-plan-c-task7-cua-fixed-locator.log`, with light1280/dark600 pending and dark active captures inspected. Real renderer/IPC/composer/keyboard controls used a substituted public host feed; no inference occurred. The initial Cua run failed the pending composer placeholder locator because readiness changes its placeholder. The corrected test locates the textarea and preserves independent Send, Enter and draft assertions. This is not native, physical-device, packaged-app or hosted-CI acceptance. Task8 is next; full C Gate5 remains pending.
