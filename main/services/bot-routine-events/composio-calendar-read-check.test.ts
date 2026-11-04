@@ -186,10 +186,20 @@ test("absent output declaration cannot accept contradictory counts or payload on
 
 test("private checker diagnostics preserve exact known compilation refusal without enabling any read", async () => {
   const f = fixture();
-  Object.assign(f.schemas.data.tool_schemas.GOOGLECALENDAR_EVENTS_LIST!.output_schema, { definitions: { private_type: { type: "string", description: "private schema text" } } });
+  Object.assign(f.schemas.data.tool_schemas.GOOGLECALENDAR_EVENTS_LIST!.output_schema, { definitions: { private_type: { type: "string", $id: "https://example.test/private-schema-text" } } });
   const result = await checkComposioCalendarRead(f.port, options());
   assert.equal(result.code, "unsupported_contract"); assert.equal(result.privateProof.contractFailure!.facts!.rejectionReason, "unsupported_keyword");
-  assert.equal(result.privateProof.contractFailure!.facts!.keyword, "definitions"); assert.equal(result.privateProof.contractFailure!.facts!.operation, "listEvents"); assert.equal(result.privateProof.contractFailure!.facts!.direction, "output");
+  assert.equal(result.privateProof.contractFailure!.facts!.keyword, "$id"); assert.equal(result.privateProof.contractFailure!.facts!.operation, "listEvents"); assert.equal(result.privateProof.contractFailure!.facts!.direction, "output");
   assert.equal(f.reads.length, 0); assert.equal(result.privateProof.calls.invalidAccount, false);
   for (const secret of ["private_type", "private schema text", "instancePath", "schemaPath"]) assert.equal(JSON.stringify(result).includes(secret), false);
+});
+
+test("local-reference failure proof contains no target names, pointers, fragments or schema values", async () => {
+  const f = fixture();
+  f.schemas.data.tool_schemas.GOOGLECALENDAR_EVENTS_LIST!.output_schema = { type: "object", properties: { items: { $ref: "#/$defs/private_missing_target" } }, $defs: { private_other_target: { type: "string", description: "private schema prose" } } } as never;
+  const result = await checkComposioCalendarRead(f.port, options());
+  assert.equal(result.code, "unsupported_contract"); assert.equal(result.privateProof.contractFailure!.facts!.referenceFailure, "missing_target");
+  assert.equal(result.privateProof.contractFailure!.facts!.operation, "listEvents"); assert.equal(result.privateProof.contractFailure!.facts!.keyword, "$ref");
+  assert.equal(f.reads.length, 0); assert.equal(result.privateProof.calls.invalidAccount, false);
+  for (const secret of ["private_missing_target", "private_other_target", "#/$defs/", "private schema prose"]) assert.equal(JSON.stringify(result).includes(secret), false);
 });

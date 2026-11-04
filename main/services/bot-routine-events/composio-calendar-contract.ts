@@ -6,6 +6,7 @@ import { connectorWatchJson } from "./connector-watch-imcp.js";
 import { compileComposioWatchInputSchema, composioWatchSchemaDiagnosticDialect, composioWatchSchemaDiagnosticKeyword, type ComposioWatchSchemaCompileFacts } from "./connector-watch-composio-probe.js";
 import { buildComposioCalendarExecutorRequest, parseComposioCalendarExecutorResponse, type ComposioCalendarRead } from "./connector-watch-composio.js";
 import type { ComposioCalendarContract } from "./composio-calendar-host-port.js";
+import { ComposioCalendarOutputSchemaError, normalizeComposioCalendarOutputSchema, type ComposioCalendarReferenceFailure } from "./composio-calendar-output-schema.js";
 
 export const CALENDAR_SCHEMA_SLUGS = ["GOOGLECALENDAR_LIST_CALENDARS", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_EVENTS_GET"] as const;
 type ObjectValue = Record<string, unknown>;
@@ -34,6 +35,7 @@ export interface ComposioCalendarFailureFacts {
   work?: ComposioWatchSchemaCompileFacts["work"];
   operation?: ComposioCalendarRead["kind"];
   direction?: "input" | "output";
+  referenceFailure?: ComposioCalendarReferenceFailure;
 }
 export class ComposioCalendarContractError extends Error {
   constructor(readonly stage: "inventory" | "search" | "schemas" | "executor" | "read_arguments" | "read_response" | "schema_drift", readonly reason: "shape" | "missing" | "unsupported" | "invalid" | "changed", readonly facts?: ComposioCalendarFailureFacts, readonly field?: "executor_input" | "executor_output" | "account_selector") {
@@ -78,6 +80,18 @@ function compile(value: unknown, stage: ComposioCalendarContractError["stage"], 
 }
 function validationFailure(stage: ComposioCalendarContractError["stage"], validator: ValidateFunction, context: Pick<ComposioCalendarFailureFacts, "operation" | "direction">, field?: ComposioCalendarContractError["field"]): never {
   throw new ComposioCalendarContractError(stage, "invalid", { keyword: composioWatchSchemaDiagnosticKeyword(validator.errors?.[0]?.keyword ?? ""), dialect: composioWatchSchemaDiagnosticDialect(optionalObject(validator.schema)?.$schema), ...context }, field);
+}
+function compileCalendarOutput(value: unknown, operation: ComposioCalendarRead["kind"]): ValidateFunction {
+  let normalized: ReturnType<typeof normalizeComposioCalendarOutputSchema>;
+  try { normalized = normalizeComposioCalendarOutputSchema(value); }
+  catch (error) {
+    if (!(error instanceof ComposioCalendarOutputSchemaError)) throw error;
+    throw new ComposioCalendarContractError("read_response", "unsupported", { keyword: error.keyword, dialect: composioWatchSchemaDiagnosticDialect(optionalObject(value)?.$schema), rejectionReason: error.failure === "expansion_limit" ? "schema_limit" : "schema_structure", work: error.work, operation, direction: "output", referenceFailure: error.failure });
+  }
+  // Never silently discard an unused unsafe definition or interpret its metadata
+  // as another schema. All semantic targets pass the unchanged restricted subset.
+  if (normalized.audit !== undefined) compile(normalized.audit, "read_response", undefined, { operation, direction: "output" });
+  return compile(normalized.schema, "read_response", undefined, { operation, direction: "output" });
 }
 function property(value: unknown, key: string): ObjectValue | undefined { return optionalObject(optionalObject(value)?.properties)?.[key] as ObjectValue | undefined; }
 function uniqueTool(metadata: readonly SubagentMcpRemoteTool[], name: string): SubagentMcpRemoteTool {
@@ -141,7 +155,7 @@ export function verifyCalendarContract(metadata: readonly SubagentMcpRemoteTool[
     if (output.type !== "object" || !optionalObject(output.properties)) return fail("schemas", "unsupported");
     const operation = (["listCalendars", "listEvents", "getEvent"] as const)[index]!;
     validators.set(slug, compile(input, "read_arguments", undefined, { operation, direction: "input" }));
-    outputValidators.set(slug, compile(output, "read_response", undefined, { operation, direction: "output" }));
+    outputValidators.set(slug, compileCalendarOutput(output, operation));
     hashes.push(digest({ input, output }));
   }
   const contract: ComposioCalendarContract = { revision: "composio-calendar-v1", executorSchemaHash: digest({ input: executor.inputSchema, output: executor.outputSchema ?? null, outputSource: executorOutputSource, hostOutputVersion: HOST_EXECUTOR_OUTPUT_VERSION, hostOutput: HOST_EXECUTOR_OUTPUT }), readSchemaHashes: { listCalendars: hashes[0]!, listEvents: hashes[1]!, getEvent: hashes[2]! } };

@@ -3,6 +3,7 @@ import test from "node:test";
 import { buildCalendarSchemasRequest, buildCalendarSearchRequest, CALENDAR_SCHEMA_SLUGS, verifyCalendarContract } from "./composio-calendar-contract.js";
 import { syntheticCalendarExecutor, syntheticCalendarMetadata, syntheticCalendarSchemas } from "./composio-calendar-test-support.js";
 import { compileComposioWatchInputSchema, type ComposioWatchSchemaCompileFacts } from "./connector-watch-composio-probe.js";
+import { normalizeComposioCalendarOutputSchema } from "./composio-calendar-output-schema.js";
 
 test("contract validates all three fixed read schemas and one account-selected executor item", () => {
   const metadata = syntheticCalendarMetadata();
@@ -111,8 +112,8 @@ test("host result invariants apply even when a declared output schema permits an
 
 test("closed compilation diagnostics distinguish definitions, unknown keywords and schema compiler failures", () => {
   for (const [extra, keyword, rejectionReason] of [
-    [{ $defs: { private_schema_name: { type: "string", description: "private provider prose" } } }, "$defs", "unsupported_keyword"],
-    [{ definitions: { private_schema_name: { type: "string" } } }, "definitions", "unsupported_keyword"],
+    [{ $defs: [] }, "$defs", "schema_structure"],
+    [{ definitions: false }, "definitions", "schema_structure"],
     [{ private_unknown_keyword: "private provider prose" }, "other", "unsupported_keyword"],
     [{ required: "private_missing_field" }, "type", "schema_compile"],
     [{ anyOf: Array.from({ length: 9 }, () => ({ type: "object" })) }, "anyOf", "schema_structure"],
@@ -122,7 +123,9 @@ test("closed compilation diagnostics distinguish definitions, unknown keywords a
     try { verifyCalendarContract(syntheticCalendarMetadata(), schemas); } catch (caught) { error = caught; }
     assert.ok(error instanceof Error); const facts = (error as { facts?: { keyword: string; rejectionReason: string; direction: string; operation: string; work: { nodes: number; depth: number } } }).facts!;
     assert.equal(facts.keyword, keyword); assert.equal(facts.rejectionReason, rejectionReason); assert.equal(facts.operation, "getEvent"); assert.equal(facts.direction, "output");
-    assert.ok(facts.work.nodes > 0 && facts.work.nodes <= 513); assert.ok(facts.work.depth <= 13);
+    if (keyword === "$defs" || keyword === "definitions") assert.equal(facts.work.nodes, 0, "malformed root tables are refused before expansion");
+    else assert.ok(facts.work.nodes > 0 && facts.work.nodes <= 513);
+    assert.ok(facts.work.depth <= 13);
     for (const secret of ["private_schema_name", "private provider prose", "private_unknown_keyword", "private_missing_field"]) assert.equal(JSON.stringify(facts).includes(secret), false);
   }
 });
@@ -151,4 +154,125 @@ test("argument and response diagnostics expose only fixed validation keyword, op
   const output = (failure as { facts: Record<string, unknown> }).facts;
   assert.deepEqual(output, { keyword: "required", dialect: "missing", operation: "listCalendars", direction: "output" });
   for (const secret of ["private_required_input", "private_required_output", "private-event-id", "actual-calendar", "instancePath", "schemaPath", "params"]) assert.equal(JSON.stringify([input, output]).includes(secret), false);
+});
+
+function localOutput(output: unknown) {
+  const schemas = syntheticCalendarSchemas(); schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = output as never;
+  return { schemas, verified: () => verifyCalendarContract(syntheticCalendarMetadata(), schemas) };
+}
+
+test("Calendar outputs enforce nested shared local definitions for both supported root containers", () => {
+  const read = { kind: "listCalendars" as const, accountId: "actual-account" };
+  for (const container of ["$defs", "definitions"] as const) {
+    const fixture = localOutput({ type: "object", properties: { items: { $ref: `#/${container}/CalendarList`, title: "inert ref title", default: { $ref: "https://example.test/not-a-schema" }, examples: [{ definitions: { ignored: { format: "unknown" } } }] }, featured: { $ref: `#/${container}/Calendar` } }, required: ["items"], additionalProperties: false, [container]: {
+      Identifier: { type: "string", minLength: 5 },
+      Calendar: { type: "object", properties: { id: { $ref: `#/${container}/Identifier` }, accessRole: { type: "string", enum: ["reader", "owner"] } }, required: ["id", "accessRole"], additionalProperties: false },
+      CalendarList: { type: "array", items: { $ref: `#/${container}/Calendar` } },
+    } });
+    const verified = fixture.verified(), response = { items: [{ id: "calendar@example.test", accessRole: "reader" }], featured: { id: "other@example.test", accessRole: "owner" } };
+    const original = JSON.stringify(response); verified.response(read, syntheticCalendarExecutor(read, response)); assert.equal(JSON.stringify(response), original, "defaults never mutate returned data");
+    for (const invalid of [{ items: [{ id: 42, accessRole: "reader" }] }, { items: [{ id: "tiny", accessRole: "reader" }] }, { items: [{ id: "calendar@example.test", accessRole: "freeBusyReader" }] }, { items: [], featured: { id: 42, accessRole: "owner" } }]) assert.throws(() => verified.response(read, syntheticCalendarExecutor(read, invalid)));
+  }
+});
+
+test("safe unused definitions are audited but the ORIGINAL schema still controls drift detection", () => {
+  const fixture = localOutput({ type: "object", properties: { items: { type: "array" } }, required: ["items"], $defs: { Unused: { type: "string", minLength: 5 } } });
+  const accepted = fixture.verified();
+  const raw = fixture.schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema as unknown as { $defs: { Unused: { title?: string } } };
+  raw.$defs.Unused.title = "unused annotation changed";
+  assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), fixture.schemas, accepted.contract));
+});
+
+test("cycles, dangling targets, external/anchor/escaped pointers and prototype lookup are refused", () => {
+  for (const [ref, definitions, expected] of [
+    ["#/$defs/A", { A: { $ref: "#/$defs/A" } }, "cycle"],
+    ["#/$defs/A", { A: { $ref: "#/$defs/B" }, B: { $ref: "#/$defs/A" } }, "cycle"],
+    ["#/$defs/Missing", {}, "missing_target"],
+    ["#/$defs/toString", {}, "missing_target"],
+    ["https://example.test/schema#/$defs/A", {}, "unsupported_reference"],
+    ["#anchor", {}, "unsupported_reference"],
+    ["#", {}, "unsupported_reference"],
+    ["#/$defs/A/properties/x", {}, "unsupported_reference"],
+    ["#/$defs/A~1B", {}, "unsupported_reference"],
+    ["#/$defs/%41", {}, "unsupported_reference"],
+    ["#/$defs/../A", {}, "unsupported_reference"],
+    ["#/$defs/__proto__", {}, "unsupported_reference"],
+    ["#/properties/items", {}, "unsupported_reference"],
+  ] as const) {
+    const fixture = localOutput({ type: "object", properties: { items: { $ref: ref } }, $defs: definitions });
+    assert.throws(fixture.verified, (error: unknown) => { const facts = (error as { facts: { referenceFailure: string; keyword: string } }).facts; assert.equal(facts.referenceFailure, expected); assert.equal(facts.keyword, "$ref"); return true; });
+  }
+  const proto = localOutput(JSON.parse('{"type":"object","properties":{},"$defs":{"__proto__":{"polluted":true}}}'));
+  assert.throws(proto.verified); assert.equal(({} as { polluted?: boolean }).polluted, undefined);
+});
+
+test("reference constraints are never merged or ignored; nonvalidating annotations remain inert", () => {
+  for (const sibling of [{ type: "array" }, { minItems: 1 }, { required: ["items"] }, { allOf: [] }, { $id: "https://example.test/id" }]) {
+    const fixture = localOutput({ type: "object", properties: { items: { $ref: "#/$defs/Array", ...sibling } }, $defs: { Array: { type: "array" } } });
+    assert.throws(fixture.verified, (error: unknown) => { assert.equal((error as { facts: { referenceFailure: string } }).facts.referenceFailure, "reference_siblings"); return true; });
+  }
+});
+
+test("unsafe targets are rejected even when their definitions are never referenced", () => {
+  for (const used of [true, false]) for (const target of [
+    { type: "string", pattern: "(a+)+$" }, { type: "string", format: "custom" },
+    { type: "string", $id: "https://example.test/id" }, { type: "string", $schema: "http://json-schema.org/draft-07/schema#" },
+    { $ref: "https://example.test/remote" }, { type: "object", properties: {}, $defs: { Nested: { type: "string" } } },
+    { type: "string", $dynamicRef: "#dynamic" }, { type: "string", $anchor: "dynamic" },
+  ]) {
+    const fixture = localOutput({ type: "object", properties: { items: used ? { $ref: "#/$defs/Target" } : { type: "array" } }, $defs: { Target: target } });
+    assert.throws(fixture.verified);
+  }
+});
+
+test("local definitions never widen Search, GetSchemas, executor or upstream INPUT compilation", () => {
+  const addition = { $defs: { Safe: { type: "string" } } };
+  const search = syntheticCalendarMetadata(); Object.assign(search[0]!.inputSchema as object, addition); assert.throws(() => buildCalendarSearchRequest(search));
+  const getSchemas = syntheticCalendarMetadata(); Object.assign(getSchemas[1]!.inputSchema as object, addition); assert.throws(() => buildCalendarSchemasRequest(getSchemas));
+  for (const direction of ["inputSchema", "outputSchema"] as const) { const metadata = syntheticCalendarMetadata(); Object.assign(metadata[2]![direction] as object, addition); assert.throws(() => verifyCalendarContract(metadata, syntheticCalendarSchemas())); }
+  const upstream = syntheticCalendarSchemas(); Object.assign(upstream.data.tool_schemas.GOOGLECALENDAR_EVENTS_GET!.input_schema!, addition); assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), upstream));
+  const dialect = localOutput({ $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", properties: { items: { $ref: "#/$defs/Array" } }, $defs: { Array: { type: "array" } } }); assert.throws(dialect.verified);
+});
+
+test("acyclic reference amplification hits the existing expanded node/depth limits", () => {
+  const definitions: Record<string, unknown> = { L0: { type: "string" } };
+  for (let index = 1; index <= 9; index++) definitions[`L${index}`] = { type: "object", properties: { left: { $ref: `#/$defs/L${index - 1}` }, right: { $ref: `#/$defs/L${index - 1}` } } };
+  const wide = localOutput({ type: "object", properties: { payload: { $ref: "#/$defs/L9" } }, $defs: definitions });
+  assert.throws(wide.verified, (error: unknown) => { const facts = (error as { facts: { referenceFailure: string; rejectionReason: string; work: { nodes: number } } }).facts; assert.equal(facts.referenceFailure, "expansion_limit"); assert.equal(facts.rejectionReason, "schema_limit"); assert.equal(facts.work.nodes, 513); return true; });
+  const deep: Record<string, unknown> = { L0: { type: "string" } };
+  for (let index = 1; index <= 13; index++) deep[`L${index}`] = { type: "array", items: { $ref: `#/$defs/L${index - 1}` } };
+  const depth = localOutput({ type: "object", properties: { payload: { $ref: "#/$defs/L13" } }, $defs: deep });
+  assert.throws(depth.verified, (error: unknown) => { assert.equal((error as { facts: { work: { depth: number } } }).facts.work.depth, 13); return true; });
+});
+
+test("repeated inert annotations also obey the expanded byte budget", () => {
+  const fixture = localOutput({ type: "object", properties: { a: { $ref: "#/$defs/Annotated" }, b: { $ref: "#/$defs/Annotated" }, c: { $ref: "#/$defs/Annotated" } }, $defs: { Annotated: { type: "string", examples: ["x".repeat(90_000)] } } });
+  assert.throws(fixture.verified, (error: unknown) => { const facts = (error as { facts: { referenceFailure: string; work: { nodes: number } } }).facts; assert.equal(facts.referenceFailure, "expansion_limit"); assert.ok(facts.work.nodes < 513, "this refuses byte amplification before reaching the schema-node cap"); return true; });
+});
+
+function usedAndUnusedAnnotationSchema(annotation: string) {
+  const ref = () => ({ $ref: "#/$defs/Text" });
+  return { type: "object", properties: { one: ref(), two: ref() }, $defs: { Text: { type: "string", examples: [annotation] }, Unused: { type: "object", properties: { one: ref(), two: ref() } } } };
+}
+
+test("shared expansion byte budget rejects combined schema and unused audit overflow", () => {
+  for (const annotation of ["x".repeat(80_000), "\u0001".repeat(14_000)]) {
+    const schema = usedAndUnusedAnnotationSchema(annotation);
+    assert.ok(Buffer.byteLength(JSON.stringify(schema)) < 256 * 1024, "the original schema fits before four semantic uses amplify its annotation");
+    const fixture = localOutput(schema);
+    assert.throws(fixture.verified, (error: unknown) => { assert.equal((error as { facts: { referenceFailure: string } }).facts.referenceFailure, "expansion_limit"); return true; });
+  }
+});
+
+test("shared expansion byte budget accepts schema and unused audit below the combined limit", () => {
+  const read = { kind: "listCalendars" as const, accountId: "actual-account" };
+  for (const annotation of ["x".repeat(60_000), "\u0001".repeat(9_000)]) {
+    const schema = usedAndUnusedAnnotationSchema(annotation), expanded = normalizeComposioCalendarOutputSchema(schema);
+    assert.ok(expanded.audit);
+    const combinedBytes = Buffer.byteLength(JSON.stringify(expanded.schema)) + Buffer.byteLength(JSON.stringify(expanded.audit));
+    assert.ok(combinedBytes > 200_000 && combinedBytes <= 256 * 1024);
+    const verified = localOutput(schema).verified();
+    verified.response(read, syntheticCalendarExecutor(read, { one: "valid", two: "also valid" }));
+    assert.throws(() => verified.response(read, syntheticCalendarExecutor(read, { one: 42 })));
+  }
 });
