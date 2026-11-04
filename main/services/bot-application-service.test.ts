@@ -9,6 +9,8 @@ import { AidenRemoteApprovedRootService } from "./aiden-remote-approved-roots.js
 import { createBotFolderGrantJournal, fileBotFolderGrantJournal } from "./bot-folder-grant-journal.js";
 import { resolveBotAccessTarget } from "./bot-runtime/bot-access-target.js";
 import { BotAccessRequestStaleError } from "./bot-runtime/bot-access-requests.js";
+import { createBotIssueService } from "./bot-issues/service.js";
+import { createBotIssueStore } from "./bot-issues/store.js";
 import {
   BOT_FULL_ACCESS_NOTICE_VERSION,
   type BotAccessUpdate,
@@ -131,6 +133,62 @@ test("committed folder receipts acknowledge only the original Bot and desktop op
   await phone.service.grantBotFolder({ ...phone.input, audienceId: "device:phone" });
   assert.equal(await phone.service.botFolderGrantCommitted(phone.owner.id, phone.input.operationId), false);
 });
+
+for (const drift of ["grant removed", "directory replaced"] as const) {
+  test(`a committed issue replay settles without restoring authority after ${drift}`, async t => {
+    const app = await folderFixture(t);
+    let service = app.service, interrupt = true;
+    const statuses: { kind: string; data: unknown }[] = [];
+    const issues = () => createBotIssueService({
+      store: createBotIssueStore({ profileDir: () => app.privateRoot }),
+      appendEntry: async (_botId, kind, data) => { statuses.push({ kind, data }); },
+      funnel: { deliver: async () => "sent" }, now: Date.now,
+      actions: {
+        resumeRoutine: async () => "missing", stopRun: async () => {}, snoozeStall() {}, openSettings() {},
+        allowFolder: async (botId, access, operationId) => {
+          const auth = access.authorization;
+          const result = await service.grantBotFolder({ audienceId: "desktop:local", botId,
+            folderPath: auth.root, expectedRevision: auth.policyRevision, expectedIdentity: auth.identity!, operationId });
+          if (interrupt) { interrupt = false; throw new Error("interrupted after publication before issue settlement"); }
+          return result;
+        },
+      },
+    });
+    const first = issues();
+    const issue = await first.raise({ botId: app.owner.id, kind: "access_needed", dedupeKey: "access:Taxes",
+      title: "Needs Taxes", body: "Prepare a return", actions: [{ kind: "dismiss_access" }, { kind: "allow_folder" }],
+      access: { label: "Taxes", folderPath: app.folderPath, authorization: {
+        policyRevision: app.input.expectedRevision, requestIds: ["routine:r1:1"], target: "folder", root: app.folderPath,
+        identity: app.input.expectedIdentity, choices: ["not_now", "always", "once"],
+      } },
+    });
+    await assert.rejects(first.act(app.owner.id, issue.id, { kind: "allow_folder" }), /interrupted after publication/u);
+    assert.equal((await app.journal.list())[0]!.state, "committed");
+    assert.equal((await first.list(app.owner.id, { open: true })).length, 1);
+    if (drift === "grant removed") {
+      const policy = app.policies.get(app.owner.id)!;
+      await app.service.updateBotAccess({ audienceId: "desktop:local", botId: app.owner.id, expectedRevision: policy.revision,
+        access: { accessMode: "custom", catalogRevision: CATALOG_REVISION, custom: { ...policy.custom!, fileScopeIds: ["scope:home"] } } });
+    } else {
+      await fs.rename(app.folderPath, app.folderPath + "-original");
+      await fs.mkdir(app.folderPath);
+    }
+    const policyBeforeRetry = structuredClone(app.policies.get(app.owner.id));
+    const receiptBeforeRetry = await fs.readFile(path.join(app.privateRoot, "bot-folder-grants.json"), "utf8");
+    service = createBotApplicationService(app.deps);
+    const reopened = issues();
+    assert.equal(await reopened.act(app.owner.id, issue.id, { kind: "allow_folder" }), "not_open");
+    assert.deepEqual(await reopened.list(app.owner.id, { open: true }), []);
+    assert.equal((await reopened.list(app.owner.id))[0]!.resolution, "superseded");
+    assert.equal(await issues().act(app.owner.id, issue.id, { kind: "allow_folder" }), "not_open");
+    assert.deepEqual(app.policies.get(app.owner.id), policyBeforeRetry);
+    assert.equal(await fs.readFile(path.join(app.privateRoot, "bot-folder-grants.json"), "utf8"), receiptBeforeRetry);
+    assert.equal(app.counts.adds, 1, "the historical publication is never repeated");
+    assert.equal(await service.botFolderGrantCommitted(app.owner.id, issue.id), true, "history remains true without restored authority");
+    assert.ok(statuses.some(row => (row.data as { resolution?: string }).resolution === "superseded"));
+    assert.ok(!statuses.some(row => (row.data as { resolution?: string }).resolution === "fixed"));
+  });
+}
 
 test("an unavailable folder journal read leaves ordinary Bot operations available without inferring a committed receipt", async (t) => {
   const app = await folderFixture(t);

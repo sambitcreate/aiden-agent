@@ -9,6 +9,7 @@ import {
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { BotAccessRequestStaleError } from "./bot-access-requests.js";
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { Harness, MemoryStorage, ToolResultEntry } from "@earendil-works/pi-durable";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
@@ -298,6 +299,41 @@ test("saved publication slot survives Once replacement and revokes only its real
   assert.equal(store.location("ada",["r1"],"published")?.root,"/Once","removing saved owner preserves a different Once owner");
 });
 
+test("a transient current-call validation failure preserves the live saved publication for retry", async () => {
+  const store = createBotRunAccess({ now: () => 1 });
+  const owner = new AbortController();
+  store.recordPublication("ada", { ...grant, expiresAt: 100 }, { signal: owner.signal, deadline: 100 });
+  const unavailable = Object.assign(new Error("policy store temporarily unreadable"), { code: "EIO" });
+  await assert.rejects(store.savedLocation("ada", ["r1"], "rev1", {
+    signal: new AbortController().signal, validate: async () => { throw unavailable; },
+  }), error => error === unavailable);
+  assert.equal((await store.savedLocation("ada", ["r1"], "rev1", {
+    signal: new AbortController().signal, validate: async () => {},
+  }))?.root, "/Taxes", "the next healthy call keeps the original exact publication");
+  owner.abort();
+  assert.equal(await store.savedLocation("ada", ["r1"], "rev1", {
+    signal: new AbortController().signal, validate: async () => {},
+  }), undefined, "preserving a transient failure cannot preserve ended ownership");
+});
+
+test("only a genuine stale validation permanently revokes a saved publication", async () => {
+  for (const classified of [true, false]) {
+    const store = createBotRunAccess({ now: () => 1 });
+    store.recordPublication("ada", { ...grant, expiresAt: 100 }, { signal: new AbortController().signal, deadline: 100 });
+    const error = classified ? new BotAccessRequestStaleError("owning input changed")
+      : Object.assign(new Error("temporary validation failure"), { name: "BotAccessRequestStaleError" });
+    const first = store.savedLocation("ada", ["r1"], "rev1", {
+      signal: new AbortController().signal, validate: async () => { throw error; },
+    });
+    if (classified) assert.equal(await first, undefined);
+    else await assert.rejects(first, value => value === error);
+    const retry = await store.savedLocation("ada", ["r1"], "rev1", {
+      signal: new AbortController().signal, validate: async () => {},
+    });
+    assert.equal(retry?.root, classified ? undefined : "/Taxes");
+  }
+});
+
 test("saved slot rejects stale policy, changed owner, postawait abort, expiration, restart and lifecycle clear",async()=>{
   for(const reason of ["policy","owner","abort","original_abort","expiry","clearBot","clearAll","restart"] as const){
     let now=1;const store=createBotRunAccess({now:()=>now}),original=new AbortController(),current=new AbortController();
@@ -311,7 +347,7 @@ test("saved slot rejects stale policy, changed owner, postawait abort, expiratio
     if(reason==="clearAll") store.clearAll();
     const actual=reason==="restart"?createBotRunAccess({now:()=>now}):store;
     const resolved=await actual.savedLocation("ada",["r1"],reason==="policy"?"rev2":"rev1",{signal:current.signal,validate:async()=>{
-      if(reason==="owner") throw new Error("owning task ended");
+      if(reason==="owner") { original.abort(); throw new Error("owning task ended"); }
       if(reason==="abort") current.abort();
     }});
     assert.equal(resolved,undefined,reason);

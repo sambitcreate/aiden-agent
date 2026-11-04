@@ -7,6 +7,7 @@ import { nextBotFileScopeIds } from "../../renderer/shared/bot-capabilities.js";
 import { botAccessRootInventoryRevision, resolveBotAccessTarget, type BotAccessTargetDeps } from "./bot-runtime/bot-access-target.js";
 import type { AidenRemoteApprovedRoot } from "./aiden-remote-state.js";
 import type { BotFolderApprovalReceipt, BotFolderGrantInput, BotFolderGrantJournal, BotFolderGrantRecord } from "./bot-folder-grant-journal.js";
+import { BotFolderGrantReplayStaleError } from "./bot-folder-grant-journal.js";
 import { BotAccessRequestStaleError } from "./bot-runtime/bot-access-requests.js";
 import { BotRuntimeInventoryLeaseInvalidError } from "./bot-runtime-inventory-lease.js";
 import type {
@@ -1501,13 +1502,13 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           policy.revision !== prior.resultRevision ||
           !(await folderRootSelected(input.botId, prior.rootId))
         )
-          throw new Error("This Bot's access changed. Ask for access again.");
+          throw new BotFolderGrantReplayStaleError("This Bot's access changed. The earlier folder approval is recorded; ask for access again.");
         try {
           await validateFolder(input, prior.rootId);
         } catch (error) {
           // This operation already published authority. A replay refusal must
           // not claim that the original decision had no durable effect.
-          if (error instanceof BotAccessRequestStaleError) throw new Error(error.message);
+          if (error instanceof BotAccessRequestStaleError) throw new BotFolderGrantReplayStaleError(error.message);
           throw error;
         }
         return "already_allowed";
