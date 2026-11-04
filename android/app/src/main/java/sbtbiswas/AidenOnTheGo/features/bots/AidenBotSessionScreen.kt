@@ -583,6 +583,11 @@ private fun AidenBotSessionContent(
                 if (ui.needsModel) {
                     item(key = "needs-model") { AidenBotNeedsModelCard(busy = openingAdvanced, onSetUp = ::openAdvanced) }
                 }
+                ui.accessSuccessNotice?.let { message ->
+                    item(key = "access-success") {
+                        Text(message, color = palette.success, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 // A notice about unsent messages (copy shared with iOS), else the last action's error.
                 (ui.notice?.let { resources.getString(it.text) } ?: ui.actionError)?.let { message ->
                     item(key = "error") {
@@ -996,6 +1001,7 @@ fun aidenBotIssueActionLabel(action: AidenBotIssueAction): String = when (action
     AidenBotIssueActionKind.STOP_RUN -> stringResource(R.string.bot_issue_stop)
     AidenBotIssueActionKind.KEEP_WAITING -> stringResource(R.string.bot_issue_keep_waiting)
     AidenBotIssueActionKind.ALLOW_FOLDER -> stringResource(R.string.bot_issue_allow_folder)
+    AidenBotIssueActionKind.DISMISS_ACCESS -> stringResource(R.string.bot_access_not_now)
 }
 
 @Composable

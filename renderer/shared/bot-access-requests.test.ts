@@ -91,6 +91,9 @@ test("titles, choices and result lines match the card", () => {
     "Not now: Taxes",
   );
 });
+test("access changed is an explicit non-decline result", () => {
+  assert.equal(botAccessResultLine({ target: "folder", label: "Taxes", outcome: "access_changed" }), "Access changed for Taxes");
+});
 test("authorization parsing requires a bounded exact pinned snapshot and never saves Whole Mac Always", () => {
   const auth = {
     policyRevision: "rev1",

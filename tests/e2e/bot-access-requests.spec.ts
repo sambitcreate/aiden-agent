@@ -5,6 +5,7 @@ import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 interface AccessE2eState {
   answers: unknown[];
   failNext: boolean;
+  saveForFuture: boolean;
   release(): void;
   replace(request: BotPendingAccessRequest): void;
 }
@@ -41,7 +42,7 @@ test("access cards keep their scope visible and wait for the host's answer", asy
       }
     };
     const state: AccessE2eState = {
-      answers: [], failNext: true,
+      answers: [], failNext: true, saveForFuture: false,
       release: () => { release?.(); release = undefined; },
       replace: (next) => { pending = next; publish(); },
     };
@@ -58,11 +59,11 @@ test("access cards keep their scope visible and wait for the host's answer", asy
       await new Promise<void>(resolve => { release = resolve; });
       if (state.failNext) {
         state.failNext = false;
-        throw new Error("This Bot's access changed. Ask for access again.");
+        throw new Error("The folder could not be saved. Please try again.");
       }
       pending = null;
       publish();
-      return {answered: true};
+      return {answered: true, ...(state.saveForFuture ? {savedForFuture: true} : {})};
     });
   }, {bot, request});
   await page.getByRole("button", {name: "Bots", exact: true}).click();
@@ -92,7 +93,7 @@ test("access cards keep their scope visible and wait for the host's answer", asy
   for (const button of await card.getByRole("button").all()) await expect(button).toBeDisabled();
   expect(await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.answers)).toEqual([{botId: bot.id, waitId: request.waitId, choice: "always"}]);
   await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.release());
-  await expect(page.getByText("This Bot's access changed. Ask for access again.", {exact: false}).first()).toBeVisible();
+  await expect(page.getByText("The folder could not be saved. Please try again.", {exact: false}).first()).toBeVisible();
   await expect(card.getByRole("button", {name: "Allow once", exact: true})).toBeEnabled();
   await card.getByRole("button", {name: "Allow once", exact: true}).click();
   await expect(card.getByRole("button", {name: "Not now", exact: true})).toBeDisabled();
@@ -110,10 +111,24 @@ test("access cards keep their scope visible and wait for the host's answer", asy
   await expect(wholeCard.getByRole("button", {name: "Allow once", exact: true})).toBeDisabled();
   await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.release());
   await expect(wholeCard).toBeHidden();
+  const futureRequest: BotPendingAccessRequest = {...request, waitId: "33332233-4455-4677-8899-aabbccddeeff"};
+  await aiden.app.evaluate((_electron, next) => {
+    const state = (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e;
+    state.saveForFuture = true;
+    state.replace(next);
+  }, futureRequest);
+  const futureCard = page.getByRole("group", {name: "Planner wants to use Taxes", exact: true});
+  await expect(futureCard).toBeVisible();
+  await futureCard.getByRole("button", {name: "Always for this folder", exact: true}).click();
+  await expect(futureCard.getByRole("button", {name: "Not now", exact: true})).toBeDisabled();
+  await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.release());
+  await expect(futureCard).toBeHidden();
+  await expect(page.getByText("Saved for future tasks.", {exact: true})).toBeVisible();
   expect(await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.answers)).toEqual([
     {botId: bot.id, waitId: request.waitId, choice: "always"},
     {botId: bot.id, waitId: request.waitId, choice: "once"},
     {botId: bot.id, waitId: "22222233-4455-4677-8899-aabbccddeeff", choice: "not_now"},
+    {botId: bot.id, waitId: futureRequest.waitId, choice: "always"},
   ]);
   expect(aiden.lmStudio.requests.filter(r => r.url === "/v1/chat/completions")).toHaveLength(0);
 });

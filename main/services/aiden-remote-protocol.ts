@@ -1795,7 +1795,7 @@ export interface AidenRemoteBotHandoffOpenOnMacReceipt {
 /** Revision 55, only for devices holding bot:access-requests. */
 export type AidenRemoteBotAccessRequest = Omit<BotPendingAccessRequest, "botId" | "toolCallId">;
 export interface AidenRemoteBotAccessAnswerRequest { choice: BotAccessChoice }
-export interface AidenRemoteBotAccessAnswerReceipt { answered: true }
+export interface AidenRemoteBotAccessAnswerReceipt { answered: true; savedForFuture?: true }
 
 // --- Contract revision 42: Bot issues on phones (`bot:issues`).
 
@@ -1824,6 +1824,7 @@ export const AIDEN_REMOTE_BOT_ISSUE_ACTION_KINDS = [
   "stop_run",
   "keep_waiting",
   "allow_folder",
+  "dismiss_access",
 ] as const;
 
 /** How many issues one session projects (the store keeps up to 8 open and 50 settled). */
@@ -6504,9 +6505,10 @@ export function parseAidenRemoteBotAccessAnswerRequest(value: unknown): AidenRem
 }
 export function parseAidenRemoteBotAccessAnswerReceipt(value: unknown): AidenRemoteBotAccessAnswerReceipt {
   if (!isRecord(value)) throw new Error("Bot access receipt must be an object.");
-  assertExactKeys(value, ["answered"], "Bot access receipt");
+  assertExactKeys(value, ["answered", "savedForFuture"], "Bot access receipt");
   if (value.answered !== true) throw new Error("Bot access receipt must be answered.");
-  return { answered: true };
+  if (hasOwn(value, "savedForFuture") && value.savedForFuture !== true) throw new Error("Bot access receipt savedForFuture must be true when present.");
+  return { answered: true, ...(value.savedForFuture === true ? { savedForFuture: true } : {}) };
 }
 
 export function parseAidenRemoteBotHandoffWaitId(value: unknown, label = "Bot hand-off waitId"): string {
@@ -6596,6 +6598,7 @@ export function parseAidenRemoteBotIssue(value: unknown): AidenRemoteBotIssue {
     throw new Error("Bot issue actions must list at most 2 entries.");
   }
   const actions = value.actions.map(parseAidenRemoteBotIssueAction);
+  if (kind !== "access_needed" && actions.some((action) => action.kind === "dismiss_access")) throw new Error("Only access issues can offer Not now.");
   const resolved = requiredBooleanValue(value.resolved, "Bot issue resolved");
   // A settled card offers nothing a phone may take: every action acted.
   if (resolved && actions.length > 0) throw new Error("Bot issue resolved must not offer actions.");

@@ -1,4 +1,6 @@
-import { createBotAccessRequests } from "./bot-runtime/bot-access-requests.js";
+import { BotAccessRequestStaleError, createBotAccessRequests } from "./bot-runtime/bot-access-requests.js";
+import { createBotAccessAuthorizer } from "./bot-runtime/bot-access-authorization.js";
+import { createBotRunAccess } from "./bot-runtime/bot-run-access.js";
 import { accessRequestPrompt } from "./bot-runtime/test-support/access-request-fixtures.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -3945,4 +3947,71 @@ test("public open issue counts exclude hidden access requests for nonholders", a
     assert.equal(await service.openIssueCount(BOT_ID), 1);
     assert.equal(await service.openIssueCount(BOT_ID, { accessRequests: true }), 2);
   } finally { await service.close(); }
+});
+
+test("stale access policy or inode returns retryable 409 on same-key replay without ledger internal_error", async () => {
+  for (const reason of ["policy", "inode"]) {
+    const bridge = createBotAccessRequests(), store = createBotRunAccess({now:Date.now});
+    let revision = "rev-1", inode = "2";
+    const authorize = createBotAccessAuthorizer({now:Date.now,audienceId:"desktop",runAccess:store,
+      revalidate:async (_id,expected)=>{if(expected!==revision) throw new BotAccessRequestStaleError("policy changed");},
+      resolveTarget:async()=>({kind:"folder",root:"/home/person/Documents/Taxes",label:"Taxes",place:"~/Documents/Taxes",device:"1",inode,always:{kind:"new"}}),
+      grantFolder:async()=>{throw new Error("must not save");},changed(){}
+    });
+    const service = new AidenRemoteBotSessionService({
+      bots: botService(), runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+      accessRequests: bridge,
+      answerAccessRequest: async (botId, waitId, choice) => ({ answered: await bridge.answer(botId, waitId, choice, authorize) === "answered" }),
+    });
+    const controller = new AbortController();
+    const owner = {signal:controller.signal,deadline:Date.now()+60_000,validate:async()=>{}};
+    const waiting = bridge.request(accessRequestPrompt({ botId: BOT_ID, owner }));
+    const withdrawn = assert.rejects(waiting, BotAccessRequestStaleError);
+    const id = bridge.pending()[0]!.waitId;
+    if(reason==="policy") revision="rev-2"; else inode="3";
+    try {
+      await assert.rejects(service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"stale-access-key-001",{choice:"once"}), (e:{code?:string;status?:number;retryable?:boolean})=>e.code==="access_request_expired"&&e.status===409&&e.retryable===true);
+      await assert.rejects(service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"stale-access-key-001",{choice:"once"}), (e:{code?:string;status?:number})=>e.code==="access_request_expired"&&e.status===409);
+      await withdrawn; assert.deepEqual(bridge.pending(),[]);
+      assert.equal(store.location(BOT_ID,["run-1"],revision),undefined);
+      const input=accessRequestPrompt({botId:BOT_ID,owner});
+      const fresh=bridge.request({...input,authorization:{...input.authorization,policyRevision:revision,identity:{device:"1",inode}}});
+      const freshId=bridge.pending()[0]!.waitId; assert.notEqual(freshId,id);
+      assert.deepEqual(await service.answerAccessRequest(DEVICE_ID,BOT_ID,freshId,"stale-access-key-002",{choice:"once"}),{answered:true});
+      await fresh; assert.equal(store.location(BOT_ID,["run-1"],revision)?.root,"/home/person/Documents/Taxes");
+    } finally { await service.close(); }
+  }
+});
+test("saved access receipt replays after card disappears without executing authority twice", async () => {
+  const bridge = createBotAccessRequests(); let effects = 0;
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(), runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+    accessRequests: bridge,
+    answerAccessRequest: async (botId, waitId, choice) => {
+      const result = await bridge.answer(botId, waitId, choice, async () => { effects++; return { savedForFuture: true }; });
+      return { answered: result === "saved_for_future", ...(result === "saved_for_future" ? { savedForFuture: true as const } : {}) };
+    },
+  });
+  const asked = bridge.request(accessRequestPrompt({ botId: BOT_ID })); const id = bridge.pending()[0]!.waitId;
+  try {
+    const receipt = { answered: true, savedForFuture: true };
+    assert.deepEqual(await service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "saved-access-key-001", { choice: "always" }), receipt);
+    await asked;
+    assert.deepEqual(await service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "saved-access-key-001", { choice: "always" }), receipt);
+    assert.deepEqual(await service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "saved-access-key-002", { choice: "always" }), receipt);
+    assert.equal(effects, 1);
+  } finally { await service.close(); }
+});
+
+test("a known pre-grant stale access issue refusal stays typed and its same-key retry can observe settlement", async () => {
+  const host = issueHost(); let attempts = 0;
+  const service = issueSession({...host.service, act: async () => {
+    if (++attempts === 1) throw new BotAccessRequestStaleError("This folder request changed. Ask again.");
+    return "not_open" as const;
+  }});
+  try {
+    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"stale-issue-key-001",{action:{kind:"allow_folder"}},{accessRequests:true}),
+      (error:{code?:string;status?:number;retryable?:boolean})=>error.code==="operation_stale"&&error.status===409&&error.retryable===true);
+    assert.deepEqual(await service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"stale-issue-key-001",{action:{kind:"allow_folder"}},{accessRequests:true}),{result:"not_open"});
+  } finally {await service.close();}
 });

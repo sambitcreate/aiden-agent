@@ -30,8 +30,9 @@ export function useBotAccessRequestActions(botId: string, waitId: string | undef
     const key = cardKey(botId, pending.waitId);
     adjust(key, 1);
     try {
-      const { answered } = await botsApi.answerAccessRequest(botId, pending.waitId, choice);
+      const { answered, savedForFuture } = await botsApi.answerAccessRequest(botId, pending.waitId, choice);
       if (!answered) toast.error("That card was already answered or closed.");
+      else if (savedForFuture) toast.success("Saved for future tasks.");
       // Only the host's fresh projection removes a card. A response never
       // fabricates a grant or hides a failed authorization attempt.
     } catch (error) {

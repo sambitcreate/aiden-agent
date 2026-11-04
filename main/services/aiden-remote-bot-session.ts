@@ -1,5 +1,5 @@
 import type { BotAccessChoice } from "../../renderer/shared/bot-access-requests.js";
-import type { BotAccessRequests } from "./bot-runtime/bot-access-requests.js";
+import { BotAccessRequestStaleError, type BotAccessRequests } from "./bot-runtime/bot-access-requests.js";
 import { botMessageRowLabel, botMessageStatusLine } from "../../renderer/shared/bot-messages.js";
 // Remote surface of the durable Bot runtime (contract revision 25).
 //
@@ -257,7 +257,7 @@ export interface AidenRemoteBotSessionServiceOptions {
    */
   handoffs?: Pick<BotHandoffs, "pending" | "get" | "answer" | "onChange">;
   accessRequests?: Pick<BotAccessRequests, "pending" | "get" | "onChange">;
-  answerAccessRequest?(botId: string, waitId: string, choice: BotAccessChoice): Promise<{ answered: boolean }>;
+  answerAccessRequest?(botId: string, waitId: string, choice: BotAccessChoice): Promise<{ answered: boolean; savedForFuture?: true }>;
   /** Revision 37: bring the hand-off forward on the Mac (`openBotHandoffById(botId, waitId, "phone")`). */
   openHandoffOnMac?(botId: string, waitId: string): Promise<BotHandoffOpened>;
   /**
@@ -2054,11 +2054,18 @@ export class AidenRemoteBotSessionService {
       () => answerOrRefuseUnchanged(async () => {
         const prompt = this.options.accessRequests!.get(bot.id, id);
         const expired = () => new AidenRemoteServiceError("access_request_expired", "This access request is no longer waiting.", 409);
-        if (!prompt) throw expired();
-        if (!prompt.choices.includes(parsed.choice)) throw new AidenRemoteServiceError("invalid_request", "That answer doesn't match the card.", 400);
-        const receipt = await this.options.answerAccessRequest!(bot.id, id, parsed.choice);
+        // An Always retry may acknowledge its exact durable operation even
+        // after the owner removed the prompt. The port never recreates access.
+        if (!prompt && parsed.choice !== "always") throw expired();
+        if (prompt && !prompt.choices.includes(parsed.choice)) throw new AidenRemoteServiceError("invalid_request", "That answer doesn't match the card.", 400);
+        let receipt;
+        try { receipt = await this.options.answerAccessRequest!(bot.id, id, parsed.choice); }
+        catch (error) {
+          if (error instanceof BotAccessRequestStaleError) throw new AidenRemoteServiceError("access_request_expired", error.message, 409, true);
+          throw error;
+        }
         if (!receipt.answered) throw expired();
-        return { answered: true as const };
+        return { answered: true as const, ...(receipt.savedForFuture ? { savedForFuture: true as const } : {}) };
       }),
     );
   }
@@ -2164,7 +2171,7 @@ export class AidenRemoteBotSessionService {
   ): Promise<AidenRemoteBotIssueActReceipt> {
     const issues = this.issueService();
     const parsed = parseOrInvalid(parseAidenRemoteBotIssueActRequest, input, "The issue action is invalid.");
-    if (options.accessRequests !== true && (parsed.action.kind === "allow_folder" || (await issues.list(botId)).some((issue) => issue.id === issueId && issue.kind === "access_needed"))) throw new AidenRemoteServiceError("capability_denied", "This card requires bot:access-requests.", 403);
+    if (options.accessRequests !== true && (parsed.action.kind === "allow_folder" || parsed.action.kind === "dismiss_access" || (await issues.list(botId)).some((issue) => issue.id === issueId && issue.kind === "access_needed"))) throw new AidenRemoteServiceError("capability_denied", "This card requires bot:access-requests.", 403);
     if (typeof issueId !== "string" || !BOT_ISSUE_ID_PATTERN.test(issueId)) {
       throw new AidenRemoteServiceError("invalid_request", "The Bot issue is invalid.", 400);
     }
@@ -2174,7 +2181,14 @@ export class AidenRemoteBotSessionService {
       { deviceId, route: "POST /bots/{id}/issues/{issueId}/act", resourceId: `${bot.id}:${id}`, key },
       parsed,
       async () => {
-        const result = await issues.act(bot.id, id, parsed.action);
+        let result;
+        try { result = await issues.act(bot.id, id, parsed.action); }
+        catch (error) {
+          if (error instanceof BotAccessRequestStaleError) throw new AidenOperationNotExecutedError(
+            new AidenRemoteServiceError("operation_stale", error.message, 409, true),
+          );
+          throw error;
+        }
         if (result === "invalid") {
           // Nothing ran: the same key is checked again after the card refreshes.
           throw new AidenOperationNotExecutedError(

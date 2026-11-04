@@ -1,7 +1,7 @@
 import os from "node:os";
 import { app, ipcMain } from "../../platform.js";
 import type { BotAccessChoice } from "../../../renderer/shared/bot-access-requests.js";
-import { createBotAccessRequests } from "./bot-access-requests.js";
+import { BotAccessRequestStaleError, createBotAccessRequests } from "./bot-access-requests.js";
 import { createBotAccessAuthorizer } from "./bot-access-authorization.js";
 import { resolveBotAccessTarget } from "./bot-access-target.js";
 
@@ -12,7 +12,7 @@ export async function answerBotAccessRequest(
   botId: string,
   waitId: string,
   choice: BotAccessChoice,
-): Promise<{ answered: boolean }> {
+): Promise<{ answered: boolean; savedForFuture?: true }> {
   // The bridge must initialize before the session runtime subscribes. Loading
   // tool sources here avoids a bridge → sources → session → bridge cycle.
   const [application, capabilities, authority, sources] = await Promise.all([
@@ -25,6 +25,7 @@ export async function answerBotAccessRequest(
   const { botCapabilityStore } = capabilities;
   const { BOT_DESKTOP_AUDIENCE_ID, botRuntimeAuthority } = authority;
   const { botRunAccess } = sources;
+  if (choice === "always" && !botAccessRequests.get(botId, waitId) && await botApplicationService.botFolderGrantCommitted(botId, waitId)) return { answered: true, savedForFuture: true };
   const authorize = createBotAccessAuthorizer({
     now: Date.now,
     audienceId: BOT_DESKTOP_AUDIENCE_ID,
@@ -40,9 +41,9 @@ export async function answerBotAccessRequest(
       }),
     revalidate: async (id, expectedRevision) => {
       if ((await botCapabilityStore.getBotPolicy(id)).revision !== expectedRevision)
-        throw new Error("This Bot's access changed. Ask for access again.");
+        throw new BotAccessRequestStaleError("This Bot's access changed. Ask for access again.");
       const chat = await botApplicationService.getCanonicalChat(id);
-      if (!chat) throw new Error("This Bot's task is no longer available.");
+      if (!chat) throw new BotAccessRequestStaleError("This Bot's task is no longer available.");
       const admission = await botRuntimeAuthority.admit({
         audienceId: BOT_DESKTOP_AUDIENCE_ID,
         botId: id,
@@ -54,7 +55,7 @@ export async function answerBotAccessRequest(
           admission.authority.files.mode !== "scoped" ||
           (await botCapabilityStore.getBotPolicy(id)).revision !== expectedRevision
         )
-          throw new Error("This Bot's access changed. Ask for access again.");
+          throw new BotAccessRequestStaleError("This Bot's access changed. Ask for access again.");
         await admission.revalidateBeforeEffect();
       } finally {
         admission.release();
@@ -64,9 +65,10 @@ export async function answerBotAccessRequest(
       await botApplicationService.grantBotFolder(input, owner);
       return botApplicationService.botFolderGrantPolicyRevision(input.botId, input.operationId);
     },
+    folderCommitted: (id, operationId) => botApplicationService.botFolderGrantCommitted(id, operationId),
     changed: (id) => ipcMain.broadcast("bots:changed", { botId: id }),
   });
   const outcome = await botAccessRequests.answer(botId, waitId, choice, authorize);
   if (outcome === "invalid") throw new Error("That answer doesn’t match the card.");
-  return { answered: outcome === "answered" };
+  return { answered: outcome === "answered" || outcome === "saved_for_future", ...(outcome === "saved_for_future" ? { savedForFuture: true } : {}) };
 }

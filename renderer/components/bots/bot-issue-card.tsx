@@ -47,6 +47,8 @@ export function botIssueActionLabel(action: BotIssueAction): string {
       return "Open chat";
     case "allow_folder":
       return "Allow this folder";
+    case "dismiss_access":
+      return "Not now";
   }
 }
 

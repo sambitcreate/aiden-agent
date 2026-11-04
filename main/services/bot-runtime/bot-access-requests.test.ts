@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createBotAccessRequests, type BotAccessRequestPrompt } from "./bot-access-requests.js";
+import { BotAccessRequestStaleError, createBotAccessRequests, type BotAccessRequestPrompt } from "./bot-access-requests.js";
 import { createBotAccessAuthorizer } from "./bot-access-authorization.js";
 import { createBotRunAccess } from "./bot-run-access.js";
 
@@ -54,7 +54,7 @@ test("first answer claims the attempt, immutable authorization runs before settl
   release();
   assert.equal(await answer, "answered");
   assert.deepEqual(await waiting, { choice: "always", waitId: card.waitId });
-  assert.equal(await bridge.answer("ada", card.waitId, "always", async () => {}), "not_waiting");
+  assert.equal(await bridge.answer("ada", card.waitId, "always", async () => {}), "saved_for_future");
 });
 test("unoffered answers and failing authorization keep the card available", async () => {
   const bridge = createBotAccessRequests();
@@ -185,7 +185,12 @@ test("once and Always revalidate immutable policy, inode and owner before issuin
       const fails =
         !["none", "publish-race"].includes(race) ||
         (choice === "always" && race === "publish-race");
-      if (fails) {
+      if (choice === "always" && (race === "publish-race" || race === "late-inode")) {
+        assert.deepEqual(await authorize(card, choice), { savedForFuture: true });
+        assert.equal(store.location("ada", ["r1"], revision), undefined);
+        assert.equal(saves, 1);
+        assert.equal(changes, 1);
+      } else if (fails) {
         await assert.rejects(authorize(card, choice), /changed|active/u);
         assert.equal(store.location("ada", ["r1"], revision), undefined);
         assert.equal(changes, 0);
@@ -255,4 +260,81 @@ test("abort during asynchronous authorization cannot issue a late run grant", as
   await rejected;
   assert.equal(store.location("ada", ["r1"], "rev1"), undefined);
   assert.deepEqual(bridge.pending(), []);
+});
+
+test("Always publication survives owner abort and its retry acknowledges without reauthorizing", async () => {
+  const bridge = createBotAccessRequests(), controller = new AbortController();
+  const store = createBotRunAccess({ now: () => 1 });
+  let published!: () => void, release!: () => void, saves = 0;
+  const committed = new Promise<void>(resolve => { published = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const waiting = bridge.request({ ...prompt, signal: controller.signal,
+    owner: { signal: controller.signal, deadline: Date.now()+60_000, validate: async () => {} } });
+  // A stopped task may reject its tool wait, while the person still receives the durable receipt.
+  const stopped = assert.rejects(waiting, /stop/u);
+  const id = bridge.pending()[0]!.waitId;
+  const answer = bridge.answer("ada", id, "always", createBotAccessAuthorizer({
+    now: () => 1, audienceId: "desktop", runAccess: store,
+    resolveTarget: async () => ({ kind: "folder", root: "/Taxes", label: "Taxes", place: "/Taxes", device: "1", inode: "2", always: { kind: "new" } }),
+    revalidate: async () => {},
+    grantFolder: async () => { saves++; published(); await gate; return "rev2"; }, changed() {},
+  }));
+  await committed; controller.abort(new Error("stop")); release();
+  assert.equal(await answer, "saved_for_future"); await stopped;
+  assert.deepEqual(bridge.pending(), []);
+  assert.equal(store.location("ada", ["r1"], "rev2"), undefined);
+  assert.equal(await bridge.answer("ada", id, "always", async () => { throw new Error("must not regrant"); }), "saved_for_future");
+  assert.equal(saves, 1);
+  assert.equal(await bridge.answer("ada", id, "once", async () => {}), "not_waiting");
+});
+test("known pre-effect stale refusal removes the card; transient errors leave it answerable", async () => {
+  const bridge = createBotAccessRequests();
+  const waiting = bridge.request({ ...prompt, signal: undefined });
+  const withdrawn = assert.rejects(waiting, BotAccessRequestStaleError);
+  const id = bridge.pending()[0]!.waitId;
+  await assert.rejects(bridge.answer("ada", id, "once", async () => { throw new Error("disk busy"); }), /disk busy/u);
+  assert.equal(bridge.pending().length, 1);
+  await assert.rejects(bridge.answer("ada", id, "once", async () => { throw new BotAccessRequestStaleError("folder changed"); }), BotAccessRequestStaleError);
+  await withdrawn; assert.deepEqual(bridge.pending(), []);
+});
+
+test("a retained Always retry acknowledges committed history before stale owner or policy checks", async () => {
+  const bridge = createBotAccessRequests(), controller = new AbortController(), store = createBotRunAccess({now:()=>1});
+  let committed = false, receiptReadable = true, saves = 0;
+  const authorize = createBotAccessAuthorizer({ now:()=>1, audienceId:"desktop", runAccess:store,
+    revalidate: async () => { if (committed) throw new BotAccessRequestStaleError("policy changed after save"); },
+    resolveTarget: async () => ({kind:"folder",root:"/Taxes",label:"Taxes",place:"/Taxes",device:"1",inode:"2",always:{kind:"new"}}),
+    grantFolder: async () => { saves++; committed = true; receiptReadable = false; throw new Error("receipt lookup unavailable"); },
+    folderCommitted: async () => { if (!receiptReadable) throw new Error("journal busy"); return committed; }, changed() {},
+  });
+  const waiting = bridge.request({...prompt, signal:undefined, owner:{signal:controller.signal,deadline:Date.now()+60_000,validate:async()=>{}}});
+  const id = bridge.pending()[0]!.waitId;
+  await assert.rejects(bridge.answer("ada",id,"always",authorize), /journal busy/u);
+  assert.equal(bridge.pending()[0]!.waitId,id);
+  receiptReadable = true; controller.abort();
+  assert.equal(await bridge.answer("ada",id,"always",authorize), "saved_for_future");
+  assert.deepEqual(await waiting,{choice:"always",waitId:id,savedForFuture:true});
+  assert.equal(saves,1); assert.equal(store.location("ada",["r1"],"rev1"),undefined);
+});
+test("post-publication owner invalidation settles live tool wait with saved-for-future receipt", async () => {
+  const bridge = createBotAccessRequests(), store = createBotRunAccess({now:()=>1});
+  let current = true;
+  const controller = new AbortController();
+  const waiting = bridge.request({...prompt, signal:controller.signal, owner:{signal:controller.signal,deadline:Date.now()+60_000,validate:async()=>{if(!current) throw new BotAccessRequestStaleError("owner changed");}}});
+  const id = bridge.pending()[0]!.waitId;
+  const result = await bridge.answer("ada",id,"always",createBotAccessAuthorizer({now:()=>1,audienceId:"desktop",runAccess:store,
+    revalidate:async()=>{}, resolveTarget:async()=>({kind:"folder",root:"/Taxes",label:"Taxes",place:"/Taxes",device:"1",inode:"2",always:{kind:"new"}}),
+    grantFolder:async()=>{current=false;return"rev2";},changed(){}
+  }));
+  assert.equal(result,"saved_for_future"); assert.equal((await waiting).savedForFuture,true);
+  assert.deepEqual(bridge.pending(),[]); assert.equal(store.location("ada",["r1"],"rev2"),undefined);
+});
+
+test("abort between successful Always authorization and bridge settlement still acknowledges publication", async () => {
+  const bridge=createBotAccessRequests(),controller=new AbortController();
+  const waiting=bridge.request({...prompt,signal:controller.signal});
+  const stopped=assert.rejects(waiting,/stop/u); const id=bridge.pending()[0]!.waitId;
+  assert.equal(await bridge.answer("ada",id,"always",async()=>{controller.abort(new Error("stop"));}),"saved_for_future");
+  await stopped;
+  assert.equal(await bridge.answer("ada",id,"always",async()=>{throw new Error("must not publish twice");}),"saved_for_future");
 });

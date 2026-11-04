@@ -11,7 +11,7 @@ import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
 import { recordingDeps } from "./test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor } from "./test-support/faux.js";
 import { botAccessRequestCandidate, BOT_ACCESS_REQUEST_MEMO } from "./bot-access-request-tool.js";
-import { createBotAccessRequests } from "./bot-access-requests.js";
+import { BotAccessRequestStaleError, createBotAccessRequests } from "./bot-access-requests.js";
 import { createBotAccessAuthorizer } from "./bot-access-authorization.js";
 import { createBotRunAccess } from "./bot-run-access.js";
 import { resolveBotAccessTarget } from "./bot-access-target.js";
@@ -85,6 +85,7 @@ async function fixture(t: import("node:test").TestContext) {
     resolveTarget,
     currentLocations,
     policyRevision: async () => revision,
+    resolveIssue: (id, key, resolution) => issues.resolve(id, key, resolution),
     raiseIssue: async (input) => {
       raised.push(input);
       return issues.raise(input);
@@ -114,7 +115,7 @@ async function fixture(t: import("node:test").TestContext) {
     runAccess,
     resolveTarget,
     revalidate: async (_id, expected) => {
-      if (!scoped || revision !== expected) throw new Error("policy changed");
+      if (!scoped || revision !== expected) throw new BotAccessRequestStaleError("policy changed");
     },
     grantFolder: async (input, owner) => {
       owner.assertCurrent();
@@ -222,11 +223,11 @@ test("unattended routine, Telegram, Bot request/reply and joined runs raise issu
     assert.equal(app.requests.pending().length, 0);
     assert.equal(app.raised.length, 1);
     assert.equal(app.raised[0]!.kind, "access_needed");
-    assert.deepEqual(app.raised[0]!.actions, [{ kind: "allow_folder" }]);
+    assert.deepEqual(app.raised[0]!.actions, [{ kind: "dismiss_access" }, { kind: "allow_folder" }]);
     assert.equal(app.raised[0]!.access!.authorization.policyRevision, "rev1");
     app.raised.length = 0;
     await app.execute({ path: "whole_mac", why: "Need files" });
-    assert.deepEqual(app.raised[0]!.actions, [{ kind: "open_settings", section: "access" }]);
+    assert.deepEqual(app.raised[0]!.actions, [{ kind: "dismiss_access" }, { kind: "open_settings", section: "access" }]);
     assert.equal(app.raised[0]!.access!.folderPath, undefined);
   }
 });
@@ -320,31 +321,41 @@ test("independent write authority needs no card; a read grant needs a separate w
   assert.equal((await app.execute()).details?.outcome, "already_allowed");
   assert.equal(app.requests.pending().length, 0);
 });
-test("Stop withdraws; stale policy, inode replacement, Files off and newly unattended ownership grant nothing", async (t) => {
-  for (const race of ["policy", "inode", "off", "unattended", "stop"] as const) {
-    const app = await fixture(t),
-      controller = new AbortController(),
-      waiting = app.execute(undefined, controller);
-    const rejected = race === "stop" ? assert.rejects(waiting, /Stop/u) : undefined;
-    await waitFor(() => app.requests.pending().length === 1);
-    if (race === "policy") app.setRevision("rev-changed");
-    if (race === "inode") {
-      await fs.rename(app.root, app.root + "old");
-      await fs.mkdir(app.root);
+test("known stale policy or inode withdraws without declining and a new attempt can approve", async (t) => {
+  for (const race of ["policy", "inode", "off", "unattended"] as const) {
+    for (const choice of ["once", "always", "not_now"] as const) {
+      const app = await fixture(t), waiting = app.execute();
+      await waitFor(() => app.requests.pending().length === 1);
+      const oldId = app.requests.pending()[0]!.waitId;
+      if (race === "policy") app.setRevision("rev-changed");
+      if (race === "inode") { await fs.rename(app.root, app.root + "old"); await fs.mkdir(app.root); }
+      if (race === "off") app.setScoped(false);
+      if (race === "unattended") app.setIds(["r1", "routine:task:1"]);
+      await assert.rejects(app.answer(choice), BotAccessRequestStaleError);
+      assert.equal((await waiting).details?.outcome, "access_changed");
+      assert.equal(app.requests.pending().length, 0);
+      assert.equal(app.runAccess.declined(BOT, ["r1"], app.root), false);
+      assert.equal(app.runAccess.location(BOT, ["r1"], app.revision()), undefined);
+      app.setScoped(true); app.setIds(["r1"]);
+      const fresh = app.execute();
+      await waitFor(() => app.requests.pending().length === 1);
+      assert.notEqual(app.requests.pending()[0]!.waitId, oldId);
+      await app.answer("once"); await fresh;
+      assert.equal(app.runAccess.location(BOT, ["r1"], app.revision())?.root, app.root);
     }
-    if (race === "off") app.setScoped(false);
-    if (race === "unattended") app.setIds(["r1", "routine:task:1"]);
-    if (race === "stop") {
-      controller.abort(new Error("Stop"));
-      await rejected;
-    } else {
-      await assert.rejects(app.answer("once"), /changed|attended/u);
-      assert.equal(app.requests.pending().length, 1);
-      await app.answer("not_now");
-      await waiting;
-    }
-    assert.equal(app.runAccess.location(BOT, ["r1"], app.revision()), undefined);
   }
+});
+test("already allowed refreshes the live location used by previously bound file tools", async (t) => {
+  const app = await fixture(t);
+  const read = app.fileTool("read_file");
+  app.setRevision("saved-policy");
+  app.setFixed([{ id: "new-fixed-root", label: "Taxes", root: app.root }]);
+  const result = await app.execute();
+  assert.equal(result.details?.outcome, "already_allowed");
+  assert.match(JSON.stringify(result.content), /run.access/u);
+  const answer = await read.execute("read", { location: "run.access", path: "report.txt" });
+  assert.match(JSON.stringify(answer.content), /original/u);
+  assert.equal(app.requests.pending().length, 0);
 });
 test("invalid params and private/root targets never raise an issue or a card", async (t) => {
   const app = await fixture(t);
@@ -459,4 +470,15 @@ test("Allow once then quit before durable result commit requires a fresh decisio
   } finally {
     await after.host.shutdown();
   }
+});
+
+test("person-approved fixed access settles the matching unattended issue without reviving its old run", async (t) => {
+  const app = await fixture(t); app.setIds(["routine:t1:1"]);
+  await app.execute(); const old = (await app.issues.list(BOT,{open:true}))[0]!;
+  app.setRevision("saved-policy"); app.setFixed([{id:"taxes",label:"Taxes",root:app.root}]); app.setIds(["r2"]);
+  assert.equal((await app.execute()).details?.outcome,"already_allowed");
+  assert.deepEqual(await app.issues.list(BOT,{open:true}),[]);
+  assert.equal((await app.issues.list(BOT)).find(issue=>issue.id===old.id)?.resolution,"fixed");
+  assert.equal(app.runAccess.location(BOT,["routine:t1:1"],"saved-policy"),undefined);
+  assert.equal(app.runAccess.location(BOT,["r2"],"saved-policy")?.root,app.root);
 });

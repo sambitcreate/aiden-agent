@@ -16,7 +16,8 @@ export type BotIssueAction =
   | { kind: "stop_run" }
   | { kind: "keep_waiting" }
   | { kind: "open_chat" }
-  | { kind: "allow_folder" };
+  | { kind: "allow_folder" }
+  | { kind: "dismiss_access" };
 // A saved folder approval never resumes the issue's original run.
 
 export type BotIssueResolution = "fixed" | "dismissed" | "superseded";
@@ -110,7 +111,7 @@ function timestamp(value: unknown): number | undefined {
 }
 
 type IssueKindForAccess<Access extends boolean> = Access extends true ? BotIssueKind : Exclude<BotIssueKind, "access_needed">;
-type IssueActionForAccess<Access extends boolean> = Access extends true ? BotIssueAction : Exclude<BotIssueAction, { kind: "allow_folder" }>;
+type IssueActionForAccess<Access extends boolean> = Access extends true ? BotIssueAction : Exclude<BotIssueAction, { kind: "allow_folder" | "dismiss_access" }>;
 
 /** Legacy wire parsers keep their closed vocabulary until explicitly opted in. */
 export function botIssueKindOf<Access extends boolean = false>(value: unknown, accessRequests?: Access): IssueKindForAccess<Access> | null {
@@ -152,6 +153,7 @@ function parseIssueAction(value: unknown, accessRequests: boolean): BotIssueActi
     case "open_chat":
       return exact(value, ["kind"]) ? { kind } : null;
     case "allow_folder":
+    case "dismiss_access":
       return accessRequests && exact(value, ["kind"]) ? { kind } : null;
     default:
       return null;
@@ -184,6 +186,7 @@ export function botIssueOf(value: unknown, botId?: string): BotIssue | null {
   for (const item of fields.actions) {
     const action = botIssueActionOf(item, true);
     if (action === null) return null;
+    if (kind !== "access_needed" && (action.kind === "allow_folder" || action.kind === "dismiss_access")) return null;
     actions.push(action);
   }
   const resolvedAt = fields.resolvedAt === undefined ? undefined : timestamp(fields.resolvedAt);

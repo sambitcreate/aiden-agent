@@ -41,15 +41,18 @@ export interface BotAccessTargetDeps {
     stat(p: string): Promise<{ dev: bigint; ino: bigint; isDirectory(): boolean }>;
   };
 }
+type AccessInventoryRoot = Pick<AidenRemoteApprovedRoot, "id" | "folderPath"> & Partial<Pick<AidenRemoteApprovedRoot, "device" | "inode">>;
 export function botAccessRootInventoryRevision(
-  roots: readonly Pick<AidenRemoteApprovedRoot, "id" | "folderPath">[],
+  roots: readonly AccessInventoryRoot[],
+  targetRoot: string,
 ): string {
   return createHash("sha256")
     .update(
       JSON.stringify(
-        roots
-          .map(({ id, folderPath }) => [id, folderPath])
-          .sort((a, b) => (a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0)),
+        [targetRoot, roots
+          .filter(({ folderPath }) => isPathInside(folderPath, targetRoot) || isPathInside(targetRoot, folderPath))
+          .map(({ id, folderPath, device, inode }) => [id, folderPath, device, inode])
+          .sort((a, b) => (a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0))],
       ),
     )
     .digest("hex");
@@ -82,16 +85,17 @@ export async function resolveBotAccessTarget(
       identity = await filesystem.stat(root);
     }
     if (!identity.isDirectory()) return { kind: "refused", reason: "not_found" };
-  } catch {
+  } catch (error) {
+    if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
     return { kind: "refused", reason: "not_found" };
   }
   if (root === path.parse(root).root) return { kind: "refused", reason: "filesystem_root" };
+  const realHome = await filesystem.realpath(home).catch(() => path.resolve(home));
   for (const privateRoot of deps.privateRoots()) {
     // Keep the lexical guard even when a private directory has not been provisioned yet.
     const canonical = await filesystem.realpath(privateRoot).catch(() => path.resolve(privateRoot));
-    if (isPathInside(canonical, root)) return { kind: "refused", reason: "private" };
+    if (isPathInside(canonical, root) || (root !== realHome && isPathInside(root, canonical))) return { kind: "refused", reason: "private" };
   }
-  const realHome = await filesystem.realpath(home).catch(() => path.resolve(home));
   const roots = await deps.approvedRoots();
   let always: BotAccessAlways = { kind: "new" };
   if (root === realHome) always = { kind: "none", reason: "home" };
@@ -123,7 +127,7 @@ export async function resolveBotAccessTarget(
     device: String(identity.dev),
     inode: String(identity.ino),
     always,
-    inventoryRevision: botAccessRootInventoryRevision(roots),
+    inventoryRevision: botAccessRootInventoryRevision(roots, root),
   };
 }
 export function coveredByBotLocations(

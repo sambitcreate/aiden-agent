@@ -1757,16 +1757,20 @@ final class AidenRemoteClientTests: XCTestCase {
         for (choice, expected) in [(AidenBotAccessChoice.notNow, "not_now"), (.always, "always"), (.once, "once")] {
             let key = UUID()
             let waitID = "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e"
+            let response = choice == .always
+                ? String(decoding: try botFixtureData(at: ["botAccessRequests", "answer", "response"]), as: UTF8.self)
+                : #"{"answered":true}"#
             AidenRemoteMockURLProtocol.handler = { request in
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/bot_fixture_01/access-requests/\(waitID)/answer")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key")?.lowercased(), key.uuidString.lowercased())
                 XCTAssertEqual(try Self.jsonBody(request) as NSDictionary, ["choice": expected] as NSDictionary)
-                return Self.response(for: request, status: 200, json: #"{"answered":true}"#)
+                return Self.response(for: request, status: 200, json: response)
             }
             let receipt = try await makeClient().answerBotAccessRequest(botId: "bot_fixture_01", waitId: waitID,
                 request: AidenBotAccessAnswerRequest(choice: choice), idempotencyKey: key)
             XCTAssertTrue(receipt.answered)
+            XCTAssertEqual(receipt.savedForFuture, choice == .always ? true : nil)
         }
     }
 

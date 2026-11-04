@@ -4,6 +4,7 @@ import { nextBotFileScopeIds } from "../../renderer/shared/bot-capabilities.js";
 import { botAccessRootInventoryRevision, resolveBotAccessTarget, type BotAccessTargetDeps } from "./bot-runtime/bot-access-target.js";
 import type { AidenRemoteApprovedRoot } from "./aiden-remote-state.js";
 import type { BotFolderGrantInput, BotFolderGrantJournal, BotFolderGrantRecord } from "./bot-folder-grant-journal.js";
+import { BotAccessRequestStaleError } from "./bot-runtime/bot-access-requests.js";
 import { BotRuntimeInventoryLeaseInvalidError } from "./bot-runtime-inventory-lease.js";
 import type {
   BotAccessUpdate,
@@ -799,7 +800,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
 
   const initialize = async (): Promise<void> => {
     await deps.capabilityStore.initialize();
-    await recoverFolderGrants();
+    await recoverFolderGrants(true);
     for (const operation of await deps.lifecycleJournal.listPending()) {
       await deps.mutationGate.run(operation.botId, () => reconcileOperation(operation));
     }
@@ -1402,11 +1403,21 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     await folders.journal.put({ ...record, state: "rolled_back" });
   };
 
-  const recoverFolderGrants = async (): Promise<void> => {
+  const recoverFolderGrants = async (isolateInitialReadFailure = false): Promise<void> => {
     const folders = deps.approvedFolders;
     if (!folders) return;
     await folders.withInventoryLock(async () => {
-      for (const record of await folders.journal.list()) await recoverFolderRecord(record);
+      let records: BotFolderGrantRecord[];
+      try {
+        records = await folders.journal.list();
+      } catch (error) {
+        // No recovery mutation has begun. A broken or unreadable journal is
+        // not authority and fences grants on their next recovery check only.
+        if (isolateInitialReadFailure) return;
+        throw error;
+      }
+      // Once recovery begins mutating, failures keep the ordinary lifecycle fence.
+      for (const record of records) await recoverFolderRecord(record);
     });
   };
 
@@ -1421,22 +1432,22 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     );
     if (
       input.expectedInventoryRevision &&
-      botAccessRootInventoryRevision(inventory) !== input.expectedInventoryRevision
+      botAccessRootInventoryRevision(inventory, input.folderPath) !== input.expectedInventoryRevision
     )
-      throw new Error("The approved folders changed. Ask for access again.");
+      throw new BotAccessRequestStaleError("The approved folders changed. Ask for access again.");
     if (
       target.kind !== "folder" ||
       target.root !== input.folderPath ||
       target.device !== input.expectedIdentity.device ||
       target.inode !== input.expectedIdentity.inode
     )
-      throw new Error("That folder changed. Ask for access again.");
+      throw new BotAccessRequestStaleError("That folder changed. Ask for access again.");
     if (
       target.always.kind === "none" ||
       (target.always.kind === "existing" && target.always.rootId !== allowedRootId) ||
       (allowedRootId && target.always.kind !== "existing")
     )
-      throw new Error("The approved folders changed. Ask for access again.");
+      throw new BotAccessRequestStaleError("The approved folders changed. Ask for access again.");
     if (allowedRootId) {
       const root = (await folders.list()).find((entry) => entry.id === allowedRootId);
       if (
@@ -1445,7 +1456,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         root.device !== target.device ||
         root.inode !== target.inode
       )
-        throw new Error("That folder changed. Ask for access again.");
+        throw new BotAccessRequestStaleError("That folder changed. Ask for access again.");
     }
     return target;
   };
@@ -1473,7 +1484,14 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           !(await folderRootSelected(input.botId, prior.rootId))
         )
           throw new Error("This Bot's access changed. Ask for access again.");
-        await validateFolder(input, prior.rootId);
+        try {
+          await validateFolder(input, prior.rootId);
+        } catch (error) {
+          // This operation already published authority. A replay refusal must
+          // not claim that the original decision had no durable effect.
+          if (error instanceof BotAccessRequestStaleError) throw new Error(error.message);
+          throw error;
+        }
         return "already_allowed";
       }
       return withFreshInventoryLease(async (leaseAssert) => {
@@ -1490,11 +1508,11 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
             current.accessMode !== "custom" ||
             !current.custom.fileScopeIds.length
           )
-            throw new Error("This Bot's access changed. Ask for access again.");
+            throw new BotAccessRequestStaleError("This Bot's access changed. Ask for access again.");
         };
         await requirePolicy();
         if (policy.accessMode !== "custom")
-          throw new Error("This Bot's access changed. Ask for access again.");
+          throw new BotAccessRequestStaleError("This Bot's access changed. Ask for access again.");
         await validateFolder(input, input.rootId);
         const chat = await canonicalChatForBot(input.botId);
         const snapshot = await snapshotForAudience(input.audienceId, input.botId, [
@@ -1507,7 +1525,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
               option.kind === "full_mac" && policy.custom.fileScopeIds.includes(option.id),
           )
         )
-          throw new Error("This Bot's access changed. Ask for access again.");
+          throw new BotAccessRequestStaleError("This Bot's access changed. Ask for access again.");
         const savedBinding = await deps.capabilityStore.getBotBinding(input.botId);
         if (
           !savedBinding ||
@@ -1543,7 +1561,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
               assertCurrent,
             });
             if (root.id !== rootId)
-              throw new Error("The approved folders changed. Ask for access again.");
+              throw new BotAccessRequestStaleError("The approved folders changed. Ask for access again.");
           }
           await requirePolicy();
           await validateFolder(input, rootId);
@@ -1631,6 +1649,13 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
 
   const service = {
     grantBotFolder,
+    /** A receipt acknowledges a past durable effect; it never authorizes a tool call. */
+    async botFolderGrantCommitted(botId: string, operationId: string): Promise<boolean> {
+      return (await deps.approvedFolders?.journal.list())?.some((entry) =>
+        entry.input.operationId === operationId && entry.input.botId === botId &&
+        entry.input.audienceId === "desktop:local" && entry.state === "committed",
+      ) ?? false;
+    },
     /** The exact publication receipt; answer handlers never adopt a fresh revision. */
     async botFolderGrantPolicyRevision(botId: string, operationId: string): Promise<string> {
       const record = (await deps.approvedFolders?.journal.list())?.find((entry) => entry.input.operationId === operationId && entry.input.botId === botId && entry.state === "committed");

@@ -1125,6 +1125,9 @@ export class AidenRemoteStateRegistry {
         throw new Error("This approved root already exists.");
       }
       if (draft.approvedRoots.some((candidate) => {
+        // An explicit phone approval may overlap a separate hidden Bot root.
+        // Keep exact paths unique and keep Bot-created roots from widening scope.
+        if (!root.botsOnly && candidate.botsOnly && candidate.folderPath !== root.folderPath) return false;
         const a = path.relative(candidate.folderPath, root.folderPath), b = path.relative(root.folderPath, candidate.folderPath);
         const contains = (relative: string) => relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
         return contains(a) || contains(b);

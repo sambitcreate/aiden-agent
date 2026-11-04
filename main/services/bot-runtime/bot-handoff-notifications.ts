@@ -1,4 +1,4 @@
-import { botAccessCardTitle, type BotPendingAccessRequest } from "../../../renderer/shared/bot-access-requests.js";
+import { type BotPendingAccessRequest } from "../../../renderer/shared/bot-access-requests.js";
 import type { BotAccessRequests } from "./bot-access-requests.js";
 // The Mac notification for a hand-off card (plan §4.1, blueprint G24):
 // "Ada needs you to: Enter the 2FA code for your bank". It is posted when a
@@ -75,7 +75,7 @@ export function createBotHandoffNotifier(deps: BotHandoffNotifierDeps): BotHando
         if (deps.isAppFocused()) return false;
         deps.show({
           title: name,
-          body: botHandoffNotificationBody(name, "choices" in prompt ? botAccessCardTitle(name, prompt) : prompt.action),
+          body: botHandoffNotificationBody(name, "choices" in prompt ? `use ${prompt.label}` : prompt.action),
           onClick: () => {
             // Capture both synchronous throws and asynchronous navigation failures.
             void Promise.resolve()

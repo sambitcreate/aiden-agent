@@ -32,7 +32,7 @@ export function toRemoteBotIssue(issue: BotIssue, accessRequests = false): Aiden
       // Settings live on the Mac: the phone may not open them, so the action
       // is left out and the card still shows its title and body. A settled
       // card offers nothing at all, as the store keeps its old actions.
-      actions: resolved ? [] : issue.actions.filter((action) => action.kind !== "open_settings" && (accessRequests || action.kind !== "allow_folder")),
+      actions: resolved ? [] : issue.actions.filter((action) => action.kind !== "open_settings" && (accessRequests || (action.kind !== "allow_folder" && action.kind !== "dismiss_access"))),
       createdAt: new Date(issue.createdAt).toISOString(),
       resolved,
     });

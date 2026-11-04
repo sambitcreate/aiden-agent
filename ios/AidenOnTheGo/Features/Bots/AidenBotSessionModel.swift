@@ -1255,6 +1255,7 @@ final class AidenBotSessionModel {
     var errorMessage: String?
     /// Unsent messages a previous launch left couldn't be read back. Shown until dismissed.
     var restoreNotice: String?
+    private(set) var accessSuccessNotice: String?
 
     @ObservationIgnored private var retainedKeys: [Action: UUID] = [:]
     @ObservationIgnored private let cache: AidenBotSessionCache
@@ -1263,7 +1264,7 @@ final class AidenBotSessionModel {
     @ObservationIgnored private let retryDelays: [Duration]
     @ObservationIgnored private var retainedQuestion: (waitId: String, request: AidenQuestionRespondRequest, key: UUID)?
     @ObservationIgnored private var retainedApproval: (waitId: String, decision: AidenApprovalDecision, key: UUID)?
-    @ObservationIgnored private var retainedAccessAnswer: (waitId: String, request: AidenBotAccessAnswerRequest, key: UUID)?
+    @ObservationIgnored private var retainedAccessAnswers: [String: UUID] = [:]
     @ObservationIgnored private var accessRequestWrites = 0
     @ObservationIgnored private var retainedHandoff: (waitId: String, request: AidenBotHandoffAnswerRequest, key: UUID)?
     @ObservationIgnored private var retainedHandoffOpen: (waitId: String, key: UUID)?
@@ -2193,6 +2194,7 @@ final class AidenBotSessionModel {
         case .stopRun: AidenBotSessionCopy.issueStop
         case .keepWaiting: AidenBotSessionCopy.issueKeepWaiting
         case .allowFolder: "Allow this folder"
+        case .dismissAccess: "Not now"
         }
     }
 
@@ -2269,26 +2271,30 @@ final class AidenBotSessionModel {
         hasLoaded && accessRequest != nil && !inFlight.contains(.answerAccessRequest)
     }
 
-    /// An uncertain answer retains its original body and key, even if the person taps another choice.
+    /// An uncertain retry reuses its key only for the same wait and choice.
     func answerAccessRequest(_ choice: AidenBotAccessChoice) async -> Bool {
         guard canAnswerAccessRequest, let shown = accessRequest, shown.choices.contains(choice) else { return false }
-        let retained = retainedAccessAnswer.flatMap { $0.waitId == shown.waitId ? $0 : nil }
-        let request = retained?.request ?? AidenBotAccessAnswerRequest(choice: choice)
-        let key = retained?.key ?? UUID()
-        retainedAccessAnswer = (shown.waitId, request, key)
+        let action = "\(shown.waitId):\(choice.rawValue)"
+        retainedAccessAnswers = retainedAccessAnswers.filter { $0.key.hasPrefix("\(shown.waitId):") }
+        let request = AidenBotAccessAnswerRequest(choice: choice)
+        let key = retainedAccessAnswers[action] ?? UUID()
+        retainedAccessAnswers[action] = key
+        errorMessage = nil
+        accessSuccessNotice = nil
         let mark = accessRequestWrites
         accessRequest = nil
         inFlight.insert(.answerAccessRequest)
         defer { inFlight.remove(.answerAccessRequest) }
         do {
-            _ = try await aidenBotWithin(requestLimit) { [transport, botID] in
+            let receipt = try await aidenBotWithin(requestLimit) { [transport, botID] in
                 try await transport.answerBotAccessRequest(botId: botID, waitId: shown.waitId, request: request, idempotencyKey: key)
             }
-            retainedAccessAnswer = nil
+            retainedAccessAnswers.removeAll()
             if accessRequest?.waitId == shown.waitId { accessRequest = nil }
+            if receipt.savedForFuture == true { accessSuccessNotice = "Saved for future tasks." }
             return true
         } catch {
-            if !aidenBotSessionFailureIsAmbiguous(error) { retainedAccessAnswer = nil }
+            if !aidenBotSessionFailureIsAmbiguous(error) { retainedAccessAnswers[action] = nil }
             if case let AidenRemoteClientError.server(_, body) = error, body.code.rawValue == "access_request_expired" {
                 if accessRequest?.waitId == shown.waitId { accessRequest = nil }
                 errorMessage = "That card was already answered or closed."

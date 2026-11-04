@@ -177,7 +177,7 @@ test("an access card notifies once per attempt only away from the app; watching 
   const repeat = notifier.opened(card);
   await settle();
   assert.equal(await repeat, false);
-  assert.deepEqual(shown.map((item) => item.body), ["Ada needs you to: Ada wants to use Taxes"]);
+  assert.deepEqual(shown.map((item) => item.body), ["Ada needs you to: use Taxes"]);
   shown[0]!.onClick();
   await settle();
   assert.deepEqual(opened, ["bot:ada"]);

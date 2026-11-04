@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   BOT_ISSUE_CHANNELS,
+  botIssueActionOf,
+  botIssueOf,
   type BotIssue,
   type BotIssueAction,
 } from "../../renderer/shared/bot-issues.js";
@@ -109,5 +111,22 @@ test("bots:issues:list reads one Bot's issues, filtered to open ones when asked"
 
   for (const input of [null, { botId: ISSUE.botId, open: "yes" }, { botId: ISSUE.botId, extra: true }, { botId: "" }]) {
     await assert.rejects(invoke(BOT_ISSUE_CHANNELS.list, input), /Invalid bot/u, JSON.stringify(input));
+  }
+});
+
+
+test("access dismissal is an explicit closed-vocabulary action, never a grant payload", async () => {
+  const {invoke, acts} = setup();
+  assert.equal(botIssueActionOf({kind: "dismiss_access"}), null, "older issue parsers do not adopt the new action");
+  assert.deepEqual(botIssueActionOf({kind: "dismiss_access"}, true), {kind: "dismiss_access"});
+  await assert.rejects(invoke(BOT_ISSUE_CHANNELS.act, act({action: {kind: "dismiss_access", authorization: {policyRevision: "fake"}}})), /Invalid bot issue/u);
+  assert.deepEqual(await invoke(BOT_ISSUE_CHANNELS.act, act({action: {kind: "dismiss_access"}})), {result: "done"});
+  assert.deepEqual(acts.map(item => item.action), [{kind: "dismiss_access"}]);
+});
+
+test("access-only actions cannot be decoded on ordinary issues", () => {
+  for (const kind of ["allow_folder", "dismiss_access"] as const) {
+    assert.equal(botIssueOf({...ISSUE, actions: [{kind}]}), null);
+    assert.deepEqual(botIssueOf({...ISSUE, kind: "access_needed", actions: [{kind}]})?.actions, [{kind}]);
   }
 });

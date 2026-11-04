@@ -2,6 +2,22 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { writeFileAtomic } from "./durable-fs.js";
 
+export class BotFolderGrantJournalReadError extends Error {
+  readonly cause: unknown;
+  constructor(cause: unknown) {
+    super("The Bot folder grant journal could not be read. Check access to bot-folder-grants.json, preserve it for repair, then restart Aiden before allowing another folder.");
+    this.name = "BotFolderGrantJournalReadError";
+    this.cause = cause;
+  }
+}
+
+export class BotFolderGrantJournalRepairError extends Error {
+  constructor() {
+    super("The Bot folder grant journal needs repair. Its evidence was preserved in bot-folder-grants.json. Restore a verified backup of that file, then restart Aiden before allowing another folder.");
+    this.name = "BotFolderGrantJournalRepairError";
+  }
+}
+
 export interface BotFolderGrantInput {
   audienceId: string;
   botId: string;
@@ -31,10 +47,16 @@ export function createBotFolderGrantJournal(storage: {
 }): BotFolderGrantJournal {
   let tail: Promise<unknown> = Promise.resolve();
   const read = async (): Promise<BotFolderGrantRecord[]> => {
-    const records = await storage.read();
+    let records: unknown;
+    try {
+      records = await storage.read();
+    } catch (error) {
+      if (error instanceof BotFolderGrantJournalRepairError) throw error;
+      throw new BotFolderGrantJournalReadError(error);
+    }
     if (records === null) return [];
     if (!Array.isArray(records) || records.length > 4096)
-      throw new Error("The Bot folder grant journal needs repair.");
+      throw new BotFolderGrantJournalRepairError();
     const ids = new Set<string>();
     for (const value of records) {
       const r = value as BotFolderGrantRecord | null;
@@ -48,7 +70,7 @@ export function createBotFolderGrantJournal(storage: {
         !r.input ||
         typeof r.input !== "object"
       )
-        throw new Error("The Bot folder grant journal needs repair.");
+        throw new BotFolderGrantJournalRepairError();
       const input = r.input;
       const bounded = (v: unknown, max: number) =>
         typeof v === "string" && v.length > 0 && v.length <= max;
@@ -86,7 +108,7 @@ export function createBotFolderGrantJournal(storage: {
         (r.state === "committed" && (!r.optionId || !r.resultRevision)) ||
         ids.has(input.operationId)
       )
-        throw new Error("The Bot folder grant journal needs repair.");
+        throw new BotFolderGrantJournalRepairError();
       ids.add(input.operationId);
     }
     return structuredClone(records);
@@ -103,6 +125,8 @@ export function createBotFolderGrantJournal(storage: {
           index = records.findIndex((entry) => entry.input.operationId === copy.input.operationId);
         if (index < 0) records.push(copy);
         else records[index] = copy;
+        // These are durable replay receipts. Pruning a completed operation
+        // without a separate replay tombstone could recreate removed authority.
         if (records.length > 4096) throw new Error("The Bot folder grant journal is full.");
         await storage.write(records);
       });
@@ -119,9 +143,12 @@ export function fileBotFolderGrantJournal(directory: () => string): BotFolderGra
   return createBotFolderGrantJournal({
     read: async () => {
       try {
-        return JSON.parse(await fs.readFile(file(), "utf8"));
+        const value: unknown = JSON.parse(await fs.readFile(file(), "utf8"));
+        if (value === null) throw new BotFolderGrantJournalRepairError();
+        return value;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        if (error instanceof SyntaxError) throw new BotFolderGrantJournalRepairError();
         throw error;
       }
     },

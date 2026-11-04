@@ -4718,12 +4718,13 @@ final class AidenBotSessionAttachmentTests: XCTestCase {
 private final class HandoffTransport: AidenBotSessionTransport, @unchecked Sendable {
     private(set) var accessAnswers: [(waitId: String, key: UUID, request: AidenBotAccessAnswerRequest)] = []
     var accessAnswerError: Error?
+    var accessAnswerResponse = #"{"answered":true}"#
     var accessGate: TestGate?
     func answerBotAccessRequest(botId: String, waitId: String, request: AidenBotAccessAnswerRequest, idempotencyKey: UUID) async throws -> AidenBotAccessAnswerReceipt {
         accessAnswers.append((waitId, idempotencyKey, request))
         await accessGate?.pass()
         if let error = accessAnswerError { accessAnswerError = nil; throw error }
-        return try JSONDecoder().decode(AidenBotAccessAnswerReceipt.self, from: Data(#"{"answered":true}"#.utf8))
+        return try JSONDecoder().decode(AidenBotAccessAnswerReceipt.self, from: Data(accessAnswerResponse.utf8))
     }
 
     let snapshot: AidenBotSession
@@ -5517,7 +5518,10 @@ final class AidenBotAccessRequestsTests: XCTestCase {
         XCTAssertEqual(issue.kind, .accessNeeded)
         XCTAssertFalse(issue.isAvailable())
         XCTAssertTrue(issue.isAvailable(accessRequests: true))
-        XCTAssertEqual(issue.actions.map(\.kind), [.allowFolder, .openChat])
+        XCTAssertEqual(issue.actions.map(\.kind), [.dismissAccess, .allowFolder])
+        let answer = try XCTUnwrap(section["answer"] as? [String: Any])
+        let receipt = try decode(AidenBotAccessAnswerReceipt.self, answer["response"]!)
+        XCTAssertEqual(receipt.savedForFuture, true)
         let (model, _) = try await model()
         XCTAssertEqual(model.accessRequest, folder)
         for raw in try XCTUnwrap(section["events"] as? [[String: Any]]) {
@@ -5579,24 +5583,116 @@ final class AidenBotAccessRequestsTests: XCTestCase {
         XCTAssertEqual(model.accessRequest?.choices, [.notNow, .once])
     }
 
-    func testLostResponseRetainsBodyAndKeyExpiredStaysGone() async throws {
+    func testUncertainAlwaysThenNotNowSendsNewChoiceAndKey() async throws {
         let (model, transport) = try await model()
         transport.accessAnswerError = URLError(.networkConnectionLost)
-        let lost = await model.answerAccessRequest(.once)
+        let lost = await model.answerAccessRequest(.always)
         XCTAssertFalse(lost)
         XCTAssertNotNil(model.accessRequest)
         XCTAssertEqual(model.errorMessage, "That answer wasn't sent. Please try again.")
-        let resent = await model.answerAccessRequest(.always)
-        XCTAssertTrue(resent)
-        XCTAssertEqual(transport.accessAnswers.map(\.request.choice), [.once, .once])
-        XCTAssertEqual(transport.accessAnswers[0].key, transport.accessAnswers[1].key)
-        let (expiredModel, expiredTransport) = try await self.model()
+        let declined = await model.answerAccessRequest(.notNow)
+        XCTAssertTrue(declined)
+        XCTAssertEqual(transport.accessAnswers.map(\.request.choice), [.always, .notNow])
+        XCTAssertNotEqual(transport.accessAnswers[0].key, transport.accessAnswers[1].key)
+        XCTAssertNil(model.accessRequest)
+    }
+
+    func testSameChoiceUncertainRetryReusesBodyAndKey() async throws {
+        let body = try decode(AidenRemoteErrorEnvelope.self, ["error": ["code": "internal_error", "message": "Unknown outcome", "requestId": "access-test", "retryable": false]]).error
+        for failure: Error in [URLError(.networkConnectionLost), AidenRemoteClientError.server(statusCode: 503, body: body)] {
+            let (model, transport) = try await model()
+            transport.accessAnswerError = failure
+            _ = await model.answerAccessRequest(.always)
+            let retried = await model.answerAccessRequest(.always)
+            XCTAssertTrue(retried)
+            XCTAssertEqual(transport.accessAnswers.map(\.request.choice), [.always, .always])
+            XCTAssertEqual(transport.accessAnswers[0].key, transport.accessAnswers[1].key)
+        }
+    }
+
+    func testHostFirstAnswerWinsAndFreshWaitCanStillBeAnswered() async throws {
+        let (model, transport) = try await model()
+        transport.accessAnswerError = URLError(.networkConnectionLost)
+        _ = await model.answerAccessRequest(.always)
         let body = try decode(AidenRemoteErrorEnvelope.self, section()["expired"]!).error
-        expiredTransport.accessAnswerError = AidenRemoteClientError.server(statusCode: 409, body: body)
-        let expired = await expiredModel.answerAccessRequest(.once)
+        transport.accessAnswerError = AidenRemoteClientError.server(statusCode: 409, body: body)
+        let expired = await model.answerAccessRequest(.notNow)
         XCTAssertFalse(expired)
-        XCTAssertNil(expiredModel.accessRequest)
-        XCTAssertEqual(expiredModel.errorMessage, "That card was already answered or closed.")
+        XCTAssertEqual(transport.accessAnswers.map(\.request.choice), [.always, .notNow])
+        XCTAssertNotEqual(transport.accessAnswers[0].key, transport.accessAnswers[1].key)
+        XCTAssertNil(model.accessRequest)
+        XCTAssertEqual(model.errorMessage, "That card was already answered or closed.")
+        let duplicate = await model.answerAccessRequest(.once)
+        XCTAssertFalse(duplicate)
+        await model.apply(try event(card: section()["wholeMac"]!, seq: 51))
+        let fresh = await model.answerAccessRequest(.once)
+        XCTAssertTrue(fresh)
+        XCTAssertNotEqual(transport.accessAnswers[0].waitId, transport.accessAnswers[2].waitId)
+    }
+
+    func testCommittedAlwaysShowsSuccessAndCannotRetryTheOldCard() async throws {
+        let (model, transport) = try await model()
+        transport.accessAnswerError = URLError(.networkConnectionLost)
+        _ = await model.answerAccessRequest(.always)
+        transport.accessAnswerResponse = #"{"answered":true,"savedForFuture":true}"#
+        let saved = await model.answerAccessRequest(.always)
+        XCTAssertTrue(saved)
+        XCTAssertNil(model.accessRequest)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(model.accessSuccessNotice, "Saved for future tasks.")
+        XCTAssertFalse(model.canAnswerAccessRequest)
+        let retry = await model.answerAccessRequest(.once)
+        XCTAssertFalse(retry)
+        XCTAssertEqual(transport.accessAnswers.count, 2)
+        XCTAssertEqual(transport.accessAnswers[0].key, transport.accessAnswers[1].key)
+    }
+
+    func testDismissAccessPostsOfferedActionAndDropsIssue() async throws {
+        var object = try XCTUnwrap(section()["session"] as? [String: Any])
+        var issue = try XCTUnwrap(section()["issue"] as? [String: Any])
+        issue["actions"] = [["kind": "dismiss_access"]]
+        object["issues"] = [issue]
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try decode(AidenBotSession.self, object)))
+        let model = AidenBotSessionModel(botID: "bot_fixture_01", transport: transport)
+        await model.load()
+        let card = try XCTUnwrap(model.openIssues.first)
+        let action = try XCTUnwrap(card.actions.first)
+        let sent = await model.actOnIssue(card, action: action)
+        XCTAssertTrue(sent)
+        XCTAssertTrue(model.openIssues.isEmpty)
+        XCTAssertEqual(transport.issueRequests.first?.request.action.kind, .dismissAccess)
+        XCTAssertEqual(transport.issueRequests.first?.issueId, card.id)
+        let duplicate = await model.actOnIssue(card, action: action)
+        XCTAssertFalse(duplicate)
+        XCTAssertEqual(transport.issueRequests.count, 1)
+    }
+
+    func testAccessReceiptAcceptsOnlyAbsentOrTrueFutureFlag() throws {
+        _ = try decode(AidenBotAccessAnswerReceipt.self, ["answered": true])
+        _ = try decode(AidenBotAccessAnswerReceipt.self, ["answered": true, "savedForFuture": true])
+        for flag: Any in [false, "true", 1, NSNull()] {
+            XCTAssertThrowsError(try decode(AidenBotAccessAnswerReceipt.self, ["answered": true, "savedForFuture": flag]))
+        }
+        for extra in ["authorization", "grant", "unknown"] {
+            XCTAssertThrowsError(try decode(AidenBotAccessAnswerReceipt.self, ["answered": true, extra: true]))
+        }
+    }
+
+    func testDismissAccessActionIsClosedAndLimitedToAccessIssues() throws {
+        var issue = try XCTUnwrap(section()["issue"] as? [String: Any])
+        issue["actions"] = [["kind": "dismiss_access"]]
+        let card = try decode(AidenRemoteBotIssue.self, issue)
+        XCTAssertFalse(card.isAvailable())
+        XCTAssertTrue(card.isAvailable(accessRequests: true))
+        XCTAssertEqual(AidenBotSessionModel.issueActionTitle(card.actions[0]), "Not now")
+        issue["kind"] = "run_stalled"
+        XCTAssertThrowsError(try decode(AidenRemoteBotIssue.self, issue))
+        for action: [String: Any] in [["kind": "dismiss_access", "routineId": "routine-1"],
+                                      ["kind": "dismiss_access", "routineId": NSNull()],
+                                      ["kind": "dismiss_access", "authorization": true], ["kind": "dismiss_unknown"]] {
+            XCTAssertThrowsError(try decode(AidenBotIssueAction.self, action))
+        }
     }
 
     func testFeedReplacementWinsOverFailedAnswerAndDuplicateTap() async throws {

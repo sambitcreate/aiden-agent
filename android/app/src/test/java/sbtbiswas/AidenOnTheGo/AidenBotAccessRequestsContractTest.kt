@@ -48,7 +48,9 @@ class AidenBotAccessRequestsContractTest {
         assertEquals(AidenBotIssueKind.ACCESS_NEEDED, issue.kind)
         assertFalse(issue.isAvailable())
         assertTrue(issue.isAvailable(accessRequests = true))
-        assertEquals(listOf(AidenBotIssueActionKind.ALLOW_FOLDER, AidenBotIssueActionKind.OPEN_CHAT), issue.actions.map { it.kind })
+        assertEquals(listOf(AidenBotIssueActionKind.DISMISS_ACCESS, AidenBotIssueActionKind.ALLOW_FOLDER), issue.actions.map { it.kind })
+        val receipt = wire.decodeFromJsonElement(AidenBotAccessAnswerReceipt.serializer(), fixture.getValue("answer").jsonObject.getValue("response"))
+        assertEquals(true, receipt.savedForFuture)
         val legacy = fixture.getValue("legacy").jsonObject
         var oldSession = snapshot(legacy.getValue("session"))
         assertEquals(1, oldSession.entries.size)
@@ -84,15 +86,49 @@ class AidenBotAccessRequestsContractTest {
         }
     }
 
+    @Test fun receiptAcceptsOnlyAbsentOrTrueFutureFlag() {
+        wire.decodeFromString(AidenBotAccessAnswerReceipt.serializer(), """{"answered":true}""")
+        wire.decodeFromString(AidenBotAccessAnswerReceipt.serializer(), """{"answered":true,"savedForFuture":true}""")
+        for (flag in listOf("false", "null", "1", "\"true\"")) {
+            assertThrows(Exception::class.java) { wire.decodeFromString(AidenBotAccessAnswerReceipt.serializer(), """{"answered":true,"savedForFuture":$flag}""") }
+        }
+        for (key in listOf("authorization", "grant", "unknown")) {
+            assertThrows(Exception::class.java) { wire.decodeFromString(AidenBotAccessAnswerReceipt.serializer(), """{"answered":true,"$key":true}""") }
+        }
+    }
+
+    @Test fun dismissAccessIsClosedAndLimitedToAccessIssues() {
+        val issue = fixture.getValue("issue").jsonObject
+        val action = buildJsonObject { put("kind", "dismiss_access") }
+        val body = JsonObject(issue + ("actions" to JsonArray(listOf(action))))
+        val card = wire.decodeFromJsonElement(AidenBotIssue.serializer(), body)
+        assertFalse(card.isAvailable())
+        assertTrue(card.isAvailable(accessRequests = true))
+        assertThrows(Exception::class.java) {
+            wire.decodeFromJsonElement(AidenBotIssue.serializer(), JsonObject(body + ("kind" to JsonPrimitive("run_stalled"))))
+        }
+        assertThrows(Exception::class.java) {
+            wire.decodeFromJsonElement(AidenBotIssueAction.serializer(), JsonObject(action + ("routineId" to JsonNull)))
+        }
+        for (extra in listOf("routineId", "authorization", "unknown")) {
+            assertThrows(Exception::class.java) {
+                wire.decodeFromJsonElement(AidenBotIssueAction.serializer(), JsonObject(action + (extra to JsonPrimitive("routine-1"))))
+            }
+        }
+    }
+
     @Test fun eachAnswerUsesItsOwnRouteBodyAndIdempotencyHeader() = runBlocking {
         val server = MockWebServer(); server.start()
         try {
             val client = AidenRemoteClient(server.url("/api/aiden/v1").toString().trimEnd('/'), "test_credential_123", customOkHttpClient = OkHttpClient())
             val waitId = AidenBotAccessRequest.parse(fixture.getValue("folder")).waitId
             for ((choice, expected) in listOf(AidenBotAccessRequestChoice.NOT_NOW to "not_now", AidenBotAccessRequestChoice.ALWAYS to "always", AidenBotAccessRequestChoice.ONCE to "once")) {
-                server.enqueue(MockResponse().setBody("""{"answered":true}"""))
+                val response = if (choice == AidenBotAccessRequestChoice.ALWAYS) fixture.getValue("answer").jsonObject.getValue("response").toString() else """{"answered":true}"""
+                server.enqueue(MockResponse().setBody(response))
                 val key = UUID.randomUUID()
-                assertTrue(client.answerBotAccessRequest("bot_fixture_01", waitId, AidenBotAccessAnswerRequest(choice), key).answered)
+                val receipt = client.answerBotAccessRequest("bot_fixture_01", waitId, AidenBotAccessAnswerRequest(choice), key)
+                assertTrue(receipt.answered)
+                assertEquals(if (choice == AidenBotAccessRequestChoice.ALWAYS) true else null, receipt.savedForFuture)
                 val request = server.takeRequest()
                 assertEquals("POST", request.method)
                 assertEquals("/api/aiden/v1/bots/bot_fixture_01/access-requests/$waitId/answer", request.path)

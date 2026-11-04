@@ -88,3 +88,50 @@ test("coverage respects path segments and independently sufficient access mode",
     true,
   );
 });
+
+test("private storage and its parents are refused while Home remains once-only", async (t) => {
+  const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "bot-target-private-")));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const parent = path.join(home, "Library", "Application Support");
+  const privateRoot = path.join(parent, "Aiden");
+  await fs.mkdir(path.join(privateRoot, "bots", "other"), { recursive: true });
+  await fs.symlink(parent, path.join(home, "alias"));
+  const deps: BotAccessTargetDeps = { homeDirectory: () => home, privateRoots: () => [privateRoot], approvedRoots: async () => [] };
+  for (const requested of [parent, path.join(home, "Library"), path.join(home, "alias"), privateRoot]) {
+    assert.deepEqual(await resolveBotAccessTarget(requested, deps), { kind: "refused", reason: "private" }, requested);
+  }
+  const resolved = await resolveBotAccessTarget("~", deps);
+  assert.equal(resolved.kind, "folder");
+  if (resolved.kind === "folder") assert.deepEqual(resolved.always, { kind: "none", reason: "home" });
+});
+
+test("only approved roots overlapping the target invalidate its inventory snapshot", async (t) => {
+  const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "bot-target-inventory-")));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const target = path.join(home, "Documents", "Taxes");
+  const unrelated = path.join(home, "Documents-old");
+  await fs.mkdir(target, { recursive: true });
+  await fs.mkdir(unrelated);
+  let roots: { id: string; folderPath: string }[] = [];
+  const deps: BotAccessTargetDeps = { homeDirectory: () => home, privateRoots: () => [], approvedRoots: async () => roots };
+  const revision = async () => { const resolved = await resolveBotAccessTarget(target, deps); assert.equal(resolved.kind, "folder"); return resolved.kind === "folder" ? resolved.inventoryRevision : undefined; };
+  const captured = await revision();
+  assert.ok(captured);
+  roots = [{ id: "unrelated", folderPath: unrelated }];
+  assert.equal(await revision(), captured, "an unrelated addition leaves the answer valid");
+  roots = [];
+  assert.equal(await revision(), captured, "an unrelated removal leaves the answer valid");
+  for (const folderPath of [path.dirname(target), target, path.join(target, "2025")]) {
+    await fs.mkdir(folderPath, { recursive: true });
+    roots = [{ id: "relevant", folderPath }];
+    assert.notEqual(await revision(), captured, folderPath);
+  }
+});
+
+test("a transient target filesystem read failure is preserved rather than declared stale or missing", async () => {
+  const failure = Object.assign(new Error("temporary disk read failure"), { code: "EIO" });
+  await assert.rejects(resolveBotAccessTarget("/ordinary", {
+    homeDirectory: () => "/home", privateRoots: () => [], approvedRoots: async () => [],
+    filesystem: { realpath: async () => { throw failure; }, stat: async () => { throw new Error("unreachable"); } },
+  }), (error: unknown) => error === failure);
+});

@@ -807,9 +807,31 @@ object AidenBotAccessRequestSerializer : KSerializer<AidenBotAccessRequest> {
 }
 @Serializable
 data class AidenBotAccessAnswerRequest(val choice: AidenBotAccessRequestChoice)
-@Serializable
-data class AidenBotAccessAnswerReceipt(@Serializable(with = AidenStrictBooleanSerializer::class) val answered: Boolean) {
-    init { if (!answered) throw AidenBotContractException.InvalidField("answered") }
+@Serializable(with = AidenBotAccessAnswerReceiptSerializer::class)
+data class AidenBotAccessAnswerReceipt(val answered: Boolean, val savedForFuture: Boolean? = null) {
+    init {
+        if (!answered) throw AidenBotContractException.InvalidField("answered")
+        if (savedForFuture == false) throw AidenBotContractException.InvalidField("savedForFuture")
+    }
+}
+object AidenBotAccessAnswerReceiptSerializer : KSerializer<AidenBotAccessAnswerReceipt> {
+    override val descriptor = JsonObject.serializer().descriptor
+    override fun serialize(encoder: Encoder, value: AidenBotAccessAnswerReceipt) =
+        (encoder as JsonEncoder).encodeJsonElement(buildJsonObject {
+            put("answered", true)
+            if (value.savedForFuture == true) put("savedForFuture", true)
+        })
+    override fun deserialize(decoder: Decoder): AidenBotAccessAnswerReceipt {
+        val body = (decoder as JsonDecoder).decodeJsonElement() as? JsonObject
+            ?: throw AidenBotContractException.InvalidField("accessAnswer")
+        if (body.keys.any { it !in setOf("answered", "savedForFuture") } || body["answered"] != JsonPrimitive(true)) {
+            throw AidenBotContractException.InvalidField("accessAnswer")
+        }
+        if ("savedForFuture" in body && body["savedForFuture"] != JsonPrimitive(true)) {
+            throw AidenBotContractException.InvalidField("savedForFuture")
+        }
+        return AidenBotAccessAnswerReceipt(true, if ("savedForFuture" in body) true else null)
+    }
 }
 
 // Contract revision 42 (`bot:issues`): the Bot's host-owned "Needs you" cards.
@@ -851,11 +873,14 @@ enum class AidenBotIssueActionKind {
     @SerialName("resume_routine") RESUME_ROUTINE,
     @SerialName("stop_run") STOP_RUN,
     @SerialName("keep_waiting") KEEP_WAITING,
-    @SerialName("allow_folder") ALLOW_FOLDER
+    @SerialName("allow_folder") ALLOW_FOLDER,
+    @SerialName("dismiss_access") DISMISS_ACCESS
 }
 
 /** One action a card offers, exactly as the host sends it. `routineId` only on RESUME_ROUTINE. */
-@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@KeepGeneratedSerializer
+@Serializable(with = AidenBotIssueActionSerializer::class)
 data class AidenBotIssueAction(
     val kind: AidenBotIssueActionKind,
     val routineId: String? = null
@@ -868,6 +893,18 @@ data class AidenBotIssueAction(
             }
             else -> if (routineId != null) throw AidenBotContractException.InvalidField("issue.action.routineId")
         }
+    }
+}
+
+/** The revision-55 dismiss action is exactly {kind}, including no routineId:null. */
+object AidenBotIssueActionSerializer :
+    JsonTransformingSerializer<AidenBotIssueAction>(AidenBotIssueAction.generatedSerializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement {
+        val body = element as? JsonObject ?: return element
+        if (body["kind"] == JsonPrimitive("dismiss_access") && body.keys != setOf("kind")) {
+            throw AidenBotContractException.InvalidField("issue.action")
+        }
+        return element
     }
 }
 
@@ -896,11 +933,14 @@ data class AidenBotIssue(
         if (resolved && actions.isNotEmpty()) {
             throw AidenBotContractException.InvalidCombination("settled issue with actions")
         }
+        if (kind != AidenBotIssueKind.ACCESS_NEEDED && actions.any { it.kind == AidenBotIssueActionKind.DISMISS_ACCESS }) {
+            throw AidenBotContractException.InvalidCombination("dismiss access on ordinary issue")
+        }
     }
 
     /** Revision 55 vocabulary is shown only after this device holds the access opt-in. */
     fun isAvailable(accessRequests: Boolean = false): Boolean = accessRequests ||
-        (kind != AidenBotIssueKind.ACCESS_NEEDED && actions.none { it.kind == AidenBotIssueActionKind.ALLOW_FOLDER })
+        (kind != AidenBotIssueKind.ACCESS_NEEDED && actions.none { it.kind == AidenBotIssueActionKind.ALLOW_FOLDER || it.kind == AidenBotIssueActionKind.DISMISS_ACCESS })
 
     companion object {
         /** At most [AidenRemoteIssueWire.MAX_CARDS] cards, each with its own id. */

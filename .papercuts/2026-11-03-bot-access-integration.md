@@ -14,3 +14,7 @@
 - Final root type-check found new host test compatibility errors: Array.at outside configured ES lib, two stale grant/private-issue fixtures, and answer receipt widened boolean instead of literal true. Sent exact diagnostics to host owner; CLI types run separately because chained && stopped before it.
 
 - Backend confirmed Task6 initial failing run was not captured; first116-test run already passed. Leave its red-run checkbox unchecked and report the evidence limit; passing final behavior tests are separate. Host test fixture type issues are fixed and final root typecheck passes.
+
+- Gate3 R1 found new phone retry-choice mismatch, stale live-card lockout, access-issue no-dismiss/refresh gap, private-parent recursive-read exposure, journal startup blast radius, hidden-root overlap and durable-save-after-owner-end ambiguity. Three implementation workers own native/runtime/storage fixes. Root behavioral red run reproduces dismiss parser/UI absence, future-save success notice absence, and duplicate notification wording; log /tmp/bot-access-r1-root-red.log.
+
+- Initial combined Python docs/E2E patch had a syntax error before any mutation. Applied the changes with apply_patch, then E2E type-check and scoped lint passed. Root focused23 tests pass after four red behavior gaps; new expected saved-future receipt is exercised through the existing hook.

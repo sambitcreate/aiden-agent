@@ -383,6 +383,7 @@ data class AidenBotSessionUiState(
     /** Revision 42: the cards whose action is on its way, so their buttons wait. */
     val actingIssueIds: Set<String> = emptySet(),
     val actionError: String? = null,
+    val accessSuccessNotice: String? = null,
     /** A notice about unsent messages; shown in place of [actionError] until dismissed or the next send. */
     val notice: AidenBotSessionNotice? = null,
     val connectRequests: Map<String, AidenBotConnectRequestPhase> = emptyMap(),
@@ -597,7 +598,6 @@ class AidenBotSessionController(
     private var questionWrites = 0
     private var approvalWrites = 0
     private var accessRequestWrites = 0
-    private var retainedAccessAnswer: Pair<String, AidenBotAccessAnswerRequest>? = null
     private var handoffWrites = 0
     private var issueWrites = 0
     /** Transcript entries that already stand for an outgoing message, for the life of an epoch. */
@@ -1598,34 +1598,31 @@ class AidenBotSessionController(
     }
 
     /**
-     * Revision 37: answers the hand-off once, Done (with an optional note the Bot reads) or Skip.
-     * The card goes at once and comes back with an error if the answer didn't reach the Mac,
-     * unless the Mac has since shown another (R18). A sign-in can only be skipped from a phone.
-     * An unanswered attempt keeps its key, so retrying the same answer replays the Mac's
-     * receipt; another answer gets a new key. A card answered elsewhere (`handoff_expired`)
-     * stays gone. A second tap while one is in flight sends nothing.
+     * A retry after an unknown outcome reuses its key for this wait and choice.
+     * A different choice sends a new request; the host decides which answer won.
+     * Expired cards stay gone, and feed replacements win over late failures.
      */
     suspend fun answerAccessRequest(choice: AidenBotAccessRequestChoice): Boolean {
         val current = _state.value
         val shown = current.session?.accessRequest ?: return false
         if (!current.hasLoaded || current.isAnsweringAccessRequest || choice !in shown.choices) return false
-        val action = "answerAccessRequest:${shown.waitId}"
-        val request = retainedAccessAnswer?.takeIf { it.first == shown.waitId }?.second ?: AidenBotAccessAnswerRequest(choice)
-        retainedAccessAnswer = shown.waitId to request
+        val action = "answerAccessRequest:${shown.waitId}:${choice.name}"
+        val request = AidenBotAccessAnswerRequest(choice)
         val writes = accessRequestWrites
-        _state.update { it.copy(isAnsweringAccessRequest = true, actionError = null, session = it.session?.copy(accessRequest = null)) }
+        _state.update { it.copy(isAnsweringAccessRequest = true, actionError = null, accessSuccessNotice = null, session = it.session?.copy(accessRequest = null)) }
         return try {
-            bounded { transport.answerAccessRequest(botId, shown.waitId, request, keys.key(action)) }
+            val receipt = bounded { transport.answerAccessRequest(botId, shown.waitId, request, keys.key(action)) }
             keys.complete(action)
-            retainedAccessAnswer = null
-            _state.update { if (it.session?.accessRequest?.waitId == shown.waitId) it.copy(session = it.session.copy(accessRequest = null)) else it }
+            _state.update { state -> state.copy(
+                session = if (state.session?.accessRequest?.waitId == shown.waitId) state.session.copy(accessRequest = null) else state.session,
+                accessSuccessNotice = if (receipt.savedForFuture == true) "Saved for future tasks." else null
+            ) }
             true
         } catch (error: CancellationException) {
             if (accessRequestWrites == writes) _state.update { it.copy(session = it.session?.copy(accessRequest = shown)) }
             throw error
         } catch (error: Exception) {
-            keys.failed(action, error)
-            if (aidenBotMacAnswered(error)) retainedAccessAnswer = null
+            if (error is AidenRemoteClientException.Server && error.statusCode < 500) keys.complete(action)
             val expired = (error as? AidenRemoteClientException.Server)?.body?.code == AidenRemoteErrorCode.ACCESS_REQUEST_EXPIRED
             _state.update { state ->
                 val session = state.session

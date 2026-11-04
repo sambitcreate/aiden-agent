@@ -887,12 +887,16 @@ struct AidenBotAccessAnswerRequest: Codable, Equatable, Sendable {
 }
 struct AidenBotAccessAnswerReceipt: Codable, Equatable, Sendable {
     let answered: Bool
+    let savedForFuture: Bool?
     init(from decoder: Decoder) throws {
-        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["answered"])
-        answered = try decoder.container(keyedBy: CodingKeys.self).decode(Bool.self, forKey: .answered)
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["answered", "savedForFuture"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        answered = try values.decode(Bool.self, forKey: .answered)
         guard answered else { throw AidenBotContractError.invalidField("answered") }
+        savedForFuture = try AidenBotWire.optional(Bool.self, from: values, forKey: .savedForFuture)
+        guard savedForFuture != false else { throw AidenBotContractError.invalidField("savedForFuture") }
     }
-    private enum CodingKeys: String, CodingKey { case answered }
+    private enum CodingKeys: String, CodingKey { case answered, savedForFuture }
 }
 
 // MARK: Contract revision 42 (`bot:issues`)
@@ -939,6 +943,7 @@ enum AidenBotIssueActionKind: String, Codable, Sendable {
     case stopRun = "stop_run"
     case keepWaiting = "keep_waiting"
     case allowFolder = "allow_folder"
+    case dismissAccess = "dismiss_access"
 }
 
 /// One action a card offers, exactly as the host sends it.
@@ -1013,6 +1018,9 @@ struct AidenRemoteBotIssue: Codable, Equatable, Identifiable, Sendable {
         guard actions.count <= AidenRemoteIssueWire.maxActions else {
             throw AidenBotContractError.invalidField("issue.actions")
         }
+        guard kind == .accessNeeded || !actions.contains(where: { $0.kind == .dismissAccess }) else {
+            throw AidenBotContractError.invalidCombination("dismiss access on ordinary issue")
+        }
         self.actions = actions
         createdAt = try values.decode(AidenRemoteTimestamp.self, forKey: .createdAt)
         resolved = try values.decode(Bool.self, forKey: .resolved)
@@ -1023,7 +1031,7 @@ struct AidenRemoteBotIssue: Codable, Equatable, Identifiable, Sendable {
 
     /// Revision 55 vocabulary is shown only after this device holds the access opt-in.
     func isAvailable(accessRequests: Bool = false) -> Bool {
-        accessRequests || (kind != .accessNeeded && !actions.contains { $0.kind == .allowFolder })
+        accessRequests || (kind != .accessNeeded && !actions.contains { $0.kind == .allowFolder || $0.kind == .dismissAccess })
     }
 
     /// At most `maxCards` cards, each with its own id.

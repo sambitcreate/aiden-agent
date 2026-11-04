@@ -16,6 +16,7 @@ import {
   type BotIssueResumeResult,
   type BotIssueService,
 } from "./service.js";
+import { BotAccessRequestStaleError } from "../bot-runtime/bot-access-requests.js";
 import { createBotIssueStore } from "./store.js";
 
 const BOT_ID = "bot:ada";
@@ -142,7 +143,7 @@ function setup(
 }
 
 const ACCESS_ISSUE = {
-  botId: BOT_ID, kind: "access_needed" as const, dedupeKey: "access:folder:/Taxes", title: "Needs Taxes", body: "Prepare a return", actions: [{ kind: "allow_folder" as const }],
+  botId: BOT_ID, kind: "access_needed" as const, dedupeKey: "access:folder:/Taxes", title: "Needs Taxes", body: "Prepare a return", actions: [{ kind: "dismiss_access" as const }, { kind: "allow_folder" as const }],
   access: { label: "Taxes", folderPath: "/Taxes", authorization: { policyRevision: "original-rev", requestIds: ["routine:r1:1"], target: "folder" as const, root: "/Taxes", identity: { device: "1", inode: "2" }, choices: ["not_now", "always", "once"] as const } },
 };
 test("allow_folder claims the saved authorization once, keeps the card open until committed and strips private data", async () => {
@@ -485,4 +486,87 @@ test("an access issue's delivery obligation carries its durable audience gate wi
   assert.equal(JSON.stringify(app.deliveries).includes("/Taxes"), false);
   await app.issues.raise(ISSUE);
   assert.equal(app.deliveries[1]!.requiredCapability, undefined);
+});
+
+test("access Not now dismisses with status and notification, without grant, stop or snooze", async () => {
+  const app = setup({ allowFolder: async () => { throw new Error("must not grant"); } });
+  const issue = await app.issues.raise({ ...ACCESS_ISSUE, actions: [{ kind: "dismiss_access" }, { kind: "open_settings", section: "access" }], access: { label: "your whole Mac", authorization: { policyRevision: "rev1", requestIds: ["routine:r1:1"], target: "whole_mac", root: "/", choices: ["not_now", "once"] } } });
+  const changes: string[] = []; app.issues.onChange(id => changes.push(id));
+  assert.equal(await app.issues.act(BOT_ID, issue.id, { kind: "dismiss_access" }), "done");
+  assert.deepEqual(await app.issues.list(BOT_ID, { open: true }), []);
+  assert.deepEqual(app.calls, []);
+  assert.deepEqual(statusEntries(app.appends).map(entry => entry.data), [{issueId: issue.id, resolution: "dismissed", resolvedAt: 1000}]);
+  assert.ok(changes.includes(BOT_ID));
+});
+test("a changed authorization creates a new immutable issue; a new run alone dedupes", async () => {
+  const operations: string[] = [];
+  const app = setup({ allowFolder: async (_id, _access, operationId) => { operations.push(operationId); return "added"; } });
+  const old = await app.issues.raise(ACCESS_ISSUE);
+  const anotherRun = { ...ACCESS_ISSUE, access: { ...ACCESS_ISSUE.access, authorization: { ...ACCESS_ISSUE.access.authorization, requestIds: ["routine:r2:1"] } } };
+  assert.equal((await app.issues.raise(anotherRun)).id, old.id);
+  const fresh = await app.issues.raise({ ...anotherRun, access: { ...anotherRun.access, authorization: { ...anotherRun.access.authorization, policyRevision: "fresh-rev" } } });
+  assert.notEqual(fresh.id, old.id);
+  assert.equal((await app.store.read(BOT_ID)).find(row => row.id === old.id)?.access?.authorization.policyRevision, "original-rev");
+  assert.equal(await app.issues.act(BOT_ID, old.id, {kind: "allow_folder"}), "not_open");
+  assert.equal(await app.issues.act(BOT_ID, fresh.id, {kind: "allow_folder"}), "done");
+  assert.deepEqual(operations, [fresh.id]);
+});
+test("authoritative dismissal wins against later allow; in-flight allow cannot be dismissed mid-publication", async () => {
+  let entered!: () => void, release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; }); let grants = 0;
+  const app = setup({ allowFolder: async () => { entered(); await gate; grants++; return "added"; } });
+  const first = await app.issues.raise(ACCESS_ISSUE);
+  await app.issues.act(BOT_ID, first.id, { kind: "dismiss_access" });
+  assert.equal(await app.issues.act(BOT_ID, first.id, {kind:"allow_folder"}), "not_open");
+  assert.equal(grants, 0);
+  const next = await app.issues.raise(ACCESS_ISSUE);
+  const allowing = app.issues.act(BOT_ID, next.id, {kind:"allow_folder"}); await started;
+  assert.equal(await app.issues.act(BOT_ID, next.id, {kind:"dismiss_access"}), "not_open");
+  release(); await allowing;
+  assert.equal((await app.issues.list(BOT_ID)).find(row => row.id === next.id)?.resolution, "fixed");
+});
+test("restart repairs supersession status before presenting replacement and never mutates old private authority", async () => {
+  const app = setup(); const old = await app.issues.raise(ACCESS_ISSUE);
+  let failStatus = true;
+  const service = () => createBotIssueService({ store: app.store, now: () => 2000,
+    appendEntry: async (botId, kind, data) => { if (kind === BOT_ISSUE_STATUS_ENTRY_KIND && failStatus) throw new Error("status disk busy"); app.appends.push({botId, kind, data}); },
+    funnel: {deliver: async () => "sent"}, actions: { resumeRoutine: async () => "missing", stopRun: async () => {}, snoozeStall() {}, openSettings() {} } });
+  const nextInput = { ...ACCESS_ISSUE, access: { ...ACCESS_ISSUE.access, authorization: {...ACCESS_ISSUE.access.authorization, policyRevision:"rev2"} } };
+  await assert.rejects(service().raise(nextInput), /status disk busy/u);
+  failStatus = false;
+  const restarted = service();
+  const open = await restarted.list(BOT_ID, {open:true});
+  assert.equal(open.length, 1); assert.notEqual(open[0]!.id, old.id);
+  assert.equal(statusEntries(app.appends).some(entry => (entry.data as {issueId:string}).issueId === old.id), true);
+  const fresh = await restarted.raise(nextInput); assert.equal(fresh.id, open[0]!.id);
+  assert.equal(app.appends.filter(entry => entry.kind === BOT_ISSUE_ENTRY_KIND && (entry.data as {id:string}).id === fresh.id).length, 1);
+  assert.equal((await app.store.read(BOT_ID)).find(row=>row.id===old.id)?.access?.authorization.policyRevision, "original-rev");
+});
+
+test("pending settlement survives retention and restart until its transcript status is repaired", async () => {
+  const app = setup();
+  const rows = Array.from({length:55},(_,index)=>({...ACCESS_ISSUE,id:`settled-${index}`,createdAt:1000-index,resolvedAt:2000,resolution:"superseded" as const,statusAppended:true}));
+  await app.store.change(BOT_ID,()=>({issues:[...rows,{...ACCESS_ISSUE,id:"pending-status",createdAt:1,resolvedAt:2000,resolution:"superseded" as const,statusAppended:false}],result:undefined}));
+  const reopened = createBotIssueStore({profileDir:()=>app.profile});
+  assert.equal((await reopened.read(BOT_ID)).some(row=>row.id==="pending-status"&&row.statusAppended===false),true);
+  const statuses: unknown[]=[];
+  const restarted=createBotIssueService({store:reopened,now:()=>3000,appendEntry:async(_id,kind,data)=>{if(kind===BOT_ISSUE_STATUS_ENTRY_KIND)statuses.push(data);},funnel:{deliver:async()=>"sent"},actions:{resumeRoutine:async()=>"missing",stopRun:async()=>{},snoozeStall(){},openSettings(){}}});
+  await restarted.list(BOT_ID);
+  assert.deepEqual(statuses,[{issueId:"pending-status",resolution:"superseded",resolvedAt:2000}]);
+  assert.equal((await reopened.read(BOT_ID)).length,50);
+});
+
+test("known stale folder action supersedes only its old issue while a fresh authorization remains answerable", async () => {
+  let entered!:()=>void,release!:()=>void;
+  const started=new Promise<void>(resolve=>{entered=resolve;});
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const app=setup({allowFolder:async(_id,access)=>{if(access.authorization.policyRevision==="original-rev"){entered();await gate;throw new BotAccessRequestStaleError("policy changed");}return"added";}});
+  const old=await app.issues.raise(ACCESS_ISSUE);
+  const action=app.issues.act(BOT_ID,old.id,{kind:"allow_folder"});
+  const refused=assert.rejects(action,BotAccessRequestStaleError); await started;
+  const fresh=await app.issues.raise({...ACCESS_ISSUE,access:{...ACCESS_ISSUE.access,authorization:{...ACCESS_ISSUE.access.authorization,policyRevision:"fresh-rev"}}});
+  release();await refused;
+  assert.deepEqual((await app.issues.list(BOT_ID,{open:true})).map(issue=>issue.id),[fresh.id]);
+  assert.equal(await app.issues.act(BOT_ID,fresh.id,{kind:"allow_folder"}),"done");
 });

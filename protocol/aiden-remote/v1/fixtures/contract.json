@@ -2684,7 +2684,8 @@
         "choice": "always"
       },
       "response": {
-        "answered": true
+        "answered": true,
+        "savedForFuture": true
       }
     },
     "expired": {
@@ -2702,10 +2703,10 @@
       "body": "Read the reports for your summary.",
       "actions": [
         {
-          "kind": "allow_folder"
+          "kind": "dismiss_access"
         },
         {
-          "kind": "open_chat"
+          "kind": "allow_folder"
         }
       ],
       "createdAt": "2026-11-03T09:00:00.000Z",

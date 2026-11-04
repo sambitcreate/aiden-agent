@@ -60,6 +60,33 @@ test("approved roots canonicalize symlinks and persist filesystem identity witho
   }
 });
 
+test("ordinary phone roots coexist with hidden overlapping Bot roots without exposing hidden approvals", async (t) => {
+  for (const relation of ["parent", "child"] as const) {
+    const app = await fixture();
+    t.after(() => fs.rm(app.directory, { recursive: true, force: true }));
+    const taxes = path.join(app.directory, "Documents", "Taxes");
+    const year = path.join(taxes, "2025");
+    await fs.mkdir(year, { recursive: true });
+    const hidden = await app.service.addLocalFolder(taxes, { botsOnly: true, operationId: "bot-grant" });
+    const visiblePath = relation === "parent" ? path.dirname(taxes) : year;
+    const visible = await app.service.addLocalFolder(visiblePath, { rootId: `root_phone_${relation}` });
+    assert.notEqual(visible.id, hidden.id);
+    const inventory = (await app.state.snapshot()).approvedRoots;
+    assert.equal(inventory.length, 2);
+    assert.deepEqual(inventory.find((root) => root.id === hidden.id), hidden, "the exact Bot root and ownership receipt stay unchanged");
+    const browser = new AidenRemoteWorkspaceBrowserService({ instanceId: "test-instance", state: app.state, approvalStore: app.directory });
+    const roots = (await browser.listRoots("phone")).roots;
+    assert.deepEqual(roots.map((root) => root.id), [visible.id]);
+    assert.equal(JSON.stringify(roots).includes(hidden.id), false);
+    assert.equal(JSON.stringify(roots).includes("bot-grant"), false);
+    const nested = path.join(visiblePath, "nested"); await fs.mkdir(nested);
+    await assert.rejects(app.service.addLocalFolder(nested), /already covered/u);
+    assert.equal(await app.service.removeLocalRoot(visible.id, "bot-grant"), false);
+    assert.equal(await app.service.removeLocalRoot(hidden.id, "bot-grant"), true);
+    assert.deepEqual((await browser.listRoots("phone")).roots.map((root) => root.id), [visible.id]);
+  }
+});
+
 test("approved roots reuse exact folders and reject nested overlap, files, and filesystem root", async () => {
   const app = await fixture();
   try {

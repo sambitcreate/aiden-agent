@@ -735,6 +735,12 @@ struct AidenBotSessionChatView: View {
                     onAnswer: { choice in Task { await model.answerAccessRequest(choice) } })
                     .id(request.waitId)
             }
+            if let notice = model.accessSuccessNotice {
+                Text(notice)
+                    .font(.footnote)
+                    .foregroundStyle(palette.success)
+                    .accessibilityIdentifier("bot_access_success_notice")
+            }
             if let handoff = model.handoff {
                 // Revision 37: the step the Bot handed back. A sign-in is
                 // finished on the Mac; any other step is Done or Skip here.

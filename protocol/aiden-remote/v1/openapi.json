@@ -17282,7 +17282,8 @@
               "resume_routine",
               "stop_run",
               "keep_waiting",
-              "allow_folder"
+              "allow_folder",
+              "dismiss_access"
             ]
           },
           "routineId": {
@@ -17294,7 +17295,7 @@
           }
         },
         "additionalProperties": false,
-        "description": "allow_folder requires bot:access-requests beside bot:issues."
+        "description": "allow_folder and dismiss_access require bot:access-requests beside bot:issues. dismiss_access is offered only on access_needed issues."
       },
       "BotIssueActRequest": {
         "type": "object",
@@ -19058,6 +19059,11 @@
           "answered": {
             "type": "boolean",
             "const": true
+          },
+          "savedForFuture": {
+            "type": "boolean",
+            "const": true,
+            "description": "Access was saved durably for future tasks. No temporary run access was issued by this acknowledgement."
           }
         }
       }

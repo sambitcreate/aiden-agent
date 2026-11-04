@@ -61,3 +61,19 @@ test("a server refusal toasts its message and unlocks every copy; an expired ans
     assert.deepEqual(messages, ["This Bot's access changed. Ask for access again.", "That card was already answered or closed."]);
   } finally { toast.error = original; }
 });
+
+
+test("an Always saved after the task ends reports future access instead of a failed answer", async () => {
+  installBotTestIpc({"bots:answerAccessRequest": () => ({answered: true, savedForFuture: true})});
+  const successes: string[] = [], failures: string[] = [];
+  const savedSuccess = toast.success, savedError = toast.error;
+  toast.success = ((message: unknown) => { successes.push(String(message)); return "toast"; }) as typeof toast.success;
+  toast.error = ((message: unknown) => { failures.push(String(message)); return "toast"; }) as typeof toast.error;
+  try {
+    const hook = renderHook(() => useBotAccessRequestActions("bot:a", "attempt-1"));
+    await act(() => hook.result.current.answer(card, "always"));
+    assert.deepEqual(successes, ["Saved for future tasks."]);
+    assert.deepEqual(failures, []);
+    assert.equal(hook.result.current.busy, false);
+  } finally { toast.success = savedSuccess; toast.error = savedError; }
+});

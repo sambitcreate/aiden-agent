@@ -3521,7 +3521,10 @@ test("revision 55 access fixtures and strict public DTOs reject private fields a
   assert.deepEqual(section, raw.botAccessRequests);
   assert.equal(section.folder.place, "~/Documents/Reports");
   assert.deepEqual(section.wholeMac.choices, ["not_now", "once"]);
+  assert.throws(() => parseAidenRemoteBotIssue({...section.issue,kind:"run_stalled",actions:[{kind:"dismiss_access"}]}));
   assert.deepEqual(receipt({ answered: true }), { answered: true });
+  assert.deepEqual(receipt({ answered: true, savedForFuture: true }), { answered: true, savedForFuture: true });
+  for (const savedForFuture of [false, null, "true", 1]) assert.throws(() => receipt({ answered: true, savedForFuture }));
   for (const choice of ["once", "always", "not_now"]) assert.deepEqual(answer({ choice }), { choice });
   for (const sample of [{}, { choice: "all" }, { choice: "once", folderPath: "/private" }]) assert.throws(() => answer(sample));
   for (const sample of [{ answered: false }, { answered: true, waitId: "other" }]) assert.throws(() => receipt(sample));
@@ -3539,6 +3542,11 @@ test("revision 55 access fixtures and strict public DTOs reject private fields a
   assert.equal(validate(section.folder), true, JSON.stringify(validate.errors));
   assert.equal(validate(section.wholeMac), true, JSON.stringify(validate.errors));
   assert.equal(validate({ ...section.folder, authorization: {} }), false);
+  const receiptSchema = new Ajv2020({ strict: false }).compile({ $ref: "#/components/schemas/BotAccessAnswerReceipt", components: spec.components });
+  assert.equal(receiptSchema({answered:true}),true);
+  assert.equal(receiptSchema({answered:true,savedForFuture:true}),true);
+  assert.equal(receiptSchema({answered:true,savedForFuture:false}),false);
+  assert.equal(receiptSchema({answered:true,authorization:{}}),false);
 });
 
 test("the access fixture refuses a holder field in a legacy snapshot or event", async () => {

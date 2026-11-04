@@ -14,7 +14,7 @@ import {
 import type { BotIssue } from "../../../renderer/shared/bot-issues.js";
 import type { BotFileToolLocation } from "../bot-file-tool-router.js";
 import { coveredByBotLocations, type BotAccessResolution } from "./bot-access-target.js";
-import type { BotAccessRequests } from "./bot-access-requests.js";
+import { BotAccessRequestStaleError, type BotAccessRequests } from "./bot-access-requests.js";
 import { BOT_RUN_ACCESS_MAX_AGE_MS, type BotRunAccess } from "./bot-run-access.js";
 import type { BotToolCandidate } from "./bot-tool-assembly.js";
 import { botRunUnattended } from "./bot-tool-policy.js";
@@ -29,6 +29,7 @@ export interface BotAccessRequestToolDeps {
   raiseIssue(
     input: Omit<BotIssue, "id" | "createdAt" | "resolvedAt" | "resolution">,
   ): Promise<unknown>;
+  resolveIssue?(botId: string, dedupeKey: string, resolution: "fixed"): Promise<unknown>;
   now?(): number;
 }
 function paramsOf(value: unknown): { path: string; why: string } {
@@ -67,7 +68,7 @@ export function botAccessRequestCandidate(
     name: BOT_REQUEST_ACCESS_TOOL_NAME,
     label: "Request access",
     description:
-      'Ask the person to read and change a folder outside your current access. Use an absolute path, ~/Documents/Taxes, or "whole_mac". The person can allow this task once, always allow an eligible folder, or say Not now. On unattended turns this leaves a Needs you issue; carry on without that access. After approval, use file tools with location "run.access". Never request Aiden private storage.',
+      'Ask the person to read and change a folder outside your current access. Use an absolute path, ~/Documents/Taxes, or "whole_mac". The person can allow this task once, always allow an eligible folder, or say Not now. On unattended turns this leaves a Needs you issue; carry on without that access. After approval, use file tools with location "run.access". Only one extra folder is available per task; another approval replaces it. Never request Aiden private storage.',
     executionMode: "sequential",
     parameters: Type.Object(
       {
@@ -107,6 +108,8 @@ export function botAccessRequestCandidate(
           throw new Error("The owning Bot task is unavailable. Ask again in a new task.");
         await call.assertRunActive?.();
         const key = target.kind === "whole_mac" ? "whole_mac" : target.root;
+        const issueKey = `access:${key}`;
+        const dedupeKey = Array.from(issueKey).length <= 400 ? issueKey : `access:${createHash("sha256").update(key).digest("hex")}`;
         const root = target.kind === "whole_mac" ? "/" : target.root;
         const label = target.kind === "whole_mac" ? "your whole Mac" : target.label;
         const result = (
@@ -117,8 +120,22 @@ export function botAccessRequestCandidate(
           details: { target: target.kind, label, outcome },
         });
         const run = deps.runAccess.location(botId, ids, revision);
-        if (coveredByBotLocations(root, [...fixed, ...(run ? [run] : [])], "write"))
-          return result("already_allowed", `You can already read and change ${label}.`);
+        if (coveredByBotLocations(root, [...fixed, ...(run ? [run] : [])], "write")) {
+          // Bound file-tool schemas may predate a new fixed folder. Refresh
+          // their late location from authority the person already granted.
+          if (!coveredByBotLocations(root, run ? [run] : [], "write")) {
+            await call.assertRunActive?.();
+            if (call.signal.aborted) throw call.signal.reason;
+            if (await deps.policyRevision(botId) !== revision) throw new BotAccessRequestStaleError("This Bot's access changed. Ask again.");
+            const now = deps.now?.() ?? Date.now();
+            deps.runAccess.grant(botId, { requestIds, target: target.kind, key, root, label,
+              ...(target.kind === "folder" ? { identity: { device: target.device, inode: target.inode } } : {}),
+              policyRevision: revision, access: "write", owner: { kind: "access", id: randomUUID() },
+              grantedAt: now, expiresAt: now + BOT_RUN_ACCESS_MAX_AGE_MS });
+          }
+          await deps.resolveIssue?.(botId, dedupeKey, "fixed");
+          return result("already_allowed", `You can already read and change ${label}. Use file tools with location "run.access" to reach it.`);
+        }
         if (deps.runAccess.declined(botId, ids, key))
           return result(
             "declined_earlier",
@@ -154,19 +171,15 @@ export function botAccessRequestCandidate(
         if (botRunUnattended(ids)) {
           // Paths may be 4,096 bytes; issue dedupe keys are bounded to 400
           // characters. Preserve readable short keys and hash longer roots.
-          const issueKey = `access:${key}`;
           await deps.raiseIssue({
             botId,
             kind: "access_needed",
-            dedupeKey:
-              Array.from(issueKey).length <= 400
-                ? issueKey
-                : `access:${createHash("sha256").update(key).digest("hex")}`,
+            dedupeKey,
             title: `Wants to use ${label}`,
             body: Array.from(params.why).slice(0, 280).join(""),
             actions: grant
-              ? [{ kind: "allow_folder" }]
-              : [{ kind: "open_settings", section: "access" }],
+              ? [{ kind: "dismiss_access" }, { kind: "allow_folder" }]
+              : [{ kind: "dismiss_access" }, { kind: "open_settings", section: "access" }],
             access: { label, ...(grant ?? {}), authorization },
           });
           return result(
@@ -186,12 +199,13 @@ export function botAccessRequestCandidate(
               botRunUnattended(currentIds) ||
               !authorization.requestIds.some((id) => currentIds.includes(id))
             )
-              throw new Error("This access request is no longer part of an attended task.");
+              throw new BotAccessRequestStaleError("This access request is no longer part of an attended task.");
             if (call.signal.aborted) throw call.signal.reason;
           },
         };
         await owner.validate();
-        const answer = await deps.requests.request({
+        let answer;
+        try { answer = await deps.requests.request({
           botId,
           logicalRequestId: memo.requestId,
           toolCallId: call.callId,
@@ -204,7 +218,10 @@ export function botAccessRequestCandidate(
           ...(grant ? { grant } : {}),
           owner,
           signal: call.signal,
-        });
+        }); } catch (error) {
+          if (!(error instanceof BotAccessRequestStaleError)) throw error;
+          return result("access_changed", "Access changed while this request was waiting. Nothing was allowed or declined. Ask for access again if it is still needed.");
+        }
         if (answer.choice === "not_now") {
           deps.runAccess.decline(botId, requestIds, key);
           return result(
@@ -216,7 +233,7 @@ export function botAccessRequestCandidate(
         // boundary. Never issue a second grant or adopt another policy revision.
         return result(
           answer.choice,
-          `The person allowed ${label} for this task. Use the file tools with location "run.access" to reach it.${answer.choice === "always" ? " It stays allowed from your next task." : ""}`,
+          answer.savedForFuture ? `The person saved ${label} for future tasks. This task no longer owns an active access request; no temporary access was granted.` : `The person allowed ${label} for this task. Use the file tools with location "run.access" to reach it.${answer.choice === "always" ? " It stays allowed from your next task." : ""}`,
         );
       },
     }),

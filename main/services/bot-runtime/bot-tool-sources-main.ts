@@ -519,6 +519,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
           } finally { fresh.release(); }
         },
         raiseIssue: async (input) => (await import("../bot-issues/service-main.js")).botIssues.raise(input),
+        resolveIssue: async (id, key, resolution) => (await import("../bot-issues/service-main.js")).botIssues.resolve(id, key, resolution),
       }));
       // Needs the Browser or a computer in the Bot's access; the verdict keeps it off otherwise.
       tools.push(

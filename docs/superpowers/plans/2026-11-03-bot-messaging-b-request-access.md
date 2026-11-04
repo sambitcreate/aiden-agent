@@ -35,7 +35,7 @@
 
 1. **Allow once must not outlive its run.** A follow-up turn uses new request ids, so it is refused. A person's steer that joins the run is allowed. After a quit, Resume has no grant, so the Bot asks again. Task 3 tests this.
 2. **Always must not widen access.** If the Bot asks for `~/Documents/Taxes` while `~/Documents` is already an approved root, Always is not offered, and the larger root is never granted. Task 2 tests this.
-3. **Access can change while the card waits.** If the person edits the Bot's access in Settings meanwhile, Always refuses with no write and no new approved root, and the card stays open with the message. A policy-revision change also drops an Allow once. A card stores the revision it showed; an answer cannot adopt a newer revision. Directory replacement and newly overlapping roots also invalidate the card. Tasks 2-5 and 7 test this.
+3. **Access can change while the card waits.** If the person edits the Bot's access in Settings meanwhile, Always refuses with no write and no new approved root. A definite stale attempt closes with a non-decline access-changed result, so the Bot can ask again. A policy-revision change also drops an Allow once. A card stores the revision it showed; an answer cannot adopt a newer revision. Directory replacement and newly overlapping roots also invalidate the card. Tasks 2-5 and 7 test this.
 4. **Symlinks.** A requested path that resolves into Aiden's private storage (other Bots' homes, settings) is refused after `realpath`. Task 2 tests this.
 5. **Asking again after Not now.** In the same run, no second card is shown, and the result says the person already declined. Task 7 tests this.
 
@@ -316,14 +316,14 @@
   export function createBotAccessRequests(): BotAccessRequests;
   ```
   - A choice that is not in `prompt.choices` is `invalid`, and the card keeps waiting.
-  - Replace the Always-only callback with `authorize(prompt, choice)` for both `once` and `always`. It runs before settlement and revalidates the immutable authorization snapshot, current run/deadline, choices, canonical root and identity. It must not adopt a new revision. If it throws, no grant is issued, the card remains available with a stale-request error, and the Bot must make a fresh request before a changed scope can be approved. Always additionally runs the journaled persistent grant; once issues only the validated ephemeral grant.
+  - Replace the Always-only callback with `authorize(prompt, choice)` for both `once` and `always`. It runs before settlement and revalidates the immutable authorization snapshot, current run/deadline, choices, canonical root and identity. It must not adopt a new revision. A typed, definite pre-effect stale refusal withdraws the attempt and returns `access_changed` without recording a decline. A transient I/O failure keeps the card retryable. The Bot must make a fresh request before a changed scope can be approved. Always additionally runs the journaled persistent grant; once issues only the validated ephemeral grant.
   - While one answer is running, a second answer for the same `waitId` is `not_waiting`.
   - A logical `requestId` identifies the durable tool request, not a person decision. A live unchanged authorization attempt reuses its current `waitId`, including transport retries. After quit/abort, or when a changed authorization snapshot deliberately needs a new card, allocate a new random `waitId` and withdraw the old attempt. A late answer to the old id is `not_waiting`; an abort rejects with `signal.reason`. Listener throws are swallowed. Never reuse a prior decision id for a deliberate reapproval.
 - Produces, in `bot-access-requests-main.ts`:
   ```ts
   export const botAccessRequests: BotAccessRequests;
   /** Desktop IPC, Remote and the issue card call this. Throws "That answer doesn’t match the card." for invalid. */
-  export function answerBotAccessRequest(botId: string, waitId: string, choice: BotAccessChoice): Promise<{ answered: boolean }>;
+  export function answerBotAccessRequest(botId: string, waitId: string, choice: BotAccessChoice): Promise<{ answered: boolean; savedForFuture?: true }>;
   ```
   - `once` validates and issues a run grant under the captured revision. `always` calls `botApplicationService.grantBotFolder` with the captured revision/identity and stable `operationId = waitId` for this authorization attempt, then issues the run grant under the resulting validated policy revision. Both use `prompt.authorization`, not current values substituted for the original authorization.
   - It then broadcasts `bots:changed`, as `grantBotConnection` does (`bot-session-main.ts:769`).
@@ -331,7 +331,7 @@
 - [x] **Step 1: Write the failing tests** in `bot-access-requests.test.ts`:
   - `the first valid answer wins`.
   - `always is refused on a card that does not offer it`: the result is `invalid` and the card is still pending.
-  - `a failing Always keeps the card open` (Review Focus 3): the `always` callback throws, `answer` rejects, and `pending(botId)` still lists the card.
+  - `a transient failing Always keeps the card open`: the `always` callback throws a transient error, `answer` rejects, and `pending(botId)` still lists the card.
   - `a second answer while Always is running is not_waiting`.
   - `pending never exposes the authorization snapshot`: neither `grant` nor `authorization` is in `pending()` items. The intentionally displayed bounded `place` remains.
   - `abort withdraws the card and rejects with the reason`.
@@ -485,11 +485,11 @@
   export const BOT_ANSWER_ACCESS_REQUEST_CHANNEL = "bots:answerAccessRequest";
   export function registerBotAccessRequestHandlers<Event = unknown>(deps: {
     handle(channel: string, handler: (event: Event, ...args: unknown[]) => unknown): void;
-    answer(botId: string, waitId: string, choice: BotAccessChoice): Promise<{ answered: boolean }>; // answerBotAccessRequest
+    answer(botId: string, waitId: string, choice: BotAccessChoice): Promise<{ answered: boolean; savedForFuture?: true }>; // answerBotAccessRequest
   }): void;
   export function parseBotAccessAnswer(input: unknown): { botId: string; waitId: string; choice: BotAccessChoice };
   // renderer/lib/ipc.ts, bots:
-  answerAccessRequest(botId: string, waitId: string, choice: BotAccessChoice): Promise<{ answered: boolean }>;
+  answerAccessRequest(botId: string, waitId: string, choice: BotAccessChoice): Promise<{ answered: boolean; savedForFuture?: true }>;
   // card
   export function AccessRequestCard(props: {
     request: BotPendingAccessRequest; botName?: string; avatar?: BotAvatarValue;
@@ -500,7 +500,7 @@
   - It sits on `BotNoticeCard`, with the Bot's avatar in the tile and a lucide `FolderOpen` or `Laptop` glyph.
   - The title comes from `botAccessCardTitle`. Below it are `place` (folder only) and `why`.
   - There is one squircle button per choice, in `choices` order. The last is the primary.
-  - All buttons are disabled while an answer is in flight. A thrown answer, such as an Always drift refusal, toasts its message and keeps the card.
+  - All buttons are disabled while an answer is in flight. A transient save failure toasts its message and keeps the card. A definite stale attempt is removed by the host snapshot; the Bot can request fresh authority. A durable Always that outlives its task reports `savedForFuture: true` and the desktop shows "Saved for future tasks.".
   - The composer is unchanged.
 
 - [x] **Step 1: Write the failing tests:**
@@ -561,7 +561,7 @@
     choices: Array<"once" | "always" | "not_now">; // whole_mac never has "always"
   }
   // POST /bots/{botId}/access-requests/{waitId}/answer, with Idempotency-Key, body { choice }
-  // → 200 { answered: true }; 409 access_request_expired when nothing waits; 400 invalid_request for a choice not offered.
+  // → 200 { answered: true, savedForFuture?: true }; 409 access_request_expired when nothing waits; 400 invalid_request for a choice not offered.
   export interface AidenRemoteBotAccessAnswerRequest { choice: "once" | "always" | "not_now" }
   ```
   - Holders get `accessRequest` in the session snapshot and `{ accessRequest }` frames, through the same serialized projection as `handoff`.
@@ -581,7 +581,7 @@
   - Negotiate `bot:access-requests` in its own `POST /device/capabilities` call, only when the host lists it. A 400 or 404 is ignored (`.memory/bot-handoffs-clients.md`).
   - Decode `accessRequest`, render a card with the offered buttons, and post the answer with a per-`waitId` Idempotency-Key that is kept across a lost response.
   - Claim the card optimistically. On `access_request_expired`, it stays gone. On any other failure it comes back with `"That answer wasn't sent. Please try again."`.
-  - Decode `access_needed` and `allow_folder`.
+  - Decode `access_needed`, `allow_folder` and the access-only `dismiss_access` action, labelled Not now. Same-choice retries retain their key/body; a different choice gets a different key and the newly selected body. A `savedForFuture: true` receipt reports durable success without a current-run grant.
   - Tests: decode the fixture section; tapping each button posts the right body; a whole-Mac card shows no Always.
 - [x] **Step 4: Run** `npx tsx --test main/services/aiden-remote-bot-session.test.ts main/services/aiden-remote-protocol.test.ts main/services/aiden-remote-operation-contract.test.ts`, the iOS focused tests (the command in `ios/README.md`), and `./gradlew :app:testDebugUnitTest --tests '*AidenBotAccessRequests*' --tests '*AidenBotIssue*'`. Expected: PASS.
 - [x] **Step 5: Commit:** "Answer Bot access requests from phones".
@@ -942,3 +942,23 @@ Parent checks passed: access 40, runtime 350, Bots 982, handoffs 69, rules 61, m
 Native Task 9 passed iOS 158 tests with two environment skips and Android 115 tests. iOS result `/tmp/aiden-bot-access-ios-phase-b.xcresult`, log `/tmp/task9-ios-grant-fix.log`. Android lint and instrumented-test compilation passed; no emulator was attached, so Compose UI tests were not executed. Android lint has 0 errors, 51 warnings and 5 hints. iOS physical pinning/signed-Keychain checks skipped; compiler, main-thread runtime and missing-Keychain-entitlement warnings remain unclaimed as resolved. No physical-device, live-provider, package, release or exact-head hosted CI acceptance is claimed.
 
 Onboarding/tour reviewed and unchanged: new Bots still start with Full access; this is an advanced Custom-access workflow. No dependency, lockfile or Pi pin changes. Docs, project memory, CLI absence, old-client behavior, notification/count capability filtering and durable retention are updated together.
+
+## Gate 3 round 1 corrections, 2026-11-04
+
+The initial frozen checkpoint `f648df31b` was not accepted by either reviewer. The corrected checkpoint will receive fresh, independent reviews from both requested models before C starts. Findings and parent dispositions:
+
+1. Opus high 1: phone retries now bind to the waiting attempt and the selected choice. Failed Always followed by Not now sends Not now with a new key; same-choice retries retain their body/key. Both native suites reproduce the old failure and pass the corrected behavior.
+2. Opus high 2 and low 8: definite pre-effect policy, inode or scope staleness withdraws the live attempt as `access_changed`, without recording a decline. A new request gets a new wait ID. Remote maps the refusal to a typed retryable 409, including same-key retries. Transient save failures retain the card. Stale access-issue actions likewise return typed `operation_stale` before an effect.
+3. Opus medium 3 and DeepSeek 1: access issues have an explicit `dismiss_access` action, displayed as Not now and restricted to access-needed issues. Changed captured authority supersedes the issue with a fresh identity instead of updating authority under an old card. Supersession status obligations survive restart and retention. Already-authorized paths resolve their access issue without resuming the old run. Unrelated root changes no longer stale requests; only the target's relationship to roots and their identity are hashed.
+4. Opus medium 4: model requests cannot select private storage or its enclosing directories, apart from explicit Home/whole-Mac temporary choices with protected-path fences. Temporary reads, writes and recursive list/glob/grep inspect each canonical path, including aliases and `..`-prefixed in-root names. Ordinary files and the own fixed Bot home remain usable; legacy fixed read behavior is unchanged.
+5. Opus medium 5: syntax/schema and initial journal read failures preserve evidence and block folder grants only. Ordinary listing, canonical chats, chat creation and access updates work. Failures after recovery begins mutating retain the existing lifecycle fence.
+6. Opus medium 6: an explicit visible phone-folder approval may overlap a hidden Bot root. The Bot keeps its exact original binding, and hidden root metadata stays out of phone lists. Existing exact-root conversion remains supported.
+7. Opus medium 7: publication is the durable effect boundary. A successful Always followed by owner invalidation reports `{answered:true,savedForFuture:true}`, with no temporary grant. The exact operation receipt is checked before old owner/policy validation on a retry, including after a receipt-read outage or after the prompt disappears. A historical acknowledgement never recreates removed authority. Desktop and phones display Saved for future tasks.
+8. Opus low 9: an already-authorized fixed folder can refresh `run.access` safely in the current run, so a tool bound before the saved grant changed can actually read it. No extra authority is requested or synthesized.
+9. DeepSeek low 2: the user guide and tool guidance explicitly state the one-extra-folder-per-task replacement limit. Saved fixed Always scopes remain available through validated current access.
+10. DeepSeek low 3: access notifications now read "Ada needs you to: use Taxes", without repeating the Bot's name.
+11. Opus low 10 is retained as a documented bounded-store limit: the journal keeps 4,096 durable operation receipts. Pruning without durable replay tombstones could recreate removed authority, so this correction does not evict receipts unsafely. The store fails closed at its cap.
+
+Correction evidence is separate from initial-checkpoint evidence above. Storage suites passed 214 broader checks and 92 final affected checks, with real red cases for privacy, journal isolation and overlap behavior. Runtime checks passed 51 access tests, 339 final host/protocol/router/issue checks and 11 final bridge race checks, with explicit red cases for changed authority, durable publication and issue recovery. Native correction checks passed iOS 168 with two environment skips and Android 121; Android lint has zero errors, 51 warnings and five hints, and instrumented tests compiled without an attached emulator. Existing Xcode warnings remain unclaimed as resolved. The actual Cua interaction test passed with the future-save success notice and a transient retryable failure. Parent broader regressions passed runtime 350, Bots 990, Remote 175 plus 1039 plus 7 plus 29 with two existing skips, and CLI 183 with three existing PTY skips. Final handoff and new frozen SHA will be recorded before the next reviews.
+
+Final R1 runtime handoff: `/tmp/aiden-bot-access-runtime-r1-handoff.md`. All three correction workers completed and stopped editing before the corrected freeze. Root type-check and scoped lint passed on the corrected code. No new test files or registry entries were needed; registry still passes all 15 checks. Final root UI/parser/notification tests passed 24, including a red/green ordinary-issue/action mismatch case. CLI type-check also passed. The last bridge-only change cached a successful historical acknowledgement before observing that its prompt had been withdrawn; its 11 behavioral tests passed and no authority or second publication was added.

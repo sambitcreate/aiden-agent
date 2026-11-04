@@ -130,10 +130,11 @@ export class AidenRemoteApprovedRootService {
       }
       return exact;
     }
-    if (existing.some((root) => isPathInside(root.folderPath, canonicalPath))) {
+    const overlapping = existing.filter((root) => options.botsOnly || !root.botsOnly);
+    if (overlapping.some((root) => isPathInside(root.folderPath, canonicalPath))) {
       throw new Error("This folder is already covered by an approved root.");
     }
-    if (existing.some((root) => isPathInside(canonicalPath, root.folderPath))) {
+    if (overlapping.some((root) => isPathInside(canonicalPath, root.folderPath))) {
       throw new Error("This folder would overlap an existing approved root.");
     }
 

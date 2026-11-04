@@ -5,7 +5,9 @@ import path from "node:path";
 import os from "node:os";
 import { AidenRemoteStateRegistry, createDefaultAidenRemoteState } from "./aiden-remote-state.js";
 import { AidenRemoteApprovedRootService } from "./aiden-remote-approved-roots.js";
-import { fileBotFolderGrantJournal } from "./bot-folder-grant-journal.js";
+import { createBotFolderGrantJournal, fileBotFolderGrantJournal } from "./bot-folder-grant-journal.js";
+import { resolveBotAccessTarget } from "./bot-runtime/bot-access-target.js";
+import { BotAccessRequestStaleError } from "./bot-runtime/bot-access-requests.js";
 import {
   BOT_FULL_ACCESS_NOTICE_VERSION,
   type BotAccessUpdate,
@@ -79,6 +81,98 @@ test("grantBotFolder adds exactly one Bot-only root, preserves selection and ret
   assert.equal(await app.service.grantBotFolder(app.input), "already_allowed");
   assert.deepEqual(app.counts, { adds: 1, removes: 0, saves: 1 });
   await assert.rejects(app.service.grantBotFolder({ ...app.input, folderPath: app.directory }), /another request/u);
+});
+
+test("a malformed on-disk folder journal fences only grants and preserves its repair evidence", async (t) => {
+  for (const malformed of ["{not-json", "null", '{"unexpected":"object"}']) {
+  const app = await folderFixture(t);
+  const file = path.join(app.privateRoot, "bot-folder-grants.json");
+  await fs.writeFile(file, malformed);
+  const service = createBotApplicationService(app.deps);
+  assert.deepEqual((await service.list()).map((bot) => bot.id), [app.owner.id]);
+  assert.equal(await service.getCanonicalChat(app.owner.id), null);
+  const chat = await service.createChat({ audienceId: "device:a", botId: app.owner.id });
+  assert.equal(chat.botId, app.owner.id);
+  assert.equal((await service.getCanonicalChat(app.owner.id))?.id, chat.id);
+  const policy = app.policies.get(app.owner.id)!;
+  const updated = await service.updateBotAccess({ audienceId: "device:a", botId: app.owner.id, expectedRevision: policy.revision, access: { accessMode: "custom", catalogRevision: CATALOG_REVISION, custom: policy.custom! } });
+  assert.notEqual(updated.revision, policy.revision);
+  await assert.rejects(service.grantBotFolder({ ...app.input, expectedRevision: updated.revision }), /folder.*journal.*repair.*preserv|folder.*journal.*preserv.*repair/iu);
+  await assert.rejects(service.botFolderGrantCommitted(app.owner.id, app.input.operationId), /journal needs repair/u);
+  assert.equal(app.counts.adds, 0);
+  assert.equal((await app.state.snapshot()).approvedRoots.length, 0);
+  assert.equal(await fs.readFile(file, "utf8"), malformed);
+  }
+});
+
+test("committed folder receipts acknowledge only the original Bot and desktop operation after access removal", async (t) => {
+  const app = await folderFixture(t);
+  const input = { ...app.input, audienceId: "desktop:local" };
+  assert.equal(await app.service.botFolderGrantCommitted(app.owner.id, input.operationId), false);
+  await app.service.grantBotFolder(input);
+  assert.equal(await app.service.botFolderGrantCommitted(app.owner.id, input.operationId), true);
+  assert.equal(await app.service.botFolderGrantCommitted("bot:other", input.operationId), false);
+  assert.equal(await app.service.botFolderGrantCommitted(app.owner.id, "different-operation"), false);
+  const policy = app.policies.get(app.owner.id)!;
+  await app.service.updateBotAccess({ audienceId: "desktop:local", botId: app.owner.id, expectedRevision: policy.revision, access: { accessMode: "custom", catalogRevision: CATALOG_REVISION, custom: { ...policy.custom!, fileScopeIds: ["scope:home"] } } });
+  assert.equal(await app.service.botFolderGrantCommitted(app.owner.id, input.operationId), true, "a receipt is history, not current access");
+  await assert.rejects(app.service.grantBotFolder(input), (error: unknown) => error instanceof Error && !(error instanceof BotAccessRequestStaleError) && /access changed/u.test(error.message));
+  assert.deepEqual(app.policies.get(app.owner.id)!.custom!.fileScopeIds, ["scope:home"]);
+  const record = (await app.journal.list())[0]!;
+  await app.journal.put({ ...record, input: { ...record.input, audienceId: "device:phone" } });
+  assert.equal(await app.service.botFolderGrantCommitted(app.owner.id, input.operationId), false);
+});
+
+test("an unavailable folder journal read leaves ordinary Bot operations available without inferring a committed receipt", async (t) => {
+  const app = await folderFixture(t);
+  let writes = 0;
+  app.deps.approvedFolders!.journal = createBotFolderGrantJournal({
+    read: async () => { throw Object.assign(new Error("disk read unavailable"), { code: "EIO" }); },
+    write: async () => { writes++; },
+  });
+  const service = createBotApplicationService(app.deps);
+  assert.equal((await service.list())[0]!.id, app.owner.id);
+  const chat = await service.createChat({ audienceId: "device:a", botId: app.owner.id });
+  assert.equal((await service.getCanonicalChat(app.owner.id))?.id, chat.id);
+  const policy = app.policies.get(app.owner.id)!;
+  await service.updateBotAccess({ audienceId: "device:a", botId: app.owner.id, expectedRevision: policy.revision, access: { accessMode: "custom", catalogRevision: CATALOG_REVISION, custom: policy.custom! } });
+  await assert.rejects(service.grantBotFolder(app.input), /journal could not be read.*preserve.*repair/iu);
+  await assert.rejects(service.botFolderGrantCommitted(app.owner.id, app.input.operationId), /journal could not be read/u);
+  assert.equal(writes, 0);
+  assert.equal(app.counts.adds, 0);
+  assert.deepEqual((await app.state.snapshot()).approvedRoots, []);
+});
+
+test("a failure after folder recovery starts mutating keeps the existing global lifecycle fence", async (t) => {
+  const app = await folderFixture(t);
+  const remove = app.deps.approvedFolders!.removeOwned;
+  app.deps.capabilityStore.updateBotPolicy = async () => { throw new Error("save failed"); };
+  app.deps.approvedFolders!.removeOwned = async () => { throw new Error("compensation unavailable"); };
+  await assert.rejects(app.service.grantBotFolder(app.input), /compensation unavailable/u);
+  assert.equal((await app.journal.list())[0]!.state, "pending");
+  app.deps.approvedFolders!.removeOwned = remove;
+  app.deps.approvedFolders!.journal = { list: () => app.journal.list(), put: async () => { throw new Error("recovery receipt write unavailable"); } };
+  const service = createBotApplicationService(app.deps);
+  await assert.rejects(service.list(), /recovery receipt write unavailable/u);
+  await assert.rejects(service.getCanonicalChat(app.owner.id), /recovery receipt write unavailable/u);
+  assert.equal((await app.state.snapshot()).approvedRoots.length, 0);
+  assert.equal((await app.journal.list())[0]!.state, "pending", "uncertain recovery evidence remains intact");
+});
+
+test("unrelated root changes leave a captured folder grant valid and phone parents never widen its Bot binding", async (t) => {
+  const app = await folderFixture(t);
+  const target = await resolveBotAccessTarget(app.folderPath, { ...app.deps.approvedFolders!.target, approvedRoots: app.deps.approvedFolders!.list });
+  assert.equal(target.kind, "folder");
+  if (target.kind !== "folder") throw new Error("Expected target");
+  const unrelated = path.join(app.directory, "Music"); await fs.mkdir(unrelated);
+  const unrelatedRoot = await app.roots.addLocalFolder(unrelated);
+  assert.equal(await app.service.grantBotFolder({ ...app.input, expectedInventoryRevision: target.inventoryRevision }), "added");
+  const hidden = (await app.state.snapshot()).approvedRoots.find((root) => root.folderPath === app.folderPath)!;
+  const before = structuredClone(app.botBindings.get(app.owner.id));
+  await app.roots.removeLocalRoot(unrelatedRoot.id);
+  await app.roots.addLocalFolder(app.directory, { confirmHomeDirectory: true });
+  assert.deepEqual(app.botBindings.get(app.owner.id), before);
+  assert.deepEqual(app.policies.get(app.owner.id)!.custom!.fileScopeIds, ["scope:home", `scope:${hidden.id}`]);
 });
 test("grantBotFolder reuses an exact root and never compensates a reused root on save failure", async (t) => {
   const app = await folderFixture(t);

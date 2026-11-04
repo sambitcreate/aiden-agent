@@ -25,6 +25,7 @@ export type BotAccessOutcome =
   | BotAccessChoice
   | "already_allowed"
   | "declined_earlier"
+  | "access_changed"
   | "asked_later";
 export interface BotAccessResultDetails {
   target: BotAccessTarget;
@@ -219,5 +220,7 @@ export function botAccessResultLine(details: BotAccessResultDetails): string {
       return `Already declined ${details.label}`;
     case "asked_later":
       return `Asked for ${details.label}`;
+    case "access_changed":
+      return `Access changed for ${details.label}`;
   }
 }

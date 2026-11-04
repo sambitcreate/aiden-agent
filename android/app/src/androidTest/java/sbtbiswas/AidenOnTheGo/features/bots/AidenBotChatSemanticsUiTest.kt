@@ -51,6 +51,18 @@ class AidenBotChatSemanticsUiTest {
         compose.onNodeWithText("Not now").assertIsNotEnabled()
     }
 
+    @Test fun accessIssueOffersNotNowAndReportsDismissAction() {
+        val action = sbtbiswas.AidenOnTheGo.models.AidenBotIssueAction(sbtbiswas.AidenOnTheGo.models.AidenBotIssueActionKind.DISMISS_ACCESS)
+        val issue = sbtbiswas.AidenOnTheGo.models.AidenBotIssue(
+            "access-issue-55", sbtbiswas.AidenOnTheGo.models.AidenBotIssueKind.ACCESS_NEEDED,
+            "Folder access needed", "Choose whether to save access for future tasks.",
+            actions = listOf(action), createdAt = java.time.Instant.parse("2026-11-03T00:00:00Z"), resolved = false)
+        val answers = mutableListOf<sbtbiswas.AidenOnTheGo.models.AidenBotIssueAction>()
+        compose.setContent { AidenTheme { AidenBotIssueCard(issue, true, false) { answers += it } } }
+        compose.onNodeWithText("Not now").performClick()
+        assertEquals(listOf(action), answers)
+    }
+
     @get:Rule
     val compose = createComposeRule()
 
