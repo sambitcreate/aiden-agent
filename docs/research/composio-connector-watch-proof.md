@@ -238,3 +238,10 @@ The owner-authorized actual check (`checkedAt:1793779492891`) again passed inval
 Bounded inert-null output compatibility (`b278f4e4b`) was clear after Sol high fix/review loops, including 189 independent cases, 28 protected-name probes and three neutral controls. The validation copy omits only eligible declared optional null string metadata; the original reply still feeds semantic guards. Explicit protected terms now cover plural, mixed-case and compound forms. Actual root ES2020 compilation and 487 proactive cases passed. Immutable pre-Open-work snapshot `530e76170` passed its build, 406 focused cases, signed/native preflight and isolated startup.
 
 The owner-authorized actual check (`checkedAt:1793781961316`) passed the previous inert-field gate and identified a null optional string at the known data.nextPageToken field. Exact invalid-account refusal remains verified. The existing page reader already treats a null cursor as end-of-pages; a paginated-read-specific compatibility correction is being implemented and reviewed without dropping or changing non-null cursors. No event or GET read ran; Calendar remains unavailable.
+
+
+### V22 null-page policy context — 2026-11-04
+
+The paginated-read null-cursor compatibility (`f7f0fc1a8`) was clear after Sol high review: 194 independent cases plus eight pagination controls. Immutable pre-Open-work snapshot `551cf817a` passed its build, 411 focused cases, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793782878543`) again passed exact invalid-account refusal, then rejected one Calendar-list response at optional string data.nextPageToken returning null. The narrowly recognized page context was not established, so the exception did not apply. No event or GET read ran.
+
+Closed page-shape and schema-context diagnostics are being added to identify the actual representation before changing parser or validation acceptance. Calendar remains gated; credentials, access settings and the installed app remain unchanged.

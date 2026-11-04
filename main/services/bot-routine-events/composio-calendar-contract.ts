@@ -8,6 +8,7 @@ import { buildComposioCalendarExecutorRequest, parseComposioCalendarExecutorResp
 import type { ComposioCalendarContract } from "./composio-calendar-host-port.js";
 import { ComposioCalendarOutputSchemaError, normalizeComposioCalendarOutputSchema, type ComposioCalendarReferenceFailure } from "./composio-calendar-output-schema.js";
 import { CALENDAR_OUTPUT_COMPATIBILITY_VERSION, calendarOutputValidationCopy } from "./composio-calendar-output-compatibility.js";
+import { composioCalendarPageShapeFacts, type ComposioCalendarPageShapeFacts } from "./composio-calendar-page-diagnostics.js";
 
 export const CALENDAR_SCHEMA_SLUGS = ["GOOGLECALENDAR_LIST_CALENDARS", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_EVENTS_GET"] as const;
 type ObjectValue = Record<string, unknown>;
@@ -83,6 +84,7 @@ export interface ComposioCalendarFailureFacts {
   referenceFailure?: ComposioCalendarReferenceFailure;
   executorResponse?: ExecutorResponseFacts;
   typeMismatch?: TypeMismatchFacts;
+  pageShape?: ComposioCalendarPageShapeFacts;
 }
 export class ComposioCalendarContractError extends Error {
   constructor(readonly stage: "inventory" | "search" | "schemas" | "executor" | "read_arguments" | "read_response" | "schema_drift", readonly reason: "shape" | "missing" | "unsupported" | "invalid" | "changed", readonly facts?: ComposioCalendarFailureFacts, readonly field?: "executor_input" | "executor_output" | "account_selector") {
@@ -220,7 +222,7 @@ function typeMismatchFacts(error: ErrorObject, value: unknown, schema: unknown):
 }
 function validationFailure(stage: ComposioCalendarContractError["stage"], validator: ValidateFunction, context: Pick<ComposioCalendarFailureFacts, "operation" | "direction" | "executorResponse">, field?: ComposioCalendarContractError["field"], value?: unknown): never {
   const error = validator.errors?.[0];
-  throw new ComposioCalendarContractError(stage, "invalid", { keyword: composioWatchSchemaDiagnosticKeyword(error?.keyword ?? ""), dialect: composioWatchSchemaDiagnosticDialect(optionalObject(validator.schema)?.$schema), ...context, ...(stage === "read_response" && error?.keyword === "type" ? { typeMismatch: typeMismatchFacts(error, value, validator.schema) } : {}) }, field);
+  throw new ComposioCalendarContractError(stage, "invalid", { keyword: composioWatchSchemaDiagnosticKeyword(error?.keyword ?? ""), dialect: composioWatchSchemaDiagnosticDialect(optionalObject(validator.schema)?.$schema), ...context, ...(stage === "read_response" ? { pageShape: composioCalendarPageShapeFacts(validator.schema, value) } : {}), ...(stage === "read_response" && error?.keyword === "type" ? { typeMismatch: typeMismatchFacts(error, value, validator.schema) } : {}) }, field);
 }
 function compileCalendarOutput(value: unknown, operation: ComposioCalendarRead["kind"]): ValidateFunction {
   let normalized: ReturnType<typeof normalizeComposioCalendarOutputSchema>;

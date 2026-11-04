@@ -5,6 +5,7 @@ import { syntheticCalendarExecutor, syntheticCalendarMetadata, syntheticCalendar
 import { compileComposioWatchInputSchema, type ComposioWatchSchemaCompileFacts } from "./connector-watch-composio-probe.js";
 import { normalizeComposioCalendarOutputSchema } from "./composio-calendar-output-schema.js";
 import { calendarOutputValidationCopy } from "./composio-calendar-output-compatibility.js";
+import { composioCalendarPageShapeFacts } from "./composio-calendar-page-diagnostics.js";
 
 test("contract validates all three fixed read schemas and one account-selected executor item", () => {
   const metadata = syntheticCalendarMetadata();
@@ -223,6 +224,50 @@ test("null page-end compatibility never supplies defaults or weakens cursor decl
   schemas.data.tool_schemas.GOOGLECALENDAR_EVENTS_GET!.output_schema = { type: "object", properties: { items: { type: "array" }, nextPageToken: { type: "string" } } } as never;
   const get = { kind: "getEvent" as const, accountId: "account", calendarId: "calendar", eventId: "event", timezone: "UTC" };
   assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(get, syntheticCalendarExecutor(get, { items: [], nextPageToken: null })));
+});
+
+test("rejected list output exposes only fixed collection, first-record and null-cursor policy shape", () => {
+  for (const collection of ["items", "calendars", "calendarList", "calendar_list"]) for (const legacy of [false, true]) {
+    const schemas = syntheticCalendarSchemas(), singleton = collection === "items";
+    schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = { type: "object", properties: {
+      successful: { type: "boolean" }, successfull: { type: "boolean" }, data: { type: "object", properties: {
+        [collection]: { type: "array", items: { type: "object" } }, nextPageToken: { type: singleton ? ["string"] : "string" }, status: { type: "string" },
+      } },
+    } } as never;
+    const first = { id: "private-id", accessRole: "reader", access_role: "owner", summary: "private-summary", name: "private-name", calendar_id: "private-calendar", calendarId: "private-calendar", private_unknown: "private-value" };
+    const response = { ...(legacy ? { successfull: true } : { successful: true }), error: null, data: { [collection]: [first], nextPageToken: null, status: null } };
+    const read = { kind: "listCalendars" as const, accountId: "private-account" };
+    let failure: unknown;
+    try { verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, syntheticCalendarExecutor(read, response)); } catch (error) { failure = error; }
+    assert.ok(failure instanceof ComposioCalendarContractError); assert.equal(failure.stage, "read_response");
+    const shape = failure.facts!.pageShape!; assert.equal(shape.bounded, true);
+    const root = shape.locations!.root, data = shape.locations!.data;
+    assert.deepEqual(root.successful, { type: legacy ? "missing" : "boolean", outcome: legacy ? "missing" : "true" });
+    assert.deepEqual(root.successfull, { type: legacy ? "boolean" : "missing", outcome: legacy ? "true" : "missing" });
+    assert.equal(root.error, "null"); assert.equal(root.data, "object"); assert.equal(data.itemsArray, singleton);
+    assert.deepEqual(data.schema, { context: "simple", objectType: "exact", ancestorRestricted: false });
+    assert.deepEqual(data.cursors.nextPageToken, { value: "null", declaredType: singleton ? "singleton_array" : "exact", required: false, default: "missing", plainString: !singleton });
+    const selected = data.collections[collection as "items" | "calendars" | "calendarList" | "calendar_list"];
+    assert.equal(selected.value, "array"); assert.equal(selected.declaredArray, true); assert.equal(selected.count, 1);
+    assert.deepEqual(selected.first, { value: "object", fields: { id: "string", accessRole: "string", access_role: "string", summary: "string", name: "string", calendar_id: "string", calendarId: "string" } });
+    for (const secret of ["private-id", "private-summary", "private-name", "private-calendar", "private-account", "private_unknown", "private-value", "reader", "owner"]) assert.equal(JSON.stringify(failure.facts).includes(secret), false);
+    assert.ok(Buffer.byteLength(JSON.stringify(failure.facts), "utf8") < 16 * 1024);
+  }
+});
+
+test("page shape projections cap counts and classify schema context without unknown names or accessor execution", () => {
+  const schema = { type: "object", minProperties: 1, properties: { data: { type: ["object"], properties: { items: { type: "array" }, nextPageToken: { type: "string", default: "private-default" } } } } };
+  const shape = composioCalendarPageShapeFacts(schema, { successful: false, data: { items: Array.from({ length: 600 }, () => ({ id: "private-identity" })), nextPageToken: null } });
+  assert.equal(shape.locations!.root.schema.context, "property_count");
+  assert.equal(shape.locations!.data.schema.objectType, "singleton_array"); assert.equal(shape.locations!.data.schema.ancestorRestricted, true);
+  assert.equal(shape.locations!.data.collections.items.count, 501); assert.equal(shape.locations!.data.collections.items.declaredArray, "unknown");
+  assert.equal(shape.locations!.data.cursors.nextPageToken.default, "other"); assert.equal(shape.locations!.data.cursors.nextPageToken.plainString, "unknown");
+  const composed = composioCalendarPageShapeFacts({ type: "object", properties: {}, allOf: [{ type: "object" }] }, { response: { data: { calendar_list: [] } } });
+  assert.equal(composed.locations!.root.schema.context, "composition"); assert.equal(composed.locations!.response_data.collections.calendar_list.count, 0);
+  for (const secret of ["private-default", "private-identity", "600"]) assert.equal(JSON.stringify(shape).includes(secret), false);
+  let accessed = false;
+  const accessor = Object.defineProperty({}, "calendars", { enumerable: true, get() { accessed = true; return []; } });
+  assert.deepEqual(composioCalendarPageShapeFacts({ type: "object", properties: {} }, accessor), { bounded: false }); assert.equal(accessed, false);
 });
 
 test("inert null compatibility never removes authority, cursor, error or partial metadata", () => {
@@ -454,8 +499,10 @@ test("argument and response diagnostics expose only fixed validation keyword, op
   const outputs = syntheticCalendarSchemas(); outputs.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema.required.push("private_required_output");
   const outputContract = verifyCalendarContract(syntheticCalendarMetadata(), outputs), read = { kind: "listCalendars" as const, accountId: "actual-account" };
   try { outputContract.response(read, syntheticCalendarExecutor(read, { items: [] })); } catch (caught) { failure = caught; }
-  const output = (failure as { facts: Record<string, unknown> }).facts;
-  assert.deepEqual(output, { keyword: "required", dialect: "missing", operation: "listCalendars", direction: "output" });
+  assert.ok(failure instanceof ComposioCalendarContractError);
+  const output = failure.facts!, { pageShape, ...outputCore } = output;
+  assert.deepEqual(outputCore, { keyword: "required", dialect: "missing", operation: "listCalendars", direction: "output" });
+  assert.equal(pageShape?.locations?.root.collections.items.count, 0);
   for (const secret of ["private_required_input", "private_required_output", "private-event-id", "actual-calendar", "instancePath", "schemaPath", "params"]) assert.equal(JSON.stringify([input, output]).includes(secret), false);
 });
 
