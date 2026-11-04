@@ -132,3 +132,14 @@ These remain plans, not implemented features. The acceptance cases in each task 
 - [ ] B: `request_access`
 - [ ] C: plan approval
 - [ ] D: allow list and nudge
+
+
+### 2026-11-04: Idle reply preparation avoids outbound roster discovery
+
+Hosted PR #727 head `a819a54d2` again failed the unchanged 10-second final-reply poll in run 41899862714, job 126819265824. Beta's answer was saved about 5.9 seconds after Alpha's initial result, but the reply effect remained unacknowledged. The exact hosted cause remains unproven; no unchanged CI rerun was requested.
+
+The real CLI parity case reproduced two outbound-roster reads while preparing a reply that cannot use `message_bot`. Session preparation now passes the already validated Bot request identity to registry refresh only when the Bot is idle. Posting, current state, admission, model, pause, spending, deadline and per-call ingress checks remain fresh. Resume and compaction retain their existing preparation. No cache, public contract, native change or timeout change was added.
+
+The first candidate also passed a queued reply's context while a person was running. A new real runtime case failed with zero person-tool executions instead of two. Restricting the context to idle preparation restores both executions and the queued reply. The original CLI assertion still requires the final reply within 10 seconds, and now independently requires zero roster reads in reply preparation.
+
+Final local validation: runtime 347 passed; messaging 95 passed; rebuilt CLI 183 passed with three existing PTY skips; whole TypeScript and scoped lint passed. Behavioral RED logs are `/tmp/bot-pr727-reply-preparation-red.log` and `-queue-red.log`; final logs use `/tmp/bot-pr727-reply-preparation-{runtime,cli,build}-final.log`, plus `-queue-green.log`, `-types.log` and `-lint.log`. Setup failures are recorded separately in the ignored papercut log. Opus review and exact-head CI remain pending for this runtime correction. All earlier retained observations and the no-merge instruction remain.
