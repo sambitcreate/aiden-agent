@@ -254,19 +254,19 @@ test("post accepts durably without any session call and later carries one final 
   assert.equal(f.sends.length, 2);
   assert.equal(f.deliveries.length, 1);
 });
-test("accepted deliveries use identity reads without repeating full roster availability discovery", async t => {
+test("accepted relays use identity reads after the posting roster check", async t => {
   let accepted = false, rosterReads = 0;
   const f = await setup(t, {
     botExists: async id => ["A", "B", "C"].includes(id),
     beforeRoster: () => {
       rosterReads++;
-      if (accepted) throw new Error("unrelated Bot availability cannot be read");
+      if (accepted) throw new Error("injected full-roster failure");
     },
   });
   assert.equal((await f.post()).status, "sent");
   accepted = true;
   await waitFor(() => f.sends.length > 0 || f.errors.length > 0, { what: "identity-only target dispatch" });
-  assert.deepEqual(f.errors, [], "unrelated availability cannot strand an accepted message");
+  assert.deepEqual(f.errors, [], "the identity-only relay ignores the injected full-roster failure");
   assert.equal(f.sends[0]!.botId, "B");
   f.finish(0, "Pong");
   await f.until(() => f.sends.length === 2);
@@ -297,20 +297,45 @@ for (const unavailable of ["missing", "read error"] as const) {
     }
   });
 }
-test("deletion during an identity read fences a late positive result", async t => {
-  let entered!: () => void, release!: () => void;
-  const checking = new Promise<void>(resolve => { entered = resolve; });
-  const held = new Promise<void>(resolve => { release = resolve; });
-  const f = await setup(t, { botExists: async id => {
-    if (id === "B") { entered(); await held; }
-    return true;
-  } });
-  await f.post();
-  await checking;
-  try { await f.courier.forgetBot("B"); } finally { release(); }
-  await f.until(() => f.notices.length === 1);
-  assert.deepEqual(f.sends, [], "a completed identity read cannot resurrect deleted work");
-});
+for (const leg of ["target", "reply"] as const) {
+  test(`deletion during the final ${leg} identity read fences a late positive result`, async t => {
+    let entered!: () => void, release!: () => void, reads = 0;
+    const checking = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const removedBot = leg === "target" ? "B" : "A";
+    const f = await setup(t, { botExists: async id => {
+      // Hold the second read, immediately before send. Holding the first
+      // would let the next read independently observe the deletion.
+      if (id === removedBot && ++reads === 2) { entered(); await held; }
+      return true;
+    } });
+    const posted = await f.post();
+    assert.equal(posted.status, "sent");
+    if (posted.status !== "sent") return;
+    if (leg === "reply") {
+      await f.until(() => f.sends.length === 1);
+      f.finish(0, "Pong");
+    }
+    await checking;
+    const read = f.ledger.get;
+    try {
+      await f.courier.forgetBot(removedBot);
+      // Observe the worker's final durable read after its held lookup resumes.
+      // Disposing to drain it would add another fence and mask deletion bugs.
+      const finished = new Promise<void>(resolve => {
+        f.ledger.get = async id => {
+          const row = await read(id);
+          if (id === posted.deliveryId) resolve();
+          return row;
+        };
+      });
+      release();
+      await finished;
+      assert.deepEqual(f.sends.map(send => send.botId), leg === "target" ? [] : ["B"],
+        "the final identity result cannot start a deleted target or reply turn");
+    } finally { f.ledger.get = read; release(); }
+  });
+}
 
 test("a positive identity read still submits through the fresh session refusal", async t => {
   const f = await setup(t, { botExists: async () => true });
