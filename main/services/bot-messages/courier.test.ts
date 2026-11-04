@@ -201,6 +201,7 @@ async function setup(t: TestContext) {
     until,
     finish,
     states,
+    pendingTimers: () => timers.size,
     create,
     get courier() {
       return courier;
@@ -1001,4 +1002,114 @@ test("parallel approval publication preserves a preannounced second card without
     { decision: "deny", decisionSource: "expiry" },
   ]);
   await f.until(() => f.notices.some((n) => (n as { outcome: string }).outcome === "gave_up"));
+});
+
+test("disposal joins a worker held before its first deadline arm and leaves no late work", async (t) => {
+  const f = await setup(t);
+  const get = f.ledger.get;
+  let held = false,
+    first = true,
+    release!: () => void;
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  f.ledger.get = async (id) => {
+    const row = await get(id);
+    if (first) {
+      first = false;
+      held = true;
+      await barrier;
+    }
+    return row;
+  };
+  const accepted = await f.post();
+  if (accepted.status !== "sent") throw new Error("not admitted");
+  let closing!: Promise<void>;
+  try {
+    await waitFor(() => held);
+    closing = f.courier.dispose();
+  } finally {
+    release();
+  }
+  await closing;
+  const before = await f.ledger.get(accepted.deliveryId);
+  assert.equal(f.pendingTimers(), 0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.pendingTimers(), 0);
+  await f.advance(1800001);
+  assert.deepEqual(await f.ledger.get(accepted.deliveryId), before);
+  assert.equal(f.sends.length, 0);
+  assert.equal(f.notices.length, 0);
+});
+
+for (const kind of ["failed", "interrupted"] as const) {
+  test(`a parked answered child settles when its parent's initial turn is ${kind}`, async (t) => {
+    const f = await setup(t);
+    const root = await f.post();
+    if (root.status !== "sent") throw new Error("not admitted");
+    await f.until(() => f.sends.length === 1);
+    const child = await f.post("B", "C", [f.sends[0]!.input.requestId]);
+    if (child.status !== "sent") throw new Error("not admitted");
+    await f.until(() => f.sends.length === 2);
+    f.finish(1, "C answered already");
+    await f.until(async () => (await f.ledger.get(child.deliveryId))?.initialAnswer === "C answered already");
+    f.finishOutcome(0, kind === "failed" ? { kind, error: "parent failed" } : { kind, settled: true });
+    await f.until(async () => (await f.ledger.get(child.deliveryId))?.status === "failed");
+    await f.until(async () => (await f.ledger.open()).length === 0);
+    assert.equal(
+      f.notices.some((n) => (n as { outcome: string }).outcome === "expired"),
+      false,
+    );
+    assert.equal(f.sends.length, 2);
+    for (let i = 0; i < 3; i++) assert.equal((await f.post("B", "A")).status, "sent", "child no longer holds capacity");
+  });
+}
+
+test("deadline recovery uses the ended parent's outcome for an already answered child", async (t) => {
+  const f = await setup(t);
+  const root = await f.post();
+  if (root.status !== "sent") throw new Error("not admitted");
+  await f.until(() => f.sends.length === 1);
+  const child = await f.post("B", "C", [f.sends[0]!.input.requestId]);
+  if (child.status !== "sent") throw new Error("not admitted");
+  await f.until(() => f.sends.length === 2);
+  f.finish(1, "C answered already");
+  await f.until(async () => !!(await f.ledger.get(child.deliveryId))?.initialAnswer);
+  // Persisted crash boundary: the parent ended before it could wake its child.
+  await f.ledger.update(root.deliveryId, (row) => ({
+    ...row,
+    status: "failed",
+    outcome: "failed",
+    effects: row.effects.map((e) => ({ ...e, acknowledgedAt: 1000 })),
+  }));
+  await f.advance(1800001);
+  await f.until(async () => (await f.ledger.get(child.deliveryId))?.status === "failed");
+  assert.equal(
+    f.notices.some((n) => (n as { outcome: string }).outcome === "expired"),
+    false,
+  );
+});
+
+test("restart derives the child's committed quiet outcome if the parent hint was not written", async (t) => {
+  const f = await setup(t);
+  const root = await f.post();
+  if (root.status !== "sent") throw new Error("not admitted");
+  await f.until(() => f.sends.length === 1);
+  const child = await f.post("B", "C", [f.sends[0]!.input.requestId]);
+  if (child.status !== "sent") throw new Error("not admitted");
+  await f.until(() => f.sends.length === 2);
+  f.finish(0, "Initial answer ended");
+  await f.until(async () => !!(await f.ledger.get(root.deliveryId))?.initialAnswer);
+  await f.courier.dispose();
+  // Only the child's first write survived the crash; its parent hint did not.
+  await f.ledger.update(child.deliveryId, (row) => ({
+    ...row,
+    status: "failed",
+    outcome: "failed",
+    effects: row.effects.map((e) => ({ ...e, acknowledgedAt: 1000 })),
+  }));
+  assert.equal((await f.ledger.get(root.deliveryId))!.childOutcome, undefined);
+  await f.restart();
+  await f.until(async () => (await f.ledger.get(root.deliveryId))?.outcome === "failed");
+  assert.equal(f.sends.length, 2);
 });

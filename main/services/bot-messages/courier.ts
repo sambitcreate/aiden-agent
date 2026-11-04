@@ -173,12 +173,13 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
       .catch(report)
       .finally(() => {
         workers.delete(id);
-        track(
-          (async () => {
-            const row = await deps.ledger.get(id);
-            if (row) arm(row);
-          })(),
-        );
+        if (!disposed)
+          track(
+            (async () => {
+              const row = await deps.ledger.get(id);
+              if (row) arm(row);
+            })(),
+          );
         if (dirty.delete(id)) queue(id);
       });
     workers.set(id, { controller, promise });
@@ -196,6 +197,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     );
   }
   function arm(row: BotMessageDelivery) {
+    if (disposed) return;
     if (!liveDeadline(row) || row.deadline <= deps.now()) {
       timers.get(row.id)?.cancel();
       timers.delete(row.id);
@@ -206,6 +208,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
       row.id,
       deps.setTimer(() => {
         timers.delete(row.id);
+        if (disposed) return;
         workers.get(row.id)?.controller.abort();
         track(expire(row.id).then(() => queue(row.id)));
       }, row.deadline - deps.now()),
@@ -260,6 +263,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
       await deps.ledger.update(row.parentDeliveryId, (r) => (unfinished(r) ? { ...r, childOutcome: outcome } : r));
       queue(row.parentDeliveryId);
     }
+    if (row?.childDeliveryId) queue(row.childDeliveryId);
     queue(id);
   }
   async function expire(id: string): Promise<void> {
@@ -271,6 +275,13 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     for (const prompt of prompts) {
       if (prompt.owner?.inputs.some((i) => i.botMessage?.deliveryId === id))
         deps.approvals.decide(prompt.waitId, "deny", "expiry");
+    }
+    if (unfinished(row) && row.parentDeliveryId) {
+      const parent = await deps.ledger.get(row.parentDeliveryId);
+      if (!parent || !unfinished(parent)) {
+        queue(id); // The normal worker settles against the parent's saved outcome.
+        return;
+      }
     }
     if (unfinished(row)) await quiet(id, prompts.length ? "gave_up" : "expired");
     else queue(id); // An answer already saved falls back to a display row.
@@ -462,9 +473,12 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
       } catch (e) {
         if (reason(e) === "bot_busy")
           return observeBusy(row.id, effect.botId, signal, () => displayReply(row, effect, "failed"));
-        if (["bot_paused", "paused_by_person"].includes(reason(e))) {
-          queue(row.id);
-          return;
+        if (
+          ["bot_paused", "paused_by_person", "spending_limit", "needs_model", "model_error", "unavailable"].includes(
+            reason(e),
+          )
+        ) {
+          return displayReply(row, effect, "failed");
         }
         throw e;
       }
@@ -582,6 +596,14 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
         }
         await quiet(id, parent?.outcome && parent.outcome !== "replied" ? parent.outcome : "failed");
         return;
+      }
+    }
+    if (row.childDeliveryId && unfinished(row) && !row.childOutcome) {
+      const child = await deps.ledger.get(row.childDeliveryId);
+      if (child && !unfinished(child) && child.outcome && child.outcome !== "replied") {
+        const outcome = child.outcome;
+        row = await deps.ledger.update(id, (r) => (unfinished(r) ? { ...r, childOutcome: outcome } : r));
+        if (!row || disposed || signal.aborted) return;
       }
     }
     if (unfinished(row) && deps.now() >= row.deadline) {
@@ -763,9 +785,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
           sender = roster.find((b) => b.id === input.fromBotId);
         const target = input.target.trim();
         const exact = roster.find((b) => b.id === target);
-        const matches = exact
-          ? [exact]
-          : roster.filter((b) => b.name.toLocaleLowerCase() === target.toLocaleLowerCase());
+        const matches = exact ? [exact] : roster.filter((b) => b.name.toLowerCase() === target.toLowerCase());
         if (matches.length !== 1)
           return refuse(
             matches.length ? "ambiguous_bot" : "unknown_bot",
@@ -983,6 +1003,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
       await Promise.allSettled([...waits.values()].map((w) => w.promise));
       await Promise.allSettled([...workers.values()].map((w) => w.promise));
       await Promise.allSettled([...publications.values(), ...background, ...posts]);
+      for (const timer of [...timers.values(), ...scheduled.values()]) timer.cancel();
       timers.clear();
       scheduled.clear();
     },

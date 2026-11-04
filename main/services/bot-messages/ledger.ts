@@ -70,7 +70,7 @@ export function botMessageReplayHash(input: {
     .update(
       JSON.stringify([
         input.fromBotId,
-        input.target.trim().toLocaleLowerCase(),
+        input.target.trim().toLowerCase(),
         input.message.trim(),
         input.hop,
         input.parentDeliveryId ?? null,

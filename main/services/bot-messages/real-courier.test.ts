@@ -41,6 +41,7 @@ async function setup(
   responses: Record<string, FauxResponseStep[]>,
   windowMs?: number,
   resolveModel?: BotSessionServiceDeps["resolveModel"],
+  spendingRefusal?: BotSessionServiceDeps["spendingRefusal"],
 ) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "real-bot-courier-"));
   const models = new Map(Object.entries(responses).map(([id, steps]) => [id, createFauxModels(steps)]));
@@ -53,6 +54,7 @@ async function setup(
     models: (id) => models.get(id)!.models,
     extension,
     resolveModel: resolveModel ?? (async () => FAUX_MODEL_REF),
+    spendingRefusal,
     knownBotIds: async () => new Set(models.keys()),
     onStateChange: (id) => {
       for (const listener of stateChanges) listener(id);
@@ -468,3 +470,26 @@ for (const outcome of ["failed", "stopped"] as const) {
     assert.deepEqual(f.errors, []);
   });
 }
+
+test("a real spending refusal preserves the reply immediately without running the sender", async (t) => {
+  const f = await setup(
+    t,
+    { A: [], B: [fauxAssistantMessage("Saved budget result")] },
+    undefined,
+    undefined,
+    async (id) => (id === "A" ? "Monthly limit reached" : undefined),
+  );
+  const accepted = await f.post();
+  await waitFor(async () => (await f.ledger.open()).length === 0);
+  const view = await (await f.runtime.conversation("A")).context(BACKGROUND_CONTEXT);
+  const rows = view.entries
+    .filter((e) => e.kind === BOT_MESSAGE_STATUS_ENTRY_KIND)
+    .map((e) => e.data as unknown as BotMessageStatusEntryData);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.outcome, "replied_while_paused");
+  assert.equal(rows[0]!.text, "Saved budget result");
+  assert.equal(f.models.get("A")!.calls(), 0);
+  assert.equal(f.sends.length, 1);
+  assert.ok((await f.ledger.get(accepted.deliveryId))!.effects.find((e) => e.kind === "reply")!.acknowledgedAt);
+  assert.deepEqual(f.errors, []);
+});

@@ -268,3 +268,25 @@ test("receipts keep hashed replay identity without private messages and collect 
   assert.equal(await f.ledger.receipt(row.id), undefined);
   assert.equal((await f.ledger.get(row.id))?.message, row.message);
 });
+
+test("replay hashes keep the same Unicode identity across English and Turkish processes", async () => {
+  // 'Iİ' has the locale-independent fold 'ii' followed by COMBINING DOT ABOVE.
+  const expected = "257d2d04f84629f77c6248fd9b9c24e9165a79ad4b9dc9d795327c2c8623df41";
+  for (const locale of ["en_US.UTF-8", "tr_TR.UTF-8"]) {
+    const result = await promisify(execFile)(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        `
+      import { botMessageReplayHash } from ${JSON.stringify(new URL("./ledger.ts", import.meta.url).href)};
+      process.stdout.write(botMessageReplayHash({fromBotId: 'A', target: 'Iİ', message: 'hello', hop: 1}));
+    `,
+      ],
+      { env: { ...process.env, LANG: locale, LC_ALL: locale } },
+    );
+    assert.equal(result.stdout, expected);
+  }
+});
