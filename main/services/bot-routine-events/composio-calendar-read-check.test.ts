@@ -183,3 +183,13 @@ test("absent output declaration cannot accept contradictory counts or payload on
     assert.equal(result.code, "unsupported_contract"); assert.equal(result.privateProof.executorOutputSource, "host_contract"); assert.equal(result.privateProof.contractFailure!.field, "executor_output"); assert.equal(result.privateProof.invalidAccountRejected, false);
   }
 });
+
+test("private checker diagnostics preserve exact known compilation refusal without enabling any read", async () => {
+  const f = fixture();
+  Object.assign(f.schemas.data.tool_schemas.GOOGLECALENDAR_EVENTS_LIST!.output_schema, { definitions: { private_type: { type: "string", description: "private schema text" } } });
+  const result = await checkComposioCalendarRead(f.port, options());
+  assert.equal(result.code, "unsupported_contract"); assert.equal(result.privateProof.contractFailure!.facts!.rejectionReason, "unsupported_keyword");
+  assert.equal(result.privateProof.contractFailure!.facts!.keyword, "definitions"); assert.equal(result.privateProof.contractFailure!.facts!.operation, "listEvents"); assert.equal(result.privateProof.contractFailure!.facts!.direction, "output");
+  assert.equal(f.reads.length, 0); assert.equal(result.privateProof.calls.invalidAccount, false);
+  for (const secret of ["private_type", "private schema text", "instancePath", "schemaPath"]) assert.equal(JSON.stringify(result).includes(secret), false);
+});

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildCalendarSchemasRequest, buildCalendarSearchRequest, CALENDAR_SCHEMA_SLUGS, verifyCalendarContract } from "./composio-calendar-contract.js";
 import { syntheticCalendarExecutor, syntheticCalendarMetadata, syntheticCalendarSchemas } from "./composio-calendar-test-support.js";
+import { compileComposioWatchInputSchema, type ComposioWatchSchemaCompileFacts } from "./connector-watch-composio-probe.js";
 
 test("contract validates all three fixed read schemas and one account-selected executor item", () => {
   const metadata = syntheticCalendarMetadata();
@@ -106,4 +107,48 @@ test("host result invariants apply even when a declared output schema permits an
   const wrongIndex = syntheticCalendarExecutor(read, { items: [] }); wrongIndex.data.results[0]!.index = 1;
   const extraResult = syntheticCalendarExecutor(read, { items: [] }); extraResult.data.results.push({ ...extraResult.data.results[0]! });
   for (const reply of [contradictory, withPayload, offloaded, wrongIndex, extraResult]) assert.throws(() => verified.executorResponse(reply));
+});
+
+test("closed compilation diagnostics distinguish definitions, unknown keywords and schema compiler failures", () => {
+  for (const [extra, keyword, rejectionReason] of [
+    [{ $defs: { private_schema_name: { type: "string", description: "private provider prose" } } }, "$defs", "unsupported_keyword"],
+    [{ definitions: { private_schema_name: { type: "string" } } }, "definitions", "unsupported_keyword"],
+    [{ private_unknown_keyword: "private provider prose" }, "other", "unsupported_keyword"],
+    [{ required: "private_missing_field" }, "type", "schema_compile"],
+    [{ anyOf: Array.from({ length: 9 }, () => ({ type: "object" })) }, "anyOf", "schema_structure"],
+  ] as const) {
+    const schemas = syntheticCalendarSchemas(); Object.assign(schemas.data.tool_schemas.GOOGLECALENDAR_EVENTS_GET!.output_schema, extra);
+    let error: unknown;
+    try { verifyCalendarContract(syntheticCalendarMetadata(), schemas); } catch (caught) { error = caught; }
+    assert.ok(error instanceof Error); const facts = (error as { facts?: { keyword: string; rejectionReason: string; direction: string; operation: string; work: { nodes: number; depth: number } } }).facts!;
+    assert.equal(facts.keyword, keyword); assert.equal(facts.rejectionReason, rejectionReason); assert.equal(facts.operation, "getEvent"); assert.equal(facts.direction, "output");
+    assert.ok(facts.work.nodes > 0 && facts.work.nodes <= 513); assert.ok(facts.work.depth <= 13);
+    for (const secret of ["private_schema_name", "private provider prose", "private_unknown_keyword", "private_missing_field"]) assert.equal(JSON.stringify(facts).includes(secret), false);
+  }
+});
+
+test("schema work diagnostics report actual bounded node and depth refusals", () => {
+  const wide = { type: "object", properties: Object.fromEntries(Array.from({ length: 600 }, (_, index) => [`private_${index}`, { type: "string" }])) };
+  let facts: ComposioWatchSchemaCompileFacts | undefined;
+  assert.throws(() => compileComposioWatchInputSchema(wide, (value) => { facts = value; }));
+  assert.equal(facts!.reason, "schema_limit"); assert.deepEqual(facts!.work, { nodes: 513, depth: 1, nodeLimit: 512, depthLimit: 12 });
+  let nested: Record<string, unknown> = { type: "string" };
+  for (let level = 0; level < 14; level++) nested = { type: "array", items: nested };
+  assert.throws(() => compileComposioWatchInputSchema({ type: "object", properties: { child: nested } }, (value) => { facts = value; }));
+  assert.equal(facts!.reason, "schema_limit"); assert.equal(facts!.work.depth, 13); assert.ok(facts!.work.nodes <= 513);
+});
+
+test("argument and response diagnostics expose only fixed validation keyword, operation and direction", () => {
+  const schemas = syntheticCalendarSchemas(); schemas.data.tool_schemas.GOOGLECALENDAR_EVENTS_GET!.input_schema!.required.push("private_required_input");
+  const verified = verifyCalendarContract(syntheticCalendarMetadata(), schemas);
+  let failure: unknown;
+  try { verified.request({ kind: "getEvent", accountId: "actual-account", calendarId: "actual-calendar@example.test", eventId: "private-event-id", timezone: "UTC" }); } catch (caught) { failure = caught; }
+  const input = (failure as { facts: Record<string, unknown> }).facts;
+  assert.deepEqual(input, { keyword: "required", dialect: "missing", operation: "getEvent", direction: "input" });
+  const outputs = syntheticCalendarSchemas(); outputs.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema.required.push("private_required_output");
+  const outputContract = verifyCalendarContract(syntheticCalendarMetadata(), outputs), read = { kind: "listCalendars" as const, accountId: "actual-account" };
+  try { outputContract.response(read, syntheticCalendarExecutor(read, { items: [] })); } catch (caught) { failure = caught; }
+  const output = (failure as { facts: Record<string, unknown> }).facts;
+  assert.deepEqual(output, { keyword: "required", dialect: "missing", operation: "listCalendars", direction: "output" });
+  for (const secret of ["private_required_input", "private_required_output", "private-event-id", "actual-calendar", "instancePath", "schemaPath", "params"]) assert.equal(JSON.stringify([input, output]).includes(secret), false);
 });

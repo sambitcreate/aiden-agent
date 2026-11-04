@@ -199,6 +199,13 @@ function responseEnvelopeFacts(value: unknown): NonNullable<ComposioWatchProbeRe
   return { value: responseValueFacts(value), fields: responseFields(source, ["isError", "content", "structuredContent"]), ...(first === undefined ? {} : { firstContent: { value: responseValueFacts(first), typeIsText: object(first) && first.type === "text", text: responseValueFacts(object(first) ? first.text : undefined), textJson } }) };
 }
 function diagnosticKeyword(value: string): DiagnosticKeyword { return DIAGNOSTIC_KEYWORDS.includes(value as DiagnosticKeyword) ? value as DiagnosticKeyword : "other"; }
+export { diagnosticKeyword as composioWatchSchemaDiagnosticKeyword, diagnosticDialect as composioWatchSchemaDiagnosticDialect };
+export interface ComposioWatchSchemaCompileFacts {
+  reason: ComposioWatchProbeRejection["reason"];
+  keyword: DiagnosticKeyword;
+  dialect: ComposioWatchProbeRejection["root"]["dialect"];
+  work: { nodes: number; depth: number; nodeLimit: 512; depthLimit: 12 };
+}
 function diagnosticDialect(value: unknown): ComposioWatchProbeRejection["root"]["dialect"] {
   if (value === undefined) return "missing";
   for (const [dialect, suffix] of [["draft-07", "draft-07/schema"], ["draft-2019-09", "draft/2019-09/schema"], ["draft-2020-12", "draft/2020-12/schema"]] as const) {
@@ -216,10 +223,11 @@ function rejectMeta(tool: DiagnosticTool, reason: DiagnosticReason, schema: unkn
     compatibility: { queriesArray: queries?.type === "array", useCaseString: property(queries?.items, "use_case")?.type === "string", sessionObject: session?.type === "object", generateIdBoolean: property(session, "generate_id")?.type === "boolean", toolSlugsArray: slugs?.type === "array", toolSlugItemsString: object(slugItems) && slugItems.type === "string", sessionIdString: property(schema, "session_id")?.type === "string" } });
 }
 const ROOT_DRAFT_07_SCHEMAS = new Set(["http://json-schema.org/draft-07/schema", "http://json-schema.org/draft-07/schema#", "https://json-schema.org/draft-07/schema", "https://json-schema.org/draft-07/schema#"]);
-function metaValidator(schema: unknown, tool: ComposioWatchProbeTool): ValidateFunction {
+function metaValidator(schema: unknown, tool: ComposioWatchProbeTool, visited?: (nodes: number, depth: number) => void): ValidateFunction {
   let nodes = 0, compiler: Ajv | undefined;
   const inspect = (value: unknown, depth = 0): void => {
-    if (++nodes > 512 || depth > 12) rejectMeta(tool, "schema_limit", schema);
+    nodes++; visited?.(nodes, depth);
+    if (nodes > 512 || depth > 12) rejectMeta(tool, "schema_limit", schema);
     if (typeof value === "boolean") return;
     if (!object(value)) rejectMeta(tool, "schema_structure", schema);
     const rootDraft07 = depth === 0 && typeof value.$schema === "string" && ROOT_DRAFT_07_SCHEMAS.has(value.$schema);
@@ -248,8 +256,13 @@ function metaValidator(schema: unknown, tool: ComposioWatchProbeTool): ValidateF
 }
 /** The same bounded, loader-free draft-07 input subset for host-built reads.
  * Compilation is validation only; it grants no tool or account authority. */
-export function compileComposioWatchInputSchema(schema: unknown): ValidateFunction {
-  return metaValidator(schema, SCHEMAS);
+export function compileComposioWatchInputSchema(schema: unknown, rejected?: (facts: ComposioWatchSchemaCompileFacts) => void): ValidateFunction {
+  let nodes = 0, depth = 0;
+  try { return metaValidator(schema, SCHEMAS, (count, level) => { nodes = Math.min(count, 513); depth = Math.min(Math.max(depth, level), 13); }); }
+  catch (error) {
+    if (error instanceof ProbeFailure && error.rejection) rejected?.({ reason: error.rejection.reason, keyword: error.rejection.keyword ?? "other", dialect: error.rejection.root.dialect, work: { nodes, depth, nodeLimit: 512, depthLimit: 12 } });
+    throw error;
+  }
 }
 
 function property(schema: unknown, name: string): RecordValue | undefined {

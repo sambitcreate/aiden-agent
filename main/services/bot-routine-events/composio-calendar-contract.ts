@@ -3,7 +3,7 @@ import type { ValidateFunction } from "ajv";
 import { copyBoundedJson, utf8Size } from "../bounded-json.js";
 import type { SubagentMcpRemoteTool } from "../subagents/subagent-mcp-read.js";
 import { connectorWatchJson } from "./connector-watch-imcp.js";
-import { compileComposioWatchInputSchema } from "./connector-watch-composio-probe.js";
+import { compileComposioWatchInputSchema, composioWatchSchemaDiagnosticDialect, composioWatchSchemaDiagnosticKeyword, type ComposioWatchSchemaCompileFacts } from "./connector-watch-composio-probe.js";
 import { buildComposioCalendarExecutorRequest, parseComposioCalendarExecutorResponse, type ComposioCalendarRead } from "./connector-watch-composio.js";
 import type { ComposioCalendarContract } from "./composio-calendar-host-port.js";
 
@@ -27,8 +27,16 @@ const dataSchema = (success: boolean) => hostObject({
   session: { anyOf: [{ type: "null" }, hostObject({ id: { type: "string", maxLength: 256 }, instructions: { type: "string", maxLength: 4_096 } })] },
 }, ["results", "total_count", "success_count", "error_count"]);
 const HOST_EXECUTOR_OUTPUT = hostObject({ successful: { type: "boolean", const: true }, error: emptyError, data: { oneOf: [dataSchema(true), dataSchema(false)] } }, ["successful", "data"]);
+export interface ComposioCalendarFailureFacts {
+  keyword: ComposioWatchSchemaCompileFacts["keyword"];
+  dialect: ComposioWatchSchemaCompileFacts["dialect"];
+  rejectionReason?: ComposioWatchSchemaCompileFacts["reason"];
+  work?: ComposioWatchSchemaCompileFacts["work"];
+  operation?: ComposioCalendarRead["kind"];
+  direction?: "input" | "output";
+}
 export class ComposioCalendarContractError extends Error {
-  constructor(readonly stage: "inventory" | "search" | "schemas" | "executor" | "read_arguments" | "read_response" | "schema_drift", readonly reason: "shape" | "missing" | "unsupported" | "invalid" | "changed", readonly facts?: { keyword: "ref" | "pattern" | "nullable" | "format" | "dialect" | "other"; dialect: "draft-07" | "draft-2020-12" | "missing" | "other" }, readonly field?: "executor_input" | "executor_output" | "account_selector") {
+  constructor(readonly stage: "inventory" | "search" | "schemas" | "executor" | "read_arguments" | "read_response" | "schema_drift", readonly reason: "shape" | "missing" | "unsupported" | "invalid" | "changed", readonly facts?: ComposioCalendarFailureFacts, readonly field?: "executor_input" | "executor_output" | "account_selector") {
     super("Calendar's current read contract could not be verified.");
   }
 }
@@ -62,14 +70,14 @@ function digest(value: unknown): string {
     ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, entry]) => [key, canonical(entry)])) : item;
   return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
 }
-function compile(value: unknown, stage: ComposioCalendarContractError["stage"], field?: ComposioCalendarContractError["field"]): ValidateFunction {
-  try { return compileComposioWatchInputSchema(value); } catch (error) {
-    const rejected = optionalObject(optionalObject(error)?.rejection)?.keyword;
-    const keyword = rejected === "$ref" ? "ref" : rejected === "pattern" ? "pattern" : rejected === "nullable" ? "nullable" : rejected === "format" ? "format" : rejected === "$schema" ? "dialect" : "other";
-    const annotation = optionalObject(value)?.$schema;
-    const dialect = annotation === undefined ? "missing" : typeof annotation === "string" && /^https?:\/\/json-schema\.org\/draft-07\/schema#?$/u.test(annotation) ? "draft-07" : typeof annotation === "string" && /^https?:\/\/json-schema\.org\/draft\/2020-12\/schema#?$/u.test(annotation) ? "draft-2020-12" : "other";
-    throw new ComposioCalendarContractError(stage, "unsupported", { keyword, dialect }, field);
+function compile(value: unknown, stage: ComposioCalendarContractError["stage"], field?: ComposioCalendarContractError["field"], context: Pick<ComposioCalendarFailureFacts, "operation" | "direction"> = {}): ValidateFunction {
+  let rejection: ComposioWatchSchemaCompileFacts | undefined;
+  try { return compileComposioWatchInputSchema(value, (facts) => { rejection = facts; }); } catch {
+    throw new ComposioCalendarContractError(stage, "unsupported", { keyword: rejection?.keyword ?? "other", dialect: rejection?.dialect ?? composioWatchSchemaDiagnosticDialect(optionalObject(value)?.$schema), ...(rejection ? { rejectionReason: rejection.reason, work: rejection.work } : {}), ...context }, field);
   }
+}
+function validationFailure(stage: ComposioCalendarContractError["stage"], validator: ValidateFunction, context: Pick<ComposioCalendarFailureFacts, "operation" | "direction">, field?: ComposioCalendarContractError["field"]): never {
+  throw new ComposioCalendarContractError(stage, "invalid", { keyword: composioWatchSchemaDiagnosticKeyword(validator.errors?.[0]?.keyword ?? ""), dialect: composioWatchSchemaDiagnosticDialect(optionalObject(validator.schema)?.$schema), ...context }, field);
 }
 function property(value: unknown, key: string): ObjectValue | undefined { return optionalObject(optionalObject(value)?.properties)?.[key] as ObjectValue | undefined; }
 function uniqueTool(metadata: readonly SubagentMcpRemoteTool[], name: string): SubagentMcpRemoteTool {
@@ -93,14 +101,16 @@ export function buildCalendarSearchRequest(metadata: readonly SubagentMcpRemoteT
   const tool = uniqueTool(metadata, SEARCH);
   if (optionalObject(tool.annotations)?.readOnlyHint !== true) return fail("search", "unsupported");
   const args = { queries: [{ use_case: "Find read-only Google Calendar tools for explicit calendar IDs, timed events in a time window and an event by ID." }], session: { generate_id: true } };
-  if (!compile(tool.inputSchema, "search")(args)) return fail("search", "invalid");
+  const validator = compile(tool.inputSchema, "search", undefined, { direction: "input" });
+  if (!validator(args)) return validationFailure("search", validator, { direction: "input" });
   return args;
 }
 export function buildCalendarSchemasRequest(metadata: readonly SubagentMcpRemoteTool[], sessionId?: string) {
   const tool = uniqueTool(metadata, SCHEMAS);
   if (optionalObject(tool.annotations)?.readOnlyHint !== true) return fail("schemas", "unsupported");
   const args = { tool_slugs: [...CALENDAR_SCHEMA_SLUGS], ...(property(tool.inputSchema, "include") ? { include: ["input_schema", "output_schema"] } : {}), ...sessionArgs(tool.inputSchema, sessionId) };
-  if (!compile(tool.inputSchema, "schemas")(args)) return fail("schemas", "invalid");
+  const validator = compile(tool.inputSchema, "schemas", undefined, { direction: "input" });
+  if (!validator(args)) return validationFailure("schemas", validator, { direction: "input" });
   return args;
 }
 
@@ -113,10 +123,10 @@ export function verifyCalendarContract(metadata: readonly SubagentMcpRemoteTool[
   const items = property(executorInput, "tools")?.items;
   const selector = property(items, "account");
   if (!selector || typeof selector !== "object" || Array.isArray(selector)) return fail("executor", "missing", "account_selector");
-  const executeValidator = compile(executorInput, "executor", "executor_input");
+  const executeValidator = compile(executorInput, "executor", "executor_input", { direction: "input" });
   const executorOutputSource: ComposioCalendarExecutorOutputSource = executor.outputSchema === undefined ? "host_contract" : "declared";
-  const hostOutputValidator = compile(HOST_EXECUTOR_OUTPUT, "executor");
-  const executorOutputValidator = executor.outputSchema === undefined ? undefined : compile(executor.outputSchema, "executor", "executor_output");
+  const hostOutputValidator = compile(HOST_EXECUTOR_OUTPUT, "executor", "executor_output", { direction: "output" });
+  const executorOutputValidator = executor.outputSchema === undefined ? undefined : compile(executor.outputSchema, "executor", "executor_output", { direction: "output" });
   const data = calendarContractData(response);
   if (data.success !== true || (data.not_found !== undefined && (!Array.isArray(data.not_found) || data.not_found.length))) return fail("schemas", "missing");
   const definitions = calendarContractObject(data.tool_schemas);
@@ -124,21 +134,23 @@ export function verifyCalendarContract(metadata: readonly SubagentMcpRemoteTool[
   const validators = new Map<string, ValidateFunction>();
   const outputValidators = new Map<string, ValidateFunction>();
   const hashes: string[] = [];
-  for (const slug of CALENDAR_SCHEMA_SLUGS) {
+  for (const [index, slug] of CALENDAR_SCHEMA_SLUGS.entries()) {
     const definition = calendarContractObject(definitions[slug]);
     if (definition.tool_slug !== slug || typeof definition.toolkit !== "string" || !/^[A-Za-z]+$/u.test(definition.toolkit) || definition.toolkit.toLowerCase() !== "googlecalendar" || definition.hasFullSchema === false || definition.schemaRef !== undefined) return fail("schemas", "invalid");
     const input = calendarContractObject(definition.input_schema), output = calendarContractObject(definition.output_schema);
     if (output.type !== "object" || !optionalObject(output.properties)) return fail("schemas", "unsupported");
-    validators.set(slug, compile(input, "read_arguments"));
-    outputValidators.set(slug, compile(output, "read_response"));
+    const operation = (["listCalendars", "listEvents", "getEvent"] as const)[index]!;
+    validators.set(slug, compile(input, "read_arguments", undefined, { operation, direction: "input" }));
+    outputValidators.set(slug, compile(output, "read_response", undefined, { operation, direction: "output" }));
     hashes.push(digest({ input, output }));
   }
   const contract: ComposioCalendarContract = { revision: "composio-calendar-v1", executorSchemaHash: digest({ input: executor.inputSchema, output: executor.outputSchema ?? null, outputSource: executorOutputSource, hostOutputVersion: HOST_EXECUTOR_OUTPUT_VERSION, hostOutput: HOST_EXECUTOR_OUTPUT }), readSchemaHashes: { listCalendars: hashes[0]!, listEvents: hashes[1]!, getEvent: hashes[2]! } };
   if (expected && digest(expected) !== digest(contract)) return fail("schema_drift", "changed");
   Object.freeze(contract.readSchemaHashes); Object.freeze(contract);
-  const validateExecutorOutput = (response: unknown): void => {
+  const validateExecutorOutput = (response: unknown, operation?: ComposioCalendarRead["kind"]): void => {
     const action = calendarContractAction(response);
-    if (!hostOutputValidator(action) || (executorOutputValidator && !executorOutputValidator(action))) return fail("executor", "invalid", "executor_output");
+    if (!hostOutputValidator(action)) return validationFailure("executor", hostOutputValidator, { ...(operation ? { operation } : {}), direction: "output" }, "executor_output");
+    if (executorOutputValidator && !executorOutputValidator(action)) return validationFailure("executor", executorOutputValidator, { ...(operation ? { operation } : {}), direction: "output" }, "executor_output");
     const data = calendarContractObject(action.data), result = calendarContractObject((data.results as unknown[])[0]);
     if (data.error_count === 1 && !(result.error as string).trim()) return fail("executor", "invalid", "executor_output");
   };
@@ -148,9 +160,10 @@ export function verifyCalendarContract(metadata: readonly SubagentMcpRemoteTool[
     request(read: ComposioCalendarRead, sessionId?: string) {
       const args = buildComposioCalendarExecutorRequest(read);
       const item = args.tools[0];
-      if (!validators.get(item.tool_slug)?.(item.arguments)) return fail("read_arguments", "invalid");
+      const validator = validators.get(item.tool_slug)!;
+      if (!validator(item.arguments)) return validationFailure("read_arguments", validator, { operation: read.kind, direction: "input" });
       const result = { ...args, ...sessionArgs(executorInput, sessionId) };
-      if (!executeValidator(result)) return fail("executor", "invalid", "executor_input");
+      if (!executeValidator(result)) return validationFailure("executor", executeValidator, { operation: read.kind, direction: "input" }, "executor_input");
       return result;
     },
     /** Includes genuine failed items; their account semantics remain a separate
@@ -159,10 +172,11 @@ export function verifyCalendarContract(metadata: readonly SubagentMcpRemoteTool[
       validateExecutorOutput(response);
     },
     response(read: ComposioCalendarRead, response: unknown): void {
-      validateExecutorOutput(response);
+      validateExecutorOutput(response, read.kind);
       const item = buildComposioCalendarExecutorRequest(read).tools[0];
       const upstream = parseComposioCalendarExecutorResponse(boundedCalendarContractJson(response), read);
-      if (!outputValidators.get(item.tool_slug)?.(upstream)) return fail("read_response", "invalid");
+      const validator = outputValidators.get(item.tool_slug)!;
+      if (!validator(upstream)) return validationFailure("read_response", validator, { operation: read.kind, direction: "output" });
     },
   });
 }
