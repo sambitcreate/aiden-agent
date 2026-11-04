@@ -15,6 +15,9 @@ const SEARCH = "COMPOSIO_SEARCH_TOOLS";
 const SCHEMAS = "COMPOSIO_GET_TOOL_SCHEMAS";
 export type ComposioCalendarExecutorOutputSource = "declared" | "host_contract";
 const HOST_EXECUTOR_OUTPUT_VERSION = "calendar-single-read-output-v3";
+// Account proof also rejects replies outside the fixed attempted-ID lookup
+// refusal grammar. Its revision is part of binding compatibility.
+const ACCOUNT_REFUSAL_VERSION = "exact-attempt-account-refusal-v1";
 // MCP outputSchema is optional. This fixed contract applies ALWAYS; a declared
 // schema can only narrow it. No vendor schema can enable batching or partial data.
 const hostObject = (properties: ObjectValue, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
@@ -216,7 +219,7 @@ export function verifyCalendarContract(metadata: readonly SubagentMcpRemoteTool[
     outputValidators.set(slug, compileCalendarOutput(output, operation));
     hashes.push(digest({ input, output }));
   }
-  const contract: ComposioCalendarContract = { revision: "composio-calendar-v1", executorSchemaHash: digest({ input: executor.inputSchema, output: executor.outputSchema ?? null, outputSource: executorOutputSource, hostOutputVersion: HOST_EXECUTOR_OUTPUT_VERSION, hostOutput: HOST_EXECUTOR_OUTPUT }), readSchemaHashes: { listCalendars: hashes[0]!, listEvents: hashes[1]!, getEvent: hashes[2]! } };
+  const contract: ComposioCalendarContract = { revision: "composio-calendar-v1", executorSchemaHash: digest({ input: executor.inputSchema, output: executor.outputSchema ?? null, outputSource: executorOutputSource, hostOutputVersion: HOST_EXECUTOR_OUTPUT_VERSION, hostOutput: HOST_EXECUTOR_OUTPUT, accountRefusalVersion: ACCOUNT_REFUSAL_VERSION }), readSchemaHashes: { listCalendars: hashes[0]!, listEvents: hashes[1]!, getEvent: hashes[2]! } };
   if (expected && digest(expected) !== digest(contract)) return fail("schema_drift", "changed");
   Object.freeze(contract.readSchemaHashes); Object.freeze(contract);
   const validateExecutorOutput = (response: unknown, operation?: ComposioCalendarRead["kind"]): void => {

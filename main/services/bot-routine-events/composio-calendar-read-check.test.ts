@@ -102,13 +102,13 @@ test("a host rejection before returning the negative reply preserves closed extr
   assert.equal("privateProof" in publicComposioCalendarReadCheckResult(result), false);
 });
 
-test("action log metadata permits the unchanged exact oracle, while attempted-ID grammar remains private diagnostics only", async () => {
+test("action log metadata preserves exact routing and private attempted-ID diagnostics", async () => {
   for (const [makeError, grammar, mentionsAttempt, availableAccounts, prefix, toolkitMention] of [
     [(_id: string) => "CONNECTED_ACCOUNT_NOT_FOUND", "exact_known", false, "none", "other", false],
     [(id: string) => `Account '${id}' not found for toolkit 'googlecalendar'. Available accounts: []`, "account_not_found", true, "empty", "account", true],
     [(id: string) => `Connected account "${id}" does not exist`, "connected_account_not_found", true, "none", "connected_account", false],
     [(id: string) => `Unknown account ${id}`, "unknown_account", true, "none", "unknown_account", false],
-    [(id: string) => `No account found with id '${id}' for toolkit googlecalendar. Available accounts: ['private-other-account']`, "no_account_with_id", true, "bracketed", "no_account_with_id", true],
+    [(id: string) => `No account found with id '${id}' for toolkit googlecalendar. Available accounts: ['private-other-account']`, "no_account_found", true, "bracketed", "no_account_found", true],
     [(id: string) => `Invalid account ${id}`, "invalid_account", true, "none", "invalid_account", false],
     [(id: string) => `Account ${id}suffix not found`, "other", false, "none", "account", false],
     [(_id: string) => "Account ca_wrongaccount not found", "other", false, "none", "account", false],
@@ -122,7 +122,7 @@ test("action log metadata permits the unchanged exact oracle, while attempted-ID
       return { isError: true, structuredContent: { ...syntheticCalendarExecutor(read, undefined, makeError(read.accountId)), successful: false, error: "Failed", log_id: "private-log-value" } };
     };
     const result = await checkComposioCalendarRead(f.port, options());
-    const accepted = grammar === "exact_known";
+    const accepted = grammar === "exact_known" || (grammar === "connected_account_not_found" && availableAccounts === "none");
     assert.equal(result.code, accepted ? "verified" : "invalid_account_unverified"); assert.equal(result.privateProof.invalidAccountRejected, accepted);
     const facts = result.privateProof.negative!.errorGrammar;
     assert.equal(facts.grammar, grammar); assert.equal(facts.attemptedAccountMention, mentionsAttempt); assert.equal(facts.availableAccounts, availableAccounts);
@@ -130,6 +130,66 @@ test("action log metadata permits the unchanged exact oracle, while attempted-ID
     assert.equal(f.reads.length, accepted ? 4 : 1);
     for (const secret of [f.reads[0]!.accountId, "private-log-value", "private-other-account", "ca_wrongaccount"]) assert.equal(JSON.stringify(result).includes(secret), false);
   }
+});
+
+test("only complete explicit account-not-found templates naming this attempt authorize the negative oracle", async () => {
+  for (const makeError of [
+    (id: string) => `Account '${id}' not found`,
+    (id: string) => `Connected account "${id}" does not exist.`,
+    (id: string) => `No account found for id: ${id}`,
+    (id: string) => `No active account found with ID '${id}'.`,
+    (id: string) => `No connected account found for identifier: "${id}" for toolkit 'googlecalendar'.`,
+    (id: string) => `No active connected account found with alias: '${id}'`,
+    (id: string) => `No connected account found for '${id}'.`,
+    (id: string) => `No account with id ${id}`,
+  ]) {
+    const f = fixture(), original = f.port.readCalendar!;
+    f.port.readCalendar = async (read, session) => {
+      if (read.accountId === actualAccount) return original(read, session);
+      f.reads.push(read);
+      return { isError: true, structuredContent: { ...syntheticCalendarExecutor(read, undefined, makeError(read.accountId)), successful: false, error: "Failed" } };
+    };
+    const result = await checkComposioCalendarRead(f.port, options());
+    assert.equal(result.code, "verified"); assert.equal(result.privateProof.invalidAccountRejected, true);
+    assert.equal(result.privateProof.negative!.result.errorCategory, "attempt_bound_not_found");
+    assert.equal(f.reads.length, 4); assert.equal(result.available, false);
+    assert.equal(JSON.stringify(result).includes(f.reads[0]!.accountId), false);
+  }
+});
+
+test("wrong identities, auth, negation, generic errors, extra text and default data never prove account rejection", async () => {
+  for (const makeError of [
+    (_id: string) => "No active connected account found with ID ca_differentaccount",
+    (id: string) => `No active connected account found with ID ${id}suffix`,
+    (id: string) => `No active connected account found with ID ${id}. Permission denied`,
+    (id: string) => `Permission denied for account ${id}`,
+    (id: string) => `Invalid account ${id}`,
+    (id: string) => `Unknown account ${id}`,
+    (id: string) => `Account ${id} not found is false`,
+    (id: string) => `No active connected account found with ID ${id} for toolkit gmail`,
+    (id: string) => `No active connected account found with ID ${id}\n`,
+    (id: string) => `No active connected account found with ID ${id}\u0000`,
+    (id: string) => `No active connected account found with ID ${id}. Available accounts: []`,
+    (id: string) => `No active connected account found with ID ${id}; use the default`,
+    (id: string) => ` No active connected account found with ID ${id}`,
+    (id: string) => `No active connected account found with ID ${id}..`,
+  ]) {
+    const f = fixture();
+    f.port.readCalendar = async (read) => { f.reads.push(read); return syntheticCalendarExecutor(read, undefined, makeError(read.accountId)); };
+    const result = await checkComposioCalendarRead(f.port, options());
+    assert.equal(result.code, "invalid_account_unverified"); assert.equal(result.privateProof.invalidAccountRejected, false); assert.equal(f.reads.length, 1);
+    assert.equal(JSON.stringify(result).includes(f.reads[0]!.accountId), false);
+    if (makeError("token").startsWith("No active connected")) assert.equal(result.privateProof.negative!.errorGrammar.prefix, "no_account_found");
+  }
+  const f = fixture();
+  f.port.readCalendar = async (read) => {
+    f.reads.push(read);
+    const reply = syntheticCalendarExecutor(read, undefined, `No connected account found for id: ${read.accountId}`);
+    Object.assign(reply.data.results[0]!, { response: { items: [{ id: "private-default-data" }] } }); return reply;
+  };
+  const result = await checkComposioCalendarRead(f.port, options());
+  assert.equal(result.code, "unsupported_contract"); assert.equal(result.privateProof.invalidAccountRejected, false); assert.equal(f.reads.length, 1);
+  assert.equal(JSON.stringify(result).includes("private-default-data"), false);
 });
 
 test("multiple or missing ACTIVE accounts perform no executor read and never choose a default", async () => {

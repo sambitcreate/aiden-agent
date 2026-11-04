@@ -198,3 +198,10 @@ The Calendar-only failed-item decoder (`a3af42a42`) was clear after Sol high rev
 The closed executor-shape diagnostic (`eb9f95c40`) was clear after Sol high review with 134 independent cases. Immutable pre-Open-work snapshot `ef51a8c48` passed its full build, 375 focused cases, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793776341009`) identifies only `log_id` as an extra action field; data and result have no extra fields. The MCP error contains a single Calendar-list result at index zero, counts1/0/1, no application response, and an error outside the five exact known account-error strings. No identifier, error text or trace value is retained.
 
 This establishes the trace-field compatibility gap, not account rejection. A bounded known-field correction and closed error-pattern diagnostics are being reviewed separately. Calendar remains unavailable; no real-account Calendar-list, event or GET read ran.
+
+
+### V16 exact error-oracle gate — 2026-11-04
+
+Bounded action-only trace metadata and diagnostic error-grammar facts (`c2d05910b`) were clear after Sol high review with 160 independent cases. Immutable pre-Open-work snapshot `613f37a81` passed its build, 377 focused cases, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793776915474`) now passes the executor/failure contract and stops only at the account-error oracle. The correlated Calendar-list/index-zero item has counts1/0/1 and no response. Its error mentions this attempt's exact generated ID, but does not match any accepted literal or diagnostic full template; the returned text is not retained.
+
+Exact account-routing proof remains open. Narrow full-template lookup failures tied to the current attempted ID are being implemented and reviewed separately; broad diagnostic text categories do not authorize reads. No real-account Calendar-list, events or GET read ran.
