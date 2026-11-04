@@ -1372,15 +1372,21 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
 
   const folderRootSelected = async (botId: string, rootId: string): Promise<boolean> => {
     if (!(await deps.botStore.get(botId))) return false;
-    const policy = await deps.capabilityStore.getBotPolicy(botId);
-    if (policy.accessMode !== "custom") return false;
-    const binding = await deps.capabilityStore.getBotBinding(botId);
-    return (binding?.fileScopes ?? []).some(
-      (scope) =>
-        scope.sourceId === rootId &&
-        scope.option.kind === "approved_location" &&
-        policy.custom.fileScopeIds.includes(scope.option.id),
-    );
+    try {
+      const policy = await deps.capabilityStore.getBotPolicy(botId);
+      if (policy.accessMode !== "custom") return false;
+      const binding = await deps.capabilityStore.getBotBinding(botId);
+      return (binding?.fileScopes ?? []).some(
+        (scope) =>
+          scope.sourceId === rootId &&
+          scope.option.kind === "approved_location" &&
+          policy.custom.fileScopeIds.includes(scope.option.id),
+      );
+    } catch (error) {
+      // Deletion removes access before identity. No remaining policy/binding can select this root.
+      if (error instanceof BotCapabilityUnavailableError) return false;
+      throw error;
+    }
   };
 
   const recoverFolderRecord = async (record: BotFolderGrantRecord): Promise<void> => {
