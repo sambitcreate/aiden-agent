@@ -80,6 +80,22 @@ test("inert metadata compatibility preserves original semantic source and exact 
   for (const secret of ["aux_note", actualAccount, "calendar@example.test", observedEvent.id]) assert.equal(JSON.stringify(result).includes(secret), false);
 });
 
+test("explicit null page ends preserve exact source/event/GET proof and original cursor values", async () => {
+  const f = fixture(), original = f.port.readCalendar!, replies: unknown[] = [], snapshots: unknown[] = [];
+  f.port.readCalendar = async (read, session) => {
+    const reply = await original(read, session) as ReturnType<typeof syntheticCalendarExecutor>;
+    if (read.accountId === actualAccount && (read.kind === "listCalendars" || read.kind === "listEvents")) {
+      const item = reply.data.results[0]!; assert.ok("response" in item);
+      Object.assign(item.response as object, { nextPageToken: null }); replies.push(reply); snapshots.push(structuredClone(reply));
+    }
+    return reply;
+  };
+  const result = await checkComposioCalendarRead(f.port, options());
+  assert.equal(result.code, "verified"); assert.equal(result.available, false); assert.equal(f.reads.length, 4);
+  assert.deepEqual(result.privateProof.counts, { activeAccounts: 1, calendars: 1, events: 1, gets: 1 });
+  assert.deepEqual(replies, snapshots); assert.equal(JSON.stringify(result).includes(actualAccount), false);
+});
+
 test("coherent MCP error JSON proves only an exact known failed-account item", async () => {
   for (const [error, accepted] of [["CONNECTED_ACCOUNT_NOT_FOUND", true], ["No active connected account found", false], ["Account ca_private_secret not found", false], ["permission denied", false]] as const) {
     const f = fixture(), original = f.port.readCalendar!; delete f.metadata[2]!.outputSchema;

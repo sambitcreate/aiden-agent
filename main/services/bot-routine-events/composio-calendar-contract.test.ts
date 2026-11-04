@@ -186,6 +186,45 @@ test("declared optional inert null string metadata validates without changing th
   assert.deepEqual(reply, before); assert.equal(response.data.aux_note, null); assert.equal(reply.data.results.length, 1);
 });
 
+test("optional null page cursors validate only in known list page contexts without changing the reply", () => {
+  for (const kind of ["listCalendars", "listEvents"] as const) for (const wrapped of [false, true]) for (const key of ["nextPageToken", "next_page_token"]) {
+    const read = kind === "listCalendars" ? { kind, accountId: "account" } : { kind, accountId: "account", calendarId: "calendar", timeMin: "2026-11-03T15:00:00Z", timeMax: "2026-11-03T16:00:00Z", timezone: "UTC" };
+    const pageSchema = { type: "object", properties: { items: { type: "array", items: { type: "object" } }, [key]: { type: "string" } } };
+    const schemas = syntheticCalendarSchemas();
+    schemas.data.tool_schemas[kind === "listCalendars" ? "GOOGLECALENDAR_LIST_CALENDARS" : "GOOGLECALENDAR_EVENTS_LIST"]!.output_schema = (wrapped ? { type: "object", properties: { successful: { type: "boolean" }, data: pageSchema } } : pageSchema) as never;
+    const page = { items: [], [key]: null }, reply = syntheticCalendarExecutor(read, wrapped ? { successful: true, data: page } : page), before = structuredClone(reply);
+    verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, reply);
+    assert.deepEqual(reply, before); assert.equal(page[key], null);
+  }
+});
+
+test("null page-end compatibility never supplies defaults or weakens cursor declarations and context", () => {
+  const read = { kind: "listCalendars" as const, accountId: "account" };
+  for (const [schema, response] of [
+    [{ type: "object", properties: { items: { type: "array" }, nextPageToken: { type: "string" } }, required: ["nextPageToken"] }, { items: [], nextPageToken: null }],
+    [{ type: "object", properties: { items: { type: "array" } }, additionalProperties: false }, { items: [], nextPageToken: null }],
+    [{ type: "object", properties: { items: { type: "array" }, nextPageToken: { type: "string", default: "default-account-page" } } }, { items: [], nextPageToken: null }],
+    [{ type: "object", properties: { items: { type: "array" }, nextPageToken: { type: "string", enum: ["one"] } } }, { items: [], nextPageToken: null }],
+    [{ type: "object", properties: { items: { type: "array" }, nextPageToken: { type: "string", const: "one" } } }, { items: [], nextPageToken: null }],
+    [{ type: "object", properties: { items: { type: "array" }, nextPageToken: { type: "string" } }, allOf: [{ type: "object" }] }, { items: [], nextPageToken: null }],
+    [{ type: "object", properties: { data: { type: "object", properties: { items: { type: "array" }, nextPageToken: { type: "string" } }, anyOf: [{ type: "object" }] } } }, { successful: true, data: { items: [], nextPageToken: null } }],
+    [{ type: "object", properties: { items: { type: "array" }, nextPageToken: { type: ["string"] } } }, { items: [], nextPageToken: null }],
+    [{ type: "object", properties: { nextPageToken: { type: "string" } } }, { nextPageToken: null }],
+    [{ type: "object", properties: { items: { type: "array" }, nextPageToken: { type: "string" } } }, { items: [], nextPageToken: 7 }],
+    [{ type: "object", properties: { items: { type: "array" }, nextPageToken: { type: "string" } } }, { items: [], nextPageToken: false }],
+    [{ type: "object", properties: { items: { type: "array" }, nextSyncToken: { type: "string" } } }, { items: [], nextSyncToken: null }],
+    [{ type: "object", properties: { items: { type: "array" }, next_sync_token: { type: "string" } } }, { items: [], next_sync_token: null }],
+    [{ type: "object", properties: { items: { type: "array" }, NextPageToken: { type: "string" } } }, { items: [], NextPageToken: null }],
+  ] as const) {
+    const schemas = syntheticCalendarSchemas(); schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = schema as never;
+    assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, syntheticCalendarExecutor(read, response)));
+  }
+  const schemas = syntheticCalendarSchemas();
+  schemas.data.tool_schemas.GOOGLECALENDAR_EVENTS_GET!.output_schema = { type: "object", properties: { items: { type: "array" }, nextPageToken: { type: "string" } } } as never;
+  const get = { kind: "getEvent" as const, accountId: "account", calendarId: "calendar", eventId: "event", timezone: "UTC" };
+  assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(get, syntheticCalendarExecutor(get, { items: [], nextPageToken: null })));
+});
+
 test("inert null compatibility never removes authority, cursor, error or partial metadata", () => {
   for (const key of ["id", "connected_account_id", "accessRole", "status", "summary", "location", "start", "end", "dateTime", "recurringEventId", "originalStartTime", "error", "successful", "items", "response", "total_count", "nextPageToken", "next_sync_token", "nextCursor", "has_more", "truncated", "remote_file_info"]) {
     const schemas = syntheticCalendarSchemas();

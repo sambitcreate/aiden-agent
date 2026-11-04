@@ -331,7 +331,7 @@ export function verifyCalendarContract(metadata: readonly SubagentMcpRemoteTool[
       const item = buildComposioCalendarExecutorRequest(read).tools[0];
       const upstream = parseComposioCalendarExecutorResponse(boundedCalendarContractJson(response), read);
       const validator = outputValidators.get(item.tool_slug)!;
-      if (!validator(calendarOutputValidationCopy(validator.schema, upstream))) return validationFailure("read_response", validator, { operation: read.kind, direction: "output" }, undefined, upstream);
+      if (!validator(calendarOutputValidationCopy(validator.schema, upstream, read.kind))) return validationFailure("read_response", validator, { operation: read.kind, direction: "output" }, undefined, upstream);
     },
   });
 }

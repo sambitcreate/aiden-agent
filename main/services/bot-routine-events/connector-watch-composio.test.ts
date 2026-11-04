@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { verifyCalendarContract } from "./composio-calendar-contract.js";
+import { syntheticCalendarMetadata, syntheticCalendarSchemas } from "./composio-calendar-test-support.js";
 import {
   COMPOSIO_CALENDAR_ADAPTER, buildComposioCalendarExecutorRequest, discoverComposioCalendarSources,
   parseComposioCalendarBaseline, readComposioCalendarWatch,
@@ -33,6 +35,14 @@ function discovery(metadata = search(), respond: (read: ComposioCalendarRead) =>
   return { ...f, port, counts: () => ({ searches, discoveryChecks }) };
 }
 const read = (f: ReturnType<typeof fixture>, previous?: ComposioCalendarBaseline, now = NOW) => readComposioCalendarWatch(source, condition, previous, f.port, now, signal());
+function validatedPages<T extends { port: ComposioCalendarReadPort }>(value: T, wrapped = false): T {
+  const schemas = syntheticCalendarSchemas();
+  const page = { type: "object", properties: { items: { type: "array", items: { type: "object" } }, nextPageToken: { type: "string" }, next_page_token: { type: "string" } }, required: ["items"] };
+  for (const slug of ["GOOGLECALENDAR_LIST_CALENDARS", "GOOGLECALENDAR_EVENTS_LIST"]) schemas.data.tool_schemas[slug]!.output_schema = (wrapped ? { type: "object", properties: { successful: { type: "boolean" }, data: page } } : page) as never;
+  const verified = verifyCalendarContract(syntheticCalendarMetadata(), schemas), original = value.port.read.bind(value.port);
+  value.port.read = async (request, current) => { const reply = await original(request, current); verified.response(request, reply); return reply; };
+  return value;
+}
 
 test("Calendar remains gated and its builder emits one explicit-account curated read", () => {
   assert.equal(COMPOSIO_CALENDAR_ADAPTER.available, false);
@@ -73,13 +83,13 @@ test("discovery refuses incomplete account identity without any executor call", 
 });
 
 test("source enumeration follows exact empty-page cursors and excludes insufficient access", async () => {
-  const f = discovery(search(), (request) => request.kind === "listCalendars" && request.pageToken ? { items: [{ id: "busy@example.test", summary: "Busy", accessRole: "freeBusyReader" }, { id: source.calendarId, summary: "Planning", accessRole: "reader" }] } : { items: [], next_page_token: "opaque account page==" });
+  const f = validatedPages(discovery(search(), (request) => request.kind === "listCalendars" && request.pageToken ? { items: [{ id: "busy@example.test", summary: "Busy", accessRole: "freeBusyReader" }, { id: source.calendarId, summary: "Planning", accessRole: "reader" }], next_page_token: null } : { items: [], next_page_token: "opaque account page==" }));
   const choices = await discoverComposioCalendarSources(f.port, signal());
   assert.equal(choices.length, 1); assert.equal(choices[0]!.calendarId, source.calendarId);
   assert.deepEqual(f.calls.map((call) => call.kind === "listCalendars" ? call.pageToken : "wrong"), [undefined, "opaque account page=="]);
-  const loop = discovery(search(), () => ({ items: [], next_page_token: "again" }));
+  const loop = validatedPages(discovery(search(), () => ({ items: [], next_page_token: "again" })));
   await assert.rejects(discoverComposioCalendarSources(loop.port, signal())); assert.equal(loop.calls.length, 2);
-  let count = 0; const fifth = discovery(search(), () => ({ items: [], next_page_token: `next-${++count}` }));
+  let count = 0; const fifth = validatedPages(discovery(search(), () => ({ items: [], next_page_token: `next-${++count}` })));
   await assert.rejects(discoverComposioCalendarSources(fifth.port, signal())); assert.equal(fifth.calls.length, 5, "never requests a sixth page");
 });
 
@@ -111,11 +121,43 @@ test("rolling window uses host time and explicit timezone, ignores overlaps/all-
 });
 
 test("empty event pages continue exact cursor without changing account, calendar or window", async () => {
-  const f = fixture((request) => request.kind === "listEvents" && request.pageToken ? { items: [event("one")] } : { items: [], nextPageToken: "cursor::/opaque==" });
+  const f = validatedPages(fixture((request) => request.kind === "listEvents" && request.pageToken ? { items: [event("one")], nextPageToken: null } : { items: [], nextPageToken: "cursor::/opaque==" }));
   const result = await read(f); assert.equal(result.items.length, 1);
   const [first, second] = f.calls; assert.equal(first!.kind, "listEvents"); assert.equal(second!.kind, "listEvents");
   assert.deepEqual(second, { ...first, pageToken: "cursor::/opaque==" });
   assert.equal(f.checks.length, 4);
+});
+
+test("validated null page ends and absent cursors have identical whole-reader source and event behavior", async () => {
+  for (const wrapped of [false, true]) {
+    const results: unknown[] = [];
+    for (const nullEnd of [false, true]) {
+      const represent = (page: Record<string, unknown>) => wrapped ? { successful: true, data: page } : page;
+      const ending = nullEnd ? { nextPageToken: null } : {};
+      const sources = validatedPages(discovery(search(), (request) => represent(request.kind === "listCalendars" && request.pageToken ? { items: [{ id: source.calendarId, summary: "Planning", accessRole: "reader" }], ...ending } : { items: [], nextPageToken: "source-page==" })), wrapped);
+      const choices = await discoverComposioCalendarSources(sources.port, signal());
+      const events = validatedPages(fixture((request) => represent(request.kind === "listEvents" && request.pageToken ? { items: [event("one")], ...ending } : { items: [], nextPageToken: "event-page==" })), wrapped);
+      const result = await read(events);
+      assert.deepEqual(sources.calls.map((request) => request.kind === "listCalendars" ? request.pageToken : "wrong"), [undefined, "source-page=="]);
+      assert.deepEqual(events.calls.map((request) => request.kind === "listEvents" ? request.pageToken : "wrong"), [undefined, "event-page=="]);
+      results.push({ choices, items: result.items, changes: result.changes, baseline: result.baseline });
+    }
+    assert.deepEqual(results[0], results[1]);
+    const empty = validatedPages(fixture(() => wrapped ? { successful: true, data: { items: [], next_page_token: null } } : { items: [], next_page_token: null }), wrapped);
+    assert.deepEqual((await read(empty)).items, []); assert.equal(empty.calls.length, 1);
+  }
+});
+
+test("null-end validation preserves conflicting cursors and partial/offload refusal in the original reply", async () => {
+  for (const payload of [
+    { items: [], nextPageToken: null, next_page_token: null },
+    { items: [], nextPageToken: null, truncated: true },
+    { items: [], nextPageToken: null, remote_file_info: { path: "private-offload" } },
+    { items: [], nextPageToken: null, has_more: true },
+  ]) {
+    const f = validatedPages(fixture(() => ({ successful: true, data: payload })), true);
+    await assert.rejects(read(f)); assert.equal(f.calls.length, 1);
+  }
 });
 
 test("recurrence identity survives rescheduling, ordering and restart without a second entry", async () => {
@@ -168,8 +210,8 @@ test("malformed, repeated and incomplete results never become a partial baseline
     { nextPageToken: "one" },
   ];
   for (const response of cases) await assert.rejects(read(fixture(() => response)));
-  const loop = fixture(() => ({ items: [], nextPageToken: "again" })); await assert.rejects(read(loop)); assert.equal(loop.calls.length, 2);
-  let cursor = 0; const fifth = fixture(() => ({ items: [], nextPageToken: `page-${++cursor}` })); await assert.rejects(read(fifth)); assert.equal(fifth.calls.length, 5);
+  const loop = validatedPages(fixture(() => ({ items: [], nextPageToken: "again" }))); await assert.rejects(read(loop)); assert.equal(loop.calls.length, 2);
+  let cursor = 0; const fifth = validatedPages(fixture(() => ({ items: [], nextPageToken: `page-${++cursor}` }))); await assert.rejects(read(fifth)); assert.equal(fifth.calls.length, 5);
 });
 
 test("executor envelope requires one exact correlated success, with no partial/offloaded result", async () => {
@@ -243,7 +285,7 @@ test("per-reply and aggregate byte bounds include JSON escaping", async () => {
 
 test("fifth complete page returns all 250 events; a duplicate recurrence across IDs is refused", async () => {
   let page = 0;
-  const f = fixture(() => { const index = page++; return { items: Array.from({ length: 50 }, (_, item) => event(`${index}-${item}`)), ...(index < 4 ? { nextPageToken: `page-${index + 1}` } : {}) }; });
+  const f = validatedPages(fixture(() => { const index = page++; return { items: Array.from({ length: 50 }, (_, item) => event(`${index}-${item}`)), nextPageToken: index < 4 ? `page-${index + 1}` : null }; }));
   const result = await read(f); assert.equal(result.items.length, 250); assert.equal(result.changes.length, 250); assert.equal(f.calls.length, 5);
   const repeated = fixture(() => ({ items: ["first", "second"].map((id) => event(id, { recurringEventId: "same-series", originalStartTime: { dateTime: "2026-11-03T15:30:00Z" } })) }));
   await assert.rejects(read(repeated), /repeated an occurrence/u);

@@ -2,7 +2,7 @@
 // response. New semantic/guard fields require reviewing this protected policy.
 import { copyBoundedJson, utf8Size } from "../bounded-json.js";
 
-export const CALENDAR_OUTPUT_COMPATIBILITY_VERSION = "optional-inert-null-string-v1";
+export const CALENDAR_OUTPUT_COMPATIBILITY_VERSION = "optional-inert-null-string-and-page-end-v2";
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as ObjectValue : undefined;
 const own = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key);
@@ -47,14 +47,20 @@ function simpleObjectSchema(schema: unknown): ObjectValue | undefined {
       (value.required !== undefined && !Array.isArray(value.required))) return undefined;
   return value;
 }
-function omitInertNulls(value: ObjectValue, schema: ObjectValue): void {
+function optionalPlainString(schema: ObjectValue, key: string): boolean {
   const properties = object(schema.properties)!;
+  if (!own(properties, key) || (schema.required as unknown[] | undefined)?.includes(key)) return false;
+  const field = object(properties[key]);
+  return !!field && field.type === "string" && !Object.keys(field).some((keyword) => !FIELD_KEYS.has(keyword)) && (!own(field, "default") || field.default === null);
+}
+function omitInertNulls(value: ObjectValue, schema: ObjectValue): void {
   for (const key of Object.keys(value)) {
-    if (value[key] !== null || !own(properties, key) || (schema.required as unknown[] | undefined)?.includes(key) || !eligibleName(key)) continue;
-    const field = object(properties[key]);
-    if (!field || field.type !== "string" || Object.keys(field).some((keyword) => !FIELD_KEYS.has(keyword)) || (own(field, "default") && field.default !== null)) continue;
-    delete value[key];
+    if (value[key] === null && optionalPlainString(schema, key) && eligibleName(key)) delete value[key];
   }
+}
+function omitNullPageEnd(value: ObjectValue, schema: ObjectValue): void {
+  if (!Array.isArray(value.items)) return;
+  for (const key of ["nextPageToken", "next_page_token"]) if (value[key] === null && optionalPlainString(schema, key)) delete value[key];
 }
 function bounded(value: unknown): unknown {
   const copy = copyBoundedJson(value, { maxNodes: 12_000, maxDepth: 18, maxSize: 256 * 1024, measure: utf8Size });
@@ -64,12 +70,18 @@ function bounded(value: unknown): unknown {
 /** Call only AFTER the original output schema and every unused definition have
  * passed restricted compilation/audit. No defaults or schema edits are applied.
  * Never descends into arrays, item/event objects, or arbitrary nested objects. */
-export function calendarOutputValidationCopy(compiledSchema: unknown, response: unknown): unknown {
+export function calendarOutputValidationCopy(compiledSchema: unknown, response: unknown, operation?: "listCalendars" | "listEvents" | "getEvent"): unknown {
   const schema = simpleObjectSchema(bounded(compiledSchema)), copy = bounded(response), root = object(copy);
   if (!schema || !root) return copy;
   omitInertNulls(root, schema);
   const data = own(root, "data") ? object(root.data) : undefined;
   const dataSchema = simpleObjectSchema(object(schema.properties)?.data);
   if (data && dataSchema) omitInertNulls(data, dataSchema);
+  if (operation === "listCalendars" || operation === "listEvents") {
+    // These are exactly the two page representations consumed by the semantic
+    // reader. It still receives the original cursors, including null/conflicts.
+    if (root.successful === undefined && root.error === undefined && root.data === undefined) omitNullPageEnd(root, schema);
+    else if (root.successful === true && (root.error === undefined || root.error === null || root.error === "") && root.items === undefined && root.id === undefined && data && dataSchema) omitNullPageEnd(data, dataSchema);
+  }
   return copy;
 }
