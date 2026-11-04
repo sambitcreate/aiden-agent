@@ -2,13 +2,15 @@ import "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { BOT_CONNECTOR_WATCH_TEMPLATES, type BotConnectorWatchCreateInput, type BotConnectorWatchList, type BotConnectorWatchView } from "../../shared/bot-connector-watches";
+import { BOT_CONNECTOR_WATCH_TEMPLATES, type BotConnectorWatchCreateInput, type BotConnectorWatchIdentityInput, type BotConnectorWatchList, type BotConnectorWatchTestInput, type BotConnectorWatchUpdateInput, type BotConnectorWatchView } from "../../shared/bot-connector-watches";
 import { BotConnectorWatches, type BotConnectorWatchesApi } from "./bot-connector-watches";
 
 afterEach(() => { cleanup(); localStorage.clear(); });
 const bot = { id: "bot-a", name: "Scout" };
 function saved(input: BotConnectorWatchCreateInput): BotConnectorWatchView {
-  return { ...input, id: input.mutationId, revision: "r1", templateId: "mail_messages", source: { providerLabel: "Mail", accountLabel: "Work", resourceLabel: "Inbox" }, enabled: true, state: "waiting" };
+  return { id: input.mutationId, botId: input.botId, name: input.name, prompt: input.prompt, condition: input.condition, everyMinutes: input.everyMinutes,
+    revision: "r1", templateId: input.condition.kind === "calendar" ? "calendar_upcoming" : "mail_messages",
+    source: { providerLabel: input.condition.kind === "calendar" ? "Google Calendar" : "Mail", accountLabel: "Work", resourceLabel: input.condition.kind === "calendar" ? "Team events" : "Inbox" }, enabled: true, state: "waiting" };
 }
 function harness() {
   const data: BotConnectorWatchList = { supported: true, templates: [...BOT_CONNECTOR_WATCH_TEMPLATES], watches: [] };
@@ -57,6 +59,8 @@ test("profile reads stay offline until explicit discovery; preview does not save
   await newDraft();
   assert.equal(h.discoveries, 1);
   assert.ok(screen.getByText(/Calendar watches are not available yet/u));
+  assert.ok(screen.getByText(/The first successful Mail check records a baseline without waking the Bot/u));
+  assert.equal(screen.queryByText(/The first Calendar check can report events/u), null);
   fireEvent.click(screen.getByRole("button", { name: "Test check" }));
   await screen.findByText("Meeting notes");
   assert.equal(h.checks, 1);
@@ -68,6 +72,106 @@ test("profile reads stay offline until explicit discovery; preview does not save
   assert.equal(h.data.watches.length, 1);
   assert.deepEqual(h.data.watches[0].condition, { kind: "email", unreadOnly: false, sender: "billing@example.com" });
   assert.equal(h.data.watches[0].prompt, "File the new receipts.");
+});
+
+test("an eligible Calendar source supports preview, durable replay and saved-watch management", async () => {
+  const h = harness();
+  // Synthetic host eligibility exercises the shared UI; it does not enable a
+  // connector or establish live account/Calendar acceptance.
+  h.data.templates = h.data.templates.map((item) => item.kind === "calendar" ? { ...item, available: true, unavailableReason: undefined } : item);
+  let discoveries = 0;
+  const checks: BotConnectorWatchTestInput[] = [];
+  const creates: BotConnectorWatchCreateInput[] = [];
+  const updates: BotConnectorWatchUpdateInput[] = [];
+  const runs: BotConnectorWatchIdentityInput[] = [];
+  h.api.discoverSources = async () => {
+    discoveries++;
+    return { choices: [
+      { id: "opaque-mail", templateId: "mail_messages", providerLabel: "Mail", accountLabel: "Personal", resourceLabel: "Inbox", available: true },
+      { id: "opaque-team-calendar", templateId: "calendar_upcoming", providerLabel: "Google Calendar", accountLabel: "Work", resourceLabel: "Team events", available: true },
+    ], unavailableReasons: [] };
+  };
+  h.api.testCheck = async (input) => { checks.push(structuredClone(input)); return { checkedAt: 1, result: "changed", itemCount: 1, changeCount: 1, preview: ["Team planning · 10:00"] }; };
+  const create = h.api.create;
+  h.api.create = async (input) => {
+    creates.push(structuredClone(input));
+    const result = await create(input);
+    if (creates.length === 1) throw new Error("Calendar save response lost.");
+    return result;
+  };
+  const update = h.api.update;
+  h.api.update = async (input) => { updates.push(structuredClone(input)); return update(input); };
+  const run = h.api.runNow;
+  h.api.runNow = async (input) => { runs.push(structuredClone(input)); return run(input); };
+  const first = render(<BotConnectorWatches bot={bot} api={h.api} />);
+  await screen.findByText("No connected-app watches");
+  assert.equal(discoveries, 0);
+  fireEvent.click(screen.getByRole("button", { name: "Add watch" }));
+  fireEvent.change(screen.getByLabelText("Watch name"), { target: { value: "Team agenda" } });
+  fireEvent.change(screen.getByLabelText("What the Bot should do"), { target: { value: "Prepare the agenda for upcoming team events." } });
+  fireEvent.click(screen.getByRole("combobox", { name: "What to watch" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Upcoming calendar events" }));
+  assert.equal(screen.queryByLabelText("Sender filter"), null);
+  assert.ok(screen.getByText(/The first Calendar check can report events already in the upcoming window/u));
+  assert.equal(screen.queryByText(/The first successful Mail check records a baseline/u), null);
+  fireEvent.change(screen.getByLabelText("Look ahead in minutes"), { target: { value: "120" } });
+  fireEvent.change(screen.getByLabelText("Calendar timezone"), { target: { value: "America/New_York" } });
+  fireEvent.click(screen.getByRole("combobox", { name: "Check every" }));
+  fireEvent.click(await screen.findByRole("option", { name: "15 minutes" }));
+  assert.equal((screen.getByRole("button", { name: "Add watch" }) as HTMLButtonElement).disabled, true);
+  fireEvent.click(screen.getByRole("button", { name: "Find sources" }));
+  fireEvent.click(await screen.findByRole("combobox", { name: "Connected source" }));
+  assert.equal(screen.queryByRole("option", { name: "Mail · Personal · Inbox" }), null);
+  fireEvent.click(await screen.findByRole("option", { name: "Google Calendar · Work · Team events" }));
+  fireEvent.click(screen.getByRole("button", { name: "Test check" }));
+  await screen.findByText("Team planning · 10:00");
+  assert.deepEqual(checks, [{ botId: bot.id, sourceChoiceId: "opaque-team-calendar", condition: { kind: "calendar", lookAheadMinutes: 120, timezone: "America/New_York" } }]);
+  assert.equal(h.data.watches.length, 0);
+  assert.equal(h.runs, 0);
+  fireEvent.click(screen.getByRole("button", { name: "Add watch" }));
+  await screen.findByText("Calendar save response lost.");
+  assert.equal(h.data.watches.length, 1);
+  first.unmount();
+  render(<BotConnectorWatches bot={bot} api={h.api} />);
+  assert.equal((screen.getByLabelText("Look ahead in minutes") as HTMLInputElement).value, "120");
+  assert.equal((screen.getByLabelText("Calendar timezone") as HTMLInputElement).value, "America/New_York");
+  assert.equal((screen.getByRole("button", { name: "Add watch" }) as HTMLButtonElement).disabled, true);
+  fireEvent.click(screen.getByRole("button", { name: "Retry same request" }));
+  await screen.findByRole("button", { name: "Edit watch Team agenda" });
+  await waitFor(() => assert.equal(screen.queryByText("Change waiting for confirmation"), null));
+  assert.equal(creates.length, 2);
+  assert.deepEqual(creates[1], creates[0]);
+  assert.equal(creates[0].sourceChoiceId, "opaque-team-calendar");
+  assert.equal(h.data.watches.length, 1);
+  assert.equal(h.data.watches[0].templateId, "calendar_upcoming");
+  assert.equal(h.data.watches[0].everyMinutes, 15);
+  assert.equal(discoveries, 1, "reopening a pending Calendar draft must not rediscover accounts");
+  fireEvent.click(screen.getByRole("button", { name: "Edit watch Team agenda" }));
+  fireEvent.click(screen.getByRole("button", { name: "Test saved watch" }));
+  await waitFor(() => assert.equal(checks.length, 2));
+  assert.deepEqual(checks[1], { botId: bot.id, id: h.data.watches[0].id, expectedRevision: "r1" });
+  fireEvent.change(screen.getByLabelText("Look ahead in minutes"), { target: { value: "180" } });
+  fireEvent.change(screen.getByLabelText("Calendar timezone"), { target: { value: "Europe/London" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save watch" }));
+  await waitFor(() => assert.equal(updates.length, 1));
+  assert.equal(updates[0].expectedRevision, "r1");
+  assert.equal(updates[0].sourceChoiceId, undefined, "editing the window retains the host's bound source");
+  assert.deepEqual(h.data.watches[0].condition, { kind: "calendar", lookAheadMinutes: 180, timezone: "Europe/London" });
+  await waitFor(() => assert.equal(screen.queryByRole("button", { name: "Save watch" }), null));
+  fireEvent.click(screen.getByRole("switch", { name: "Team agenda on" }));
+  await waitFor(() => assert.equal(screen.getByRole("switch", { name: "Team agenda on" }).getAttribute("aria-checked"), "false"));
+  fireEvent.click(screen.getByRole("switch", { name: "Team agenda on" }));
+  await waitFor(() => assert.equal(screen.getByRole("switch", { name: "Team agenda on" }).getAttribute("aria-checked"), "true"));
+  fireEvent.click(screen.getByRole("button", { name: "Run Team agenda now" }));
+  await screen.findByText(/Run request confirmed/u);
+  assert.equal(h.runs, 1);
+  assert.equal(runs[0].expectedRevision, h.data.watches[0].revision);
+  fireEvent.click(screen.getByRole("button", { name: "Remove watch Team agenda" }));
+  assert.equal(h.data.watches.length, 1);
+  fireEvent.click(screen.getByRole("button", { name: "Remove watch" }));
+  await screen.findByText("No connected-app watches");
+  assert.equal(h.data.watches.length, 0);
+  assert.equal(localStorage.length, 0);
 });
 
 test("a lost create response freezes the request across remount and replay leaves one watch", async () => {

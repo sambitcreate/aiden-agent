@@ -217,7 +217,7 @@ function WatchManager({ bot, api }: { bot: { id: string; name: string }; api: Bo
         {removing === watch.id && <><Text variant="small">Remove this watch?</Text><Button size="small" disabled={disabled} onClick={() => void perform({ action: "remove", input: identity(watch) })}>Remove watch</Button><Button size="small" variant="transparent" disabled={disabled} onClick={() => setRemoving(null)}>Keep watch</Button></>}
       </div>
     </Field>)}
-    {list?.supported && !list.watches.length && !draft && <Field label="No connected-app watches" description="Choose a mailbox and tell your Bot what to do when something meaningful changes." />}
+    {list?.supported && !list.watches.length && !draft && <Field label="No connected-app watches" description="Choose a mailbox or calendar and tell your Bot what to do when something meaningful changes." />}
     {draft && <Field orientation="vertical" label={draft.id ? "Edit connected-app watch" : "New connected-app watch"}>
       <div className="flex flex-col gap-3">
         <Input aria-label="Watch name" maxLength={limits.nameChars} value={draft.name} disabled={disabled} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Watch name" />
@@ -244,7 +244,9 @@ function WatchManager({ bot, api }: { bot: { id: string; name: string }; api: Bo
           <Input aria-label="Calendar timezone" maxLength={limits.timezoneChars} value={draft.condition.timezone} disabled={disabled} onChange={(e) => setDraft({ ...draft, condition: { ...draft.condition as Extract<Draft["condition"], { kind: "calendar" }>, timezone: e.target.value } })} />
         </>}
         <Label htmlFor={`${fieldId}-interval`}>Check every</Label><Select value={String(draft.everyMinutes)} disabled={disabled} onValueChange={(value) => setDraft({ ...draft, everyMinutes: Number(value) as BotConnectorWatchInterval })}><SelectTrigger id={`${fieldId}-interval`}><SelectValue /></SelectTrigger><SelectContent>{(template?.intervals ?? [15, 30, 60]).map((minutes) => <SelectItem key={minutes} value={String(minutes)}>{minutes} minutes</SelectItem>)}</SelectContent></Select>
-        <Text variant="small" color="tertiary">The first check establishes a baseline. Test check previews matching metadata without saving that baseline or running the Bot.</Text>
+        <Text variant="small" color="tertiary">{draft.condition.kind === "calendar"
+          ? "The first Calendar check can report events already in the upcoming window."
+          : "The first successful Mail check records a baseline without waking the Bot."} Test check previews matching metadata without saving that baseline or running the Bot.</Text>
         <div className="flex flex-wrap gap-2"><Button size="small" disabled={disabled || !valid} onClick={save}>{draft.id ? "Save watch" : "Add watch"}</Button><Button size="small" variant="filled" disabled={disabled || (!draft.sourceChoiceId && !draft.id)} onClick={() => void readAction(() => api.testCheck(draft.sourceChoiceId ? { botId: bot.id, sourceChoiceId: draft.sourceChoiceId, condition: draft.condition } : { botId: bot.id, id: draft.id!, expectedRevision: draft.expectedRevision! }))}>{draft.id && !draft.sourceChoiceId ? "Test saved watch" : "Test check"}</Button><Button size="small" variant="transparent" disabled={disabled} onClick={() => { setDraft(null); setPreview(null); setConflict(null); }}>Cancel</Button></div>
       </div>
     </Field>}
