@@ -12,6 +12,16 @@ import { normalizeSpendingDispatch, type SpendingDispatchInput } from "./spendin
 
 export interface BotRoutineModelLifetime { signal: AbortSignal; assertCurrent(): void | Promise<void> }
 export interface BotExecutionModelChoice { binding: BoundBotProviderModel; thinkingLevel: BotRoutineThinkingLevel }
+function preparedChoiceHash(identity: { botIncarnation: string; routineIncarnation?: string }, primary: BotExecutionModelChoice, vision: BoundBotProviderModel | undefined, fallback: BotExecutionModelChoice | undefined): string {
+  const route = (binding: BoundBotProviderModel) => ({ provider: binding.sourceProviderId, model: binding.sourceModelId });
+  const choice = (value: BotExecutionModelChoice) => ({ ...route(value.binding), thinkingLevel: value.thinkingLevel });
+  // Credential/availability repairs never change which route was chosen.
+  return digest({ identity, primary: choice(primary), vision: vision ? route(vision) : undefined, fallback: fallback ? choice(fallback) : undefined });
+}
+export class BotRoutineModelPreparationChangedError extends Error {
+  readonly name = "BotRoutineModelPreparationChangedError";
+  constructor() { super("The prepared event's original model choice changed before ownership was saved."); }
+}
 export interface BotExecutionClaim {
   version: 1; id: string; botId: string; requestId: string; botIncarnation: string;
   routineId?: string; routineIncarnation?: string; configRevision?: string;
@@ -189,7 +199,17 @@ export function createBotRoutineModelService(options: BotRoutineModelServiceOpti
       } catch (error) { return error instanceof BotRoutineModelSelectionError ? { ok: false, code: "invalid", error: error.message } : { ok: false, code: "unavailable", error: "The model change could not be confirmed. Retry this same action to check its outcome." }; }
     });
   }
-  async function claim(botId: string, input: { requestId: string; peerOrigin?: BotPeerInputOrigin; routineOrigin?: BotRoutineInputOrigin; connectorServerId?: string; connectorRestriction?: BotConnectorExecutionRestriction; scheduledFor?: number; timezone?: string; retryOf?: string }): Promise<BotExecutionClaim> {
+  /** Deny-only fingerprint: ordinary event storage never supplies a model binding. */
+  async function prepareRoutineClaim(botId: string, routineId: string): Promise<string> {
+    return serial("store", async () => {
+      const state = await load(), identity = await anchors(botId, routineId), config = currentConfig(state, botId, routineId, identity);
+      const primary = config.selection.mode === "selected" ? config.primary! : await options.defaultChoice(botId);
+      const vision = await options.companionChoice?.(botId), fallback = config.fallback;
+      return preparedChoiceHash(identity, primary, vision, fallback);
+    });
+  }
+
+  async function claim(botId: string, input: { requestId: string; peerOrigin?: BotPeerInputOrigin; routineOrigin?: BotRoutineInputOrigin; connectorServerId?: string; connectorRestriction?: BotConnectorExecutionRestriction; scheduledFor?: number; timezone?: string; retryOf?: string; expectedChoiceHash?: string }): Promise<BotExecutionClaim> {
     parseBotRoutineModelId(input.requestId);
     const peer = input.peerOrigin ? inspectBotPeerInputOrigin(input.peerOrigin) : undefined;
     if (peer && (peer.botId !== botId || peer.requestId !== input.requestId || input.routineOrigin || input.retryOf)) throw new Error("Peer execution requires its exact host delivery.");
@@ -212,6 +232,8 @@ export function createBotRoutineModelService(options: BotRoutineModelServiceOpti
       const vision = resumed ? resumed.vision : original ? original.vision : await options.companionChoice?.(botId);
       const fallback = resumed ? undefined : original ? original.fallback : config?.fallback;
       const deliveryQuiet = resumed ? resumed.deliveryQuiet : original ? original.deliveryQuiet : input.routineOrigin && await options.deliveryQuiet?.(botId,input.routineOrigin.routineId) ? true : undefined;
+      if (input.expectedChoiceHash !== undefined && (!/^[a-f0-9]{64}$/u.test(input.expectedChoiceHash) || peer || original ||
+        preparedChoiceHash(identity, primary, vision, fallback) !== input.expectedChoiceHash)) throw new BotRoutineModelPreparationChangedError();
       const next: BotExecutionClaim = { version: 1, id: randomUUID(), botId, requestId: input.requestId, ...identity, primary: clone(primary), ...(vision ? { vision: clone(vision) } : {}), ...(fallback ? { fallback: clone(fallback) } : {}), actual: resumed ? "primary" : original?.actual ?? "primary", ...(!resumed && original?.fallbackReason ? { fallbackReason: original.fallbackReason } : {}), admittedAt: now(), ...(deliveryQuiet ? {deliveryQuiet:true as const}:{}), root: peer ? clone(peer.binding.root) : original?.root ?? { botId, requestId: input.requestId, ...(config ? { routineRunId: input.requestId } : {}) }, ...(peer ? { peer: clone(peer.binding) } : {}), ...(resumed?.routineId ? { routineId: resumed.routineId, configRevision: resumed.configRevision } : config ? { routineId: config.routineId, configRevision: original?.configRevision ?? config.revision, triggerKind: input.routineOrigin!.kind } : {}), ...((original?.connectorServerId ?? connectorServerId) ? { connectorServerId: original?.connectorServerId ?? connectorServerId } : {}), ...((original?.connectorRestriction ?? connectorRestriction) ? { connectorRestriction: clone((original?.connectorRestriction ?? connectorRestriction)!) } : {}), ...(input.scheduledFor === undefined ? {} : { scheduledFor: input.scheduledFor }), ...(input.timezone ? { timezone: input.timezone } : {}) };
       state.claims.push(next); await saveState(state, async () => { await peer?.assertCurrent(); if (JSON.stringify(await anchors(botId, next.routineId)) !== JSON.stringify(identity)) throw new Error("Execution ownership changed."); }); return clone(next);
     });
@@ -270,7 +292,7 @@ export function createBotRoutineModelService(options: BotRoutineModelServiceOpti
     const claim = await responseOwner(state, evidence.facts);
     if (claim.botIncarnation !== evidence.botIncarnation) throw new Error("The provider response owner changed.");
   }
-  return { read, catalog, save, claim, getClaim, grant,
+  return { read, catalog, save, claim, getClaim, grant, prepareRoutineClaim,
     async observedResponse(botId: string, claimId: string, taskId: string, responseDigest: string): Promise<boolean> { const state = await load(), evidence = state.responseEvidence.find((row) => row.observed && row.facts.botId === botId && row.facts.claimId === claimId && row.facts.taskId === taskId && row.facts.responseDigest === responseDigest); if (!evidence || evidence.retired) return false; return (await responseOwner(state, evidence.facts)).botIncarnation === evidence.botIncarnation; },
     async reservePeerRoot(botId: string, claimId: string, requestId: string): Promise<{ id: string; expiresAt: number }> { return serial("store", async () => {
       const state = await load(), source = state.claims.find((row) => row.botId === botId && row.id === claimId && row.requestId === requestId); if (!source) throw new Error("The peer source has no protected execution claim.");

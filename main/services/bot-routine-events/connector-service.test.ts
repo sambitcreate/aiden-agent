@@ -10,6 +10,7 @@ import test from "node:test";
 import { createBotConnectorWatchService, type BotConnectorWatchServicePorts } from "./connector-service.js";
 import { createBotEventRoutineStore } from "./store.js";
 import { createBotWatches } from "./watch.js";
+import { createBotRoutineEventDispatcher } from "./dispatcher.js";
 import { composioSourceConnection } from "./connector-source-admission.js";
 import { verifyCalendarContract } from "./composio-calendar-contract.js";
 import { syntheticCalendarMetadata, syntheticCalendarSchemas, syntheticCalendarExecutor } from "./composio-calendar-test-support.js";
@@ -18,7 +19,7 @@ import type { ComposioCalendarWatchBinding } from "./connector-types.js";
 import type { BotConnectorWatchBinding } from "./connector-types.js";
 import type { BotConnectorWatchCreateInput } from "../../../renderer/shared/bot-connector-watches.js";
 import { eventRoutineAfterRun } from "./after-run.js";
-import { createBotEventRunner, eventRoutineTask } from "./runner.js";
+import { createBotEventRunner, createEventModelOwnershipPorts, eventRoutineTask } from "./runner.js";
 import { eventRoutinesToolSource } from "../bot-runtime/bot-tool-candidates.js";
 import { createBotRoutinesTool } from "../schedule-tool.js";
 import type { ScheduledRun } from "../types.js";
@@ -334,6 +335,71 @@ function calendarFixture(t:test.TestContext) {
   return {...f,calendar,calendarReads:()=>reads};
 }
 async function createCalendar(f:ReturnType<typeof calendarFixture>){const service=f.make(),sources=await service.discoverSources(BOT);const input:BotConnectorWatchCreateInput={botId:BOT,mutationId:randomUUID(),sourceChoiceId:sources.choices[0]!.id,name:"Planning",prompt:"Prepare for upcoming events.",condition:{kind:"calendar",lookAheadMinutes:60,timezone:"America/New_York"},everyMinutes:15};return {service,view:await service.create(input),input};}
+
+test("production event ownership ports retain the accepted Mail or Calendar boundary in preparation and claim", async t => {
+  for (const calendar of [false, true]) await t.test(calendar ? "Calendar" : "Mail", async t => {
+    const f = calendar ? calendarFixture(t) : fixture(t);
+    const calendarSetup = calendar ? await createCalendar(f as ReturnType<typeof calendarFixture>) : undefined;
+    if (!calendarSetup) await create(f.make());
+    const routine = (await f.store.list(BOT))[0]!;
+    const seen: string[] = [];
+    const inspect = async (stage: string) => {
+      await Promise.resolve();
+      const scope = botConnectorExecutionRestriction()!;
+      assert.equal(scope.routineId, routine.id);
+      assert.equal(scope.revision, routine.updatedAt);
+      assert.equal(scope.binding.adapter, calendar ? "composio-calendar-v1" : "imcp-mail-v1");
+      if (calendar) {
+        assert.deepEqual(scope.condition, { kind: "calendar", lookAheadMinutes: 60, timezone: "America/New_York" });
+        if (scope.condition?.kind !== "calendar") throw new Error("The Calendar condition is required");
+        scope.condition.lookAheadMinutes = 1440;
+        const retained = botConnectorExecutionRestriction()!.condition;
+        assert.equal(retained?.kind === "calendar" && retained.lookAheadMinutes, 60, "returned scope facts cannot widen the accepted window");
+      }
+      seen.push(stage);
+    };
+    const ports = createEventModelOwnershipPorts({ prepare: async () => { await inspect("prepare"); return "a".repeat(64); }, claim: async () => { await inspect("claim"); } });
+    await ports.prepareRoutineExecution!(routine);
+    await ports.claimRoutineExecution!(routine, { eventId: "bounded-transition", payload: "Synthetic change", source: "watch" }, "a".repeat(64));
+    const runner = createBotEventRunner({ undelivered: () => false, executor: { run: async (task, options) => {
+      await inspect("run");
+      return { id: options!.runId!, taskId: task.id, result: "success", output: "Done", startedAt: f.now(), finishedAt: f.now() };
+    } } });
+    assert.equal((await runner.run(routine, { eventId: "bounded-transition", payload: "Synthetic change", source: "watch" })).settled, true);
+    assert.deepEqual(seen, ["prepare", "claim", "run"]);
+    if (calendar && routine.connector?.condition.kind === "calendar") {
+      const invalid = structuredClone(routine);
+      if (invalid.connector?.condition.kind !== "calendar") throw new Error("Expected Calendar");
+      invalid.connector.condition.lookAheadMinutes = 14;
+      await assert.rejects(ports.prepareRoutineExecution!(invalid), /accepted window condition/u);
+      await assert.rejects(ports.claimRoutineExecution!(invalid, { eventId: "refused", payload: "data", source: "watch" }), /accepted window condition/u);
+      assert.deepEqual(seen, ["prepare", "claim", "run"], "invalid windows never reach either model phase");
+      const attempts: Array<{ revision: number; lookAhead: number }> = [];
+      const pendingPorts = createEventModelOwnershipPorts({ prepare: async () => "a".repeat(64), claim: async () => {
+        const scope = botConnectorExecutionRestriction()!;
+        if (scope.condition?.kind !== "calendar") throw new Error("Missing original Calendar condition");
+        attempts.push({ revision: scope.revision, lookAhead: scope.condition.lookAheadMinutes });
+        throw new Error("Unknown model ownership response");
+      } });
+      const eventId = `${"c".repeat(24)}-transition`;
+      await f.store.mutate(BOT, routine.id, row => ({ next: { ...row, watch: { ...row.watch!, pending: { eventId, payload: "Original window output", revision: row.updatedAt, nextAttemptAt: f.now() } } }, result: true }));
+      const dispatcher = createBotRoutineEventDispatcher({ store: f.store, ...pendingPorts, run: async () => { throw new Error("A failed claim cannot run"); },
+        isPaused: async () => false, now: f.now, timeZone: () => "UTC", setTimer: () => ({ cancel() {} }) });
+      await assert.rejects(dispatcher.emit(BOT, routine.id, { eventId, payload: "Original window output", watchRevision: routine.updatedAt }), /Unknown model ownership response/u);
+      const before = (await f.store.list(BOT))[0]!;
+      assert.deepEqual(before.running?.[0]?.execution?.condition, { kind: "calendar", lookAheadMinutes: 60, timezone: "America/New_York" });
+      await dispatcher.rearm(f.store.list(BOT)); await dispatcher.idle();
+      assert.deepEqual(attempts, [{ revision: routine.updatedAt, lookAhead: 60 }, { revision: routine.updatedAt, lookAhead: 60 }], "recovery never substitutes a later window or source revision into the original claim");
+      await calendarSetup!.service.update({ ...calendarSetup!.input, id: routine.id, expectedRevision: calendarSetup!.view.revision, mutationId: randomUUID(), condition: { kind: "calendar", lookAheadMinutes: 120, timezone: "America/New_York" } });
+      await dispatcher.rearm(f.store.list(BOT)); await dispatcher.idle();
+      assert.equal(attempts.length, 2, "a changed source condition cancels the original event instead of claiming it under the new window");
+      assert.equal((await f.store.list(BOT))[0]!.running, undefined);
+      const latestCondition = (await f.store.list(BOT))[0]!.connector!.condition;
+      assert.equal(latestCondition.kind === "calendar" && latestCondition.lookAheadMinutes, 120);
+    }
+    assert.equal(botConnectorExecutionRestriction(), undefined);
+  });
+});
 
 test("Calendar initial upcoming events durably hand off once while Mail keeps its quiet first baseline",async t=>{
   const f=calendarFixture(t); const {service,view}=await createCalendar(f);

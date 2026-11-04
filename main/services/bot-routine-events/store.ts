@@ -16,6 +16,7 @@ import { botIdFromDirectoryName } from "../bot-runtime/harness-host.js";
 import { botSessionDirectory, createKeyedSerial } from "../bot-routine-notes.js";
 import { writeJsonAtomic, type DurableFsIo } from "../durable-fs.js";
 import { parseConnectorPrivate, parseConnectorBaseline, ConnectorWatchStorageError, type BotConnectorWatchPrivate, type BotConnectorWatchBinding, type BotConnectorWatchBaseline } from "./connector-types.js";
+import type { BotConnectorWatchCondition } from "../../../renderer/shared/bot-connector-watches.js";
 
 
 export const BOT_EVENT_ROUTINES_FILE = "event-routines.json";
@@ -27,6 +28,33 @@ export interface BotEventReceipt {
   payload: string;
   at: number;
   watchRevision?: number;
+  /** Payload saved before protected model ownership crosses its store boundary. */
+  claimPending?: true;
+  /** Original task facts; private and never a grant or a replacement source binding. */
+  execution?: BotEventExecutionSnapshot;
+}
+
+export interface BotEventExecutionSnapshot {
+  name: string;
+  prompt: string;
+  trigger: BotRoutineTrigger;
+  createdAt: number;
+  updatedAt: number;
+  condition?: BotConnectorWatchCondition;
+  /** Deny-only comparison for a not-yet-created protected model claim. */
+  choiceHash?: string;
+}
+
+function executionSnapshot(value: unknown, connector?: BotConnectorWatchPrivate): BotEventExecutionSnapshot | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ConnectorWatchStorageError();
+  const row = value as Record<string, unknown>;
+  if (typeof row.name !== "string" || typeof row.prompt !== "string" || typeof row.createdAt !== "number" || !Number.isSafeInteger(row.createdAt) || typeof row.updatedAt !== "number" || !Number.isSafeInteger(row.updatedAt) ||
+    row.choiceHash !== undefined && (typeof row.choiceHash !== "string" || !/^[a-f0-9]{64}$/u.test(row.choiceHash))) throw new ConnectorWatchStorageError();
+  const clean = cleanInput({ name: row.name, prompt: row.prompt, trigger: row.trigger });
+  const conditioned = row.condition === undefined ? undefined : connector && parseConnectorPrivate({ ...connector, condition: row.condition });
+  if (row.condition !== undefined && !conditioned) throw new ConnectorWatchStorageError();
+  return { ...clean, createdAt: row.createdAt, updatedAt: row.updatedAt, ...(conditioned ? { condition: structuredClone(conditioned.condition) } : {}), ...(row.choiceHash === undefined ? {} : { choiceHash: row.choiceHash as string }) };
 }
 
 export interface BotEventRoutine {
@@ -188,12 +216,17 @@ function parseRoutine(value: unknown, botId: string): BotEventRoutine | undefine
   const day = record.day && typeof record.day === "object" ? record.day as { key?: unknown; count?: unknown } : undefined;
   const held = record.held && typeof record.held === "object" ? record.held as { eventId?: unknown; payload?: unknown; at?: unknown; watchRevision?: unknown } : undefined;
   const running = Array.isArray(record.running)
-    ? (record.running as Array<{ eventId?: unknown; payload?: unknown; at?: unknown; watchRevision?: unknown } | null>)
-      .filter((entry): entry is { eventId: string; payload: string; at: number; watchRevision?: unknown } =>
+    ? (record.running as Array<{ eventId?: unknown; payload?: unknown; at?: unknown; watchRevision?: unknown; claimPending?: unknown; execution?: unknown } | null>)
+      .filter((entry): entry is { eventId: string; payload: string; at: number; watchRevision?: unknown; claimPending?: unknown; execution?: unknown } =>
         !!entry && typeof entry.eventId === "string" && typeof entry.payload === "string" && typeof entry.at === "number")
       .slice(-BOT_EVENT_RUNNING_MAX)
-      .map(({ eventId, payload, at, watchRevision }) => ({ eventId, payload, at,
-        ...(typeof watchRevision === "number" && Number.isSafeInteger(watchRevision) ? { watchRevision } : {}) }))
+      .map(({ eventId, payload, at, watchRevision, claimPending, execution }) => {
+        const snapshot = executionSnapshot(execution, connector);
+        if (claimPending !== undefined && claimPending !== true || claimPending && !snapshot?.choiceHash) throw new ConnectorWatchStorageError();
+        return { eventId, payload, at,
+          ...(typeof watchRevision === "number" && Number.isSafeInteger(watchRevision) ? { watchRevision } : {}),
+          ...(claimPending === true ? { claimPending: true as const } : {}), ...(snapshot ? { execution: snapshot } : {}) };
+      })
     : [];
   return {
     id: record.id,
@@ -369,6 +402,10 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
         const revision = Math.max(at, current.updatedAt + 1);
         const enabled = input.enabled ?? current.enabled;
         const next: BotEventRoutine = { ...current, ...clean, enabled, updatedAt: revision };
+        if (clean.trigger.kind === "file_change" && JSON.stringify(clean.trigger) !== JSON.stringify(current.trigger)) {
+          delete next.held;
+          delete next.running;
+        }
         if (clean.trigger.kind === "watch" && current.trigger.kind === "watch") {
           next.watch = nextWatchState(current.watch ?? { failures: 0 }, current.trigger, clean.trigger, !current.enabled && enabled, at);
           if (next.watch.pending) {

@@ -12,8 +12,7 @@ import { eventRoutineAfterRun } from "./after-run.js";
 import { createBotRoutineEventDispatcher } from "./dispatcher.js";
 import { createBotFolderWatches } from "./folder-watch.js";
 import { botOwnWrites } from "./own-writes.js";
-import { createBotEventRunner, eventRoutineRunStore, eventRoutineTask } from "./runner.js";
-import { withBotConnectorExecutionRestriction } from "../bot-connector-inventory-scope.js";
+import { createBotEventRunner, createEventModelOwnershipPorts, eventRoutineRunStore, eventRoutineTask } from "./runner.js";
 import { createBotEventRoutineStore, type BotEventRoutine } from "./store.js";
 import { createBotWatches } from "./watch.js";
 import { productionConnectorWatchService } from "./connector-host-main.js";
@@ -75,6 +74,9 @@ export async function forgetBotEventRoutine(botId: string, routineId: string): P
   await scheduleStore.removeRuns(routineId);
   const { botRoutineNotes } = await import("../scheduled-bot-routines-main.js");
   await botRoutineNotes.clear(botId, routineId).catch(() => undefined);
+  await watchIssueSerial(`event_claim:${botId}:${routineId}`, async () => {
+    await (await import("../bot-issues/service-main.js")).botIssues.resolve(botId, `event_claim:${routineId}`, "fixed");
+  });
 }
 
 /** A Bot is deleted: every event routine's runs go (the routine file goes with the Bot's folder). */
@@ -97,9 +99,32 @@ const runner = createBotEventRunner({
 
 const dispatcher = createBotRoutineEventDispatcher({
   store: botEventRoutines,
-  claimRoutineExecution: async (routine, event) => {
-    const claim = async () => (await import("../scheduled-bot-routines-main.js")).claimBotRoutineExecution(eventRoutineTask(routine), { kind: "event", ...event });
-    return routine.connector ? withBotConnectorExecutionRestriction({ routineId: routine.id, revision: routine.updatedAt, binding: routine.connector.binding }, claim) : claim();
+  ...createEventModelOwnershipPorts({
+    prepare: async routine => (await import("../bot-routine-models-main.js")).botRoutineModels.prepareRoutineClaim(routine.botId, routine.id),
+    claim: async (routine, event, expectedChoiceHash) => (await import("../scheduled-bot-routines-main.js")).claimBotRoutineExecution(eventRoutineTask(routine), { kind: "event", ...event }, expectedChoiceHash),
+  }),
+  claimFailed: async (routine, error) => {
+    await watchIssueSerial(`event_claim:${routine.botId}:${routine.id}`, async () => {
+      const fresh = (await botEventRoutines.list(routine.botId)).find(row => row.id === routine.id && row.createdAt === routine.createdAt);
+      if (!fresh?.running?.some(row => row.claimPending)) return;
+      const { BotRoutineModelPreparationChangedError } = await import("../bot-routine-models.js");
+      const { botIssues } = await import("../bot-issues/service-main.js");
+      const changed = error instanceof BotRoutineModelPreparationChangedError;
+      await botIssues.raise({ botId: routine.botId, kind: "routine_failed", dedupeKey: `event_claim:${routine.id}`,
+        title: `${routine.name} needs its original model`,
+        body: changed ? "An event is safely retained, but its model, thinking or fallback choice changed before ownership was saved. Restore the original Model choices to retry it, or delete the routine to cancel the retained event. New events cannot replace its payload."
+          : "An event is safely retained while its original execution choice is unavailable. Check the routine's Model settings and access. Aiden retries while it runs; delete the routine to cancel the retained event.",
+        routineId: routine.id, actions: [] });
+      ipcMain.broadcast("bots:changed", { botId: routine.botId });
+    });
+  },
+  claimRecovered: async routine => {
+    await watchIssueSerial(`event_claim:${routine.botId}:${routine.id}`, async () => {
+      const fresh = (await botEventRoutines.list(routine.botId)).find(row => row.id === routine.id);
+      if (!fresh || fresh.running?.some(row => row.claimPending)) return;
+      const { botIssues } = await import("../bot-issues/service-main.js");
+      await botIssues.resolve(routine.botId, `event_claim:${routine.id}`, "fixed");
+    });
   },
   run: (routine, event, signal) => runner.run(routine, event, signal),
   authorizeRun: async (routine) => {

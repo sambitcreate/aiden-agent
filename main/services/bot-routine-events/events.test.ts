@@ -4,14 +4,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test, { after } from "node:test";
 import { formatBotRoutineTriggerLabel, parseBotRoutineTrigger } from "../../../renderer/shared/bot-routine-trigger.js";
-import { botRoutineEventBlock, botRoutineMessage, botRoutineRequestId, createBotRoutineExecutor, type BotRoutineExecutorPorts } from "../scheduled-bot-routines.js";
+import { botRoutineEventBlock, botRoutineMessage, botRoutineRequestId, botRoutineExecutionInput, createBotRoutineExecutor, type BotRoutineExecutorPorts } from "../scheduled-bot-routines.js";
 import { openProtectedRoutineClaims, claimTestModule, killAfterRoutineReceipt } from "../bot-routine-model-claim-test-support.js";
 import { createScheduleStore } from "../schedule-store.js";
 import { createBotRoutineEventDispatcher } from "./dispatcher.js";
 import { createBotFolderWatches, folderEventPayload } from "./folder-watch.js";
 import { createBotOwnWrites } from "./own-writes.js";
-import { createBotEventRunner, eventRoutineRunStore } from "./runner.js";
-import { createBotEventRoutineStore, type BotEventRoutine } from "./store.js";
+import { createBotEventRunner, eventRoutineRunStore, eventRoutineTask } from "./runner.js";
+import { createBotEventRoutineStore, viewOf, type BotEventRoutine } from "./store.js";
 import { createBotWebhookHandler } from "./webhook.js";
 
 const roots: string[] = [];
@@ -71,8 +71,8 @@ test("event ownership follows its protected model claim and retains modelA after
     import { openProtectedRoutineClaims } from ${JSON.stringify(claimTestModule("main/services/bot-routine-model-claim-test-support.ts"))};
     const store=createBotEventRoutineStore({profileDir:()=>${JSON.stringify(root)}});
     const models=await openProtectedRoutineClaims(${JSON.stringify(authority)},${JSON.stringify(routine.botId)},${JSON.stringify(routine.id)});
-    const dispatcher=createBotRoutineEventDispatcher({store,
-      claimRoutineExecution:async(routine,event)=>{assert.equal((await store.list(routine.botId))[0].running?.length??0,0);const input=botRoutineExecutionInput(eventRoutineTask(routine),{kind:'event',...event});await models.service.claim(routine.botId,{requestId:input.requestId,routineOrigin:input.routineOrigin,...input.routineTiming});assert.equal((await store.list(routine.botId))[0].running?.length??0,0);},
+    const dispatcher=createBotRoutineEventDispatcher({store,prepareRoutineExecution:row=>models.service.prepareRoutineClaim(row.botId,row.id),
+      claimRoutineExecution:async(routine,event)=>{const input=botRoutineExecutionInput(eventRoutineTask(routine),{kind:'event',...event});await models.service.claim(routine.botId,{requestId:input.requestId,routineOrigin:input.routineOrigin,...input.routineTiming});},
       run:async()=>{process.stdout.write('OWNERSHIP_SAVED\\n');return new Promise(()=>{});},isPaused:async()=>false,now:Date.now,timeZone:()=> 'UTC',setTimer:()=>({cancel(){}})});
     await dispatcher.emit(${JSON.stringify(routine.botId)},${JSON.stringify(routine.id)},{eventId:'accepted-event',payload:'synthetic event'});setInterval(()=>{},1000);
   `);
@@ -89,25 +89,209 @@ test("event ownership follows its protected model claim and retains modelA after
   const executor = createBotRoutineExecutor({ store: eventRoutineRunStore(runStore), ports: () => ports, broadcast() {} });
   const runner = createBotEventRunner({ executor, undelivered: () => false });
   const recoveredStore = openStore();
-  const dispatcher = createBotRoutineEventDispatcher({ store: recoveredStore, run: (row, event) => runner.run(row, event), isPaused: async () => false, now: Date.now, timeZone: () => "UTC", setTimer: () => ({ cancel() {} }) });
+  const dispatcher = createBotRoutineEventDispatcher({ store: recoveredStore, claimRoutineExecution: async (row, event, expectedChoiceHash) => { const input = botRoutineExecutionInput(eventRoutineTask(row), { kind: "event", ...event }); await models.service.claim(row.botId, { requestId: input.requestId, routineOrigin: input.routineOrigin, expectedChoiceHash, ...input.routineTiming }); }, run: (row, event) => runner.run(row, event), isPaused: async () => false, now: Date.now, timeZone: () => "UTC", setTimer: () => ({ cancel() {} }) });
   await dispatcher.rearm(recoveredStore.list(routine.botId)); await dispatcher.idle();
   assert.equal(used, "A", "the event receipt's original model remains fixed across the owner edit and reopen");
   assert.equal((await recoveredStore.list(routine.botId))[0]?.running?.length ?? 0, 0);
 });
 
-test("a refused write-ahead model claim cannot consume an event or promote its held receipt", async () => {
+test("SIGKILL on either side of model ownership retains the exact event and refuses silent choice drift", async t => {
+  for (const kind of ["webhook", "file_change"] as const) for (const stage of ["before", "after"] as const) await t.test(`${kind} ${stage} claim`, async t => {
+    const root = profile();
+    const store = createBotEventRoutineStore({ profileDir: () => root });
+    const { routine } = await store.create("bot-crash-gap", { name: "Original task", prompt: "Use this exact event.", trigger: kind === "webhook" ? { kind } : { kind, folder: "Inbox" } });
+    const authority = path.join(root, "authority");
+    await (await openProtectedRoutineClaims(authority, routine.botId, routine.id)).select("A");
+    await killAfterRoutineReceipt(t, `
+      import { createBotEventRoutineStore } from ${JSON.stringify(claimTestModule("main/services/bot-routine-events/store.ts"))};
+      import { createBotRoutineEventDispatcher } from ${JSON.stringify(claimTestModule("main/services/bot-routine-events/dispatcher.ts"))};
+      import { eventRoutineTask } from ${JSON.stringify(claimTestModule("main/services/bot-routine-events/runner.ts"))};
+      import { botRoutineExecutionInput } from ${JSON.stringify(claimTestModule("main/services/scheduled-bot-routines.ts"))};
+      import { openProtectedRoutineClaims } from ${JSON.stringify(claimTestModule("main/services/bot-routine-model-claim-test-support.ts"))};
+      const store=createBotEventRoutineStore({profileDir:()=>${JSON.stringify(root)}});
+      const models=await openProtectedRoutineClaims(${JSON.stringify(authority)},${JSON.stringify(routine.botId)},${JSON.stringify(routine.id)});
+      const dispatcher=createBotRoutineEventDispatcher({store,prepareRoutineExecution:row=>models.service.prepareRoutineClaim(row.botId,row.id),
+        claimRoutineExecution:async(row,event,expectedChoiceHash)=>{const input=botRoutineExecutionInput(eventRoutineTask(row),{kind:'event',...event});if(${JSON.stringify(stage)}==='after')await models.service.claim(row.botId,{requestId:input.requestId,routineOrigin:input.routineOrigin,expectedChoiceHash,...input.routineTiming});process.stdout.write('OWNERSHIP_SAVED\\n');return new Promise(()=>{});},
+        run:async()=>{throw new Error('The kill point must precede the event run');},isPaused:async()=>false,now:Date.now,timeZone:()=> 'UTC',setTimer:()=>({cancel(){}})});
+      await dispatcher.emit(${JSON.stringify(routine.botId)},${JSON.stringify(routine.id)},{eventId:'claim-gap',payload:'exact original payload\\nwith detail'});setInterval(()=>{},1000);
+    `);
+    await (await openProtectedRoutineClaims(authority, routine.botId, routine.id)).select("B");
+    const models = await openProtectedRoutineClaims(authority, routine.botId, routine.id);
+    const recovered = createBotEventRoutineStore({ profileDir: () => root });
+    const prepared = (await recovered.list(routine.botId))[0]!;
+    assert.equal(prepared.running?.[0]?.claimPending, true);
+    assert.equal(prepared.day?.count, 1);
+    const { lastRunAt: _reservedAt, ...shown } = viewOf(prepared);
+    assert.deepEqual(shown, viewOf(routine), "private payload, preparation and choice comparison never enter the routine DTO");
+    await recovered.update(routine.botId, routine.id, { prompt: "A later owner edit must not rewrite accepted input." });
+    const seen: Array<{ payload: string; model: string; prompt: string }> = [];
+    const failures: unknown[] = [];
+    let repairs = 0;
+    const dispatcher = createBotRoutineEventDispatcher({ store: recovered,
+      claimFailed: async (_row, error) => { failures.push(error); }, claimRecovered: async () => { repairs++; },
+      claimRoutineExecution: async (row, event, expectedChoiceHash) => { const input = botRoutineExecutionInput(eventRoutineTask(row), { kind: "event", ...event }); await models.service.claim(row.botId, { requestId: input.requestId, routineOrigin: input.routineOrigin, expectedChoiceHash, ...input.routineTiming }); },
+      run: async (row, event) => {
+        const input = botRoutineExecutionInput(eventRoutineTask(row), { kind: "event", ...event });
+        const claim = await models.service.claim(row.botId, { requestId: input.requestId, routineOrigin: input.routineOrigin, ...input.routineTiming });
+        seen.push({ payload: event.payload, model: claim.primary.binding.sourceModelId, prompt: row.prompt });
+      }, isPaused: async () => false, now: Date.now, timeZone: () => "UTC", setTimer: () => ({ cancel() {} }) });
+    await dispatcher.rearm(recovered.list(routine.botId)); await dispatcher.idle();
+    if (stage === "before") {
+      assert.deepEqual(seen, []);
+      assert.equal((failures[0] as Error).name, "BotRoutineModelPreparationChangedError", "unclaimed route drift has an actionable repair signal");
+      assert.equal((await recovered.list(routine.botId))[0]!.running?.[0]?.claimPending, true);
+      await models.select("A");
+      await Promise.all([dispatcher.rearm(recovered.list(routine.botId)), dispatcher.rearm(recovered.list(routine.botId))]); await dispatcher.idle();
+    }
+    assert.deepEqual(seen, [{ payload: "exact original payload\nwith detail", model: "A", prompt: "Use this exact event." }]);
+    assert.ok(repairs >= 1, "repair is resolved only after the original ownership can be completed");
+    await dispatcher.rearm(recovered.list(routine.botId)); await dispatcher.idle();
+    assert.equal(seen.length, 1, "a settled preparation cannot run again on another rearm");
+    assert.equal((await recovered.list(routine.botId))[0]!.day?.count, 1);
+  });
+});
+
+test("a held promotion killed after its real model claim survives a newer held event and charges each once", async t => {
+  const root = profile(), at = Date.UTC(2026, 10, 4, 12);
+  const store = createBotEventRoutineStore({ profileDir: () => root });
+  const { routine } = await store.create("bot-held-crash", { name: "Held hook", prompt: "Original held task", trigger: { kind: "webhook" } });
+  await store.mutate(routine.botId, routine.id, row => ({ next: { ...row, lastRunAt: at - 5 * MIN, day: { key: "2026-11-04", count: 1 }, seenEventIds: ["promoted"], held: { eventId: "promoted", payload: "original held payload", at: at - MIN } }, result: true }));
+  const authority = path.join(root, "authority");
+  await (await openProtectedRoutineClaims(authority, routine.botId, routine.id)).select("A");
+  await killAfterRoutineReceipt(t, `
+    import { createBotEventRoutineStore } from ${JSON.stringify(claimTestModule("main/services/bot-routine-events/store.ts"))};
+    import { createBotRoutineEventDispatcher } from ${JSON.stringify(claimTestModule("main/services/bot-routine-events/dispatcher.ts"))};
+    import { eventRoutineTask } from ${JSON.stringify(claimTestModule("main/services/bot-routine-events/runner.ts"))};
+    import { botRoutineExecutionInput } from ${JSON.stringify(claimTestModule("main/services/scheduled-bot-routines.ts"))};
+    import { openProtectedRoutineClaims } from ${JSON.stringify(claimTestModule("main/services/bot-routine-model-claim-test-support.ts"))};
+    const store=createBotEventRoutineStore({profileDir:()=>${JSON.stringify(root)}}),models=await openProtectedRoutineClaims(${JSON.stringify(authority)},${JSON.stringify(routine.botId)},${JSON.stringify(routine.id)});
+    const dispatcher=createBotRoutineEventDispatcher({store,prepareRoutineExecution:row=>models.service.prepareRoutineClaim(row.botId,row.id),
+      claimRoutineExecution:async(row,event,expectedChoiceHash)=>{const input=botRoutineExecutionInput(eventRoutineTask(row),{kind:'event',...event});await models.service.claim(row.botId,{requestId:input.requestId,routineOrigin:input.routineOrigin,expectedChoiceHash,...input.routineTiming});process.stdout.write('OWNERSHIP_SAVED\\n');return new Promise(()=>{});},
+      run:async()=>{throw new Error('No effects before the kill checkpoint');},isPaused:async()=>false,now:()=>${at},timeZone:()=> 'UTC',setTimer:fn=>{queueMicrotask(fn);return{cancel(){}}}});
+    await dispatcher.rearm(store.list(${JSON.stringify(routine.botId)}));await dispatcher.idle();
+  `);
+  await (await openProtectedRoutineClaims(authority, routine.botId, routine.id)).select("B");
+  const models = await openProtectedRoutineClaims(authority, routine.botId, routine.id);
+  const recovered = createBotEventRoutineStore({ profileDir: () => root });
+  let now = at + 1;
+  const timers: Array<{ at: number; fn(): void; cancelled: boolean }> = [];
+  const seen: Array<{ payload: string; model: string }> = [];
+  const claim = async (row: BotEventRoutine, event: { eventId: string; source: "webhook" | "file_change" | "watch"; payload: string }, expectedChoiceHash?: string) => {
+    const input = botRoutineExecutionInput(eventRoutineTask(row), { kind: "event", ...event });
+    return models.service.claim(row.botId, { requestId: input.requestId, routineOrigin: input.routineOrigin, expectedChoiceHash, ...input.routineTiming });
+  };
+  const dispatcher = createBotRoutineEventDispatcher({ store: recovered, prepareRoutineExecution: row => models.service.prepareRoutineClaim(row.botId, row.id), claimRoutineExecution: claim,
+    run: async (row, event) => { seen.push({ payload: event.payload, model: (await claim(row, event)).primary.binding.sourceModelId }); },
+    isPaused: async () => false, now: () => now, timeZone: () => "UTC", setTimer: (fn, ms) => { const timer = { at: now + ms, fn, cancelled: false }; timers.push(timer); return { cancel() { timer.cancelled = true; } }; } });
+  assert.equal(await dispatcher.emit(routine.botId, routine.id, { eventId: "newest", payload: "newest held payload" }), "held");
+  await Promise.all([dispatcher.rearm(recovered.list(routine.botId)), dispatcher.rearm(recovered.list(routine.botId))]); await dispatcher.idle();
+  assert.deepEqual(seen, [{ payload: "original held payload", model: "A" }]);
+  assert.equal((await recovered.list(routine.botId))[0]!.held?.eventId, "newest");
+  now = at + 5 * MIN;
+  for (const timer of timers.filter(row => !row.cancelled && row.at <= now)) { timer.cancelled = true; timer.fn(); }
+  await dispatcher.idle();
+  assert.deepEqual(seen, [{ payload: "original held payload", model: "A" }, { payload: "newest held payload", model: "B" }]);
+  const saved = (await recovered.list(routine.botId))[0]!;
+  assert.equal(saved.day?.count, 3);
+  assert.equal(saved.running, undefined);
+  assert.equal(saved.held, undefined);
+});
+
+test("a protected event cannot cross the model store without a preparation and damaged preparations fail closed", async () => {
+  const store = createBotEventRoutineStore({ profileDir: fixedProfile() });
+  const { routine } = await store.create("bot-missing-preparation", { name: "Hook", prompt: "React", trigger: { kind: "webhook" } });
+  let claims = 0;
+  const dispatcher = createBotRoutineEventDispatcher({ store, claimRoutineExecution: async () => { claims++; }, run: async () => { throw new Error("No effects"); },
+    isPaused: async () => false, now: Date.now, timeZone: () => "UTC", setTimer: () => ({ cancel() {} }) });
+  await assert.rejects(dispatcher.emit(routine.botId, routine.id, { eventId: "no-preparation", payload: "exact payload" }), /requires an original-choice preparation/u);
+  assert.equal(claims, 0);
+  assert.equal((await store.list(routine.botId))[0]!.running, undefined);
+  await store.mutate(routine.botId, routine.id, row => ({ next: { ...row, running: [{ eventId: "damaged", payload: "retained", at: Date.now(), claimPending: true,
+    execution: { name: row.name, prompt: row.prompt, trigger: row.trigger, createdAt: row.createdAt, updatedAt: row.updatedAt } }] }, result: true }));
+  await assert.rejects(store.list(routine.botId), { name: "ConnectorWatchStorageError" });
+});
+
+test("pending model claims reserve four slots and duplicate recovery preserves payload and limits", async () => {
+  const store = createBotEventRoutineStore({ profileDir: fixedProfile() });
+  const { routine } = await store.create("bot-prepared-bound", { name: "Bounded events", prompt: "Original task", trigger: { kind: "webhook" } });
+  let failing = true, now = Date.UTC(2026, 10, 4, 12);
+  const runs: string[] = [];
+  const dispatcher = createBotRoutineEventDispatcher({ store, prepareRoutineExecution: async () => "0".repeat(64), claimRoutineExecution: async () => { if (failing) throw new Error("Temporarily unavailable"); },
+    run: async (_row, event) => { runs.push(`${event.eventId}:${event.payload}`); }, isPaused: async () => false, now: () => now, timeZone: () => "UTC", setTimer: () => ({ cancel() {} }) });
+  for (const eventId of ["one", "two", "three", "four"]) {
+    await assert.rejects(dispatcher.emit(routine.botId, routine.id, { eventId, payload: eventId }), /Temporarily unavailable/u);
+    now += 5 * MIN;
+  }
+  assert.equal(await dispatcher.emit(routine.botId, routine.id, { eventId: "fifth", payload: "held" }), "held");
+  const saved = (await store.list(routine.botId))[0]!;
+  assert.equal(saved.running?.length, 4);
+  assert.ok(saved.running?.every(row => row.claimPending));
+  assert.equal(saved.day?.count, 4);
+  failing = false;
+  await Promise.all([dispatcher.emit(routine.botId, routine.id, { eventId: "one", payload: "foreign replacement" }), dispatcher.rearm(store.list(routine.botId)), dispatcher.rearm(store.list(routine.botId))]);
+  await dispatcher.idle();
+  assert.deepEqual(runs.sort(), ["one:one", "two:two", "three:three", "four:four"].sort());
+  assert.equal((await store.list(routine.botId))[0]!.day?.count, 4);
+  assert.equal((await store.list(routine.botId))[0]!.held?.eventId, "fifth");
+});
+
+test("source cancellation clears a failed preparation's repair signal without retrying or running it", async () => {
+  const store = createBotEventRoutineStore({ profileDir: fixedProfile() });
+  const { routine } = await store.create("bot-prepared-cancel-issue", { name: "Folder", prompt: "React", trigger: { kind: "file_change", folder: "Inbox" } });
+  let issueOpen = false, claims = 0, runs = 0;
+  const dispatcher = createBotRoutineEventDispatcher({ store, prepareRoutineExecution: async () => "0".repeat(64),
+    claimRoutineExecution: async () => { claims++; throw new Error("Needs repair"); },
+    claimFailed: async () => { issueOpen = true; }, claimRecovered: async () => { issueOpen = false; },
+    run: async () => { runs++; }, isPaused: async () => false, now: Date.now, timeZone: () => "UTC", setTimer: () => ({ cancel() {} }) });
+  await assert.rejects(dispatcher.emit(routine.botId, routine.id, { eventId: "original", payload: "Old source payload" }), /Needs repair/u);
+  assert.equal(issueOpen, true);
+  await store.update(routine.botId, routine.id, { trigger: { kind: "file_change", folder: "Other" } });
+  await dispatcher.rearm(store.list(routine.botId)); await dispatcher.idle();
+  assert.equal(issueOpen, false, "retiring the obligation resolves its Needs-you card");
+  assert.equal(claims, 1);
+  assert.equal(runs, 0);
+  assert.equal((await store.list(routine.botId))[0]!.running, undefined);
+});
+
+test("dispose and pause retain a prepared event until a current start; source replacement cancels it", async () => {
+  for (const replaceSource of [false, true]) {
+    const store = createBotEventRoutineStore({ profileDir: fixedProfile() });
+    const { routine } = await store.create("bot-prepared-stop", { name: "Folder", prompt: "React", trigger: { kind: "file_change", folder: "Inbox" } });
+    let entered!: () => void, release!: () => void;
+    const claiming = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+    let paused = false, claims = 0, runs = 0;
+    const dispatcher = createBotRoutineEventDispatcher({ store, prepareRoutineExecution: async () => "0".repeat(64), claimRoutineExecution: async () => { claims++; entered(); await gate; },
+      run: async () => { runs++; }, isPaused: async () => paused, now: Date.now, timeZone: () => "UTC", setTimer: () => ({ cancel() {} }) });
+    const admission = dispatcher.emit(routine.botId, routine.id, { eventId: "original", payload: "original folder payload" });
+    await claiming;
+    dispatcher.dispose(); dispatcher.resume();
+    release(); await admission; await dispatcher.idle();
+    assert.equal(runs, 0, "resume cannot revive work from the disposed generation");
+    assert.equal((await store.list(routine.botId))[0]!.running?.[0]?.claimPending, true);
+    if (replaceSource) await store.update(routine.botId, routine.id, { trigger: { kind: "file_change", folder: "Other" } });
+    paused = true;
+    await dispatcher.rearm(store.list(routine.botId)); await dispatcher.idle();
+    assert.equal(claims, 1, "a paused Bot cannot finish a pending ownership claim");
+    paused = false;
+    await dispatcher.rearm(store.list(routine.botId)); await dispatcher.idle();
+    assert.equal(runs, replaceSource ? 0 : 1);
+    assert.equal((await store.list(routine.botId))[0]!.running, undefined);
+  }
+});
+
+test("a refused model claim retains a retryable payload preparation without running or charging it twice", async () => {
   const store = createBotEventRoutineStore({ profileDir: fixedProfile() });
   const { routine } = await store.create("bot-claim-refusal", { name: "Hook", prompt: "React.", trigger: { kind: "webhook" } });
   let fail = true;
   let now = Date.UTC(2026, 10, 3, 12);
   const timers: Array<() => void> = [];
   let runs = 0;
-  const dispatcher = createBotRoutineEventDispatcher({ store, claimRoutineExecution: async () => { if (fail) throw new Error("Protected choice unavailable"); }, run: async () => { runs++; return { settled: true }; },
+  const dispatcher = createBotRoutineEventDispatcher({ store, prepareRoutineExecution: async () => "0".repeat(64), claimRoutineExecution: async () => { if (fail) throw new Error("Protected choice unavailable"); }, run: async () => { runs++; return { settled: true }; },
     isPaused: async () => false, now: () => now, timeZone: () => "UTC", setTimer: fn => { timers.push(fn); return { cancel() {} }; } });
   await assert.rejects(dispatcher.emit(routine.botId, routine.id, { eventId: "first", payload: "x" }), /Protected choice unavailable/u);
   let saved = (await store.list(routine.botId))[0]!;
-  assert.equal(saved.running?.length ?? 0, 0);
-  assert.equal(saved.seenEventIds.includes("first"), false, "a refused event remains retryable under the same identity");
+  assert.deepEqual(saved.running?.map(({ eventId, payload, claimPending }) => ({ eventId, payload, claimPending })), [{ eventId: "first", payload: "x", claimPending: true }]);
+  assert.equal(runs, 0, "a preparation is not an admitted provider effect");
   fail = false;
   assert.equal(await dispatcher.emit(routine.botId, routine.id, { eventId: "first", payload: "x" }), "queued");
   await dispatcher.idle();
@@ -115,9 +299,15 @@ test("a refused write-ahead model claim cannot consume an event or promote its h
   fail = true; now += 5 * MIN;
   timers.shift()!(); await dispatcher.idle();
   saved = (await store.list(routine.botId))[0]!;
-  assert.equal(saved.held?.eventId, "held");
-  assert.equal(saved.running?.length ?? 0, 0);
+  assert.deepEqual(saved.running?.map(({ eventId, payload, claimPending }) => ({ eventId, payload, claimPending })), [{ eventId: "held", payload: "later", claimPending: true }]);
   assert.equal(runs, 1, "held work cannot start before its claim is durable");
+  fail = false;
+  assert.equal(await dispatcher.emit(routine.botId, routine.id, { eventId: "held", payload: "a retry cannot replace the original" }), "queued");
+  await dispatcher.idle();
+  saved = (await store.list(routine.botId))[0]!;
+  assert.equal(saved.day?.count, 2, "each reservation is counted once across claim retries");
+  assert.equal(saved.running, undefined);
+  assert.equal(runs, 2);
 });
 
 function dispatcherHarness(store: ReturnType<typeof createBotEventRoutineStore>, run?: (event: { eventId: string }) => Promise<{ settled: boolean } | void>) {

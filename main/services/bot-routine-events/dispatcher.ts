@@ -3,7 +3,7 @@
 // that arrives too soon is held (the newest wins) and runs once the gap allows.
 
 import { BOT_ROUTINE_EVENT_LIMITS, type BotRoutineTriggerKind } from "../../../renderer/shared/bot-routine-trigger.js";
-import { BOT_EVENT_RUNNING_MAX, type BotEventRoutine, type BotEventRoutineStore } from "./store.js";
+import { BOT_EVENT_RUNNING_MAX, type BotEventRoutine, type BotEventRoutineStore, type BotEventExecutionSnapshot, type BotEventReceipt } from "./store.js";
 
 export type BotRoutineEventOutcome = "queued" | "held" | "duplicate" | "daily_limit" | "disabled" | "unknown";
 export interface BotRoutineEvent {
@@ -25,8 +25,12 @@ export interface BotRoutineEventDispatcherDependencies {
    * stays for the next start to replay.
    */
   run(routine: BotEventRoutine, event: { eventId: string; source: BotRoutineTriggerKind; payload: string }, signal?: AbortSignal): Promise<{ settled: boolean } | void>;
-  /** Write-ahead protected choice, before this event acquires a running receipt. */
-  claimRoutineExecution?(routine: BotEventRoutine, event: { eventId: string; source: BotRoutineTriggerKind; payload: string }): Promise<unknown>;
+  /** Original-choice comparison, without creating this event's execution claim. */
+  prepareRoutineExecution?(routine: BotEventRoutine): Promise<string>;
+  /** Idempotent protected choice, after this event's payload is durable. */
+  claimRoutineExecution?(routine: BotEventRoutine, event: { eventId: string; source: BotRoutineTriggerKind; payload: string }, expectedChoiceHash?: string): Promise<unknown>;
+  claimFailed?(routine: BotEventRoutine, error: unknown): Promise<void>;
+  claimRecovered?(routine: BotEventRoutine): Promise<void>;
   /** Re-admit watch source access at actual startup, including held/replayed work. */
   authorizeRun?(routine: BotEventRoutine): Promise<{ signal: AbortSignal; release(): void } | { error: string }>;
   isPaused(botId: string): Promise<boolean>;
@@ -68,10 +72,57 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
   }
 
   /** The receipt list with this event added. Callers admit only below the bound, so none is dropped. */
-  function withRunning(routine: BotEventRoutine, event: BotRoutineEvent, at: number) {
+  function withRunning(routine: BotEventRoutine, event: BotRoutineEvent, at: number, execution: BotEventExecutionSnapshot) {
     const others = (routine.running ?? []).filter((entry) => entry.eventId !== event.eventId);
-    return [...others, { eventId: event.eventId, payload: event.payload, at,
+    return [...others, { eventId: event.eventId, payload: event.payload, at, execution,
+      ...(dependencies.claimRoutineExecution ? { claimPending: true as const } : {}),
       ...(event.watchRevision !== undefined ? { watchRevision: event.watchRevision } : {}) }];
+  }
+
+  async function prepare(routine: BotEventRoutine): Promise<BotEventExecutionSnapshot> {
+    if (dependencies.claimRoutineExecution && !dependencies.prepareRoutineExecution) throw new Error("Protected event ownership requires an original-choice preparation.");
+    const choiceHash = await dependencies.prepareRoutineExecution?.(routine);
+    if (choiceHash !== undefined && !/^[a-f0-9]{64}$/u.test(choiceHash)) throw new Error("The protected event preparation is invalid.");
+    return { name: routine.name, prompt: routine.prompt, trigger: structuredClone(routine.trigger), createdAt: routine.createdAt, updatedAt: routine.updatedAt,
+      ...(routine.connector ? { condition: structuredClone(routine.connector.condition) } : {}),
+      ...(choiceHash ? { choiceHash } : {}) };
+  }
+
+  function originalTask(routine: BotEventRoutine, execution: BotEventExecutionSnapshot): BotEventRoutine {
+    const { condition, ...task } = structuredClone(execution);
+    return { ...routine, ...task, ...(condition && routine.connector ? { connector: { ...routine.connector, condition } } : {}) };
+  }
+
+  function sameSource(routine: BotEventRoutine, event: BotEventReceipt): boolean {
+    return !event.execution || event.execution.createdAt === routine.createdAt &&
+      JSON.stringify(event.execution.trigger.kind === "watch" ? event.execution.trigger.source : event.execution.trigger) ===
+      JSON.stringify(routine.trigger.kind === "watch" ? routine.trigger.source : routine.trigger);
+  }
+
+  /** Complete ownership before any effects; a crash in either store leaves the same payload/request. */
+  async function claimAndStart(routine: BotEventRoutine, event: BotRoutineEvent, armedFor: number): Promise<void> {
+    if (!live(armedFor) || event.isCurrent?.() === false || await dependencies.isPaused(routine.botId)) return;
+    let claimed: { routine: BotEventRoutine; event: BotEventReceipt } | undefined;
+    try { claimed = await dependencies.store.mutate<{ routine: BotEventRoutine; event: BotEventReceipt } | undefined>(routine.botId, routine.id, async current => {
+      const receipt = current.running?.find(row => row.eventId === event.eventId);
+      if (!receipt || !current.enabled || !sameSource(current, receipt) || !live(armedFor) || event.isCurrent?.() === false) return { result: undefined };
+      if (receipt.watchRevision !== undefined && receipt.watchRevision !== current.updatedAt) return { result: undefined };
+      const original = receipt.execution ? originalTask(current, receipt.execution) : current;
+      if (receipt.claimPending) {
+        if (!dependencies.claimRoutineExecution) throw new Error("The prepared event's protected execution choice is unavailable.");
+        await dependencies.claimRoutineExecution(original, { ...receipt, source: original.trigger.kind }, receipt.execution?.choiceHash);
+        if (!live(armedFor) || event.isCurrent?.() === false) return { result: undefined };
+        const { claimPending: _pending, ...ready } = receipt;
+        const next = { ...current, running: current.running!.map(row => row.eventId === event.eventId ? ready : row) };
+        return { next, result: { routine: next, event: ready } };
+      }
+      return { result: { routine: current, event: receipt } };
+    }); } catch (error) {
+      await dependencies.claimFailed?.(routine, error).catch((reportError: unknown) => dependencies.onError?.(reportError));
+      throw error;
+    }
+    if (claimed) await dependencies.claimRecovered?.(claimed.routine).catch((error: unknown) => dependencies.onError?.(error));
+    if (claimed && !await dependencies.isPaused(routine.botId)) track(start(claimed.routine, { ...claimed.event, ...(event.isCurrent ? { isCurrent: event.isCurrent } : {}) }, armedFor));
   }
 
   /** Every receipt slot holds an unfinished run: a new event waits as the held one. */
@@ -87,9 +138,12 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
     let settled = false;
     let grant: { signal: AbortSignal; release(): void } | undefined;
     try {
+      const fresh = (await dependencies.store.list(routine.botId)).find(item => item.id === routine.id);
+      const accepted = fresh?.running?.find(item => item.eventId === event.eventId);
+      if (!fresh?.enabled || !accepted || accepted.claimPending) return;
+      if (!sameSource(fresh, accepted)) { settled = true; return; }
+      routine = fresh;
       if (routine.trigger.kind === "watch") {
-        const fresh = (await dependencies.store.list(routine.botId)).find((item) => item.id === routine.id);
-        if (!fresh?.enabled) return;
         const receipt = fresh.running?.find((item) => item.eventId === event.eventId);
         if (!receipt) return;
         if (receipt.watchRevision !== undefined && fresh.updatedAt !== receipt.watchRevision) { settled = true; return; }
@@ -104,6 +158,9 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
         routine = ready;
       }
       if (!live(armedFor) || event.isCurrent?.() === false || grant?.signal.aborted) return;
+      const receipt = routine.running?.find(row => row.eventId === event.eventId);
+      if (receipt?.claimPending || receipt && !sameSource(routine, receipt)) return;
+      if (receipt?.execution) routine = originalTask(routine, receipt.execution);
       settled = (await dependencies.run(routine, { ...event, source: routine.trigger.kind }, grant?.signal))?.settled !== false;
     } finally {
       grant?.release();
@@ -132,6 +189,7 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
   }
 
   async function releaseHeld(botId: string, routineId: string, armedFor: number): Promise<void> {
+    if (!live(armedFor) || await dependencies.isPaused(botId)) return;
     const now = dependencies.now();
     const today = dayKey(now, dependencies.timeZone());
     let retryAt: number | undefined;
@@ -147,13 +205,13 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
       const count = routine.day?.key === today ? routine.day.count : 0;
       if (count >= BOT_ROUTINE_EVENT_LIMITS.perDay) return { next: { ...routine, held: undefined }, result: undefined };
       const event = routine.held;
-      await dependencies.claimRoutineExecution?.(routine, { ...event, source: routine.trigger.kind });
+      const execution = await prepare(routine);
       return {
-        next: { ...routine, held: undefined, running: withRunning(routine, event, now), lastRunAt: now, day: { key: today, count: count + 1 } },
+        next: { ...routine, held: undefined, running: withRunning(routine, event, now, execution), lastRunAt: now, day: { key: today, count: count + 1 } },
         result: { routine, event },
       };
     });
-    if (claimed) await start(claimed.routine, claimed.event, armedFor);
+    if (claimed) await claimAndStart(claimed.routine, claimed.event, armedFor);
     else if (retryAt !== undefined) armHeld(botId, routineId, retryAt, armedFor);
   }
 
@@ -174,7 +232,8 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
         routine.updatedAt !== event.watchRevision || routine.watch?.pending?.eventId !== event.eventId)) {
         return { result: { kind: "disabled" as const } };
       }
-      if (routine.seenEventIds.includes(event.eventId) || routine.held?.eventId === event.eventId) {
+      if (routine.running?.some(row => row.eventId === event.eventId && row.claimPending)) return { result: { kind: "queued" as const, routine } };
+      if (routine.seenEventIds.includes(event.eventId) || routine.held?.eventId === event.eventId || routine.running?.some(row => row.eventId === event.eventId)) {
         return { result: { kind: "duplicate" as const } };
       }
       const seenEventIds = [...routine.seenEventIds, event.eventId].slice(-BOT_ROUTINE_EVENT_LIMITS.seenIds);
@@ -192,12 +251,11 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
           result: { kind: "held" as const, at: nextAllowed },
         };
       }
-      // The receipt is written with the claim, before the caller hears
-      // "queued": a quit before the run is recorded replays it.
-      await dependencies.claimRoutineExecution?.(routine, { ...event, payload, source: routine.trigger.kind });
+      // Reserve limits and save the original payload/task before crossing the model store.
+      const execution = await prepare(routine);
       if (event.isCurrent?.() === false || (event.watchRevision !== undefined && !live(armedFor))) return { result: { kind: "disabled" as const } };
       return {
-        next: { ...routine, seenEventIds, running: withRunning(routine, { ...event, payload }, now), lastRunAt: now, day: { key: today, count: count + 1 } },
+        next: { ...routine, seenEventIds, running: withRunning(routine, { ...event, payload }, now, execution), lastRunAt: now, day: { key: today, count: count + 1 } },
         result: { kind: "queued" as const, routine },
       };
     });
@@ -207,7 +265,7 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
       return "held";
     }
     if (decision.kind === "queued") {
-      track(start(decision.routine, { ...event, payload }, armedFor));
+      await claimAndStart(decision.routine, { ...event, payload }, armedFor);
       return "queued";
     }
     return decision.kind;
@@ -223,8 +281,11 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
       const armedFor = generation;
       return admitting((async () => {
         for (const routine of await routines) {
+          if (live(armedFor) && !routine.running?.some(event => event.claimPending)) {
+            await dependencies.claimRecovered?.(routine).catch((error: unknown) => dependencies.onError?.(error));
+          }
           for (const event of routine.running ?? []) {
-            track(start(routine, event, armedFor));
+            track(claimAndStart(routine, event, armedFor));
           }
           if (!routine.held) continue;
           armHeld(routine.botId, routine.id, (routine.lastRunAt ?? 0) + BOT_ROUTINE_EVENT_LIMITS.minGapMs, armedFor);

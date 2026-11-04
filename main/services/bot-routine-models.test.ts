@@ -46,6 +46,30 @@ async function fixture(t: test.TestContext) {
   const saveA = async () => service.save({ botId: "bot:one", routineId: "routine:one", mutationId: randomUUID(), expectedRevision: (await service.read("bot:one", "routine:one")).revision, catalogRevision: (await service.catalog("bot:one", "routine:one")).revision, selection: { mode: "selected", primary: { providerId: provider.id, modelId: a.id, thinkingLevel: "high" } } }, lifetime());
   return { root, store, open, service, snapshot, saveA, provider, a, d, models, faux, holdNextPersistence, get defaultCalls() { return defaultCalls; }, setQuiet(value:boolean) {quiet=value;}, unavailableDefault() { defaultAvailable = false; }, rotate() { connection = "two"; }, recreate() { routineIncarnation = "routine-two"; }, removeRoutine() { routinePresent = false; }, recreateBot() { botIncarnation = "bot-two"; }, tick() { now++; }, loseResponse() { failAfterPublish = true; } };
 }
+test("a prepared choice refuses model, thinking and fallback drift while credential repair and existing ownership retain their routes", async t => {
+  const f = await fixture(t);
+  const origin = (id: string) => ({ version: 1 as const, botId: "bot:one", routineId: "routine:one", runId: id, kind: "event" as const });
+  const inherited = await f.service.prepareRoutineClaim("bot:one", "routine:one");
+  f.rotate();
+  const repaired = await f.service.claim("bot:one", { requestId: "credential-repair", routineOrigin: origin("credential-repair"), expectedChoiceHash: inherited });
+  assert.equal(repaired.primary.binding.sourceModelId, "D");
+  assert.equal(repaired.primary.binding.connectionFingerprint, fp("two"));
+  assert.equal((await f.saveA()).ok, true);
+  const selected = await f.service.prepareRoutineClaim("bot:one", "routine:one");
+  const frozen = await f.service.claim("bot:one", { requestId: "already-owned", routineOrigin: origin("already-owned"), expectedChoiceHash: selected });
+  for (const selection of [
+    { mode: "inherit" as const },
+    { mode: "selected" as const, primary: { providerId: f.provider.id, modelId: f.a.id, thinkingLevel: "off" as const } },
+    { mode: "selected" as const, primary: { providerId: f.provider.id, modelId: f.a.id, thinkingLevel: "high" as const }, fallback: { providerId: f.provider.id, modelId: f.d.id, thinkingLevel: "off" as const } },
+  ]) {
+    const saved = await f.service.save({ botId: "bot:one", routineId: "routine:one", mutationId: randomUUID(), expectedRevision: (await f.service.read("bot:one", "routine:one")).revision, catalogRevision: (await f.service.catalog("bot:one", "routine:one")).revision, selection }, lifetime());
+    assert.equal(saved.ok, true);
+    await assert.rejects(f.service.claim("bot:one", { requestId: "not-owned", routineOrigin: origin("not-owned"), expectedChoiceHash: selected }), { name: "BotRoutineModelPreparationChangedError" });
+    assert.equal(await f.service.claimByRequest("bot:one", "not-owned"), undefined);
+    assert.deepEqual(await f.service.claim("bot:one", { requestId: "already-owned", routineOrigin: origin("already-owned"), expectedChoiceHash: selected }), frozen);
+  }
+});
+
 test("explicit routine grant admits its model while Custom default stays unavailable and unchanged; forged/cross-owner/recreated grants fail", async (t) => {
   const f = await fixture(t); assert.equal((await f.saveA()).ok, true); f.unavailableDefault();
   const claim = await f.service.claim("bot:one", { requestId: "routine:one:fire", routineOrigin: { version: 1, botId: "bot:one", routineId: "routine:one", runId: "routine:one:fire", kind: "manual" } });

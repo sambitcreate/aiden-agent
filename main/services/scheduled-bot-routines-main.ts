@@ -23,18 +23,18 @@ async function resolveRetry(botId: string, requestId: string, retryOf: string): 
   return task?.botId === botId && task.pendingRoutineFires?.some(fire => fire.requestId === requestId && fire.retry?.failedRunId === retryOf) === true;
 }
 
-/** No host/runtime opening: protected model choice precedes ownership receipt publication. */
-export async function claimBotRoutineExecution(task: ScheduledTask, trigger: ScheduledRunTrigger): Promise<{ claimId: string }> {
+/** No host/runtime opening: mint or reuse the protected choice for this exact input. */
+export async function claimBotRoutineExecution(task: ScheduledTask, trigger: ScheduledRunTrigger, expectedChoiceHash?: string): Promise<{ claimId: string }> {
   if (!task.botId || task.wakeUp) throw new Error("This task is not a person-accepted Bot routine.");
-  return claimBotRoutineInputExecution(task.botId, botRoutineExecutionInput(task, trigger));
+  return claimBotRoutineInputExecution(task.botId, botRoutineExecutionInput(task, trigger), expectedChoiceHash);
 }
 
-async function claimBotRoutineInputExecution(botId: string, input: Parameters<NonNullable<BotRoutineExecutorPorts["claimExecution"]>>[1]): Promise<{ claimId: string }> {
+async function claimBotRoutineInputExecution(botId: string, input: Parameters<NonNullable<BotRoutineExecutorPorts["claimExecution"]>>[1], expectedChoiceHash?: string): Promise<{ claimId: string }> {
   const resolveOrigin = (await import("./bot-open-work/service-main.js")).resolveBotOpenWorkRoutineOrigin;
   if (input.routineOrigin.botId !== botId || input.routineOrigin.runId !== input.requestId || !await resolveOrigin(botId, input.requestId, "1", input.routineOrigin)) throw new Error("This input is not an accepted Bot routine.");
   if (input.routineOrigin.kind === "retry" ? !input.retryOf || !await resolveRetry(botId, input.requestId, input.retryOf) : input.retryOf !== undefined) throw new Error("This input is not a verified routine retry.");
   const { botRoutineModels } = await import("./bot-routine-models-main.js");
-  const claim = await botRoutineModels.claim(botId, { requestId: input.requestId, routineOrigin: issueBotRoutineInputOrigin(input.routineOrigin), ...(input.routineTiming ? parseBotRoutineTiming(input.routineTiming) : {}), ...(input.retryOf ? { retryOf: input.retryOf } : {}), ...(botConnectorInventoryServer() ? { connectorServerId: botConnectorInventoryServer() } : {}), ...(botConnectorExecutionRestriction() ? { connectorRestriction: botConnectorExecutionRestriction() } : {}) });
+  const claim = await botRoutineModels.claim(botId, { ...(expectedChoiceHash ? { expectedChoiceHash } : {}), requestId: input.requestId, routineOrigin: issueBotRoutineInputOrigin(input.routineOrigin), ...(input.routineTiming ? parseBotRoutineTiming(input.routineTiming) : {}), ...(input.retryOf ? { retryOf: input.retryOf } : {}), ...(botConnectorInventoryServer() ? { connectorServerId: botConnectorInventoryServer() } : {}), ...(botConnectorExecutionRestriction() ? { connectorRestriction: botConnectorExecutionRestriction() } : {}) });
   return { claimId: claim.id };
 }
 
