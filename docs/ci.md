@@ -71,12 +71,17 @@ superseded. Runner capacity can still cause queueing.
 - Browser containment, terminal coverage thresholds, Ruby policy, Rust
   formatting/tests/clippy and native helper production/test builds retain their
   execution modes. Registry validation checks both files and these prerequisites.
-- Electron files run across three isolated macOS runners with one worker each and
-  `--fail-on-flaky-tests`. File-duration weights come from hosted run 41534097337;
-  the cancelled shard's last file includes an allowance for its unfinished test.
-  A separate completed run checks the allocation against independent timings;
-  newly discovered specs get a default weight and always run. Live-provider specs
-  remain opt-in; production diagnostics run separately with the production profile.
+- Electron files run across four isolated macOS runners with one worker each and
+  `--fail-on-flaky-tests`, retaining the 20-minute job limit. File-duration weights
+  preserve larger historical estimates and complete windows from hosted runs
+  41784199399 and 41789418295. Cancelled terminal windows are lower bounds, never
+  treated as completed timings. The completed run 41778188548 independently checks
+  the allocation. A measured budget check reserves two minutes for setup/cleanup
+  and at least three minutes of headroom; real runner variation can still differ.
+  Newly discovered specs get a default weight and always run. A real Playwright
+  collection check verifies that every deterministic case belongs to exactly one
+  shard. Live-provider specs remain opt-in; production diagnostics run separately
+  with the production profile.
 - Android retains unit tests, lint, test compilation and emulator coverage, with
   Gradle's build cache enabled and APK publication only on main. Hosted iOS
   compilation is not physical-device XCTest acceptance.
@@ -101,6 +106,19 @@ multiple comparable full and selected-lane runs, including queue delays, failure
 reruns and total runner usage. Parallelism may trade more runner-minutes for less
 waiting. Browser caches, install retries and further Linux migration are follow-up
 experiments only if measured overhead or failures justify them.
+
+On 2026-11-04, run [41789418295](https://github.com/sambitcreate/aiden-agent/actions/runs/41789418295)
+hit the 20-minute job limit on Electron shard 1 after starting its final case;
+GitHub's annotation explicitly identified the job deadline, with no individual
+spec failure printed. Its three shards collected 118/80/96 cases. Shards 2 and 3
+completed their test steps in 881/684 seconds; shard 1 was cancelled after 1,126
+seconds of testing plus setup. The earlier run 41784199399 instead timed out on
+shard 3, so refreshing weights from one fast runner alone would conceal the
+variance. Four shards using the conservative complete-file measurements project
+under 15 minutes each before the setup reserve, while the independent completed
+run projects roughly 10–11 minutes. This adds one runner's setup cost in exchange
+for headroom. It changes neither test timeouts nor retries; exact-head hosted CI
+must still pass.
 
 Release workflows, signing/notarization, publication and repository protection
 settings remain unchanged. The previous draft's release-admission rewrite has
