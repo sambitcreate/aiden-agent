@@ -41,7 +41,7 @@ The primary application is an Electron desktop app for macOS and Linux. People w
 
 The headless server (`aiden serve`, the standalone CLI) can explicitly migrate its Bot host to the shared durable session core. Migration is opt-in, preserves legacy data, and advertises only supported session, routine, preset and memory endpoints; see [CLI durable Bots](docs/cli-durable-bots.md). Private verification receipts and workflow lesson drafts are evaluation infrastructure; Bot learning (lessons, corrections, skill proposals) is a separate, person-approved feature with its own store.
 
-Bot messaging is under implementation. The desktop core accepts durable, bounded messages and delivers one final reply later, with global and per-Bot switches. Transcript rows, CLI hosting, Remote and native support remain pending after the core review gate. See [Bot messaging core](docs/bot-messaging-core.md).
+Bots can ask each other for help through private, bounded messages on desktop and the CLI host. Chats name who asked or replied, and the sender receives one final result. Global and per-Bot switches are available on desktop and paired iOS and Android clients that negotiate messaging support. Another Bot's words never grant approval or personal memory access. The CLI records paid Bot response costs in its profile-local spending ledger and enforces configured monthly and routine-run limits. See [Bot messaging](docs/bot-messaging.md).
 
 ## Brand Commitments
 

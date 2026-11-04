@@ -278,7 +278,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     }
     if (unfinished(row) && row.parentDeliveryId) {
       const parent = await deps.ledger.get(row.parentDeliveryId);
-      if (parent?.status === "answered" && parent.outcome === "replied") {
+      if (parent?.status === "answered" && (parent.outcome === "replied" || parent.outcome === "silent")) {
         queue(id);
         return;
       }
@@ -454,7 +454,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     }
     await deps.ledger.update(row.id, (r) => {
       if (!unfinished(r) || r.initialAnswer === undefined) return r;
-      const effects = notice(r, "replied_while_paused", r.initialAnswer);
+      const effects = notice(r, "replied_while_paused", r.initialAnswer).filter((e) => e.kind === "notice");
       return {
         ...r,
         status: "answered",
@@ -568,6 +568,11 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     if (active) return active;
     const task = (async () => {
       if (!(await exists(effect.botId, row.id))) return;
+      // A child's answer belongs in its parent's chat, never a separate funnel delivery.
+      if (row.parentDeliveryId && effect.kind === "notification" && effect.data?.outcome === "replied_while_paused") {
+        await ack(row.id, effect.id);
+        return;
+      }
       if (effect.kind === "notice")
         await deps.sessions.appendEntry(effect.botId, BOT_MESSAGE_STATUS_ENTRY_KIND, {
           ...effect.data,
@@ -619,7 +624,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     if (row.parentDeliveryId && unfinished(row)) {
       const parent = await deps.ledger.get(row.parentDeliveryId);
       if (!parent || !unfinished(parent)) {
-        if (parent?.status === "answered" && parent.outcome === "replied") {
+        if (parent?.status === "answered" && (parent.outcome === "replied" || parent.outcome === "silent")) {
           await deps.ledger.update(id, (r) => ({
             ...r,
             status: "answered",

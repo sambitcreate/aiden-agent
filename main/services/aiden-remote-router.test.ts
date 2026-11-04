@@ -105,6 +105,7 @@ async function fixture(options: {
   platform?: "mac" | "linux" | "windows";
   /** The Bot service serves and accepts Chat activity (contract revision 30). */
   chatActivity?: boolean;
+  botMessaging?: boolean;
   speechAvailable?: boolean;
   /** The host ships the phone visual viewer (contract revision 35). */
   visualViewer?: boolean;
@@ -183,6 +184,7 @@ async function fixture(options: {
     avatar: { semantic: { version: 1 as const, shape: "orb" as const, color: "sky" as const } },
     health: "ready" as const,
     ...(options.pausedBot ? { sessionState: "paused" as const, paused: true } : {}),
+    ...(options.botMessaging ? {botMessaging: {receive: true, send: true}} : {}),
     ...(options.botIssueCount === undefined ? {} : { issueCount: options.botIssueCount }),
     access: botAccess,
     createdAt: new Date(1_000).toISOString(),
@@ -626,11 +628,12 @@ async function fixture(options: {
       }),
     },
     bots: {
+      ...(options.botMessaging ? {supportsBotMessaging: true, updateMessaging: async (input: unknown) => {calls.push(`bots:messaging:${JSON.stringify(input)}`); return input as {enabled: boolean};}} : {}),
       ...(options.chatActivity ? { supportsChatActivity: true } : {}),
       list: async () => {
         calls.push("bots:list");
-        const { instructions: _instructions, access: _access, ...summary } = botDetail;
-        return { bots: [summary], maxBots: 256 };
+        const { instructions: _instructions, access: _access, botMessaging: _messaging, ...summary } = botDetail;
+        return { bots: [summary], maxBots: 256, ...(options.botMessaging ? {messaging: {enabled: true}} : {}) };
       },
       get: async (botId) => {
         calls.push(`bots:get:${botId}`);
@@ -7137,4 +7140,31 @@ test("context pressure is a desktop chat read gated by its feature, chat:read an
   } finally {
     await botChat.close();
   }
+});
+
+
+test("Bot messaging fields and settings require negotiation and write authority", async () => {
+  for (const holder of [false, true]) {
+    const app = await fixture({botMessaging: true, acceptsBotCapabilities: true, capabilities: ["server:read", "bot:read", "bot:write", ...(holder ? ["bot:messaging" as const] : [])]});
+    try {
+      const headers = {authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "content-type": "application/json"};
+      const detail = await (await fetch(`${app.base}/bots/bot-1`, {headers})).json() as Record<string, unknown>;
+      const list = await (await fetch(`${app.base}/bots`, {headers})).json() as Record<string, unknown>;
+      assert.equal("botMessaging" in detail, holder); assert.equal("messaging" in list, holder);
+      const patch = await fetch(`${app.base}/bots/bot-1`, {method: "PATCH", headers: {...headers, "if-match": "bot_revision_1"}, body: JSON.stringify({botMessaging: {receive: false}})});
+      assert.equal(patch.status, holder ? 200 : 400);
+      const put = await fetch(`${app.base}/bots/messaging`, {method: "PUT", headers, body: JSON.stringify({enabled: false})});
+      assert.equal(put.status, holder ? 200 : 403);
+      assert.equal(app.calls.filter(c => c.startsWith("bots:messaging:")).length, holder ? 1 : 0);
+      if (holder) {
+        assert.deepEqual(await put.json(), {enabled: false});
+        for (const body of [{enabled: "false"}, {enabled: false, extra: true}, {}]) assert.equal((await fetch(`${app.base}/bots/messaging`, {method: "PUT", headers, body: JSON.stringify(body)})).status, 400);
+      }
+    } finally { await app.close(); }
+  }
+  const readOnly = await fixture({botMessaging: true, acceptsBotCapabilities: true, capabilities: ["bot:read", "bot:messaging"]});
+  try {
+    assert.equal((await fetch(`${readOnly.base}/bots/messaging`, {method: "PUT", headers: {authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "content-type": "application/json"}, body: '{"enabled":false}'})).status, 403);
+    assert.equal(readOnly.calls.some(c => c.startsWith("bots:messaging:")), false);
+  } finally { await readOnly.close(); }
 });

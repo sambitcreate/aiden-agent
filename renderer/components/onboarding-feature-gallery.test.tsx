@@ -1,7 +1,7 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, within } from "@testing-library/react";
 import { OnboardingFeatureGallery, onboardingFeatures } from "./onboarding-feature-gallery.js";
 
 /** A stand-in for the browser's IntersectionObserver that the test scrolls by hand. */
@@ -25,6 +25,16 @@ class FakeIntersectionObserver {
   }
 }
 (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = FakeIntersectionObserver;
+
+test("the existing Bots tile explains collaboration and illustrates a labelled reply", () => {
+  const { container, unmount } = render(<OnboardingFeatureGallery features={onboardingFeatures} platform="darwin" />);
+  const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="bots"]');
+  assert.ok(tile);
+  assert.ok(within(tile).getByText(/Bots can ask each other for help/u));
+  assert.ok(within(tile).getByText("COS replied"));
+  unmount();
+  cleanup();
+});
 
 test("a feature tile scrolled out of the gallery is marked off-screen so its looping art holds still", () => {
   const { container, unmount } = render(<OnboardingFeatureGallery features={onboardingFeatures} platform="darwin" />);

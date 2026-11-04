@@ -237,7 +237,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Meet your Bots",
     description:
-      "Start with a helper for a job, like planning meals or keeping up with email. Each Bot keeps one chat, remembers what matters to you, and can check in on a schedule.",
+      "Start with a helper for a job, like planning meals or email. Each Bot keeps one chat and remembers what matters. Bots can ask each other for help and check in on a schedule.",
     icon: Bot,
     size: "standard",
   },

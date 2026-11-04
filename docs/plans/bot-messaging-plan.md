@@ -1,6 +1,6 @@
 # Bots that work together: implementation plan
 
-Status: implementation in progress (2026-11-03). Phase A Tasks 1–7 are implemented and locally verified; the first independent core reviews required fixes, and the verification round is pending before Tasks 8–11. No phase has passed its acceptance gate yet. Branch `feature/bot-messaging`, with `main` at `a5c5db8b1` merged into it.
+Status: implementation in progress (2026-11-03). Phase A Tasks 1–7 are implemented and locally verified; both independent core reviewers accepted `79d485a75` in round 5. Tasks 8–11 are implemented and locally verified across desktop, Remote, CLI and both native clients. The A-core checkpoint has passed; the combined A checkpoint is ready for independent review, so full phase A acceptance remains open. Branch `feature/bot-messaging`, with `main` at `a5c5db8b1` merged into it.
 
 This is the master plan. It records the owner's decisions and how the four detailed plans fit together. Research and design: [bot-to-bot-messaging-research.md](bot-to-bot-messaging-research.md).
 

@@ -282,7 +282,7 @@ object AidenBotPrivateResponseValidator {
         "botRoutineNotifications", "botSessionCards",
         // Contract revision 37.
         "botHandoffs",
-        "botIssues"
+        "botIssues", "botMessagingDetail", "botMessagingPatch", "botMessagingSettings", "botMessageNotification"
     )
     private val botSessionRoots = setOf("botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionCards")
     private val privateChildBases = listOf("children", "subagents", "subagent", "child")
@@ -484,7 +484,7 @@ object AidenBotPrivateResponseValidator {
                 (parentPath + key).joinToString(".") in listOf("act.response.result", "notOpen.result")
         }
         if (key != "instructions" && key != "openingGreeting") return false
-        if (root == "botDetail") {
+        if (root == "botDetail" || root == "botMessagingDetail") {
             return parentPath.isEmpty()
         }
         // Revision 37: the hand-off fixture's paused Bot detail carries its own instructions.
@@ -554,6 +554,7 @@ data class AidenRemoteCapability(val rawValue: String) {
          * Contract revision 30: this phone receives the activity and queued session frames and
          * Bot detail `chatActivity`. It grants no authority.
          */
+        val BOT_MESSAGING = AidenRemoteCapability("bot:messaging")
         val BOT_ACTIVITY = AidenRemoteCapability("bot:activity")
         /**
          * Contract revision 37: this phone receives a Bot's hand-offs, the `paused` session
@@ -645,6 +646,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         val PHONE_BOT_CARDS = listOf(BOT_CARDS)
 
         /** Negotiable behind `bot-activity-v1`. */
+        val PHONE_BOT_MESSAGING = listOf(BOT_MESSAGING)
         val PHONE_BOT_ACTIVITY = listOf(BOT_ACTIVITY)
 
         /** Negotiable when the Mac lists them in `serverCapabilities`, in a call of their own. */
@@ -671,12 +673,12 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
-            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_BOT_MESSAGING
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
         val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
-            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_BOT_MESSAGING
     }
 }
 

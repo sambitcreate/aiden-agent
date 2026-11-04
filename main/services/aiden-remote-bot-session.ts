@@ -1,3 +1,4 @@
+import { botMessageRowLabel, botMessageStatusLine } from "../../renderer/shared/bot-messages.js";
 // Remote surface of the durable Bot runtime (contract revision 25).
 //
 // - `GET /bots/{id}/session` and its SSE stream project the Bot's one Pi Durable
@@ -318,7 +319,7 @@ export interface AidenRemoteBotSessionServiceOptions {
   routineNotifications?: {
     list(
       since: number | undefined,
-      options?: { issues?: boolean },
+      options?: { issues?: boolean; messaging?: boolean },
     ): Promise<AidenRemoteBotRoutineNotificationList>;
   };
   now?(): number;
@@ -401,6 +402,14 @@ export function projectBotSessionEntries(
   for (const entry of projectBotTranscript(entries)) {
     const id = wireEntryId(entry.id);
     switch (entry.type) {
+      case "bot_message":
+      case "bot_message_status": {
+        const createdAt = isoOf(entry.at);
+        const label = entry.type === "bot_message" ? botMessageRowLabel(entry.kind, entry.botName) : entry.data.botName;
+        const text = entry.type === "bot_message" ? entry.text : [botMessageStatusLine(entry.data), ...(entry.data.outcome === "replied_while_paused" && entry.data.text ? [entry.data.text] : [])].join("\n\n");
+        output.push({type: "message", id, role: "user", label: wireText(label, 120), text: bounded(text), ...(createdAt ? {createdAt} : {})});
+        break;
+      }
       case "user":
       case "routine": {
         const createdAt = isoOf(entry.at);
@@ -1812,7 +1821,7 @@ export class AidenRemoteBotSessionService {
   /** Finished Bot routine runs a phone should announce, after `since` (ISO). */
   async routineNotificationFeed(
     since: string | undefined,
-    options: { issues?: boolean } = {},
+    options: { issues?: boolean; messaging?: boolean } = {},
   ): Promise<AidenRemoteBotRoutineNotificationList> {
     const { routineNotifications } = this.proactive();
     let sinceMs: number | undefined;
@@ -1822,7 +1831,7 @@ export class AidenRemoteBotSessionService {
         throw new AidenRemoteServiceError("invalid_request", "since must be an ISO-8601 time.", 400);
       }
     }
-    return routineNotifications.list(sinceMs, { issues: options.issues === true && this.supportsIssues });
+    return routineNotifications.list(sinceMs, { issues: options.issues === true && this.supportsIssues, messaging: options.messaging === true });
   }
 
   /** The state as a `bot:handoffs` device sees it; `stateViewForAudience` projects it for the others. */

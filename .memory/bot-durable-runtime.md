@@ -106,3 +106,7 @@ Plan: `docs/superpowers/plans/2026-10-07-bots-rework.md`. Spec: `docs/superpower
 - Diagnostics: Bot error class names are on the `DIAGNOSTIC_ERROR_TYPES` allowlist (`renderer/shared/diagnostics.ts`), so they project distinct `errorType`/fingerprints instead of `UnknownError`. `bots:create` failures and turn readmission failures (`bot-session-main` `readmit`) are logged once under area `bots`.
 
 Desktop and CLI person-sent Bot inputs reserve colon-separated IDs for host ingress. Routine preapproval verifies the host-authored Pi entry kind on every placed input. Unmarked pending turns from older versions use ordinary approval.
+
+- Bot messaging (2026-11-03): host-owned bot:/botreply: inputs use bounded external courier work, atomic idle-only sends and owned approval deadlines. Bot-only expiry blocks its generation; joined person steers remain untouched. Empty provenance denies tools. See .memory/bot-messaging.md; A-core accepted79d485a75, fullA in progress.
+
+Phase A CLI parity, 2026-11-03: serve-only durable Bots now host the shared ledger/courier and model-only message_bot tool, with host task settlement collection, expiry-aware approvals, public prompt redaction and pre-erase purge markers. The CLI runner records paid response costs in profile-local spending.json using the shared SpendingLedger and actual ModelRuntime.checkAuth classification, enforcing configured monthly and routine-run limits from aiden.json. No usage-limit waits, spending editor, temporary allowances or delivery funnel were added. Full A independent review remains pending.

@@ -5273,3 +5273,200 @@ final class AidenBotIssueTests: XCTestCase {
         XCTAssertTrue(model.openIssues.contains(where: { $0.id == card.id }), "opening a surface fixes nothing")
     }
 }
+
+extension AidenBotSessionTests {
+    private func messagingFixture() throws -> [String: Any] {
+        let url = try XCTUnwrap(Bundle(for: AidenBotSessionTests.self).url(forResource: "contract", withExtension: "json"))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    }
+
+    func testMessagingDetailListAndStrictBooleanBounds() throws {
+        let root = try messagingFixture()
+        let sharedDetail = try AidenRemoteJSONDecoder.decode(AidenBotDetail.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(root["botMessagingDetail"])))
+        XCTAssertEqual(sharedDetail.botMessaging, AidenBotMessaging(receive: true, send: true))
+        let sharedPatch = try AidenRemoteJSONDecoder.decode(AidenBotIdentityPatch.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(root["botMessagingPatch"])))
+        XCTAssertEqual(sharedPatch.botMessaging?.receive, false)
+        XCTAssertNil(sharedPatch.botMessaging?.send)
+        let sharedSettings = try AidenRemoteJSONDecoder.decode(AidenBotMessagingSettings.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(root["botMessagingSettings"])))
+        XCTAssertFalse(sharedSettings.enabled)
+        let sharedNotification = try AidenRemoteJSONDecoder.decode(AidenBotRoutineNotification.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(root["botMessageNotification"])))
+        XCTAssertEqual(sharedNotification.kind, .message)
+        var detail = try XCTUnwrap(root["botDetail"] as? [String: Any])
+        detail["botMessaging"] = ["receive": false, "send": true]
+        let decoded = try AidenRemoteJSONDecoder.decode(AidenBotDetail.self, from: JSONSerialization.data(withJSONObject: detail))
+        XCTAssertEqual(decoded.botMessaging, AidenBotMessaging(receive: false, send: true))
+        var list = try XCTUnwrap(root["botList"] as? [String: Any])
+        list["messaging"] = ["enabled": false]
+        let bots = try AidenRemoteJSONDecoder.decode(AidenBotList.self, from: JSONSerialization.data(withJSONObject: list))
+        XCTAssertEqual(bots.messaging?.enabled, false)
+        XCTAssertEqual(try bots.removing(botID: decoded.id).messaging?.enabled, false)
+        detail.removeValue(forKey: "botMessaging")
+        XCTAssertNil(try AidenRemoteJSONDecoder.decode(AidenBotDetail.self, from: JSONSerialization.data(withJSONObject: detail)).botMessaging)
+        for invalid in [#"{}"#, #"{"receive":null}"#, #"{"receive":"false"}"#, #"{"receive":1}"#, #"{"send":true,"path":"private"}"#] {
+            XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBotMessagingPatch.self, from: Data(invalid.utf8)))
+        }
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBotMessagingSettings.self, from: Data(#"{"enabled":"false"}"#.utf8)))
+        detail["botMessaging"] = ["receive": true]
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBotDetail.self, from: JSONSerialization.data(withJSONObject: detail)))
+    }
+
+    func testMessagingChangedFieldRequestAndGlobalPutUseContractHeaders() async throws {
+        let root = try messagingFixture()
+        var detail = try XCTUnwrap(root["botDetail"] as? [String: Any])
+        detail["botMessaging"] = ["receive": false, "send": true]
+        MessagingURLProtocol.response = try JSONSerialization.data(withJSONObject: detail)
+        MessagingURLProtocol.requests = []
+        defer { MessagingURLProtocol.requests = []; MessagingURLProtocol.response = Data() }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MessagingURLProtocol.self]
+        let client = AidenRemoteClient(endpoint: URL(string: "https://messaging.test/api/aiden/v1")!, credential: "test-only", session: URLSession(configuration: configuration))
+        let id = try XCTUnwrap(detail["id"] as? String)
+        _ = try await client.updateBotIdentity(id: id, revision: "revision_current", patch: AidenBotIdentityPatch(botMessaging: AidenBotMessagingPatch(receive: false)))
+        let patch = try XCTUnwrap(MessagingURLProtocol.requests.first)
+        XCTAssertEqual(patch.method, "PATCH")
+        XCTAssertEqual(patch.path, "/api/aiden/v1/bots/\(id)")
+        XCTAssertEqual(patch.revision, "revision_current")
+        XCTAssertEqual(patch.protocolVersion, "1")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: patch.body) as? [String: Any])
+        XCTAssertEqual(Set(body.keys), ["botMessaging"])
+        XCTAssertEqual(body["botMessaging"] as? [String: Bool], ["receive": false])
+        MessagingURLProtocol.response = Data(#"{"enabled":false}"#.utf8)
+        let settings = try await client.setBotMessaging(enabled: false)
+        XCTAssertFalse(settings.enabled)
+        let put = try XCTUnwrap(MessagingURLProtocol.requests.last)
+        XCTAssertEqual(put.method, "PUT")
+        XCTAssertEqual(put.path, "/api/aiden/v1/bots/messaging")
+        XCTAssertEqual(put.protocolVersion, "1")
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: put.body) as? [String: Bool], ["enabled": false])
+    }
+
+    func testMessagingGlobalOptimismRollbackAndLostAnswerReconcile() async {
+        let context = AidenRemoteRequestContext(instanceId: "mac", deviceId: "phone", generation: 1)
+        let model = AidenBotMessagingModel()
+        model.adopt(AidenBotMessagingSettings(enabled: true), context: context)
+        await model.save(enabled: false, context: context, send: {
+            XCTAssertEqual(model.settings?.enabled, false)
+            XCTAssertTrue(model.isSaving)
+            throw URLError(.networkConnectionLost)
+        }, read: { AidenBotMessagingSettings(enabled: true) }, isCurrent: { true })
+        XCTAssertEqual(model.settings?.enabled, true)
+        XCTAssertNotNil(model.error)
+        XCTAssertFalse(model.isSaving)
+        await model.save(enabled: false, context: context, send: {
+            throw URLError(.networkConnectionLost)
+        }, read: { AidenBotMessagingSettings(enabled: false) }, isCurrent: { true })
+        XCTAssertEqual(model.settings?.enabled, false)
+        XCTAssertNil(model.error)
+        model.adopt(AidenBotMessagingSettings(enabled: true), context: context, generation: 0)
+        XCTAssertEqual(model.settings?.enabled, false, "A list read started before Save must not replace its result")
+        XCTAssertFalse(aidenBotMessagingControlsEnabled(settings: nil, canWrite: true, saving: false))
+        XCTAssertFalse(aidenBotMessagingControlsEnabled(settings: model.settings, canWrite: true, saving: false))
+        XCTAssertFalse(aidenBotMessagingControlsEnabled(settings: AidenBotMessagingSettings(enabled: true), canWrite: false, saving: false))
+        XCTAssertFalse(aidenBotMessagingControlsEnabled(settings: AidenBotMessagingSettings(enabled: true), canWrite: true, saving: true))
+        XCTAssertTrue(aidenBotMessagingControlsEnabled(settings: AidenBotMessagingSettings(enabled: true), canWrite: true, saving: false))
+        let other = AidenRemoteRequestContext(instanceId: "other", deviceId: "phone", generation: 2)
+        XCTAssertNil(model.value(for: other))
+        model.adopt(nil, context: other)
+        XCTAssertNil(model.settings, "An older host has no messaging state or controls")
+        XCTAssertTrue(AidenRemoteCapability.phoneNegotiable.contains(.botMessaging))
+        XCTAssertTrue(AidenRemoteCoordinator.capabilitiesAskedForAlone.contains([.botMessaging]))
+    }
+
+    func testMessagingIdentitySaveUsesNewestRevisionAndRollsBackToHostFields() async throws {
+        var detail = try XCTUnwrap(try messagingFixture()["botMessagingDetail"] as? [String: Any])
+        func decoded(_ object: [String: Any]) throws -> AidenBotDetail {
+            try AidenRemoteJSONDecoder.decode(AidenBotDetail.self, from: JSONSerialization.data(withJSONObject: object))
+        }
+        var authoritative = try decoded(detail)
+        var revisions: [String] = []
+        var loseResponse = false
+        let saver = AidenBotIdentitySaver(send: { patch, revision in
+            revisions.append(revision)
+            if loseResponse { throw URLError(.networkConnectionLost) }
+            let next = try XCTUnwrap(patch.botMessaging).applying(to: XCTUnwrap(authoritative.botMessaging))
+            detail["botMessaging"] = ["receive": next.receive, "send": next.send]
+            detail["revision"] = "revision_next"
+            authoritative = try decoded(detail)
+            return authoritative
+        }, refresh: { authoritative })
+        saver.adopt(authoritative)
+        let originalRevision = authoritative.revision
+        let first = try AidenBotIdentityPatch(botMessaging: AidenBotMessagingPatch(receive: false))
+        let saved = await saver.save(first)
+        XCTAssertEqual(saved, .saved(authoritative))
+        XCTAssertEqual(authoritative.botMessaging, AidenBotMessaging(receive: false, send: true))
+        loseResponse = true
+        let second = try AidenBotIdentityPatch(botMessaging: AidenBotMessagingPatch(send: false))
+        let failed = await saver.save(second)
+        XCTAssertEqual(failed, .failed(authoritative: authoritative))
+        XCTAssertFalse(second.isSatisfied(by: authoritative))
+        XCTAssertEqual(authoritative.botMessaging, AidenBotMessaging(receive: false, send: true))
+        XCTAssertEqual(revisions, [originalRevision, "revision_next"])
+    }
+
+    func testMessagingNotificationOpensBotChatAndKeepsRedactedPreview() throws {
+        let item = try AidenRemoteJSONDecoder.decode(AidenBotRoutineNotification.self, from: Data(#"{"id":"message_1","kind":"message","botId":"bot_fixture_01","botName":"COS","routineName":"COS replied","finishedAt":"2026-11-03T12:00:00.000Z","preview":"[redacted]"}"#.utf8))
+        let request = AidenBotRoutineNotifier.request(for: item, instanceId: "mac-1")
+        XCTAssertEqual(item.kind, .message)
+        XCTAssertEqual(request.content.body, "COS replied: [redacted]")
+        XCTAssertEqual(request.content.userInfo[AidenRunAlertNotifier.deepLinkUserInfoKey] as? String,
+                       AidenDeepLink.botChatURL(instanceId: "mac-1", botId: "bot_fixture_01")?.absoluteString)
+        XCTAssertNil(item.routineId)
+        XCTAssertNil(item.status)
+        let emptyPreview = try AidenRemoteJSONDecoder.decode(AidenBotRoutineNotification.self, from: Data(#"{"id":"message_2","kind":"message","botId":"bot_fixture_01","botName":"COS","routineName":"COS replied","finishedAt":"2026-11-03T12:00:00.000Z","preview":""}"#.utf8))
+        XCTAssertEqual(AidenBotRoutineNotifier.request(for: emptyPreview, instanceId: "mac-1").content.body, "COS replied")
+    }
+
+    func testMessagingLabelAndPausedSavedAnswerRemainVisibleWithoutResume() async throws {
+        let clean = try AidenRemoteJSONDecoder.decode(AidenBotSessionEntry.self, from: Data(#"{"id":"request_1","type":"message","role":"user","label":"Jester asked","text":"Check the calendar"}"#.utf8))
+        let saved = try AidenRemoteJSONDecoder.decode(AidenBotSessionEntry.self, from: Data(#"{"id":"reply_1","type":"message","role":"user","label":"COS","text":"COS replied while this Bot was paused.\nThere are three events."}"#.utf8))
+        let transport = FakeBotSessionTransport()
+        let model = await loadedModel(transport, try session(seq: 1, state: .paused, entries: [clean, saved]))
+        XCTAssertEqual(model.entries, [clean, saved])
+        guard case .message(let row) = model.entries[0], case .message(let answer) = model.entries[1] else { return XCTFail("Expected visible messages") }
+        XCTAssertEqual(row.label, "Jester asked")
+        XCTAssertEqual(row.text, "Check the calendar")
+        XCTAssertFalse(row.text.contains("<bot_message"))
+        XCTAssertEqual(answer.label, "COS")
+        XCTAssertTrue(answer.text.contains("There are three events."))
+        XCTAssertTrue(transport.resumeKeys.isEmpty)
+        XCTAssertTrue(transport.sendKeys.isEmpty)
+        let excessive = #"{"id":"reply_2","type":"message","role":"user","label":"COS","text":""# + String(repeating: "x", count: AidenBotSessionWire.maxTextLength + 1) + #""}"#
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBotSessionEntry.self, from: Data(excessive.utf8)))
+    }
+}
+
+private final class MessagingURLProtocol: URLProtocol, @unchecked Sendable {
+    struct Request {
+        let method: String?
+        let path: String?
+        let revision: String?
+        let protocolVersion: String?
+        let body: Data
+    }
+    nonisolated(unsafe) static var response = Data()
+    nonisolated(unsafe) static var requests: [Request] = []
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "messaging.test" }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        var body = request.httpBody ?? Data()
+        if let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 1024)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                if count <= 0 { break }
+                body.append(contentsOf: buffer.prefix(count))
+            }
+        }
+        Self.requests.append(Request(method: request.httpMethod, path: request.url?.path,
+            revision: request.value(forHTTPHeaderField: "If-Match"),
+            protocolVersion: request.value(forHTTPHeaderField: "Aiden-Protocol-Version"), body: body))
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Self.response)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}

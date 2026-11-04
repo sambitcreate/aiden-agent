@@ -103,6 +103,8 @@ extension AidenBotIdentityPatch {
             && (instructions == nil || instructions == detail.instructions)
             && (avatar == nil || avatar == detail.avatar.semantic)
             && (chatActivity == nil || chatActivity == detail.chatActivity)
+            && (botMessaging?.receive == nil || botMessaging?.receive == detail.botMessaging?.receive)
+            && (botMessaging?.send == nil || botMessaging?.send == detail.botMessaging?.send)
     }
 }
 

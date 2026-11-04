@@ -1756,3 +1756,19 @@ test("Retry hides the failed card and echoes the message at once, under one requ
   const [first, second] = calls.filter((call) => call.channel === "bots:send").map((call) => (call.args[0] as { requestId: string }).requestId);
   assert.equal(first, second, "the same failed turn retries under one request id");
 });
+
+
+test("Bot questions, replies and saved paused answers show clean labels without Retry", async () => {
+  const calls = await mountChat({ "bots:live:subscribe": () => snapshot({entries: [
+    {id: "q", type: "bot_message", kind: "request", botId: "j", botName: "Jester", text: "Can you check?"},
+    {id: "r", type: "bot_message", kind: "reply", botId: "c", botName: "COS", text: "Checked the calendar."},
+    {id: "s", type: "bot_message_status", data: {deliveryId: "d", botId: "c", botName: "COS", outcome: "waiting_approval", summary: "Create 3 events"}},
+    {id: "p", type: "bot_message_status", data: {deliveryId: "d", botId: "c", botName: "COS", outcome: "replied_while_paused", text: "Saved answer while paused."}},
+    {id: "f", type: "failed_turn", retryText: null},
+  ]}) });
+  for (const text of ["Jester asked", "Can you check?", "COS replied", "Checked the calendar.", "COS is waiting for you to approve: Create 3 events", "Saved answer while paused."]) assert.ok((await screen.findAllByText(text)).length > 0);
+  assert.equal(screen.queryByRole("button", {name: "Retry"}), null);
+  assert.equal(calls.some(call => call.channel === "bots:send" || call.channel === "bots:resume"), false);
+  const waiting = screen.getByText("COS is waiting for you to approve: Create 3 events");
+  assert.equal(waiting.querySelector("button"), null);
+});

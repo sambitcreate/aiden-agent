@@ -285,7 +285,9 @@ export const AIDEN_REMOTE_INBOX_SIGNALS_CONTRACT_REVISION = 52 as const;
  * phones see nothing new.
  */
 export const AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION = 53 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION;
+/** Revision 54: Bot messaging switches and message notifications, negotiated with bot:messaging. */
+export const AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION = 54 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -478,6 +480,9 @@ export type AidenRemoteBotCardCapability = (typeof AIDEN_REMOTE_BOT_CARD_CAPABIL
  */
 export const AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES = ["bot:activity"] as const;
 
+/** Revision 54: switch fields and message notifications; grants no write authority. */
+export const AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES = ["bot:messaging"] as const;
+
 /**
  * Contract revision 37: a device holding `bot:handoffs` receives the session
  * `handoff` field and frames, the `paused` session state and Bot `paused`
@@ -514,6 +519,7 @@ export type AidenRemoteBotIssueCapability = (typeof AIDEN_REMOTE_BOT_ISSUE_CAPAB
 export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
@@ -576,6 +582,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
@@ -597,6 +604,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
@@ -1247,6 +1255,7 @@ export type AidenRemoteBotDetail = AidenRemoteBotSummary & {
   visionModelSelection?: { providerId: string; modelId: string };
   /** Contract revision 30, only for devices holding `bot:activity`. */
   chatActivity?: AidenRemoteBotChatActivity;
+  botMessaging?: { receive: boolean; send: boolean };
 };
 
 /**
@@ -1257,6 +1266,7 @@ export type AidenRemoteBotDetail = AidenRemoteBotSummary & {
 export const AIDEN_REMOTE_IGNORED_BOT_IDENTITY_FIELDS = ["openingGreeting"] as const;
 
 export interface AidenRemoteBotList {
+  messaging?: { enabled: boolean };
   bots: AidenRemoteBotSummary[];
   maxBots: number;
 }
@@ -1277,6 +1287,7 @@ export interface AidenRemoteBotIdentityPatchRequest {
   avatar?: AidenRemoteBotSemanticAvatar;
   /** Contract revision 30, only on hosts announcing `bot-activity-v1`. Absent keeps the saved choice. */
   chatActivity?: AidenRemoteBotChatActivity;
+  botMessaging?: { receive?: boolean; send?: boolean };
 }
 
 export interface AidenRemoteBotConversationItemBase {
@@ -1594,7 +1605,7 @@ export interface AidenRemoteBotRoutineSuggestionList {
   suggestions: AidenRemoteBotRoutineSuggestion[];
 }
 
-export const AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_KINDS = ["routine", "issue"] as const;
+export const AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_KINDS = ["routine", "issue", "message"] as const;
 export type AidenRemoteBotNotificationKind = (typeof AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_KINDS)[number];
 
 /**
@@ -1607,7 +1618,7 @@ export type AidenRemoteBotNotificationKind = (typeof AIDEN_REMOTE_BOT_ROUTINE_NO
 export interface AidenRemoteBotRoutineNotification {
   /** The routine run id; clients post `aiden.bot-routine.<id>` once. */
   id: string;
-  /** Revision 42: absent means `"routine"`. */
+  /** Revision 42 adds issue; revision 54 adds message; absent means routine. */
   kind?: AidenRemoteBotNotificationKind;
   botId: string;
   botName: string;
@@ -2087,6 +2098,10 @@ export interface AidenRemoteContractFixture {
   speechStatus: unknown;
   speechTranscription: unknown;
   botSummary: AidenRemoteBotSummary;
+  botMessagingDetail?: AidenRemoteBotDetail;
+  botMessagingPatch?: AidenRemoteBotIdentityPatchRequest;
+  botMessagingSettings?: {enabled: boolean};
+  botMessageNotification?: AidenRemoteBotRoutineNotification;
   botList: AidenRemoteBotList;
   botDetail: AidenRemoteBotDetail;
   botAvatar: AidenRemoteBotAvatarView;
@@ -3189,8 +3204,8 @@ export function parseAidenRemoteBotList(value: unknown): AidenRemoteBotList {
   const bots = value.bots.map(parseAidenRemoteBotSummary);
   const botIds = new Set(bots.map((bot) => bot.id));
   if (botIds.size !== bots.length) throw new Error("Bot list ids must be unique.");
-  assertExactKeys(value, ["bots", "maxBots"], "Bot list");
-  return { bots, maxBots: AIDEN_REMOTE_BOT_MAX_COUNT };
+  assertExactKeys(value, ["bots", "maxBots", "messaging"], "Bot list");
+  return { bots, maxBots: AIDEN_REMOTE_BOT_MAX_COUNT, ...(hasOwn(value, "messaging") ? { messaging: parseAidenRemoteBotMessagingSettings(value.messaging) } : {}) };
 }
 
 export function parseAidenRemoteBotCreateRequest(value: unknown): AidenRemoteBotCreateRequest {
@@ -3230,9 +3245,25 @@ export function parseAidenRemoteBotChatActivity(value: unknown): AidenRemoteBotC
   };
 }
 
+export function parseAidenRemoteBotMessagingSettings(value: unknown): { enabled: boolean } {
+  if (!isRecord(value)) throw new Error("Bot messaging settings must be an object.");
+  assertExactKeys(value, ["enabled"], "Bot messaging settings");
+  return {enabled: requiredBooleanValue(value.enabled, "Bot messaging enabled")};
+}
+
+function parseAidenRemoteBotMessaging(value: unknown, patch = false): {receive?: boolean; send?: boolean} {
+  if (!isRecord(value)) throw new Error("Bot messaging must be an object.");
+  assertExactKeys(value, ["receive", "send"], "Bot messaging");
+  if (patch && Object.keys(value).length === 0) throw new Error("Bot messaging patch must change a switch.");
+  return {
+    ...(!patch || hasOwn(value, "receive") ? {receive: requiredBooleanValue(value.receive, "Bot messaging receive")} : {}),
+    ...(!patch || hasOwn(value, "send") ? {send: requiredBooleanValue(value.send, "Bot messaging send")} : {}),
+  };
+}
+
 export function parseAidenRemoteBotIdentityPatchRequest(
   value: unknown,
-  options: { allowChatActivity?: boolean } = {},
+  options: { allowChatActivity?: boolean; allowBotMessaging?: boolean } = {},
 ): AidenRemoteBotIdentityPatchRequest {
   if (!isRecord(value)) throw new Error("Bot identity patch must be an object.");
   const allowed = [
@@ -3243,6 +3274,7 @@ export function parseAidenRemoteBotIdentityPatchRequest(
     "avatar",
     // Revision 30: older hosts reject the key, so phones send it only where it is announced.
     ...(options.allowChatActivity === true ? ["chatActivity"] : []),
+    ...(options.allowBotMessaging === true ? ["botMessaging"] : []),
   ];
   assertExactKeys(value, allowed, "Bot identity patch");
   if (Object.keys(value).length === 0) {
@@ -3266,6 +3298,7 @@ export function parseAidenRemoteBotIdentityPatchRequest(
     ...(hasOwn(value, "chatActivity")
       ? { chatActivity: parseAidenRemoteBotChatActivity(value.chatActivity) }
       : {}),
+    ...(hasOwn(value, "botMessaging") ? { botMessaging: parseAidenRemoteBotMessaging(value.botMessaging, true) } : {}),
   };
 }
 
@@ -4306,6 +4339,7 @@ export function parseAidenRemoteBotDetail(value: unknown): AidenRemoteBotDetail 
   if (access.botId !== summary.id) throw new Error("Bot detail access belongs to another Bot.");
   return {
     ...summary,
+    ...(hasOwn(value, "botMessaging") ? { botMessaging: parseAidenRemoteBotMessaging(value.botMessaging) as {receive: boolean; send: boolean} } : {}),
     ...(paused === undefined ? {} : { paused }),
     instructions: boundedText(value.instructions, "Bot instructions", 32_000),
     access,
@@ -6130,9 +6164,9 @@ export function parseAidenRemoteBotRoutineNotificationList(value: unknown): Aide
       : "routine";
     // A routine result says which routine ran and how it ended; an issue card
     // carries neither, and its `routineName` is the card's own title.
-    if (kind === "issue") {
+    if (kind === "issue" || kind === "message") {
       if (hasOwn(notification, "routineId") || hasOwn(notification, "status")) {
-        throw new Error("Bot issue notification must not carry routineId or status.");
+        throw new Error("Bot issue or message notification must not carry routineId or status.");
       }
     } else if (!hasOwn(notification, "routineId") || !hasOwn(notification, "status")) {
       throw new Error("Bot routine notification must carry routineId and status.");
@@ -8003,6 +8037,10 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
   return {
     ...value,
     contractRevision,
+    ...(value.botMessagingDetail === undefined ? {} : {botMessagingDetail: parseAidenRemoteBotDetail(value.botMessagingDetail)}),
+    ...(value.botMessagingPatch === undefined ? {} : {botMessagingPatch: parseAidenRemoteBotIdentityPatchRequest(value.botMessagingPatch, {allowBotMessaging: true})}),
+    ...(value.botMessagingSettings === undefined ? {} : {botMessagingSettings: parseAidenRemoteBotMessagingSettings(value.botMessagingSettings)}),
+    ...(value.botMessageNotification === undefined ? {} : {botMessageNotification: parseAidenRemoteBotRoutineNotificationList({notifications: [value.botMessageNotification], now: botRoutineNotifications.now}).notifications[0]!}),
     protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
     generated: false,
     notice: fixtureNotice,

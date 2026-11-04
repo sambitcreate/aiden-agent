@@ -2180,3 +2180,27 @@ test("a list summary reads a waiting question, hand-off and approval whether or 
     await live.close();
   }
 });
+
+
+test("Bot message projection uses clean text, preserves bounded status, and never offers Retry", () => {
+  const notice = { id: 1, kind: "aiden.bot-notice", data: { notice: "bot_message", requestId: "bot:j:1:d", kind: "request", deliveryId: "d", botId: "j", botName: "Jester", text: "Clean question" } };
+  const input = { id: 2, kind: "aiden.bot-message-input", model: [{ role: "user", content: '<bot_message from="Jester">private frame</bot_message>', timestamp: 1 }] };
+  const status = { id: 3, kind: "aiden.bot-message-status", data: { deliveryId: "d", botId: "c", botName: "COS", outcome: "replied_while_paused", text: "x".repeat(9000) } };
+  const failed = { id: 4, kind: "pi.assistant", model: [{role: "assistant", content: [], stopReason: "error", errorMessage: "failed", timestamp: 2}] };
+  const rows = projectBotTranscript([notice, input, status, {...status, id: 5}, failed] as never);
+  assert.deepEqual(rows[0], { id: "2", type: "bot_message", kind: "request", botId: "j", botName: "Jester", text: "Clean question", at: 1 });
+  assert.equal(rows.filter(r => r.type === "bot_message_status").length, 1);
+  assert.equal(rows.find(r => r.type === "bot_message_status")?.data.text?.length, 8000);
+  assert.equal(rows.find(r => r.type === "failed_turn")?.retryText, null);
+  const silent = projectBotTranscript([notice, input, status, {id: 6, kind: "pi.assistant", model: [fauxAssistantMessage("[SILENT]")]}] as never);
+  assert.deepEqual(silent.map(r => r.type), ["bot_message_status"]);
+  const orphan = projectBotTranscript([input, failed] as never);
+  assert.equal(orphan.some(r => r.type === "user"), false, "missing display notice must never expose the frame");
+  assert.equal(orphan.find(r => r.type === "failed_turn")?.retryText, null);
+});
+
+test("Bot statuses dedupe independently by delivery, outcome and approval wait", () => {
+  const data = { deliveryId: "d", botId: "c", botName: "COS", outcome: "waiting_approval", waitId: "one", summary: "Approve" };
+  const records = [data, data, {...data, waitId: "two"}, {...data, deliveryId: "other"}, {...data, outcome: "failed"}];
+  assert.equal(projectBotTranscript(records.map((data, id) => ({id, kind: "aiden.bot-message-status", data})) as never).length, 4);
+});

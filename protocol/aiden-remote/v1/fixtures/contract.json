@@ -1,5 +1,9 @@
 {
-  "contractRevision": 53,
+  "botMessagingDetail": {"id": "bot_fixture_01", "name": "Scout", "purpose": "Finds the signal in a busy week", "instructions": "Find the important signal, explain it plainly, and keep the owner in control.", "avatar": {"semantic": {"version": 1, "shape": "orb", "color": "rose"}, "asset": {"assetRevision": "avatar_revision_3", "mimeType": "image/png", "width": 512, "height": 512, "byteSize": 1024}}, "health": "ready", "sessionState": "idle", "access": {"botId": "bot_fixture_01", "accessMode": "full", "revision": "bot_policy_revision_4", "policyEpoch": "bot_policy_epoch_4", "summary": "Can use your Mac, shell, enabled connections, and skills."}, "modelSelection": {"providerId": "provider_fixture", "modelId": "model_fixture"}, "visionModelSelection": {"providerId": "provider_fixture", "modelId": "vision_model_fixture"}, "createdAt": "2026-08-18T17:00:00.000Z", "updatedAt": "2026-08-18T18:45:00.000Z", "revision": "bot_revision_7", "botMessaging": {"receive": true, "send": true}},
+  "botMessagingPatch": {"botMessaging": {"receive": false}},
+  "botMessagingSettings": {"enabled": false},
+  "botMessageNotification": {"id": "bot-message-fixture-01", "kind": "message", "botId": "bot_fixture_01", "botName": "Scout", "routineName": "COS replied", "finishedAt": "2026-11-03T12:00:00.000Z", "preview": "The calendar is ready."},
+  "contractRevision": 54,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -1579,7 +1583,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 53,
+    "contractRevision": 54,
     "pairingRequests": true
   },
   "hostFeedEvents": [

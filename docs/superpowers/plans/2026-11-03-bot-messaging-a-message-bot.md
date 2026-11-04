@@ -428,7 +428,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
 - Modify: `renderer/main/bots/bot-turns.ts:13-16` (`bot_message` starts a turn), `renderer/main/bots/bot-activity-log.ts:36-51` (the title is the row label)
 - Test: `live-projection.test.ts`, `bot-transcript-rows.test.ts`, `bot-chat-pane.test.tsx`, `bot-activity-log.test.ts` (extend)
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `live-projection.test.ts`:
     - `a bot message shows its clean text, not the frame`: a notice plus a framed input give one `bot_message` row whose `text` is the clean message and contains no `<bot_message`.
     - `a silent answer hides the bot message row`.
@@ -439,12 +439,14 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     - `COS replied shows in Jester's chat`.
     - `a waiting notice reads as one line`: "COS is waiting for you to approve: Create 3 events" is visible, with no buttons.
   - `bot-activity-log.test.ts`: `a reply turn is titled COS replied`.
-- [ ] **Step 2: Run and see them fail.**
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** `npx tsx --test main/services/bot-runtime/live-projection.test.ts renderer/main/bots/bot-transcript-rows.test.ts renderer/main/bots/bot-chat-pane.test.tsx renderer/main/bots/bot-activity-log.test.ts`. Expected: PASS.
-- [ ] **Step 5: Commit:** "Show Bot messages and replies in Bot chats".
+- [x] **Step 2: Run and see them fail.**
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run** `npx tsx --test main/services/bot-runtime/live-projection.test.ts renderer/main/bots/bot-transcript-rows.test.ts renderer/main/bots/bot-chat-pane.test.tsx renderer/main/bots/bot-activity-log.test.ts`. Expected: PASS.
+- [x] **Step 5: Commit:** included in the combined phase A integration checkpoint.
 
 ### Task 9: Phones: rows, switches and notifications (Remote revision)
+
+Host checkpoint, 2026-11-03: projection, revision 54, capability negotiation, strict switch routes, notification filtering, canonical fixtures and API/OpenAPI docs are implemented. The six focused host suites pass, 314 tests. Task 8's four suites pass, 164 tests; the chat-pane suite was also rerun after the sender-label alignment adjustment. Existing suites were extended, with no new test files. Root coordinates dedicated Cua visual acceptance and native verification. Native integration passed 88 iOS tests with two environment-dependent skips and 69 Android tests. The simulator handoff exited zero after diagnostic collection timed out; no assertions, retries or test timeouts were weakened. Full phase A independent review remains pending. Host tests were added during host implementation; no preimplementation red run is claimed for Step 2.
 
 **Files:**
 - Modify: `main/services/aiden-remote-bot-session.ts:396-560` (`projectBotSessionEntries`). This part needs no revision:
@@ -478,7 +480,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
   - the routine notification poster (`kind: "message"`).
 - Test: `main/services/aiden-remote-bot-session.test.ts`, `main/services/aiden-remote-protocol.test.ts`, `main/services/aiden-remote-bots.test.ts`, `main/services/aiden-remote-router.test.ts`, `main/services/bot-routine-notifications.test.ts`, `ios/AidenOnTheGoTests/AidenBotSessionTests.swift`, `ios/AidenOnTheGoTests/AidenRemotePhase0Tests.swift:174`, Android `AidenBotContractTest.kt` and `features/bots/AidenBotProfileBehaviorTest.kt`
 
-- [ ] **Step 1: Write the failing host tests:**
+- [x] **Step 1: Write the failing host tests:**
   - `aiden-remote-bot-session.test.ts`: `bot messages reach every phone as labelled messages`. A `bot_message` row gives `{type: "message", role: "user", label: "Jester asked"}` with the clean text. A waiting status gives `label: "COS"` and the status line. No tool step or frame text appears.
   - `aiden-remote-router.test.ts`:
     - `botMessaging is only for bot:messaging devices`: the detail and list carry it only with the capability.
@@ -489,8 +491,8 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
   - Paused-sender fixture: desktop and both native clients show the same bounded answer without resuming or creating a new model turn.
   - `aiden-remote-protocol.test.ts`: fixtures parse, and the revision equals `AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION`. Check the capability list stays within the bounds its siblings use.
 - [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/aiden-remote-bot-session.test.ts main/services/aiden-remote-router.test.ts main/services/aiden-remote-bots.test.ts main/services/bot-routine-notifications.test.ts main/services/aiden-remote-protocol.test.ts main/services/aiden-remote-operation-contract.test.ts`.
-- [ ] **Step 3: Implement the host side.**
-- [ ] **Step 4: Native.**
+- [x] **Step 3: Implement the host side.**
+- [x] **Step 4: Native.**
   - iOS and Android decode `botMessaging` and the list's `messaging`.
   - The toggles appear only when the device negotiated `bot:messaging`. Older hosts show nothing new.
   - While the global switch is off, the per-Bot toggles are disabled with "Turned off for all Bots".
@@ -499,10 +501,12 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     - toggling "Other Bots can message Ada" sends a `PATCH` whose body holds only `botMessaging: {receive: false}` plus the revision headers;
     - a `kind: "message"` notification opens the Bot chat;
     - the Phase 0 test expects the new revision.
-- [ ] **Step 5: Run** the host suites again, then iOS `xcodebuild test -only-testing:AidenOnTheGoTests/AidenBotSessionTests -only-testing:AidenOnTheGoTests/AidenRemotePhase0Tests` (with the destination documented in `ios/README.md`) and Android `./gradlew :app:testDebugUnitTest --tests '*AidenBotContract*' --tests '*AidenBotProfileBehavior*'`. Expected: PASS.
-- [ ] **Step 6: Commit:** "Bring Bot messaging to phones".
+- [x] **Step 5: Run** the host suites again, then iOS `xcodebuild test -only-testing:AidenOnTheGoTests/AidenBotSessionTests -only-testing:AidenOnTheGoTests/AidenRemotePhase0Tests` (with the destination documented in `ios/README.md`) and Android `./gradlew :app:testDebugUnitTest --tests '*AidenBotContract*' --tests '*AidenBotProfileBehavior*'`. Expected: PASS.
+- [x] **Step 6: Commit:** included in the combined phase A integration checkpoint.
 
 ### Task 10: CLI serve daemon
+
+Implementation checkpoint, 2026-11-03: steps 1–4 passed with the fake-provider Ping/Pong red-to-green case, shared projected transcripts, HTTPS capability/switch checks, pause/spending/corruption refusals, approval redaction and deletion purges. Final CLI build and full suite passed, 183 tests and three existing pseudo-terminal skips, including eight bundle tests. Type-check and scoped lint passed. No dependencies or pins changed. Parent owns the integrated commit and independent full-A review.
 
 **Files:**
 - Modify: `packages/cli/src/bot-durable.ts:42-165`:
@@ -517,13 +521,15 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
 - Modify: `packages/cli/README.md`, `docs/cli-durable-bots.md`
 - Test: `packages/cli/tests/parity.test.mjs` (extend)
 
-- [ ] **Step 1: Write the failing test** `durable CLI Bots can message each other`, with the existing fake SSE provider. Bot A's first response is a `message_bot` call to B. B replies `"Pong"`. Expect B's transcript to hold a `bot_message` row from A, A's transcript to then hold a `bot_message` reply row with `"Pong"`, and A's `GET /bots` and Bot detail to carry `botMessaging` for a `bot:messaging` device.
-- [ ] **Step 2: Run and see it fail.** `cd packages/cli && npm run build && node --test tests/parity.test.mjs`.
-- [ ] **Step 3: Implement.** Keep the CLI tool list built by `ports.tools`, and add the candidate the way `botMemoryToolEntry` is added.
-- [ ] **Step 4: Run** `cd packages/cli && npm test`. Expected: PASS, including `tests/bundle.test.mjs`.
-- [ ] **Step 5: Commit:** "Serve Bot messaging from the CLI daemon".
+- [x] **Step 1: Write the failing test** `durable CLI Bots can message each other`, with the existing fake SSE provider. Bot A's first response is a `message_bot` call to B. B replies `"Pong"`. Expect B's transcript to hold a `bot_message` row from A, A's transcript to then hold a `bot_message` reply row with `"Pong"`, and A's `GET /bots` and Bot detail to carry `botMessaging` for a `bot:messaging` device.
+- [x] **Step 2: Run and see it fail.** `cd packages/cli && npm run build && node --test tests/parity.test.mjs`.
+- [x] **Step 3: Implement.** Keep the CLI tool list built by `ports.tools`, and add the candidate the way `botMemoryToolEntry` is added.
+- [x] **Step 4: Run** `cd packages/cli && npm test`. Expected: PASS, including `tests/bundle.test.mjs`.
+- [x] **Step 5: Commit:** included in the combined phase A integration checkpoint.
 
 ### Task 11: Docs, onboarding, memory and the plan index
+
+Integration checkpoint, 2026-11-03: messaging 89, runtime 341, Bots 971, health 74, tour/onboarding 12 and CI registry 15 passed; root and E2E type-check and scoped lint passed. Full Remote TypeScript coverage passed (1,200 passed, two existing skips). The unchanged physical-spike fixture rejected PATH OpenSSL 4.1's stricter `-days 0`; it passed all seven cases with installed OpenSSL 3.5.9, then the remaining 29 Remote cases passed. Cua verified the labelled messages, waiting line, saved reply, no approval/Retry actions or inference, actual light/wide and dark/narrow appearances; screenshots were inspected. Three existing Bot onboarding E2E cases also passed. Native checks passed 88 iOS tests with two environment-dependent skips and 69 Android tests. Full-A independent reviews remain pending.
 
 **Files:**
 - Create: `docs/bot-messaging.md` (what a Bot can send, the chain, limits, the 30-minute window, approvals as Needs you, the three switches, privacy: only the message and the reply cross)
@@ -535,11 +541,11 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
   - `docs/bot-rules.md` (rule hand-offs block on Bot-message turns, and asks wait);
   - `docs/plans/README.md` (the research row's status, plus a row for this plan);
   - `.memory/bot-wake-ups.md`, `.memory/bot-durable-runtime.md` and `.memory/bot-rules.md` (one line each on the new turn kind).
-- Modify: `renderer/components/onboarding-bots-step.tsx:22` and its test. Add one line, "Bots can message each other when it helps; turn it off in Settings → Bots.". The test asserts that line is shown. The feature gallery is unchanged, because this is not first-session value.
+- Modify: `renderer/components/onboarding-bots-step.tsx:22` and its test. Add one line, "Bots can message each other when it helps; turn it off in Settings → Bots.". The test asserts that line is shown. Keep the existing Bots gallery tile and update its description and code-drawn art to show a labelled Bot reply; do not add a separate collaboration tile. This follows the current AGENTS.md requirement to keep the feature tour current without adding another onboarding step.
 
-- [ ] **Step 1:** Search for claims this plan made stale: `rg -n -i "talk to each other|message (another|other) bot|no way to (talk|message)|bot-to-bot" README.md PRODUCT.md docs packages/cli/README.md .memory`. Fix each one.
-- [ ] **Step 2:** Run `npm run test:bot-messaging`, `npm run test:bot-runtime`, `npm run test:bots`, `npm run test:bot-health`, `npm run test:aiden-remote`, `npx tsx --test renderer/components/onboarding-bots-step.test.tsx` and `node --test scripts/ci-test-registry.test.mjs`. Expected: PASS.
-- [ ] **Step 3: Commit:** "Document Bot-to-Bot messaging".
+- [x] **Step 1:** Search for claims this plan made stale: `rg -n -i "talk to each other|message (another|other) bot|no way to (talk|message)|bot-to-bot" README.md PRODUCT.md docs packages/cli/README.md .memory`. Fix each one.
+- [x] **Step 2:** Run `npm run test:bot-messaging`, `npm run test:bot-runtime`, `npm run test:bots`, `npm run test:bot-health`, `npm run test:aiden-remote`, `npx tsx --test renderer/components/onboarding-bots-step.test.tsx` and `node --test scripts/ci-test-registry.test.mjs`. Expected: PASS.
+- [x] **Step 3: Commit:** included in the combined phase A integration checkpoint.
 
 ---
 

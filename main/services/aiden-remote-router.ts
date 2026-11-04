@@ -45,6 +45,9 @@ import {
   AIDEN_REMOTE_BOT_MEMORY_FEATURE,
   AIDEN_REMOTE_BOT_PROACTIVE_FEATURE,
   AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
+  AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES,
+  parseAidenRemoteBotIdentityPatchRequest,
+  parseAidenRemoteBotMessagingSettings,
   AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
   AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
@@ -306,7 +309,7 @@ export interface AidenRemoteRouterDependencies {
   > & Partial<Pick<
     AidenRemoteBotService,
     "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete"
-    | "supportsChatActivity"
+    | "supportsChatActivity" | "supportsBotMessaging" | "updateMessaging"
   >>;
   /**
    * Durable Bot sessions, routines, connection requests and starter presets
@@ -440,6 +443,7 @@ export type AidenRemoteRouteLabel =
   | "botMemory"
   | "botRoutineProposals"
   | "botRoutineSuggestions"
+  | "botMessaging"
   | "botRoutineNotifications"
   | "botPresets"
   | "botCapabilities"
@@ -540,6 +544,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   botMemory: ["/bots/:botId/memory", "/bots/:botId/memory/edits"],
   botRoutineProposals: ["/bots/:botId/routine-proposals/:proposalId/respond"],
   botRoutineSuggestions: ["/bots/:botId/routine-suggestions"],
+  botMessaging: ["/bots/messaging"],
   botRoutineNotifications: ["/bots/routine-notifications"],
   botPresets: ["/bot-presets"],
   botCapabilities: ["/bot-capabilities", "/bots/:botId/capabilities"],
@@ -1931,6 +1936,14 @@ function botActivityWired(dependencies: AidenRemoteRouterDependencies): boolean 
   return dependencies.botSessions?.supportsActivity === true && dependencies.bots?.supportsChatActivity === true;
 }
 
+function botMessagingWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return dependencies.bots?.supportsBotMessaging === true && typeof dependencies.bots.updateMessaging === "function";
+}
+
+function holdsBotMessaging(device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): boolean {
+  return device.capabilities.has("bot:messaging") && botMessagingWired(dependencies);
+}
+
 /** Revision 39: schedule cards ride on stream approvals and phone run approvals. */
 function scheduleCardsWired(dependencies: AidenRemoteRouterDependencies): boolean {
   return Boolean(dependencies.streams || dependencies.hostRuns);
@@ -2075,12 +2088,12 @@ function writeBotDetail(
     projectBotDetailForAudience(detail, { handoffs: holdsBotHandoffs(device, dependencies) }),
     { issues: holdsBotIssues(device, dependencies) },
   );
-  if (device.capabilities.has("bot:activity")) {
-    writeJson(response, status, projected);
-    return;
-  }
-  const { chatActivity: _hidden, ...visible } = projected;
-  writeJson(response, status, visible);
+  const { chatActivity, botMessaging, ...visible } = projected;
+  writeJson(response, status, {
+    ...visible,
+    ...(device.capabilities.has("bot:activity") && chatActivity ? { chatActivity } : {}),
+    ...(holdsBotMessaging(device, dependencies) && botMessaging ? { botMessaging } : {}),
+  });
 }
 
 function advertisedServerCapabilities(
@@ -2100,6 +2113,8 @@ function advertisedServerCapabilities(
     ...(device.acceptsBotCapabilities === true && botActivityWired(dependencies)
       ? AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES
       : []),
+    ...(device.acceptsBotCapabilities === true && botMessagingWired(dependencies)
+      ? AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES : []),
     // Revision 37: offered only while the hand-off and pause routes are wired.
     ...(device.acceptsBotCapabilities === true && botHandoffsWired(dependencies)
       ? AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES
@@ -2548,6 +2563,8 @@ export function createAidenRemoteRequestHandler(
             if (!botIssuesWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Bot issues are unavailable on this Aiden installation.", 404);
             }
+          } else if ((AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES as readonly string[]).includes(capability)) {
+            if (!botMessagingWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot messaging is unavailable on this Aiden installation.", 404);
           } else if ((AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
             // Revision 39: a display opt-in for scheduled-task approvals; it never changes canAllow.
             if (!scheduleCardsWired(dependencies)) {
@@ -2630,6 +2647,20 @@ export function createAidenRemoteRequestHandler(
         writeJson(response, 200, { capabilities: updated.capabilities });
         return;
       }
+      if (path === "/bots/messaging" && request.method === "PUT") {
+        route = "botMessaging";
+        requireNoQuery(query);
+        const device = await authenticate(request, dependencies.devices, "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        requireDeviceCapabilities(device, ["bot:messaging"]);
+        if (!botMessagingWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        const body = await readJsonBody(request);
+        let parsed;
+        try { parsed = parseAidenRemoteBotMessagingSettings(body); }
+        catch { throw new AidenRemoteServiceError("invalid_request", "The Bot messaging settings are invalid.", 400); }
+        writeJson(response, 200, await dependencies.bots!.updateMessaging!(parsed));
+        return;
+      }
       if (path === "/bots" && request.method === "GET") {
         route = "bots";
         const device = await authenticate(request, dependencies.devices, "bot:read");
@@ -2638,9 +2669,10 @@ export function createAidenRemoteRequestHandler(
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         requireNoQuery(query);
-        const list = await dependencies.bots.list();
+        const {messaging, ...list} = await dependencies.bots.list();
         writeJson(response, 200, {
           ...list,
+          ...(holdsBotMessaging(device, dependencies) && messaging ? {messaging} : {}),
           bots: list.bots.map((summary) => botSummaryForAudience(summary, device, dependencies)),
         });
         return;
@@ -3191,6 +3223,7 @@ export function createAidenRemoteRequestHandler(
           200,
           await botSessionFeature(dependencies, "routineNotificationFeed")(params.get("since") ?? undefined, {
             issues: holdsBotIssues(device, dependencies),
+            messaging: holdsBotMessaging(device, dependencies),
           }),
         );
         return;
@@ -3324,6 +3357,8 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.bots) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
+        try { parseAidenRemoteBotIdentityPatchRequest(body, {allowChatActivity: device.capabilities.has("bot:activity") && botActivityWired(dependencies), allowBotMessaging: holdsBotMessaging(device, dependencies)}); }
+        catch { throw new AidenRemoteServiceError("invalid_request", "The Bot identity update is invalid.", 400); }
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         writeBotDetail(
           response,

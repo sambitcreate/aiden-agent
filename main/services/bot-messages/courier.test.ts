@@ -1238,6 +1238,11 @@ test("nested saved-text fallback has one truthful child row and one parent failu
     ["failed"],
   );
   assert.equal(f.sends.length, 2);
+  assert.deepEqual(
+    f.deliveries.map((d) => (d as { botId: string }).botId),
+    ["A"],
+    "only the ancestor status reaches the funnel",
+  );
   for (let i = 0; i < 3; i++) assert.equal((await f.post("B", "A")).status, "sent");
 });
 
@@ -1296,5 +1301,37 @@ for (const checkpoint of ["acknowledged_reply", "terminal_fallback"] as const) {
     assert.equal(reads, settledReads);
     assert.equal(f.pendingTimers(), 0);
     assert.equal(f.sends.length, 3);
+    assert.equal(
+      f.deliveries.some((d) => (d as { botId: string }).botId === "B"),
+      false,
+      "even a saved legacy notification cannot forward the child answer",
+    );
   });
 }
+
+test("restart preserves a completed silent child relay instead of displaying its saved input", async (t) => {
+  const f = await setup(t);
+  const root = await f.post();
+  if (root.status !== "sent") throw new Error("not admitted");
+  await f.until(() => f.sends.length === 1);
+  const child = await f.post("B", "C", [f.sends[0]!.input.requestId]);
+  if (child.status !== "sent") throw new Error("not admitted");
+  await f.until(() => f.sends.length === 2);
+  f.finish(1, "C's answer considered by B");
+  f.finish(0, "B's initial answer");
+  await f.until(() => f.sends.length === 3);
+  await f.courier.dispose();
+  // B's relay chose silence and the parent's first write survived the crash.
+  await f.ledger.update(root.deliveryId, (row) => ({
+    ...row,
+    status: "answered",
+    outcome: "silent",
+    effects: row.effects.map((e) => ({ ...e, acknowledgedAt: 1000 })),
+  }));
+  await f.restart();
+  await f.until(async () => (await f.ledger.open()).length === 0);
+  assert.equal((await f.ledger.get(child.deliveryId))!.outcome, "replied");
+  assert.equal(f.notices.filter((n) => (n as { botName: string }).botName === "C").length, 0);
+  assert.equal(f.deliveries.length, 0);
+  assert.equal(f.sends.length, 3);
+});

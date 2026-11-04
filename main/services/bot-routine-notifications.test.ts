@@ -278,3 +278,17 @@ test("a bot:issues reader also gets the Bot's issue cards, with no routine field
   assert.equal("routineId" in card!, false);
   assert.equal("status" in card!, false);
 });
+
+
+test("bot_message rows reach only messaging holders as bounded redacted message notifications", async (t) => {
+  const h = await harness(); t.after(h.cleanup);
+  await h.log.append(delivery({class: "bot_message", dedupeKey: "msg", requestId: "delivery-msg", routineId: undefined, title: "COS replied", body: "Saved answer at /Users/sam/private.txt " + "answer ".repeat(100)}));
+  assert.deepEqual((await h.feed.list(undefined)).notifications, []);
+  assert.deepEqual((await h.feed.list(undefined, {issues: true})).notifications, []);
+  const [row] = (await h.feed.list(undefined, {messaging: true})).notifications;
+  assert.ok(row);
+  assert.equal(row.kind, "message");
+  assert.equal(row.routineName, "COS replied");
+  assert.equal(row.routineId, undefined); assert.equal(row.status, undefined);
+  assert.ok(row.preview.length <= 160); assert.equal(row.preview.includes("/Users/sam"), false);
+});

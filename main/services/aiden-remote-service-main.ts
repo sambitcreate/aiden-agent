@@ -1,3 +1,4 @@
+import { botMessagingEnabled } from "../../renderer/shared/bot-messages.js";
 import { workspaceIntakeService } from "./workspace-intake-main.js";
 import { mcpLiveStatus } from "./mcp-status-events.js";
 import { remoteAppControls } from "./aiden-remote-app-controls.js";
@@ -936,6 +937,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               }
             },
             chatActivity: true,
+            messaging: {
+              enabled: async () => botMessagingEnabled(await configStore.getSettings()),
+              setEnabled: async (enabled) => botMessagingEnabled(await configStore.setSettings({botMessaging: enabled})),
+            },
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
             notifyBotsChanged: () => ipcMain.broadcast("bots:changed", {}),

@@ -1,4 +1,5 @@
-import { isBotInputEntryKind } from "./bot-input-entry.js";
+import { BOT_MESSAGE_LIMITS, BOT_MESSAGE_STATUS_ENTRY_KIND, type BotMessageStatusEntryData } from "../../../renderer/shared/bot-messages.js";
+import { BOT_MESSAGE_INPUT_KIND, isBotInputEntryKind } from "./bot-input-entry.js";
 // Live projection of each Bot's durable conversation to renderer windows
 // (spec §6.5, plan Task 1.4).
 //
@@ -147,7 +148,28 @@ function isNotice(entry: EntryRecord): entry is EntryRecord & { data: BotNotice 
 }
 
 /** Entries that stay visible when the turn they follow is hidden as `[SILENT]`. */
-const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["connect_card", "memory_update", "routine_proposal", "skill_proposal", "lesson_proposal", "lesson_learned", "memory_tidy", "wake_up"]);
+const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["bot_message_status", "connect_card", "memory_update", "routine_proposal", "skill_proposal", "lesson_proposal", "lesson_learned", "memory_tidy", "wake_up"]);
+
+/** Host-owned saved notices still validate and bound text before reaching any display. */
+function botMessageStatusOf(value: unknown): BotMessageStatusEntryData | null {
+  if (typeof value !== "object" || value === null) return null;
+  const data = value as Record<string, unknown>;
+  if (
+    typeof data.deliveryId !== "string" || typeof data.botId !== "string" || typeof data.botName !== "string" ||
+    typeof data.outcome !== "string" ||
+    !["waiting_approval", "silent", "expired", "gave_up", "failed", "replied_while_paused"].includes(data.outcome)
+  ) return null;
+  if (data.waitId !== undefined && typeof data.waitId !== "string") return null;
+  return {
+    deliveryId: data.deliveryId,
+    botId: data.botId,
+    botName: data.botName.slice(0, 80),
+    outcome: data.outcome as BotMessageStatusEntryData["outcome"],
+    ...(typeof data.waitId === "string" ? { waitId: data.waitId } : {}),
+    ...(typeof data.summary === "string" ? { summary: data.summary.slice(0, 160) } : {}),
+    ...(typeof data.text === "string" ? { text: data.text.slice(0, BOT_MESSAGE_LIMITS.replyChars) } : {}),
+  };
+}
 
 function isSilentAnswer(entry: BotTranscriptEntry): boolean {
   return entry.type === "assistant" && entry.toolCalls.length === 0 && entry.text.trim() === BOT_SILENT_REPLY;
@@ -278,6 +300,8 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
   /** `retryText`: the typed message Retry resends if this turn fails. */
   type Turn = { start: number; silent: boolean; retryText: string | null };
   const mapped: Array<{ entry: BotTranscriptEntry; turn: Turn | null }> = [];
+  let pendingBotMessage: Extract<BotNotice, {notice: "bot_message"}> | undefined;
+  const seenBotStatuses = new Set<string>();
   let pendingRoutine: string | undefined;
   let pendingHidden = false;
   /** File tool calls aimed at the default location (the Bot's folder), by call id. */
@@ -358,7 +382,8 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
     const id = String(record.id);
     if (isNotice(record)) {
       const notice = record.data;
-      if (notice.notice === "routine") pendingRoutine = notice.label;
+      if (notice.notice === "bot_message") pendingBotMessage = notice;
+      else if (notice.notice === "routine") pendingRoutine = notice.label;
       else if (notice.notice === "hidden_input") pendingHidden = true;
       else if (notice.notice === "interrupted" || notice.notice === "session_reset") {
         mapped.push({ entry: { id, type: "notice", notice: notice.notice }, turn });
@@ -374,6 +399,17 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
         );
         if (routines.length > 0) {
           mapped.push({ entry: { id, type: "routines_skipped", since: notice.since, routines }, turn: null });
+        }
+      }
+      continue;
+    }
+    if (record.kind === BOT_MESSAGE_STATUS_ENTRY_KIND) {
+      const data = botMessageStatusOf(record.data);
+      if (data) {
+        const key = JSON.stringify([data.deliveryId, data.outcome, data.waitId ?? ""]);
+        if (!seenBotStatuses.has(key)) {
+          seenBotStatuses.add(key);
+          mapped.push({ entry: {id, type: "bot_message_status", data}, turn: null });
         }
       }
       continue;
@@ -486,8 +522,16 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       turn = {
         start: mapped.length,
         silent: false,
-        retryText: pendingHidden || pendingRoutine !== undefined || !text.trim() ? null : text,
+        retryText: pendingHidden || pendingRoutine !== undefined || pendingBotMessage !== undefined || record.kind === BOT_MESSAGE_INPUT_KIND || !text.trim() ? null : text,
       };
+      if (record.kind === BOT_MESSAGE_INPUT_KIND || pendingBotMessage) {
+        const notice = pendingBotMessage;
+        pendingBotMessage = undefined;
+        pendingRoutine = undefined;
+        pendingHidden = false;
+        if (notice) mapped.push({entry: {id, type: "bot_message", kind: notice.kind, botId: notice.botId, botName: notice.botName.slice(0, 80), text: notice.text.slice(0, notice.kind === "request" ? BOT_MESSAGE_LIMITS.messageChars : BOT_MESSAGE_LIMITS.replyChars), at: message.timestamp}, turn});
+        continue;
+      }
       if (pendingHidden) {
         pendingHidden = false;
         pendingRoutine = undefined;

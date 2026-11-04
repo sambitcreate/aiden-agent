@@ -2107,6 +2107,148 @@ test("daemon releases sessions and authority when extension binding fails or is 
   }
 });
 
+test("CLI Bot spending stays with the runner, persists limits and refuses unreadable state", async (t) => {
+  const dir = temporary(t);
+  api.atomicJson(join(dir, "aiden.json"), { spendingLimits: { botMonthUsd: 1 } });
+  const spend = api.createCliBotSpending(dir);
+  const paid = { local: false, provider: { id: "api" }, models: { checkAuth: async () => ({ type: "api_key" }) } };
+  spend.register("runner", paid);
+  await spend.record("runner", ["person-send"], { usage: { cost: { total: 0.75 } } });
+  await spend.record("runner", ["bot:peer:1:10000000-0000-4000-8000-000000000001"], { usage: { cost: { total: 0.5 } } });
+  const saved = JSON.parse(readFileSync(join(dir, "spending.json")));
+  assert.equal(saved.bots.runner.spentUsd, 1.25);
+  assert.equal(saved.bots.peer, undefined);
+  assert.match(await api.createCliBotSpending(dir).refusal("runner", "Runner"), /Runner reached its \$1.00 spending limit/u);
+  assert.equal(await spend.refusal("peer"), undefined);
+  spend.register("signed-in", { local: false, provider: { id: "signed-in" }, models: { checkAuth: async () => ({ type: "oauth" }) } });
+  await spend.record("signed-in", [undefined], { usage: { cost: { total: 2 } } });
+  assert.equal(JSON.parse(readFileSync(join(dir, "spending.json"))).bots["signed-in"], undefined);
+  writeFileSync(join(dir, "spending.json"), "broken");
+  await assert.rejects(spend.refusal("runner"), /Cannot read/u);
+  assert.equal(readFileSync(join(dir, "spending.json"), "utf8"), "broken");
+});
+
+test("durable CLI Bots can message each other", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "aiden-cli-messaging-")), daemon = api.createDaemonChats(dir), requests = [];
+  const original = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    const parsed = JSON.parse(body); requests.push(parsed);
+    const last = parsed.messages.at(-1), content = JSON.stringify(last.content);
+    const call = last.role === "user" && content.includes("Ask Beta for Ping")
+      ? { id: "message-beta", name: "message_bot", arguments: { bot: "Beta", message: "Ping" } } : undefined;
+    const text = content.includes("<bot_message") ? "Pong" : content.includes("<bot_reply") ? "Beta says Pong" : "Sent";
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ id: "messaging", object: "chat.completion.chunk", choices: [{ index: 0, delta: call ? { role: "assistant", tool_calls: [{ index: 0, id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] } : { role: "assistant", content: text }, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "messaging", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: call ? "tool_calls" : "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  let host = await api.createCliBots(dir, daemon);
+  t.after(async () => { await host.stop(); await daemon.stop(); });
+  daemon.setBots(host);
+  const audienceId = "cli:local", notice = await host.application.noticeStatus(audienceId);
+  await host.application.acknowledgeNotice(audienceId, { version: notice.version, decision: "customize_first", confirmedForeground: true });
+  const bots = [];
+  for (const name of ["Alpha", "Beta"]) {
+    const catalog = await host.application.capabilityCatalog(audienceId), provider = catalog.providers.find((item) => item.label === "cli-test");
+    bots.push(await host.application.createBot({ audienceId, bot: { name, instructions: "Reply briefly", avatar: { version: 1, shape: "wisp", color: "lilac" } }, access: { accessMode: "custom", catalogRevision: catalog.revision, custom: { providerId: provider.id, modelId: provider.models[0].id, fileScopeIds: [], shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] } } }));
+  }
+  await host.command(["enable-durable"]); await host.stop();
+  host = await api.createCliBots(dir, daemon); daemon.setBots(host);
+  const sent = await host.durable.runtime.send(bots[0].id, { text: "Ask Beta for Ping", requestId: "ask-beta" });
+  assert.equal((await host.durable.runtime.awaitReply(bots[0].id, sent.submissionId, AbortSignal.timeout(20_000))).kind, "completed");
+  const entries = async (id) => api.projectBotTranscript((await (await host.durable.runtime.conversation(id)).context(api.BACKGROUND_CONTEXT)).entries);
+  const deadline = Date.now() + 10_000;
+  while (!(await entries(bots[0].id)).some((entry) => entry.type === "assistant" && entry.text === "Beta says Pong")) {
+    if (Date.now() > deadline) assert.fail(`Bot reply did not arrive: ${JSON.stringify({entries: await entries(bots[0].id), state: await host.durable.runtime.state(bots[0].id), requests: requests.map((request) => request.messages.at(-1)), ledger: JSON.parse(readFileSync(join(dir, "bots/bot-messages.json")))})}`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const incoming = (await entries(bots[1].id)).find((entry) => entry.type === "bot_message");
+  assert.equal(incoming.text, "Ping");
+  assert.equal(incoming.botId, bots[0].id);
+  const reply = (await entries(bots[0].id)).find((entry) => entry.type === "bot_message" && entry.kind === "reply");
+  assert.equal(reply.text, "Pong");
+  assert.ok(requests[0].tools.some((tool) => tool.function.name === "message_bot"));
+  assert.ok(requests.find((request) => JSON.stringify(request.messages.at(-1).content).includes("<bot_reply")).tools.every((tool) => tool.function.name !== "message_bot"));
+  assert.equal(statSync(join(dir, "bots/bot-messages.json")).mode & 0o777, 0o600);
+
+  // Exercise the actual CLI HTTPS adapter, including an older paired device.
+  const scheduler = api.createCliScheduler(dir);
+  const remote = await api.createCliRemote(dir, daemon, scheduler, { bots: host, discovery: { async start() {}, stop() {} } });
+  t.after(async () => { await remote.stop(); await scheduler.service.stopAndSettle(); rmSync(dir, { recursive: true, force: true }); });
+  await remote.start();
+  const { lanPort } = await remote.service.status(), ca = readFileSync(join(dir, "remote-tls/ca-certificate.pem"));
+  const modern = await remote.state.issueDevice({ name: "Messaging phone", type: "iphone", clientVersion: "test", capabilities: ["server:read", "chat:read", "bot:read", "bot:write", "bot:messaging"], acceptsBotCapabilities: true });
+  const older = await remote.state.issueDevice({ name: "Older phone", type: "iphone", clientVersion: "test", capabilities: ["server:read", "chat:read", "bot:read", "bot:write"], acceptsBotCapabilities: true });
+  const request = (device, path, method = "GET", body, headers = {}) => new Promise((resolve, reject) => {
+    const req = httpsRequest({ hostname: "127.0.0.1", port: lanPort, ca, path: `/api/aiden/v1${path}`, method,
+      headers: { authorization: `Bearer ${device.credential}`, "aiden-protocol-version": "1", ...(body ? { "content-type": "application/json" } : {}), ...headers } }, (response) => {
+      let data = ""; response.on("data", (chunk) => { data += chunk; }); response.on("end", () => resolve({ status: response.statusCode, data: JSON.parse(data) }));
+    });
+    req.setTimeout(15_000, () => req.destroy(new Error(`Messaging request timed out: ${path}`)));
+    req.on("error", reject); req.end(body ? JSON.stringify(body) : undefined);
+  });
+  const list = await request(modern, "/bots");
+  assert.equal(list.status, 200); assert.deepEqual(list.data.messaging, { enabled: true });
+  assert.equal((await request(older, "/bots")).data.messaging, undefined);
+  const detail = await request(modern, `/bots/${bots[0].id}`);
+  assert.deepEqual(detail.data.botMessaging, { receive: true, send: true });
+  assert.equal((await request(older, `/bots/${bots[0].id}`)).data.botMessaging, undefined);
+  assert.equal((await request(older, "/bots/messaging", "PUT", { enabled: false })).status, 403);
+  assert.equal((await request(modern, "/bots/messaging", "PUT", { enabled: "false" })).status, 400);
+  assert.deepEqual((await request(modern, "/bots/messaging", "PUT", { enabled: false })).data, { enabled: false });
+  assert.equal(JSON.parse(readFileSync(join(dir, "aiden.json"))).botMessaging, false);
+  const post = (deliveryId) => host.durable.messages.post({ fromBotId: bots[0].id, target: bots[1].id, message: "Ping", deliveryId, runRequestIds: [undefined] });
+  assert.equal((await post("10000000-0000-4000-8000-000000000001")).code, "switched_off");
+  assert.deepEqual((await request(modern, "/bots/messaging", "PUT", { enabled: true })).data, { enabled: true });
+  assert.equal(Object.hasOwn(JSON.parse(readFileSync(join(dir, "aiden.json"))), "botMessaging"), false);
+  const patched = await request(modern, `/bots/${bots[0].id}`, "PATCH", { botMessaging: { send: false } }, { "if-match": detail.data.revision });
+  assert.equal(patched.status, 200, JSON.stringify(patched));
+  assert.deepEqual(patched.data.botMessaging, { receive: true, send: false });
+  assert.equal((await post("10000000-0000-4000-8000-000000000002")).code, "switched_off");
+  const restored = await request(modern, `/bots/${bots[0].id}`, "PATCH", { botMessaging: { send: true } }, { "if-match": patched.data.revision });
+  assert.equal(restored.status, 200, JSON.stringify(restored));
+  assert.equal((await host.botStore.get(bots[0].id)).messagesOtherBots, undefined, "on is represented by absence");
+
+  const receiveDetail = await request(modern, `/bots/${bots[1].id}`);
+  const receiveOff = await request(modern, `/bots/${bots[1].id}`, "PATCH", { botMessaging: { receive: false } }, { "if-match": receiveDetail.data.revision });
+  assert.equal(receiveOff.status, 200, JSON.stringify(receiveOff));
+  assert.deepEqual(receiveOff.data.botMessaging, { receive: false, send: true });
+  assert.equal((await post("10000000-0000-4000-8000-000000000003")).code, "switched_off");
+  const receiveOn = await request(modern, `/bots/${bots[1].id}`, "PATCH", { botMessaging: { receive: true } }, { "if-match": receiveOff.data.revision });
+  assert.equal(receiveOn.status, 200, JSON.stringify(receiveOn));
+  const beforeChecks = requests.length;
+  await host.command(["pause", bots[1].id]);
+  assert.equal((await post("10000000-0000-4000-8000-000000000004")).code, "bot_paused");
+  await host.command(["unpause", bots[1].id]);
+  api.atomicJson(join(dir, "aiden.json"), { spendingLimits: { botMonthUsd: 1 } });
+  const spending = api.createCliBotSpending(dir);
+  spending.register(bots[1].id, { local: false, provider: { id: "cli-test" }, models: { checkAuth: async () => ({ type: "api_key" }) } });
+  await spending.record(bots[1].id, [undefined], { usage: { cost: { total: 1.25 } } });
+  assert.equal((await post("10000000-0000-4000-8000-000000000005")).code, "spending_limit");
+  writeFileSync(join(dir, "spending.json"), "broken");
+  assert.equal((await post("10000000-0000-4000-8000-000000000006")).code, "unavailable");
+  assert.equal(readFileSync(join(dir, "spending.json"), "utf8"), "broken");
+  rmSync(join(dir, "spending.json"));
+  assert.equal(requests.length, beforeChecks, "switches, availability and spending checks never invoke a provider");
+
+  // Public CLI approval output must omit the host's private run and input provenance.
+  const pending = host.durable.approvals.requestOutcome({ botId: bots[0].id, waitId: "private-approval", toolCallId: "private-tool", toolName: "test", summary: "Allow test?", signal: undefined,
+    owner: { runId: "private-run", inputs: [{ submissionId: "private-submission", requestId: "private-input" }] } });
+  assert.deepEqual(await host.command(["approvals", bots[0].id]), [{ botId: bots[0].id, waitId: "private-approval", toolCallId: "private-tool", toolName: "test", summary: "Allow test?" }]);
+  host.durable.approvals.decide("private-approval", "deny"); await pending;
+
+  await host.durable.runtime.deleteBot(bots[1].id);
+  assert.equal(await host.botStore.get(bots[1].id), null);
+  assert.ok(readdirSync(join(dir, "bots/.bot-messages.json.pending-purges")).length > 0);
+  assert.equal((await post("10000000-0000-4000-8000-000000000007")).code, "unknown_bot");
+});
+
 test("durable CLI Bot migration preserves history, dedupes across restart, and fences revoked access", async (t) => {
   const dir = temporary(t), daemon = api.createDaemonChats(dir);
   const oldEntry = process.env.AIDEN_CLI_ENTRY;

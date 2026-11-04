@@ -1717,6 +1717,11 @@ class AidenRemoteClient(
         throw AidenBotContractException.InvalidField("bot response")
     }
 
+    suspend fun setBotMessaging(enabled: Boolean): AidenBotMessagingSettings = executeRequest(
+        "/bots/messaging", method = "PUT",
+        bodyJson = botJson.encodeToString(AidenBotMessagingSettings.serializer(), AidenBotMessagingSettings(enabled))
+    ) { bytes -> decodeBotWire(AidenBotMessagingSettings.serializer(), String(bytes, Charsets.UTF_8)) }
+
     suspend fun bots(): AidenBotList = executeRequest(
         "/bots",
         botScope = AidenBotPrivateResponseScope.Root("botList")
@@ -1756,14 +1761,15 @@ class AidenRemoteClient(
         id: String,
         revision: String,
         patch: AidenBotIdentityPatch,
-        supportsBotActivity: Boolean = false
+        supportsBotActivity: Boolean = false,
+        supportsBotMessaging: Boolean = false
     ): AidenBotDetail = executeRequest(
         "/bots/$id",
         method = "PATCH",
         ifMatchRevision = revision,
         bodyJson = botJson.encodeToString(
             AidenBotIdentityPatch.serializer(),
-            patch.forHost(supportsBotActivity) ?: throw AidenBotContractException.InvalidCombination("chat activity unsupported")
+            patch.also { if (it.botMessaging != null && !supportsBotMessaging) throw AidenBotContractException.InvalidCombination("bot messaging unsupported") }.forHost(supportsBotActivity) ?: throw AidenBotContractException.InvalidCombination("chat activity unsupported")
         ),
         botScope = AidenBotPrivateResponseScope.Root("botDetail")
     ) { bytes ->

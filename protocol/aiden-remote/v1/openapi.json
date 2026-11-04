@@ -7214,6 +7214,46 @@
           }
         }
       }
+    },
+    "/bots/messaging": {
+      "parameters": [{"$ref": "#/components/parameters/ProtocolVersion"}],
+      "put": {
+        "operationId": "updateBotMessaging",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:write",
+          "bot:messaging"
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotMessagingSettings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authoritative Bot messaging settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotMessagingSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Set whether Bots can message each other",
+        "description": "Revision 54. Requires bot:write and negotiated bot:messaging. Exact boolean enabled. Changes gate new sends only; accepted deliveries finish. No inference or catalog access."
+      }
     }
   },
   "components": {
@@ -7968,6 +8008,7 @@
                 "simulators:mobile",
                 "bot:cards",
                 "bot:activity",
+                "bot:messaging",
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
@@ -8014,6 +8055,7 @@
                 "simulators:mobile",
                 "bot:cards",
                 "bot:activity",
+                "bot:messaging",
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
@@ -8147,7 +8189,7 @@
             "type": "array",
             "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1 (android devices since contract revision 31); host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found. Contract revision 27 adds bot:cards, which any device type may negotiate while the server advertises bot-durable-session-v1: it grants no authority and only opts the device into the memory_update and routine_proposal Bot session entries. Contract revision 30 adds bot:activity, which any device type may negotiate while the server advertises bot-activity-v1: it grants no authority and only opts the device into the activity and queued Bot session frames and Bot detail chatActivity. Contract revision 37 adds bot:handoffs, which any device type may negotiate while the server lists it in serverCapabilities (a host without the hand-off routes answers not_found): it opts the device into the Bot session handoff field and frame, the paused session state, Bot paused flags and the bot_paused error code, and lets it call the hand-off answer, open-on-mac and pause routes, which still need bot:read and bot:write. Phones request it in their own call, after any other negotiation. Contract revision 39 adds schedule:cards, which any device type may negotiate while the server lists it in serverCapabilities (a host without streams or the run registry answers not_found): it grants no authority and, together with schedule:read, opts the device into the schedule field on scheduled-task approvals. Phones request it in its own call, so an older host that rejects the name leaves every other grant in place. Contract revision 42 adds bot:issues, which any device type may negotiate while the server lists it in serverCapabilities (a host without the issue act route answers not_found): it grants no authority and opts the device into the Bot session issues list and frame, the summary issueCount, issue items in the routine notification feed, and the issue act route, which still needs bot:read and bot:write. Phones request it in its own call. Contract revision 43 adds bot:handoff-on-mac, negotiated like bot:handoff-notes beside bot:handoffs: it grants no authority and opts the device into onMac on hand-off cards whose step is on the Bot's own screen.",
             "minItems": 1,
-            "maxItems": 16,
+            "maxItems": 23,
             "items": {
               "enum": [
                 "tasks:read",
@@ -8163,6 +8205,7 @@
                 "simulators:mobile",
                 "bot:cards",
                 "bot:activity",
+                "bot:messaging",
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
@@ -8218,6 +8261,7 @@
                 "simulators:mobile",
                 "bot:cards",
                 "bot:activity",
+                "bot:messaging",
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
@@ -10537,6 +10581,9 @@
           },
           "maxBots": {
             "const": 256
+          },
+          "messaging": {
+            "$ref": "#/components/schemas/BotMessagingSettings"
           }
         },
         "additionalProperties": false
@@ -11070,6 +11117,10 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128
+          },
+          "botMessaging": {
+            "$ref": "#/components/schemas/BotMessaging",
+            "description": "Revision 54, only for devices holding bot:messaging. Absent switches default on."
           }
         },
         "additionalProperties": false
@@ -11164,6 +11215,9 @@
           "chatActivity": {
             "description": "Contract revision 30, only on hosts announcing bot-activity-v1. Absent keeps the saved choice.",
             "$ref": "#/components/schemas/BotChatActivity"
+          },
+          "botMessaging": {
+            "$ref": "#/components/schemas/BotMessagingPatch"
           }
         },
         "additionalProperties": false
@@ -17681,10 +17735,11 @@
                   "maxLength": 160
                 },
                 "kind": {
-                  "description": "Contract revision 42: absent means routine. An issue item carries no routineId or status, and routineName is the card's title.",
+                  "description": "Absent means routine. Issue and message items carry neither routineId nor status. Message items require bot:messaging, revision 54.",
                   "enum": [
                     "routine",
-                    "issue"
+                    "issue",
+                    "message"
                   ]
                 },
                 "botId": {
@@ -17724,7 +17779,46 @@
                   "maxLength": 160
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "issue",
+                          "message"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  },
+                  "then": {
+                    "not": {
+                      "anyOf": [
+                        {
+                          "required": [
+                            "routineId"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "status"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "else": {
+                    "required": [
+                      "routineId",
+                      "status"
+                    ]
+                  }
+                }
+              ]
             }
           },
           "now": {
@@ -18695,6 +18789,47 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 134217728
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotMessagingSettings": {
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotMessaging": {
+        "type": "object",
+        "required": [
+          "receive",
+          "send"
+        ],
+        "properties": {
+          "receive": {
+            "type": "boolean"
+          },
+          "send": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotMessagingPatch": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+          "receive": {
+            "type": "boolean"
+          },
+          "send": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false

@@ -1,3 +1,4 @@
+import type { BotMessageStatusEntryData } from "./bot-messages.js";
 // The renderer's view of a Bot's one durable conversation (plan Task 1.4).
 //
 // Main projects the Pi Durable transcript into these entries and streams them
@@ -70,6 +71,8 @@ export interface BotTranscriptToolCall {
 export type BotToolResultStatus = "ok" | "failed" | "blocked" | "stopped";
 
 export type BotTranscriptEntry =
+  | { id: string; type: "bot_message"; kind: "request" | "reply"; botId: string; botName: string; text: string; at?: number }
+  | { id: string; type: "bot_message_status"; data: BotMessageStatusEntryData; at?: number }
   | {
       id: string;
       type: "user";

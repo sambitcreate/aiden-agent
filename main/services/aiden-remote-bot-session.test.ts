@@ -1110,11 +1110,17 @@ test("a phone sees a Bot's waiting approval and allowing it runs the tool and fi
     const sent = await runtime.send(BOT_ID, { text: "tell Dana", requestId: "send-request-0001" });
     await waitFor(() => approvals.pending(BOT_ID).length === 1, { what: "the approval prompt" });
 
-    // A phone that reconnects now gets the waiting approval in its snapshot.
+    const internal = approvals.pending(BOT_ID)[0]!;
+    assert.ok(internal.owner, "the real approval retains its main-owned run provenance");
+    internal.decisionSource = "person";
+    // A phone that reconnects now gets only the public card, never provenance.
+
     const waiting = (await service.session(BOT_ID)).approval;
     assert.equal(waiting?.summary, "Send a note: lunch on Friday");
     assert.equal(waiting?.toolName, "send_note");
     assert.equal(waiting?.canAllow, true);
+    assert.deepEqual(Object.keys(waiting!).sort(), ["canAllow", "summary", "toolCallId", "toolName", "waitId"]);
+
     await stream.until(() => stream.frames.some((frame) => frame.type === "approval" && frame.payload.approval !== null), "the approval frame");
     assert.equal(note.executions.length, 0, "nothing runs before the person answers");
 
@@ -3806,4 +3812,22 @@ test("a card's desktop-only settings action never crosses the wire, and a settle
   } finally {
     await service.close();
   }
+});
+
+
+test("Bot messaging projects to existing labelled messages, including bounded saved answers", () => {
+  const rows = projectBotSessionEntries([
+    {id: 1, kind: "aiden.bot-notice", data: {notice: "bot_message", kind: "request", botId: "j", botName: "Jester", text: "Clean question"}},
+    {id: 2, kind: "aiden.bot-message-input", model: [{role: "user", content: "<bot_message>frame instructions</bot_message>", timestamp: 1}]},
+    {id: 3, kind: "aiden.bot-message-status", data: {deliveryId: "d", botId: "c", botName: "COS", outcome: "waiting_approval", summary: "Create 3 events"}},
+    {id: 4, kind: "aiden.bot-message-status", data: {deliveryId: "d", botId: "c", botName: "COS", outcome: "replied_while_paused", text: "Saved answer. ".repeat(900)}},
+  ] as never);
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows[0], {type: "message", id: "entry_2", role: "user", label: "Jester asked", text: "Clean question", createdAt: new Date(1).toISOString()});
+  assert.deepEqual(rows[1], {type: "message", id: "entry_3", role: "user", label: "COS", text: "COS is waiting for you to approve: Create 3 events"});
+  assert.ok(rows[2]?.type === "message");
+  assert.match(rows[2].text, /^COS replied\n\nSaved answer/u);
+  assert.ok(rows[2].text.length <= 16000);
+  for (const row of rows) assert.deepEqual(parseAidenRemoteBotSessionEntry(row), row);
+  assert.equal(JSON.stringify(rows).includes("frame instructions"), false);
 });

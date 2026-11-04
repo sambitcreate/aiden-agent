@@ -550,6 +550,7 @@ fun AidenBotProfileScreen(
     val current = bot
     if (showAdvanced && current != null) {
         AidenBotAdvancedSheet(
+            messagingCoordinator = coordinator,
             bot = current,
             client = client,
             onDismiss = { showAdvanced = false },

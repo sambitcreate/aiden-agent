@@ -1,0 +1,15 @@
+# Bot messaging implementation
+
+- Direct runtime tests initially failed because `build/native/aiden-lease-flock` was absent in the fresh checkout. Build the declared `build:lease-flock` prerequisite before rerunning; no dependency install was started.
+- `test:bot-runtime` reached the existing routine-file-write test before `test:bots` finished building `aiden-subagent-file-mutator`. That test failed with "The workspace write could not be completed safely; the target file may be incomplete." The helper now exists; rerun that test and the runtime suite after the prerequisite build.
+- The declared tool factory is synchronous while its roster port is asynchronous. Keep `createMessageBotTool` synchronous with a captured declaration roster; `messageBotCandidate` awaits the roster during refresh, then binds the real durable call.
+
+- Both missing-helper failures are resolved: the runtime file-write check and full `test:bot-runtime` pass after the declared builds. No timeouts, retries or test expectations were relaxed.
+- Review recovery: guessed runtime helper paths produced missing-file reads. Discover actual files with rg --files before reading; keep independent reads bounded to avoid truncation.
+- DeepSeek r2 reproduced an ENOTEMPTY teardown flake in courier.test.ts: FIFO after-hooks removed storage before courier disposal. Combined cleanup now awaits dispose, asserts timers are cleared, then removes the directory. No retries/timeouts changed.
+- A-core r3 reviewers reproduced leftover deadline timers in 3/8 and 2/3 suite runs. Source issue: worker finally armed after dispose's first cancellation. Added disposed guard at arm/finally/callback and a final cancellation pass, retained teardown assertion, added deterministic pre-arm barrier test. Planned 10 serial suite runs after the fix, without retries or relaxed checks.
+- New transcript E2E initially matched both the sidebar preview and conversation saved-answer text. Scoped locators to the observed Conversation region; deterministic selector fix, not a timeout/retry change. Existing three Bot onboarding tests passed in that run; corrected E2E now running.
+- Task11's old 'gallery unchanged' note conflicts with current AGENTS durable-feature tour requirement. Updated the existing Bots tile copy and code-drawn art with a reply label; no additional tile or onboarding step. Extended the rendered gallery test.
+
+- Phase A visual checks: Playwright color-scheme emulation does not switch Aiden's explicit theme. Use the real settings appearance preview IPC and assert data-appearance-scheme before screenshots. Wait for the onboarding success toast to disappear so it cannot cover message labels. Confirmed light/wide and dark/narrow screenshots after the fix.
+- Full Remote suite reached the existing physical TLS spike, then four cases failed because PATH chose OpenSSL 4.1.0, which rejects the fixture's `x509 -days 0`. All preceding peer/Remote TypeScript cases passed. Use the installed OpenSSL 3 binary for the spike and run the remaining tail; keep the original failure log rather than changing tests or retrying unchanged.
