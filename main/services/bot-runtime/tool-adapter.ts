@@ -41,7 +41,7 @@ export interface BotToolCall {
   memo<T extends JsonValue>(name: string, candidate: T): Promise<T>;
   /**
    * Request ids of the inputs the calling run serves (one per input; `undefined` for one without),
-   * when the registry reads them. The registry holds the attended tool set, so a tool that acts
+   * when the registry reads them. Preparation may precede this run, so a tool that acts
    * differently on routine or Telegram runs asks here.
    */
   runRequestIds?(): Promise<readonly (string | undefined)[]>;
