@@ -140,16 +140,16 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
   - rule: `Rule · ${label} (up to ${max})`
 - The details: a connector lists each tool's `title`; a site reads `Clicks, typing and key presses on ${host} and its subdomains`; files read `${path}` plus, for a grant, `${access === "write" ? "Read and change" : "Read only"} · allowed once, for this plan only`; a rule reads `Steps your rule “${label}” would ask about`.
 
-- [ ] **Step 1: Write the failing tests** in `renderer/shared/bot-plans.test.ts`:
+- [x] **Step 1: Write the failing tests** in `renderer/shared/bot-plans.test.ts`:
   - `connector line names the app, the action and its cap`: `botPlanItemView({kind:"connector", app:"Google Calendar", action:"create events", max:5, …}, 0).line === "Google Calendar · create events (up to 5)"`, and its `details` equals the tools' titles.
   - `a folder grant reads as for this plan only`: a `files` item with `grant: true` has line `Files · change ~/Documents/Taxes for this plan` for a write grant and `Files · read ~/Documents/Taxes for this plan` for read. The corresponding details say `Read and change` or `Read only`, on desktop and both phones.
   - `progress counts done and skipped steps`: steps `[done, skipped, pending]` give `{done: 2, total: 3}`.
   - `parseBotPlanResponse refuses unknown decisions and extra keys`: `{decision: "allow"}` throws, `{…, decision: "approve", extra: 1}` throws, and `{botId: "b", planId: "p", decision: "stop"}` parses.
   - `used and max appear only on counted items`: a `shell` view has neither `used` nor `max`, and a `rule` view with `used = 2` has `used === 2` and `max`.
-- [ ] **Step 2: Run them and see them fail.** `npx tsx --test renderer/shared/bot-plans.test.ts`. Expected: FAIL, module not found.
-- [ ] **Step 3: Implement** the module. It has no imports beyond types.
-- [ ] **Step 4: Run the tests.** Same command. Expected: PASS.
-- [ ] **Step 5: Register** it in `test:bot-plans` and the CI lane, then commit: "Add the Bot plan contract".
+- [x] **Step 2: Run them and see them fail.** `npx tsx --test renderer/shared/bot-plans.test.ts`. Expected: FAIL, module not found.
+- [x] **Step 3: Implement** the module. It has no imports beyond types.
+- [x] **Step 4: Run the tests.** Same command. Expected: PASS.
+- [x] **Step 5: Register** it in `test:bot-plans` and the CI lane, then commit: "Add the Bot plan contract".
 
 ### Task 2: Validating a proposal against the Bot's current access
 
@@ -186,7 +186,7 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
   - Revalidate the captured proposal at the person's approve action. A changed policy, tool binding, folder identity or named rule refuses the stale answer with no approved record or folder grant. Do not silently substitute changed items into the card.
   - `max` defaults to `defaultMax`, and a value above `maxCeiling` is a problem. Item ids are `i1`…`i8` in input order.
 
-- [ ] **Step 1: Write the failing tests** in `validate.test.ts`. Build facts the way `bot-tool-assembly.test.ts` builds MCP grants (`testAuthority` with a connection whose tools are mutating and read-only):
+- [x] **Step 1: Write the failing tests** in `validate.test.ts`. Build facts the way `bot-tool-assembly.test.ts` builds MCP grants (`testAuthority` with a connection whose tools are mutating and read-only):
   - `a mutating connector tool becomes a connector item with its server identity`: `{connector:"Calendar", action:"create events", tools:["gcal__create_event"], max:5}` gives `items[0]` of kind connector with `serverId` equal to the connection's `sourceId`, `remoteName === "create_event"` and `max === 5`.
   - `read-only and ungranted tools refuse the whole plan`: two bad tools give two problems and `ok === false`.
   - `locked and hand-off rules are never covered`: `{rule:"locked.money"}` and a purchase rule switched to `hand_off` each give a problem. `{rule:"Make a purchase or booking"}` (Ask first) gives a rule item with `ruleId === "default.purchase"`.
@@ -194,10 +194,10 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
   - `an outside folder becomes an access item, and without Plan B it is refused`: with an `access` port returning `{kind: "outside", authorization}`, the item has `grant: true`. Without the port the plan is refused. Two outside folders refuse the plan.
   - `a site needs the browser and is never a payment host`.
   - `a cap above the ceiling is refused; a missing cap is the default`.
-- [ ] **Step 2: Run them and see them fail.** `npx tsx --test main/services/bot-plans/validate.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement `validateBotPlanProposal`.**
-- [ ] **Step 4: Run the tests.** Expected: PASS.
-- [ ] **Step 5: Register and commit:** "Validate Bot plans against the Bot's access".
+- [x] **Step 2: Run them and see them fail.** `npx tsx --test main/services/bot-plans/validate.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement `validateBotPlanProposal`.**
+- [x] **Step 4: Run the tests.** Expected: PASS.
+- [x] **Step 5: Register and commit:** "Validate Bot plans against the Bot's access".
 
 ### Task 3: Plan store, waits and coverage
 
@@ -262,7 +262,7 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
     forgetBot(botId: string): Promise<void>;
   }
   export function createBotPlans(options: { profileDir: string; knownBot(botId: string): Promise<boolean>; now?(): number;
-    revalidate(proposal: BotPlanProposal): Promise<void>; revokeAccess(botId: string, planId: string): void;
+    revalidate(botId: string, proposal: BotPlanProposal): Promise<void>; revokeAccess(botId: string, planId: string): void;
   }): BotPlans;
   ```
 - Coverage, in `botPlanCoveredItems`:
@@ -507,3 +507,10 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
 - [ ] **Step 1: Search** for claims this plan made stale: `rg -n "approval card|one card per|routines go ahead|preapproved" README.md PRODUCT.md docs/*.md .memory/*.md`. Fix each one.
 - [ ] **Step 2: Run** `npx tsx --test renderer/components/onboarding-bots-step.test.tsx`, then `npm run test:bot-plans`, `npm run test:bot-rules`, `npm run test:bot-runtime`, `npm run test:bots` and `node --test scripts/ci-test-registry.test.mjs`. Expected: PASS.
 - [ ] **Step 3: Commit:** "Document Bot plan approval".
+
+
+## C enforcement progress, 2026-11-04
+
+C starts from B acceptance status commit `1f108d931` on `feature/bot-plan-approval`. Both Gate 3 reviewers accepted B source at `494d6b39f`. Tasks 1–2 are implemented and registered. Worker missing-module red runs are recorded at `/tmp/bot-plans-core-task1-red.log` and `/tmp/bot-plans-core-task2-red.log`. Parent contract/validation checks passed 12 tests and the registry passed 15 checks. Task 3 is in progress. Tasks 4–9 and C review gates remain pending.
+
+The production approval-time option takes `revalidate(botId, proposal)` so the singleton can re-admit the correct Bot. Rule and proposal fingerprints have shared main-only helpers in validate.ts. Compact ended receipts retain only hash identity, necessary IDs, status and deadline until an authoritative durable-task-settlement collection port exists. Full private proposals remain in bounded display history. An admission persisted without its live started promise cannot authorize another callback after restart. These are enforcement contracts awaiting Gate 4 review, not phase acceptance.

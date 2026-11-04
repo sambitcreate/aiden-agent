@@ -1,0 +1,9 @@
+# Bot plan approval, phase C
+
+Implementation starts from B acceptance status 1f108d931 on feature/bot-plan-approval. Follow docs/superpowers/plans/2026-11-03-bot-messaging-c-plan-approval.md and master docs/plans/bot-messaging-plan.md. Shared contract and proposal validation Tasks1–2 are implemented; store/coverage Task3 is in progress. No C enforcement or full phase gate is accepted yet. No UI, native support or CLI plans are advertised.
+
+renderer/shared/bot-plans.ts owns bounded contract, display formatting/progress and strict response parsing. main/services/bot-plans/ports.ts defines A delivery/wait and B scope/once/revoke ports. validate.ts checks live granted mutating tools, same-server identity, browser/payment restrictions, shell authority, exact named Ask-first rules and one pinned outside folder. Validation is all-or-nothing and deep-freezes canonical proposals with policy, binding, rule and optional B folder authorization. Main-only botPlanRuleFingerprint and botPlanProposalFingerprint share identities across approval and call-time checks.
+
+Approval revalidation takes botId plus the exact proposal. Ended replay receipts must retain only hashes and necessary IDs/status/deadline until durable task settlement can be observed; full proposal history remains bounded. Final admission must serialize callback invocation against Stop/expiry, persist admission identity and return the started promise without awaiting external I/O under the serial. A persisted admittedAt with no live promise after restart fails closed. Planned temporary outside-folder grants are plan-owned, at most one and 60 minutes, revoked on every termination; stored approval replay cannot recreate them.
+
+C tools remain absent from CLI and paired-Mac capability negotiation. No dependencies, Pi pins, inference or model-catalog calls are part of this implementation. Native revision and capability changes belong later Tasks6–9.
