@@ -1,6 +1,6 @@
 # Bots that work together: implementation plan
 
-Status: implementation in progress (2026-11-04). A Tasks1–11 passed full-A review at `dc89b16ce`, and B Tasks1–10 passed both Gate3 reviewers at `494d6b39f`. C Tasks1–9 are implemented and locally verified across desktop, Remote56 and both native clients. C enforcement Gate4 accepted `054e953fa`; Gate5 accepted all C Tasks1–9 at `55678558e` after the payment-subdomain correction. D Tasks1–8 are implemented and locally verified on `feature/bot-allow-list`, including desktop controls, Remote57 host contracts and both native clients. Both whole-D Gate6 reviewers rejected the first Task8 checkpoint `5c43f4a81`. Corrections are implemented and locally verified; fresh whole-D reviews are pending at the correction checkpoint. The stack is `feature/bot-messaging` → `feature/bot-access-requests` → `feature/bot-plan-approval` → `feature/bot-allow-list`; main `a5c5db8b1` was merged into A. Four PRs, final GPT-6 Astra high review and exact-head CI remain pending.
+Status: implementation in progress (2026-11-04). A Tasks1–11 passed full-A review at `dc89b16ce`, and B Tasks1–10 passed both Gate3 reviewers at `494d6b39f`. C Tasks1–9 are implemented and locally verified across desktop, Remote56 and both native clients. C enforcement Gate4 accepted `054e953fa`; Gate5 accepted all C Tasks1–9 at `55678558e` after the payment-subdomain correction. D Tasks1–8 are implemented and locally verified on `feature/bot-allow-list`, including desktop controls, Remote57 host contracts and both native clients. Both whole-D Gate6 reviewers rejected the first Task8 checkpoint `5c43f4a81`. Opus round2 rejected `930e9392e` for a folder-name compatibility regression. The main session implemented and locally verified its correction; a fresh Opus review is pending. The stack is `feature/bot-messaging` → `feature/bot-access-requests` → `feature/bot-plan-approval` → `feature/bot-allow-list`; main `a5c5db8b1` was merged into A. Four PRs, final Opus 5.5 medium review and exact-head CI remain pending.
 
 This is the master plan. It records the owner's decisions and how the four detailed plans fit together. Research and design: [bot-to-bot-messaging-research.md](bot-to-bot-messaging-research.md).
 
@@ -71,14 +71,13 @@ Each PR ships working software on its own. Merge bottom-up and let GitHub retarg
 
 ## How it gets built
 
-The main session owns implementation, integration, finding triage and commits. Follow each detailed plan's numbered tasks in order, in phases A, B, C and D. Keep commits focused. A fresh implementation worker is optional; the two models below are independent review agents and must not review their own implementation. This workflow is self-contained and requires no `superpowers` skills.
+The main session owns implementation, integration, finding triage and commits. Follow each detailed plan's numbered tasks in order, in phases A, B, C and D. Keep commits focused. Under the owner’s 2026-11-04 update, the main session implements directly without implementation subagents. Only Opus 5.5 medium is used for reviews, including the final whole-program review. This workflow is self-contained and requires no `superpowers` skills.
 
-Use T3 `delegate_task` for each review, with `role: "review"`, a fresh task per round and explicit model options from the live `orchestrator_capabilities` catalog. Record each returned task id and verify its returned model and options. The verified selections on 2026-11-03 are:
+Use T3 `delegate_task` for each review, with `role: "review"`, a fresh task per round and explicit model options from the live `orchestrator_capabilities` catalog. Record each returned task id and verify its returned model and options. The current selection, verified against the live catalog on 2026-11-04, is:
 
 - Opus reviewer: provider `claudeAgent`, model `claude-opus-5-5`, options `{ "effort": "medium" }`. Emphasize authority, policy order, lifecycle and consistency between phases.
-- DeepSeek reviewer: provider `opencode`, model `opencode-go/deepseek-v4.1-flash`, options `{ "variant": "high" }`. Emphasize concurrency, persistence, replay, behavioral test gaps and native/CLI parity.
 
-Both review the same frozen checkpoint SHA independently and read-only. Supply the master and phase plan, base SHA, checkpoint SHA, acceptance criteria, changed files, validation results and known limitations. Both may report any concrete correctness issue. They do not edit, commit, open PRs or launch more agents. Reviewers can share this checkout only while the main session keeps it at that checkpoint.
+Each fresh Opus reviewer checks the frozen checkpoint SHA independently and read-only, including concurrency, persistence, replay, behavioral tests and native/CLI parity. Supply the master and phase plan, base SHA, checkpoint SHA, acceptance criteria, changed files, validation results and known limitations. The reviewer may report any concrete correctness issue, but does not edit, commit, open PRs or launch more agents. The checkout remains frozen during review.
 
 Review gates:
 
@@ -89,14 +88,14 @@ Review gates:
 5. C complete: after Task 9, including Stop, native clients and permission lifetime.
 6. D complete: after Task 8, including durable approval deduplication, revocation and native clients.
 
-Each gate launches both reviewers, for 12 initial review runs across the program. Before launching, run the narrow suites for completed tasks. The main session accepts or rejects each finding with source/test evidence. Resolve every blocking or important finding, rerun affected checks, then start a fresh review round for substantive fixes. Include the original brief, prior findings, fixes, rejected findings and unresolved objections. Never advance on an unresolved correctness finding or a failed relevant check. Re-review changes after a merge from `main` when they affect an accepted contract; CI must always be green on the exact PR head.
+Each remaining gate launches a fresh Opus 5.5 medium reviewer. Earlier dual-provider reviews remain recorded as history. Before launching, run the narrow suites for completed tasks. The main session accepts or rejects each finding with source/test evidence. Resolve every blocking or important finding, rerun affected checks, then start a fresh review round for substantive fixes. Include the original brief, prior findings, fixes, rejected findings and unresolved objections. Never advance on an unresolved correctness finding or a failed relevant check. Re-review changes after a merge from `main` when they affect an accepted contract; CI must always be green on the exact PR head.
 
 Before each PR opens:
 - Run the narrow suites named in the plan, plus `npm run test:bots`, `npm run test:bot-runtime`, `npm run test:bot-rules`, `npm run type-check` and `npm run test:aiden-remote`.
 - Run `npm run test:cli` for A, and for any change to files the CLI bundles.
 - Run the iOS and Android suites for every step with phone work.
 - Run window-opening tests through `npm run test:e2e:space`, plus the macOS-only checks required by `AGENTS.md` when a changed path has a darwin branch.
-- Complete the phase gate's whole-branch reviews with both selected models. Record reviewed SHA, validation, findings and their dispositions in the PR description.
+- Complete the phase gate's whole-branch Opus 5.5 medium review and the final whole-program Opus review. Record reviewed SHA, validation, findings and their dispositions in the PR description.
 
 The main session owns each stacked PR and links it to this T3 thread. Merge only when explicitly authorized, bottom-up, after fresh exact-head CI. Live-model and physical-device checks below are separate acceptance evidence; passing local or hosted tests does not substitute for them.
 
@@ -124,7 +123,7 @@ GPT-6 Astra reviewed the master, all four detailed plans, research and current r
 
 After four Astra review rounds and the corrections above, the final focused review found no blocking or important plan issues. This is acceptance of the written contracts, not runtime acceptance. Local document checks passed for whitespace, links, fenced blocks and task numbering.
 
-Phases A and B have passed their source review gates. C enforcement passed Gate4 at `054e953fa`; C Tasks1–9 passed both Gate5 reviewers at `55678558e`. D Tasks1–8 are implemented and locally verified on `feature/bot-allow-list`, including desktop controls, Remote57 host contracts and both native clients. Both whole-D Gate6 reviewers rejected the first Task8 checkpoint `5c43f4a81`. Corrections are implemented and locally verified; fresh whole-D reviews are pending at the correction checkpoint. The acceptance cases and review gates must pass before advancing each phase. Keep the earlier research as a dated design record; the master and corrected detailed contracts govern implementation.
+Phases A and B have passed their source review gates. C enforcement passed Gate4 at `054e953fa`; C Tasks1–9 passed both Gate5 reviewers at `55678558e`. D Tasks1–8 are implemented and locally verified on `feature/bot-allow-list`, including desktop controls, Remote57 host contracts and both native clients. Both whole-D Gate6 reviewers rejected the first Task8 checkpoint `5c43f4a81`. Opus round2 rejected `930e9392e` for a folder-name compatibility regression. The main session implemented and locally verified its correction; a fresh Opus review is pending. The acceptance cases and review gates must pass before advancing each phase. Keep the earlier research as a dated design record; the master and corrected detailed contracts govern implementation.
 
 ## Status
 
@@ -132,3 +131,8 @@ Phases A and B have passed their source review gates. C enforcement passed Gate4
 - [x] B: `request_access`
 - [x] C: plan approval
 - [ ] D: allow list and nudge
+
+
+## Owner workflow update, 2026-11-04
+
+The owner asked the main session to implement directly and use only Opus5.5medium for reviews. Sol implementation workers are stopped and the OpenCode correction reviewer is cancelled. This supersedes the earlier optional implementation delegation, dual Opus/DeepSeek gates and final Astra request for remaining work. Prior review reports and dated records remain history. Finding fixes, a fresh read-only review per substantive correction, four stacked PRs, exact-head CI and no merge without authorization remain required.

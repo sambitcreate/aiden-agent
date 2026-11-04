@@ -792,3 +792,11 @@ test("real book commit with a lost acknowledgement reconciles the pending tally 
   assert.equal(await tallies.nudge("bot:a", CAL), undefined);
   assert.equal(guards, 1, "historical reconciliation never calls the first-publication guard again");
 });
+
+test("folder history refuses NUL, relative, noncanonical, root and oversized UTF-8 identities without creating a ledger", async t => {
+  const f = await setup(t);
+  for (const folder of ["/bad\0folder", "relative", "/", "/first/../second", "/" + "é".repeat(2048)]) {
+    await assert.rejects(f.tallies.record("bot:a", { kind: "folder", path: folder }, f.person()), /tally class/u);
+  }
+  await assert.rejects(fs.stat(f.file()), { code: "ENOENT" });
+});

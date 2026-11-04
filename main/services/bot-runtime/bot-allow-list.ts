@@ -68,7 +68,7 @@ export function createBotAllowList(deps: BotAllowListDeps): BotAllowList {
   };
   async function label(target: BotApprovalRuleTarget, title: string) {
     return target.kind === "connection" ? clean(`${clean(await deps.connectionName(target.serverId) ?? "Connected app", "Connected app")} · ${clean(title, "Action")}`, "Connected app")
-      : describeBotApprovalRule({ target, label: title });
+      : clean(describeBotApprovalRule({ target, label: title }), "Website action");
   }
   async function currentGrant(botId: string, target: BotApprovalRuleTarget, ruleId: string): Promise<BotAllowListRelease | undefined> {
     const revision = await deps.rules.botConsentRevision(botId, target), rule = await deps.rules.matchBot(botId, target);
@@ -194,15 +194,23 @@ export function createBotAllowList(deps: BotAllowListDeps): BotAllowList {
     },
     async reconcile(botId, folderReceipts = []) {
       const capturedReceipts = structuredClone(folderReceipts);
+      const failures: unknown[] = [];
       for (const receipt of await deps.tallies.pendingPublications(botId)) {
-        const operation = await deps.rules.botGrantOperation(botId, receipt.decision.id);
-        if (!operation) continue;
-        if (operation.targetKey !== botApprovalRuleKey(receipt.target)) throw new Error("The saved approval target changed.");
-        await deps.tallies.completePublication(botId, receipt.decision.id, receipt.decision.authorizationFingerprint, operation.status);
+        try {
+          const operation = await deps.rules.botGrantOperation(botId, receipt.decision.id);
+          if (!operation) continue;
+          if (operation.targetKey !== botApprovalRuleKey(receipt.target)) throw new Error("The saved approval target changed.");
+          await deps.tallies.completePublication(botId, receipt.decision.id, receipt.decision.authorizationFingerprint, operation.status);
+        } catch (error) { failures.push(error); }
       }
       for (const receipt of capturedReceipts) {
-        if (receipt.botId === botId) await service.settleFolder({ ...receipt, origin: "historical" });
+        if (receipt.botId !== botId) continue;
+        try { await service.settleFolder({ ...receipt, origin: "historical" }); }
+        catch (error) { failures.push(error); }
       }
+      // Preserve the failure signal for startup logging after giving every
+      // independent obligation its own recovery attempt. Nothing grants access.
+      if (failures.length) throw failures[0];
     },
     async forgetBot(botId) { await Promise.all([deps.rules.forgetBot(botId), deps.tallies.forgetBot(botId)]); },
     changed,

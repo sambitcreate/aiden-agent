@@ -532,13 +532,23 @@ test("D: the real authorizer snapshots the prompt before receipt I/O", async () 
   assert.equal(runAccess.location("ada", ["other"], "rev1"), undefined);
 });
 
-async function folderD(t: import("node:test").TestContext) {
+async function folderD(t: import("node:test").TestContext, realFolderName?: string) {
   const fs = await import("node:fs/promises"), os = await import("node:os"), path = await import("node:path");
   const { fileBotFolderGrantJournal } = await import("../bot-folder-grant-journal.js");
   const { createBotApprovalTallies } = await import("./bot-approval-tallies.js");
   const { createBotAllowList } = await import("./bot-allow-list.js");
   const { ToolApprovalRuleBook, emptyToolApprovalRulesDocument } = await import("../tool-approval-rules.js");
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-folder-d-")); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  let target: Extract<import("./bot-access-target.js").BotAccessResolution, { kind: "folder" }> = { kind: "folder", root: "/Taxes", label: "Taxes", place: "/Taxes", device: "1", inode: "2", always: { kind: "new" as const } };
+  const { resolveBotAccessTarget } = await import("./bot-access-target.js");
+  const targetDeps = { homeDirectory: () => dir, privateRoots: () => [], approvedRoots: async () => [] };
+  if (realFolderName !== undefined) {
+    const requested = path.join(dir, realFolderName); await fs.mkdir(requested);
+    const resolved = await resolveBotAccessTarget(requested, targetDeps);
+    assert.equal(resolved.kind, "folder");
+    if (resolved.kind !== "folder") throw new Error("Test directory did not resolve");
+    target = resolved;
+  }
   let now = 1_000, revision = "rev1", receiptsReadable = true, saves = 0, aliases = 0, failGrant = false;
   let ticking = false;
   const clock = () => ticking ? now++ : now;
@@ -569,7 +579,7 @@ async function folderD(t: import("node:test").TestContext) {
   const runAccess = createBotRunAccess({ now: () => now });
   const authorize = createBotAccessAuthorizer({ now: clock, audienceId: "desktop:local", runAccess: { ...runAccess, grant: (botId, grant) => { aliases++; runAccess.grant(botId, grant); } },
     captureDecision: (card, choice) => { lastCard = card; lastProof = d.captureDecision(card, choice); return lastProof; }, revalidate: async (_id, expected) => { if (revision !== expected) throw new BotAccessRequestStaleError("policy changed"); },
-    resolveTarget: async () => ({ kind: "folder", root: "/Taxes", label: "Taxes", place: "/Taxes", device: "1", inode: "2", always: { kind: "new" } }),
+    resolveTarget: async requested => realFolderName === undefined ? target : resolveBotAccessTarget(requested, targetDeps),
     grantFolder: async (input, owner) => {
       owner.assertCurrent(); if (failGrant) throw new Error("grant failed before publication");
       saves++; await journal.put({ input, rootId: "taxes", ownsRoot: true, state: "pending" });
@@ -579,10 +589,13 @@ async function folderD(t: import("node:test").TestContext) {
     },
     folderCommitted: async (botId, id) => (await journal.list()).some(record => record.state === "committed" && record.input.botId === botId && record.input.operationId === id), changed() {},
   });
-  const waiting = bridge.request({ ...prompt, approvalCount: 3, signal: controller.signal, owner: { signal: controller.signal, deadline: Date.now() + 60_000, validate: async () => {} } });
+  const waiting = bridge.request({ ...prompt, label: target.label, place: target.place, grant: { folderPath: target.root },
+    authorization: { ...prompt.authorization, root: target.root, identity: { device: target.device, inode: target.inode },
+      ...(target.inventoryRevision ? { inventoryRevision: target.inventoryRevision } : {}) },
+    approvalCount: 3, signal: controller.signal, owner: { signal: controller.signal, deadline: Date.now() + 60_000, validate: async () => {} } });
   const outcome = waiting.catch(error => error), id = bridge.pending()[0]!.waitId;
   const answer = (choice: "once" | "always" | "not_now") => bridge.answer("ada", id, choice, (card, actual) => d.authorize(card, actual, authorize), d.settle);
-  return { service, tallies, journal, d, makeD, bridge, controller, outcome, id, answer, runAccess,
+  return { service, tallies, journal, d, makeD, bridge, controller, outcome, id, answer, runAccess, root: target.root, dir,
     counts: () => ({ saves, aliases }), proof: () => lastProof, card: () => lastCard, tick() { ticking = true; }, afterPublish(fn: () => void) { afterPublish = fn; },
     readable(value: boolean) { receiptsReadable = value; }, setRevision(value: string) { revision = value; }, failGrant(value: boolean) { failGrant = value; }, advance(ms: number) { now += ms; } };
 }
@@ -696,3 +709,22 @@ test("D: a legacy committed folder receipt acknowledges Always without inventing
   assert.equal((await f.tallies.pendingPublications("ada")).length, 0);
   assert.deepEqual(f.counts(), { saves: 0, aliases: 0 });
 });
+
+for (const [name, folderName] of [["tab", "tab\tfolder"], ["newline", "line\nfolder"], ["DEL", "del\u007ffolder"]]) {
+  for (const choice of ["not_now", "once", "always"] as const) {
+    test(`D: ${choice} settles a real folder with ${name} in its name`, async t => {
+      const f = await folderD(t, folderName);
+      t.after(() => f.controller.abort());
+      assert.equal(await f.answer(choice), "answered");
+      assert.equal((await f.outcome).choice, choice);
+      assert.deepEqual(f.bridge.pending(), []);
+      assert.equal(f.counts().saves, choice === "always" ? 1 : 0);
+      assert.equal(f.runAccess.location("ada", ["r1"], choice === "always" ? "rev2" : "rev1")?.root,
+        choice === "not_now" ? undefined : f.root);
+      const { createBotApprovalTallies } = await import("./bot-approval-tallies.js");
+      const reopened = createBotApprovalTallies({ profileDir: () => f.dir, now: () => 1_000 });
+      assert.equal((await reopened.decision("ada", f.id, f.proof()!.authorizationFingerprint))?.answer,
+        choice === "once" ? "allow" : choice === "always" ? "allow_always" : "deny");
+    });
+  }
+}

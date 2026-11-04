@@ -402,3 +402,36 @@ test("service integration: Remove during own publication creates no entry, usage
   assert.equal((await f.rules.listBot("bot")).length, 0); assert.equal(f.tool.executions.length, 0);
   assert.equal((await f.tallies.publication("bot", original.waitId, original.authorizationFingerprint!))?.status, "revoked");
 });
+
+test("service: an invalid recovery receipt does not prevent a later valid receipt from settling", async t => {
+  const f = await fixture(t);
+  const base = { botId: "bot", offered: false, decidedAt: Date.parse("2026-11-04T12:00:00Z"), answer: "always" as const, source: "person" as const };
+  await assert.rejects(f.service.reconcile("bot", [
+    { ...base, decisionId: "invalid-path", authorizationFingerprint: "invalid-fp", path: "/bad\0folder" },
+    { ...base, decisionId: "valid-path", authorizationFingerprint: "valid-fp", path: "/valid/folder" },
+  ]), /tally class/u);
+  assert.equal((await f.tallies.decision("bot", "valid-path", "valid-fp"))?.answer, "allow_always");
+  assert.deepEqual((await f.rules.listBot("bot")), [], "historical recovery never creates authority");
+});
+
+for (const action of ["click", "type", "press"] as const) {
+  test(`service: a long valid site ${action} settles offered Once and Always`, async t => {
+    const f = await fixture(t);
+    const host = `${"a".repeat(60)}.${"b".repeat(60)}.${"c".repeat(60)}.${"d".repeat(20)}`;
+    const target = { kind: "site" as const, host, action };
+    const input = async (id: string, answer: BotApprovalSettlementInput["decision"]["answer"], offered = false): Promise<BotApprovalSettlementInput> => ({
+      botId: "bot", remember: { target, title: host, ...(offered ? { offer: { count: 3 } } : {}) },
+      requirements: { target, requirementsFingerprint: "site-req", consentRevision: await f.rules.botConsentRevision("bot", target), authorizationFingerprint: `fp-${id}` },
+      decision: { id, authorizationFingerprint: `fp-${id}`, answer, source: "person" },
+    });
+    for (let i = 0; i < 3; i++) await f.service.settle(await input(`seed-${i}`, "allow"));
+    assert.deepEqual(await f.service.offer("bot", target), { count: 3 });
+    const once = await input("offered-once", "allow", true);
+    assert.match((await f.service.settle(once)).hint!, /4 times/u);
+    const result = await f.service.settle(await input("always", "allow_always", true), { validatePublication: async () => {} });
+    assert.ok(result.publication);
+    const [rule] = await f.rules.listBot("bot");
+    assert.deepEqual(rule!.target, target, "display bounding never changes the enforced host or action");
+    assert.ok(rule!.label.length <= 200);
+  });
+}

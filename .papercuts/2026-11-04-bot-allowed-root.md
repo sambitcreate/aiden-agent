@@ -61,3 +61,10 @@
 - Settlement review uncovered a missing production-clock oracle and a crash-at-threshold case. Worker captured9behavioral failures plus realSIGKILL failure, then192focused/27finalservice pass. Root broaderchecks run only after both workers froze.
 
 - Corrected integration first-run green: allowed113/runtime480/access101/plans144/rules66/messaging89/Bots1012/types0/registry15/scopedlint12files0/fullRemote1300+2existing skips/Cua2retries0/rebuiltCLI183+3existing skips+CLItypes0. Earlier standaloneCLI timingflake remains carried. No mobile DTO/source changes warranted another native run.
+
+- Latest user overrides orchestration: root implements directly; only Opus5.5medium reviews, including final program review. Sol implementers stopped, OpenCode cancelled, prior DeepSeek/Astra requirements retained only as dated history.
+- OpusGate6r2 rejected930e9392e for valid control-character folder paths blocked by D tally identity and long-site display labels. Root adding real-directory answers and per-receipt recovery isolation tests before production edits.
+
+- Gate6r2 direct-root real-directory/site/recovery tests captured13failures before production edits, then13passed. All three answers work for tab/newline/DEL names; malformed recovery isolation retains error reporting. Added explicit invalid-private-path bounds coverage. No implementation delegation.
+
+- Root direct Gate6r2 fix passed149focused andbroaderallowed118/runtime480/access110/rules66/types0/registry15/scopedlint6files0/diff0. No assertion/timeout/retry changes. Kept the comment-only Low distinct from a claimed functional replay fix.

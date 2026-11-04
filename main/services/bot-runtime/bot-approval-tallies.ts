@@ -145,7 +145,10 @@ function keyOf(value: BotApprovalTallyKey): string {
     !value.host.startsWith("www.") && (value.action === "click" || value.action === "type" || value.action === "press")) {
     return botApprovalRuleKey({ kind: "site", host: value.host, action: value.action });
   }
-  if (value.kind === "folder" && text(value.path, 4096) && path.isAbsolute(value.path) &&
+  // This is private path identity, not display text. Match B's byte/NUL
+  // bounds; valid filesystem names may contain tabs, newlines or DEL.
+  if (value.kind === "folder" && typeof value.path === "string" && !value.path.includes("\0") &&
+    Buffer.byteLength(value.path, "utf8") <= 4096 && path.isAbsolute(value.path) &&
     path.normalize(value.path) === value.path && value.path !== path.parse(value.path).root) {
     return JSON.stringify(["folder", value.path]);
   }

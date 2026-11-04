@@ -77,8 +77,8 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
     assertActive(captured);
     if (captured.assertCurrent) await captured.assertCurrent();
     assertActive(captured);
-    // Only eligible remembered classes write D receipts. Ordinary rule and
-    // Computer Use cards must not depend on that ledger's availability.
+    // Lookup here follows scope-proven allow-list metadata. Rule-made and
+    // Computer Use cards without it must not depend on this ledger.
     if (captured.allowList && options.lookupDecision) {
       const saved = await options.lookupDecision(captured.botId, captured.waitId, captured.authorizationFingerprint);
       await captured.assertCurrent?.(); assertActive(captured);
