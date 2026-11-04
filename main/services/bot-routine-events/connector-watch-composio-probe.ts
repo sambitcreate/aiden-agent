@@ -143,13 +143,15 @@ function rejectMeta(tool: DiagnosticTool, reason: DiagnosticReason, schema: unkn
     root: { type, dialect: diagnosticDialect(root.$schema), propertiesObject: object(root.properties), requiredArray: Array.isArray(root.required), unknownRequired: root.required === undefined ? null : !Array.isArray(root.required) || root.required.some((entry) => typeof entry !== "string" || !knownRequired.includes(entry)) },
     compatibility: { queriesArray: queries?.type === "array", useCaseString: property(queries?.items, "use_case")?.type === "string", sessionObject: session?.type === "object", generateIdBoolean: property(session, "generate_id")?.type === "boolean", toolSlugsArray: slugs?.type === "array", toolSlugItemsString: object(slugItems) && slugItems.type === "string", sessionIdString: property(schema, "session_id")?.type === "string" } });
 }
+const ROOT_DRAFT_07_SCHEMAS = new Set(["http://json-schema.org/draft-07/schema", "http://json-schema.org/draft-07/schema#", "https://json-schema.org/draft-07/schema", "https://json-schema.org/draft-07/schema#"]);
 function metaValidator(schema: unknown, tool: ComposioWatchProbeTool): ValidateFunction {
   let nodes = 0, compiler: Ajv | undefined;
   const inspect = (value: unknown, depth = 0): void => {
     if (++nodes > 512 || depth > 12) rejectMeta(tool, "schema_limit", schema);
     if (typeof value === "boolean") return;
     if (!object(value)) rejectMeta(tool, "schema_structure", schema);
-    const unsupported = Object.keys(value).find((key) => !SCHEMA_KEYS.has(key));
+    const rootDraft07 = depth === 0 && typeof value.$schema === "string" && ROOT_DRAFT_07_SCHEMAS.has(value.$schema);
+    const unsupported = Object.keys(value).find((key) => !SCHEMA_KEYS.has(key) && !(key === "$schema" && rootDraft07));
     if (unsupported !== undefined) rejectMeta(tool, "unsupported_keyword", schema, unsupported);
     if (value.properties !== undefined) {
       if (!object(value.properties)) rejectMeta(tool, "schema_structure", schema, "properties");
@@ -167,7 +169,9 @@ function metaValidator(schema: unknown, tool: ComposioWatchProbeTool): ValidateF
     if (schema.type !== "object") rejectMeta(tool, "root_type", schema);
     if (!schema.properties) rejectMeta(tool, "root_properties", schema);
     compiler = new Ajv({ strict: false, allErrors: false, validateSchema: true });
-    return compiler.compile(schema);
+    // Ajv already bundles draft-07 under its HTTP identity. Normalize only
+    // this validated root annotation; no loader or remote dialect is used.
+    return compiler.compile(schema.$schema === undefined ? schema : { ...schema, $schema: "http://json-schema.org/draft-07/schema#" });
   } catch (error) { if (error instanceof ProbeFailure) throw error; return rejectMeta(tool, "schema_compile", schema, compiler?.errors?.[0]?.keyword); }
 }
 function property(schema: unknown, name: string): RecordValue | undefined {

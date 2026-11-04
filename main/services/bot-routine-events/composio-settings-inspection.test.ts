@@ -227,7 +227,7 @@ test("owner or client generation invalidation during the final filesystem check 
 });
 
 test("Settings retains bounded structural rejection reasons privately while the public result stays unchanged", async (t) => {
-  const f = await fixture(t); f.changeMetadata((tools) => { tools[0]!.inputSchema = { ...tools[0]!.inputSchema, $schema: "https://json-schema.org/draft/2020-12/schema", description: marker } as typeof tools[0]["inputSchema"]; });
+  const f = await fixture(t); f.changeMetadata((tools) => { tools[0]!.inputSchema = { ...tools[0]!.inputSchema, $schema: "https://json-schema.org/draft/2020-12/schema", description: marker } as unknown as typeof tools[0]["inputSchema"]; });
   const result = await f.inspect(owner()); assert.equal(result.code, "unsupported_meta_schema"); assert.equal(f.connected, 1); assert.equal(f.closed, 1); assert.deepEqual(f.sent, []);
   const file = path.join(f.directory, COMPOSIO_SETTINGS_INSPECTION_FILE), retained = await fs.readFile(file, "utf8"), diagnostic = JSON.parse(retained);
   assert.equal(diagnostic.privateProof.rejection.reason, "unsupported_keyword"); assert.equal(diagnostic.privateProof.rejection.keyword, "$schema"); assert.equal(diagnostic.privateProof.rejection.root.dialect, "draft-2020-12"); assert.match(diagnostic.privateProof.rejection.schemaHash, /^[a-f0-9]{64}$/u);

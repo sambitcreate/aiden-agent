@@ -287,10 +287,49 @@ test("a refreshed GetSchemas rejection identifies its stage without retaining un
   assert.equal(JSON.stringify(result).includes(privateMarker), false);
 });
 
-test("known schema dialects are fixed diagnostics and never enable unsupported meta schemas", async () => {
-  for (const [uri, dialect] of [["https://json-schema.org/draft-07/schema#", "draft-07"], ["https://json-schema.org/draft/2019-09/schema", "draft-2019-09"], ["https://json-schema.org/draft/2020-12/schema", "draft-2020-12"], ["https://private-account.example/schema?credential=never-retain", "other"]]) {
+test("unsupported schema dialects remain fixed diagnostics and never enable unsupported meta schemas", async () => {
+  for (const [uri, dialect] of [["https://json-schema.org/draft/2019-09/schema", "draft-2019-09"], ["https://json-schema.org/draft/2020-12/schema", "draft-2020-12"], ["https://private-account.example/schema?credential=never-retain", "other"]]) {
     const h = harness(); (h.tools[0] as { inputSchema: unknown }).inputSchema = { ...searchSchema, $schema: uri };
     const result = await inspectComposioWatchSchemas(h.port, { kind: "email" }); assert.equal(result.code, "unsupported_meta_schema"); assert.deepEqual(h.calls, []);
     assert.equal(result.privateProof?.rejection?.keyword, "$schema"); assert.equal(result.privateProof?.rejection?.root.dialect, dialect); assert.equal(JSON.stringify(result).includes(uri), false);
   }
+});
+
+test("both metadata tools accept only canonical root draft-07 annotations through the existing schema subset", async () => {
+  for (const uri of ["http://json-schema.org/draft-07/schema", "http://json-schema.org/draft-07/schema#", "https://json-schema.org/draft-07/schema", "https://json-schema.org/draft-07/schema#"]) {
+    const h = harness();
+    for (const tool of h.tools as { name: string; inputSchema: unknown }[]) if (tool.name === SEARCH || tool.name === SCHEMAS) tool.inputSchema = { ...(tool.inputSchema as Record<string, unknown>), $schema: uri };
+    const result = await inspectComposioWatchSchemas(h.port, { kind: "both" });
+    assert.equal(result.code, "account_routing_unverified"); assert.equal(result.available, false); assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH, SCHEMAS]); assert.equal(h.lists, 2);
+    assert.deepEqual(h.calls[1]!.args.tool_slugs, ["GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_EVENTS_LIST"]); assert.equal(result.privateProof?.rejection, undefined); assert.equal(JSON.stringify(result).includes(uri), false);
+  }
+});
+
+test("root draft-07 does not permit nested dialects, references, identifiers, regular expressions or formats", async (t) => {
+  for (const toolName of [SEARCH, SCHEMAS]) for (const [label, forbidden] of [
+    ["nested dialect", { $schema: "http://json-schema.org/draft-07/schema#" }],
+    ["remote reference", { $ref: "https://private.invalid/schema?account=never-retain" }],
+    ["local reference", { $ref: "#/definitions/private" }],
+    ["identifier", { $id: "https://private.invalid/schema" }],
+    ["regular expression", { pattern: "(a+)+$" }],
+    ["custom format", { format: "private-custom-format" }],
+  ] as const) await t.test(`${toolName}/${label}`, async () => {
+    const h = harness(), tool = (h.tools as { name: string; inputSchema: unknown }[]).find((entry) => entry.name === toolName)!;
+    const schema = structuredClone(toolName === SEARCH ? searchSchema : getSchema) as Record<string, unknown>;
+    schema.$schema = "https://json-schema.org/draft-07/schema#";
+    const properties = schema.properties as Record<string, unknown>;
+    properties.private_nested_field = { type: "string", ...forbidden }; tool.inputSchema = schema;
+    const result = await inspectComposioWatchSchemas(h.port, { kind: "email" });
+    assert.equal(result.code, "unsupported_meta_schema"); assert.deepEqual(h.calls, []); assert.equal(result.privateProof?.rejection?.tool, toolName); assert.equal(result.privateProof?.rejection?.reason, "unsupported_keyword"); assert.equal(result.privateProof?.rejection?.root.dialect, "draft-07"); assert.equal(JSON.stringify(result).includes("private.invalid"), false);
+  });
+});
+
+test("draft-07 compatibility refuses lookalike root URIs and rechecks dialect drift before GetSchemas", async () => {
+  for (const uri of ["http://json-schema.org/draft-07/schema?account=private", "https://json-schema.org/draft-07/schema/", "https://json-schema.org.evil.invalid/draft-07/schema#"]) {
+    const h = harness(); (h.tools[0] as { inputSchema: unknown }).inputSchema = { ...searchSchema, $schema: uri };
+    const result = await inspectComposioWatchSchemas(h.port, { kind: "email" }); assert.equal(result.code, "unsupported_meta_schema"); assert.deepEqual(h.calls, []); assert.equal(result.privateProof?.rejection?.root.dialect, "other");
+  }
+  const h = harness(); let lists = 0;
+  h.port.listTools = async () => { lists++; return { tools: metadata().map((tool) => tool.name === SEARCH || tool.name === SCHEMAS ? { ...tool, inputSchema: { ...tool.inputSchema, $schema: lists === 1 || tool.name === SEARCH ? "https://json-schema.org/draft-07/schema#" : "https://json-schema.org/draft/2020-12/schema" } } : tool) }; };
+  const result = await inspectComposioWatchSchemas(h.port, { kind: "email" }); assert.equal(result.code, "unsupported_meta_schema"); assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH]); assert.equal(result.privateProof?.rejection?.tool, SCHEMAS); assert.equal(result.privateProof?.rejection?.stage, "refreshed_inventory"); assert.equal(result.privateProof?.rejection?.root.dialect, "draft-2020-12");
 });

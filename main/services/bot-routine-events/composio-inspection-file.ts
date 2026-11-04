@@ -41,6 +41,7 @@ export async function saveComposioWatchInspection(
       const target = await fs.lstat(file);
       if (!target.isFile() || target.isSymbolicLink() || target.nlink !== 1) throw new Error("The inspection record is unsafe.");
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    await assertCurrent();
   };
   await check();
   try {

@@ -2,14 +2,17 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createRequire, syncBuiltinESMExports } from "node:module";
+import type { PathLike } from "node:fs";
 import test, { type TestContext } from "node:test";
 import { botDirectoryName } from "../bot-runtime/harness-host.js";
 import { COMPOSIO_INSPECTION_FILE, saveComposioWatchInspection } from "./composio-inspection-file.js";
 import type { ComposioWatchProbeResult } from "./connector-watch-composio-probe.js";
 
 const result: ComposioWatchProbeResult = { available: false, checkedAt: 1700000000000, status: "unavailable", code: "unsupported_meta_schema" };
+const mutableFs = createRequire(import.meta.url)("node:fs/promises") as typeof fs;
 async function fixture(t: TestContext) {
-  const profile = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-composio-proof-"));
+  const profile = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-composio-proof-")));
   t.after(() => fs.rm(profile, { recursive: true, force: true }));
   const directory = path.join(profile, "bots", botDirectoryName("bot-a"));
   await fs.mkdir(directory, { recursive: true });
@@ -35,6 +38,36 @@ test("a late revoked inspection leaves the previous evidence intact and cleans s
   }), /Access revoked/u);
   assert.equal(await fs.readFile(f.file, "utf8"), before);
   assert.deepEqual(await fs.readdir(f.directory), [COMPOSIO_INSPECTION_FILE]);
+});
+
+test("revocation during the final filesystem checks cannot publish a Bot's inspection", async (t) => {
+  for (const boundary of ["directory", "realpath", "target"] as const) await t.test(boundary, async (t) => {
+    const f = await fixture(t);
+    await saveComposioWatchInspection(f.profile, "bot-a", result, async () => {});
+    const previous = await fs.readFile(f.file, "utf8"); let revoked = false;
+    const originalRealpath = mutableFs.realpath, originalLstat = mutableFs.lstat;
+    const intercept = async (name: PathLike) => {
+      const value = boundary === "realpath" ? await originalRealpath(name) : await originalLstat(name);
+      if (!revoked && String(name) === (boundary === "target" ? f.file : f.directory)
+        && (await fs.readdir(f.directory)).some((file) => file.endsWith(".tmp"))) revoked = true;
+      return value;
+    };
+    const intercepted = boundary === "realpath"
+      ? t.mock.method(mutableFs, "realpath", intercept as typeof originalRealpath)
+      : t.mock.method(mutableFs, "lstat", intercept as typeof originalLstat);
+    syncBuiltinESMExports();
+    let failure: unknown;
+    try {
+      await saveComposioWatchInspection(f.profile, "bot-a", { ...result, checkedAt: result.checkedAt + 1 }, async () => {
+        if (revoked) throw new Error("Access revoked.");
+      });
+    } catch (error) { failure = error;
+    } finally { intercepted.mock.restore(); syncBuiltinESMExports(); }
+    assert.equal(revoked, true);
+    assert.ok(failure instanceof Error && failure.message === "Access revoked.", "invalidated work must refuse publication");
+    assert.equal(await fs.readFile(f.file, "utf8"), previous);
+    assert.deepEqual(await fs.readdir(f.directory), [COMPOSIO_INSPECTION_FILE]);
+  });
 });
 
 test("an inspection neither recreates a deleted Bot nor follows a replaced directory symlink", async (t) => {

@@ -95,3 +95,15 @@ At the owner's explicit request to take over the visible Composio check, Codex u
 The actual **Check watch support** action now writes the private structural record and reports `unavailable / unsupported_meta_schema`. The metadata connection reaches the probe; the rejected contract and exact account-routing semantics are not yet established. Calendar remains unavailable while this mismatch is investigated. The public generated Search/Get Schemas input schemas fit the probe's current keyword subset; that public snapshot does not establish the installed connection's schemas or annotation hints.
 
 Current Composio guidance says an unpinned session resolves active accounts at execution time and that an explicit connected-account override does not fall back. Its multi-account execution contract can select an account by ID or alias. Those capabilities are not proof that this existing consumer connection exposes the same enforceable selector. The adapter must verify the installed metadata and bind an immutable account ID before any app-data acceptance read. [Tool Router account selection](https://docs.composio.dev/kb/guide/mcp-tool-router-sessions), [Multiple accounts](https://docs.composio.dev/docs/authentication/managing-multiple-connected-accounts).
+
+
+## Observed metadata declaration — 2026-11-03
+
+The reviewed V3 diagnostic (`2e1266847`, isolated from the later feature state) identifies the actual initial rejection: `COMPOSIO_GET_TOOL_SCHEMAS` declares a read-only hint and a canonical JSON Schema draft-07 `$schema` annotation. Its root object, required-field vocabulary, tool-slug array and session field satisfy the probe's expected structural shape. The probe rejected the annotation itself before calling Search or Get Schemas. This is an observed installed-metadata fact, rather than an inference from the public snapshot. A narrowly bounded draft-07 compatibility correction is being reviewed; account routing and Calendar remain unverified.
+
+
+## Bounded draft-07 correction — 2026-11-03
+
+The probe now accepts only the four canonical HTTP/HTTPS draft-07 root annotations, with or without the trailing fragment marker. It normalizes that annotation to Ajv's bundled draft-07 identity and compiles synchronously without a schema loader or network request. Other dialects, nested annotations, references, identifiers, patterns and custom formats remain refused. This changes metadata compatibility only: every result still leaves account routing and execution unavailable until independently verified.
+
+The Bot-specific inspection writer also rechecks the initiating authority after its final directory, realpath and target checks, immediately before atomic publication. Revocation during any of those awaited checks preserves prior evidence and removes the staging file. Both changes passed the requested GPT-6.1 Sol high review; independent focused suites passed88/88 and strict probe types and lint passed. Live verification of the corrected snapshot follows separately.
