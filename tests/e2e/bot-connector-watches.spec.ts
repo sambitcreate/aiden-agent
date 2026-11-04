@@ -169,8 +169,10 @@ test("an eligible Calendar watch supports preview, editing, pause, same-request 
   await expect(group.getByLabel("Sender filter")).toHaveCount(0);
   await expect(group.getByText(/The first Calendar check can report events already in the upcoming window/u)).toBeVisible();
   await expect(group.getByText(/The first successful Mail check records a baseline/u)).toHaveCount(0);
-  await group.getByLabel("Look ahead in minutes").fill("120");
-  await group.getByLabel("Calendar timezone").fill("America/New_York");
+  await expect(group.getByText("Look ahead (minutes)", { exact: true })).toBeVisible();
+  await expect(group.getByText("Time zone", { exact: true })).toBeVisible();
+  await group.getByRole("spinbutton", { name: "Look ahead (minutes)", exact: true }).fill("120");
+  await group.getByRole("textbox", { name: "Time zone", exact: true }).fill("America/New_York");
   await group.getByRole("combobox", { name: "Check every" }).click();
   await page.getByRole("option", { name: "15 minutes", exact: true }).click();
   await expect(group.getByRole("button", { name: "Add watch", exact: true })).toBeDisabled();
@@ -185,7 +187,7 @@ test("an eligible Calendar watch supports preview, editing, pause, same-request 
   expect(preview.watches).toHaveLength(0);
   expect(preview.runAdmissions).toBe(0);
   await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(600, 1000));
-  await group.getByLabel("Look ahead in minutes").scrollIntoViewIfNeeded();
+  await group.getByText("Look ahead (minutes)", { exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: test.info().outputPath("calendar-watch-editor.png"), fullPage: true });
   await group.getByRole("button", { name: "Add watch", exact: true }).click();
   await expect(group.getByRole("button", { name: "Edit watch Team agenda" })).toBeVisible();
@@ -197,8 +199,8 @@ test("an eligible Calendar watch supports preview, editing, pause, same-request 
   await group.getByRole("button", { name: "Test saved watch", exact: true }).click();
   await expect.poll(async () => (await snapshot()).checks.length).toBe(2);
   expect((await snapshot()).checks[1]).toEqual({ botId: bot.id, id: created.watches[0]!.id, expectedRevision: created.watches[0]!.revision });
-  await group.getByLabel("Look ahead in minutes").fill("180");
-  await group.getByLabel("Calendar timezone").fill("Europe/London");
+  await group.getByLabel("Look ahead (minutes)").fill("180");
+  await group.getByLabel("Time zone").fill("Europe/London");
   await group.getByRole("button", { name: "Save watch", exact: true }).click();
   await expect(group.getByRole("button", { name: "Save watch", exact: true })).toHaveCount(0);
   const edited = await snapshot();

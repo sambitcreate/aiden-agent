@@ -114,8 +114,12 @@ test("an eligible Calendar source supports preview, durable replay and saved-wat
   assert.equal(screen.queryByLabelText("Sender filter"), null);
   assert.ok(screen.getByText(/The first Calendar check can report events already in the upcoming window/u));
   assert.equal(screen.queryByText(/The first successful Mail check records a baseline/u), null);
-  fireEvent.change(screen.getByLabelText("Look ahead in minutes"), { target: { value: "120" } });
-  fireEvent.change(screen.getByLabelText("Calendar timezone"), { target: { value: "America/New_York" } });
+  const lookAheadInput = screen.getByRole("spinbutton", { name: "Look ahead (minutes)" });
+  const timezoneInput = screen.getByRole("textbox", { name: "Time zone" });
+  assert.equal((screen.getByText("Look ahead (minutes)") as HTMLLabelElement).control, lookAheadInput);
+  assert.equal((screen.getByText("Time zone") as HTMLLabelElement).control, timezoneInput);
+  fireEvent.change(lookAheadInput, { target: { value: "120" } });
+  fireEvent.change(timezoneInput, { target: { value: "America/New_York" } });
   fireEvent.click(screen.getByRole("combobox", { name: "Check every" }));
   fireEvent.click(await screen.findByRole("option", { name: "15 minutes" }));
   assert.equal((screen.getByRole("button", { name: "Add watch" }) as HTMLButtonElement).disabled, true);
@@ -133,8 +137,8 @@ test("an eligible Calendar source supports preview, durable replay and saved-wat
   assert.equal(h.data.watches.length, 1);
   first.unmount();
   render(<BotConnectorWatches bot={bot} api={h.api} />);
-  assert.equal((screen.getByLabelText("Look ahead in minutes") as HTMLInputElement).value, "120");
-  assert.equal((screen.getByLabelText("Calendar timezone") as HTMLInputElement).value, "America/New_York");
+  assert.equal((screen.getByLabelText("Look ahead (minutes)") as HTMLInputElement).value, "120");
+  assert.equal((screen.getByLabelText("Time zone") as HTMLInputElement).value, "America/New_York");
   assert.equal((screen.getByRole("button", { name: "Add watch" }) as HTMLButtonElement).disabled, true);
   fireEvent.click(screen.getByRole("button", { name: "Retry same request" }));
   await screen.findByRole("button", { name: "Edit watch Team agenda" });
@@ -150,8 +154,8 @@ test("an eligible Calendar source supports preview, durable replay and saved-wat
   fireEvent.click(screen.getByRole("button", { name: "Test saved watch" }));
   await waitFor(() => assert.equal(checks.length, 2));
   assert.deepEqual(checks[1], { botId: bot.id, id: h.data.watches[0].id, expectedRevision: "r1" });
-  fireEvent.change(screen.getByLabelText("Look ahead in minutes"), { target: { value: "180" } });
-  fireEvent.change(screen.getByLabelText("Calendar timezone"), { target: { value: "Europe/London" } });
+  fireEvent.change(screen.getByLabelText("Look ahead (minutes)"), { target: { value: "180" } });
+  fireEvent.change(screen.getByLabelText("Time zone"), { target: { value: "Europe/London" } });
   fireEvent.click(screen.getByRole("button", { name: "Save watch" }));
   await waitFor(() => assert.equal(updates.length, 1));
   assert.equal(updates[0].expectedRevision, "r1");
