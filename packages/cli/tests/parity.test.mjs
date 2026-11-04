@@ -2177,6 +2177,35 @@ test("durable CLI Bots can message each other", async (t) => {
   assert.ok(requests.find((request) => JSON.stringify(request.messages.at(-1).content).includes("<bot_reply")).tools.every((tool) => tool.function.name !== "message_bot"));
   assert.equal(statSync(join(dir, "bots/bot-messages.json")).mode & 0o777, 0o600);
 
+  // Once accepted, an absent identity must fail before opening its session.
+  // Keep list() unchanged so the full posting roster still sees both Bots.
+  const absentId = "10000000-0000-4000-8000-000000000008";
+  const accepted = await host.durable.messages.post({ fromBotId: bots[0].id, target: bots[1].id,
+    message: "Ping", deliveryId: absentId, runRequestIds: [undefined] });
+  assert.equal(accepted.status, "sent");
+  const getBot = host.botStore.get;
+  const state = host.durable.runtime.state;
+  const beforeAbsent = requests.length;
+  let absentSessionReads = 0;
+  host.botStore.get = async id => id === bots[1].id ? null : getBot(id);
+  host.durable.runtime.state = async id => {
+    if (id === bots[1].id) absentSessionReads++;
+    return state(id);
+  };
+  try {
+    const missingDeadline = Date.now() + 10_000;
+    const missingRow = () => JSON.parse(readFileSync(join(dir, "bots/bot-messages.json"))).rows.find(row => row.id === absentId);
+    while (missingRow()?.status !== "failed") {
+      if (Date.now() > missingDeadline) assert.fail("Missing Bot identity did not settle its accepted delivery");
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(absentSessionReads, 0, "the real CLI existence port refuses an absent Bot before session inspection");
+    assert.equal(requests.length, beforeAbsent, "no model call starts for the absent identity");
+  } finally {
+    host.botStore.get = getBot;
+    host.durable.runtime.state = state;
+  }
+
   // Exercise the actual CLI HTTPS adapter, including an older paired device.
   const scheduler = api.createCliScheduler(dir);
   const remote = await api.createCliRemote(dir, daemon, scheduler, { bots: host, discovery: { async start() {}, stop() {} } });
