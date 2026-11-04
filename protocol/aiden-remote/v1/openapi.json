@@ -19183,7 +19183,7 @@
           }
         },
         "additionalProperties": false,
-        "description": "Revision 56, bot:plans holders only. Display-only plan with bounded redacted text. No Bot/item IDs, authorization, runtime request identities, raw proposal, binding, model tool names or revision. Counted items carry both used and max, with used <= max."
+        "description": "Revision 56, bot:plans holders only. Display-only plan with bounded text. Bot-written text is redacted; host-formatted file items disclose the enforced folder location, access mode and temporary-grant lifetime. No Bot/item IDs, authorization, runtime request identities, raw proposal, binding, model tool names or revision. Counted items carry both used and max, with used <= max."
       },
       "BotPlanRespondRequest": {
         "type": "object",

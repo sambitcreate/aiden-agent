@@ -63,7 +63,8 @@ still use the Bot's own access settings; listing them does not grant a new
 connection, skill or Shell permission or narrow independently saved access.
 
 Passwords, verification codes, account security, money and card details still
-come to you. **Hand off to me** rules remain hand-offs. A plan never approves
+come to you. Payment-provider subdomains still ask, even when the plan names
+their parent site. **Hand off to me** rules remain hand-offs. A plan never approves
 Computer Use on your own Mac. Changing the Bot's access, model, connected-tool
 binding or effective rules invalidates the captured approval rather than
 silently applying it to new authority.

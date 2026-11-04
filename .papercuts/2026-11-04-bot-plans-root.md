@@ -37,3 +37,8 @@
 - Gate5R1: Opus found uninformed phone folder approval, clipped pending caps and terminal model-state lifecycle mismatch; DeepSeek found retained pre-execution approval closures. Both reviewed clean6c405ac21. Root lifecycle genuine RED5pass4fail /tmp/bot-plan-c-g5r1-lifecycle-red.log; host/native correction is separately scoped. Resource cleanup has no natural public memory-size oracle, so use existing real-harness rejection/Stop/admission checks rather than add a change-detector/debug-only test.
 
 - Gate5 correction first whole-type snapshot overlapped test edits: root real-plan fixture omitted required signal, and host fixture test used Object.hasOwn beyond ES2020. Root supplied signal; host notified to use the compatible own-property helper. Retain /tmp/bot-plan-c-g5r1-root-types.log and run fresh integrated types after source readiness.
+
+- Gate5R2 first dispatch exceeded T3 delegate_task 120000-character limit before task creation. Preserved full144196-byte prompt, inlined current original brief/full reports/dispositions, and required reading nested Gate4 history by exact file path; bounded66851-character dispatch succeeded with stable request IDs.
+- OpusR2 acceptance disclosed incomplete plan reads. Fresh same-head scope review read every line and found payment-provider subdomains covered by a parent site, dating to pre-Gate4. D stays held; reproduce at core and policy levels before adding the per-target payment-host guard.
+
+- Payment-subdomain RED first used dotted plan IDs, which the strict store correctly rejects. Replaced only fixture IDs with hyphenated equivalents; the corrected core/policy run produced two genuine approval-bypass failures before the production guard. Logs /tmp/bot-plan-c-g5r3-payment-red{,2}.log.

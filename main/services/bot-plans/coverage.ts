@@ -1,5 +1,6 @@
 import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
 import type { BotClassifiableAction } from "../bot-rules/classify.js";
+import { isPaymentHost } from "../bot-rules/words.js";
 import type { BotPlanRecord } from "./plans.js";
 
 export interface BotPlanCoverCheck {
@@ -27,7 +28,8 @@ export function botPlanCoveredItems(plan: BotPlanRecord, used: ReadonlyMap<strin
       if (item.kind !== "site" || action?.surface !== "browser" || !action.url) return false;
       try {
         const url = new URL(action.url);
-        return ["https:", "http:"].includes(url.protocol) && (url.hostname === item.host || url.hostname.endsWith(`.${item.host}`));
+        return ["https:", "http:"].includes(url.protocol) && !isPaymentHost(url.hostname) &&
+          (url.hostname === item.host || url.hostname.endsWith(`.${item.host}`));
       } catch { return false; }
     });
     if (!surfaces.length) return undefined;

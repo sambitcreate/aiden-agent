@@ -149,6 +149,24 @@ test("site coverage uses real host boundaries and only HTTP browser actions", as
   }
 });
 
+test("site coverage excludes payment-provider subdomains without charging the plan", async (t) => {
+  const f = await fixture(t);
+  for (const [host, ordinary, payments] of [
+    ["google.com", "mail.google.com", ["pay.google.com", "secure.pay.google.com"]],
+    ["shopify.com", "admin.shopify.com", ["pay.shopify.com", "checkout.shopify.com"]],
+  ] as const) {
+    await approve(f.plans, request(`plan-${host.split(".").join("-")}`, proposal([{ id: "i1", kind: "site", host, max: 4 }])));
+    const browser = (target: string) => check(target, { toolName: "browser_click", action: {
+      surface: "browser", tool: "browser_click", url: `https://${target}/confirm`, field: { accessibleName: "Confirm" },
+    } });
+    assert.ok(await f.plans.cover("b", browser(ordinary)));
+    for (const payment of payments) {
+      assert.equal(await f.plans.cover("b", browser(payment)), undefined, payment);
+      assert.equal((await f.plans.current("b"))?.items[0]?.used, 1, "payment refusals cannot reserve the site's cap");
+    }
+  }
+});
+
 test("exact expiry ends authority, revokes before returning and never renews on replay", async (t) => {
   const f = await fixture(t); await approve(f.plans);
   f.setTime(1000 + BOT_PLAN_MAX_MS);

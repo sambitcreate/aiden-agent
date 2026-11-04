@@ -1706,6 +1706,33 @@ test("plan: a new matching Ask first rule during onAllow requires an ordinary ca
 });
 
 
+test("plan: a site's payment-provider subdomains keep their ordinary browser approval", async () => {
+  const f = await approvedRuntimePlan([{ id: "i1", kind: "site", host: "google.com", max: 4 }]);
+  const state = assemblyState(testAuthority({ mode: "full", home: botHome(), ...FULL_GRANTS, other: [...FULL_GRANTS.other, "browser"] }));
+  let host = "mail.google.com";
+  const deps = assemblyDeps(state, { plans: f.plans, candidates: () => [], rules: () => defaultBotRules(),
+    approvalFor: async () => ({ approval: { summary: "Click Confirm" }, action: {
+      surface: "browser", tool: "browser_click", url: `https://${host}/confirm`, field: { accessibleName: "Confirm" },
+    } }) });
+  const check = () => deps.checkPolicy(PLAN_BOT, "browser_click", { executionId: `browser-${host}`, callId: "provider-id",
+    args: { selector: "#confirm" }, requestIds: ["plan-run"], signal: undefined });
+  try {
+    const ordinarySite = await check();
+    assert.equal(ordinarySite.allowed, true);
+    assert.ok(ordinarySite.allowed && ordinarySite.approval?.planPermit);
+    host = "pay.google.com";
+    const payment = await check();
+    assert.equal(payment.allowed, true);
+    assert.ok(payment.allowed && payment.approval, "the neutral payment button still requires a person's answer");
+    if (payment.allowed) {
+      assert.equal(payment.approval?.summary, "Click Confirm");
+      assert.equal(payment.approval?.preapproved, undefined);
+      assert.equal(payment.approval?.planPermit, undefined);
+    }
+    assert.equal((await f.plans.current(PLAN_BOT))?.items[0]?.used, 1);
+  } finally { await f.plans.endRuns(PLAN_BOT, "finished"); }
+});
+
 test("plan: a same-URL browser reload cannot reuse a reservation for the old document", async () => {
   const f = await approvedRuntimePlan([{ id: "i1", kind: "site", host: "docs.example", max: 2 }]);
   const state = assemblyState(testAuthority({ mode: "full", home: botHome(), ...FULL_GRANTS, other: [...FULL_GRANTS.other, "browser"] }));
