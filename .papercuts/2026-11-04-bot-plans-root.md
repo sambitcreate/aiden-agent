@@ -42,3 +42,5 @@
 - OpusR2 acceptance disclosed incomplete plan reads. Fresh same-head scope review read every line and found payment-provider subdomains covered by a parent site, dating to pre-Gate4. D stays held; reproduce at core and policy levels before adding the per-target payment-host guard.
 
 - Payment-subdomain RED first used dotted plan IDs, which the strict store correctly rejects. Replaced only fixture IDs with hyphenated equivalents; the corrected core/policy run produced two genuine approval-bypass failures before the production guard. Logs /tmp/bot-plan-c-g5r3-payment-red{,2}.log.
+
+- R4 Opus saw an untracked root ESM probe from concurrent DeepSeek. DeepSeek removed its own probe; parent verified zero porcelain after both reviews. Do not delete another reviewer's live probe or mistake its presence for a tracked source change.
