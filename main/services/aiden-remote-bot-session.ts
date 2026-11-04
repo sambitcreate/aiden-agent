@@ -833,6 +833,7 @@ interface Audience {
   issues: boolean;
   accessRequests: boolean;
   plans: boolean;
+  allowed: boolean;
 }
 
 /**
@@ -1017,12 +1018,14 @@ class BotLiveProjector {
     const state = stateViewForAudience(this.state, audience);
     const handoff = handoffForAudience(this.handoff?.handoff ?? null, audience);
     const issues = this.issuesFor(audience);
+    const approval = approvalForAudience(this.approval, audience.allowed);
+    const accessRequest = accessForAudience(this.accessRequest?.card ?? null, audience.allowed);
     let used = 2 + memberBytes("botId", this.botId) + memberBytes("epoch", this.epoch) + memberBytes("seq", this.seq);
     for (const [key, value] of Object.entries(state)) used += memberBytes(key, value);
-    used += memberBytes("question", this.question) + memberBytes("approval", this.approval);
+    used += memberBytes("question", this.question) + memberBytes("approval", approval);
     if (audience.handoffs) used += memberBytes("handoff", handoff);
     if (audience.issues) used += memberBytes("issues", issues);
-    if (audience.accessRequests) used += memberBytes("accessRequest", this.accessRequest?.card ?? null);
+    if (audience.accessRequests) used += memberBytes("accessRequest", accessRequest);
     if (audience.plans) used += memberBytes("plan", this.plan);
     if (showActivity) used += memberBytes("activity", this.activity);
 
@@ -1057,11 +1060,11 @@ class BotLiveProjector {
       entries,
       hasOlder,
       question: this.question,
-      approval: this.approval,
+      approval,
       ...(showActivity ? { activity: this.activity, queued } : {}),
       ...(audience.handoffs ? { handoff } : {}),
       ...(audience.issues ? { issues } : {}),
-      ...(audience.accessRequests ? { accessRequest: this.accessRequest?.card ?? null } : {}),
+      ...(audience.accessRequests ? { accessRequest } : {}),
       ...(audience.plans ? { plan: this.plan } : {}),
     });
   }
@@ -1091,7 +1094,7 @@ class BotLiveProjector {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
         subscriber.overflowed = true;
       } else {
-        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}:${subscriber.accessRequests}:${subscriber.plans}`;
+        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}:${subscriber.accessRequests}:${subscriber.plans}:${subscriber.allowed}`;
         let text = rendered.get(key);
         if (text === undefined) {
           text = render(subscriber);
@@ -1152,6 +1155,14 @@ class BotLiveProjector {
       : undefined;
     this.broadcast((audience) => {
       if ((card && !audience.cards) || (activityOnly && !audience.activity)) return noOp(audience);
+      if (event.type === "approval") {
+        const approval = approvalForAudience((event.payload as { approval: AidenRemoteBotApproval | null }).approval, audience.allowed);
+        return sseFrame(id, "approval", { ...data, payload: { approval } });
+      }
+      if (event.type === "access_request" && audience.accessRequests) {
+        const accessRequest = accessForAudience((event.payload as { accessRequest: AidenRemoteBotAccessRequest | null }).accessRequest, audience.allowed);
+        return sseFrame(id, "access_request", { ...data, payload: { accessRequest } });
+      }
       if (event.type === "plan" && !audience.plans) return noOp(audience);
       if (issuesOnly && !audience.issues) return noOp(audience);
       if (issuesOnly && !audience.accessRequests) return sseFrame(id, "issues", { ...data, payload: { issues: this.issuesFor(audience) } });
@@ -1510,8 +1521,17 @@ class BotLiveProjector {
 // Service
 // ---------------------------------------------------------------------------
 
+function approvalForAudience(approval: AidenRemoteBotApproval | null, allowed: boolean): AidenRemoteBotApproval | null {
+  if (!approval || allowed) return approval;
+  const { alwaysCount: _count, ...legacy } = approval; return legacy;
+}
+function accessForAudience(card: AidenRemoteBotAccessRequest | null, allowed: boolean): AidenRemoteBotAccessRequest | null {
+  if (!card || allowed) return card;
+  const { approvalCount: _count, ...legacy } = card; return legacy;
+}
+
 /** A waiting Bot approval as phones see it. */
-function wireApproval(prompt: { waitId: string; toolCallId: string; toolName: string; summary: string }): AidenRemoteBotApproval {
+function wireApproval(prompt: { waitId: string; toolCallId: string; toolName: string; summary: string; always?: { count: number } }): AidenRemoteBotApproval {
   return {
     waitId: prompt.waitId,
     toolCallId: wireText(prompt.toolCallId, 128),
@@ -1519,6 +1539,7 @@ function wireApproval(prompt: { waitId: string; toolCallId: string; toolName: st
     summary: wireText(prompt.summary, 2_000) || "Aiden needs approval.",
     // Computer Use acts on the Mac's screen: it is allowed there, never from a phone.
     canAllow: !isComputerUseCapabilityTool(prompt.toolName),
+    ...(!isComputerUseCapabilityTool(prompt.toolName) && prompt.always && Number.isInteger(prompt.always.count) && prompt.always.count >= 3 && prompt.always.count <= 20 ? { alwaysCount: prompt.always.count } : {}),
   };
 }
 
@@ -1718,7 +1739,7 @@ function routineError(error: unknown): never {
 const HOLDER_AUDIENCE: AidenRemoteBotHandoffAudience = { handoffs: true };
 
 /** The opt-ins a route was called with, from the device's grants. */
-type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean; accessRequests?: boolean; plans?: boolean };
+type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean; accessRequests?: boolean; plans?: boolean; allowed?: boolean };
 
 /** Ledger route of each session control. */
 const CONTROL_ROUTES = {
@@ -2009,8 +2030,9 @@ export class AidenRemoteBotSessionService {
     if (!this.supportsAccessRequests) return null;
     const prompt = this.options.accessRequests!.pending(botId)[0];
     if (!prompt) return null;
-    const { botId: _botId, toolCallId: _toolCallId, ...publicCard } = prompt;
-    const card = parseAidenRemoteBotAccessRequest(publicCard);
+    const card = parseAidenRemoteBotAccessRequest({ waitId: prompt.waitId, target: prompt.target, label: prompt.label,
+      why: prompt.why, choices: [...prompt.choices], ...(prompt.place === undefined ? {} : { place: prompt.place }),
+      ...(prompt.approvalCount === undefined ? {} : { approvalCount: prompt.approvalCount }) });
     const { name } = await this.options.bots.bot(botId);
     return { card, notice: { type: "message", id: `access-notice:${card.waitId}`, role: "assistant", text: `${name} needs you on your Mac: allow access to ${card.label}` } };
   }
@@ -2071,7 +2093,7 @@ export class AidenRemoteBotSessionService {
 
   /**
    * Allow or deny a Bot's waiting tool approval by `waitId`. Idempotent per
-   * request UUID. Only "once" is offered; Computer Use is denied-only from a
+   * request UUID. Always needs an explicit offer and holder; Computer Use is denied-only from a
    * phone; an approval that is no longer waiting is `approval_expired`.
    */
   async respondApproval(
@@ -2080,6 +2102,7 @@ export class AidenRemoteBotSessionService {
     decision: "allow" | "deny",
     key: string,
     scope?: string,
+    options: { allowed?: boolean } = {},
   ): Promise<{ approvalId: string; decision: "allow" | "deny"; resolvedAt: string }> {
     const approvals = this.options.approvals;
     if (!approvals) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
@@ -2090,7 +2113,7 @@ export class AidenRemoteBotSessionService {
         const prompt = approvals.pending().find((candidate) => candidate.waitId === waitId);
         if (!prompt) throw new AidenRemoteServiceError("approval_expired", "This approval is no longer available.", 409);
         await this.options.bots.bot(prompt.botId);
-        if (scope !== undefined && scope !== "once") {
+        if (scope !== undefined && scope !== "once" && (scope !== "always" || decision !== "allow" || options.allowed !== true || !wireApproval(prompt).alwaysCount)) {
           throw new AidenRemoteServiceError("invalid_request", "This approval cannot be remembered with that scope.", 400);
         }
         if (decision === "allow" && !wireApproval(prompt).canAllow) {
@@ -2100,7 +2123,7 @@ export class AidenRemoteBotSessionService {
             403,
           );
         }
-        if (!approvals.decide(waitId, decision)) {
+        if (!approvals.decide(waitId, decision, scope === "always" ? "always" : undefined)) {
           throw new AidenRemoteServiceError("approval_already_resolved", "This approval was already resolved.", 409);
         }
         this.answeredApprovals.add(waitId);
@@ -2456,6 +2479,7 @@ export class AidenRemoteBotSessionService {
       issues: options.issues === true && this.supportsIssues,
       accessRequests: options.accessRequests === true && this.supportsAccessRequests,
       plans: options.plans === true && this.supportsPlans,
+      allowed: options.allowed === true,
     };
   }
 

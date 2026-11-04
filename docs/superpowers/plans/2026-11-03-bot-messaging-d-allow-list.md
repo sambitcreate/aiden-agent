@@ -536,7 +536,7 @@ B's optional journal approvalTally stores version1, the original authorization f
   - An unknown Bot is `not_found`.
   - `bot:allowed` is offered only when the host wires `botAllowed`.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - `aiden-remote-bot-allowed.test.ts`:
     - `list` maps one connection and one site entry to `{id, kind, what, addedAt, uses}` with `what === "Google Calendar · Create event"` and `"Click on amazon.com"`, and `lastUsedAt` only when used;
     - a folder entry maps to `{id, kind: "folder", what, addedAt}` with no `uses`;
@@ -553,14 +553,14 @@ B's optional journal approvalTally stores version1, the original authorization f
   - `aiden-remote-bot-session.test.ts`:
     - `a phone with bot:allowed can answer Always on an offered card`: `respondApproval(..., "allow", "always")` calls `decide` with the scope, and the wire approval carried `alwaysCount: 3`;
     - `Always is refused on a card that doesn't offer it`, and `for a device without bot:allowed`: both `invalid_request`, and that device's wire approval has no `alwaysCount`.
-- [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/aiden-remote-bot-allowed.test.ts main/services/aiden-remote-router.test.ts main/services/aiden-remote-protocol.test.ts main/services/aiden-remote-bot-session.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.** Do the protocol constants, parsers and service. Add the router block modelled on `botSpendingMatch` with a strict optional cursor parser for GET, `requireNoQuery` for remove, `requireEmptyJsonObject` and `requireDeviceCapabilities(device, ["bot:allowed"])`. Wire it in `aiden-remote-service-main.ts` with `toolApprovalRules` and the Bot store.
-- [ ] **Step 4: Update the contract artifacts.**
+- [x] **Step 2: Run and see them fail.** `npx tsx --test main/services/aiden-remote-bot-allowed.test.ts main/services/aiden-remote-router.test.ts main/services/aiden-remote-protocol.test.ts main/services/aiden-remote-bot-session.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement.** Do the protocol constants, parsers and service. Add the router block modelled on `botSpendingMatch` with a strict optional cursor parser for GET, `requireNoQuery` for remove, `requireEmptyJsonObject` and `requireDeviceCapabilities(device, ["bot:allowed"])`. Wire it in `aiden-remote-service-main.ts` with `toolApprovalRules` and the Bot store.
+- [x] **Step 4: Update the contract artifacts.**
   - `contract.json` gets `botAllowed`: a list with a folder entry, a paginated maximum-rule-plus-folders example, the first page after a remove, the capability refusal, and an approval with `alwaysCount`.
   - `openapi.json` gets both paths.
   - `docs/aiden-remote-api-v1.md` gets a "Revision 57 (`bot:allowed`)" section.
-- [ ] **Step 5: Run the tests.** `npm run test:aiden-remote`. Expected: PASS.
-- [ ] **Step 6: Register and commit.** Add `aiden-remote-bot-allowed.test.ts` to `test:aiden-remote` and the registry. Commit: "Show a Bot's allow list on phones (Remote rev 57)".
+- [x] **Step 5: Run the tests.** `npm run test:aiden-remote`. Expected: PASS.
+- [x] **Step 6: Register and commit.** Add `aiden-remote-bot-allowed.test.ts` to `test:aiden-remote` and the registry. Commit: "Show a Bot's allow list on phones (Remote rev 57)".
 
 ### Task 8: iOS and Android
 
@@ -673,3 +673,15 @@ Desktop Always/count, private strict main handlers, profile/list/settings routin
 ### 2026-11-04 — Task 6 complete locally
 
 Task6 source is frozen and all planned files/tests are registered. Focused renderer135, Bots1010, rules66, parentmain/application89, registeredallowed102, registry15, wholetypes0 and scopedlint/diff0 passed. Final type log is /tmp/bot-allowed-d-task6-renderer-types-after-root-fix.log. Parent Cua /tmp/bot-allowed-d-task6-cua-final2.log passed2 tests with retries0 in11.4s, covering existing B access cards and the complete repeated-approval→Manage→profile removal→Settings removal path. Light1280/dark600 card screenshots, dark list and Settings screenshots were inspected. Two earlier runs exposed test-navigation setup mistakes, not product failures: narrow sidebar collapse, then the distinct Bots sidebar’s Back to Aiden step. Both logs and corrective details remain in the root papercut. No assertion or timeout was weakened. Truthful acknowledgement copy and pending Remove behavior are recorded above. Task7 host may start after this commit; native implementation waits for its stable fixture manifest. No wholeD/Gate6, physical/rendered-native/live/package/hostedCI acceptance.
+
+### 2026-11-04 — Task 7 started
+
+Task6 committed18d547748 clean. Task7 host is implementing revision57 provisionally, explicit device/Bot-bound immutable cursor views and capability-gated ordinary/B-folder approval counts. The service API adds deviceId first to list/remove because the plan’s snapshot ownership cannot be enforced from botId alone. Cursor snapshots use50rows/page,2minuteTTL,64global/4perdevice plus an aggregate byte budget; oversized views fail with a refreshable error rather than truncate rows. Native implementation remains held until the canonical fixture manifest is stable. Root owns registration/status/commit and native coordination.
+
+### 2026-11-04 — Stable Task 7 fixture, native Task 8 started
+
+Remote57 canonical botAllowed fixtures are stable, with rule/folder list and complete pagination beyond50, remove/refusal examples, eligible ordinary Always counts and B folder counts, and exact legacy projections. Protocol behavioralRED→GREEN1 and the existing B count rejection are captured by the host worker. Root registered the new Remote service suite. NativeTask8 starts from this stable manifest while host implementation/tests finish, with no shared file ownership. Both native clients must reject malformed/extra/null data, page all rows, isolate capability negotiation and retain exact per-decision/scope retry identities. No host/native completion or wholeD acceptance is claimed at this milestone.
+
+### 2026-11-04 — Task 7 host complete locally
+
+Remote57 host source and stable canonical fixtures are frozen. Parent registered the new service suite in test:aiden-remote and the CI lane. Focused314, fullRemote1300pass+2existing conditional skips, final B holder/legacy SSE3pass, wholetypes0/scoped10-filelint0/diff0. Handoff /tmp/aiden-bot-allowed-d-task7-host-handoff.md lists exact files and actual REDs. Parent rebuiltCLI268files/27.1MiB, full183pass+3existing skips andCLItypes0. An extended existing real HTTPS test proves CLI never advertises bot:allowed and its allow-list route is unavailable. Its standalone run hit the existing A messaging reply deadline before those assertions, then passed on the one allowed unchanged-limit rerun; this remains a reported timing flake, not a resolved bug. Logs /tmp/bot-allowed-d-task7-cli-{build,tests,types,exclusion,exclusion-rerun}.log. No test assertion/timeout/retry was weakened. NativeTask8 is implementing the stable contract separately, so wholeD/native/Gate6/physical/rendered/live/package/CI acceptance remains pending. Reclaim revision57 against main before the PR.

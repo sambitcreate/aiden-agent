@@ -7255,6 +7255,126 @@
         "description": "Revision 54. Requires bot:write and negotiated bot:messaging. Exact boolean enabled. Changes gate new sends only; accepted deliveries finish. No inference or catalog access."
       }
     },
+    "/bots/{botId}/allowed": {
+      "parameters": [
+        {
+          "name": "botId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "listBotAllowed",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:allowed"
+        ],
+        "description": "Revision 57. Combined rules and selected folders, sorted newest date then ID, with opaque device-and-Bot-bound cursors. Pages of 50 share a complete immutable snapshot for 2 minutes. Cache: 64 snapshots globally, 4 per device, aggregate 8 MiB; over-capacity complete views are refused, never truncated. Unknown Bot is 404. Foreign, expired or evicted cursors are refreshable 400 invalid_request; restart without cursor.",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^cur_[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The first or requested immutable page, at most 50 rows. No private targets or authorization metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotAllowedList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/allowed/{entryId}/remove": {
+      "parameters": [
+        {
+          "name": "botId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "entryId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "removeBotAllowed",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:allowed"
+        ],
+        "description": "Revision 57. Remove only this Bot entry. Exact empty JSON body, no query. Naturally idempotent; no Idempotency-Key required. Success including an already-gone entry invalidates this device/Bot snapshots and returns a fresh first page; load its subsequent pages. Never republishes consent or removes another Bot folder/root.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The first or requested immutable page, at most 50 rows. No private targets or authorization metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotAllowedList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bots/{botId}/plans/{planId}/respond": {
       "parameters": [
         {
@@ -8138,6 +8258,7 @@
                 "bot:handoff-on-mac",
                 "bot:access-requests",
                 "bot:plans",
+                "bot:allowed",
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
@@ -8187,6 +8308,7 @@
                 "bot:handoff-on-mac",
                 "bot:access-requests",
                 "bot:plans",
+                "bot:allowed",
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
@@ -8339,6 +8461,7 @@
                 "bot:handoff-on-mac",
                 "bot:access-requests",
                 "bot:plans",
+                "bot:allowed",
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
@@ -8397,6 +8520,7 @@
                 "bot:handoff-on-mac",
                 "bot:access-requests",
                 "bot:plans",
+                "bot:allowed",
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
@@ -18523,8 +18647,130 @@
         },
         "additionalProperties": false
       },
+      "BotAllowedEntry": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "kind": {
+                "const": "rule"
+              },
+              "what": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+              },
+              "addedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "uses": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastUsedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "what",
+              "addedAt",
+              "uses"
+            ],
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "uses": {
+                      "const": 0
+                    }
+                  }
+                },
+                "then": {
+                  "not": {
+                    "required": [
+                      "lastUsedAt"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "kind": {
+                "const": "folder"
+              },
+              "what": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+              },
+              "addedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "what",
+              "addedAt"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "BotAllowedList": {
+        "type": "object",
+        "properties": {
+          "botId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "entries": {
+            "type": "array",
+            "maxItems": 50,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/BotAllowedEntry"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "pattern": "^cur_[A-Za-z0-9_-]{43}$"
+          }
+        },
+        "required": [
+          "botId",
+          "entries"
+        ],
+        "additionalProperties": false
+      },
       "BotApproval": {
-        "description": "A tool call the Bot is waiting to have approved. Answered once, by waitId, through POST /approvals/{approvalId}/respond, which needs approval:respond, bot:read and bot:write. canAllow false: a phone may only deny it.",
+        "description": "A tool call the Bot is waiting to have approved. Answered once, by waitId, through POST /approvals/{approvalId}/respond, which needs approval:respond, bot:read and bot:write. canAllow false: a phone may only deny it. An offered Always answer also requires bot:allowed and scope always; other Bot cards remain once-only. The receipt acknowledges the choice, not durable grant publication.",
         "type": "object",
         "required": [
           "waitId",
@@ -18557,9 +18803,31 @@
           },
           "canAllow": {
             "type": "boolean"
+          },
+          "alwaysCount": {
+            "type": "integer",
+            "minimum": 3,
+            "maximum": 20,
+            "description": "Revision 57, only bot:allowed holders on an offered card. No private class key."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "alwaysCount"
+              ]
+            },
+            "then": {
+              "properties": {
+                "canAllow": {
+                  "const": true
+                }
+              }
+            }
+          }
+        ]
       },
       "BotQuestionAnswerReceipt": {
         "type": "object",
@@ -19307,6 +19575,12 @@
                 "once"
               ]
             ]
+          },
+          "approvalCount": {
+            "type": "integer",
+            "minimum": 3,
+            "maximum": 20,
+            "description": "Revision 57. Only bot:allowed plus bot:access-requests holders, for a folder offering Always."
           }
         },
         "description": "Revision 55, bot:access-requests holders only. Public display card; no authorization, root identity, tool call or logical request id. Exact choices in order are [not_now, once] or, for a persistable folder, [not_now, always, once]. Whole Mac has label 'your whole Mac' and no place or always. Nonblank text, no control characters. place is a bounded display path, never an API identifier.",
@@ -19335,6 +19609,27 @@
                 "required": [
                   "place"
                 ]
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "approvalCount"
+              ]
+            },
+            "then": {
+              "properties": {
+                "target": {
+                  "const": "folder"
+                },
+                "choices": {
+                  "const": [
+                    "not_now",
+                    "always",
+                    "once"
+                  ]
+                }
               }
             }
           }

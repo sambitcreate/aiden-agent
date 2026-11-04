@@ -1528,7 +1528,7 @@ function activityBots() {
 /** Serve one Bot's SSE stream to a device with these opt-ins; keep the raw data lines too. */
 async function openAudienceStream(
   service: AidenRemoteBotSessionService,
-  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean; accessRequests?: boolean; plans?: boolean },
+  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean; accessRequests?: boolean; plans?: boolean; allowed?: boolean },
   botId = BOT_ID,
 ) {
   const server = createServer((_request, response) => {
@@ -4550,4 +4550,63 @@ test("a refused phone key retries only after the host folder display becomes rep
     assert.equal(responses, 1);
     await approve(); assert.equal(responses, 1);
   } finally { await service.close(); }
+});
+
+test("D folder approval count cannot break legacy snapshots or leak through SSE", async () => {
+  const { service, accessRequests } = accessSession();
+  const holderStream = await openAudienceStream(service, { accessRequests: true, allowed: true });
+  const legacyStream = await openAudienceStream(service, { accessRequests: true });
+  await holderStream.until(() => holderStream.frames.length === 1, "holder attached");
+  await legacyStream.until(() => legacyStream.frames.length === 1, "legacy attached");
+  const waiting = accessRequests.request(accessRequestPrompt({ botId: BOT_ID, approvalCount: 3 }));
+  try {
+    const legacy = await service.session(BOT_ID, { accessRequests: true });
+    assert.ok(legacy.accessRequest); assert.equal(Object.prototype.hasOwnProperty.call(legacy.accessRequest, "approvalCount"), false);
+    const holder = await service.session(BOT_ID, { accessRequests: true, allowed: true });
+    assert.equal(holder.accessRequest?.approvalCount, 3);
+    assert.equal(Object.prototype.hasOwnProperty.call(await service.session(BOT_ID, { allowed: true }), "accessRequest"), false);
+    await holderStream.until(() => holderStream.frames.some(f => f.type === "access_request" && f.payload.accessRequest?.approvalCount === 3), "holder folder count");
+    await legacyStream.until(() => legacyStream.frames.some(f => f.type === "access_request" && f.payload.accessRequest !== null), "legacy folder");
+    assert.equal(JSON.stringify(legacyStream.frames).includes("approvalCount"), false);
+    assert.equal(gapless(holderStream.frames), true); assert.equal(gapless(legacyStream.frames), true);
+  } finally {
+    await accessRequests.answer(BOT_ID, accessRequests.pending(BOT_ID)[0]!.waitId, "not_now", async () => {}); await waiting;
+    await holderStream.close(); await legacyStream.close(); await service.close();
+  }
+});
+
+test("D Always counts are holder-only in snapshots/SSE and an offered scoped answer preserves private provenance", async () => {
+  const approvals = createBotApprovals({ publish() {} });
+  const service = new AidenRemoteBotSessionService({ bots: botService(), runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, approvals });
+  const holder = await openAudienceStream(service, { allowed: true }); const legacy = await openAudienceStream(service, {});
+  const wait = approvals.request({ botId: BOT_ID, waitId: "allowed-wait-57", toolCallId: "call-57", toolName: "send_note", summary: "Send a note", signal: undefined, authorizationFingerprint: "private-fingerprint", always: { key: '["connection","private-server","private-tool"]', count: 3 } });
+  try {
+    await waitFor(() => approvals.pending(BOT_ID).length === 1);
+    const current = await service.session(BOT_ID, { allowed: true }); assert.equal(current.approval?.alwaysCount, 3);
+    assert.deepEqual(Object.keys((await service.session(BOT_ID)).approval!).sort(), ["canAllow", "summary", "toolCallId", "toolName", "waitId"]);
+    await holder.until(() => holder.frames.some(f => f.type === "approval" && f.payload.approval?.alwaysCount === 3), "holder count");
+    await legacy.until(() => legacy.frames.some(f => f.type === "approval" && f.payload.approval !== null), "legacy approval");
+    assert.equal(JSON.stringify(holder.frames).includes("private-"), false);
+    assert.equal(JSON.stringify(legacy.frames).includes("alwaysCount"), false);
+    await assert.rejects(service.respondApproval(DEVICE_ID, "allowed-wait-57", "allow", "no-grant-key-000057", "always"), isError("invalid_request", 400));
+    await assert.rejects(service.respondApproval(DEVICE_ID, "allowed-wait-57", "deny", "deny-scope-key-0057", "always", { allowed: true }), isError("invalid_request", 400));
+    const answer = () => service.respondApproval(DEVICE_ID, "allowed-wait-57", "allow", "holder-key-00000057", "always", { allowed: true });
+    const response = await answer(); assert.deepEqual(await answer(), response);
+    assert.deepEqual(await wait, { id: "allowed-wait-57", authorizationFingerprint: "private-fingerprint", answer: "allow_always", source: "person" });
+  } finally { approvals.decide("allowed-wait-57", "deny"); await holder.close(); await legacy.close(); await service.close(); }
+});
+
+test("D Always refuses unoffered and Computer Use scopes without consuming the waiting card", async () => {
+  for (const toolName of ["send_note", "computer_use"]) {
+    const approvals = createBotApprovals({ publish() {} });
+    const service = new AidenRemoteBotSessionService({ bots: botService(), runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, approvals });
+    const wait = approvals.request({ botId: BOT_ID, waitId: "not-offered-57", toolCallId: "call-57", toolName, summary: "An action", signal: undefined, authorizationFingerprint: "private", ...(toolName === "computer_use" ? { always: { key: "forged", count: 3 } } : {}) });
+    try {
+      await waitFor(() => approvals.pending().length === 1);
+      assert.equal((await service.session(BOT_ID, { allowed: true })).approval?.alwaysCount, undefined);
+      await assert.rejects(service.respondApproval(DEVICE_ID, "not-offered-57", "allow", "unoffered-key-00057", "always", { allowed: true }), isError("invalid_request", 400));
+      assert.equal(approvals.pending().length, 1);
+      await service.respondApproval(DEVICE_ID, "not-offered-57", "deny", "deny-key-0000000057"); assert.equal((await wait).answer, "deny");
+    } finally { approvals.decide("not-offered-57", "deny"); await service.close(); }
+  }
 });

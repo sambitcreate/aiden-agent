@@ -1,4 +1,4 @@
-import { botPendingAccessRequestOf, parseBotAccessChoice, type BotAccessChoice, type BotPendingAccessRequest } from "../../renderer/shared/bot-access-requests.js";
+import { botPendingAccessRequestOf, parseBotAccessChoice, type BotAccessChoice } from "../../renderer/shared/bot-access-requests.js";
 import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
 import {
   parseAidenRemoteApprovalSchedule,
@@ -291,7 +291,8 @@ export const AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION = 53 as const;
 export const AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION = 54 as const;
 export const AIDEN_REMOTE_BOT_ACCESS_REQUESTS_CONTRACT_REVISION = 55 as const;
 export const AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION = 56 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION;
+export const AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION = 57 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -523,6 +524,7 @@ export type AidenRemoteBotIssueCapability = (typeof AIDEN_REMOTE_BOT_ISSUE_CAPAB
 export const AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES = ["bot:access-requests"] as const;
 
 export const AIDEN_REMOTE_BOT_PLAN_CAPABILITIES = ["bot:plans"] as const;
+export const AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES = ["bot:allowed"] as const;
 
 export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
@@ -531,6 +533,7 @@ export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_PLAN_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
 ] as const;
@@ -596,6 +599,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_PLAN_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
@@ -620,6 +624,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_PLAN_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
@@ -1726,12 +1731,20 @@ export interface AidenRemoteBotQuestion {
  * `bot:read` and `bot:write`). `canAllow` false: a phone may only deny it
  * (Computer Use is allowed on the Mac).
  */
+export type AidenRemoteBotAllowedEntry =
+  | { id: string; kind: "rule"; what: string; addedAt: string; uses: number; lastUsedAt?: string }
+  | { id: string; kind: "folder"; what: string; addedAt: string };
+export interface AidenRemoteBotAllowedList { botId: string; entries: AidenRemoteBotAllowedEntry[]; nextCursor?: string }
+export const AIDEN_REMOTE_BOT_ALLOWED_PAGE_SIZE = 50;
+
 export interface AidenRemoteBotApproval {
   waitId: string;
   toolCallId: string;
   toolName: string;
   summary: string;
   canAllow: boolean;
+  /** Only bot:allowed holders, on an offered card. Never the private class key. */
+  alwaysCount?: number;
 }
 
 /**
@@ -1801,7 +1814,11 @@ export interface AidenRemoteBotHandoffOpenOnMacReceipt {
 }
 
 /** Revision 55, only for devices holding bot:access-requests. */
-export type AidenRemoteBotAccessRequest = Omit<BotPendingAccessRequest, "botId" | "toolCallId">;
+export interface AidenRemoteBotAccessRequest {
+  waitId: string; target: "folder" | "whole_mac"; label: string; place?: string; why: string; choices: BotAccessChoice[];
+  /** Revision 57, only holders of both bot:allowed and bot:access-requests. */
+  approvalCount?: number;
+}
 export interface AidenRemoteBotAccessAnswerRequest { choice: BotAccessChoice }
 export interface AidenRemoteBotAccessAnswerReceipt { answered: true; savedForFuture?: true }
 
@@ -2205,6 +2222,7 @@ export interface AidenRemoteContractFixture {
   botHandoffs?: AidenRemoteBotHandoffsFixture;
   botAccessRequests?: AidenRemoteBotAccessRequestsFixture;
   botPlans?: AidenRemoteBotPlansFixture;
+  botAllowed?: AidenRemoteBotAllowedFixture;
   /** Revision 42 (`bot:issues`): issue cards, their frames, the act route and the phone notification. */
   botIssues?: AidenRemoteBotIssuesFixture;
   /** Revision 39 (`schedule:cards`): scheduled-task approval cards and the cards every reader rejects. */
@@ -2579,6 +2597,7 @@ const AIDEN_REMOTE_PRIVATE_BOT_FIXTURE_ROOTS = new Set([
   "botHandoffs",
   "botAccessRequests",
   "botPlans",
+  "botAllowed",
   "botIssues",
 ]);
 
@@ -6490,15 +6509,51 @@ export function parseAidenRemoteBotQuestion(value: unknown): AidenRemoteBotQuest
 }
 
 /** A tool approval a Bot is waiting on. `null` in a session means nothing is waiting. */
+function parseBotApprovalCount(value: unknown): number {
+  if (!Number.isInteger(value) || (value as number) < 3 || (value as number) > 20) throw new Error("Bot approval count must be an integer from 3 to 20.");
+  return value as number;
+}
+export function parseAidenRemoteBotAllowedEntryId(value: unknown): string {
+  const id = boundedText(value, "Bot allowed entry id", 80);
+  if (!/^[A-Za-z0-9_-]{1,80}$/u.test(id)) throw new Error("Bot allowed entry id is invalid.");
+  return id;
+}
+export function parseAidenRemoteBotAllowedCursor(value: unknown): string {
+  if (typeof value !== "string" || !/^cur_[A-Za-z0-9_-]{43}$/u.test(value)) throw new Error("Bot allowed cursor is invalid.");
+  return value;
+}
+export function parseAidenRemoteBotAllowedList(value: unknown): AidenRemoteBotAllowedList {
+  if (!isRecord(value)) throw new Error("Bot allowed list must be an object.");
+  assertExactKeys(value, ["botId", "entries", "nextCursor"], "Bot allowed list");
+  if (!Array.isArray(value.entries) || value.entries.length > AIDEN_REMOTE_BOT_ALLOWED_PAGE_SIZE) throw new Error("Bot allowed page is too large.");
+  const entries = value.entries.map((entry): AidenRemoteBotAllowedEntry => {
+    if (!isRecord(entry)) throw new Error("Bot allowed entry must be an object.");
+    assertExactKeys(entry, ["id", "kind", "what", "addedAt", "uses", "lastUsedAt"], "Bot allowed entry");
+    const base = { id: parseAidenRemoteBotAllowedEntryId(entry.id), what: planDisplayText(entry.what, 200), addedAt: dateTimeValue(entry.addedAt, "Bot allowed date") };
+    if (entry.kind === "folder") {
+      if (hasOwn(entry, "uses") || hasOwn(entry, "lastUsedAt")) throw new Error("A folder has no use count.");
+      return { ...base, kind: "folder" };
+    }
+    if (entry.kind !== "rule" || !Number.isSafeInteger(entry.uses) || (entry.uses as number) < 0) throw new Error("Bot allowed usage is invalid.");
+    if (hasOwn(entry, "lastUsedAt") && entry.uses === 0) throw new Error("An unused rule has no last used date.");
+    return { ...base, kind: "rule", uses: entry.uses as number, ...(hasOwn(entry, "lastUsedAt") ? { lastUsedAt: dateTimeValue(entry.lastUsedAt, "Bot last used date") } : {}) };
+  });
+  if (new Set(entries.map(e => e.id)).size !== entries.length) throw new Error("Bot allowed entries must be unique.");
+  return { botId: boundedBotId(value.botId, "Bot allowed botId"), entries,
+    ...(hasOwn(value, "nextCursor") ? { nextCursor: parseAidenRemoteBotAllowedCursor(value.nextCursor) } : {}) };
+}
+
 export function parseAidenRemoteBotApproval(value: unknown): AidenRemoteBotApproval {
   if (!isRecord(value)) throw new Error("Bot approval must be an object.");
-  assertExactKeys(value, ["waitId", "toolCallId", "toolName", "summary", "canAllow"], "Bot approval");
+  assertExactKeys(value, ["waitId", "toolCallId", "toolName", "summary", "canAllow", "alwaysCount"], "Bot approval");
+  if (hasOwn(value, "alwaysCount") && value.canAllow !== true) throw new Error("This Bot approval cannot offer Always.");
   return {
     waitId: parseBotQuestionWaitId(value.waitId, "Bot approval waitId"),
     toolCallId: boundedText(value.toolCallId, "Bot approval toolCallId", 128),
     toolName: boundedText(value.toolName, "Bot approval toolName", 120),
     summary: boundedText(value.summary, "Bot approval summary", 2_000),
     canAllow: requiredBooleanValue(value.canAllow, "Bot approval canAllow"),
+    ...(hasOwn(value, "alwaysCount") ? { alwaysCount: parseBotApprovalCount(value.alwaysCount) } : {}),
   };
 }
 
@@ -6563,7 +6618,11 @@ export function parseAidenRemoteBotPlanRespondReceipt(value: unknown): AidenRemo
 
 export function parseAidenRemoteBotAccessRequest(value: unknown): AidenRemoteBotAccessRequest {
   if (!isRecord(value)) throw new Error("Bot access request must be an object.");
-  assertExactKeys(value, ["waitId", "target", "label", "place", "why", "choices"], "Bot access request");
+  assertExactKeys(value, ["waitId", "target", "label", "place", "why", "choices", "approvalCount"], "Bot access request");
+  if (hasOwn(value, "approvalCount")) {
+    parseBotApprovalCount(value.approvalCount);
+    if (value.target !== "folder" || !Array.isArray(value.choices) || !value.choices.includes("always")) throw new Error("This folder cannot offer an approval count.");
+  }
   // The shared parser enforces target-specific fields and the exact offered choice order.
   for (const [key, max] of [["label", 120], ["why", 400], ["place", 512]] as const) {
     if (key === "place" && !hasOwn(value, key)) continue;
@@ -6572,8 +6631,9 @@ export function parseAidenRemoteBotAccessRequest(value: unknown): AidenRemoteBot
   }
   const card = botPendingAccessRequestOf({ ...value, botId: "remote", toolCallId: "remote" });
   if (!card || (value.place !== undefined && !(typeof value.place === "string" && (value.place.startsWith("~/") || value.place.startsWith("/"))))) throw new Error("Bot access request is invalid.");
-  const { botId: _botId, toolCallId: _toolCallId, ...wire } = card;
-  return wire;
+  return { waitId: card.waitId, target: card.target, label: card.label, why: card.why, choices: [...card.choices],
+    ...(card.place === undefined ? {} : { place: card.place }),
+    ...(hasOwn(value, "approvalCount") ? { approvalCount: parseBotApprovalCount(value.approvalCount) } : {}) };
 }
 export function parseAidenRemoteBotAccessAnswerRequest(value: unknown): AidenRemoteBotAccessAnswerRequest {
   if (!isRecord(value)) throw new Error("Bot access answer must be an object.");
@@ -6938,6 +6998,18 @@ export interface AidenRemoteBotActivityFixture {
 }
 
 /** Canonical revision 56 plan examples shared by host and native decoders. */
+export interface AidenRemoteBotAllowedFixture {
+  capability: "bot:allowed";
+  list: AidenRemoteBotAllowedList;
+  paginated: { firstPage: AidenRemoteBotAllowedList; nextPage: AidenRemoteBotAllowedList; afterRemove: AidenRemoteBotAllowedList; afterRemoveNextPage: AidenRemoteBotAllowedList };
+  remove: { request: Record<string, never>; response: AidenRemoteBotAllowedList };
+  denied: AidenRemoteErrorEnvelope;
+  approval: AidenRemoteBotApproval;
+  legacyApproval: AidenRemoteBotApproval;
+  accessRequest: AidenRemoteBotAccessRequest;
+  legacyAccessRequest: AidenRemoteBotAccessRequest;
+}
+
 export interface AidenRemoteBotPlansFixture {
   capability: "bot:plans";
   pending: AidenRemoteBotPlan;
@@ -7117,6 +7189,22 @@ function parseScheduleCardsFixture(value: unknown): AidenRemoteScheduleCardsFixt
     cards,
     rejected,
   };
+}
+
+function parseBotAllowedFixture(value: unknown): AidenRemoteBotAllowedFixture {
+  if (!isRecord(value)) throw new Error("Bot allowed fixture must be an object.");
+  assertExactKeys(value, ["capability", "list", "paginated", "remove", "denied", "approval", "legacyApproval", "accessRequest", "legacyAccessRequest"], "Bot allowed fixture");
+  if (value.capability !== "bot:allowed" || !isRecord(value.paginated) || !isRecord(value.remove)) throw new Error("Invalid Bot allowed fixture.");
+  assertExactKeys(value.paginated, ["firstPage", "nextPage", "afterRemove", "afterRemoveNextPage"], "Bot allowed pages");
+  assertExactKeys(value.remove, ["request", "response"], "Bot allowed remove fixture");
+  const fixture: AidenRemoteBotAllowedFixture = {
+    capability: value.capability, list: parseAidenRemoteBotAllowedList(value.list),
+    paginated: { firstPage: parseAidenRemoteBotAllowedList(value.paginated.firstPage), nextPage: parseAidenRemoteBotAllowedList(value.paginated.nextPage), afterRemove: parseAidenRemoteBotAllowedList(value.paginated.afterRemove), afterRemoveNextPage: parseAidenRemoteBotAllowedList(value.paginated.afterRemoveNextPage) },
+    remove: { request: parseAidenRemoteEmptyRequest(value.remove.request, "Bot allowed remove"), response: parseAidenRemoteBotAllowedList(value.remove.response) },
+    denied: parseErrorEnvelopeFixture(value.denied, "Bot allowed refusal"), approval: parseAidenRemoteBotApproval(value.approval), legacyApproval: parseAidenRemoteBotApproval(value.legacyApproval), accessRequest: parseAidenRemoteBotAccessRequest(value.accessRequest), legacyAccessRequest: parseAidenRemoteBotAccessRequest(value.legacyAccessRequest),
+  };
+  if (fixture.denied.error.code !== "capability_denied" || fixture.approval.alwaysCount === undefined || fixture.accessRequest.approvalCount === undefined || fixture.legacyApproval.alwaysCount !== undefined || fixture.legacyAccessRequest.approvalCount !== undefined) throw new Error("Bot allowed fixture capability fields are invalid.");
+  return fixture;
 }
 
 function parseBotPlansFixture(value: unknown): AidenRemoteBotPlansFixture {
@@ -8230,6 +8318,11 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     chatNewWorktree = parseChatNewWorktreeFixture(value.chatNewWorktree);
   }
+  let botAllowed: AidenRemoteBotAllowedFixture | undefined;
+  if (value.botAllowed !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION) throw new Error("Bot allowed fixtures require revision 57.");
+    botAllowed = parseBotAllowedFixture(value.botAllowed);
+  }
   let botPlans: AidenRemoteBotPlansFixture | undefined;
   if (value.botPlans !== undefined) {
     if (contractRevision < AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION) throw new Error("Bot plan fixtures require revision 56.");
@@ -8340,6 +8433,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(botHandoffs ? { botHandoffs } : {}),
     ...(botAccessRequests ? { botAccessRequests } : {}),
     ...(botPlans ? { botPlans } : {}),
+    ...(botAllowed ? { botAllowed } : {}),
     ...(botIssues ? { botIssues } : {}),
     ...(scheduleCards ? { scheduleCards } : {}),
     ...(botImages ? { botImages } : {}),

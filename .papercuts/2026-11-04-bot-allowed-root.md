@@ -36,3 +36,11 @@
 - Task6 Cua first run passed Always, truthful toast, Manage, list and rule removal, then timed out on Settings because 600px collapses the sidebar. Screenshot confirmed the intended narrow layout. Corrected the test to reopen navigation before Settings; no timeout/retry/production change. /tmp/bot-allowed-d-task6-cua.log retains the first run.
 
 - Task6 second Cua navigation failure revealed Bots uses a separate sidebar even when expanded. The screenshot and BotSidebar showed its Back to Aiden action; added that real navigation step before Settings. This was a second test setup correction, not a passing rerun/flakiness classification. Preserve /tmp/bot-allowed-d-task6-cua-final.log.
+
+- Task7 prep found B’s public count was being spread into a strict legacy Remote parser. Host worker captured an actual RED and owns explicit projection/capability gating; native Task8 will consume the stable optional count under both capabilities.
+
+- Task7 CLI inspection found desktop-only exclusion covered tool names but not D’s capability or list route. Extended the existing real CLI HTTPS/messaging test with server-capability and unavailable-route assertions. Initial edit used a root-relative path under the CLI workdir and failed before mutation; its unmodified targeted run is not final evidence. Corrected the workdir before editing and validating.
+
+- Task7 targeted CLI messaging run failed before D’s new assertions: recipient submission was acknowledged after the test’s 10-second reply-poll window, with no recipient inference yet. /tmp/bot-allowed-d-task7-cli-exclusion.log retains the ledger/request trace. Full rebuilt CLI had183pass/3existing skips earlier. One diagnostic rerun is allowed, unchanged limits; a passing rerun still must be reported as a timing flake in the PR.
+
+- The one permitted CLI rerun passed with new real HTTPS D-capability/route assertions, unchanged deadlines. Keep the original missed-reply run as a timing flake and report both logs in the PR. Final rerun /tmp/bot-allowed-d-task7-cli-exclusion-rerun.log; no extra reruns or timeout increases.

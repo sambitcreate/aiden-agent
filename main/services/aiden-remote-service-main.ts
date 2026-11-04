@@ -1,3 +1,4 @@
+import { createAidenRemoteBotAllowList, type AidenRemoteBotAllowList } from "./aiden-remote-bot-allowed.js";
 import { botMessagingEnabled } from "../../renderer/shared/bot-messages.js";
 import { workspaceIntakeService } from "./workspace-intake-main.js";
 import { mcpLiveStatus } from "./mcp-status-events.js";
@@ -425,6 +426,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     readAloud: AidenRemoteTtsService;
     bots?: AidenRemoteBotService;
     botSessions?: AidenRemoteBotSessionService;
+    botAllowed?: AidenRemoteBotAllowList;
   }>();
   let activeReadAloud: AidenRemoteTtsService | undefined;
   let activeStreams: AidenRemoteStreamService | undefined;
@@ -961,6 +963,18 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 chats: chatStore,
               })
             : undefined;
+          const botAllowed = bots ? createAidenRemoteBotAllowList({
+            allowed: {
+              list: async botId => (await import("./bot-runtime/bot-session-main.js")).botAllowList.list(botId),
+              remove: async (botId, entryId) => (await import("./bot-runtime/bot-session-main.js")).botAllowList.remove(botId, entryId),
+            },
+            botExists: async botId => {
+              const [bot, { botLifecycleJournal }] = await Promise.all([
+                botApplicationService.get(botId), import("./bot-capability-services-main.js"),
+              ]);
+              return bot !== null && !(await botLifecycleJournal.listPending()).some(operation => operation.kind === "delete_bot" && operation.botId === botId);
+            },
+          }) : undefined;
           // A rebuilt API must not leave the previous one's watches and streams open.
           void activeBotSessions?.close();
           const botSessions = bots
@@ -1194,6 +1208,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   botFiles,
                   bots,
                   botSessions,
+                  botAllowed,
                 }
               : {}),
             hostFeed,

@@ -2197,6 +2197,10 @@ test("durable CLI Bots can message each other", async (t) => {
     req.setTimeout(15_000, () => req.destroy(new Error(`Messaging request timed out: ${path}`)));
     req.on("error", reject); req.end(body ? JSON.stringify(body) : undefined);
   });
+  const capabilities = await request(modern, "/server");
+  assert.equal(capabilities.status, 200);
+  assert.equal(capabilities.data.serverCapabilities.includes("bot:allowed"), false, "CLI never advertises desktop remembered approvals");
+  assert.equal((await request(modern, `/bots/${bots[0].id}/allowed`)).status, 404, "CLI supplies no remembered-approval endpoint");
   const list = await request(modern, "/bots");
   assert.equal(list.status, 200); assert.deepEqual(list.data.messaging, { enabled: true });
   assert.equal((await request(older, "/bots")).data.messaging, undefined);
