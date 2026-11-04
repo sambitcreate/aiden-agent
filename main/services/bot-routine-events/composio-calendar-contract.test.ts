@@ -85,7 +85,7 @@ test("Calendar output type failures report closed expected/actual types at known
     try { verified.response(fixture.read, syntheticCalendarExecutor(fixture.read, fixture.value)); } catch (error) { failure = error; }
     assert.ok(failure instanceof ComposioCalendarContractError); assert.equal(failure.stage, "read_response"); assert.equal(failure.reason, "invalid");
     const facts = failure.facts;
-    assert.deepEqual(facts?.typeMismatch, { expected: fixture.expected, actual: fixture.actual, path: fixture.path, truncated: false });
+    assert.deepEqual(facts?.typeMismatch, { expected: fixture.expected, actual: fixture.actual, path: fixture.path, truncated: false, declaration: { required: false, default: "missing", nullableAllowed: fixture.index === 2 } });
     for (const secret of ["918273645", "private_secret", "private-value"]) assert.equal(JSON.stringify(facts).includes(secret), false);
   }
 });
@@ -98,8 +98,78 @@ test("type diagnostics resolve escaped and dynamic names without exposing names,
   try { verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, syntheticCalendarExecutor(read, { data: { "private~/secret": { "314159": false } } })); } catch (error) { failure = error; }
   assert.ok(failure instanceof ComposioCalendarContractError);
   const facts = failure.facts;
-  assert.deepEqual(facts?.typeMismatch, { expected: ["integer"], actual: "boolean", path: ["data", "other", "other"], truncated: false });
+  assert.deepEqual(facts?.typeMismatch, { expected: ["integer"], actual: "boolean", path: ["data", "other", "other"], truncated: false, declaration: { required: false, default: "missing", nullableAllowed: false } });
   for (const secret of ["private~/secret", "private~0~1secret", "314159", "private-account", "instancePath", "schemaPath"]) assert.equal(JSON.stringify(facts).includes(secret), false);
+});
+
+test("type diagnostics canonicalize only bounded known ASCII aliases and describe direct field declarations", () => {
+  for (const [name, canonical, required, defaultValue, defaultCategory] of [
+    ["next_sync_token", "nextSyncToken", false, null, "null"],
+    ["NEXT_PAGE_TOKEN", "nextPageToken", true, "private-default-value", "other"],
+    ["Time_Zone", "timeZone", false, undefined, "missing"],
+    ["private_next_sync_token", "other", true, null, "null"],
+    [" next_sync_token", "other", false, undefined, "missing"],
+    ["next_sуnc_token", "other", false, undefined, "missing"],
+    ["n_ext_sync_token", "other", false, undefined, "missing"],
+  ] as const) {
+    const schemas = syntheticCalendarSchemas();
+    schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = { type: "object", properties: { DATA: { type: "object", properties: { [name]: { type: "string", ...(defaultValue === undefined ? {} : { default: defaultValue }) } }, ...(required ? { required: [name] } : {}) } } } as never;
+    const read = { kind: "listCalendars" as const, accountId: "private-account" };
+    let failure: unknown;
+    try { verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, syntheticCalendarExecutor(read, { DATA: { [name]: null } })); } catch (error) { failure = error; }
+    assert.ok(failure instanceof ComposioCalendarContractError);
+    const mismatch = failure.facts!.typeMismatch!;
+    assert.deepEqual(mismatch.path, ["data", canonical]);
+    assert.deepEqual(mismatch.declaration, { required, default: defaultCategory, nullableAllowed: false });
+    for (const secret of ["private-default-value", "private_next_sync_token", "next_sуnc_token", "n_ext_sync_token", "private-account"]) assert.equal(JSON.stringify(failure.facts).includes(secret), false);
+  }
+});
+
+test("composed field constraints leave ambiguous required declarations unknown without weakening validation", () => {
+  const schemas = syntheticCalendarSchemas();
+  schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = { type: "object", properties: { next_sync_token: { type: "string", default: null } }, allOf: [{ required: ["next_sync_token"] }] } as never;
+  const read = { kind: "listCalendars" as const, accountId: "account" };
+  let failure: unknown;
+  try { verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, syntheticCalendarExecutor(read, { next_sync_token: null })); } catch (error) { failure = error; }
+  assert.ok(failure instanceof ComposioCalendarContractError);
+  assert.deepEqual(failure.facts!.typeMismatch!.declaration, { required: "unknown", default: "null", nullableAllowed: false });
+});
+
+test("parent and deeper ancestor composition prevent a local nullable declaration from claiming effective null acceptance", async (t) => {
+  for (const nested of [false, true]) await t.test(nested ? "ancestor" : "parent", () => {
+    const schemas = syntheticCalendarSchemas();
+    const property = { type: ["string", "null"] };
+    const local = { type: "object", properties: { items: property } };
+    const restriction = { properties: { items: { enum: [true, "valid"] } } };
+    schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = nested ? {
+      type: "object", properties: { data: local }, allOf: [{ properties: { data: restriction } }],
+    } as never : { ...local, allOf: [restriction] } as never;
+    const read = { kind: "listCalendars" as const, accountId: "account" }, verified = verifyCalendarContract(syntheticCalendarMetadata(), schemas);
+    const response = (items: unknown) => syntheticCalendarExecutor(read, nested ? { data: { items } } : { items });
+    let typeFailure: unknown, nullFailure: unknown;
+    try { verified.response(read, response(true)); } catch (error) { typeFailure = error; }
+    try { verified.response(read, response(null)); } catch (error) { nullFailure = error; }
+    assert.ok(typeFailure instanceof ComposioCalendarContractError); assert.equal(typeFailure.facts!.keyword, "type");
+    assert.deepEqual(typeFailure.facts!.typeMismatch!.declaration, { required: "unknown", default: "missing", nullableAllowed: "unknown" });
+    assert.ok(nullFailure instanceof ComposioCalendarContractError); assert.equal(nullFailure.stage, "read_response"); assert.equal(nullFailure.facts!.keyword, "enum");
+    verified.response(read, response("valid"));
+  });
+});
+
+test("declarations inside alternative schema branches never claim global nullability", async (t) => {
+  for (const keyword of ["anyOf", "oneOf"]) await t.test(keyword, () => {
+    const schemas = syntheticCalendarSchemas();
+    schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = { type: "object", properties: { data: { type: "object", [keyword]: [
+      { type: "object", properties: { items: { type: "string" } } },
+      { type: "object", properties: { items: { type: "null" } } },
+    ] } } } as never;
+    const read = { kind: "listCalendars" as const, accountId: "account" }, verified = verifyCalendarContract(syntheticCalendarMetadata(), schemas);
+    let failure: unknown;
+    try { verified.response(read, syntheticCalendarExecutor(read, { data: { items: true } })); } catch (error) { failure = error; }
+    assert.ok(failure instanceof ComposioCalendarContractError); assert.equal(failure.facts!.keyword, "type");
+    assert.equal(failure.facts!.typeMismatch!.declaration, undefined);
+    verified.response(read, syntheticCalendarExecutor(read, { data: { items: null } }));
+  });
 });
 
 test("present executor output uses the restricted compiler before requests, including genuine failure representation", () => {

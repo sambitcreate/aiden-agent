@@ -53,7 +53,7 @@ test("a real-account list type mismatch preserves completed negative proof and s
   assert.equal(result.code, "invalid_response"); assert.equal(result.privateProof.invalidAccountRejected, true);
   assert.equal(result.privateProof.calls.calendars, 1); assert.equal(result.privateProof.calls.events, 0); assert.equal(result.privateProof.calls.get, false); assert.equal(f.reads.length, 2);
   assert.equal(result.privateProof.contractFailure!.stage, "read_response");
-  assert.deepEqual(result.privateProof.contractFailure!.facts!.typeMismatch, { expected: ["string"], actual: "null", path: ["error"], truncated: false });
+  assert.deepEqual(result.privateProof.contractFailure!.facts!.typeMismatch, { expected: ["string"], actual: "null", path: ["error"], truncated: false, declaration: { required: false, default: "missing", nullableAllowed: false } });
   assert.equal(JSON.stringify(result).includes(actualAccount), false);
   assert.equal("privateProof" in publicComposioCalendarReadCheckResult(result), false);
 });

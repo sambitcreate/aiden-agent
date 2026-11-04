@@ -60,11 +60,17 @@ const RESPONSE_FIELDS = [
 ] as const;
 const JSON_SCHEMA_TYPES = ["object", "array", "string", "number", "integer", "boolean", "null"] as const;
 type JsonSchemaType = typeof JSON_SCHEMA_TYPES[number];
+interface FieldDeclarationFacts {
+  required: boolean | "unknown";
+  default: "missing" | "null" | "other";
+  nullableAllowed: boolean | "unknown";
+}
 interface TypeMismatchFacts {
   expected: JsonSchemaType[];
   actual: Exclude<JsonSchemaType, "integer"> | "missing" | "other";
   path: (typeof RESPONSE_FIELDS[number] | "array_index" | "other")[];
   truncated: boolean;
+  declaration?: FieldDeclarationFacts;
 }
 export interface ComposioCalendarFailureFacts {
   keyword: ComposioWatchSchemaCompileFacts["keyword"];
@@ -160,16 +166,51 @@ function compile(value: unknown, stage: ComposioCalendarContractError["stage"], 
 }
 /** The instance and schema already passed bounded copying/compilation. Resolve
  * the pointer privately, preserving only known fields and collapsed indexes. */
-function typeMismatchFacts(error: ErrorObject, value: unknown): TypeMismatchFacts {
+function canonicalResponseField(key: string): typeof RESPONSE_FIELDS[number] | "other" {
+  if (!/^[A-Za-z][A-Za-z0-9_]{0,127}$/u.test(key)) return "other";
+  const lower = key.toLowerCase();
+  return RESPONSE_FIELDS.find((field) => field.toLowerCase() === lower || field.replace(/([A-Z])([A-Z][a-z])/gu, "$1_$2").replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toLowerCase() === lower) ?? "other";
+}
+function fieldDeclarationFacts(error: ErrorObject, schema: unknown): FieldDeclarationFacts | undefined {
+  if (typeof error.schemaPath !== "string" || !error.schemaPath.startsWith("#/") || error.schemaPath.length > 256 * 1024) return undefined;
+  let keys: string[];
+  try { keys = error.schemaPath.slice(2).split("/").map((key) => decodeURIComponent(key).replace(/~1/gu, "/").replace(/~0/gu, "~")); } catch { return undefined; }
+  // Branch/item constraints need more interpretation than a direct property's
+  // declaration. Do not invent field metadata for an ambiguous location.
+  if (keys.at(-1) !== "type" || keys.at(-3) !== "properties") return undefined;
+  let parent = schema;
+  let composed = false;
+  for (const key of keys.slice(0, -3)) {
+    const ancestor = optionalObject(parent);
+    composed ||= ["anyOf", "oneOf", "allOf"].some((keyword) => ancestor?.[keyword] !== undefined);
+    // A branch's declaration may disagree with another branch that accepts
+    // the value. Report no field declaration from inside a composition branch.
+    if (["anyOf", "oneOf", "allOf"].includes(key) && Array.isArray(ancestor?.[key])) return undefined;
+    const descriptor = parent !== null && typeof parent === "object" ? Object.getOwnPropertyDescriptor(parent, key) : undefined;
+    parent = descriptor && "value" in descriptor ? descriptor.value : undefined;
+  }
+  const object = optionalObject(parent), properties = optionalObject(object?.properties), name = keys.at(-2)!;
+  const propertyDescriptor = properties ? Object.getOwnPropertyDescriptor(properties, name) : undefined;
+  const field = propertyDescriptor && "value" in propertyDescriptor ? optionalObject(propertyDescriptor.value) : undefined;
+  if (!object || !field) return undefined;
+  composed ||= ["anyOf", "oneOf", "allOf"].some((keyword) => object[keyword] !== undefined);
+  const required = composed ? "unknown" : object.required === undefined ? false : Array.isArray(object.required) ? object.required.includes(name) : "unknown";
+  let nullableAllowed: FieldDeclarationFacts["nullableAllowed"] = field.type === undefined ? "unknown" : Array.isArray(field.type) ? field.type.includes("null") : field.type === "null";
+  if ((field.const !== undefined && field.const !== null) || (Array.isArray(field.enum) && !field.enum.includes(null))) nullableAllowed = false;
+  else if (nullableAllowed === true && (composed || ["anyOf", "oneOf", "allOf"].some((keyword) => field[keyword] !== undefined))) nullableAllowed = "unknown";
+  return { required, default: !Object.prototype.hasOwnProperty.call(field, "default") ? "missing" : field.default === null ? "null" : "other", nullableAllowed };
+}
+function typeMismatchFacts(error: ErrorObject, value: unknown, schema: unknown): TypeMismatchFacts {
   const types: unknown[] = Array.isArray(error.params.type) ? error.params.type : [error.params.type];
-  const facts: TypeMismatchFacts = { expected: JSON_SCHEMA_TYPES.filter((type) => types.includes(type)), actual: "other", path: [], truncated: false };
+  const declaration = fieldDeclarationFacts(error, schema);
+  const facts: TypeMismatchFacts = { expected: JSON_SCHEMA_TYPES.filter((type) => types.includes(type)), actual: "other", path: [], truncated: false, ...(declaration ? { declaration } : {}) };
   if (typeof error.instancePath !== "string" || error.instancePath.length > 256 * 1024 || (error.instancePath !== "" && !error.instancePath.startsWith("/"))) return { ...facts, path: ["other"], truncated: true };
   const parts = error.instancePath === "" ? [] : error.instancePath.slice(1).split("/");
   facts.truncated = parts.length > 18;
   let actual = value;
   for (const part of parts.slice(0, 18)) {
     const key = part.replace(/~1/gu, "/").replace(/~0/gu, "~");
-    facts.path.push(Array.isArray(actual) && /^(?:0|[1-9][0-9]*)$/u.test(key) ? "array_index" : RESPONSE_FIELDS.find((field) => field === key) ?? "other");
+    facts.path.push(Array.isArray(actual) && /^(?:0|[1-9][0-9]*)$/u.test(key) ? "array_index" : canonicalResponseField(key));
     const descriptor = actual !== null && typeof actual === "object" ? Object.getOwnPropertyDescriptor(actual, key) : undefined;
     actual = descriptor && "value" in descriptor ? descriptor.value : undefined;
   }
@@ -178,7 +219,7 @@ function typeMismatchFacts(error: ErrorObject, value: unknown): TypeMismatchFact
 }
 function validationFailure(stage: ComposioCalendarContractError["stage"], validator: ValidateFunction, context: Pick<ComposioCalendarFailureFacts, "operation" | "direction" | "executorResponse">, field?: ComposioCalendarContractError["field"], value?: unknown): never {
   const error = validator.errors?.[0];
-  throw new ComposioCalendarContractError(stage, "invalid", { keyword: composioWatchSchemaDiagnosticKeyword(error?.keyword ?? ""), dialect: composioWatchSchemaDiagnosticDialect(optionalObject(validator.schema)?.$schema), ...context, ...(stage === "read_response" && error?.keyword === "type" ? { typeMismatch: typeMismatchFacts(error, value) } : {}) }, field);
+  throw new ComposioCalendarContractError(stage, "invalid", { keyword: composioWatchSchemaDiagnosticKeyword(error?.keyword ?? ""), dialect: composioWatchSchemaDiagnosticDialect(optionalObject(validator.schema)?.$schema), ...context, ...(stage === "read_response" && error?.keyword === "type" ? { typeMismatch: typeMismatchFacts(error, value, validator.schema) } : {}) }, field);
 }
 function compileCalendarOutput(value: unknown, operation: ComposioCalendarRead["kind"]): ValidateFunction {
   let normalized: ReturnType<typeof normalizeComposioCalendarOutputSchema>;

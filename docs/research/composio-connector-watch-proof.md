@@ -217,3 +217,10 @@ Exact-attempt refusal templates (`340f568fe`) were clear after Sol high review: 
 Fixed selector vocabulary and literal backtick quoting (`b09f3e071`) were clear after Sol high review: 164 independent cases plus 33 adversarial controls. Immutable pre-Open-work snapshot `ae93e6d39` passed its build, 381 focused cases, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793777952472`) passed the invalid-account oracle with a whole-string lookup failure bound to this attempt's exact ID. Its closed grammar is no-account-found / matching / no selector label / double quotes / no suffix. The sole failed item had correct Calendar-list/index-zero correlation, counts1/0/1 and no response.
 
 The check then sent one explicit real-account Calendar-list read. Its executor envelope succeeded, but upstream output validation rejected a type before Calendar sources were accepted. No event or GET read ran. Precise expected/actual type and known-field diagnostics are the next reviewed step; the complete account/list/events/GET acceptance gate remains open. No returned identity, trace value, schema, vendor text or Calendar content was retained in the closed evidence.
+
+
+### V19 null type at a classified output field — 2026-11-04
+
+Closed output-type diagnostics (`af8001af8`) were clear after Sol high review with 167 independent cases. Immutable pre-Open-work snapshot `2c140d68a` passed its build, 384 focused cases, a final 62-case test refresh, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793778505773`) again passed exact invalid-account refusal and reached one successful real-account Calendar-list response. Upstream validation identified expected string / actual null at the classified path data / other. No raw property name or value was retained, and no event or GET read ran.
+
+Diagnostic recognition of known ASCII case/snake aliases and safely derived required/default/nullable declaration facts is under review. Acceptance remains unchanged until the affected field and its meaning are established.
