@@ -36,4 +36,6 @@ A folder approved for a Bot does not appear in the phone's file browser or its l
 
 The CLI host does not offer `request_access`. Configure its saved Bot grants through the existing administration controls. See [durable CLI Bots](cli-durable-bots.md).
 
+Startup finishes interrupted Bot deletions even when a folder approval still needs cleanup. Removing an unused approval record never deletes the person’s folder.
+
 The [implementation plan](plans/bot-messaging-plan.md) tracks phase B review and acceptance. Local tests and simulator checks are separate from physical-device, live-provider and release acceptance.

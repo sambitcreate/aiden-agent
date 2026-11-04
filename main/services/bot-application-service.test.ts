@@ -31,13 +31,13 @@ import {
   type BotApplicationDependencies,
 } from "./bot-application-service.js";
 
-async function folderFixture(t: import("node:test").TestContext) {
+async function folderFixture(t: import("node:test").TestContext, extraBots: BotDefinition[] = []) {
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "bot-folder-grant-")));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const folderPath = path.join(directory, "Taxes"), privateRoot = path.join(directory, "private");
   await fs.mkdir(folderPath); await fs.mkdir(privateRoot);
   const owner = bot("bot:folder");
-  const app = fixture({ bots: [owner] }); await app.service.initialize();
+  const app = fixture({ bots: [owner, ...extraBots] }); await app.service.initialize();
   const policy = await app.service.updateBotAccess({ audienceId: "device:a", botId: owner.id, expectedRevision: app.policies.get(owner.id)!.revision, access: {
     accessMode: "custom", catalogRevision: CATALOG_REVISION, custom: { providerId: "provider:opaque", modelId: "model:opaque", fileScopeIds: ["scope:home"], shellEnabled: false, connectionIds: ["keep:connection"], skillIds: ["keep:skill"], otherCapabilityIds: [] },
   } });
@@ -2507,3 +2507,64 @@ test("disabled Full Bot catalog retains only its own saved chat-reduction skill 
   assert.deepEqual((await app.service.capabilityCatalog("device:a")).skills, []);
   assert.doesNotMatch(JSON.stringify(result), /other-bot|sourceId|instructions/u);
 });
+
+for (const deleting of ["grant owner", "another Bot", "binding disappears"] as const) {
+  test(`folder recovery completes an interrupted delete without blocking surviving Bots (${deleting})`, async t => {
+    const other = bot("bot:other");
+    const app = await folderFixture(t, [other]);
+    const root = await app.roots.addLocalFolder(app.folderPath, { operationId: app.input.operationId, botsOnly: true });
+    await app.journal.put({ input: app.input, rootId: root.id, ownsRoot: true, state: "pending" });
+    const deletedId = deleting === "grant owner" ? app.owner.id : other.id;
+    const survivorId = deletedId === app.owner.id ? other.id : app.owner.id;
+    const originalPolicy = app.deps.capabilityStore.getBotPolicy.bind(app.deps.capabilityStore);
+    app.deps.capabilityStore.getBotPolicy = async id => {
+      if (!app.policies.has(id)) throw new BotCapabilityUnavailableError("missing policy during interrupted deletion");
+      return originalPolicy(id);
+    };
+    if (deleting === "binding disappears") {
+      app.policies.set(other.id, { ...app.policies.get(app.owner.id)!, botId: other.id });
+      const binding = app.deps.capabilityStore.getBotBinding.bind(app.deps.capabilityStore);
+      app.deps.capabilityStore.getBotBinding = async id => {
+        if (id === deletedId) throw new BotCapabilityUnavailableError("binding removed after policy read");
+        return binding(id);
+      };
+    } else {
+      // Persisted crash window: the home/access are gone, but identity and delete intent remain.
+      await app.deps.managedWorkspace.deleteHome(deletedId);
+      await app.deps.capabilityStore.deleteBotAuthority(deletedId);
+    }
+    app.pending.set("delete-in-progress", { operationId: "delete-in-progress", kind: "delete_bot", botId: deletedId,
+      subject: {}, stage: "prepared", startedAt: 1, updatedAt: 1 });
+    const restarted = createBotApplicationService(app.deps);
+    await restarted.initialize();
+    assert.deepEqual((await restarted.list()).map(entry => entry.id), [survivorId]);
+    assert.equal(app.pending.size, 0, "startup must finish the durable delete intent");
+    assert.equal((await app.journal.list())[0]!.state, "rolled_back");
+    assert.deepEqual((await app.state.snapshot()).approvedRoots, []);
+    assert.equal(app.counts.removes, 1);
+    const chat = await restarted.createChat({ audienceId: "device:a", botId: survivorId });
+    assert.equal(chat.botId, survivorId, "unrelated Bots remain operational");
+    const reopened = createBotApplicationService(app.deps);
+    await reopened.initialize();
+    assert.deepEqual((await reopened.list()).map(entry => entry.id), [survivorId]);
+    assert.equal(app.counts.removes, 1, "recovery cannot repeat owned-root removal");
+    assert.ok((await fs.stat(app.folderPath)).isDirectory(), "root-record compensation never erases the person's folder");
+  });
+}
+
+for (const failure of ["disk read", "named impostor"] as const) {
+  test(`folder recovery preserves its fail-closed fence for ${failure} errors`, async t => {
+    const app = await folderFixture(t);
+    const root = await app.roots.addLocalFolder(app.folderPath, { operationId: app.input.operationId, botsOnly: true });
+    await app.journal.put({ input: app.input, rootId: root.id, ownsRoot: true, state: "pending" });
+    const evidence = await fs.readFile(path.join(app.privateRoot, "bot-folder-grants.json"), "utf8");
+    const error = Object.assign(new Error("capability storage read failed"),
+      failure === "disk read" ? { code: "EIO" } : { name: "BotCapabilityUnavailableError" });
+    app.deps.capabilityStore.getBotPolicy = async () => { throw error; };
+    await assert.rejects(createBotApplicationService(app.deps).initialize(), value => value === error);
+    await assert.rejects(createBotApplicationService(app.deps).initialize(), value => value === error);
+    assert.equal(await fs.readFile(path.join(app.privateRoot, "bot-folder-grants.json"), "utf8"), evidence);
+    assert.equal((await app.state.snapshot()).approvedRoots[0]!.id, root.id);
+    assert.equal(app.counts.removes, 0);
+  });
+}
