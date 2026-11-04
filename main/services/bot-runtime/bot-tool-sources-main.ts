@@ -114,6 +114,7 @@ export interface BotToolSourceDeps {
   botName?(botId: string): Promise<string | undefined>;
   /** Desktop-only plan cards and coverage. The CLI does not supply this port. */
   planTools?: BotPlanToolDeps;
+  folderOffer?(botId: string, path: string): Promise<{ count: number } | undefined>;
 }
 
 type ProductionFacts = BotToolFactsWithSkills;
@@ -523,6 +524,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       );
       if (authority.accessMode === "custom" && authority.files.mode === "scoped") tools.push(botAccessRequestCandidate(botId, {
         requests: botAccessRequests, runAccess: botRunAccess, policyRevision: deps.policyRevision, boundLocations: boundFileLocations,
+        ...(deps.folderOffer ? { folderOffer: deps.folderOffer } : {}),
         resolveTarget: (requested) => resolveBotAccessTarget(requested, { homeDirectory: os.homedir, privateRoots: () => botAccessPrivateRoots(app.getPath("userData"), aidenConfigDir()), approvedRoots: async () => (await (await import("../aiden-remote-service-main.js")).getAidenRemoteRuntime()).state.snapshot().then((state) => state.approvedRoots) }),
         currentLocations: async () => {
           const fresh = await deps.admit(botId);

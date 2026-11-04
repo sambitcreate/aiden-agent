@@ -34,6 +34,7 @@ export interface BotAccessRequestToolDeps {
   ): Promise<unknown>;
   resolveIssue?(botId: string, dedupeKey: string, resolution: "fixed"): Promise<unknown>;
   now?(): number;
+  folderOffer?(botId: string, path: string): Promise<{ count: number } | undefined>;
 }
 /** Validate using the current tool task, never the completed Always task's API. */
 export async function botSavedLocationForCall(
@@ -216,6 +217,7 @@ export function botAccessRequestCandidate(
           );
         }
         const memo = await call.memo(BOT_ACCESS_REQUEST_MEMO, { requestId: randomUUID() });
+        const offer = grant ? await deps.folderOffer?.(botId, root) : undefined;
         const owner = {
           signal: call.signal,
           deadline: (deps.now?.() ?? Date.now()) + BOT_RUN_ACCESS_MAX_AGE_MS,
@@ -242,6 +244,7 @@ export function botAccessRequestCandidate(
           ...(target.kind === "folder" ? { place: target.place } : {}),
           why: params.why,
           choices,
+          ...(offer ? { approvalCount: offer.count } : {}),
           authorization,
           ...(grant ? { grant } : {}),
           owner,
@@ -259,10 +262,11 @@ export function botAccessRequestCandidate(
         }
         // Authorization and the run grant have already committed at the answer
         // boundary. Never issue a second grant or adopt another policy revision.
-        return result(
+        const allowed = result(
           answer.choice,
           answer.savedForFuture ? `The person approved ${label} for future tasks. This acknowledgement records that earlier approval and does not grant temporary access or restore removed access. Check current access on a new task.` : `The person allowed ${label} for this task. Use the file tools with location "run.access" to reach it.${answer.choice === "always" ? " It stays allowed from your next task." : ""}`,
         );
+        return answer.hint ? { ...allowed, content: [...allowed.content, { type: "text", text: "\n\n" + answer.hint }] } : allowed;
       },
     }),
   };

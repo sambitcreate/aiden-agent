@@ -19,15 +19,30 @@ export interface BotApprovalDecision {
   answer: BotApprovalAnswer;
   source: "person" | "expiry" | "allow_list";
 }
+export interface BotApprovalPublicationContext {
+  consentRevision: string;
+  label: string;
+  title: string;
+}
+export interface BotApprovalPublicationRecord {
+  decision: BotApprovalDecision;
+  target: BotApprovalRuleTarget;
+  offered: boolean;
+  decidedAt: number;
+  context: BotApprovalPublicationContext;
+  status: "pending" | "published" | "revoked";
+}
 export type BotApprovalTallyKey = BotApprovalRuleTarget | { kind: "folder"; path: string };
 export interface BotApprovalTallyResult { counted: boolean; hintCount?: number }
 export interface BotApprovalTallies {
   /** decidedAt is trusted original event time for delayed host-journal recovery.
    * Omitted replay time uses the receipt; explicit replay time must match it. */
-  record(botId: string, key: BotApprovalTallyKey, decision: BotApprovalDecision & { offered: boolean; decidedAt?: number }): Promise<BotApprovalTallyResult>;
+  record(botId: string, key: BotApprovalTallyKey, decision: BotApprovalDecision & { offered: boolean; decidedAt?: number; publicationContext?: BotApprovalPublicationContext }): Promise<BotApprovalTallyResult>;
   /** Grants nothing. First terminal result sticks; publication clears earlier history and its own exact event. */
   completePublication(botId: string, decisionId: string, authorizationFingerprint: string, status: "published" | "revoked"): Promise<void>;
   decision(botId: string, id: string, authorizationFingerprint: string): Promise<BotApprovalDecision | undefined>;
+  publication(botId: string, id: string, authorizationFingerprint: string): Promise<BotApprovalPublicationRecord | undefined>;
+  pendingPublications(botId: string): Promise<BotApprovalPublicationRecord[]>;
   nudge(botId: string, key: BotApprovalTallyKey): Promise<{ count: number } | undefined>;
   /** Explicit class-cache reset. Publication settlement uses completePublication instead. */
   forget(botId: string, key: BotApprovalTallyKey): Promise<void>;
@@ -49,6 +64,7 @@ interface DecisionReceipt extends BotApprovalDecision {
   result: BotApprovalTallyResult;
   /** Only a person's Always decision carries this entitlement. First completion wins. */
   publication?: "pending" | "published" | "revoked";
+  publicationContext?: BotApprovalPublicationContext;
 }
 interface TallyFile { version: 1; classes: ClassHistory[]; decisions: DecisionReceipt[] }
 interface FileState {
@@ -78,6 +94,34 @@ function decisionFields(v: unknown): v is BotApprovalDecision {
   return obj(v) && text(v.id, 256) && text(v.authorizationFingerprint, 512) &&
     (v.answer === "allow" || v.answer === "allow_always" || v.answer === "deny") &&
     (v.source === "person" || v.source === "expiry" || v.source === "allow_list");
+}
+
+function safePublicationDisplay(value: unknown): value is string {
+  return text(value, 200) && value === value.replace(/\s+/gu, " ").trim() &&
+    !/[\p{Cc}\p{Cf}]/u.test(value) && !/(?:https?|file):\/\//iu.test(value);
+}
+function validPublicationContext(value: unknown): value is BotApprovalPublicationContext {
+  return obj(value) && keys(value, ["consentRevision", "label", "title"]) &&
+    typeof value.consentRevision === "string" && /^[a-f0-9]{64}$/u.test(value.consentRevision) &&
+    safePublicationDisplay(value.label) && safePublicationDisplay(value.title);
+}
+function publicationContextIdentity(context: BotApprovalPublicationContext | undefined): string {
+  return JSON.stringify(context ? [context.consentRevision, context.label, context.title] : null);
+}
+function publicationTarget(key: string): BotApprovalRuleTarget | undefined {
+  // Callers use this only after canonicalKey/keyOf validated the tuple.
+  const tuple = JSON.parse(key) as string[];
+  if (tuple[0] === "connection") return { kind: "connection", serverId: tuple[1]!, tool: tuple[2]! };
+  if (tuple[0] === "site") return { kind: "site", host: tuple[1]!, action: tuple[2] as "click" | "type" | "press" };
+  return undefined;
+}
+function publicationRecord(receipt: DecisionReceipt): BotApprovalPublicationRecord | undefined {
+  if (!receipt.publicationContext || !receipt.publication) return undefined;
+  const target = publicationTarget(receipt.key);
+  if (!target) return undefined;
+  return { decision: { id: receipt.id, authorizationFingerprint: receipt.authorizationFingerprint,
+    answer: receipt.answer, source: receipt.source }, target, offered: receipt.offered,
+    decidedAt: receipt.at, context: { ...receipt.publicationContext }, status: receipt.publication };
 }
 
 function keyOf(value: BotApprovalTallyKey): string {
@@ -116,12 +160,14 @@ function parseFile(value: unknown): TallyFile | undefined {
   const ids = new Set<string>();
   const hints = new Map<string, number>();
   for (const r of value.decisions) {
-    if (!obj(r) || !keys(r, ["id", "authorizationFingerprint", "answer", "source", "key", "offered", "at", "result", "publication"]) ||
+    if (!obj(r) || !keys(r, ["id", "authorizationFingerprint", "answer", "source", "key", "offered", "at", "result", "publication", "publicationContext"]) ||
       !decisionFields(r) || ids.has(r.id) || !canonicalKey(r.key) || typeof r.offered !== "boolean" || !timestamp(r.at) ||
       !obj(r.result) || !keys(r.result, ["counted", "hintCount"]) || r.result.counted !== (r.source === "person")) return undefined;
     if (r.source === "person" && r.answer === "allow_always"
       ? r.publication !== "pending" && r.publication !== "published" && r.publication !== "revoked"
       : r.publication !== undefined) return undefined;
+    if (r.publicationContext !== undefined && (!validPublicationContext(r.publicationContext) ||
+      r.source !== "person" || r.answer !== "allow_always" || !publicationTarget(r.key))) return undefined;
     ids.add(r.id);
     if (r.result.hintCount !== undefined) {
       if (r.source !== "person" || r.answer !== "allow" || !r.offered ||
@@ -167,7 +213,7 @@ function assertActive(context: Context): void {
 function observe(context: Context, document: TallyFile): void {
   const next = new Map(document.decisions.map((r) => [r.id, JSON.stringify([
     r.id, r.authorizationFingerprint, r.answer, r.source, r.key, r.offered, r.at,
-    r.result.counted, r.result.hintCount ?? null,
+    r.result.counted, r.result.hintCount ?? null, publicationContextIdentity(r.publicationContext),
   ])]));
   const publications = new Map(document.decisions.map((r) => [r.id, r.publication]));
   for (const [id, previous] of context.state.receipts) {
@@ -276,6 +322,13 @@ export function createBotApprovalTallies(options: { profileDir(): string; now?()
       const captured = { id: decision.id, authorizationFingerprint: decision.authorizationFingerprint,
         answer: decision.answer, source: decision.source, offered: decision.offered };
       const decidedAt = decision.decidedAt;
+      let publicationContext: BotApprovalPublicationContext | undefined;
+      if (decision.publicationContext !== undefined) {
+        if (!validPublicationContext(decision.publicationContext) || captured.source !== "person" ||
+          captured.answer !== "allow_always" || !publicationTarget(key)) throw new Error("Invalid Bot approval publication context.");
+        publicationContext = { consentRevision: decision.publicationContext.consentRevision,
+          label: decision.publicationContext.label, title: decision.publicationContext.title };
+      }
       const context = contextOf(botId);
       return serial(context.file, async () => {
         const loaded = await load(context);
@@ -284,7 +337,8 @@ export function createBotApprovalTallies(options: { profileDir(): string; now?()
         if (existing) {
           if (existing.authorizationFingerprint !== captured.authorizationFingerprint || existing.key !== key ||
             existing.answer !== captured.answer || existing.source !== captured.source || existing.offered !== captured.offered ||
-            (decidedAt !== undefined && existing.at !== decidedAt)) {
+            (decidedAt !== undefined && existing.at !== decidedAt) ||
+            (publicationContext !== undefined && publicationContextIdentity(publicationContext) !== publicationContextIdentity(existing.publicationContext))) {
             throw new Error("Bot approval decision changed its immutable identity.");
           }
           return { ...existing.result };
@@ -297,6 +351,7 @@ export function createBotApprovalTallies(options: { profileDir(): string; now?()
         const hintedAt = lastReceiptTime(document, key, "hint");
         const result: BotApprovalTallyResult = { counted: captured.source === "person" };
         const receipt: DecisionReceipt = { ...captured, key, at, result,
+          ...(publicationContext ? { publicationContext } : {}),
           ...(captured.source === "person" && captured.answer === "allow_always" ? { publication: "pending" as const } : {}) };
         if (captured.source === "person") {
           if (captured.answer === "allow" && captured.offered && at === observedAt && allowed.length >= BOT_APPROVAL_NUDGE_THRESHOLD && !denied &&
@@ -355,6 +410,23 @@ export function createBotApprovalTallies(options: { profileDir(): string; now?()
         const receipt = document.decisions.find((r) => r.id === id && r.authorizationFingerprint === authorizationFingerprint);
         return receipt ? { id: receipt.id, authorizationFingerprint: receipt.authorizationFingerprint,
           answer: receipt.answer, source: receipt.source } : undefined;
+      });
+    },
+    async publication(botId, id, authorizationFingerprint) {
+      if (!text(id, 256) || !text(authorizationFingerprint, 512)) throw new Error("Invalid Bot approval decision identity.");
+      const context = contextOf(botId);
+      return serial(context.file, async () => {
+        const { document } = await load(context);
+        const receipt = document.decisions.find((r) => r.id === id && r.authorizationFingerprint === authorizationFingerprint);
+        return receipt ? publicationRecord(receipt) : undefined;
+      });
+    },
+    async pendingPublications(botId) {
+      const context = contextOf(botId);
+      return serial(context.file, async () => {
+        const { document } = await load(context);
+        return document.decisions.filter((r) => r.publication === "pending")
+          .map(publicationRecord).filter((record): record is BotApprovalPublicationRecord => record !== undefined);
       });
     },
     async nudge(botId, target) {

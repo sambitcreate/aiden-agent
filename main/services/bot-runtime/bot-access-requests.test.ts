@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BotAccessRequestStaleError, createBotAccessRequests, type BotAccessRequestPrompt } from "./bot-access-requests.js";
-import { createBotAccessAuthorizer, createBotAccessRevalidator } from "./bot-access-authorization.js";
+import { createBotAccessAuthorizer, createBotAccessRevalidator, createBotAccessDecisionSettlement } from "./bot-access-authorization.js";
 import { createBotRunAccess } from "./bot-run-access.js";
 import { createBotFolderGrantJournal, BotFolderGrantJournalReadError, BotFolderGrantJournalRepairError, type BotFolderGrantRecord } from "../bot-folder-grant-journal.js";
 import { BotRuntimeAuthorityError } from "../bot-runtime-authority.js";
@@ -488,3 +488,153 @@ for (const failure of ["EIO", "schema"] as const) {
     });
   }
 }
+
+test("D: a successful Once survives failed tally settlement and a different retry tap without a second authorization", async () => {
+  const bridge = createBotAccessRequests();
+  const waiting = bridge.request({ ...prompt, signal: undefined });
+  const id = bridge.pending()[0]!.waitId;
+  let grants = 0, records = 0;
+  const authorize = async () => { grants++; };
+  const settle = async () => { if (++records === 1) throw new Error("tally unavailable"); return { hint: "Aiden note: saved" }; };
+  await assert.rejects(bridge.answer("ada", id, "once", authorize, settle), /tally unavailable/u);
+  assert.equal(bridge.pending()[0]?.waitId, id);
+  assert.equal(await bridge.answer("ada", id, "not_now", authorize, settle), "answered");
+  assert.deepEqual(await waiting, { choice: "once", waitId: id, hint: "Aiden note: saved" });
+  assert.equal(grants, 1); assert.equal(records, 2);
+});
+
+test("D: a failed grant permits changing the choice, and failed/stale answers never enter tally settlement", async () => {
+  const bridge = createBotAccessRequests(); const waiting = bridge.request({ ...prompt, signal: undefined });
+  const id = bridge.pending()[0]!.waitId; const choices: string[] = [];
+  const settle = async (_card: BotAccessRequestPrompt, choice: string) => { choices.push(choice); return {}; };
+  await assert.rejects(bridge.answer("ada", id, "always", async () => { throw new Error("publication failed"); }, settle), /publication failed/u);
+  await bridge.answer("ada", id, "not_now", async () => {}, settle); await waiting;
+  assert.deepEqual(choices, ["not_now"]);
+});
+
+async function folderD(t: import("node:test").TestContext) {
+  const fs = await import("node:fs/promises"), os = await import("node:os"), path = await import("node:path");
+  const { fileBotFolderGrantJournal } = await import("../bot-folder-grant-journal.js");
+  const { createBotApprovalTallies } = await import("./bot-approval-tallies.js");
+  const { createBotAllowList } = await import("./bot-allow-list.js");
+  const { ToolApprovalRuleBook, emptyToolApprovalRulesDocument } = await import("../tool-approval-rules.js");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-folder-d-")); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  let now = 1_000, revision = "rev1", receiptsReadable = true, saves = 0, aliases = 0, failGrant = false;
+  let afterPublish: (() => void) | undefined;
+  let lastProof: import("./bot-access-requests.js").BotAccessTallyProof | undefined;
+  let document = emptyToolApprovalRulesDocument();
+  const rules = new ToolApprovalRuleBook({ load: async () => structuredClone(document), update: async mutation => { const draft = structuredClone(document), result = await mutation(draft); document = draft; return result; } }, undefined, undefined, { knownBot: async () => true });
+  const reopen = () => {
+    const tallies = createBotApprovalTallies({ profileDir: () => dir, now: () => now });
+    const service = createBotAllowList({ rules, tallies, approvals: { pending: () => [], releaseFromAllowList: async () => false },
+      folderEntries: async () => [], revokeFolder: async () => false, botName: async () => "Ada", connectionName: async () => undefined });
+    return { tallies, service };
+  };
+  const { tallies, service } = reopen();
+  const journal = fileBotFolderGrantJournal(() => dir);
+  const receipts = async (botId: string, decisionId: string) => {
+    if (!receiptsReadable) throw new Error("D journal receipt outage");
+    return (await journal.list()).flatMap(record => {
+      const context = record.input.approvalTally;
+      return record.state === "committed" && context && record.input.botId === botId && record.input.operationId === decisionId
+        ? [{ botId, decisionId, path: record.input.folderPath, authorizationFingerprint: context.authorizationFingerprint, offered: context.offered,
+          decidedAt: context.decidedAt, answer: "always" as const, source: "person" as const }] : [];
+    });
+  };
+  const makeD = () => createBotAccessDecisionSettlement({ now: () => now, allowList: reopen().service, receipts });
+  const d = makeD(), bridge = createBotAccessRequests(), controller = new AbortController();
+  const runAccess = createBotRunAccess({ now: () => now });
+  const authorize = createBotAccessAuthorizer({ now: () => now, audienceId: "desktop:local", runAccess: { ...runAccess, grant: (botId, grant) => { aliases++; runAccess.grant(botId, grant); } },
+    captureDecision: (card, choice) => { lastProof = d.captureDecision(card, choice); return lastProof; }, revalidate: async (_id, expected) => { if (revision !== expected) throw new BotAccessRequestStaleError("policy changed"); },
+    resolveTarget: async () => ({ kind: "folder", root: "/Taxes", label: "Taxes", place: "/Taxes", device: "1", inode: "2", always: { kind: "new" } }),
+    grantFolder: async (input, owner) => {
+      owner.assertCurrent(); if (failGrant) throw new Error("grant failed before publication");
+      saves++; await journal.put({ input, rootId: "taxes", ownsRoot: true, state: "pending" });
+      revision = "rev2";
+      await journal.put({ input, rootId: "taxes", ownsRoot: true, state: "committed", optionId: "option", resultRevision: revision });
+      afterPublish?.(); return revision;
+    },
+    folderCommitted: async (botId, id) => (await journal.list()).some(record => record.state === "committed" && record.input.botId === botId && record.input.operationId === id), changed() {},
+  });
+  const waiting = bridge.request({ ...prompt, approvalCount: 3, signal: controller.signal, owner: { signal: controller.signal, deadline: Date.now() + 60_000, validate: async () => {} } });
+  const outcome = waiting.catch(error => error), id = bridge.pending()[0]!.waitId;
+  const answer = (choice: "once" | "always" | "not_now") => bridge.answer("ada", id, choice, (card, actual) => d.authorize(card, actual, authorize), d.settle);
+  return { service, tallies, journal, d, makeD, bridge, controller, outcome, id, answer, runAccess,
+    counts: () => ({ saves, aliases }), proof: () => lastProof, afterPublish(fn: () => void) { afterPublish = fn; },
+    readable(value: boolean) { receiptsReadable = value; }, setRevision(value: string) { revision = value; }, failGrant(value: boolean) { failGrant = value; }, advance(ms: number) { now += ms; } };
+}
+
+for (const incoming of ["once", "always", "not_now"] as const) {
+  test(`D: a real published folder receipt survives a tally outage and an incoming ${incoming} recovers only Always`, async t => {
+    const f = await folderD(t); f.afterPublish(() => f.readable(false));
+    await assert.rejects(f.answer("always"), /receipt outage/u);
+    assert.equal(f.bridge.pending().length, 1);
+    const record = (await f.journal.list())[0]!;
+    assert.match(record.input.approvalTally!.authorizationFingerprint, /^[a-f0-9]{64}$/u);
+    f.readable(true); f.setRevision("removed");
+    assert.equal(await f.answer(incoming), "saved_for_future");
+    const decision = await f.outcome; assert.equal(decision.choice, "always");
+    assert.equal((await f.tallies.decision("ada", f.id, record.input.approvalTally!.authorizationFingerprint))?.answer, "allow_always");
+    assert.deepEqual(f.counts(), { saves: 1, aliases: 1 });
+    assert.equal(f.runAccess.location("ada", ["r1"], "removed"), undefined);
+  });
+}
+
+test("D: owner abort after publication with no prompt is recovered from the original journal once after reopen", async t => {
+  const f = await folderD(t); f.afterPublish(() => { f.readable(false); f.controller.abort(new Error("stop")); });
+  await assert.rejects(f.answer("always"), /receipt outage/u);
+  assert.match((await f.outcome).message, /stop/u); assert.equal(f.bridge.pending().length, 0);
+  const record = (await f.journal.list())[0]!, proof = record.input.approvalTally!;
+  f.readable(true); f.advance(100); f.setRevision("removed");
+  await f.service.settleFolder({ botId: "ada", path: "/Taxes", decisionId: "later-deny", authorizationFingerprint: "later-proof", source: "person", answer: "not_now", offered: false });
+  const reopened = f.makeD();
+  assert.equal(await reopened.reconcileAbsent("ada", f.id), true);
+  assert.equal(await reopened.reconcileAbsent("ada", f.id), true);
+  assert.equal((await f.tallies.decision("ada", f.id, proof.authorizationFingerprint))?.answer, "allow_always");
+  assert.equal((await f.tallies.decision("ada", "later-deny", "later-proof"))?.answer, "deny");
+  assert.equal(await f.service.folderOffer("ada", "/Taxes"), undefined);
+  assert.deepEqual(f.counts(), { saves: 1, aliases: 0 });
+  assert.equal(f.runAccess.location("ada", ["r1"], "removed"), undefined);
+});
+
+test("D: real Once tally commit then acknowledgement failure cannot recount or authorize a Not now retry", async t => {
+  const f = await folderD(t); const settle = f.d.settle; let attempts = 0;
+  f.d.settle = async (...args) => { const result = await settle(...args); if (++attempts === 1) throw new Error("tally acknowledgement lost"); return result; };
+  await assert.rejects(f.answer("once"), /acknowledgement lost/u);
+  f.advance(1_000);
+  assert.equal(await f.answer("not_now"), "answered");
+  assert.equal((await f.outcome).choice, "once");
+  assert.deepEqual(f.counts(), { saves: 0, aliases: 1 });
+  const proof = f.proof()!;
+  assert.deepEqual(await f.tallies.decision("ada", f.id, proof.authorizationFingerprint), {
+    id: f.id, authorizationFingerprint: proof.authorizationFingerprint, answer: "allow", source: "person",
+  });
+  assert.equal((await f.journal.list()).length, 0, "Once never manufactures a folder publication receipt");
+  assert.equal(await f.service.folderOffer("ada", "/Taxes"), undefined);
+});
+
+test("D: a failed real Always grant permits Once on the same wait, counting only that successful choice", async t => {
+  const f = await folderD(t); f.failGrant(true);
+  await assert.rejects(f.answer("always"), /before publication/u);
+  f.failGrant(false); f.advance(1_000);
+  assert.equal(await f.answer("once"), "answered");
+  assert.equal((await f.outcome).choice, "once");
+  assert.deepEqual(f.counts(), { saves: 0, aliases: 1 });
+  assert.equal((await f.journal.list()).length, 0);
+  assert.equal((await f.tallies.decision("ada", f.id, f.proof()!.authorizationFingerprint))?.answer, "allow");
+});
+
+test("D: a legacy committed folder receipt acknowledges Always without inventing a D decision or alias", async t => {
+  const f = await folderD(t);
+  await f.journal.put({ input: { audienceId: "desktop:local", botId: "ada", folderPath: "/Taxes", expectedRevision: "old",
+    expectedIdentity: { device: "1", inode: "2" }, operationId: f.id }, rootId: "legacy-root", ownsRoot: true,
+    state: "committed", optionId: "legacy-option", resultRevision: "old-publication" });
+  f.setRevision("removed");
+  assert.equal(await f.answer("not_now"), "saved_for_future");
+  assert.equal((await f.outcome).choice, "always");
+  const record = (await f.journal.list())[0]!;
+  assert.equal(record.input.approvalTally, undefined);
+  assert.equal(await f.d.reconcileAbsent("ada", f.id), false);
+  assert.equal((await f.tallies.pendingPublications("ada")).length, 0);
+  assert.deepEqual(f.counts(), { saves: 0, aliases: 0 });
+});

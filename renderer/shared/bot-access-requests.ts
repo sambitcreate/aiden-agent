@@ -20,6 +20,7 @@ export interface BotPendingAccessRequest {
   place?: string;
   why: string;
   choices: BotAccessChoice[];
+  approvalCount?: number;
 }
 export type BotAccessOutcome =
   | BotAccessChoice
@@ -151,7 +152,7 @@ export function botPendingAccessRequestOf(value: unknown): BotPendingAccessReque
   if (
     Object.keys(v).some(
       (key) =>
-        !["botId", "waitId", "toolCallId", "target", "label", "place", "why", "choices"].includes(
+        !["botId", "waitId", "toolCallId", "target", "label", "place", "why", "choices", "approvalCount"].includes(
           key,
         ),
     )
@@ -189,6 +190,8 @@ export function botPendingAccessRequestOf(value: unknown): BotPendingAccessReque
     choices.some((choice, index) => choice !== suppliedChoices[index])
   )
     return null;
+  if (v.approvalCount !== undefined && (v.target !== "folder" || !choices.includes("always") ||
+      !Number.isInteger(v.approvalCount) || (v.approvalCount as number) < 3 || (v.approvalCount as number) > 20)) return null;
   return {
     botId,
     waitId: v.waitId,
@@ -198,6 +201,7 @@ export function botPendingAccessRequestOf(value: unknown): BotPendingAccessReque
     ...(place === undefined ? {} : { place }),
     why,
     choices,
+    ...(v.approvalCount === undefined ? {} : { approvalCount: v.approvalCount as number }),
   };
 }
 export function botAccessCardTitle(

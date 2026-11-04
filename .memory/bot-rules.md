@@ -49,7 +49,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 - ask:
   - An existing approval keeps its `onAllow` and gains the prefix `Rule · <label> — <summary>`.
   - With no baseline approval, a new rule-made approval is created.
-  - Bot approvals pass once/always scopes only for an explicit baseline Always offer. Rule-made asks never receive an offer or reuse remembered consent. The bridge supports this contract; production allow-list/tally wiring follows in D Task5.
+  - Bot approvals pass once/always scopes only for an explicit baseline Always offer. Rule-made asks never receive an offer or reuse remembered consent. The desktop runtime wires the allow-list/tally service; CLI has no such port.
 - hand_off: `decision.handoff {rule, summary, action, why}`. beforeTool then:
   - stores the approval memo with `kind:"handoff"` and `rule`;
   - asks through `requestHandoff`, which is `ruleHandoffRequest` from `bot-handoffs.ts`: kind `action`, source `rule`;
@@ -100,3 +100,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 - The shell is outside rules by design. Under Full access, a shell command could edit `rules.json`; the locked rules still hold because they come from code.
 
 - Bot messaging (2026-11-03): Ask first cards on bot:/botreply: turns wait on the real owning run within the saved deadline; expiry remains host provenance, not person denial. Hand-off rules block Bot-started steps and routine go-ahead never applies. See .memory/bot-messaging.md.
+
+## Allow list, phase D Task5
+
+botAllowList is wired after routines and C coverage for baseline-only no-rule approvals. Exact connection/server/tool and normalized site/action classes count person choices, three in14days without a denial, with an executed hint at most weekly. Atomic first publication compares original consent generation and the live pure full-requirements guard; exact operation receipts acknowledge history after Remove without invoking stale guards or restoring authority. Siblings use fresh automatic attempt pairs and do not count as person choices. Publication I/O/capacity failures keep the current one-time allowance and leave original private context for safe recovery. BotApprovalTallies publication/pendingPublications queries reconcile only known committed/revoked book history at startup. B's original committed journal context drives folder Always accounting and all-choice retry recovery. Full-file details/status in bot-allowed.md; desktop/native UI and Gate6 remain pending.

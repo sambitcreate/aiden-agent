@@ -87,7 +87,13 @@ export function initializeBotApplicationService(): Promise<void> {
       // orphaned sessions and records interrupted turns, and never resumes one.
       // A failure leaves Bots unavailable without blocking the rest of Aiden.
       void import("./bot-runtime/bot-session-main.js")
-        .then(({ initializeBotSessionRuntime }) => initializeBotSessionRuntime())
+        .then(async ({ initializeBotSessionRuntime, reconcileBotAllowList }) => {
+          // Journal recovery is complete. Reconcile historical obligations,
+          // without publishing new consent or restoring ephemeral run access.
+          try { await reconcileBotAllowList(); }
+          catch (error) { logger.warn("bots", "Bot approval history could not be reconciled.", error); }
+          await initializeBotSessionRuntime();
+        })
         .catch((error: unknown) => logger.error("bots", "The Bot runtime could not start.", error));
     })
     .catch((error) => {

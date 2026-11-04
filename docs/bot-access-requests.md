@@ -14,6 +14,15 @@ A temporary grant from an access card is unavailable while an unattended routine
 
 A request for **your whole Mac** offers only Allow once and Not now. It is never saved as an Always grant. File access turned off is not a route to requesting more access; change that choice yourself in the Bot's Advanced settings.
 
+Folder cards that offer Always can show how often you allowed that exact
+folder in the last two weeks. After three approvals without a recent denial,
+a later Allow once can prompt one brief reminder about **Always for this
+folder**, at most once a week. Whole-Mac requests never count; folders without
+an Always choice never offer the reminder. Retries keep the original choice
+and count it once. If an earlier Always was saved before its acknowledgement
+arrived, a later retry records that earlier approval without restoring access
+you removed. See [Allowed without asking](bot-rules.md#allowed-without-asking).
+
 ## What an approval covers
 
 The grant applies to the file tools and the folder shown on the card. It does not grant a connection, browser sign-in, computer control or permission to approve another card. Protected Aiden storage stays protected, including during temporary Home or whole-Mac access and recursive file searches.

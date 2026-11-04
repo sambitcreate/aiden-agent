@@ -255,7 +255,7 @@
     "pretest:bot-access": "npm run build:lease-flock",
     "test:bot-access": "tsx --test renderer/shared/bot-access-requests.test.ts main/services/bot-runtime/bot-access-target.test.ts main/services/bot-runtime/bot-run-access.test.ts main/services/bot-runtime/bot-access-requests.test.ts main/services/bot-runtime/bot-access-request-tool.test.ts main/handlers/bot-access-requests.test.ts renderer/components/bots/access-request-card.test.tsx renderer/main/bots/use-bot-access-request-actions.test.tsx",
     "pretest:bot-allowed": "npm run build:lease-flock",
-    "test:bot-allowed": "tsx --test main/services/bot-runtime/bot-approval-tallies.test.ts main/services/bot-runtime/bot-allow-target.test.ts main/services/bot-runtime/bot-approvals.test.ts",
+    "test:bot-allowed": "tsx --test main/services/bot-runtime/bot-approval-tallies.test.ts main/services/bot-runtime/bot-allow-target.test.ts main/services/bot-runtime/bot-approvals.test.ts main/services/bot-runtime/bot-allow-list.test.ts",
     "pretest:bot-plans": "npm run build:lease-flock",
     "test:bot-plans": "tsx --test renderer/shared/bot-plans.test.ts main/services/bot-plans/validate.test.ts main/services/bot-plans/plans.test.ts main/services/bot-plans/authority.test.ts main/services/bot-runtime/bot-plan-tools.test.ts main/handlers/bot-plans.test.ts main/services/bot-plans/lifecycle.test.ts renderer/components/bots/plan-card.test.tsx"
   },

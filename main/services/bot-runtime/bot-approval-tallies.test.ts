@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { botSessionDirectory } from "../bot-routine-notes.js";
+import { DataStore } from "../data-store.js";
+import { ToolApprovalRuleBook, emptyToolApprovalRulesDocument, normalizeToolApprovalRulesDocument,
+  TOOL_APPROVAL_RULES_MAX_BYTES, type ToolApprovalRulesDocument } from "../tool-approval-rules.js";
 import {
   createBotApprovalTallies,
   type BotApprovalAnswer,
@@ -588,4 +591,177 @@ test("published receipt replay cannot reintroduce its count after class forget o
     await allow();
     assert.deepEqual(await open().nudge("bot:a", CAL), { count: 3 });
   });
+});
+
+const PUBLICATION_CONTEXT = { consentRevision: "a".repeat(64), label: "Google Calendar · Create event", title: "Create event" };
+
+test("publication context is captured immutably and survives reopen and connection rename", async (t) => {
+  const { tallies, person, open, file } = await setup(t);
+  const decision = person("allow_always", true);
+  const context = { ...PUBLICATION_CONTEXT };
+  const pending = tallies.record("bot:a", CAL, { ...decision, publicationContext: context });
+  context.label = "Renamed calendar";
+  await pending;
+  const expected = { decision: { id: decision.id, authorizationFingerprint: decision.authorizationFingerprint, answer: "allow_always", source: "person" },
+    target: CAL, offered: true, decidedAt: START, context: PUBLICATION_CONTEXT, status: "pending" };
+  assert.deepEqual(await open().publication("bot:a", decision.id, decision.authorizationFingerprint), expected);
+  const cloned = (await tallies.publication("bot:a", decision.id, decision.authorizationFingerprint))!;
+  cloned.context.title = "Mutated return value";
+  cloned.target = { kind: "site", host: "evil.example", action: "click" };
+  assert.deepEqual(await open().publication("bot:a", decision.id, decision.authorizationFingerprint), expected);
+  const before = await fs.readFile(file(), "utf8");
+  assert.deepEqual(await open().record("bot:a", CAL, decision), { counted: true });
+  assert.deepEqual(await open().record("bot:a", CAL, { ...decision, publicationContext: { ...PUBLICATION_CONTEXT } }), { counted: true });
+  await assert.rejects(open().record("bot:a", CAL, { ...decision, publicationContext: context }), /decision.*changed|context|conflict/iu);
+  assert.equal(await fs.readFile(file(), "utf8"), before);
+});
+
+test("pending publication reads never count, grant or invent legacy context", async (t) => {
+  const { tallies, person, open, file, allow } = await setup(t);
+  const connection = person("allow_always", false);
+  const site = person("allow_always", true);
+  const legacy = person("allow_always", false);
+  await tallies.record("bot:a", CAL, { ...connection, publicationContext: PUBLICATION_CONTEXT });
+  await tallies.record("bot:a", { kind: "site", host: "amazon.com", action: "click" }, { ...site,
+    publicationContext: { ...PUBLICATION_CONTEXT, label: "Click on amazon.com", title: "amazon.com" } });
+  await tallies.record("bot:a", FOLDER, legacy);
+  await allow();
+  const bytes = await fs.readFile(file(), "utf8");
+  assert.deepEqual((await open().pendingPublications("bot:a")).map((r) => [r.decision.id, r.target.kind, r.status]), [
+    [connection.id, "connection", "pending"], [site.id, "site", "pending"],
+  ]);
+  assert.equal(await open().publication("bot:a", legacy.id, legacy.authorizationFingerprint), undefined);
+  assert.equal((await open().decision("bot:a", legacy.id, legacy.authorizationFingerprint))?.answer, "allow_always");
+  assert.equal(await tallies.publication("bot:a", connection.id, "changed"), undefined);
+  assert.equal(await tallies.publication("bot:a", "unknown", "fingerprint"), undefined);
+  assert.equal(await fs.readFile(file(), "utf8"), bytes);
+  await tallies.completePublication("bot:a", connection.id, connection.authorizationFingerprint, "published");
+  await tallies.completePublication("bot:a", site.id, site.authorizationFingerprint, "revoked");
+  assert.equal((await open().publication("bot:a", connection.id, connection.authorizationFingerprint))?.status, "published");
+  assert.equal((await open().publication("bot:a", site.id, site.authorizationFingerprint))?.status, "revoked");
+  assert.deepEqual(await open().pendingPublications("bot:a"), []);
+});
+
+test("legacy connection decisions stay acknowledgeable but cannot acquire new publication context", async (t) => {
+  const { tallies, person, open } = await setup(t);
+  const legacy = person("allow_always", false);
+  await tallies.record("bot:a", CAL, legacy);
+  assert.deepEqual(await open().record("bot:a", CAL, legacy), { counted: true });
+  assert.equal((await open().decision("bot:a", legacy.id, legacy.authorizationFingerprint))?.answer, "allow_always");
+  assert.equal(await open().publication("bot:a", legacy.id, legacy.authorizationFingerprint), undefined);
+  assert.deepEqual(await open().pendingPublications("bot:a"), []);
+  await assert.rejects(tallies.record("bot:a", CAL, { ...legacy, publicationContext: PUBLICATION_CONTEXT }), /decision.*changed|context|conflict/iu);
+});
+
+test("publication context is allowed only on person Always connection/site decisions and has strict safe display fields", async (t) => {
+  const { tallies, person, file } = await setup(t);
+  const decision = person("allow_always", false);
+  for (const context of [
+    { ...PUBLICATION_CONTEXT, consentRevision: "not-a-digest" },
+    { ...PUBLICATION_CONTEXT, label: "x".repeat(201) },
+    { ...PUBLICATION_CONTEXT, title: "two  spaces" },
+    { ...PUBLICATION_CONTEXT, label: " Calendar" },
+    { ...PUBLICATION_CONTEXT, title: "Create\u202eevent" },
+    { ...PUBLICATION_CONTEXT, label: "https://owner.example/private" },
+    { consentRevision: PUBLICATION_CONTEXT.consentRevision, label: "Calendar" },
+    { ...PUBLICATION_CONTEXT, rawArgs: { secret: "do-not-persist" } },
+  ]) {
+    await assert.rejects(tallies.record("bot:a", CAL, { ...decision, publicationContext: context } as never), /context|publication/iu);
+  }
+  await assert.rejects(tallies.record("bot:a", FOLDER, { ...decision, publicationContext: PUBLICATION_CONTEXT }), /context|publication/iu);
+  await assert.rejects(tallies.record("bot:a", CAL, { ...person("allow"), publicationContext: PUBLICATION_CONTEXT }), /context|publication/iu);
+  await assert.rejects(tallies.record("bot:a", CAL, { ...decision, source: "allow_list", publicationContext: PUBLICATION_CONTEXT }), /context|publication/iu);
+  await assert.rejects(fs.stat(file()), { code: "ENOENT" });
+});
+
+test("changed or missing observed publication context fails closed and preserves evidence", async (t) => {
+  for (const variant of ["rename", "missing", "malformed"]) await t.test(variant, async (child) => {
+    const { tallies, person, file, open } = await setup(child);
+    const decision = person("allow_always", false);
+    await tallies.record("bot:a", CAL, { ...decision, publicationContext: PUBLICATION_CONTEXT });
+    const document = JSON.parse(await fs.readFile(file(), "utf8"));
+    if (variant === "missing") delete document.decisions[0].publicationContext;
+    else document.decisions[0].publicationContext.label = variant === "rename" ? "Valid but different label" : "bad\nlabel";
+    const evidence = JSON.stringify(document);
+    await fs.writeFile(file(), evidence);
+    await assert.rejects(open().pendingPublications("bot:a"), /read|receipt|ledger/iu);
+    assert.equal(await fs.readFile(file(), "utf8"), evidence);
+  });
+});
+
+test("committed publication recovery preserves context and never resets a later denial twice", async (t) => {
+  const { tallies, person, allow, at, open } = await setup(t);
+  await allow(); await allow(); await allow();
+  at(1);
+  const always = person("allow_always", false);
+  await tallies.record("bot:a", CAL, { ...always, publicationContext: PUBLICATION_CONTEXT });
+  // The book has committed. A crash leaves this tally pending until a read-only
+  // reconciler supplies that exact historical operation's result.
+  assert.equal((await open().pendingPublications("bot:a")).length, 1);
+  await open().completePublication("bot:a", always.id, always.authorizationFingerprint, "published");
+  at(2);
+  await tallies.record("bot:a", CAL, person("deny"));
+  await open().completePublication("bot:a", always.id, always.authorizationFingerprint, "published");
+  assert.equal(await tallies.nudge("bot:a", CAL), undefined);
+  assert.deepEqual(await open().record("bot:a", CAL, always), { counted: true });
+  assert.deepEqual((await open().publication("bot:a", always.id, always.authorizationFingerprint))?.context, PUBLICATION_CONTEXT);
+  assert.deepEqual(await open().pendingPublications("bot:a"), []);
+});
+
+test("publication queries and context writes respect the shared deletion fence", async (t) => {
+  const { tallies, person, open, file } = await setup(t);
+  await tallies.record("bot:b", CAL, { ...person("allow_always"), publicationContext: PUBLICATION_CONTEXT });
+  const pending = tallies.record("bot:a", CAL, { ...person("allow_always"), publicationContext: PUBLICATION_CONTEXT });
+  const deleted = open().forgetBot("bot:a");
+  await assert.rejects(pending, /no longer exists/u);
+  await deleted;
+  await assert.rejects(open().pendingPublications("bot:a"), /no longer exists/u);
+  assert.equal((await open().pendingPublications("bot:b")).length, 1);
+  await assert.rejects(fs.stat(file()), { code: "ENOENT" });
+});
+
+
+test("real book commit with a lost acknowledgement reconciles the pending tally without regrant or a second reset", async (t) => {
+  const { dir, tallies, person, allow, at, open } = await setup(t);
+  const store = new DataStore<ToolApprovalRulesDocument>("tool-approval-rules.json", emptyToolApprovalRulesDocument(), () => dir,
+    { normalize: normalizeToolApprovalRulesDocument, maxBytes: TOOL_APPROVAL_RULES_MAX_BYTES, reloadBeforeWrite: true, fileMode: 0o600 });
+  let uncertain = true;
+  const rules = new ToolApprovalRuleBook({
+    load: () => store.load(), loadedFromCorruptFile: () => store.loadedFromCorruptFile(),
+    async update<R>(mutation: (draft: ToolApprovalRulesDocument) => R | Promise<R>): Promise<R> {
+      const result = await store.update(mutation);
+      if (uncertain) { uncertain = false; throw new Error("Acknowledgement lost after the book committed"); }
+      return result;
+    },
+  }, () => new Date(START + DAY), undefined, { knownBot: async () => true });
+  await allow(); await allow(); await allow();
+  at(1);
+  const always = person("allow_always", true);
+  const context = { ...PUBLICATION_CONTEXT, consentRevision: await rules.botConsentRevision("bot:a", CAL) };
+  await tallies.record("bot:a", CAL, { ...always, publicationContext: context });
+  const pending = (await open().pendingPublications("bot:a"))[0]!;
+  assert.equal(await rules.botGrantOperation("bot:a", pending.decision.id), undefined);
+  assert.deepEqual(await rules.listBot(), [], "pending entitlement reads install no authority");
+  let guards = 0;
+  await assert.rejects(rules.grantBot("bot:a", pending.target, pending.context.label, pending.decision.id, {
+    expectedConsentRevision: pending.context.consentRevision, validatePublication: async () => { guards++; },
+  }), /Acknowledgement lost/u);
+  assert.equal((await open().pendingPublications("bot:a")).length, 1);
+  at(2);
+  await tallies.record("bot:a", CAL, person("deny"));
+  const committed = await rules.botGrantOperation("bot:a", always.id);
+  assert.ok(committed);
+  assert.equal(committed.status, "published");
+  await open().completePublication("bot:a", always.id, always.authorizationFingerprint, committed.status);
+  await open().completePublication("bot:a", always.id, always.authorizationFingerprint, committed.status);
+  assert.deepEqual(await open().record("bot:a", CAL, always), { counted: true });
+  assert.equal(await tallies.nudge("bot:a", CAL), undefined, "the later denial survives acknowledgement recovery");
+  await rules.revokeBot("bot:a", (await rules.listBot())[0]!.id);
+  const removed = await rules.botGrantOperation("bot:a", always.id);
+  assert.equal(removed?.status, "revoked");
+  await open().completePublication("bot:a", always.id, always.authorizationFingerprint, removed!.status);
+  assert.deepEqual(await rules.listBot(), []);
+  assert.deepEqual(await open().pendingPublications("bot:a"), []);
+  assert.equal(await tallies.nudge("bot:a", CAL), undefined);
+  assert.equal(guards, 1, "historical reconciliation never calls the first-publication guard again");
 });

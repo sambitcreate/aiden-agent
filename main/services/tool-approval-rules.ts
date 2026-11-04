@@ -49,6 +49,12 @@ export interface BotGrantOperation {
   revokedAt?: string;
 }
 
+export interface BotApprovalPublicationOptions {
+  expectedConsentRevision?: string;
+  /** Pure live read, never a queued rule mutation. Used only for first publication. */
+  validatePublication?(): Promise<void>;
+}
+
 export const BOT_APPROVAL_RULES_PROFILE_MAX = 1_000;
 
 export interface ToolApprovalRulesDocument {
@@ -329,6 +335,16 @@ export interface ToolApprovalRuleStore {
 
 export type ToolApprovalRuleMatch = Exclude<ToolApprovalScope, "once">;
 
+/** Same canonical digest for external reads and the atomic first-publication compare. */
+function botConsentRevisionOf(document: ToolApprovalRulesDocument, botId: string, key: string): string {
+  const operations = (document.botGrantOperations ?? [])
+    .filter((operation) => operation.botId === botId && operation.targetKey === key)
+    .sort((a, b) => a.operationId < b.operationId ? -1 : a.operationId > b.operationId ? 1 : 0)
+    .map((operation) => [operation.operationId, operation.ruleId, operation.status,
+      operation.publishedAt, operation.revokedAt ?? null]);
+  return createHash("sha256").update(JSON.stringify(["bot-consent-v1", botId, key, operations])).digest("hex");
+}
+
 /** Holds in-memory chat rules and the persisted "always" rules. */
 export class ToolApprovalRuleBook {
   private readonly chatRules = new Map<string, Set<string>>();
@@ -459,16 +475,24 @@ export class ToolApprovalRuleBook {
     const document = await this.store.load();
     await this.assertBotReceipts(document);
     if (!await this.isKnownBot(botId)) throw new Error("This Bot no longer exists.");
-    const key = botApprovalRuleKey(canonical);
-    const operations = (document.botGrantOperations ?? [])
-      .filter((operation) => operation.botId === botId && operation.targetKey === key)
-      .sort((a, b) => a.operationId < b.operationId ? -1 : a.operationId > b.operationId ? 1 : 0)
-      .map((operation) => [operation.operationId, operation.ruleId, operation.status,
-        operation.publishedAt, operation.revokedAt ?? null]);
-    return createHash("sha256").update(JSON.stringify(["bot-consent-v1", botId, key, operations])).digest("hex");
+    return botConsentRevisionOf(document, botId, botApprovalRuleKey(canonical));
   }
 
-  async grantBot(botId: string, target: BotApprovalRuleTarget, label: string, operationId: string): Promise<
+  /** Historical receipt read. It grants nothing and needs no current Bot/binding. */
+  async botGrantOperation(botId: string, operationId: string): Promise<BotGrantOperation | undefined> {
+    if (!validWorkspaceId(botId) || !validWorkspaceId(operationId)) throw new Error("Invalid Bot approval operation identity.");
+    const document = await this.store.load();
+    await this.assertBotReceipts(document);
+    const operation = document.botGrantOperations?.find((entry) => entry.operationId === operationId);
+    if (!operation) return undefined;
+    const receipt = normalizeBotOperation(operation);
+    if (!receipt) throw new Error("Bot approval operation receipt could not be read.");
+    if (receipt.botId !== botId) throw new Error("Bot approval operation changed its Bot identity.");
+    return structuredClone(receipt);
+  }
+
+  async grantBot(botId: string, target: BotApprovalRuleTarget, label: string, operationId: string,
+    options?: BotApprovalPublicationOptions): Promise<
     { status: "published"; rule: BotApprovalRuleView } | { status: "revoked" }
   > {
     const canonical = normalizeBotTarget(target);
@@ -478,6 +502,9 @@ export class ToolApprovalRuleBook {
     }
     const capturedLabel = label.trim().slice(0, 200);
     const key = botApprovalRuleKey(canonical);
+    const guarded = options !== undefined;
+    const expectedConsentRevision = options?.expectedConsentRevision;
+    const validatePublication = options?.validatePublication;
     const result = await this.store.update(async (draft) => {
       await this.assertBotReceipts(draft);
       const previous = draft.botGrantOperations?.find((op) => op.operationId === operationId);
@@ -490,6 +517,22 @@ export class ToolApprovalRuleBook {
         const rule = rules.find((r) => r.id === previous.ruleId && r.botId === botId && botApprovalRuleKey(r.target) === key);
         return rule ? { status: "published" as const, rule: structuredClone(rule), changed: false }
           : { status: "revoked" as const, changed: false };
+      }
+      if (guarded) {
+        if (typeof expectedConsentRevision !== "string" || !/^[a-f0-9]{64}$/u.test(expectedConsentRevision) ||
+          typeof validatePublication !== "function") {
+          throw new Error("A Bot approval publication requires a consent revision and a live publication proof.");
+        }
+        if (botConsentRevisionOf(draft, botId, key) !== expectedConsentRevision) {
+          throw new Error("Bot approval consent changed before publication.");
+        }
+        if (!await this.isKnownBot(botId)) throw new Error("This Bot no longer exists.");
+        // The live proof must be the final awaited authorization. Another lookup
+        // afterward would let Stop, expiry or page drift invalidate that proof.
+        await validatePublication();
+        // Deletion intent can arrive while the proof is held. Fence it without
+        // introducing an await after the final live authorization.
+        if (this.forgottenBots.has(botId)) throw new Error("This Bot no longer exists.");
       }
       let rule = rules.find((r) => r.botId === botId && botApprovalRuleKey(r.target) === key);
       if (!rule) {

@@ -10,8 +10,8 @@ import { createBotRegistry, type BotRegistry } from "./bot-extension.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
 import { recordingDeps } from "./test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor } from "./test-support/faux.js";
-import { botAccessRequestCandidate, botSavedLocationForCall, BOT_ACCESS_REQUEST_MEMO } from "./bot-access-request-tool.js";
-import { BotAccessRequestStaleError, createBotAccessRequests } from "./bot-access-requests.js";
+import { botAccessRequestCandidate, botSavedLocationForCall, BOT_ACCESS_REQUEST_MEMO, type BotAccessRequestToolDeps } from "./bot-access-request-tool.js";
+import { BotAccessRequestStaleError, createBotAccessRequests, type BotAccessSettle } from "./bot-access-requests.js";
 import { createBotAccessAuthorizer } from "./bot-access-authorization.js";
 import { createBotFolderGrantJournal, type BotFolderGrantRecord } from "../bot-folder-grant-journal.js";
 import { createBotRunAccess } from "./bot-run-access.js";
@@ -24,7 +24,7 @@ import { createBotIssueService } from "../bot-issues/service.js";
 import { createBotIssueStore } from "../bot-issues/store.js";
 
 const BOT = "ada";
-async function fixture(t: import("node:test").TestContext, folderCommitted?: (botId: string, operationId: string) => Promise<boolean>) {
+async function fixture(t: import("node:test").TestContext, folderCommitted?: (botId: string, operationId: string) => Promise<boolean>, d?: Pick<BotAccessRequestToolDeps, "folderOffer"> & { settle?: BotAccessSettle }) {
   const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "bot-access-tool-")));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
   const root = path.join(home, "Taxes"),
@@ -84,6 +84,7 @@ async function fixture(t: import("node:test").TestContext, folderCommitted?: (bo
       },
     },
     runAccess,
+    ...(d?.folderOffer ? { folderOffer: d.folderOffer } : {}),
     resolveTarget,
     currentLocations,
     boundLocations: structuredClone(fixed),
@@ -136,7 +137,7 @@ async function fixture(t: import("node:test").TestContext, folderCommitted?: (bo
     controller?: AbortController,
   ) => candidate.bind!(call(controller)).execute("call-1", value);
   const answer = async (choice: "once" | "always" | "not_now") =>
-    requests.answer(BOT, requests.pending()[0]!.waitId, choice, authorize);
+    requests.answer(BOT, requests.pending()[0]!.waitId, choice, authorize, d?.settle);
   const fileCandidates = botFileCandidates([{id:"home",label:"Bot folder",root:botHome}], {
     routine:false,recordOwnWrite(){},
     runAccess:{resolve:async(current)=>runAccess.location(BOT,await current.runRequestIds!(),revision)},
@@ -682,3 +683,27 @@ for (const failure of ["EIO", "schema"] as const) {
     });
   }
 }
+
+test("D: an eligible fourth folder card copies the count and its private receipt hint reaches only tool output", async t => {
+  const app = await fixture(t, undefined, { folderOffer: async () => ({ count: 3 }), settle: async () => ({ hint: "Aiden note: folder hint" }) });
+  const result = app.execute(); await waitFor(() => app.requests.pending().length === 1);
+  assert.equal(app.requests.pending()[0]?.approvalCount, 3);
+  assert.equal("authorizationFingerprint" in app.requests.pending()[0]!, false);
+  await app.answer("once");
+  const settled = await result;
+  assert.deepEqual(settled.details, { target: "folder", label: "Taxes", outcome: "once" });
+  assert.equal(settled.content.filter(item => item.type === "text" && item.text.includes("Aiden note: folder hint")).length, 1);
+});
+
+test("D: Home and Whole Mac never query a folder offer or display a repeat-approval count", async t => {
+  let offers = 0;
+  const app = await fixture(t, undefined, { folderOffer: async () => { offers++; return { count: 3 }; } });
+  for (const requested of [app.home, "whole_mac"]) {
+    const result = app.execute({ path: requested, why: "Read this" });
+    await waitFor(() => app.requests.pending().length === 1);
+    const card = app.requests.pending()[0]!;
+    assert.equal(card.approvalCount, undefined); assert.deepEqual(card.choices, ["not_now", "once"]);
+    await app.answer("not_now"); await result;
+  }
+  assert.equal(offers, 0);
+});

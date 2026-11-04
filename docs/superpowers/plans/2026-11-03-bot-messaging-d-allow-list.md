@@ -334,6 +334,10 @@ The precedence is authority/ingress, rules, existing routine go-ahead, plan cove
 - Create: `main/services/bot-runtime/bot-allow-list.ts`, `main/services/bot-runtime/bot-allow-list.test.ts`
 - Modify: `main/services/bot-runtime/bot-session-main.ts:239-245` (assembly `allowList` port), `:414` (`settleApproval`), `:802-826` (`deleteEffects`)
 - Modify: `main/services/bot-runtime/bot-access-requests-main.ts` (`answerBotAccessRequest`, Plan B Task 5) and `main/services/bot-runtime/bot-access-request-tool.ts` (its tool result, Plan B Task 7) for the folder nudge
+- Modify: `main/services/bot-folder-grant-journal.ts`, `main/services/bot-application-service.ts` and existing application tests (optional original tally context, historical receipts, selected folder rows/removal).
+- Modify: `main/services/tool-approval-rules.ts` and existing tests, `bot-runtime/bot-approval-tallies.ts` and existing tests (atomic first-publication proof and immutable pending-publication recovery context).
+- Modify: `main/services/tool-approval-rules-main.ts`, `main/services/bot-application-service-main.ts` (active-Bot/deletion check and bounded historical reconciliation after journal recovery).
+- Modify: B private authorizer/bridge/candidate source and existing tests, plus shared access-card type/parser tests for the safe folder approvalCount. Remote55 wire shape stays unchanged; Task7/8 controls any new phone count projection.
 - Modify: `.memory/bot-rules.md` (Enforcement: the "never pass `scopes`" line becomes "pass scopes only for an Always allow offer; rule-made asks never get one"; a new "Allow list" section), `.memory/bot-durable-runtime.md` (Approvals line), `docs/bot-rules.md` (new "Allowed without asking" section after "Routines that go ahead")
 
 **Interfaces:**
@@ -341,7 +345,7 @@ The precedence is authority/ingress, rules, existing routine go-ahead, plan cove
 - Produces:
   ```ts
   export interface BotAllowList extends BotAllowListPort {
-    settle(input: { botId: string; remember: NonNullable<BotApprovalRequirement["remember"]>; decision: BotApprovalDecision }): Promise<{ hint?: string }>;
+    settle(input: BotApprovalSettlementInput, context?: BotApprovalSettlementContext): Promise<BotApprovalSettlement>;
     /** Rules plus the Bot's Custom `approved_location` selections, newest first; every Bot when omitted. */
     list(botId?: string): Promise<BotAllowedEntry[]>;
     /** A rule: `revokeBot`. A folder: `BotApplicationService.revokeBotFolder`. */
@@ -351,17 +355,21 @@ The precedence is authority/ingress, rules, existing routine go-ahead, plan cove
     forgetBot(botId: string): Promise<void>;
   }
   export function createBotAllowList(deps: {
-    rules: Pick<ToolApprovalRuleBook, "matchBot" | "grantBot" | "listBot" | "recordBotUse" | "revokeBot" | "forgetBot">;
+    rules: Pick<ToolApprovalRuleBook, "matchBot" | "grantBot" | "listBot" | "recordBotUse" | "revokeBot" | "forgetBot" | "botConsentRevision" | "botGrantOperation" | "onBotChange">;
     folderEntries(botId?: string): Promise<BotAllowedEntry[]>; // main wiring reads selected approved locations
     revokeFolder(botId: string, sourceId: string): Promise<boolean>; // main wiring calls revokeBotFolder
     tallies: BotApprovalTallies;
-    approvals: Pick<BotApprovals, "pending" | "decide">;
+    approvals: Pick<BotApprovals, "pending" | "releaseFromAllowList">;
     botName(botId: string): Promise<string | undefined>;
     connectionName(serverId: string): Promise<string | undefined>;
     log?(message: string, error: unknown): void;
   }): BotAllowList;
   export function botApprovalNudgeHint(input: { label: string; count: number; choice: string; place?: string }): string;
   ```
+Atomic connection/site publication takes the captured consent generation plus a live pure validation callback inside the existing rule-book transaction. Exact prior-operation replay is handled first and grants nothing after Remove; it does not invoke a stale live guard. First publication compares the generation from that same draft, validates current full requirements/owner/deadline, then mutates. The transient callback is never persisted. Tally publicationContext stores only the original consentRevision, canonical label and title beside the exact person decision. The exact publication and pendingPublications queries return that immutable context. Startup reconciliation completes only known committed/revoked rule-book receipts; a missing operation remains pending and cannot create authority without a live resumed call.
+
+B's optional journal approvalTally stores version1, the original authorization fingerprint, offered flag and original decidedAt before the first pending write. The decoder rejects malformed context and input replacement before writing. botFolderApprovalReceipts returns only committed desktop operations with D context, excluding deleted and deleting Bots. Legacy B receipts remain acknowledgeable without inventing a D event. Reconciliation never calls grantBotFolder, installs a run alias or changes selected folders. An incoming Once/Not now after earlier Always publication records the earlier Always, not a new choice. Publication completion is idempotent and preserves later history; it never calls a blanket forget after recovery.
+
 - Exact hint copy:
 
   `Aiden note: the person has approved “${label}” ${count} times in the last 14 days. Once, in one short sentence of your own, tell them they can stop being asked: “${choice}” on the next card${place ? `, or ${place}` : ""}. Don't bring it up again.`
@@ -380,7 +388,7 @@ The precedence is authority/ingress, rules, existing routine go-ahead, plan cove
   - A `grantBot` failure is logged and the current call keeps its one-time human allowance. The saved grant obligation/result records that persistence failed, so replay cannot manufacture another human approval. Do not clear the tally or release sibling cards unless the remembered grant actually published.
   - `offer` returns `undefined` when the Bot already has 50 remembered rules or the profile has 1,000. `grantBot` enforces both limits atomically under its store update; folder rows do not consume this rule limit.
 
-- [ ] **Step 1: Write the failing tests** in `bot-allow-list.test.ts`. Use a real `ToolApprovalRuleBook` on an in-memory store, real tallies on a temp dir, and a fake `approvals`:
+- [x] **Step 1: Write the failing tests** in `bot-allow-list.test.ts`. Use a real `ToolApprovalRuleBook` on an in-memory store, real tallies on a temp dir, and a fake `approvals`:
   - `Always allow adds an entry named after the app and clears the count`: `connectionName("gcal") → "Google Calendar"`, three `allow` settles, then `allow_always`. Expect:
     - `listBot("bot")[0].label === "Google Calendar · Create event"`;
     - `match` returns its id;
@@ -399,27 +407,27 @@ The precedence is authority/ingress, rules, existing routine go-ahead, plan cove
     - `answer: "always"` forgets the count;
     - `"not_now"` records a denial.
   - `forgetBot removes the Bot's entries and its tally file`.
-- [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-allow-list.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement `createBotAllowList`.**
-- [ ] **Step 4: Wire it in `bot-session-main.ts`:**
+- [x] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-allow-list.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement `createBotAllowList`.**
+- [x] **Step 4: Wire it in `bot-session-main.ts`:**
   - `const botApprovalTallies = createBotApprovalTallies({ profileDir: () => app.getPath("userData") })`, the same root `bot-delivery/funnel-main.ts` uses;
   - `const botAllowList = createBotAllowList({ rules: toolApprovalRules, tallies: botApprovalTallies, approvals: botApprovals, botName, connectionName: async (id) => (await configStore.listMcpServers()).find((s) => s.id === id)?.name, log: (m, e) => logger.warn("bots", m, e) })`;
   - pass `allowList: botAllowList` to `createBotToolAssembly`;
   - pass `settleApproval: (input) => botAllowList.settle(input)` and `requestApproval: (request) => botApprovals.request(request)` (the type changes, the call doesn't);
   - add `(botId) => botAllowList.forgetBot(botId)` to `deleteEffects` before `eraseBotData`.
-- [ ] **Step 4b: Add `revokeBotFolder` and folder entries (owner pick 12).** In `main/services/bot-application-service.ts`, next to Plan B's `grantBotFolder`, add `revokeBotFolder(input: { audienceId: string; botId: string; sourceId: string }): Promise<boolean>`. It saves through `updateBotAccess` with `nextBotFileScopeIds(policy.custom.fileScopeIds, snapshot.catalog.fileScopes, option.id, false)` and the same `refuseDriftedGrants` message; a Full-access Bot or an unselected folder returns `false`. It leaves the approved root in place. Tests:
+- [x] **Step 4b: Add `revokeBotFolder` and folder entries (owner pick 12).** In `main/services/bot-application-service.ts`, next to Plan B's `grantBotFolder`, add `revokeBotFolder(input: { audienceId: string; botId: string; sourceId: string }): Promise<boolean>`. It saves through `updateBotAccess` with `nextBotFileScopeIds(policy.custom.fileScopeIds, snapshot.catalog.fileScopes, option.id, false)` and the same `refuseDriftedGrants` message; a Full-access Bot or an unselected folder returns `false`. It leaves the approved root in place. Tests:
   - `list includes the folders in a Custom Bot's access`: a Custom Bot with one rule and one `approved_location` gives one `kind: "rule"` and one `kind: "folder"` row whose `what` is `Folder · ~/Documents/Taxes`. A Full-access Bot gives no folder rows.
   - `removing a folder entry takes it out of the Bot's access`: `remove(bot, "folder_root_a")` returns true, the saved `custom.fileScopeIds` no longer holds that option, `bot_home` stays, and the next `list` has no folder row.
   - `removing a folder another Bot uses leaves that Bot's access alone`.
-- [ ] **Step 5: Hook `request_access` (Plan B).** Make these three changes at B's card settle point and its tool result:
+- [x] **Step 5: Hook `request_access` (Plan B).** Make these three changes at B's card settle point and its tool result:
   - before raising a folder card, call `folderOffer(botId, path)`, and when it returns a count show the line `You’ve allowed this folder ${count} times in the last 2 weeks.` (B's card already has Always for this folder);
   - after a successfully validated person answer, call `settleFolder` with this authorization attempt's wait id as `decisionId` and source `person`; B's logical request id is not a decision id. Quit/Resume reapproval creates a new attempt, whereas transport retries keep the current attempt and native idempotency key; stale/aborted answers do not count. Replays are deduplicated by the same durable receipt mechanism;
   - append the returned hint to the tool result.
   
   Whole Mac requests are never counted, since only Allow once exists for them. Extend B's card test: `the fourth request for the same folder shows the count`, and `a Whole Mac request never does`.
-- [ ] **Step 6: Run the tests.** `npm run test:bot-allowed`, `npm run test:bot-runtime`, `npm run test:bot-rules`, and B's suite. Expected: PASS.
-- [ ] **Step 7: Update** `.memory/bot-rules.md`, `.memory/bot-durable-runtime.md` and `docs/bot-rules.md`. The doc section covers: what counts as a class; 3 in 14 days with no denial; Always allow for <Bot>; what entries never cover (locked rules, rule-made asks, Computer Use on your Mac); entries apply on every turn kind; Remove.
-- [ ] **Step 8: Register and commit.** Add the test file to `test:bot-allowed` and the registry. Commit: "Count, remember and hint repeated Bot approvals".
+- [x] **Step 6: Run the tests.** `npm run test:bot-allowed`, `npm run test:bot-runtime`, `npm run test:bot-rules`, and B's suite. Expected: PASS.
+- [x] **Step 7: Update** `.memory/bot-rules.md`, `.memory/bot-durable-runtime.md` and `docs/bot-rules.md`. The doc section covers: what counts as a class; 3 in 14 days with no denial; Always allow for <Bot>; what entries never cover (locked rules, rule-made asks, Computer Use on your Mac); entries apply on every turn kind; Remove.
+- [x] **Step 8: Register and commit.** Add the test file to `test:bot-allowed` and the registry. Commit: "Count, remember and hint repeated Bot approvals".
 
 ### Task 6: Desktop: the card, the profile list and Settings → Bots
 
@@ -641,3 +649,15 @@ Structured decisions and attempt-specific authorization fingerprints now cover o
 Parent inspection found stale Always could reach publication before the post-answer check. Real-book REDs reproduced page and new-Ask-rule drift. The follow-up validates before settlement and exposes a revocable live publication guard for Task5's atomic first grant. Original target/title/requirements/consent remain immutable private data; callbacks never enter a cache or receipt. Committed publication proofs still permit their one-time call after the intentional generation change, without surviving Remove.
 
 Final focused275pass and runtime474pass; rules62, messaging89, access84 and plans144 passed in the preceding validation. Rebuilt CLI183pass with3 existing skips; whole-project/CLI types, scoped lint and diff passed. Parent registered bridge tests: test:bot-allowed64pass and registry15pass results are in /tmp/bot-allowed-d-task4-parent-{allowed,registry}.log; current root types in /tmp/bot-allowed-d-task4-parent-types.log passed. Original actual REDs and setup-only failures are separated in the Task4 papercut. Publication correction evidence is /tmp/bot-allowed-d-task4-publication-{red,focused,runtime,types-final,cli-types,lint}.log. Task5 follows this commit; Tasks6–8 remain held. No fullD/native/Cua/live/package/hosted-CI acceptance.
+
+
+### Task 5 integration in progress, 2026-11-04
+
+Runtime/service and book/tally changes have separate bounded ownership; root owns journal/application storage, active-Bot main wiring, startup integration, docs and registration. Root application tests captured4 failures before the APIs/context support, then a genuine first-await snapshot failure and a strict-schema coercion failure. Current application suite74pass, scoped storage lint0 and its type-check passed. A selected Bot folder is removed through the existing expected-revision policy save under the inventory lock, preserving its home, other grants, other Bots and the approved root. Private journal input is immutable and rolls forward original D metadata. Root is checking the book's final awaited guard ordering; full Task5 validation and commit remain pending. No Task6–8 source work or D acceptance yet.
+
+
+### Task 5 complete locally, 2026-11-04
+
+The desktop service now wires exact per-class offers, immutable decisions/hints, atomic consent publication, validated sibling release, combined rule/folder listing/removal, deletion fencing and bounded historical reconciliation. First publication's final awaited authorization is its live guard, followed by synchronous deletion intent before mutation. An original committed operation bypasses stale guards only to acknowledge history. Pending original consent/title/label survives renames and acknowledgement loss; missing history never publishes a grant at startup. A corrupt Bot's tally does not stop later Bots from reconciling. B records only validated effective decisions at its private settle boundary, using original journal context for earlier Always and never incoming retry choice. Whole Mac never counts; folders without Always never offer a nudge. Safe desktop approvalCount is bounded3..20, and private hints remain tool output. Remote55 DTOs did not change.
+
+Root application suite74pass; book/settings35pass after actual final-guard Stop/expiry REDs. Runtime/service focused92, runtime474, rules62, access96, messaging89, plans144, Bots1003 and affected host adapters147 passed. Root registered the new service test: official allowed95pass, storage/settings109pass, registry15pass and current wholetypes0 at /tmp/bot-allowed-d-task5-parent-{allowed,storage,registry,types}.log. Scoped root5files, store4files and runtime12files lint passed; whitespace clean. Worker handoff /tmp/aiden-bot-allow-d-task5-runtime-handoff.md separates actual REDs from setup failures. Root initial storageRED4, snapshotRED1 and schema-coercionRED1 are retained; all new tests extend existing registered modules except the explicitly registered service pair. Task6 follows this commit, with Tasks7–8 still held. No fullD source/native/Cua/live/package/hosted-CI acceptance.

@@ -74,7 +74,10 @@ import { buildSystemPrompt } from "../chat-system-prompt.js";
 import { runtimeSupportsImages } from "../generation-runtime.js";
 import { resolveBotModelRuntime } from "../model-runtime.js";
 import { telegramBotBindingAuthority, telegramBotBindings } from "../telegram/telegram-bot-bindings.js";
-import { botApprovals } from "./bot-approvals-main.js";
+import { botApprovals, configureBotApprovalDecisionLookup } from "./bot-approvals-main.js";
+import { createBotApprovalTallies } from "./bot-approval-tallies.js";
+import { createBotAllowList, reconcileBotAllowListHistory } from "./bot-allow-list.js";
+import { toolApprovalRules } from "../tool-approval-rules-main.js";
 import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { botRunStalls, createBotRunWatchdog } from "./bot-run-watchdog.js";
@@ -238,8 +241,29 @@ async function imageInput(botId: string): Promise<boolean> {
   return resolvedModels.get(botId)?.imageInput ?? false;
 }
 
+export const botAllowList = createBotAllowList({
+  rules: toolApprovalRules,
+  tallies: createBotApprovalTallies({ profileDir }),
+  approvals: botApprovals,
+  botName: async botId => (await botStore.get(botId))?.name,
+  connectionName: async serverId => (await configStore.listMcpServers()).find(server => server.id === serverId)?.name,
+  folderEntries: botId => botApplicationService.botFolderEntries(botId),
+  revokeFolder: (botId, sourceId) => botApplicationService.revokeBotFolder({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, sourceId }),
+  log: (message, error) => logger.warn("bots", message, error),
+});
+configureBotApprovalDecisionLookup((...args) => botAllowList.decision(...args));
+
+/** Called after the application journal recovered and before runtime initialization.
+ * Only known committed history is reconciled; this never publishes new access. */
+export async function reconcileBotAllowList(): Promise<void> {
+  const [bots, receipts] = await Promise.all([botStore.list(), botApplicationService.botFolderApprovalReceipts()]);
+  await reconcileBotAllowListHistory(botAllowList, bots.map(bot => bot.id), receipts,
+    (_botId, error) => logger.warn("bots", "A Bot's approval history could not be reconciled.", error));
+}
+
 const toolSources = createBotToolSources({
   policyRevision: async (botId) => (await botCapabilityStore.getBotPolicy(botId)).revision,
+  folderOffer: (botId, folder) => botAllowList.folderOffer(botId, folder),
   canonicalChatId,
   imageInput,
   admit,
@@ -292,6 +316,7 @@ const planAuthority = createBotPlanAuthority({
 configureBotPlanAuthority({ revalidate: planAuthority.revalidate, revokeAccess: planAuthority.revokeAccess });
 
 const tools = createBotToolAssembly({
+  allowList: botAllowList,
   admit,
   sources: toolSources,
   rules: (botId) => botRules.rules(botId),
@@ -467,6 +492,7 @@ const extension: BotExtensionDeps = {
   turnAllows: withBotMemoryIngress(botIngressAllowsTool),
   afterReply: (botId) => memoryReview.afterReply(botId),
   beforeCompact: compactionSteering,
+  settleApproval: (input, context) => botAllowList.settle(input, context),
   requestApproval: async (request) => {
     const window = await botMessages().announceWaiting(request.botId, request.owner?.inputs.map(i => i.requestId) ?? [], request.summary, request.waitId);
     if (window?.expired) return { id: request.waitId, authorizationFingerprint: request.authorizationFingerprint, answer: "deny", source: "expiry" };
@@ -922,6 +948,7 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       (botId) => botIssues.forgetBot(botId),
       (botId) => botPauses.forgetBot(botId),
       // Its rules file goes, and no later edit can bring its directory back.
+      (botId) => botAllowList.forgetBot(botId),
       (botId) => botRules.forgetBot(botId),
       // Its computer stops and its VM is deleted before its home (the shared folder) goes.
       async (botId) => (await import("../bot-computers/bot-computers-main.js")).deleteBotComputer(botId),

@@ -568,3 +568,174 @@ test("quarantined receipt evidence does not consume workspace capacity twice", a
   await assert.rejects(book.grantBot("bot:a", CAL, "Calendar", "d0"), /receipt/u);
   assert.ok(JSON.stringify(saved).includes('"operationId":"d1099"'), "the valid prefix is retained as evidence");
 });
+
+test("first publication compares original consent inside the same draft after Remove wins", async (t) => {
+  const disk = await diskBook(t);
+  const rules = new ToolApprovalRuleBook(disk.open(), undefined, undefined, { knownBot: async () => true });
+  await rules.grantBot("bot:a", CAL, "Calendar", "d1");
+  const expectedConsentRevision = await rules.botConsentRevision("bot:a", CAL);
+  const original = (await rules.listBot())[0]!;
+  const changes: string[] = [];
+  rules.onBotChange((id) => changes.push(id));
+  const removed = rules.revokeBot("bot:a", original.id);
+  let guards = 0;
+  const pending = rules.grantBot("bot:a", CAL, "Calendar", "d2", { expectedConsentRevision,
+    validatePublication: async () => { guards++; } });
+  assert.equal(await removed, true);
+  await assert.rejects(pending, /consent.*changed|stale/iu);
+  assert.equal(guards, 0);
+  assert.deepEqual(await rules.listBot(), []);
+  assert.equal(await rules.botGrantOperation("bot:a", "d2"), undefined);
+  assert.deepEqual(changes, ["bot:a"]);
+});
+
+test("publication wins its serial then Remove tombstones every exact operation", async (t) => {
+  const disk = await diskBook(t);
+  const rules = new ToolApprovalRuleBook(disk.open(), undefined, undefined, { knownBot: async () => true });
+  await rules.grantBot("bot:a", CAL, "Calendar", "d1");
+  const expectedConsentRevision = await rules.botConsentRevision("bot:a", CAL);
+  let entered!: () => void;
+  let release!: () => void;
+  const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const first = rules.grantBot("bot:a", CAL, "Calendar", "d2", { expectedConsentRevision,
+    validatePublication: async () => { entered(); await gate; } });
+  await Promise.race([ready, first.then(() => assert.fail("First publication must await its live guard"))]);
+  const removed = rules.revokeBot("bot:a", (await rules.listBot())[0]!.id);
+  release();
+  assert.equal((await first).status, "published");
+  assert.equal(await removed, true);
+  assert.deepEqual(await rules.listBot(), []);
+  assert.equal((await rules.botGrantOperation("bot:a", "d1"))?.status, "revoked");
+  assert.equal((await rules.botGrantOperation("bot:a", "d2"))?.status, "revoked");
+});
+
+test("pure live guards can read real DataStore revision and match inside update without deadlock", async (t) => {
+  const disk = await diskBook(t);
+  const rules = new ToolApprovalRuleBook(disk.open(), undefined, undefined, { knownBot: async () => true });
+  await rules.grantBot("bot:a", CAL, "Calendar", "d1");
+  const expectedConsentRevision = await rules.botConsentRevision("bot:a", CAL);
+  const bytes = await fs.readFile(disk.file, "utf8");
+  let events = 0;
+  rules.onBotChange(() => { events++; });
+  await assert.rejects(rules.grantBot("bot:a", CAL, "Calendar", "stale-page", { expectedConsentRevision,
+    validatePublication: async () => {
+      assert.equal(await rules.botConsentRevision("bot:a", CAL), expectedConsentRevision);
+      assert.equal((await rules.matchBot("bot:a", CAL))?.label, "Calendar");
+      throw new Error("The full approval requirements changed.");
+    } }), /requirements changed/u);
+  assert.equal(events, 0);
+  assert.equal(await fs.readFile(disk.file, "utf8"), bytes);
+  for (const options of [{}, { expectedConsentRevision }, { validatePublication: async () => {} },
+    { expectedConsentRevision: "bad", validatePublication: async () => {} }]) {
+    await assert.rejects(rules.grantBot("bot:a", CAL, "Calendar", "missing-proof", options), /proof|revision|consent/iu);
+  }
+  const result = await rules.grantBot("bot:a", CAL, "Calendar", "live", { expectedConsentRevision,
+    validatePublication: async () => {
+      assert.equal(await rules.botConsentRevision("bot:a", CAL), expectedConsentRevision);
+      assert.ok(await rules.matchBot("bot:a", CAL));
+    } });
+  assert.equal(result.status, "published");
+  assert.equal(events, 1);
+});
+
+test("publication proof is captured before awaits and deletion during a held guard still wins", async () => {
+  const { book, store } = memoryBotBook();
+  const expectedConsentRevision = await book.botConsentRevision("bot:a", CAL);
+  let guards = 0;
+  const proof = { expectedConsentRevision, validatePublication: async () => { guards++; } };
+  const pending = book.grantBot("bot:a", CAL, "Calendar", "d1", proof);
+  proof.expectedConsentRevision = "f".repeat(64);
+  proof.validatePublication = async () => { throw new Error("Mutated caller object"); };
+  assert.equal((await pending).status, "published");
+  assert.equal(guards, 1);
+  let entered!: () => void;
+  let release!: () => void;
+  const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const generation = await book.botConsentRevision("bot:b", CAL);
+  const deleting = book.grantBot("bot:b", CAL, "Calendar", "d2", { expectedConsentRevision: generation,
+    validatePublication: async () => { entered(); await gate; } });
+  await Promise.race([ready, deleting.then(() => assert.fail("First publication must await its live guard"))]);
+  const forgotten = book.forgetBot("bot:b");
+  release();
+  await assert.rejects(deleting, /no longer exists/u);
+  assert.equal(await forgotten, 0);
+  assert.equal((await store.load()).botGrantOperations?.some((r) => r.operationId === "d2"), false);
+});
+
+test("unknown write outcomes reconcile exact historical receipts without regrant or stale live guards", async (t) => {
+  const disk = await diskBook(t);
+  const store = disk.open();
+  let uncertain = true;
+  const ambiguous = {
+    load: () => store.load(),
+    loadedFromCorruptFile: () => store.loadedFromCorruptFile(),
+    async update<R>(mutation: (draft: ToolApprovalRulesDocument) => R | Promise<R>): Promise<R> {
+      const result = await store.update(mutation);
+      if (uncertain) { uncertain = false; throw new Error("Unknown publication outcome"); }
+      return result;
+    },
+  };
+  const rules = new ToolApprovalRuleBook(ambiguous, undefined, undefined, { knownBot: async () => true });
+  const expectedConsentRevision = await rules.botConsentRevision("bot:a", CAL);
+  let guards = 0;
+  await assert.rejects(rules.grantBot("bot:a", CAL, "Calendar", "d1", { expectedConsentRevision,
+    validatePublication: async () => { guards++; } }), /Unknown publication outcome/u);
+  const restarted = new ToolApprovalRuleBook(disk.open(), undefined, undefined, { knownBot: async () => true });
+  const receipt = await restarted.botGrantOperation("bot:a", "d1");
+  assert.equal(receipt?.status, "published");
+  const staleGuard = async () => { guards++; throw new Error("Old live context is revoked"); };
+  assert.equal((await restarted.grantBot("bot:a", CAL, "Renamed", "d1", {
+    expectedConsentRevision: "f".repeat(64), validatePublication: staleGuard })).status, "published");
+  assert.equal(guards, 1);
+  receipt!.targetKey = '["site","evil.example","click"]';
+  assert.equal((await restarted.botGrantOperation("bot:a", "d1"))?.targetKey, '["connection","gcal","create_event"]');
+  await assert.rejects(restarted.botGrantOperation("bot:b", "d1"), /operation|identity/iu);
+  assert.equal(await restarted.botGrantOperation("bot:a", "unknown"), undefined);
+  await restarted.forgetBot("bot:a");
+  const historical = new ToolApprovalRuleBook(disk.open());
+  assert.equal((await historical.botGrantOperation("bot:a", "d1"))?.status, "revoked");
+  assert.deepEqual(await historical.grantBot("bot:a", CAL, "Calendar", "d1", {
+    expectedConsentRevision, validatePublication: staleGuard }), { status: "revoked" });
+  assert.equal(guards, 1);
+  assert.deepEqual(await historical.listBot(), []);
+});
+
+test("Stop or expiry during the final Bot lookup cannot publish from an earlier live validation", async (t) => {
+  for (const reason of ["stopped", "expired"]) await t.test(reason, async (child) => {
+    const disk = await diskBook(child);
+    let identityReads = 0;
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const rules = new ToolApprovalRuleBook(disk.open(), undefined, undefined, { knownBot: async () => {
+      identityReads++;
+      // One read captures consent, then first-publication admission checks the
+      // Bot initially and once more around its live proof.
+      if (identityReads === 3) { enter(); await held; }
+      return true;
+    } });
+    const expectedConsentRevision = await rules.botConsentRevision("bot:a", CAL);
+    let live = true;
+    let guards = 0;
+    let changes = 0;
+    rules.onBotChange(() => { changes++; });
+    const pending = rules.grantBot("bot:a", CAL, "Calendar", `owner-${reason}`, { expectedConsentRevision,
+      validatePublication: async () => {
+        guards++;
+        if (!live) throw new Error(`The approval owner ${reason}.`);
+      } });
+    await Promise.race([entered, pending.then(() => assert.fail("Publication completed before the held identity read"))]);
+    // The owner stops, or its deadline expires, while the authoritative Bot
+    // lookup is pending. The lookup still truthfully returns an existing Bot.
+    live = false;
+    release();
+    await assert.rejects(pending, new RegExp(`owner ${reason}`, "u"));
+    assert.equal(guards, 1, "the live proof runs once for this first-publication attempt");
+    assert.equal(changes, 0);
+    assert.equal(await rules.botGrantOperation("bot:a", `owner-${reason}`), undefined);
+    assert.deepEqual(await rules.listBot(), []);
+  });
+});
