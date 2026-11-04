@@ -868,6 +868,14 @@ export class BrowserService {
       // A crash after navigation started still needs recovery, even while the
       // main-frame response is pending. Renderer recreation resets ownership.
       if (!wc.isCrashed() || navigationSupersededCrash) return;
+      writeDiagnosticEvent({
+        level: "error",
+        area: "electron",
+        event: "browser-tab-process-gone",
+        outcome: "failed",
+        code: "renderer-crashed",
+        fields: { reason: details.reason, exitCode: details.exitCode },
+      });
       this.cancelCrashRecovery(tab);
       tab.navigationCommand = undefined;
       tab.queue.interrupt();

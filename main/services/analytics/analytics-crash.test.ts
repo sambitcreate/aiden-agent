@@ -6,10 +6,13 @@ import test from "node:test";
 
 import {
   PENDING_CRASH_FILE,
+  acknowledgePendingCrash,
   beginRun,
+  crashSignalFor,
   deletePendingCrash,
   endRun,
   parsePendingCrash,
+  readPendingCrash,
   serializePendingCrash,
   takePendingCrash,
   writePendingCrashSync,
@@ -94,11 +97,94 @@ test("serializing and parsing round-trip", () => {
   assert.equal(parsed?.id, id);
 });
 
+test("a record stays until the server acknowledges it, and only that record is removed", (t) => {
+  const dir = tempDir(t);
+  const first = "6a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+  const newer = "7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+  writePendingCrashSync(dir, crash(), context, NOW, { id: first });
+
+  assert.equal(readPendingCrash(dir)?.id, first);
+  assert.equal(readPendingCrash(dir)?.id, first);
+
+  writePendingCrashSync(dir, crash(), context, NOW, { id: newer });
+  acknowledgePendingCrash(dir, first);
+  assert.equal(readPendingCrash(dir)?.id, newer);
+
+  acknowledgePendingCrash(dir, newer);
+  assert.equal(existsSync(join(dir, PENDING_CRASH_FILE)), false);
+});
+
+test("a damaged record is removed on read instead of being retried forever", (t) => {
+  const dir = tempDir(t);
+  writeFileSync(join(dir, PENDING_CRASH_FILE), "{damaged");
+
+  assert.equal(readPendingCrash(dir), undefined);
+  assert.equal(existsSync(join(dir, PENDING_CRASH_FILE)), false);
+});
+
+test("a record carries the install id it was captured under", () => {
+  const installId = "0b6f4a6e-3c1d-4f8e-9a2b-7c5d1e0f9a8b";
+  assert.equal(parsePendingCrash(serializePendingCrash(crash(), context, { now: NOW, installId }))?.installId, installId);
+  assert.equal(parsePendingCrash(serializePendingCrash(crash(), context, { now: NOW, installId: "/Users/jane" })), undefined);
+});
+
+test("process deaths map to crash events; clean exits, intended stops and quitting do not", () => {
+  const gone = (event: string, fields: Record<string, unknown>, duringShutdown = false) =>
+    crashSignalFor({ event, fields }, { duringShutdown });
+
+  assert.deepEqual(gone("renderer-process-gone", { reason: "oom", exitCode: 9 }), {
+    kind: "process_gone",
+    props: { kind: "renderer", reason: "oom", exit_code: 9 },
+  });
+  assert.deepEqual(gone("child-process-gone", { processType: "GPU", reason: "crashed", exitCode: 5 }), {
+    kind: "process_gone",
+    props: { kind: "gpu", reason: "crashed", exit_code: 5 },
+  });
+  assert.deepEqual(gone("browser-tab-process-gone", { reason: "launch-failed", exitCode: 1 }), {
+    kind: "process_gone",
+    props: { kind: "browser_tab", reason: "launch_failed", exit_code: 1 },
+  });
+  assert.deepEqual(gone("child-process-gone", { processType: "Zygote", reason: "abnormal-exit" }), {
+    kind: "process_gone",
+    props: { kind: "other", reason: "abnormal_exit" },
+  });
+  assert.deepEqual(crashSignalFor({ event: "renderer-crash-loop", fields: { crashCount: 4 } }), {
+    kind: "process_gone",
+    props: { kind: "renderer_loop" },
+  });
+
+  assert.equal(gone("renderer-process-gone", { reason: "clean-exit", exitCode: 0 }), undefined);
+  assert.equal(gone("child-process-gone", { processType: "Utility", reason: "clean-exit", exitCode: 0 }), undefined);
+  assert.equal(gone("child-process-gone", { processType: "Utility", reason: "killed", exitCode: 15 }), undefined);
+  assert.equal(gone("renderer-process-gone", { reason: "killed", exitCode: 15 }, true), undefined);
+  assert.equal(gone("child-process-gone", { processType: "GPU", reason: "crashed" }, true), undefined);
+});
+
+test("soft failures in the journal are not crashes", () => {
+  for (const event of ["provider-failed", "renderer-react-caught", "renderer-route-error", "renderer-react-recoverable", "mcp-failed", "store-write-failed"]) {
+    assert.equal(crashSignalFor({ event }, { rawError: new Error("handled") }), undefined, event);
+  }
+});
+
+test("a renderer report without raw fields has nothing to send", () => {
+  assert.equal(crashSignalFor({ event: "renderer-global-error" }), undefined);
+  assert.deepEqual(crashSignalFor({ event: "unhandled-rejection" }, { rawError: "x" }), { kind: "main_rejection", error: "x" });
+  assert.deepEqual(crashSignalFor({ event: "bootstrap-import-failed" }, { rawError: "x" }), { kind: "fatal", error: "x", origin: "uncaught_exception" });
+  assert.deepEqual(crashSignalFor({ event: "renderer-unhandled-rejection" }, { rawError: {} }), {
+    kind: "renderer_error",
+    error: {},
+    origin: "unhandled_rejection",
+  });
+});
+
 test("a run that ends without a clean quit is reported on the next launch", (t) => {
   const dir = tempDir(t);
 
-  assert.deepEqual(beginRun(dir), { previousRunUnclean: false });
-  assert.deepEqual(beginRun(dir), { previousRunUnclean: true });
+  const first = beginRun(dir);
+  assert.equal(first.previousRunUnclean, false);
+  const second = beginRun(dir);
+  assert.equal(second.previousRunUnclean, true);
+  assert.equal(second.previousRunId, first.runId);
   endRun(dir);
-  assert.deepEqual(beginRun(dir), { previousRunUnclean: false });
+  assert.equal(beginRun(dir).previousRunUnclean, false);
 });
