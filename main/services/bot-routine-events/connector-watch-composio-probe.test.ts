@@ -122,6 +122,113 @@ test("optional Search description fields reject malformed present values and nev
   }
 });
 
+test("unused legacy connection details can be omitted independently without granting account routing", async (t) => {
+  for (const omitted of [["gmail"], ["googlecalendar"], ["gmail", "googlecalendar"]]) await t.test(omitted.join("+"), async () => {
+    const h = harness(), call = h.port.call;
+    h.port.call = async (tool, args, signal) => {
+      const response = await call(tool, args, signal) as { data: { toolkit_connection_statuses: Record<string, unknown>[] } };
+      if (tool === SEARCH) for (const status of response.data.toolkit_connection_statuses) if (omitted.includes(status.toolkit as string)) delete status.connection_details;
+      return response;
+    };
+    const inspected = await inspectComposioWatchSchemas(h.port, { kind: "both" });
+    assert.equal(inspected.status, "inspected"); assert.equal(inspected.code, "account_routing_unverified"); assert.equal(inspected.available, false);
+    assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH, SCHEMAS]); assert.deepEqual(h.calls[1].args.tool_slugs, ["GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_EVENTS_LIST"]);
+    assert.deepEqual(inspected.privateProof?.activeConnectionReported, { email: true, calendar: true });
+    assert.ok(!JSON.stringify(inspected).includes("ca_private_fixture"));
+  });
+});
+
+test("present legacy connection details must be objects without incomplete markers", async (t) => {
+  for (const details of [null, false, 123, "private-connection-details", [], { truncated: true }, { next_cursor: "private-connection-cursor" }]) await t.test(JSON.stringify(details), async () => {
+    const h = harness(), call = h.port.call;
+    h.port.call = async (tool, args, signal) => {
+      const response = await call(tool, args, signal) as { data: { toolkit_connection_statuses: Record<string, unknown>[] } };
+      if (tool === SEARCH) response.data.toolkit_connection_statuses[0]!.connection_details = details;
+      return response;
+    };
+    const inspected = await inspectComposioWatchSchemas(h.port, { kind: "email" }), diagnostic = inspected.privateProof?.responseRejection;
+    assert.equal(inspected.code, "invalid_response"); assert.equal(inspected.available, false); assert.equal(diagnostic?.stage, "connections");
+    assert.equal(diagnostic?.reason, details !== null && !Array.isArray(details) && typeof details === "object" ? "incomplete" : "expected_object");
+    assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH]);
+    assert.ok(!JSON.stringify(inspected).includes("private-connection-details")); assert.ok(!JSON.stringify(inspected).includes("private-connection-cursor"));
+  });
+});
+
+test("connection account diagnostics retain only fixed types/counts on success and later schema rejection", async (t) => {
+  for (const failLater of [false, true]) await t.test(failLater ? "later rejection" : "inspection", async () => {
+    const marker = "private-account-id-alias-user-status-and-unknown-key", number = 9876543210123;
+    const h = harness(), call = h.port.call;
+    h.port.call = async (tool, args, signal) => {
+      const response = await call(tool, args, signal) as { data: Record<string, unknown> };
+      if (tool === SEARCH) {
+        const statuses = response.data.toolkit_connection_statuses as Record<string, unknown>[];
+        delete statuses[0]!.connection_details;
+        statuses[0]!.accounts = [
+          { id: marker, alias: null, user_info: { [marker]: marker }, status: marker, created_at: number, is_default: true, account_type: marker, [marker]: marker },
+          { id: "second-private-account-must-not-be-retained" },
+        ];
+        statuses[0]!.account_selection = { [marker]: marker };
+        statuses[1]!.accounts = []; statuses[1]!.account_selection = marker;
+      } else if (failLater) response.data.success = false;
+      return response;
+    };
+    const inspected = await inspectComposioWatchSchemas(h.port, { kind: "both" }), shapes = inspected.privateProof?.connectionMetadata;
+    assert.equal(inspected.code, failLater ? "schemas_incomplete" : "account_routing_unverified"); assert.equal(inspected.available, false);
+    assert.deepEqual(shapes, [
+      { kind: "email", accounts: { type: "array", count: 2 }, account_selection: { type: "object", count: 1 }, firstAccount: { value: { type: "object", count: 8 }, statusIsActive: false, idFormat: "other", fields: {
+        id: { type: "string", count: marker.length }, alias: { type: "null" }, user_info: { type: "object", count: 1 }, status: { type: "string", count: marker.length }, created_at: { type: "number" }, is_default: { type: "boolean" }, account_type: { type: "string", count: marker.length },
+      } } },
+      { kind: "calendar", accounts: { type: "array", count: 0 }, account_selection: { type: "string", count: marker.length } },
+    ]);
+    const retained = JSON.stringify(inspected);
+    for (const forbidden of [marker, String(number), "second-private-account-must-not-be-retained", "ca_private_fixture", "private@example.test"]) assert.ok(!retained.includes(forbidden));
+    assert.ok(Buffer.byteLength(retained) < 32 * 1024); assert.ok(!JSON.stringify(publicComposioWatchProbeResult(inspected)).includes("connectionMetadata"));
+    assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH, SCHEMAS]); assert.ok(!JSON.stringify(h.calls).includes(marker), "account metadata never supplies operation arguments");
+  });
+});
+
+test("account metadata diagnostics do not validate identities, choose defaults or retain unknown toolkit names", async () => {
+  const h = harness(), call = h.port.call;
+  h.port.call = async (tool, args, signal) => {
+    const response = await call(tool, args, signal) as { data: { toolkit_connection_statuses: Record<string, unknown>[] } };
+    if (tool === SEARCH) {
+      const status = response.data.toolkit_connection_statuses[0]!;
+      status.toolkit = "private-unknown-toolkit"; status.accounts = [null]; status.account_selection = false;
+    }
+    return response;
+  };
+  const inspected = await inspectComposioWatchSchemas(h.port, { kind: "email" }), shape = inspected.privateProof?.connectionMetadata?.[0];
+  assert.equal(inspected.code, "account_routing_unverified"); assert.equal(inspected.available, false);
+  assert.equal(shape?.kind, "other"); assert.deepEqual(shape?.account_selection, { type: "boolean" }); assert.deepEqual(shape?.firstAccount?.value, { type: "null" });
+  assert.equal(shape?.firstAccount?.idFormat, "missing"); assert.equal(shape?.firstAccount?.statusIsActive, false);
+  assert.ok(Object.values(shape!.firstAccount!.fields).every((field) => field.type === "missing"));
+  assert.ok(!JSON.stringify(inspected).includes("private-unknown-toolkit")); assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH, SCHEMAS]);
+});
+
+test("account diagnostics classify only fixed ID syntax and exact ACTIVE status without retaining either value", async (t) => {
+  const cases = [
+    { id: "ca_0123abcdABCD", status: "ACTIVE", format: "ca_id", active: true },
+    { id: "12345678-1234-5678-9abc-def012345678", status: "active", format: "uuid", active: false },
+    { id: "private-account-identity", status: "PRIVATE-STATUS", format: "other", active: false },
+    { id: "ca_short", status: null, format: "other", active: false },
+    { id: "ca_0123abcd/injected", status: "ACTIVE ", format: "other", active: false },
+    { id: undefined, status: undefined, format: "missing", active: false },
+  ];
+  for (const entry of cases) await t.test(entry.format + "/" + String(entry.status), async () => {
+    const h = harness(), call = h.port.call;
+    h.port.call = async (tool, args, signal) => {
+      const response = await call(tool, args, signal) as { data: { toolkit_connection_statuses: Record<string, unknown>[] } };
+      if (tool === SEARCH) response.data.toolkit_connection_statuses[0]!.accounts = [{ ...(entry.id === undefined ? {} : { id: entry.id }), ...(entry.status === undefined ? {} : { status: entry.status }) }];
+      return response;
+    };
+    const inspected = await inspectComposioWatchSchemas(h.port, { kind: "email" }), facts = inspected.privateProof?.connectionMetadata?.[0]?.firstAccount;
+    assert.equal(inspected.code, "account_routing_unverified"); assert.equal(inspected.available, false); assert.equal(facts?.idFormat, entry.format); assert.equal(facts?.statusIsActive, entry.active);
+    if (entry.id !== undefined) assert.ok(!JSON.stringify(inspected).includes(entry.id));
+    if (typeof entry.status === "string") assert.ok(!JSON.stringify(inspected).includes(JSON.stringify(entry.status)));
+    assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH, SCHEMAS]);
+  });
+});
+
 test("the public projection contains only safe facts even if a caller attaches private extras", async () => {
   const h = harness(); const result = await inspectComposioWatchSchemas(h.port, { kind: "email", now: () => 321 });
   const view = publicComposioWatchProbeResult({ ...result, secret: "credential-fixture" } as ComposioWatchProbeResult);

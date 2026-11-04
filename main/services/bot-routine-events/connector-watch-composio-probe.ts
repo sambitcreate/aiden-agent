@@ -60,6 +60,13 @@ interface ResponseValueFacts {
   boolean?: boolean;
   safeInteger?: boolean;
 }
+type AccountShapeFacts = Pick<ResponseValueFacts, "type" | "count">;
+interface ConnectionMetadataShape {
+  kind: ComposioWatchProbeKind | "other";
+  accounts: AccountShapeFacts;
+  account_selection: AccountShapeFacts;
+  firstAccount?: { value: AccountShapeFacts; statusIsActive: boolean; idFormat: "ca_id" | "uuid" | "other" | "missing"; fields: Record<"id" | "alias" | "user_info" | "status" | "created_at" | "is_default" | "account_type", AccountShapeFacts> };
+}
 export interface ComposioWatchProbeResponseRejection {
   stage: ResponseStage; tool: ComposioWatchProbeTool; field: ResponseField; reason: ResponseReason;
   calls: { searchStarted: boolean; searchReturned: boolean; schemasStarted: boolean; schemasReturned: boolean };
@@ -85,6 +92,8 @@ export interface ComposioWatchProbePrivateProof {
     inputFields: string[];
   }[];
   activeConnectionReported: { email: boolean; calendar: boolean };
+  /** Diagnostic shapes only, never account identities, defaults or authority. */
+  connectionMetadata?: ConnectionMetadataShape[];
   /** Closed structural rejection facts only; never AJV error prose or schema paths. */
   rejection?: ComposioWatchProbeRejection;
   /** Closed response shape facts only; no vendor values or arbitrary field names. */
@@ -153,6 +162,23 @@ function responseValueFacts(value: unknown): ResponseValueFacts {
 function responseFields<K extends string>(value: unknown, keys: readonly K[]): Record<K, ResponseValueFacts> {
   const source = object(value) ? value : {};
   return Object.fromEntries(keys.map((key) => [key, responseValueFacts(source[key])])) as Record<K, ResponseValueFacts>;
+}
+function accountShapeFacts(value: unknown): AccountShapeFacts {
+  const facts = responseValueFacts(value);
+  return { type: facts.type, ...(facts.count === undefined ? {} : { count: facts.count }) };
+}
+function accountIdFormat(value: unknown): NonNullable<ConnectionMetadataShape["firstAccount"]>["idFormat"] {
+  if (value === undefined) return "missing";
+  if (typeof value !== "string") return "other";
+  if (/^ca_[A-Za-z0-9]{8,128}$/u.test(value)) return "ca_id";
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value)) return "uuid";
+  return "other";
+}
+function connectionMetadataShape(status: RecordValue, toolkit: string): ConnectionMetadataShape {
+  const first = Array.isArray(status.accounts) && status.accounts.length ? status.accounts[0] : undefined;
+  return { kind: toolkit === "gmail" ? "email" : toolkit === "googlecalendar" ? "calendar" : "other",
+    accounts: accountShapeFacts(status.accounts), account_selection: accountShapeFacts(status.account_selection),
+    ...(first === undefined ? {} : { firstAccount: { value: accountShapeFacts(first), statusIsActive: object(first) && first.status === "ACTIVE", idFormat: accountIdFormat(object(first) ? first.id : undefined), fields: Object.fromEntries(["id", "alias", "user_info", "status", "created_at", "is_default", "account_type"].map((field) => [field, accountShapeFacts(object(first) ? first[field] : undefined)])) as NonNullable<ConnectionMetadataShape["firstAccount"]>["fields"] } }) };
 }
 function responseEnvelopeFacts(value: unknown): NonNullable<ComposioWatchProbeResponseRejection["envelope"]> {
   const source = object(value) ? value : {};
@@ -267,6 +293,7 @@ export async function inspectComposioWatchSchemas(port: ComposioWatchProbePort, 
   const observedMeta = new Map<ComposioWatchProbeTool, ComposioWatchProbePrivateProof["meta"][number]>();
   let rejectionStage: DiagnosticStage = "initial_inventory";
   const calls = { searchStarted: false, searchReturned: false, schemasStarted: false, schemasReturned: false };
+  const connectionMetadata: ConnectionMetadataShape[] = [];
   let responseStage: ResponseStage = "search_response", responseTool: ComposioWatchProbeTool = SEARCH;
   let responseEnvelope: unknown, responseAction: unknown, responseData: unknown;
   let responseEntry: ComposioWatchProbeResponseRejection["entry"], responseRejection: ComposioWatchProbeResponseRejection | undefined;
@@ -427,12 +454,12 @@ export async function inspectComposioWatchSchemas(port: ComposioWatchProbePort, 
     for (const entry of search.toolkit_connection_statuses) {
       responseEntry = responseFields(entry, ["toolkit", "has_active_connection", "connection_details", "description", "status_message"]);
       const status = responseRecord(entry, "connection"); const toolkit = responseText(status.toolkit, "connection.toolkit", 100);
+      connectionMetadata.push(connectionMetadataShape(status, toolkit));
       if (toolkitSeen.has(toolkit)) responseFail("invalid_response", "connection.toolkit", "duplicate");
       if (typeof status.has_active_connection !== "boolean") responseFail("invalid_response", "connection.has_active_connection", "expected_boolean", status.has_active_connection);
-      if (!status.connection_details) responseFail("invalid_response", "connection.connection_details", "expected_object", status.connection_details);
       if (typeof status.description !== "string") responseFail("invalid_response", "connection.description", "expected_string", status.description);
       if (typeof status.status_message !== "string") responseFail("invalid_response", "connection.status_message", "expected_string", status.status_message);
-      responseRecord(status.connection_details, "connection.connection_details");
+      if (status.connection_details !== undefined) responseComplete(responseRecord(status.connection_details, "connection.connection_details"));
       toolkitSeen.add(toolkit);
       if (toolkit === "gmail") activeConnectionReported.email = status.has_active_connection;
       if (toolkit === "googlecalendar") activeConnectionReported.calendar = status.has_active_connection;
@@ -477,7 +504,7 @@ export async function inspectComposioWatchSchemas(port: ComposioWatchProbePort, 
     const proof: ComposioWatchProbePrivateProof = { revision: "composio-watch-inspection-v1",
       meta: [SEARCH, SCHEMAS].map((tool) => { const meta = (tool === SEARCH ? metadata : fresh).get(tool)!; return { tool: tool as ComposioWatchProbeTool, schemaHash: hash(meta.schema), readOnlyHint: meta.readOnlyHint }; }),
       accountDeclarations: { executor: Boolean(property(executor, "account") || property(executor, "connected_account_id")), executorItem: Boolean(property(executorItem, "account") || property(executorItem, "connected_account_id")), upstream: candidates.some((entry) => entry.inputFields.includes("account") || entry.inputFields.includes("connected_account_id")) },
-      candidates, activeConnectionReported };
+      candidates, activeConnectionReported, connectionMetadata };
     await current();
     return result("account_routing_unverified", proof);
   };
@@ -487,6 +514,7 @@ export async function inspectComposioWatchSchemas(port: ComposioWatchProbePort, 
       revision: "composio-watch-inspection-v1", meta: [...observedMeta.values()], accountDeclarations: { ...(responseRejection ? observedExecutorDeclarations : { executor: false, executorItem: false }), upstream: false }, candidates: [], activeConnectionReported: { email: false, calendar: false },
       ...(error.rejection ? { rejection: { ...error.rejection, stage: rejectionStage, inventory: { ...present } } } : {}),
       ...(responseRejection ? { responseRejection } : {}),
+      ...(connectionMetadata.length ? { connectionMetadata } : {}),
     } : undefined;
     return result(error instanceof ProbeFailure ? error.code : controller.signal.aborted && controller.signal.reason instanceof ProbeFailure ? controller.signal.reason.code : "inspection_failed", proof);
   }
