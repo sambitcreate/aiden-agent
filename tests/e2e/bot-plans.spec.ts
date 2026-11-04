@@ -1,6 +1,6 @@
 import { botFixture } from "../../renderer/main/bots/test-fixtures";
 import type { BotPlanView } from "../../renderer/shared/bot-plans";
-import { expect, finishLmStudioOnboarding, test } from "./fixtures";
+import { E2E_PROFILE_NAME, expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 interface PlanE2eState {
   answers: unknown[];
@@ -147,5 +147,44 @@ test("plan approval waits for the host, then becomes a stoppable checklist", asy
   await expect(page.getByRole("button", { name: "Approve plan", exact: true })).toBeInViewport();
   await expect(draft).toHaveValue("Keep this draft while the plan waits");
   await page.screenshot({ path: testInfo.outputPath("plan-long-review-dark.png") });
+  expect(aiden.lmStudio.requests.filter(request => request.url === "/v1/chat/completions")).toHaveLength(0);
+});
+
+
+test("onboarding explains plan approvals and draws the checklist in its Bots tile", async ({ aiden }, testInfo) => {
+  const { page } = aiden;
+  await aiden.app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler("bots:list");
+    ipcMain.handle("bots:list", () => []);
+  });
+  const onboarding = page.locator('section[aria-label="Set up Aiden"]');
+  await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
+  const next = onboarding.getByRole("button", { name: /^Next/u });
+  await next.click();
+  await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
+  await next.click();
+  await expect(onboarding.getByRole("heading", { name: "Meet your first Bot" })).toBeVisible();
+  await expect(onboarding.getByText("Bots hand you the steps only you should do, follow rules you set, and can ask you to approve a whole plan at once.", { exact: true })).toBeVisible();
+  await onboarding.getByRole("button", { name: "Skip", exact: true }).click();
+  await expect(onboarding.getByRole("heading", { name: "Everything Aiden brings together" })).toBeVisible();
+  const botsTile = onboarding.locator('article[data-onboarding-feature="bots"]');
+  for (const [mode, width] of [["light", 1280], ["dark", 600]] as const) {
+    await page.evaluate(async scheme => {
+      const appearance = await window.aidenAPI.ipc.invoke("settings:getAppearance") as Record<string, unknown>;
+      await window.aidenAPI.ipc.invoke("settings:previewAppearance", { ...appearance, mode: scheme, reduceMotion: "on" });
+    }, mode);
+    await aiden.app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0]!.setSize(size, 900), width);
+    await expect(page.locator("html")).toHaveAttribute("data-appearance-scheme", mode);
+    await page.mouse.move(0, 0);
+    await botsTile.scrollIntoViewIfNeeded();
+    await expect(botsTile.getByText("Stop plan", { exact: true })).toBeVisible();
+    await botsTile.screenshot({ path: testInfo.outputPath(`bots-plan-tour-${mode}.png`) });
+    await botsTile.focus();
+    await expect(botsTile).toBeFocused();
+    await expect(botsTile).toHaveAttribute("aria-label", /Approve a whole plan on desktop or phone/u);
+    expect(await botsTile.evaluate(tile => tile.scrollWidth <= tile.clientWidth)).toBe(true);
+    await botsTile.screenshot({ path: testInfo.outputPath(`bots-plan-tour-description-${mode}.png`) });
+    await botsTile.press("Tab");
+  }
   expect(aiden.lmStudio.requests.filter(request => request.url === "/v1/chat/completions")).toHaveLength(0);
 });

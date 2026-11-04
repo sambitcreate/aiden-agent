@@ -504,9 +504,9 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
 - Modify: `docs/plans/README.md` (the research row: plan C written or built), `.memory/bot-rules.md` (a "Plan coverage" bullet under Enforcement)
 - Create: `.memory/bot-plans.md` (files, constants, the coverage rules, the two cross-plan ports, and the known limits: CLI, paired-Mac viewers, one outside folder per plan, and that folder's in-memory grant not surviving a quit)
 
-- [ ] **Step 1: Search** for claims this plan made stale: `rg -n "approval card|one card per|routines go ahead|preapproved" README.md PRODUCT.md docs/*.md .memory/*.md`. Fix each one.
-- [ ] **Step 2: Run** `npx tsx --test renderer/components/onboarding-bots-step.test.tsx`, then `npm run test:bot-plans`, `npm run test:bot-rules`, `npm run test:bot-runtime`, `npm run test:bots` and `node --test scripts/ci-test-registry.test.mjs`. Expected: PASS.
-- [ ] **Step 3: Commit:** "Document Bot plan approval".
+- [x] **Step 1: Search** for claims this plan made stale: `rg -n "approval card|one card per|routines go ahead|preapproved" README.md PRODUCT.md docs/*.md .memory/*.md`. Fix each one.
+- [x] **Step 2: Run** `npx tsx --test renderer/components/onboarding-bots-step.test.tsx`, then `npm run test:bot-plans`, `npm run test:bot-rules`, `npm run test:bot-runtime`, `npm run test:bots` and `node --test scripts/ci-test-registry.test.mjs`. Expected: PASS.
+- [x] **Step 3: Commit:** "Document Bot plan approval".
 
 
 ## C enforcement progress, 2026-11-04
@@ -626,3 +626,17 @@ Both native clients consume the same revision56 canonical fixture and strictly d
 Native handoff `/tmp/aiden-bot-plan-c-task8-native-handoff.md`: iOS419 total,414pass/5existing physical/configuration skips/0fail, final exit0 and finalized result `/tmp/bot-plan-c-task8-native-ios-final.xcresult`; Android1169pass/0fail across96classes, lint0errors/51warnings/5hints and instrumented-test compilation passed. Logs `/tmp/bot-plan-c-task8-native-{ios,android}-final.log`. Meaningful native REDs and coordinator/date-boundary corrections are retained in the handoff. New XCTest membership is registered in the Xcode project; Gradle discovers the Kotlin contract test. Existing Xcode compiler/main-thread warnings and unsigned-simulator entitlement limits remain documented, not claimed fixed. Native source edits stopped after final tests.
 
 Host and parent evidence is recorded above and in both handoffs. Parent final protocol/schema and registry reruns passed after the host schema audit. Task8 is complete for source/local tests; Task9 docs/onboarding and full-C Gate5 remain pending. No physical-device, signed-Keychain, live-provider, package/release or hosted-CI acceptance exists. Remote56 still needs main-time revision recheck.
+
+
+### Task 9 started, 2026-11-04
+
+Task8 committedbafae36ee. Root searched README, PRODUCT, active guides and project memory for stale per-call approval and platform claims, preserving dated records. Search inventory is /tmp/bot-plan-c-task9-stale-claims.txt. User guidance now describes whole-task approval, conjunctive rule/cap coverage, final permission checks, Stop versus already-started calls, the extra folder's in-memory lifetime after quit, nested codemode checks, Bot-message deadlines and CLI/paired-desktop limits. A bounded onboarding worker owns the exact new first-Bot line and existing Bots gallery/art/tests; root owns Cua tour/interaction acceptance and status. Gate5 is not yet started; D remains held.
+
+
+### Task 9 complete locally, Gate 5 pending, 2026-11-04
+
+Product, rules, codemode, messaging and CLI guidance now describe plan coverage and limits without claiming D. README/PRODUCT link the plan guide. Project rule memory records conjunctive coverage/final admission. Onboarding uses the required first-Bot sentence and an amended single Bots tile: a code-drawn active checklist with usage cap, Stop and details, using existing art tokens and a complete reduced-motion pose. The gallery retains messaging, routines and hand-off guidance.
+
+Worker meaningful RED3 and GREEN13, fulltypes/scopedlint/diff are mapped in /tmp/aiden-bot-plan-c-task9-onboarding-handoff.md. Broader onboarding initially84pass1fail exposed an already-stale gallery-copy assertion outside worker ownership; parent replaced that rendered expected guidance with independent plan/cap assertions. Parent final onboarding85/plans138/rules62/runtime403/Bots997/registry15, wholetypes and scopedlint7files passed. Cua2 passed9.5s with real onboarding/renderer/IPC/keyboard over deterministic keyless setup; light1280/dark600 art and keyboard-focused description captures were inspected. The existing plan interaction and long-review case also passed. Logs /tmp/bot-plan-c-task9-parent-{onboarding,plans,rules,runtime,bots,registry,types,lint,cua}.log. No native wire or implementation changed after Task8 suites.
+
+All C Tasks1–9 are implemented and locally verified. Gate4 acceptance remains054e953fa; fresh complete-C Gate5 reviews are next on the frozen Task9 commit. D remains held until both accept. The native rendered-UI/physical-device, live-provider, package/release and hosted-CI limits remain unclaimed. Four PRs and final Astra review remain pending.

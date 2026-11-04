@@ -29,3 +29,7 @@
 - Task7 max-length Cua acceptance reproduced a clipped review: first step had viewport ratio0 and no scrollable review ancestor. Added a bounded keyboard-scrollable Plan review region keeping heading/actions outside; retained failing log /tmp/bot-plan-c-task7-long-review-red.log.
 
 - Task8 source-ready initial whole types overlapped host final corrections: missing route-label union and widened/nullable paired fixture assertions. Host corrected owned files; parent fresh whole types exited0. Retained initial/final logs /tmp/bot-plan-c-task8-parent-types{,-final}.log.
+
+- Task9 initial art-test path assumed a feature-art.test.tsx that does not exist. Confirmed art assertions belong to onboarding-feature-gallery.test.tsx and corrected worker ownership without adding a redundant test file.
+
+- Task9 onboarding85-suite failure was an older gallery-copy assertion at onboarding-flow:390, not the first-Bot sentence. First exact replacement assertion stopped before writing. Replaced only the stale rendered-gallery expectation with independent plan guidance and limit assertions; retained initial84pass1fail log.

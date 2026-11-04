@@ -120,7 +120,7 @@ Phones and Macs paired with the server see its workspaces, chats, Bots, schedule
 
 The desktop-only `request_access` tool is not offered by the CLI host. Its Bots use their saved Custom file grants; temporary Allow once cards and Always-for-folder requests require the desktop host. See [Bot access requests](../../docs/bot-access-requests.md).
 
-CLI Bots also omit `propose_plan` and `plan_step`. The CLI supplies no plan coverage port and does not advertise `bot:plans`; ordinary tool approvals remain required.
+CLI Bots also omit `propose_plan` and `plan_step`. The CLI supplies no plan coverage port and does not advertise `bot:plans`; ordinary tool approvals remain required. Plan cards and checklists belong to desktop-hosted Bots and their supported phones; see [plan approval](../../docs/bot-rules.md#approve-a-plan-once).
 
 - `aiden bots list|get|catalog|notice|acknowledge|create|update|access` use the shared notice, revision and capability contracts.
 - `aiden bots pause <id>` and `bots unpause <id>` pause a Bot as a whole: running turns stop and new ones, including manual routine runs, are refused until it is unpaused.

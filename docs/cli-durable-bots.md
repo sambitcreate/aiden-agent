@@ -30,7 +30,8 @@ For rollback, stop the daemon first, retain the whole profile, and move only `bo
 | Stable request deduplication and paused restart | Supported | Shared core |
 | Bot messaging (phase A) | Supported | Shared tool, private ledger, courier and Remote switches; no desktop delivery funnel |
 | Folder access requests (`request_access`, phase B) | Desktop host only | The CLI does not offer access cards or temporary run grants; its saved Custom grants still apply |
-| Access requests, plan approval and the allow list (phases B-D) | Desktop-hosted | Unavailable |
+| Plan approval (`propose_plan`, `plan_step`, phase C) | Desktop and capability-gated paired phones | No plan tools, coverage or `bot:plans` capability |
+| Allow list (phase D) | Pending implementation | Unavailable |
 | Bot memory tools, recall, person edits | Supported | Shared store and existing Remote endpoints |
 | Routines | Supported | Shared routine service/executor; paused turns are skipped |
 | Pause and unpause (the person's switch) | Supported | `aiden bots pause` and `unpause` through the shared core and its pause file: a running turn is stopped and waits for Resume or Dismiss after unpause. Paired devices see a paused Bot as unavailable, and an open session stream hears the change at once. Devices can't pause or unpause a CLI Bot (those routes need `bot:handoffs`) |

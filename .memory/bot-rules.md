@@ -60,6 +60,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
   - The answer memo is read before anything else, so a resume applies the answer without asking again or re-deciding.
 - Unattended turns (`routine:`, `tg:`): a hand-off, or a rule-made ask with no baseline, blocks at once with `ruleUnattendedBlock` or `ruleAskUnattendedBlock`. A run with no `requestHandoff` dep also fails closed with the unattended text.
 - Settings → Bots, routines go ahead (2026-10-31, owner chose option a of the tool audit's Q1): `AppSettings.botRoutinesGoAhead` (off by default; only literal `true` counts, `botRoutinesGoAhead()` in `renderer/shared/bot-rules.ts`). The assembly port `routinesGoAhead()` is read on every call. When every request id of the run is `routine:` (no `tg:`, no person's turn joined) and the tool isn't `computer_use` (the person's Mac), an approval (baseline or rule-made ask, with or without baseline) comes back with `preapproved: true`; `beforeTool` runs its `onAllow` and lets the call through with no memo and no card. Hand-offs and the locked rules are unchanged. Page: `renderer/components/settings/bots-settings.tsx` (section id `bots`); the Rules group on a Bot's profile says what routines do and links there. The CLI durable host has no such port.
+- Plan coverage (phase C, 2026-11-04): after fresh authority/ingress, rules/locked/refusals/hand-offs and eligible routine go-ahead, check one captured active plan before ordinary approval. Every allMatchingAsk fingerprint and baseline connector/site item must match; atomic caps are conjunctive. No Computer Use/locked/password/money/hand-off waiver. Direct/nested durable tasks reserve exact execution identity and admit only around the actual callback, then ordinary fallback skips coverage on a stale permit. Details in .memory/bot-plans.md.
 - Memos must be JSON values:
   - The approval memo always writes `kind` and `rule` (null when no rule made it).
   - Memos written before rules have neither field and read as approvals: only `kind === "handoff"` changes the summary.
@@ -82,7 +83,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
   - Add a rule opens a Dialog with a text Input and a radio choice shown by `has-[[data-state=checked]]:bg-list-selection` fill.
   - A refused change shows a red Callout with `botRuleRefusalText` and the fresh view.
   - There is no cross-window push: the stale refusal covers concurrent edits.
-- Onboarding Bots step line: "Bots hand you the steps only you should do, and follow rules you set."
+- Onboarding Bots step line: "Bots hand you the steps only you should do, follow rules you set, and can ask you to approve a whole plan at once."
 
 ## Tests
 - `npm run test:bot-rules`: the services tests in the runtime-subagents lane; handler, editor and shared tests in renderer-other.
