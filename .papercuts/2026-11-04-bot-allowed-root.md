@@ -4,3 +4,11 @@
 - Existing ToolApprovalRuleBook uses a512KiB DataStore ceiling. New Bot entries/receipts must not commit a document that becomes unreadable at the next load; worker must address the concrete byte-budget and receipt-retention seam before publishing.
 
 - Task1 inspection found a fresh publication operation on an existing target changed consent revision but emitted no Bot change event. Extended the existing API test, captured event RED, then emit once for every new publication receipt while exact transport replay stays silent. /tmp/bot-allowed-d-task1-parent-event-red.log.
+
+- Read-only D runtime prep exposed a cross-file recovery gap: B Always can publish before the tally commit, then lose its prompt/owner. Task5 needs original tally fingerprint/offer/time in the existing committed folder journal, plus idempotent event-time reset. Counting incoming retry choices or replaying forget() would create a false decline or erase later history. Coordinated before Task2 API freeze.
+
+- Task2 parent suite passed38, but inspection found completion retained its own Always event, allowing a new offer after only two later Once decisions. Sent a bounded behavioral RED/GREEN follow-up to remove only that known event while retaining ambiguous equal-time and later history. Task3 stays held until correction and commit.
+
+- Task2 follow-up used aligned private receipt IDs rather than subtracting an ambiguous timestamp. Registered suite48pass, types/lint/diff0. New files are not live-wired, so no migration of shipped tally data is required.
+
+- Task2 staging reported ignored .memory/.papercuts paths after staging the tracked files; the unique worker log needed explicit force-add. Included it in the local unpublished task commit before releasing Task3.

@@ -544,6 +544,7 @@
         "main/services/bot-runtime/bot-tool-policy.test.ts",
         "main/services/bot-runtime/bot-handoff-notifications.test.ts",
         "main/services/bot-runtime/bot-handoff-open.test.ts",
+        "main/services/bot-runtime/bot-approval-tallies.test.ts",
         "main/services/bot-rules/classify.test.ts",
         "main/services/bot-plans/authority.test.ts",
         "main/services/bot-plans/lifecycle.test.ts",

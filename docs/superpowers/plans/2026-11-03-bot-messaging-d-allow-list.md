@@ -154,8 +154,10 @@ This plan extends those pieces. It does not invent a parallel store:
     /** Persists decision receipt, tally and hint entitlement in one transaction. Replays return the stored result. */
     record(botId: string, key: BotApprovalTallyKey, decision: {
       id: string; authorizationFingerprint: string; source: "person" | "expiry" | "allow_list";
-      answer: BotApprovalAnswer; offered: boolean;
+      answer: BotApprovalAnswer; offered: boolean; decidedAt?: number;
     }): Promise<{ counted: boolean; hintCount?: number }>;
+    /** First terminal publication result sticks; grants nothing and never resets later history on replay. */
+    completePublication(botId: string, decisionId: string, authorizationFingerprint: string, status: "published" | "revoked"): Promise<void>;
     decision(botId: string, id: string, authorizationFingerprint: string): Promise<BotApprovalDecision | undefined>;
     /** Approvals in the window when ≥ threshold and none denied in it; else undefined. */
     nudge(botId: string, key: BotApprovalTallyKey): Promise<{ count: number } | undefined>;
@@ -165,11 +167,15 @@ This plan extends those pieces. It does not invent a parallel store:
   }
   export function createBotApprovalTallies(options: { profileDir(): string; now?(): number }): BotApprovalTallies;
   ```
-  The file is `<profile>/bots/<dir>/approval-tallies.json`: `{version:1, classes:[{key, allowed:number[], deniedAt?, hintedAt?}], decisions:[...]}`. Each decision receipt contains the host-owned wait/decision id, immutable answer, provenance, target key, timestamp and recorded hint result. Atomically record receipt + tally + hint ownership under one per-Bot serial. A duplicate id with different target/answer is an error; exact replay returns the saved result and does not recount.
+  The file is `<profile>/bots/<dir>/approval-tallies.json`: `{version:1, classes:[{key, allowed:number[], allowedDecisionIds:string[], deniedAt?, hintedAt?}], decisions:[...]}`. Each decision receipt contains the host-owned wait/decision id, immutable answer, provenance, target key, timestamp and recorded hint result. Atomically record receipt + tally + hint ownership under one per-Bot serial. A duplicate id with different target/answer is an error; exact replay returns the saved result and does not recount.
+
+Historical host-journal recovery supplies the original `decidedAt`; exact replay without a time uses the saved receipt, and a supplied conflicting time is refused. Always publication completion is a separate durable, idempotent transition. It clears only preceding history and its own completed Always event, preserving other equal-time events, all later decisions and the original weekly hint entitlement. A revoked completion grants nothing and clears nothing. Publication recovery must never call a blanket `forget()` after a later denial.
+
+Aligned private `allowedDecisionIds` prove exact cache membership; missing or inconsistent identities preserve evidence and fence bookkeeping rather than guessing from timestamps.
 
 Class history keeps 20 times per class and 100 classes, pruning timestamps outside the window. Decision receipts are separate from these display/count limits and remain while their durable tasks can replay. Collect them only after proven task settlement, never because a class was evicted or an Always grant cleared the tally. Unreadable receipt bookkeeping fails closed for remembered-approval settlement and preserves the file; it must not reset replay protection. Only `source: "person"` changes approval/denial counts or hint cooldowns. Expiry, withdrawal and release under an allow-list entry are not human choices; withdrawal has no decision at all.
 
-- [ ] **Step 1: Write the failing tests** in `bot-approval-tallies.test.ts`. Use a temp profile dir and a settable clock; `DAY = 86_400_000`. Every human-answer fixture uses a unique host-owned decision id and source `person`:
+- [x] **Step 1: Write the failing tests** in `bot-approval-tallies.test.ts`. Use a temp profile dir and a settable clock; `DAY = 86_400_000`. Every human-answer fixture uses a unique host-owned decision id and source `person`:
   - `offers on the third approval in 14 days`: two `record(…,"allowed")` give `nudge === undefined`; a third gives `{count: 3}`.
   - `approvals older than 14 days don't count`: three at day 0, and at day 14 plus 1 ms `nudge === undefined`.
   - `a denial withholds the offer for 14 days` (Review Focus 2):
@@ -181,10 +187,10 @@ Class history keeps 20 times per class and 100 classes, pruning timestamps outsi
   - `forgetBot removes the file`: the Bot directory has no `approval-tallies.json` afterwards.
   - Crash after the receipt/tally commit but before the task memo: reopen and settle the same decision repeatedly; the count remains one and the original hint result is returned.
   - Expiry denial and automatic sibling allowance never change human counts, denials or hint timestamps. Corruption never makes replayable decisions count again. Clearing a class leaves its replay receipts intact.
-- [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-approval-tallies.test.ts`. Expected: FAIL, module not found.
-- [ ] **Step 3: Implement `createBotApprovalTallies`.** Per-Bot serial writes. Keys are `botApprovalRuleKey`, or `JSON.stringify(["folder", path])` for folders.
-- [ ] **Step 4: Run the tests.** Same command. Expected: PASS.
-- [ ] **Step 5: Register and commit.** Add the file to `test:bot-allowed` and to the CI registry lane that holds `main/services/bot-rules/*.test.ts`. Commit: "Count a Bot's approvals per class".
+- [x] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-approval-tallies.test.ts`. Expected: FAIL, module not found.
+- [x] **Step 3: Implement `createBotApprovalTallies`.** Per-Bot serial writes. Keys are `botApprovalRuleKey`, or `JSON.stringify(["folder", path])` for folders.
+- [x] **Step 4: Run the tests.** Same command. Expected: PASS.
+- [x] **Step 5: Register and commit.** Add the file to `test:bot-allowed` and to the CI registry lane that holds `main/services/bot-rules/*.test.ts`. Commit: "Count a Bot's approvals per class".
 
 ### Task 3: Which class a call is, and the policy check
 
@@ -193,6 +199,7 @@ Class history keeps 20 times per class and 100 classes, pruning timestamps outsi
 - Modify: `main/services/bot-runtime/bot-extension.ts:120-135` (`BotApprovalRequirement.remember`)
 - Modify: `main/services/bot-runtime/bot-tool-assembly.ts:113-122` (ports), `:276-293` (the no-rule branch); update the header comment's "Routines go ahead" paragraph with one line on entries
 - Test: `main/services/bot-runtime/bot-tool-assembly.test.ts` (extend)
+- Modify: `main/services/bot-runtime/test-support/assembly-fixtures.ts` (optional allow-list port and real harness fixtures only)
 
 **Interfaces:**
 - Consumes: `BotClassifiableAction` (`main/services/bot-rules/classify.ts:61`), `COMPUTER_USE_TOOL_NAME`, and the Task 1 types.
@@ -210,12 +217,16 @@ Class history keeps 20 times per class and 100 classes, pruning timestamps outsi
 
   // bot-tool-assembly.ts
   export interface BotAllowListPort {
+    /** Target-specific durable consent generation, unchanged by usage or unrelated targets. */
+    consentRevision(botId: string, target: BotApprovalRuleTarget): Promise<string>;
     match(botId: string, target: BotApprovalRuleTarget): Promise<{ id: string } | undefined>;
     offer(botId: string, target: BotApprovalRuleTarget): Promise<{ count: number } | undefined>;
     used(botId: string, ruleId: string): Promise<void>;
   }
   // BotToolAssemblyPorts.allowList?: BotAllowListPort
   ```
+The runtime also exposes a main-only, read-only `approvalRequirements(botId, toolName, call)` probe for Task 4. It returns an eligible baseline target, a requirements fingerprint, the current consent revision, their combined authorization fingerprint, and an optional matched rule ID. The requirements fingerprint binds the durable execution identity, canonical operation/arguments, full effective authority and complete effective rules, host input ownership/ingress and explicit browser binding. It excludes usage, tally counts, presentation text and callback identity. Snapshot caller inputs before awaits. Read consent revision around the match lookup and reject an unstable result, then finish fresh authority/rule checks. Missing or unreadable consent identity disables remembered authorization and offers for that call. This probe never reserves C coverage, records entry usage or invokes `onAllow`. Ordinary `checkPolicy` still evaluates C exactly once before D. Every eligible pending card will retain private requirements/target metadata in Task 4, even when no Always offer is present; none is copied into public prompts.
+
 - Integrate with C's single decision sequence rather than adding an earlier return:
   1. Check fresh authority, ingress, deadlines and classification; load rules fail closed. Locked rules, hand-offs and refusals return first.
   2. Apply the existing eligible routine go-ahead behavior.
@@ -599,3 +610,12 @@ The shared Bot target/view/list types and existing ToolApprovalRuleBook are impl
 The existing512KiB document ceiling remains. Publication reserves future usage/revocation growth; receipts never prune without authoritative task-settlement GC, so byte capacity can refuse new remembered consent before count limits. Malformed/unreadable receipt state preserves evidence and fences Bot operations while workspace operations may proceed within capacity. No singleton wiring or new user-facing allow-list behavior is active yet.
 
 Worker initial RED8pass10fail, consentRED20pass2fail and API quarantineRED are retained at /tmp/bot-allowed-d-task1-*.log. Parent event-contract RED is /tmp/bot-allowed-d-task1-parent-event-red.log, then final store/settings27pass, wholetypes0, scopedlint0 and diffclean at /tmp/bot-allowed-d-task1-parent-{final,types,lint}.log. Worker final checks also passed. New tests extend existing files, so no registry addition yet. Task2 follows only after this commit; runtime Tasks3–5 preparation is read-only and held. No fullD/native/device/live/package/CI acceptance.
+
+
+### Task 2 complete locally, 2026-11-04
+
+Per-Bot approval tallies now atomically persist immutable decisions, provenance, person-only counts and seven-day hint ownership in a 0600 file. Counts keep 20 events across at most100 cached classes; immutable receipts remain indefinitely until an authoritative task-settlement collection boundary exists. Corrupt, unreadable or lost previously observed receipt state preserves evidence and fails closed. Bot deletion immediately fences queued writers, removes only its tally file and preserves sibling files and other Bots. Exact replay returns the saved decision result without recounting or moving the hint cooldown.
+
+Historical recovery uses original decidedAt. First publication completion is durable and idempotent, removes earlier history and the exact completed Always event, and preserves other equal-time events, later history and weekly hint ownership. Revoked completion clears nothing. Aligned private allowedDecisionIds prevent guesses when an event was capped, forgotten or evicted. No public contract or file version changed; these new files are not wired into live approvals yet.
+
+The original missing-module RED and recovery RED32pass6fail are retained. Parent official suite initially38passed; inspection then found the own-Always reset gap. Follow-up RED38pass7fail became registered test:bot-allowed48pass0fail. Whole types, scoped lint and diff checks passed. Logs: /tmp/bot-allowed-d-task2-own-reset-{red,green,official,types,lint}.log. Root registered the test script/pretest and CI lane, with registry15pass at /tmp/bot-allowed-d-task2-parent-registry.log. Task3 follows this commit; Tasks4–8 remain held. D source review, native, Cua, package, live-provider and hosted-CI acceptance remain pending.
