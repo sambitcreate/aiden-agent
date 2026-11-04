@@ -1,6 +1,6 @@
 # Bots that work together: implementation plan
 
-Status: implementation in progress (2026-11-03). Phase A Tasks 1–11 are implemented, locally verified across desktop, Remote, CLI, iOS and Android, and accepted by Opus 5.5 medium and OpenCode Go DeepSeek V4.1 Flash high at `dc89b16ce` in full-A round 4. Phase B access requests are implemented and locally validated on the stacked `feature/bot-access-requests` branch, with correctness fixes in progress after its third independent phase review; C and D remain pending. The A implementation is on `feature/bot-messaging`, with main `a5c5db8b1` merged. PRs, final Astra review and exact-head CI are still pending.
+Status: implementation in progress (2026-11-03). Phase A Tasks 1–11 are implemented, locally verified across desktop, Remote, CLI, iOS and Android, and accepted by Opus 5.5 medium and OpenCode Go DeepSeek V4.1 Flash high at `dc89b16ce` in full-A round 4. Phase B access requests are implemented and locally validated on the stacked `feature/bot-access-requests` branch, and accepted by both Gate 3 reviewers at `494d6b39f` in round 4; C and D remain pending. The A implementation is on `feature/bot-messaging`, with main `a5c5db8b1` merged. PRs, final Astra review and exact-head CI are still pending.
 
 This is the master plan. It records the owner's decisions and how the four detailed plans fit together. Research and design: [bot-to-bot-messaging-research.md](bot-to-bot-messaging-research.md).
 
@@ -124,11 +124,11 @@ GPT-6 Astra reviewed the master, all four detailed plans, research and current r
 
 After four Astra review rounds and the corrections above, the final focused review found no blocking or important plan issues. This is acceptance of the written contracts, not runtime acceptance. Local document checks passed for whitespace, links, fenced blocks and task numbering.
 
-These remain plans, not implemented features. The acceptance cases in each task must be implemented and run before that phase is accepted. Keep the earlier research as a dated design record; the master and corrected detailed contracts govern implementation.
+Phases A and B have passed their source review gates. C and D remain plans. The acceptance cases in each task must be implemented and run before that phase is accepted. Keep the earlier research as a dated design record; the master and corrected detailed contracts govern implementation.
 
 ## Status
 
-- [ ] A: `message_bot`
-- [ ] B: `request_access`
+- [x] A: `message_bot`
+- [x] B: `request_access`
 - [ ] C: plan approval
 - [ ] D: allow list and nudge
