@@ -67,7 +67,7 @@ async function fixture(t: test.TestContext, timeoutMs?: number, inspectPort?: (p
             if (method === "tools/list") { pages++; return { tools: paged ? [] : listedMetadata, ...(paged ? { nextCursor: String(pages) } : {}), ...(oversized ? { vendorProse: "x".repeat(256 * 1024) } : {}) } as Result; }
             if (method !== "tools/call") throw new Error("Unexpected synthetic MCP request.");
             const tool = String(params?.name); sent.push(tool); await beforeCall(tool);
-            return transformReply(tool, { content: [], structuredContent: tool === SEARCH ? searchReply() : schemaReply(params?.arguments as Record<string, unknown>) }) as Result;
+            return transformReply(tool, { content: [], structuredContent: tool === SEARCH ? searchReply() : tool === "COMPOSIO_MULTI_EXECUTE_TOOL" ? { successful: true, data: { results: [{ tool_slug: "GOOGLECALENDAR_LIST_CALENDARS", index: 0, response: { items: [] } }], total_count: 1, success_count: 1, error_count: 0 } } : schemaReply(params?.arguments as Record<string, unknown>) }) as Result;
           }, async close() { if (!ended) { ended = true; closed++; for (const listener of closeListeners) listener(); } },
         };
       },
@@ -96,6 +96,23 @@ test("cold Settings inspection uses a disposable metadata connection and leaves 
   assert.ok(retained.includes("inputSchemaHash")); assert.ok(!retained.includes(marker));
   assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
   assert.deepEqual((await fs.readdir(f.directory)).sort(), [COMPOSIO_SETTINGS_INSPECTION_FILE, "existing-bot-grants.json"].sort());
+});
+
+test("metadata inspection of all three Calendar slugs does not require an executable Calendar contract", async (t) => {
+  const f = await fixture(t);
+  f.changeReply((tool, reply) => {
+    if (tool !== SEARCH) return reply;
+    const data = (reply as { structuredContent: { data: Record<string, unknown> } }).structuredContent.data;
+    const rows = data.results as Record<string, unknown>[];
+    rows[0]!.primary_tool_slugs = [];
+    rows[1]!.primary_tool_slugs = ["GOOGLECALENDAR_LIST_CALENDARS", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_EVENTS_GET"];
+    data.tool_schemas = Object.fromEntries((rows[1]!.primary_tool_slugs as string[]).map((slug) => [slug, {}]));
+    return reply;
+  });
+  const result = await f.inspect(owner());
+  assert.deepEqual(f.sent, [SEARCH, SCHEMAS], "ordinary metadata inspection sends no executor operation");
+  assert.equal(result.code, "account_routing_unverified");
+  assert.equal(result.available, false);
 });
 
 test("disabled, off-model, globally hidden and legacy-excluded services resolve no credentials or metadata", async (t) => {
@@ -135,6 +152,26 @@ test("registered IPC captures document invalidation before awaited metadata work
   const pending = handler({}); await entered.promise; destroyed = true; invalidate(); release.release();
   await assert.rejects(pending);
   assert.equal(f.pages, 0); assert.equal(f.published, 0);
+});
+
+test("registered Calendar read check is opt-in, closed to caller IDs and fenced by its document", async () => {
+  let handler!: (event: unknown, input?: unknown) => Promise<unknown>;
+  let metadata = 0, reads = 0, destroyed = false, invalidate = () => {};
+  const entered = barrier(), release = barrier();
+  registerComposioWatchInspection({
+    handle: (_channel, registered) => { handler = registered; },
+    owner: () => ({ isDestroyed: () => destroyed, onInvalidated: (listener) => { invalidate = listener; return () => {}; } }),
+    inspect: async () => { metadata++; return { available: false, checkedAt: 1, status: "inspected", code: "account_routing_unverified", message: "Metadata only." }; },
+    checkCalendarReads: async ({ signal, assertCurrent }) => { reads++; entered.release(); await release.promise; signal.throwIfAborted(); assertCurrent(); return { message: "Calendar reads checked." }; },
+  });
+  for (const input of [{ calendarRead: false }, { calendarRead: true, accountId: "caller-choice" }, { calendarRead: "true" }, { read: true }]) await assert.rejects(handler({}, input), /Invalid inspection/u);
+  assert.equal(metadata, 0); assert.equal(reads, 0);
+  await handler({});
+  assert.equal(metadata, 1); assert.equal(reads, 0);
+  const pending = handler({}, { calendarRead: true });
+  await entered.promise; destroyed = true; invalidate(); release.release();
+  await assert.rejects(pending);
+  assert.equal(reads, 1); assert.equal(metadata, 1);
 });
 
 test("the private Settings record preserves newer evidence and refuses symlink or future-version replacement", async (t) => {
@@ -181,8 +218,53 @@ test("an unbound saved key refuses the disposable connection without credential 
 test("the disposable raw port refuses app dispatch and connection-management operations before sending", async (t) => {
   const f = await fixture(t, undefined, async (port) => {
     for (const name of ["COMPOSIO_MULTI_EXECUTE_TOOL", "COMPOSIO_MANAGE_CONNECTIONS", "COMPOSIO_PROXY_EXECUTE", "COMPOSIO_REMOTE_BASH_TOOL", "GMAIL_FETCH_EMAILS"]) await assert.rejects(port.call(name, {}), /Unsupported Composio inspection/u);
+    await assert.rejects(port.readCalendar!({ kind: "listCalendars", accountId: "unverified-account" }), /current read schemas/u);
   });
   assert.equal((await f.inspect(owner())).code, "account_routing_unverified"); assert.deepEqual(f.sent, [SEARCH, SCHEMAS]); assert.equal(f.closed, 1);
+});
+
+test("typed foreground reads require full schemas returned by this client and lose admission on inventory refresh or revocation", async (t) => {
+  const calendarSlugs = ["GOOGLECALENDAR_LIST_CALENDARS", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_EVENTS_GET"];
+  for (const boundary of ["read", "refresh", "revoke", "forged", "schema_mutation"] as const) await t.test(boundary, async (t) => {
+    let prepared = false;
+    const f = await fixture(t, undefined, async (port) => {
+      await port.list();
+      const reply = await port.call(SCHEMAS, { tool_slugs: calendarSlugs });
+      prepared = true;
+      if (boundary === "schema_mutation") {
+        const data = (reply as { structuredContent: { data: { tool_schemas: Record<string, { input_schema: { required?: string[] } }> } } }).structuredContent.data;
+        data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.input_schema.required = [];
+      }
+      if (boundary === "refresh") await port.list();
+      if (boundary === "revoke") f.revoke();
+      const request = boundary === "forged" ? { kind: "listCalendars", accountId: "exact-account", tools: [{ tool_slug: "GMAIL_SEND_EMAIL" }] } : { kind: "listCalendars", accountId: "exact-account" };
+      if (boundary === "read") {
+        const response = await port.readCalendar!(request as Parameters<NonNullable<typeof port.readCalendar>>[0]);
+        assert.equal((response as { structuredContent: { data: { total_count: number } } }).structuredContent.data.total_count, 1);
+      } else await assert.rejects(port.readCalendar!(request as Parameters<NonNullable<typeof port.readCalendar>>[0]));
+    });
+    f.changeMetadata((tools) => {
+      for (const tool of tools) if (tool.name === SEARCH || tool.name === SCHEMAS) Object.assign(tool, { annotations: { readOnlyHint: true } });
+      const executor = tools.find((tool) => tool.name === "COMPOSIO_MULTI_EXECUTE_TOOL")!;
+      executor.inputSchema = { type: "object", required: ["tools", "sync_response_to_workbench"], properties: { tools: { type: "array", minItems: 1, maxItems: 1, items: { type: "object", additionalProperties: false, required: ["tool_slug", "arguments", "account"], properties: { tool_slug: { type: "string" }, arguments: { type: "object" }, account: { type: "string" } } } }, sync_response_to_workbench: { const: false } } } as unknown as typeof executor.inputSchema;
+      Object.assign(executor, { outputSchema: { type: "object", required: ["successful", "data"], properties: { successful: { type: "boolean" }, data: { type: "object" } } } });
+    });
+    f.changeReply((tool, reply) => {
+      if (tool !== SCHEMAS) return reply;
+      const data = (reply as { structuredContent: { data: { tool_schemas: Record<string, unknown> } } }).structuredContent.data;
+      if (!data.tool_schemas.GOOGLECALENDAR_EVENTS_GET) return reply;
+      data.tool_schemas = Object.fromEntries(calendarSlugs.map((slug) => [slug, { tool_slug: slug, toolkit: "GOOGLECALENDAR", hasFullSchema: true,
+        input_schema: { type: "object", additionalProperties: false, properties: slug === "GOOGLECALENDAR_LIST_CALENDARS" ? { max_results: { type: "integer", maximum: 100 }, page_token: { type: "string" } } : {} }, output_schema: { type: "object", properties: { items: { type: "array", items: { type: "object" } } } },
+      }]));
+      if (boundary === "schema_mutation") Object.assign((data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS as { input_schema: object }).input_schema, { required: ["not_part_of_the_curated_request"] });
+      return reply;
+    });
+    await f.inspect(owner());
+    assert.equal(prepared, true, "the requested invalidation boundary follows successfully returned full schemas");
+    assert.equal(f.sent.filter((name) => name === "COMPOSIO_MULTI_EXECUTE_TOOL").length, boundary === "read" ? 1 : 0);
+    assert.equal(await fs.readFile(f.permissionFile, "utf8"), "original grant data");
+    assert.equal(f.closed, 1);
+  });
 });
 
 test("a deadline during noncooperative credential lookup closes the disposable client and prevents late I/O", async (t) => {

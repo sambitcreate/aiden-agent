@@ -862,8 +862,33 @@ test("Composio watch support inspection is explicit and never changes Bot or ser
   fireEvent.click(check);
   assert.ok((screen.getByRole("button", { name: "Checking watch support…" }) as HTMLButtonElement).disabled);
   assert.equal(channelCalls(calls, "mcp:composioWatch:inspect").length, 1);
+  assert.equal(channelCalls(calls, "mcp:composioWatch:inspect")[0]?.args.length, 0, "metadata inspection does not opt into Calendar reads");
+  assert.ok((screen.getByRole("button", { name: "Check Calendar reads" }) as HTMLButtonElement).disabled);
   await act(async () => release());
   await screen.findByText(message);
+  assert.equal(savedServers(calls).length, 0);
+  assert.ok(!calls.some((call) => call.channel.startsWith("bots:")));
+  assert.equal(screen.getByRole("switch", { name: "Let the model use Composio" }).getAttribute("aria-checked"), "true");
+});
+
+test("Calendar read checking is a separate explicit action with visible scope and no access mutation", async () => {
+  const server = serverFromPreset(MCP_PRESETS.find((entry) => entry.id === "composio")!);
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const calls = mount({
+    "mcp:list": () => [server], "mcp:toolList": () => [{ name: "COMPOSIO_SEARCH_TOOLS" }],
+    "mcp:composioWatch:inspect": async () => { await pending; return { message: "Calendar read check completed." }; },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Tools" }));
+  const check = await screen.findByRole("button", { name: "Check Calendar reads" });
+  assert.ok(screen.getByText(/read your Calendar list and preview up to one day of events/u));
+  assert.equal(channelCalls(calls, "mcp:composioWatch:inspect").length, 0);
+  fireEvent.click(check);
+  assert.deepEqual(channelCalls(calls, "mcp:composioWatch:inspect").map((call) => call.args), [[{ calendarRead: true }]]);
+  assert.ok((screen.getByRole("button", { name: "Checking Calendar reads…" }) as HTMLButtonElement).disabled);
+  assert.ok((screen.getByRole("button", { name: "Check watch support" }) as HTMLButtonElement).disabled);
+  await act(async () => release());
+  await screen.findByText("Calendar read check completed.");
   assert.equal(savedServers(calls).length, 0);
   assert.ok(!calls.some((call) => call.channel.startsWith("bots:")));
   assert.equal(screen.getByRole("switch", { name: "Let the model use Composio" }).getAttribute("aria-checked"), "true");

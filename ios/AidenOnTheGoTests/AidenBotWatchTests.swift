@@ -185,6 +185,45 @@ final class AidenBotWatchTests: XCTestCase {
         XCTAssertFalse(model.canTestDraft)
     }
 
+    func testAvailableCalendarKeepsItsSelectedSourceWindowAndTimezoneThroughPreviewAndSave() async throws {
+        var available = templates
+        available[1]["available"] = true
+        available[1].removeValue(forKey: "unavailableReason")
+        let selected = try decode(AidenBotWatchSources.self, ["choices": [["id": sourceID, "templateId": "calendar_upcoming",
+            "providerLabel": "Composio Calendar", "accountLabel": "Work", "resourceLabel": "Planning", "available": true]], "unavailableReasons": []])
+        let initial = try decode(AidenBotWatchList.self, ["supported": true, "templates": available, "watches": []])
+        let host = WatchHost(list: initial, sources: selected)
+        let model = AidenBotWatchModel(botID: bot, transport: host)
+        await model.load()
+        let discoveries = await host.discoveries
+        XCTAssertEqual(discoveries, 0)
+        model.begin(); model.selectTemplate(.calendarUpcoming)
+        model.draft?.name = "Upcoming planning"
+        model.draft?.prompt = "Prepare a short agenda"
+        model.draft?.lookAheadMinutes = 120
+        model.draft?.timezone = "America/New_York"
+        await model.discover(); model.draft?.sourceChoiceID = sourceID
+        XCTAssertTrue(model.canSave)
+        await host.setTest(try decode(AidenBotWatchTestResult.self, ["checkedAt": 1234, "result": "changed", "itemCount": 1, "changeCount": 1, "preview": ["Planning starts soon"]]))
+        await model.testDraft()
+        let tests = await host.tests
+        XCTAssertEqual(tests, [.draft(sourceChoiceId: sourceID, condition: .calendar(lookAheadMinutes: 120, timezone: "America/New_York"))])
+        XCTAssertEqual(model.testResult?.preview, ["Planning starts soon"])
+        let saved = watchObject(["name": "Upcoming planning", "prompt": "Prepare a short agenda", "templateId": "calendar_upcoming",
+            "condition": ["kind": "calendar", "lookAheadMinutes": 120, "timezone": "America/New_York"],
+            "source": ["providerLabel": "Composio Calendar", "accountLabel": "Work", "resourceLabel": "Planning"]])
+        await host.queueSave(.success(try decode(AidenBotWatch.self, saved)))
+        await host.setList(try decode(AidenBotWatchList.self, ["supported": true, "templates": available, "watches": [saved]]))
+        await model.saveDraft()
+        let saves = await host.saves
+        XCTAssertEqual(saves.count, 1)
+        XCTAssertEqual(saves.first?.1.sourceChoiceId, sourceID)
+        XCTAssertEqual(saves.first?.1.condition, .calendar(lookAheadMinutes: 120, timezone: "America/New_York"))
+        XCTAssertEqual(model.list?.watches.first?.templateId, .calendarUpcoming)
+        XCTAssertNil(model.draft)
+        XCTAssertFalse(model.uncertain)
+    }
+
     func testDraftDiscoveryAndTestUseOpaqueSourceAndNeverRunOrSave() async throws {
         let (model, host) = try await setup()
         let result = try decode(AidenBotWatchTestResult.self, ["checkedAt": 1234, "result": "baseline", "itemCount": 1, "changeCount": 0, "preview": ["One message"]])

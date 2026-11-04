@@ -18,6 +18,9 @@ import java.time.Instant
 class AidenBotWatchControllerTest {
     private class Host : AidenBotWatchTransport {
         var watches = listOf(watchFixture())
+        var templates = watchList().templates
+        var sourceChoices = listOf(AidenBotWatchSourceChoice(SOURCE_ID, AidenBotWatchTemplateId.MAIL, "Mail", "Personal", "Inbox", true))
+        var calendarSaveResult: AidenBotWatch? = null
         var reads = 0
         var discoveries = 0
         var saves = mutableListOf<AidenBotWatchSaveRequest>()
@@ -31,12 +34,12 @@ class AidenBotWatchControllerTest {
         var runError: Exception? = null
         var read: (suspend () -> AidenBotWatchList)? = null
         var testRequest: AidenBotWatchTestRequest? = null
-        override suspend fun list(): AidenBotWatchList { reads++; return read?.invoke() ?: watchList(watches) }
-        override suspend fun sources(): AidenBotWatchSourceList { discoveries++; return AidenBotWatchSourceList(listOf(AidenBotWatchSourceChoice(SOURCE_ID, AidenBotWatchTemplateId.MAIL, "Mail", "Personal", "Inbox", true)), emptyList()) }
+        override suspend fun list(): AidenBotWatchList { reads++; return read?.invoke() ?: watchList(watches).copy(templates = templates) }
+        override suspend fun sources(): AidenBotWatchSourceList { discoveries++; return AidenBotWatchSourceList(sourceChoices, emptyList()) }
         override suspend fun save(id: String?, request: AidenBotWatchSaveRequest): AidenBotWatch {
             saves.add(request)
             if (conflict) throw AidenRemoteClientException.Server(409, AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.REVISION_CONFLICT, "Changed", "req_1", false))
-            val value = watchFixture().copy(id = id ?: request.mutationId, name = request.name, prompt = request.prompt, revision = "2")
+            val value = calendarSaveResult ?: watchFixture().copy(id = id ?: request.mutationId, name = request.name, prompt = request.prompt, revision = "2")
             watches = listOf(value)
             if (failSave) throw IOException("Response lost")
             return value
@@ -45,6 +48,33 @@ class AidenBotWatchControllerTest {
         override suspend fun remove(id: String, request: AidenBotWatchMutation): AidenBotWatchRemoval { removes++; watches = emptyList(); throw IOException("Response lost") }
         override suspend fun test(request: AidenBotWatchTestRequest): AidenBotWatchTestResult { testRequest = request; return AidenBotWatchTestResult(1, AidenBotWatchCheckResult.UNCHANGED, 3, 0, emptyList()) }
         override suspend fun run(id: String, request: AidenBotWatchMutation): AidenBotWatchRunResult { runs.add(request); runError?.let { throw it }; if (deniedRun) throw AidenRemoteClientException.Server(403, AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.CAPABILITY_DENIED, "Denied", "req_1", false)); if (inFlight) throw AidenRemoteClientException.Server(409, AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT, "Pending", "req_1", true)); if (failRun) throw IOException("Response lost"); return AidenBotWatchRunResult(id, "2", false) }
+    }
+    @Test fun availableCalendarPreservesOpaqueSourceWindowAndEditedTimezoneThroughPreviewAndSave() = runTest {
+        val host = Host()
+        host.watches = emptyList()
+        host.templates = listOf(WATCH_TEMPLATE, WATCH_CALENDAR.copy(available = true, unavailableReason = null))
+        host.sourceChoices = listOf(AidenBotWatchSourceChoice(SOURCE_ID, AidenBotWatchTemplateId.CALENDAR, "Composio Calendar", "Work", "Planning", true))
+        val controller = AidenBotWatchController(host, { true }, { true }, { MUTATION_ID })
+        controller.load()
+        assertEquals(0, host.discoveries)
+        controller.begin(); controller.discover(); controller.choose(controller.state.value.sources!!.choices.single())
+        controller.edit { it.copy(name = "Upcoming planning", prompt = "Prepare a short agenda", condition = AidenBotWatchCondition.Calendar(120, "UTC"), calendarTimezone = "America/New_York") }
+        controller.test()
+        assertEquals(SOURCE_ID, host.testRequest!!.sourceChoiceId)
+        val preview = host.testRequest!!.condition as AidenBotWatchCondition.Calendar
+        assertEquals(120, preview.lookAheadMinutes)
+        assertEquals("America/New_York", preview.timezone)
+        assertTrue(host.saves.isEmpty()); assertTrue(host.runs.isEmpty())
+        host.calendarSaveResult = watchFixture().copy(id = MUTATION_ID, revision = "2", name = "Upcoming planning", prompt = "Prepare a short agenda", templateId = AidenBotWatchTemplateId.CALENDAR,
+            condition = AidenBotWatchCondition.Calendar(120, "America/New_York"), source = AidenBotWatchSource("Composio Calendar", "Work", "Planning"))
+        controller.save()
+        assertEquals(1, host.saves.size)
+        assertEquals(SOURCE_ID, host.saves.single().sourceChoiceId)
+        val saved = host.saves.single().condition as AidenBotWatchCondition.Calendar
+        assertEquals(120, saved.lookAheadMinutes)
+        assertEquals("America/New_York", saved.timezone)
+        assertEquals(AidenBotWatchTemplateId.CALENDAR, controller.state.value.view!!.watches.single().templateId)
+        assertNull(controller.state.value.draft); assertFalse(controller.state.value.pending)
     }
     @Test fun uncertainEditPreservesFrozenRevisionWordsAndIdentityUntilExplicitRetry() = runTest {
         val host = Host(); val controller = AidenBotWatchController(host, { true }, { true }, { MUTATION_ID })

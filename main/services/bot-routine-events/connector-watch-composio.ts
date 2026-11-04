@@ -99,13 +99,18 @@ function action(value: unknown): RecordValue {
   if (result.successful !== true || (result.error !== undefined && result.error !== null && result.error !== "")) return fail("The selected Calendar account could not be read.");
   noPartial(result); return object(result.data);
 }
-function executorResult(value: unknown, read: ComposioCalendarRead): RecordValue {
+/** Correlated successful upstream representation, before optional action unwrap. */
+export function parseComposioCalendarExecutorResponse(value: unknown, read: ComposioCalendarRead): RecordValue {
   const data = action(value); noPartial(data);
   if (data.total_count !== 1 || data.success_count !== 1 || data.error_count !== 0 || !Array.isArray(data.results) || data.results.length !== 1) return fail("Calendar did not return exactly one successful operation.");
   const result = object(data.results[0]); noPartial(result);
   const slug = read.kind === "listCalendars" ? LIST_CALENDARS : read.kind === "listEvents" ? LIST_EVENTS : GET_EVENT;
   if (result.index !== 0 || result.tool_slug !== slug || (result.error !== undefined && result.error !== null && result.error !== "")) return fail();
   const response = object(result.response); noPartial(response, true);
+  return response;
+}
+function executorResult(value: unknown, read: ComposioCalendarRead): RecordValue {
+  const response = parseComposioCalendarExecutorResponse(value, read);
   // Candidate forms are explicit and non-overlapping. Both remain gated until
   // the installed operation's real output contract is independently accepted.
   if (response.successful !== undefined) {
@@ -153,7 +158,8 @@ function page(value: RecordValue, maximum: number): { items: unknown[]; next?: s
   if (cursor === undefined || cursor === null || cursor === "") return { items: value.items };
   return { items: value.items, next: text(cursor, 2_000) };
 }
-function accounts(value: unknown): Array<{ id: string; label: string }> {
+/** Parse only a freshly guarded Search reply; this data never grants a read. */
+export function parseComposioCalendarAccounts(value: unknown): Array<{ id: string; label: string }> {
   const data = action(value); noPartial(data);
   if (!Array.isArray(data.toolkit_connection_statuses) || data.toolkit_connection_statuses.length > 16) return fail("Calendar account discovery was incomplete.");
   const matches = data.toolkit_connection_statuses.map(object).filter((entry) => typeof entry.toolkit === "string" && /^[a-z]+$/iu.test(entry.toolkit) && entry.toolkit.toLowerCase() === "googlecalendar");
@@ -213,7 +219,7 @@ export function discoverComposioCalendarSources(port: ComposioCalendarDiscoveryP
     current.throwIfAborted(); await port.assertDiscoveryCurrent(current); current.throwIfAborted();
     const metadata = await port.currentAccounts(current);
     current.throwIfAborted(); await port.assertDiscoveryCurrent(current); current.throwIfAborted();
-    const activeAccounts = accounts(bounded(metadata)); const result: ComposioCalendarSource[] = [];
+    const activeAccounts = parseComposioCalendarAccounts(bounded(metadata)); const result: ComposioCalendarSource[] = [];
     for (const account of activeAccounts) {
       let token: string | undefined; const cursors = new Set<string>(); const calendars = new Set<string>();
       for (let index = 0; index < LIMITS.pages; index++) {
@@ -290,6 +296,15 @@ export function parseComposioCalendarBaseline(value: unknown): ComposioCalendarB
     });
     return { version: 1, accountId: account, calendarId: calendar, items };
   } catch { return undefined; }
+}
+
+/** Validate a real GET against a timed occurrence already returned by the
+ * selected Calendar's bounded window. No lookup or authority is minted here. */
+export function normalizeComposioCalendarEventGet(reply: unknown, request: Extract<ComposioCalendarRead, { kind: "getEvent" }>, expected: ComposioCalendarItem): ComposioCalendarItem {
+  if (request.eventId !== expected.eventId) return fail("Calendar GET did not request the observed event.");
+  const item = normalizedEvent(executorResult(reply, request), new Map([[expected.eventId, expected]]), new Map([[expected.id, expected]]), expected);
+  if (!item) return fail("Calendar GET did not return the observed timed occurrence.");
+  return item;
 }
 
 export function readComposioCalendarWatch(binding: ComposioCalendarSource, condition: ComposioCalendarCondition, previous: ComposioCalendarBaseline | undefined, port: ComposioCalendarReadPort, now: number, signal: AbortSignal, options: Options = {}): Promise<{ items: ComposioCalendarItem[]; baseline: ComposioCalendarBaseline; changes: ConnectorWatchChange[] }> {

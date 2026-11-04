@@ -246,6 +246,12 @@ function metaValidator(schema: unknown, tool: ComposioWatchProbeTool): ValidateF
     return compiler.compile(schema.$schema === undefined ? schema : { ...schema, $schema: "http://json-schema.org/draft-07/schema#" });
   } catch (error) { if (error instanceof ProbeFailure) throw error; return rejectMeta(tool, "schema_compile", schema, compiler?.errors?.[0]?.keyword); }
 }
+/** The same bounded, loader-free draft-07 input subset for host-built reads.
+ * Compilation is validation only; it grants no tool or account authority. */
+export function compileComposioWatchInputSchema(schema: unknown): ValidateFunction {
+  return metaValidator(schema, SCHEMAS);
+}
+
 function property(schema: unknown, name: string): RecordValue | undefined {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) return undefined;
   const properties = (schema as RecordValue).properties;

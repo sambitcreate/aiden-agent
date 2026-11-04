@@ -101,18 +101,21 @@ test.describe("Settings → Connectors", () => {
   });
 });
 
-test("Composio watch schema check is an explicit Settings action with one service allowance", async ({ aiden }) => {
+test("Composio metadata and Calendar read checks are separate explicit Settings actions with one allowance", async ({ aiden }) => {
   await finishLmStudioOnboarding(aiden.page);
   const server = serverFromPreset(getMcpPreset("composio")!);
   await aiden.app.evaluate(({ ipcMain }, saved) => {
-    const state = globalThis as { composioChecks?: number; composioSaves?: number };
-    state.composioChecks = 0; state.composioSaves = 0;
-    const handlers: Record<string, () => unknown> = {
+    const state = globalThis as { composioChecks?: number; composioReads?: number; composioSaves?: number };
+    state.composioChecks = 0; state.composioReads = 0; state.composioSaves = 0;
+    const handlers: Record<string, (...args: unknown[]) => unknown> = {
       "mcp:list": () => [saved],
       "mcp:toolList": () => [{ name: "COMPOSIO_SEARCH_TOOLS" }, { name: "COMPOSIO_MULTI_EXECUTE_TOOL" }],
       "mcp:liveStatus": () => [{ serverId: saved.id, state: "connected", toolCount: 1 }],
       "mcp:save": () => { state.composioSaves!++; return saved; },
-      "mcp:composioWatch:inspect": () => { state.composioChecks!++; return { available: false, checkedAt: 1, status: "inspected", code: "account_routing_unverified", message: "Composio’s watch schemas were inspected. Exact account routing is not verified, so these watches remain unavailable." }; },
+      "mcp:composioWatch:inspect": (_event, input) => {
+        if (input && typeof input === "object" && (input as { calendarRead?: unknown }).calendarRead === true) { state.composioReads!++; return { message: "Calendar read check completed." }; }
+        state.composioChecks!++; return { available: false, checkedAt: 1, status: "inspected", code: "account_routing_unverified", message: "Composio’s watch schemas were inspected. Exact account routing is not verified, so these watches remain unavailable." };
+      },
     };
     for (const [channel, handler] of Object.entries(handlers)) { ipcMain.removeHandler(channel); ipcMain.handle(channel, handler); }
   }, server);
@@ -129,9 +132,14 @@ test("Composio watch schema check is an explicit Settings action with one servic
   await page.getByRole("button", { name: "Check watch support", exact: true }).click();
   await expect(page.getByRole("status").filter({ hasText: "Exact account routing is not verified" })).toBeVisible();
   expect(await aiden.app.evaluate(() => (globalThis as { composioChecks?: number }).composioChecks)).toBe(1);
+  expect(await aiden.app.evaluate(() => (globalThis as { composioReads?: number }).composioReads)).toBe(0);
+  await expect(page.getByText(/read your Calendar list and preview up to one day of events/u)).toBeVisible();
+  await page.getByRole("button", { name: "Check Calendar reads", exact: true }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Calendar read check completed." })).toBeVisible();
+  expect(await aiden.app.evaluate(() => (globalThis as { composioReads?: number }).composioReads)).toBe(1);
   expect(await aiden.app.evaluate(() => (globalThis as { composioSaves?: number }).composioSaves)).toBe(0);
   await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(600, 900));
-  await page.getByRole("button", { name: "Check watch support", exact: true }).scrollIntoViewIfNeeded();
-  await expect(page.getByRole("button", { name: "Check watch support", exact: true })).toBeInViewport();
+  await page.getByRole("button", { name: "Check Calendar reads", exact: true }).scrollIntoViewIfNeeded();
+  await expect(page.getByRole("button", { name: "Check Calendar reads", exact: true })).toBeInViewport();
   await page.screenshot({ path: test.info().outputPath("composio-watch-support.png"), fullPage: true });
 });

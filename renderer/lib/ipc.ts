@@ -727,6 +727,8 @@ export const skillsApi = {
 export const mcpApi = {
   /** Explicit Settings metadata check; never changes a Bot's grants. */
   inspectComposioWatch: () => invoke<import("../../main/services/bot-routine-events/connector-watch-composio-probe").ComposioWatchProbePublicResult>("mcp:composioWatch:inspect"),
+  /** Explicit foreground Calendar read acceptance, separate from metadata inspection. */
+  checkComposioCalendarReads: () => invoke<{ message: string }>("mcp:composioWatch:inspect", { calendarRead: true }),
   list: () => invoke<McpServer[]>("mcp:list"),
   /** Built-in provider catalog plus per-preset connection state. */
   presets: () => invoke<McpPresetState[]>("mcp:presets"),
