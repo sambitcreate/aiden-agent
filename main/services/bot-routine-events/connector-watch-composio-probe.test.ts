@@ -78,6 +78,50 @@ test("only schema meta-reads run, requested slugs came from Search, and structur
   for (const forbidden of ["ca_private_fixture", "credential-fixture", "private@example.test", "private-session-fixture", "secret-field-fixture", "ignored-private-prose"]) assert.ok(!retained.includes(forbidden), forbidden);
 });
 
+test("unused Search description fields can be omitted independently while tool correlation and watch gating remain intact", async (t) => {
+  for (const omitted of [["reasoning", "task_difficulty"], ["reasoning"], ["task_difficulty"]]) await t.test(omitted.join("+"), async () => {
+    const h = harness(), call = h.port.call;
+    h.port.call = async (tool, args, signal) => {
+      const response = await call(tool, args, signal) as { data: { results: Record<string, unknown>[] } };
+      if (tool === SEARCH) for (const result of response.data.results) for (const field of omitted) delete result[field];
+      return response;
+    };
+    const inspected = await inspectComposioWatchSchemas(h.port, { kind: "both" });
+    assert.equal(inspected.code, "account_routing_unverified"); assert.equal(inspected.status, "inspected"); assert.equal(inspected.available, false);
+    assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH, SCHEMAS]); assert.deepEqual(h.calls[1].args.tool_slugs, ["GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_EVENTS_LIST"]);
+    assert.deepEqual(inspected.privateProof?.candidates.map((candidate) => candidate.kind), ["email", "calendar"]);
+    assert.equal(inspected.privateProof?.responseRejection, undefined);
+    for (const forbidden of ["ca_private_fixture", "private-session-fixture", "private@example.test", "ignored-private-prose"]) assert.ok(!JSON.stringify(inspected).includes(forbidden));
+  });
+});
+
+test("optional Search description fields reject malformed present values and never retain accepted prose", async (t) => {
+  for (const field of ["reasoning", "task_difficulty"]) {
+    for (const value of [null, 123, {}, [], "x".repeat(4097), "\ud800"]) await t.test(`${field}/${typeof value}/${value === null ? "null" : Array.isArray(value) ? "array" : typeof value === "string" ? value.length : "value"}`, async () => {
+      const h = harness(), call = h.port.call;
+      h.port.call = async (tool, args, signal) => {
+        const response = await call(tool, args, signal) as { data: { results: Record<string, unknown>[] } };
+        if (tool === SEARCH) response.data.results[0]![field] = value;
+        return response;
+      };
+      const inspected = await inspectComposioWatchSchemas(h.port, { kind: "email" });
+      assert.equal(inspected.code, "invalid_response"); assert.equal(inspected.available, false); assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH]);
+      assert.equal(inspected.privateProof?.responseRejection?.field, field === "reasoning" ? "result.reasoning" : "result.task_difficulty");
+      assert.equal(inspected.privateProof?.responseRejection?.reason, typeof value === "string" ? "invalid_text" : "expected_string");
+      assert.ok(!JSON.stringify(inspected).includes("ca_private_fixture")); assert.ok(!JSON.stringify(inspected).includes("private-session-fixture"));
+    });
+    const h = harness(), call = h.port.call, prose = "private-descriptive-prose-never-authorization";
+    h.port.call = async (tool, args, signal) => {
+      const response = await call(tool, args, signal) as { data: { results: Record<string, unknown>[] } };
+      if (tool === SEARCH) { response.data.results[0]![field] = prose; response.data.results[0]![field === "reasoning" ? "task_difficulty" : "reasoning"] = ""; }
+      return response;
+    };
+    const inspected = await inspectComposioWatchSchemas(h.port, { kind: "email" });
+    assert.equal(inspected.code, "account_routing_unverified"); assert.equal(inspected.available, false);
+    assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH, SCHEMAS]); assert.ok(!JSON.stringify(inspected).includes(prose));
+  }
+});
+
 test("the public projection contains only safe facts even if a caller attaches private extras", async () => {
   const h = harness(); const result = await inspectComposioWatchSchemas(h.port, { kind: "email", now: () => 321 });
   const view = publicComposioWatchProbeResult({ ...result, secret: "credential-fixture" } as ComposioWatchProbeResult);
@@ -393,7 +437,7 @@ test("Search rejection diagnostics identify strict field, completeness and conne
     { name: "result use case", change: (data) => { delete result(data).use_case; }, field: "result.use_case", stage: "results", reason: "expected_string" },
     { name: "result toolkit list", change: (data) => { result(data).toolkits = {}; }, field: "result.toolkits", stage: "results", reason: "expected_array" },
     { name: "result reasoning", change: (data) => { result(data).reasoning = null; }, field: "result.reasoning", stage: "results", reason: "expected_string" },
-    { name: "result difficulty", change: (data) => { delete result(data).task_difficulty; }, field: "result.task_difficulty", stage: "results", reason: "expected_string" },
+    { name: "result difficulty", change: (data) => { result(data).task_difficulty = null; }, field: "result.task_difficulty", stage: "results", reason: "expected_string" },
     { name: "result error", change: (data) => { result(data).error = "private-value"; }, field: "result.error", stage: "results", reason: "reported_error" },
     { name: "primary slug list", change: (data) => { result(data).primary_tool_slugs = {}; }, field: "result.primary_tool_slugs", stage: "results", reason: "expected_array" },
     { name: "related slug list", change: (data) => { result(data).related_tool_slugs = [""]; }, field: "result.related_tool_slugs", stage: "results", reason: "invalid_text" },

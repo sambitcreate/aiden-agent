@@ -405,8 +405,12 @@ export async function inspectComposioWatchSchemas(port: ComposioWatchProbePort, 
       if (entry.index !== index + 1) responseFail("invalid_response", "result.index", "unexpected_value", entry.index);
       if (typeof entry.use_case !== "string") responseFail("invalid_response", "result.use_case", "expected_string", entry.use_case);
       if (!Array.isArray(entry.toolkits)) responseFail("invalid_response", "result.toolkits", "expected_array", entry.toolkits);
-      if (typeof entry.reasoning !== "string") responseFail("invalid_response", "result.reasoning", "expected_string", entry.reasoning);
-      if (typeof entry.task_difficulty !== "string") responseFail("invalid_response", "result.task_difficulty", "expected_string", entry.task_difficulty);
+      // Descriptive metadata is optional and never controls tool selection.
+      for (const field of ["reasoning", "task_difficulty"] as const) if (entry[field] !== undefined) {
+        const value = entry[field], diagnosticField = field === "reasoning" ? "result.reasoning" : "result.task_difficulty";
+        if (typeof value !== "string") responseFail("invalid_response", diagnosticField, "expected_string", value);
+        if (value.length > 4096 || !connectorTextIsWellFormed(value)) responseFail("invalid_response", diagnosticField, "invalid_text", value);
+      }
       if (entry.error !== undefined && entry.error !== null && entry.error !== "") responseFail("invalid_response", "result.error", "reported_error", entry.error);
       responseStrings(entry.toolkits, "result.toolkits", 16);
       const returned = [...responseStrings(entry.primary_tool_slugs, "result.primary_tool_slugs"), ...responseStrings(entry.related_tool_slugs, "result.related_tool_slugs")];
