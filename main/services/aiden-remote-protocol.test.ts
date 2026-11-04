@@ -3638,3 +3638,21 @@ test("plan collection and string bounds reject oversize payloads without weakeni
   assert.equal([...maximum.title].length, 80);
   assert.equal(maximum.items[0]!.used, 25);
 });
+
+test("canonical phone plan fixtures identify enforced folders, modes and temporary grant lifetime", async () => {
+  const protocol = await import("./aiden-remote-protocol.js");
+  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const plans = protocol.parseAidenRemoteContractFixture(raw).botPlans!;
+  const files = [
+    { line: "Files · change /Volumes/Backup/Family Photos for this plan", details: ["/Volumes/Backup/Family Photos", "Read and change · allowed once, for this plan only"] },
+    { line: "Files · read ~/Documents/Tax Records", details: ["~/Documents/Tax Records"] },
+  ];
+  for (const plan of [plans.pending, plans.active, plans.session.plan, ...plans.events.flatMap(event => event.type === "snapshot" ? [event.payload.session.plan] : event.type === "plan" && event.payload.plan ? [event.payload.plan] : [])]) {
+    assert.ok(plan);
+    assert.deepEqual(plan.items.slice(2), files);
+    assert.equal(plan.items.filter(item => item.line.endsWith(" for this plan")).length, 1);
+  }
+  assert.ok(raw.botPlans.readOnlyFolderPlan);
+  const readOnly = protocol.parseAidenRemoteBotPlan(raw.botPlans.readOnlyFolderPlan);
+  assert.deepEqual(readOnly.items, [{ line: "Files · read /Volumes/Archive/Tax Records for this plan", details: ["/Volumes/Archive/Tax Records", "Read only · allowed once, for this plan only"] }]);
+});

@@ -3722,6 +3722,19 @@
         {
           "line": "Commands · in its own folder",
           "details": []
+        },
+        {
+          "line": "Files · change /Volumes/Backup/Family Photos for this plan",
+          "details": [
+            "/Volumes/Backup/Family Photos",
+            "Read and change · allowed once, for this plan only"
+          ]
+        },
+        {
+          "line": "Files · read ~/Documents/Tax Records",
+          "details": [
+            "~/Documents/Tax Records"
+          ]
         }
       ],
       "from": "COS"
@@ -3753,6 +3766,19 @@
         {
           "line": "Commands · in its own folder",
           "details": []
+        },
+        {
+          "line": "Files · change /Volumes/Backup/Family Photos for this plan",
+          "details": [
+            "/Volumes/Backup/Family Photos",
+            "Read and change · allowed once, for this plan only"
+          ]
+        },
+        {
+          "line": "Files · read ~/Documents/Tax Records",
+          "details": [
+            "~/Documents/Tax Records"
+          ]
         }
       ],
       "from": "COS",
@@ -3795,6 +3821,19 @@
           {
             "line": "Commands · in its own folder",
             "details": []
+          },
+          {
+            "line": "Files · change /Volumes/Backup/Family Photos for this plan",
+            "details": [
+              "/Volumes/Backup/Family Photos",
+              "Read and change · allowed once, for this plan only"
+            ]
+          },
+          {
+            "line": "Files · read ~/Documents/Tax Records",
+            "details": [
+              "~/Documents/Tax Records"
+            ]
           }
         ],
         "from": "COS"
@@ -3845,6 +3884,19 @@
                 {
                   "line": "Commands · in its own folder",
                   "details": []
+                },
+                {
+                  "line": "Files · change /Volumes/Backup/Family Photos for this plan",
+                  "details": [
+                    "/Volumes/Backup/Family Photos",
+                    "Read and change · allowed once, for this plan only"
+                  ]
+                },
+                {
+                  "line": "Files · read ~/Documents/Tax Records",
+                  "details": [
+                    "~/Documents/Tax Records"
+                  ]
                 }
               ],
               "from": "COS"
@@ -3886,6 +3938,19 @@
               {
                 "line": "Commands · in its own folder",
                 "details": []
+              },
+              {
+                "line": "Files · change /Volumes/Backup/Family Photos for this plan",
+                "details": [
+                  "/Volumes/Backup/Family Photos",
+                  "Read and change · allowed once, for this plan only"
+                ]
+              },
+              {
+                "line": "Files · read ~/Documents/Tax Records",
+                "details": [
+                  "~/Documents/Tax Records"
+                ]
               }
             ],
             "from": "COS",
@@ -3904,6 +3969,32 @@
         }
       }
     ],
+    "readOnlyFolderPlan": {
+      "planId": "plan-read-only-folder-56",
+      "status": "pending",
+      "title": "Prepare the weekly review",
+      "why": "Collect the updates and prepare a draft.",
+      "steps": [
+        {
+          "text": "Collect the updates",
+          "status": "pending"
+        },
+        {
+          "text": "Prepare a draft",
+          "status": "pending"
+        }
+      ],
+      "items": [
+        {
+          "line": "Files · read /Volumes/Archive/Tax Records for this plan",
+          "details": [
+            "/Volumes/Archive/Tax Records",
+            "Read only · allowed once, for this plan only"
+          ]
+        }
+      ],
+      "from": "COS"
+    },
     "respond": {
       "request": {
         "decision": "approve"

@@ -17,12 +17,52 @@ final class AidenBotPlanTests: XCTestCase {
         let fixture = try section()
         let session = try decode(AidenBotSession.self, fixture["session"]!)
         XCTAssertEqual(session.seq, 0)
+        assertHostFolderReview(try XCTUnwrap(session.plan))
+        assertHostFolderReview(try decode(AidenRemoteBotPlan.self, fixture["pending"]!))
+        assertHostFolderReview(try decode(AidenRemoteBotPlan.self, fixture["active"]!))
         let events = try XCTUnwrap(fixture["events"] as? [Any]).map { try decode(AidenBotSessionEvent.self, $0) }
         XCTAssertEqual(events.map(\.seq), [0, 1, 2])
+        guard case let .snapshot(first) = events[0].kind,
+              case let .plan(active) = events[1].kind,
+              case let .plan(cleared) = events[2].kind else {
+            XCTFail("Expected the canonical snapshot, active-plan update, and clear")
+            return
+        }
+        assertHostFolderReview(try XCTUnwrap(first.plan))
+        assertHostFolderReview(try XCTUnwrap(active))
+        XCTAssertNil(cleared)
     }
 }
 
 extension AidenBotPlanTests {
+    /// Independent expected review text: these are the strings the native card renders verbatim.
+    private func assertHostFolderReview(_ plan: AidenRemoteBotPlan, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(plan.items.map(\.line), [
+            "Google Calendar · create events (up to 5)",
+            "Commands · in its own folder",
+            "Files · change /Volumes/Backup/Family Photos for this plan",
+            "Files · read ~/Documents/Tax Records",
+        ], file: file, line: line)
+        XCTAssertEqual(plan.items.map(\.details), [
+            ["Create event"], [],
+            ["/Volumes/Backup/Family Photos", "Read and change · allowed once, for this plan only"],
+            ["~/Documents/Tax Records"],
+        ], file: file, line: line)
+        XCTAssertEqual(plan.items.first?.used, 0, file: file, line: line)
+        XCTAssertEqual(plan.items.first?.max, 5, file: file, line: line)
+        for item in plan.items.dropFirst() {
+            XCTAssertNil(item.used, file: file, line: line)
+            XCTAssertNil(item.max, file: file, line: line)
+        }
+    }
+    private func assertReadOnlyFolderReview(_ plan: AidenRemoteBotPlan) {
+        XCTAssertEqual(plan.planId, "plan-read-only-folder-56")
+        XCTAssertEqual(plan.status, .pending)
+        XCTAssertEqual(plan.items.map(\.line), ["Files · read /Volumes/Archive/Tax Records for this plan"])
+        XCTAssertEqual(plan.items.map(\.details), [["/Volumes/Archive/Tax Records", "Read only · allowed once, for this plan only"]])
+        XCTAssertNil(plan.items.first?.used)
+        XCTAssertNil(plan.items.first?.max)
+    }
     func snapshot() throws -> AidenBotSession { try decode(AidenBotSession.self, section()["session"]!) }
     func plan(_ key: String = "pending") throws -> AidenRemoteBotPlan { try decode(AidenRemoteBotPlan.self, section()[key]!) }
     func frame(_ value: Any, seq: Int = 1) throws -> AidenBotSessionEvent {
@@ -38,12 +78,14 @@ extension AidenBotPlanTests {
     func testCanonicalPendingActiveClearAndLegacyAreHostAuthoritative() async throws {
         let (model, _) = try await loaded()
         XCTAssertEqual(model.plan, try plan())
+        assertHostFolderReview(try XCTUnwrap(model.plan))
         XCTAssertTrue(model.composerHeldForPlan)
         let sent = await model.send("Keep this draft")
         XCTAssertFalse(sent)
         let events = try XCTUnwrap(section()["events"] as? [Any])
         _ = await model.apply(try decode(AidenBotSessionEvent.self, events[1]))
         XCTAssertEqual(model.plan, try plan("active"))
+        assertHostFolderReview(try XCTUnwrap(model.plan))
         XCTAssertEqual(model.plan?.completedSteps, 1)
         XCTAssertFalse(model.composerHeldForPlan)
         _ = await model.apply(try decode(AidenBotSessionEvent.self, events[2]))
@@ -51,6 +93,11 @@ extension AidenBotPlanTests {
         let legacy = try XCTUnwrap(section()["legacy"] as? [String: Any])
         XCTAssertNil(try decode(AidenBotSession.self, legacy["session"]!).plan)
         for event in try XCTUnwrap(legacy["events"] as? [Any]) { _ = try decode(AidenBotSessionEvent.self, event) }
+        let readOnly = try plan("readOnlyFolderPlan")
+        assertReadOnlyFolderReview(readOnly)
+        _ = await model.apply(try frame(section()["readOnlyFolderPlan"]!, seq: 3))
+        assertReadOnlyFolderReview(try XCTUnwrap(model.plan))
+        XCTAssertTrue(model.composerHeldForPlan, "The exact outside read grant still requires a person's answer")
     }
     func testStrictShapeBoundsCountersNullAndPrivateFields() throws {
         let base = try XCTUnwrap(section()["pending"] as? [String: Any])
@@ -64,7 +111,7 @@ extension AidenBotPlanTests {
         let step: [String: Any] = ["text": "Do this", "status": "pending"]
         for steps: Any in [Array(repeating: step, count: 11), [["text": "Do this", "status": "done", "id": "private"]], [["text": String(repeating: "x", count: 201), "status": "pending"]]] { var copy = base; copy["steps"] = steps; bad.append(copy) }
         let item: [String: Any] = ["line": "Calendar", "details": []]
-        for fields: [String: Any] in [["used": 0], ["max": 1], ["used": NSNull(), "max": 1], ["used": "1", "max": 2], ["used": true, "max": 2], ["used": -1, "max": 2], ["used": 3, "max": 2], ["used": 0, "max": 26], ["used": 0, "max": 0], ["id": "private"], ["details": Array(repeating: "detail", count: 7)], ["details": [NSNull()]], ["line": String(repeating: "x", count: 121)]] {
+        for fields: [String: Any] in [["used": 0], ["max": 1], ["used": NSNull(), "max": 1], ["used": "1", "max": 2], ["used": true, "max": 2], ["used": -1, "max": 2], ["used": 3, "max": 2], ["used": 0, "max": 26], ["used": 0, "max": 0], ["id": "private"], ["fileScope": ["path": "/private/host-only"]], ["details": Array(repeating: "detail", count: 7)], ["details": [NSNull()]], ["line": String(repeating: "x", count: 121)]] {
             var copy = base; copy["items"] = [item.merging(fields) { _, new in new }]; bad.append(copy)
         }
         for object in bad { XCTAssertThrowsError(try decode(AidenRemoteBotPlan.self, object), "\(object.keys.sorted())") }

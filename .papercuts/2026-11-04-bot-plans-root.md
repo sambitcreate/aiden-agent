@@ -33,3 +33,7 @@
 - Task9 initial art-test path assumed a feature-art.test.tsx that does not exist. Confirmed art assertions belong to onboarding-feature-gallery.test.tsx and corrected worker ownership without adding a redundant test file.
 
 - Task9 onboarding85-suite failure was an older gallery-copy assertion at onboarding-flow:390, not the first-Bot sentence. First exact replacement assertion stopped before writing. Replaced only the stale rendered-gallery expectation with independent plan guidance and limit assertions; retained initial84pass1fail log.
+
+- Gate5R1: Opus found uninformed phone folder approval, clipped pending caps and terminal model-state lifecycle mismatch; DeepSeek found retained pre-execution approval closures. Both reviewed clean6c405ac21. Root lifecycle genuine RED5pass4fail /tmp/bot-plan-c-g5r1-lifecycle-red.log; host/native correction is separately scoped. Resource cleanup has no natural public memory-size oracle, so use existing real-harness rejection/Stop/admission checks rather than add a change-detector/debug-only test.
+
+- Gate5 correction first whole-type snapshot overlapped test edits: root real-plan fixture omitted required signal, and host fixture test used Object.hasOwn beyond ES2020. Root supplied signal; host notified to use the compatible own-property helper. Retain /tmp/bot-plan-c-g5r1-root-types.log and run fresh integrated types after source readiness.

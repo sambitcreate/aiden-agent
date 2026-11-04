@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { botPlanItemView, botPlanProgress, parseBotPlanResponse } from "./bot-plans.js";
+import { botPlanItemView, botPlanProgress, parseBotPlanResponse, type BotPlanItem } from "./bot-plans.js";
 
 test("connector line names the app, action, cap and live tool titles", () => {
   assert.deepEqual(botPlanItemView({ id: "i1", kind: "connector", app: "Google Calendar", action: "create events", max: 5,
@@ -11,7 +11,7 @@ test("connector line names the app, action, cap and live tool titles", () => {
 test("folder grant copy distinguishes read from change and limits its lifetime", () => {
   for (const [access, verb, detail] of [["read", "read", "Read only"], ["write", "change", "Read and change"]] as const) {
     assert.deepEqual(botPlanItemView({ id: "i1", kind: "files", path: "~/Documents/Taxes", access, grant: true }, 9), {
-      id: "i1", line: `Files · ${verb} ~/Documents/Taxes for this plan`,
+      id: "i1", fileScope: { path: "~/Documents/Taxes", access, grant: true }, line: `Files · ${verb} ~/Documents/Taxes for this plan`,
       details: ["~/Documents/Taxes", `${detail} · allowed once, for this plan only`],
     });
   }
@@ -46,4 +46,16 @@ test("plan responses accept production Bot identities and refuse path/control ch
   for (const invalid of [longest + "x", "../bot", "bot/../other", "bot\\other", "bot:\u0000escape", "bot:\nnext", "bot:\u202ehidden"]) {
     assert.throws(() => parseBotPlanResponse({ botId: invalid, planId: "p", decision: "approve" }));
   }
+});
+
+test("only host-formatted files carry a snapshot of folder display provenance", () => {
+  const item: BotPlanItem = { id: "i1", kind: "files", path: "/Volumes/Backup/Family Photos", access: "read", grant: true };
+  const view = botPlanItemView(item, 0);
+  item.path = "/Volumes/Other"; item.access = "write"; item.grant = false;
+  assert.deepEqual(view.fileScope, { path: "/Volumes/Backup/Family Photos", access: "read", grant: true });
+  assert.equal(view.line, "Files · read /Volumes/Backup/Family Photos for this plan");
+  for (const prose of [
+    { id: "i2", kind: "connector", app: "Files", action: "change /Volumes/Other for this plan", tools: [], max: 5 },
+    { id: "i3", kind: "rule", ruleId: "r", ruleFingerprint: "fp", label: "Files · read /Volumes/Other", max: 5 },
+  ] satisfies BotPlanItem[]) assert.equal(botPlanItemView(prose, 0).fileScope, undefined);
 });

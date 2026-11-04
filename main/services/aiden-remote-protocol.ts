@@ -6937,14 +6937,12 @@ export interface AidenRemoteBotActivityFixture {
   send: { request: AidenRemoteBotMessageRequest; response: AidenRemoteBotMessageReceipt };
 }
 
-/**
- * Revision 37: what a `bot:handoffs` device and a device without it each
- * receive for one hand-off and one pause.
- */
+/** Canonical revision 56 plan examples shared by host and native decoders. */
 export interface AidenRemoteBotPlansFixture {
   capability: "bot:plans";
   pending: AidenRemoteBotPlan;
   active: AidenRemoteBotPlan;
+  readOnlyFolderPlan: AidenRemoteBotPlan;
   session: AidenRemoteBotSession;
   events: AidenRemoteBotSessionEvent[];
   respond: { request: AidenRemoteBotPlanRespondRequest; response: AidenRemoteBotPlanRespondReceipt };
@@ -7123,7 +7121,7 @@ function parseScheduleCardsFixture(value: unknown): AidenRemoteScheduleCardsFixt
 
 function parseBotPlansFixture(value: unknown): AidenRemoteBotPlansFixture {
   if (!isRecord(value)) throw new Error("Bot plan fixtures must be an object.");
-  assertExactKeys(value, ["capability", "pending", "active", "session", "events", "respond", "expired", "legacy"], "Bot plan fixtures");
+  assertExactKeys(value, ["capability", "pending", "active", "readOnlyFolderPlan", "session", "events", "respond", "expired", "legacy"], "Bot plan fixtures");
   if (value.capability !== "bot:plans" || !isRecord(value.respond) || !isRecord(value.legacy)) throw new Error("Invalid Bot plan fixtures.");
   assertExactKeys(value.respond, ["request", "response"], "Bot plan response fixture");
   assertExactKeys(value.legacy, ["session", "events"], "Bot plan legacy fixture");
@@ -7133,12 +7131,13 @@ function parseBotPlansFixture(value: unknown): AidenRemoteBotPlansFixture {
   };
   const fixture: AidenRemoteBotPlansFixture = {
     capability: value.capability, pending: parseAidenRemoteBotPlan(value.pending), active: parseAidenRemoteBotPlan(value.active),
+    readOnlyFolderPlan: parseAidenRemoteBotPlan(value.readOnlyFolderPlan),
     session: parseAidenRemoteBotSession(value.session), events: events(value.events),
     respond: { request: parseAidenRemoteBotPlanRespondRequest(value.respond.request), response: parseAidenRemoteBotPlanRespondReceipt(value.respond.response) },
     expired: parseErrorEnvelopeFixture(value.expired, "Bot plan expired"),
     legacy: { session: parseAidenRemoteBotSession(value.legacy.session), events: events(value.legacy.events) },
   };
-  if (fixture.pending.status !== "pending" || fixture.active.status !== "active" || JSON.stringify(fixture.session.plan) !== JSON.stringify(fixture.pending) || fixture.expired.error.code !== "plan_expired") throw new Error("Bot plan fixture status is invalid.");
+  if (fixture.readOnlyFolderPlan.status !== "pending" || fixture.pending.status !== "pending" || fixture.active.status !== "active" || JSON.stringify(fixture.session.plan) !== JSON.stringify(fixture.pending) || fixture.expired.error.code !== "plan_expired") throw new Error("Bot plan fixture status is invalid.");
   if (fixture.legacy.session.plan !== undefined || fixture.legacy.events.some(e => e.type === "plan" || (e.type === "snapshot" && e.payload.session.plan !== undefined))) throw new Error("Legacy Bot plans must not carry holder fields or frames.");
   return fixture;
 }

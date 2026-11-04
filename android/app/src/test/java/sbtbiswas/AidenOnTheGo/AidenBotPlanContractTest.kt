@@ -22,10 +22,35 @@ class AidenBotPlanContractTest {
         Json.parseToJsonElement(text).jsonObject
     }
     private val fixture get() = root.getValue("botPlans").jsonObject
+    /** Literal review expectations, independent of the fixture and host formatting implementation. */
+    private fun assertHostFolderReview(plan: AidenRemoteBotPlan) {
+        assertEquals(listOf(
+            "Google Calendar · create events (up to 5)",
+            "Commands · in its own folder",
+            "Files · change /Volumes/Backup/Family Photos for this plan",
+            "Files · read ~/Documents/Tax Records"
+        ), plan.items.map { it.line })
+        assertEquals(listOf(
+            listOf("Create event"), emptyList(),
+            listOf("/Volumes/Backup/Family Photos", "Read and change · allowed once, for this plan only"),
+            listOf("~/Documents/Tax Records")
+        ), plan.items.map { it.details })
+        assertEquals(0, plan.items.first().used)
+        assertEquals(5, plan.items.first().max)
+        plan.items.drop(1).forEach { assertNull(it.used); assertNull(it.max) }
+    }
+    private fun assertReadOnlyFolderReview(plan: AidenRemoteBotPlan) {
+        assertEquals("plan-read-only-folder-56", plan.planId)
+        assertEquals(AidenBotPlanStatus.PENDING, plan.status)
+        assertEquals(listOf("Files · read /Volumes/Archive/Tax Records for this plan"), plan.items.map { it.line })
+        assertEquals(listOf(listOf("/Volumes/Archive/Tax Records", "Read only · allowed once, for this plan only")), plan.items.map { it.details })
+        assertNull(plan.items.first().used); assertNull(plan.items.first().max)
+    }
     @Test fun canonicalSnapshotAndOrderedPlanFramesDecode() {
         assertEquals(56, root.getValue("contractRevision").jsonPrimitive.int)
         val session = wire.decodeFromJsonElement(AidenBotSession.serializer(), fixture.getValue("session"))
         assertEquals(0L, session.seq)
+        assertHostFolderReview(requireNotNull(session.plan))
         val botId = fixture.getValue("session").jsonObject.getValue("botId").jsonPrimitive.content
         val frames = fixture.getValue("events").jsonArray.map { AidenBotSessionEventStream.decodeFrame(it.toString().toByteArray(), botId) }
         assertEquals(listOf(0L, 1L, 2L), frames.map { it.seq })
@@ -38,12 +63,17 @@ class AidenBotPlanContractTest {
         val active = AidenRemoteBotPlan.parse(fixture.getValue("active"))
         assertEquals(AidenBotPlanStatus.PENDING, pending.status)
         assertEquals(AidenBotPlanStatus.ACTIVE, active.status)
+        assertHostFolderReview(pending)
+        assertHostFolderReview(active)
+        assertReadOnlyFolderReview(AidenRemoteBotPlan.parse(fixture.getValue("readOnlyFolderPlan")))
         assertEquals(1, active.completedSteps)
         var session = wire.decodeFromJsonElement(AidenBotSession.serializer(), fixture.getValue("session"))
         assertEquals(pending, session.plan)
+        assertHostFolderReview(requireNotNull(session.plan))
         for (element in fixture.getValue("events").jsonArray) {
             val frame = AidenBotSessionEventStream.decodeFrame(element.toString().toByteArray(), session.botId)
             session = (aidenApplyBotSessionEvent(session, frame) as AidenBotSessionEventOutcome.Applied).session
+            if (frame.seq <= 1) assertHostFolderReview(requireNotNull(session.plan))
         }
         assertNull(session.plan)
         val legacy = fixture.getValue("legacy").jsonObject
@@ -72,7 +102,7 @@ class AidenBotPlanContractTest {
         bad += changed("steps", JsonArray(listOf(JsonObject(step + ("id" to JsonPrimitive("private"))))))
         bad += changed("steps", JsonArray(listOf(JsonObject(step + ("text" to JsonPrimitive("x".repeat(201)))))))
         val item = buildJsonObject { put("line", "Calendar"); put("details", JsonArray(emptyList())) }
-        val counts = listOf("{\"used\":0}", "{\"max\":1}", "{\"used\":null,\"max\":1}", "{\"used\":\"1\",\"max\":2}", "{\"used\":true,\"max\":2}", "{\"used\":-1,\"max\":2}", "{\"used\":3,\"max\":2}", "{\"used\":0,\"max\":26}", "{\"used\":0,\"max\":0}", "{\"id\":\"private\"}")
+        val counts = listOf("{\"used\":0}", "{\"max\":1}", "{\"used\":null,\"max\":1}", "{\"used\":\"1\",\"max\":2}", "{\"used\":true,\"max\":2}", "{\"used\":-1,\"max\":2}", "{\"used\":3,\"max\":2}", "{\"used\":0,\"max\":26}", "{\"used\":0,\"max\":0}", "{\"id\":\"private\"}", "{\"fileScope\":{\"path\":\"/private/host-only\"}}")
         for (fields in counts.map { Json.parseToJsonElement(it).jsonObject }) bad += changed("items", JsonArray(listOf(JsonObject(item + fields))))
         bad += changed("items", JsonArray(listOf(JsonObject(item + ("details" to JsonArray(List(7) { JsonPrimitive("detail") }))))))
         bad.forEach { body -> assertThrows(Exception::class.java) { AidenRemoteBotPlan.parse(body) } }

@@ -24,7 +24,11 @@ export type BotPlanItem =
 
 export type BotPlanStepStatus = "pending" | "done" | "skipped";
 export type BotPlanStatus = "pending" | "active" | "finished" | "stopped" | "expired";
-export interface BotPlanItemView { id: string; line: string; details: string[]; used?: number; max?: number }
+export interface BotPlanItemView {
+  id: string; line: string; details: string[]; used?: number; max?: number;
+  /** Host-built display provenance, never authority or a Remote DTO member. */
+  fileScope?: { path: string; access: "read" | "write"; grant: boolean };
+}
 export interface BotPlanView {
   planId: string; botId: string; status: BotPlanStatus; title: string; why: string;
   steps: { text: string; status: BotPlanStepStatus }[]; items: BotPlanItemView[];
@@ -35,7 +39,7 @@ export function botPlanItemView(item: BotPlanItem, used: number): BotPlanItemVie
   switch (item.kind) {
     case "connector": return { id: item.id, line: `${item.app} · ${item.action} (up to ${item.max})`, details: item.tools.map((tool) => tool.title), used, max: item.max };
     case "site": return { id: item.id, line: `${item.host} · click and type (up to ${item.max})`, details: [`Clicks, typing and key presses on ${item.host} and its subdomains`], used, max: item.max };
-    case "files": return { id: item.id, line: `Files · ${item.access === "write" ? "change" : "read"} ${item.path}${item.grant ? " for this plan" : ""}`, details: [item.path, ...(item.grant ? [`${item.access === "write" ? "Read and change" : "Read only"} · allowed once, for this plan only`] : [])] };
+    case "files": return { id: item.id, fileScope: { path: item.path, access: item.access, grant: item.grant }, line: `Files · ${item.access === "write" ? "change" : "read"} ${item.path}${item.grant ? " for this plan" : ""}`, details: [item.path, ...(item.grant ? [`${item.access === "write" ? "Read and change" : "Read only"} · allowed once, for this plan only`] : [])] };
     case "shell": return { id: item.id, line: "Commands · in its own folder", details: [] };
     case "rule": return { id: item.id, line: `Rule · ${item.label} (up to ${item.max})`, details: [`Steps your rule “${item.label}” would ask about`], used, max: item.max };
   }

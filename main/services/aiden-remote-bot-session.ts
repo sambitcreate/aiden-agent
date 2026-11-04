@@ -1,5 +1,6 @@
 import type { BotPlans } from "./bot-plans/plans.js";
-import type { BotPlanView } from "../../renderer/shared/bot-plans.js";
+import { homedir } from "node:os";
+import type { BotPlanItemView, BotPlanView } from "../../renderer/shared/bot-plans.js";
 import { withoutBotHandoffControls } from "../../renderer/shared/bot-handoffs.js";
 import type { BotAccessChoice } from "../../renderer/shared/bot-access-requests.js";
 import { BotAccessRequestStaleError, type BotAccessRequests } from "./bot-runtime/bot-access-requests.js";
@@ -343,14 +344,70 @@ export interface AidenRemoteBotSessionServiceOptions {
   projectorIdleMs?: number;
 }
 
+/** Keep both ends of a folder name, rather than losing it to a tail cut. */
+function elidePlanLocation(value: string, maximum: number): string {
+  const points = [...value];
+  if (points.length <= maximum) return value;
+  const tail = Math.floor((maximum - 1) / 2);
+  return points.slice(0, maximum - tail - 1).join("") + "…" + points.slice(-tail).join("");
+}
+
+function safePlanLocationText(value: string): boolean {
+  return withoutBotHandoffControls(value) === value && wireText(value, Infinity) === value &&
+    !Array.from(value).some(point => { const code = point.codePointAt(0)!; return code < 32 || (code >= 127 && code <= 159); });
+}
+
+function remotePlanFileScope(scope: NonNullable<BotPlanItemView["fileScope"]>): { line: string; details: string[]; complete: boolean } {
+  // The file formatter alone supplies this metadata. Never infer provenance from prose.
+  const home = homedir();
+  const place = scope.path === home ? "~" : scope.path.startsWith(home + "/") ? "~" + scope.path.slice(home.length) : scope.path;
+  const safe = safePlanLocationText(place) && (place.startsWith("/") || place === "~" || place.startsWith("~/"));
+  const prefix = `Files · ${scope.access === "write" ? "change" : "read"} `;
+  const suffix = scope.grant ? " for this plan" : "";
+  const lifetime = scope.grant ? [`${scope.access === "write" ? "Read and change" : "Read only"} · allowed once, for this plan only`] : [];
+  const pathPoints = [...place];
+  const chunks: string[] = [];
+  for (let offset = 0; offset < pathPoints.length; offset += 160) chunks.push(pathPoints.slice(offset, offset + 160).join(""));
+  const complete = safe && chunks.length > 0 && chunks.length + lifetime.length <= 6 && chunks.every(chunk => chunk.trim().length > 0);
+  const available = 120 - [...prefix + suffix].length;
+  // Prefer the entire basename when a long parent consumes the line's budget.
+  const withoutTrailingSlash = place.replace(/\/+$/u, "");
+  const basename = withoutTrailingSlash.slice(withoutTrailingSlash.lastIndexOf("/") + 1);
+  const shortPlace = pathPoints.length <= available ? place : [...basename].length + 2 <= available
+    ? "…/" + basename : "…/" + elidePlanLocation(basename, available - 2);
+  const summary = safe ? shortPlace : basename.trim() && safePlanLocationText(basename)
+    ? "…/" + elidePlanLocation(basename, available - 2) : "[folder location unavailable]";
+  return { line: prefix + summary + suffix,
+    details: complete ? [...chunks, ...lifetime] : ["Review the full folder location on the host desktop.", ...lifetime], complete };
+}
+
 /** Bound each public member before budgeting it; select fields explicitly. */
-export function projectAidenRemoteBotPlan(view: BotPlanView): AidenRemoteBotPlan {
+export function projectAidenRemoteBotPlan(view: BotPlanView): AidenRemoteBotPlan | null {
   const text = (value: string, maximum: number) => redactRemoteText(withoutBotHandoffControls(value), maximum) || "[unavailable]";
+  const items: AidenRemoteBotPlan["items"] = [];
+  for (const item of view.items) {
+    if (item.fileScope) {
+      const scope = remotePlanFileScope(item.fileScope);
+      // A pending card must identify every folder before offering approval. Active
+      // cards retain their real status and Stop even if full review needs the desktop.
+      if (!scope.complete && view.status === "pending") return null;
+      items.push({ line: scope.line, details: scope.details });
+    } else {
+      let line = text(item.line, Infinity);
+      if (item.max !== undefined) {
+        const suffix = ` (up to ${item.max})`;
+        if (line.endsWith(suffix)) line = line.slice(0, -suffix.length);
+        const available = 120 - [...suffix].length;
+        line = [...line].length > available ? wireText(line, available - 1) + "…" : line;
+        line += suffix;
+      } else line = wireText(line, 120);
+      items.push({ line, details: item.details.map(detail => text(detail, 160)),
+        ...(item.used !== undefined ? { used: item.used } : {}), ...(item.max !== undefined ? { max: item.max } : {}) });
+    }
+  }
   return parseAidenRemoteBotPlan({
     planId: view.planId, status: view.status, title: text(view.title, 80), why: text(view.why, 300),
-    steps: view.steps.map(step => ({ text: text(step.text, 200), status: step.status })),
-    items: view.items.map(item => ({ line: text(item.line, 120), details: item.details.map(detail => text(detail, 160)),
-      ...(item.used !== undefined ? { used: item.used } : {}), ...(item.max !== undefined ? { max: item.max } : {}) })),
+    steps: view.steps.map(step => ({ text: text(step.text, 200), status: step.status })), items,
     ...(view.expiresAt !== undefined ? { expiresAt: new Date(view.expiresAt).toISOString() } : {}),
     ...(view.from !== undefined ? { from: text(view.from, 120) } : {}),
   });
@@ -893,7 +950,7 @@ class BotLiveProjector {
     /** Revision 42; without it no issue card is ever projected. */
     private readonly readIssues?: () => Promise<{ holder: AidenRemoteBotIssue[]; legacy: AidenRemoteBotIssue[] }>,
     private readonly readAccessRequest: () => Promise<BotLiveProjector["accessRequest"]> = async () => null,
-    private readonly readPlan: () => Promise<AidenRemoteBotPlan | null> = async () => null,
+    private readonly readPlan: () => Promise<{ plan: AidenRemoteBotPlan | null; pending: boolean }> = async () => ({ plan: null, pending: false }),
   ) {
     this.classifier = activityDeps
       ? createQueuedInputClassifier({
@@ -925,7 +982,8 @@ class BotLiveProjector {
     this.approval = this.readApproval();
     this.handoff = await this.readHandoff();
     this.accessRequest = await this.readAccessRequest();
-    this.plan = await this.readPlan();
+    const planProjection = await this.readPlan();
+    this.plan = planProjection.plan;
     const issues = await this.readIssues?.();
     this.issues = issues?.holder ?? [];
     this.legacyIssues = issues?.legacy ?? [];
@@ -934,7 +992,7 @@ class BotLiveProjector {
       this.activity = this.deriveActivity(
         watch.value,
         this.state,
-        this.question !== null || this.approval !== null || this.handoff !== null || this.accessRequest !== null || this.plan?.status === "pending",
+        this.question !== null || this.approval !== null || this.handoff !== null || this.accessRequest !== null || planProjection.pending,
       );
       this.queued = await this.queuedFor(watch.value.docs);
     }
@@ -1316,7 +1374,7 @@ class BotLiveProjector {
     const approval = this.readApproval();
     const handoff = await this.readHandoff();
     const accessRequest = await this.readAccessRequest();
-    const plan = await this.readPlan();
+    const { plan, pending: planPending } = await this.readPlan();
     const projectedIssues = this.readIssues ? await this.readIssues().catch(() => ({ holder: this.issues, legacy: this.legacyIssues })) : { holder: [], legacy: [] };
     const issues = projectedIssues.holder;
     const legacyIssues = projectedIssues.legacy;
@@ -1325,7 +1383,7 @@ class BotLiveProjector {
     let activity: AidenRemoteBotSessionActivity | null = null;
     if (this.activityDeps) {
       this.trackRun(this.state, state, view.docs);
-      activity = this.deriveActivity(view, state, question !== null || approval !== null || handoff !== null || accessRequest !== null || plan?.status === "pending");
+      activity = this.deriveActivity(view, state, question !== null || approval !== null || handoff !== null || accessRequest !== null || planPending);
     }
 
     const previous = this.entries;
@@ -2116,6 +2174,9 @@ export class AidenRemoteBotSessionService {
         try {
           const before = await plans.current(bot.id, id);
           if (!before || before.status !== (parsed.decision === "stop" ? "active" : "pending")) throw new AidenOperationNotExecutedError(expired());
+          if (parsed.decision === "approve" && projectAidenRemoteBotPlan(before) === null) {
+            throw new AidenOperationNotExecutedError(new AidenRemoteServiceError("plan_expired", "Review this plan on the host desktop.", 409));
+          }
           const result = await plans.respond(bot.id, id, parsed.decision);
           if (result !== "done") throw new AidenOperationNotExecutedError(expired());
           // Another pending card has UI precedence, so never read unqualified current here.
@@ -2352,7 +2413,7 @@ export class AidenRemoteBotSessionService {
         () => this.accessRequestOf(botId),
         async () => {
           const plan = await this.options.plans?.current(botId);
-          return plan ? projectAidenRemoteBotPlan(plan) : null;
+          return { plan: plan ? projectAidenRemoteBotPlan(plan) : null, pending: plan?.status === "pending" };
         },
       );
       await projector.attach(conversation);

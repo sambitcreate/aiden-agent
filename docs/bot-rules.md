@@ -40,7 +40,12 @@ A desktop-hosted Bot can propose a task with a reason, numbered steps and the
 access or actions it needs. Review the coverage lines and use **Show details**
 to see the exact connected-app actions. Choose **Approve plan** or **Not now**
 in the Bot's chat on the desktop or a supported paired iPhone or Android phone.
-A pending plan holds Send while your draft stays editable.
+Phone coverage identifies a folder by its host-owned location, including its
+name and read/change scope. If its exact location cannot fit safely in the
+phone review, approve on the host desktop instead; the phone cannot approve
+that pending plan. A visible pending plan holds Send while your draft stays
+editable. If the phone cannot show the review, it keeps the waiting signal
+and can still send a message; approval remains on the host desktop.
 
 Approval applies to the current task for at most 60 minutes from approval.
 A task requested by another Bot keeps that exchange's earlier deadline. A
@@ -67,8 +72,9 @@ The approved card becomes a checklist. The Bot marks steps done or skipped;
 counted actions show how much of each limit has been used. **Stop plan** ends
 that plan's approval and its extra folder access. Calls that already started
 can finish; later calls use ordinary checks. Finishing the steps, completing
-the task, stopping or dismissing its turn, or reaching the deadline also ends
-the plan. An ended card shows its compact progress line.
+the task, a run ending because its model is unavailable, stopping or dismissing
+its turn, or reaching the deadline also ends the plan. An ended card shows
+its compact progress line.
 
 A plan may request one outside folder with read-only or read-and-change access.
 Approval grants that folder only for this plan and current task, within the

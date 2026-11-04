@@ -7,6 +7,8 @@ export function createBotPlanLifecycle(deps: {
   onError?(botId: string, error: unknown): void;
 }) {
   const running = new Set<string>();
+  const completed = (state: Pick<BotSessionState, "kind">): boolean =>
+    state.kind === "idle" || state.kind === "needs_model" || state.kind === "model_error";
   const end = (botId: string, reason: "stopped" | "finished"): void => {
     running.delete(botId);
     try {
@@ -16,13 +18,13 @@ export function createBotPlanLifecycle(deps: {
   return {
     stateChanged(botId: string, state: Pick<BotSessionState, "kind">): void {
       if (state.kind === "running") running.add(botId);
-      // Before recovery, an unopened session can look idle. It has not ended
-      // a run that this process observed, so preserve its saved approval.
-      else if (state.kind === "idle" && running.has(botId)) end(botId, "finished");
+      // Before recovery, unopened sessions can look idle or lack a model.
+      // Only end an observed run; paused/interrupted states remain recoverable.
+      else if (completed(state) && running.has(botId)) end(botId, "finished");
     },
     settled(botId: string, state: Pick<BotSessionState, "kind">): void {
       // Projection settlement represents an actual run, unlike an idle read.
-      if (state.kind === "idle") end(botId, "finished");
+      if (completed(state)) end(botId, "finished");
     },
     stopped: (botId: string): void => end(botId, "stopped"),
     forget: (botId: string): void => { running.delete(botId); },

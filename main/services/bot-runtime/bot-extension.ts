@@ -681,9 +681,11 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     if (decision.approval.preapproved === true) {
       try {
         await assertLive(api, context);
-      await decision.approval.onAllow?.();
-      await assertLive(api, context);
+        await decision.approval.onAllow?.();
+        await assertLive(api, context);
       } catch (error) {
+        // A beforeTool block never reaches execute/afterTool/settled.
+        executionApprovals.delete(String(api.taskId));
         return { block: error instanceof Error ? error.message : "This action can no longer run." };
       }
       return undefined;
