@@ -46,6 +46,9 @@ async function providerRotation(saveFails = false) {
   return load<typeof import("../provider-credential-rotation.js")>("../provider-credential-rotation.ts", {
     "./config-store.js": {
       configStore: {
+        listProviders: async () => [...providers.values()],
+        portableConfigSafeForCredentialReconciliation: async () => true,
+        cachedPortableConfigSafeForCredentialReconciliation: async () => true,
         getProvider: async (id: string) => providers.get(id),
         saveProvider: async (provider: StoredProvider) => {
           if (saveFails) throw new Error("disk full");
@@ -54,18 +57,8 @@ async function providerRotation(saveFails = false) {
         },
       },
     },
-    "./secrets.js": {
-      secrets: {
-        hasKey: async () => false,
-        getProviderKey: async () => null,
-        getKeyStrict: async () => null,
-        getInternalKey: async () => null,
-        setInternalKey: async () => undefined,
-        deleteInternalKey: async () => undefined,
-        deleteKey: async () => undefined,
-        setProviderKey: async () => undefined,
-      },
-    },
+    // An empty keychain: every read finds nothing and every write succeeds.
+    "./secrets.js": { secrets: new Proxy({}, { get: () => async () => null }) },
     "./portable-credential-snapshot.js": { mutatePortableConfigAndSync: (operation: () => unknown) => operation() },
   });
 }
