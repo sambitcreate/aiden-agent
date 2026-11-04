@@ -68,3 +68,6 @@
 - Gate6r2 direct-root real-directory/site/recovery tests captured13failures before production edits, then13passed. All three answers work for tab/newline/DEL names; malformed recovery isolation retains error reporting. Added explicit invalid-private-path bounds coverage. No implementation delegation.
 
 - Root direct Gate6r2 fix passed149focused andbroaderallowed118/runtime480/access110/rules66/types0/registry15/scopedlint6files0/diff0. No assertion/timeout/retry changes. Kept the comment-only Low distinct from a claimed functional replay fix.
+
+- Gate6Opusr3 accepted eaa4ae9b0 with one desktop display Low. Root fixing row-only controls/bidi/whitespace directly before final program review.
+- Pre-PR fetch found main advanced to581aee4f8 through docs-onlyPR724, no protocol/runtime changes; Remote remains53. Will merge main intoA then carry the merge throughB/C/D, preserving all branch histories.

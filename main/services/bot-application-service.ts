@@ -2,6 +2,7 @@ import { newChatUuid } from "../../renderer/shared/chat-identity.js";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { BotAllowedEntry } from "../../renderer/shared/tool-approval-scope.js";
+import { withoutBotHandoffControls } from "../../renderer/shared/bot-handoffs.js";
 import { nextBotFileScopeIds } from "../../renderer/shared/bot-capabilities.js";
 import { botAccessRootInventoryRevision, resolveBotAccessTarget, type BotAccessTargetDeps } from "./bot-runtime/bot-access-target.js";
 import type { AidenRemoteApprovedRoot } from "./aiden-remote-state.js";
@@ -1697,7 +1698,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
             const place = relative === "" ? "~" : !path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`)
               ? `~/${relative.split(path.sep).join("/")}` : root.folderPath;
             result.push({ kind: "folder", id: `folder_${root.id}`, botId: bot.id,
-              what: `Folder · ${place}`, createdAt: new Date(root.createdAt).toISOString() });
+              what: `Folder · ${withoutBotHandoffControls(place).replace(/\s+/gu, " ").trim()}`, createdAt: new Date(root.createdAt).toISOString() });
           }
         }
         return result.sort((a, b) => b.createdAt.localeCompare(a.createdAt));

@@ -721,3 +721,12 @@ The owner now requires direct implementation by the main session and only Opus5.
 The bridge comment now states its actual scope-proven lookup boundary. The reviewer’s possible remember-without-requirements crash replay remains an unproven Low observation, not a claimed fix; carry it into the narrow re-review and final program review. No native/RemoteDTO/revision changes. Broader checks and a new frozen correction review follow; source/whole-program/hosted-CI acceptance remains pending.
 
 Root direct correction validation passed149focused, allowed118/runtime480/access110/rules66/types0/registry15, sixchangedTSfileslint0 anddiff0. Logs /tmp/bot-allowed-g6r2-root-{red,green,focused,allowed,runtime,access,rules,types,registry,lint}.log. RED13fail becameGREEN13, and private-path guards independently refuse NUL/relative/root/noncanonical/oversizedUTF8 identities without creating a ledger. No import/wire/native/CLI behavior changed, so prior Remote1300+2skips/Cua2/CLI183+3skips/native406+5/Android225+22 remain prior checkpoint evidence, not rerun counts for this delta. Root freezes a new correction commit and requests only Opus5.5medium review.
+
+
+### 2026-11-04 — Gate6 accepted and final display Low fixed directly
+
+Opus5.5medium accepted whole-D source correctness at eaa4ae9b00e054f6a851620ceb728bf28ebcc9a9, with noBlocking/Important/Medium findings. The narrowround3 delta review relies on round2’s full-D read as prior evidence; its report closes the canonicalfixture/OpenAPI read gaps and independently runs real grantBotFolder for control-character names. Report /tmp/aiden-bot-allowed-GATE6-opus-r3.md. It retains the unproven fallback remember/no-requirements crash replay and earlier accepted observations.
+
+Root fixed the new display-only Low directly: botFolderEntries removes existing hand-off controls/bidi characters and collapses whitespace only in its display path. Its exact root path, id and Remove remain unchanged. A real-grant/API-visible RED1 becameGREEN86 across application, Remote list and renderer suites; scopedlint0, /tmp/bot-allowed-g6r3-display-{red,green,lint}.log. Final whole-program Opus5.5medium review remains required. No newnative/wire/revision claim.
+
+Fresh pre-PR fetch found origin/main advanced to581aee4f8282444e13e3db1a2d7fefceaae65de9 by docs-onlyPR724; Remote stays53. Root will merge it intoA and carry the merge bottom-up throughB/C/D, preserving all branch histories. Revisions54–57 still apply. No merge of PRs is authorized; local main synchronization is separate.

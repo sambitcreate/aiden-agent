@@ -342,6 +342,22 @@ test("D folder rows remove only the selected Bot binding and keep shared approve
   assert.deepEqual(await full.service.botFolderEntries("bot:full"), []);
 });
 
+test("D folder rows sanitize bidi and whitespace while Remove keeps the exact root identity", async t => {
+  const app = await folderFixture(t);
+  const folderPath = path.join(app.directory, "bidi\u202e\tfolder\nnotes\u007f");
+  await fs.rename(app.folderPath, folderPath);
+  await app.service.grantBotFolder({ ...app.input, folderPath });
+  const [root] = (await app.state.snapshot()).approvedRoots;
+  assert.equal(root!.folderPath, folderPath, "display cleanup must never rewrite the enforced filesystem path");
+  const [entry] = await app.service.botFolderEntries(app.owner.id);
+  assert.equal(entry!.what, "Folder · ~/bidi folder notes");
+  assert.equal(entry!.id, `folder_${root!.id}`);
+  assert.equal(await app.service.revokeBotFolder({ audienceId: "desktop:local", botId: app.owner.id, sourceId: root!.id }), true);
+  assert.deepEqual(await app.service.botFolderEntries(app.owner.id), []);
+  assert.equal((await app.state.snapshot()).approvedRoots[0]!.folderPath, folderPath);
+  assert.deepEqual(app.policies.get(app.owner.id)!.custom!.fileScopeIds, ["scope:home"]);
+});
+
 test("inventory changes and path replacement at binding refuse publication and compensate only owned roots", async (t) => {
   for (const scenario of ["inventory", "inode"] as const) {
     const app = await folderFixture(t);
