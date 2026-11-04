@@ -226,3 +226,5 @@ reach cards, the Bot's own computer or browser, routines or subagents.
 ## Messages from other Bots
 
 A `bot:` or `botreply:` turn still follows every rule. An uncovered Ask first step opens the real approval card in the receiving Bot's chat and waits for the person within the exchange's deadline. A plan can cover eligible steps only after the person approves it in that recipient's chat, and cannot extend the exchange's deadline. Hand off to me blocks the step; another Bot cannot answer or accept it. The routines go-ahead switch never applies to Bot-message turns. See [Bot messaging](bot-messaging.md).
+
+For local plan enforcement checks, `npm run test:bot-plans` builds its lease and file-write helpers automatically before running the behavioral suite. No prior app build is required.

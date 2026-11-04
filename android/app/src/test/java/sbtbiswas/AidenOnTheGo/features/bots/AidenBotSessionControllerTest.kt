@@ -242,6 +242,25 @@ class AidenBotSessionControllerTest {
         assertEquals(replacement, controller.state.value.session?.plan)
         controller.stopFollowing()
     }
+    @Test fun identicalPendingSnapshotDoesNotDiscardExpiredAnswer() = runTest {
+        for (decision in listOf(AidenBotPlanDecision.APPROVE, AidenBotPlanDecision.NOT_NOW)) {
+            val initial = planSession(); val transport = FakeTransport(initial)
+            val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
+            controller.refetch()
+            transport.planGate = CompletableDeferred()
+            transport.planFailure = planError()
+            val answer = async { controller.respondToPlan(decision) }; runCurrent()
+            assertTrue(controller.handle(snapshotOf(initial.copy(seq = 1))))
+            assertEquals(initial.plan, controller.state.value.session?.plan)
+            assertTrue(controller.state.value.composerHeldForPlan)
+            transport.planGate!!.complete(Unit); answer.await()
+            assertNull(controller.state.value.session?.plan)
+            assertFalse(controller.state.value.composerHeldForPlan)
+            assertTrue(controller.state.value.respondingPlanIds.isEmpty())
+            assertEquals(listOf(decision), transport.planAnswers.map { it.request.decision })
+            controller.stopFollowing()
+        }
+    }
     @Test fun latePlanFailureConflictAndReceiptCannotAlterReplacementClearOrGeneration() = runTest {
         for (outcome in listOf("failure", "conflict", "success", "clear", "same-id-active", "generation")) {
             val initial = planSession(); val transport = FakeTransport(initial)

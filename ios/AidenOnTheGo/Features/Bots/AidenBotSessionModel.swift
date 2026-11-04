@@ -2301,6 +2301,7 @@ final class AidenBotSessionModel {
         planError = nil
     }
     private func adoptPlan(_ next: AidenRemoteBotPlan?) {
+        guard next != plan else { return }
         if next?.planId != plan?.planId || next?.status != plan?.status {
             planKeys.removeAll()
             planError = nil

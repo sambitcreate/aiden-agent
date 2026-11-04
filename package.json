@@ -254,7 +254,7 @@
     "test:bot-messaging": "tsx --test renderer/shared/bot-messages.test.ts main/services/bot-messages/framing.test.ts main/services/bot-messages/ledger.test.ts main/services/bot-messages/courier.test.ts main/services/bot-messages/tool.test.ts renderer/main/bots/bot-messaging-fields.test.tsx main/services/bot-messages/lifecycle.test.ts main/services/bot-messages/roster.test.ts main/services/bot-messages/real-courier.test.ts",
     "pretest:bot-access": "npm run build:lease-flock",
     "test:bot-access": "tsx --test renderer/shared/bot-access-requests.test.ts main/services/bot-runtime/bot-access-target.test.ts main/services/bot-runtime/bot-run-access.test.ts main/services/bot-runtime/bot-access-requests.test.ts main/services/bot-runtime/bot-access-request-tool.test.ts main/handlers/bot-access-requests.test.ts renderer/components/bots/access-request-card.test.tsx renderer/main/bots/use-bot-access-request-actions.test.tsx",
-    "pretest:bot-plans": "npm run build:lease-flock",
+    "pretest:bot-plans": "npm run build:lease-flock && npm run build:subagent-file-mutator",
     "test:bot-plans": "tsx --test renderer/shared/bot-plans.test.ts main/services/bot-plans/validate.test.ts main/services/bot-plans/plans.test.ts main/services/bot-plans/authority.test.ts main/services/bot-runtime/bot-plan-tools.test.ts main/handlers/bot-plans.test.ts main/services/bot-plans/lifecycle.test.ts renderer/components/bots/plan-card.test.tsx"
   },
   "dependencies": {
