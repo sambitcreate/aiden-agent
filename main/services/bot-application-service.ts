@@ -1375,8 +1375,12 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
           policy.custom.fileScopeIds.includes(scope.option.id),
       );
     } catch (error) {
-      // Deletion removes access before identity. No remaining policy/binding can select this root.
-      if (error instanceof BotCapabilityUnavailableError) return false;
+      // Unavailable also covers uncertain commits. Only a fresh, readable
+      // inventory audit can prove deletion removed this policy.
+      if (error instanceof BotCapabilityUnavailableError) {
+        const audit = await deps.capabilityStore.auditBotInventory([botId]);
+        if (audit.missingBotIds.includes(botId)) return false;
+      }
       throw error;
     }
   };
