@@ -324,8 +324,8 @@ export function UsageDataSettings() {
         label={USAGE_DATA_LABEL}
         description={
           <>
-            App launches, daily use, setup and updates, with a random install ID. Feature use and crash reports arrive
-            in later releases. Never your chats, files, keys or paths.
+            App launches, daily use, setup, updates and which big features you use, with a random install ID. Crash
+            reports arrive in a later release. Never your chats, files, keys or paths.
             {caption ? <span className="mt-1 block text-tertiary">{caption}</span> : null}
           </>
         }

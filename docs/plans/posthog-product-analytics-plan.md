@@ -1,6 +1,6 @@
 # Anonymous Usage Analytics and Crash Reporting (PostHog)
 
-Status: Active (PR 1, core with nothing sending, in review; PR 2, consent and lifecycle, in review)
+Status: Active (PR 1, core, and PR 2, consent and lifecycle, merged and shipped in 0.64.0; PR 3, feature events, in review)
 Date: 2026-10-28
 Base: `origin/main` at `8504c773c` (0.62.0 + #625–#628)
 Scope: Electron desktop app (macOS and Linux) first, then the `aiden` CLI. iOS and Android are out of scope.
@@ -143,7 +143,7 @@ Dashboards count active users from both `app_active` and real actions (`chat_mes
 | `computer_use_enabled` | Global switch turned on: `computerUse:setEnabled(true)` (`main/handlers/computer-use.ts:53`). Per-chat access-card grants are not counted. | — |
 | `bot_computer_set_up` | Set up completes (`main/handlers/bot-computers.ts:97`) | `element_control` (bool) |
 | `terminal_opened` | `terminal:create` (`main/handlers/terminal.ts:91`) | — |
-| `git_commit` | `git:commit` succeeds (`main/handlers/workspaces.ts:299`) | `pushed` (bool, set by a following `git:push` within the same action if available; otherwise separate) |
+| `git_commit` | `git:commit` succeeds (`main/handlers/workspaces.ts:299`) | — (`pushed` was dropped in PR 3: commit and push are separate service calls, so a commit can't honestly know it) |
 | `worktree_created` | `git:createWorktree` (`main/handlers/workspaces.ts:357`) | — |
 
 Only success moments are counted. Subagent turns are not `chat_message_sent` events; they are counted once by `subagent_launched`. Line numbers are as of the base commit; the implementer should hook the service function rather than the IPC wrapper where both exist, so CLI and phone-originated actions are counted once.
@@ -289,7 +289,7 @@ Behavioural, per `AGENTS.md` house style; every new file registered in the root 
 
 1. **Core, no sending.** `main/services/analytics/*` (registry, consent, sanitizer, core with fake transport, client wrapper, crash sink), `posthog-node` pinned exactly, tests. No key, no UI, nothing wired. Safe to merge on its own. Because nothing in main imports the client yet, `posthog-node` sits in `devDependencies` (as `scripts/main-runtime-dependencies.test.mjs` requires); PR 2 moves it to `dependencies` when main starts importing it.
 2. **Consent, lifecycle and "who's using it".** (In review, stacked on PR 1.) Settings group, onboarding row, existing-user notice, "What's sent" sheet, IPC, release-key injection, `app_opened` / `app_active` / `onboarding_finished` / `app_updated` / `analytics_disabled`. All docs and policy changes above. Screenshots in the PR.
-3. **Feature events.** Wire the core-use and big-feature tables at service level.
+3. **Feature events.** (In review.) Wire the core-use and big-feature tables at service level. Services bundled into the CLI report through `analytics-report.ts`, never `analytics-main.ts`; the desktop registers its reporter when it creates the analytics service. Registry changes from the tables above: `git_commit` lost `pushed`, `trigger` gained `watch` (an event-started run reports its source), and `thinking` gained `max`. Telegram chats, Design runs and unattended follow-through notices are not `chat_message_sent`; a message to a Bot is, whichever surface it came from. `chat_message_sent` for a Bot always has `in_workspace: false` and `thinking: other`. `bot_computer_set_up` also fires when element control is added later. Not hooked yet, for PR 5: the daemon's own chat paths and `aiden auth`.
 4. **Crashes and errors.** Journal sink (including rejections via the existing monitor), widened renderer IPC with main-side sanitizing, process-gone events, run marker, pending-crash file, flood control.
 5. **CLI.** Consent store, notice, `aiden telemetry`, `cli_started`, shared events, crash capture, `packages/cli/README.md`.
 
