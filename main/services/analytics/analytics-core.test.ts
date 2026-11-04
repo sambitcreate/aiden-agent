@@ -239,6 +239,19 @@ test("the outgoing guard rejects an exception whose fields were not built by the
   }
 });
 
+test("server_started passes with a known launch and is dropped with anything else", () => {
+  const { core, sent } = harness({ superProperties: { ...SUPER, surface: "server" } });
+  assert.equal(core.track("server_started", { launch: "service" }), true);
+  assert.equal(sent[0]!.properties.launch, "service");
+  assert.equal(sent[0]!.properties.surface, "server");
+  const checked = validateOutgoingEvent({ event: sent[0]!.event, properties: sent[0]!.properties });
+  assert.equal(checked?.properties?.launch, "service");
+
+  const argument = { launch: "/Users/jane/secret-plan.json" } as unknown as { launch: "service" };
+  assert.equal(core.track("server_started", argument), false);
+  assert.equal(sent.length, 1);
+});
+
 test("the outgoing guard rejects events outside the registry", () => {
   assert.equal(validateOutgoingEvent({ event: "$identify", properties: {} }), null);
   assert.equal(validateOutgoingEvent({ event: "$pageview", properties: {} }), null);

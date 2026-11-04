@@ -1,0 +1,68 @@
+name: Build keyed server bundle
+
+# The only place the server is built with the analytics project key. Builds
+# from a clone, Docker images and CI have no key and cannot send usage data.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aiden-server-bundle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bundle:
+    name: Keyed server bundle
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: release
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.23.4
+          cache: npm
+
+      - name: Require the analytics project key
+        env:
+          AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}
+        run: test -n "$AIDEN_POSTHOG_PROJECT_KEY" || { echo "::error::The AIDEN_POSTHOG_PROJECT_KEY secret is missing."; exit 1; }
+
+      - name: Install locked dependencies
+        run: |
+          npm ci --ignore-scripts
+          npm ci --prefix packages/cli
+
+      - name: Build the keyed bundle
+        env:
+          AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}
+        run: npm run cli:dist
+
+      - name: Verify the bundle carries the key and starts
+        env:
+          AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}
+          # A launch no person started never sends.
+          AIDEN_ANALYTICS: "0"
+        run: |
+          set -euo pipefail
+          grep -rqF "$AIDEN_POSTHOG_PROJECT_KEY" packages/cli/dist/app/chunks packages/cli/dist/app/cli.js || { echo "::error::The server bundle does not carry the analytics project key."; exit 1; }
+          test "$(node packages/cli/dist/app/cli.js --version)" = "$(node -p 'require("./packages/cli/package.json").version')"
+
+      - name: Pack the server
+        run: |
+          mkdir -p "$RUNNER_TEMP/server-bundle"
+          npm pack ./packages/cli --pack-destination "$RUNNER_TEMP/server-bundle"
+
+      - name: Upload the server package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aiden-server-keyed
+          path: ${{ runner.temp }}/server-bundle/*.tgz
+          if-no-files-found: error
+          retention-days: 30

@@ -52,6 +52,7 @@
     "postinstall": "node scripts/patch-electron-builder-keychain.mjs && node scripts/patch-pi-oauth-branding.mjs && node scripts/vendor-generative-ui-libs.mjs",
     "cli:install": "npm install --prefix packages/cli",
     "cli:build": "npm --prefix packages/cli run build",
+    "cli:dist": "AIDEN_DISTRIBUTION_BUILD=1 npm run cli:build",
     "test:cli": "npm --prefix packages/cli ci && npm run cli:build && npm --prefix packages/cli test",
     "generative-ui:vendor": "node scripts/vendor-generative-ui-libs.mjs",
     "pretest:generative-ui": "npm run build:subagent-file-mutator && npm run build:visual-viewer",

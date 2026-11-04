@@ -1,4 +1,7 @@
 export * from "./state.ts";
+export * from "./server-analytics.ts";
+export { telemetryCommand } from "./telemetry.ts";
+export { reportAnalyticsEvent } from "../../../main/services/analytics/analytics-report.js";
 export * from "./workspaces.ts";
 export * from "./workspace-application.ts";
 export * from "./sessions.ts";
@@ -58,6 +61,6 @@ export { cliDurableBotToolContext } from "./bot-durable.ts";
 export { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 export { capturePersistedSubagentContext } from "../../../main/services/subagents/forked-context.js";
 export { createAdvisorInlineExtension } from "./extensions/advisor.ts";
-export { chooseNetwork, installService, launchdPlist, parseInstallFlags, reachableNetwork, releaseTailscaleRoute, restoreService, savedNetwork, serviceCommand, serviceFile, serviceStatus, systemdUnit, uninstallService } from "./service.ts";
+export { LAUNCHD_LABEL, chooseNetwork, installService, launchdPlist, parseInstallFlags, reachableNetwork, releaseTailscaleRoute, restoreService, runsUnderServiceManager, savedNetwork, serviceCommand, serviceFile, serviceStatus, systemdUnit, uninstallService } from "./service.ts";
 export { formatChecklist, looksLikeCloudServer, networkQuestion, probeAidenHealth, readSystemTailscaleFacts, readTailscaleFacts, recommendNetwork, remoteCheckCommand, serverChecklist, tailscaleChecklist, tailscaleReady, waitForTailscaleAddress } from "./reachability.ts";
 export { AIDEN_REMOTE_LEGACY_CAPABILITIES, AIDEN_REMOTE_HOST_CAPABILITIES } from "../../../main/services/aiden-remote-protocol.js";
