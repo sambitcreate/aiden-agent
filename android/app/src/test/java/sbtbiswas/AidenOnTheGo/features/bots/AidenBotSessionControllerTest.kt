@@ -413,12 +413,18 @@ class AidenBotSessionControllerTest {
         override suspend fun requestConnection(botId: String, pluginId: String, key: UUID) =
             AidenBotConnectionRequestReceipt(pluginId, "Google Calendar", AidenBotConnectionRequestStatus.SENT)
 
-        data class ApprovalCall(val waitId: String, val decision: AidenApprovalDecision, val key: UUID)
+        data class ApprovalCall(val waitId: String, val decision: AidenApprovalDecision, val key: UUID, val scope: AidenApprovalScope? = null)
         val approvalCalls = mutableListOf<ApprovalCall>()
         /** Failures the next approval responses throw, in order. */
         val approvalFailures = ArrayDeque<Exception>()
         var approvalGate: CompletableDeferred<Unit>? = null
 
+        override suspend fun respondToApproval(waitId: String, decision: AidenApprovalDecision, scope: AidenApprovalScope?, key: UUID): AidenApprovalResponse {
+            approvalCalls += ApprovalCall(waitId,decision,key,scope)
+            approvalGate?.await()
+            approvalFailures.removeFirstOrNull()?.let { throw it }
+            return AidenApprovalResponse(waitId,decision,scope,java.time.Instant.parse("2026-08-19T15:02:00Z"))
+        }
         override suspend fun respondToApproval(waitId: String, decision: AidenApprovalDecision, key: UUID): AidenApprovalResponse {
             approvalCalls += ApprovalCall(waitId, decision, key)
             approvalGate?.await()
@@ -607,6 +613,41 @@ class AidenBotSessionControllerTest {
         assertEquals(null, controller.state.value.session?.approval)
         assertEquals(approvalFrames[1].seq, controller.state.value.session?.seq)
         assertFalse("nothing waits on an idle Bot any more", controller.state.value.canStopTurn)
+    }
+
+    @Test fun alwaysScopeRetainsItsUnknownKeyAndOnceUsesAnotherBody() = runTest {
+        val (transport,controller) = approvalController(mailApproval.copy(alwaysCount=3),backgroundScope)
+        controller.refetch()
+        assertFalse(controller.respondToApproval(AidenApprovalDecision.ALLOW,AidenApprovalScope.ALWAYS))
+        assertTrue(transport.approvalCalls.isEmpty())
+        controller.allowedSupported=true
+        for (scope in listOf(AidenApprovalScope.ALWAYS,AidenApprovalScope.ONCE,AidenApprovalScope.ALWAYS)) {
+            transport.approvalFailures += IOException("lost acknowledgement")
+            assertFalse(controller.respondToApproval(AidenApprovalDecision.ALLOW,scope))
+        }
+        assertEquals(listOf(AidenApprovalScope.ALWAYS,null,AidenApprovalScope.ALWAYS),transport.approvalCalls.map { it.scope })
+        assertEquals(transport.approvalCalls[0].key,transport.approvalCalls[2].key)
+        assertNotEquals(transport.approvalCalls[0].key,transport.approvalCalls[1].key)
+        assertTrue(controller.respondToApproval(AidenApprovalDecision.ALLOW,AidenApprovalScope.ALWAYS))
+        assertEquals("Always allow requested.",controller.state.value.approvalSuccessNotice)
+    }
+
+    @Test fun lateAlwaysFailureCannotRestoreHostReplacementOrClear() = runTest {
+        for (clear in listOf(false,true)) {
+            val offered=mailApproval.copy(alwaysCount=3)
+            val (transport,controller)=approvalController(offered,backgroundScope)
+            controller.refetch(); controller.allowedSupported=true
+            transport.approvalGate=CompletableDeferred()
+            transport.approvalFailures += IOException("lost acknowledgement")
+            val answer=async { controller.respondToApproval(AidenApprovalDecision.ALLOW,AidenApprovalScope.ALWAYS) }
+            runCurrent()
+            val next=if (clear) null else offered.copy(waitId="replacement-57")
+            controller.handle(snapshotOf(transport.session.copy(seq=1,approval=next)))
+            transport.approvalGate!!.complete(Unit)
+            assertFalse(answer.await())
+            assertEquals(next,controller.state.value.session?.approval)
+            assertNull(controller.state.value.approvalSuccessNotice)
+        }
     }
 
     @Test

@@ -2125,6 +2125,27 @@ class AidenRemoteClient(
 
     // --- Revision 27: memory (`bot-memory-v1`) ---
 
+    suspend fun botAllowed(botId: String, cursor: String? = null): AidenBotAllowedList {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        require(cursor == null || AidenBotAllowedList.validCursor(cursor))
+        val query = cursor?.let { "?cursor=$it" } ?: ""
+        return executeRequest("/bots/$botId/allowed$query", botScope = AidenBotPrivateResponseScope.Root("botAllowed")) { bytes ->
+            val view = AidenBotAllowedList.parse(json.parseToJsonElement(String(bytes, Charsets.UTF_8)))
+            if (view.botId != botId) throw AidenRemoteClientException.InvalidResponse()
+            view
+        }
+    }
+    suspend fun removeBotAllowed(botId: String, entryId: String): AidenBotAllowedList {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        require(AidenBotAllowedList.validId(entryId))
+        return executeRequest("/bots/$botId/allowed/$entryId/remove", method = "POST", retryConnectionFailure = false,
+            bodyJson = "{}", botScope = AidenBotPrivateResponseScope.Root("botAllowed")) { bytes ->
+            val view = AidenBotAllowedList.parse(json.parseToJsonElement(String(bytes, Charsets.UTF_8)))
+            if (view.botId != botId) throw AidenRemoteClientException.InvalidResponse()
+            view
+        }
+    }
+
     suspend fun botMemory(botId: String): AidenBotMemory {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
         return executeRequest(

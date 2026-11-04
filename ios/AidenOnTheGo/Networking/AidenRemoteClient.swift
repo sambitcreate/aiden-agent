@@ -1564,7 +1564,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
-            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues, .botMessaging, .botAccessRequests, .botPlans,
+            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues, .botMessaging, .botAccessRequests, .botPlans, .botAllowed,
             .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw, .chatNewWorktree,
         ])
         guard !accepts.isEmpty,
@@ -2732,6 +2732,19 @@ final class AidenRemoteClient: @unchecked Sendable {
     }
 
     // MARK: Memory (`bot-memory-v1`) and proactivity (`bot-proactive-v1`)
+
+    func botAllowed(botId: String, cursor: String? = nil) async throws -> AidenBotAllowedList {
+        try validateBotIdentifier(botId)
+        if let cursor, !AidenBotAllowedList.validCursor(cursor) { throw AidenRemoteClientError.invalidResponse }
+        let view: AidenBotAllowedList = try await send(method: "GET", path: ["bots", botId, "allowed"], query: cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? [])
+        guard view.botId == botId else { throw AidenRemoteClientError.invalidResponse }; return view
+    }
+    func removeBotAllowed(botId: String, entryId: String) async throws -> AidenBotAllowedList {
+        try validateBotIdentifier(botId)
+        guard AidenBotAllowedEntry.validID(entryId) else { throw AidenRemoteClientError.invalidResponse }
+        let view: AidenBotAllowedList = try await send(method: "POST", path: ["bots", botId, "allowed", entryId, "remove"], body: [String: String]())
+        guard view.botId == botId else { throw AidenRemoteClientError.invalidResponse }; return view
+    }
 
     func botMemory(botId: String) async throws -> AidenBotMemory {
         try validateBotIdentifier(botId)

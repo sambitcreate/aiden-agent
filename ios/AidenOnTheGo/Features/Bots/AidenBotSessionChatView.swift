@@ -229,6 +229,7 @@ struct AidenBotSessionChatView: View {
         .onChange(of: aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation)) { _, grants in
             guard let model, grants != feedOpenedWith else { return }
             feedOpenedWith = grants
+            model.allowedSupported = grants.contains(.botAllowed)
             model.plansSupported = grants.contains(.botPlans)
             model.reopenFeed()
         }
@@ -713,6 +714,12 @@ struct AidenBotSessionChatView: View {
                 .id(question.waitId)
             }
             if let approval = model.approval {
+                if let count = approval.alwaysCount, model.allowedSupported {
+                    Text("You’ve allowed this \(count) times in the last 2 weeks.").font(.footnote).foregroundStyle(palette.secondary)
+                    Button("Always allow for \(bot?.name ?? "Bot")") { Task { await model.answerApproval(.allow, scope: .always) } }
+                        .buttonStyle(.bordered).buttonBorderShape(.capsule)
+                        .disabled(!canRespondToApprovals || !model.canAnswerApproval)
+                }
                 // The workspace chat's approval card. Allow is hidden when the
                 // Mac says this tool can only be denied from a phone.
                 AidenApprovalCard(
@@ -729,6 +736,7 @@ struct AidenBotSessionChatView: View {
                 .disabled(!canRespondToApprovals || !model.canAnswerApproval)
                 .id(approval.waitId)
             }
+            if let notice = model.approvalSuccessNotice { Text(notice).font(.footnote).foregroundStyle(palette.secondary) }
             if let plan = model.plan, model.plansSupported {
                 AidenBotPlanCard(plan: plan, botName: bot?.name ?? "Bot",
                     canAnswer: canWrite && model.canRespondToPlan(plan), error: model.planError,
@@ -738,6 +746,7 @@ struct AidenBotSessionChatView: View {
             if let request = model.accessRequest,
                coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAccessRequests) == true {
                 AidenBotAccessRequestCard(request: request, botName: bot?.name ?? "Bot",
+                    showsApprovalCount: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAllowed) == true,
                     canAnswer: canWrite && model.canAnswerAccessRequest,
                     onAnswer: { choice in Task { await model.answerAccessRequest(choice) } })
                     .id(request.waitId)
@@ -1162,6 +1171,7 @@ struct AidenBotSessionChatView: View {
             botID: botID,
             transport: client,
             cacheKey: AidenBotSessionKey(instanceId: context.instanceId, deviceId: context.deviceId, botID: botID),
+            allowedSupported: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAllowed) == true,
             plansSupported: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botPlans) == true
         )
         model.activitySupported = aidenBotActivitySupported(coordinator: coordinator)

@@ -55,7 +55,7 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
 /// the chat reopens a feed that opened without one
 /// (`AidenBotSessionModel.reopenFeed()`; Android parity).
 func aidenBotSessionFeedGrants(_ installation: AidenInstallation?) -> Set<AidenRemoteCapability> {
-    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages, .botAccessRequests, .botPlans].filter { installation?.hasNegotiatedAccess(to: $0) == true })
+    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages, .botAccessRequests, .botPlans, .botAllowed].filter { installation?.hasNegotiatedAccess(to: $0) == true })
 }
 
 /// How a Bot chat is opened. A host advertising `bot-durable-session-v1`
@@ -102,7 +102,7 @@ protocol AidenBotSessionTransport: Sendable {
         idempotencyKey: UUID
     ) async throws -> AidenBotQuestionAnswerReceipt
     /// The generic `POST /approvals/{id}/respond`; a Bot approval is answered
-    /// by its `waitId` with no scope.
+    /// by its `waitId`; Remote 57 adds `always` only for a host offer and held grant.
     func respondToApproval(
         id: String,
         decision: AidenApprovalDecision,
@@ -1277,7 +1277,10 @@ final class AidenBotSessionModel {
     @ObservationIgnored private let outboxStore: AidenBotOutboxStore?
     @ObservationIgnored private let retryDelays: [Duration]
     @ObservationIgnored private var retainedQuestion: (waitId: String, request: AidenQuestionRespondRequest, key: UUID)?
-    @ObservationIgnored private var retainedApproval: (waitId: String, decision: AidenApprovalDecision, key: UUID)?
+    var allowedSupported = false
+    var approvalSuccessNotice: String?
+    @ObservationIgnored private var approvalGeneration = 0
+    @ObservationIgnored private var retainedApprovalKeys: [String: UUID] = [:]
     @ObservationIgnored private var retainedAccessAnswers: [String: UUID] = [:]
     @ObservationIgnored private var accessRequestWrites = 0
     @ObservationIgnored private var retainedHandoff: (waitId: String, request: AidenBotHandoffAnswerRequest, key: UUID)?
@@ -1332,6 +1335,7 @@ final class AidenBotSessionModel {
         botID: String,
         transport: any AidenBotSessionTransport,
         cacheKey: AidenBotSessionKey? = nil,
+        allowedSupported: Bool = false,
         plansSupported: Bool = false,
         cache: AidenBotSessionCache = .shared,
         outboxStore: AidenBotOutboxStore? = .shared,
@@ -1341,6 +1345,7 @@ final class AidenBotSessionModel {
         now: @escaping () -> Date = { Date() }
     ) {
         self.botID = botID
+        self.allowedSupported = allowedSupported
         self.plansSupported = plansSupported
         self.sharedImages = AidenSharedImageBytes(maxBytes: sharedImageBudget)
         self.transport = transport
@@ -1381,6 +1386,9 @@ final class AidenBotSessionModel {
     /// the latest outbox.
     func release() {
         released = true
+        approvalGeneration += 1
+        inFlight.remove(.answerApproval)
+        approvalSuccessNotice = nil
         invalidatePlanResponses()
         attachTask?.cancel()
         backoffTask?.cancel()
@@ -1550,6 +1558,9 @@ final class AidenBotSessionModel {
     /// as they are. Between connections it does nothing: the next one opens
     /// with the grants held then.
     func reopenFeed() {
+        approvalGeneration += 1
+        inFlight.remove(.answerApproval)
+        approvalSuccessNotice = nil
         invalidatePlanResponses()
         guard let end = endFeedConnection else { return }
         feedReopenRequested = true
@@ -1630,6 +1641,8 @@ final class AidenBotSessionModel {
             question = next
             questionWrites += 1
         case let .approval(next):
+            retainedApprovalKeys = retainedApprovalKeys.filter { next != nil && $0.key.hasPrefix("\(next!.waitId):") }
+            approvalSuccessNotice = nil
             approval = next
             approvalWrites += 1
         case let .activity(next):
@@ -1736,6 +1749,8 @@ final class AidenBotSessionModel {
         revealPartialNow()
         setStateView(session.stateView)
         question = session.question
+        retainedApprovalKeys = retainedApprovalKeys.filter { session.approval != nil && $0.key.hasPrefix("\(session.approval!.waitId):") }
+        approvalSuccessNotice = nil
         approval = session.approval
         handoff = session.handoff
         adoptPlan(plansSupported ? session.plan : nil)
@@ -2105,6 +2120,9 @@ final class AidenBotSessionModel {
         let hadUnsent = outbox.contains { $0.submissionId == nil }
         backoffTask?.cancel()
         purgeGeneration += 1
+        approvalGeneration += 1
+        inFlight.remove(.answerApproval)
+        approvalSuccessNotice = nil
         invalidatePlanResponses()
         adoptPlan(nil)
         restoreTask?.cancel()
@@ -2161,38 +2179,38 @@ final class AidenBotSessionModel {
         hasLoaded && approval != nil && !inFlight.contains(.answerApproval)
     }
 
-    /// Allows or denies the waiting tool call, once. The card goes at once and
+    /// Answers the waiting call, with Always only when the host offered it. The card goes at once and
     /// comes back with an error if the decision didn't reach the Mac (R18).
     /// Allow is refused when the Mac says the phone may only deny it. The
     /// request UUID survives an ambiguous failure so retrying the same decision
     /// replays the Mac's receipt; another decision is a new request. When nothing
     /// is waiting any more (expired or already answered), the card stays gone.
-    func answerApproval(_ decision: AidenApprovalDecision) async {
-        guard canAnswerApproval, let current = approval else { return }
+    func answerApproval(_ decision: AidenApprovalDecision, scope: AidenApprovalScope? = nil) async {
+        guard canAnswerApproval, !released, let current = approval else { return }
         if decision == .allow && !current.canAllow { return }
-        let waitId = current.waitId
-        let key: UUID
-        if let retainedApproval, retainedApproval.waitId == waitId, retainedApproval.decision == decision {
-            key = retainedApproval.key
-        } else {
-            key = UUID()
-            retainedApproval = (waitId, decision, key)
-        }
+        let chosenScope: AidenApprovalScope? = scope == .always ? .always : nil
+        guard scope == nil || scope == .once || (decision == .allow && allowedSupported && current.alwaysCount != nil && scope == .always) else { return }
+        let action = "\(current.waitId):\(decision.rawValue):\(chosenScope?.rawValue ?? "once")"
+        let key = retainedApprovalKeys[action] ?? UUID()
+        retainedApprovalKeys[action] = key
         let mark = approvalWrites
+        let generation = approvalGeneration
+        approvalSuccessNotice = nil
         approval = nil
         inFlight.insert(.answerApproval)
-        defer { inFlight.remove(.answerApproval) }
+        defer { if generation == approvalGeneration { inFlight.remove(.answerApproval) } }
         do {
             _ = try await aidenBotWithin(requestLimit) { [transport] in
-                try await transport.respondToApproval(id: waitId, decision: decision, scope: nil, idempotencyKey: key)
+                try await transport.respondToApproval(id: current.waitId, decision: decision, scope: chosenScope, idempotencyKey: key)
             }
-            retainedApproval = nil
+            guard generation == approvalGeneration, !released else { return }
+            retainedApprovalKeys[action] = nil
+            if chosenScope == .always, approvalWrites == mark { approvalSuccessNotice = "Always allow requested." }
         } catch {
-            if !aidenBotSessionFailureIsAmbiguous(error) { retainedApproval = nil }
+            guard generation == approvalGeneration, !released else { return }
+            if !aidenBotSessionFailureIsAmbiguous(error) { retainedApprovalKeys[action] = nil }
             if case let AidenRemoteClientError.server(_, body) = error,
-               ["approval_expired", "approval_already_resolved"].contains(body.code.rawValue) {
-                return
-            }
+               ["approval_expired", "approval_already_resolved"].contains(body.code.rawValue) { return }
             if approvalWrites == mark { approval = current }
             if error is CancellationError { return }
             errorMessage = "That answer wasn’t sent. Please try again."

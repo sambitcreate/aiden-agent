@@ -126,6 +126,14 @@ internal fun aidenShouldRequestBotImages(server: AidenServer, installation: Aide
 /**
  * Revision 56: plans are offered and negotiated alone, preserving the existing grants.
  */
+internal suspend fun aidenRequestBotAllowed(
+    client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
+    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ALLOWED, server, installation)) listOf(AidenRemoteCapability.BOT_ALLOWED) else emptyList(),
+    client, stillCurrent
+)
+
 internal suspend fun aidenRequestBotPlans(
     client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
@@ -685,13 +693,14 @@ class AidenRemoteCoordinator(
                     server = rawUploadsServer,
                     request = ::aidenRequestChatNewWorktree
                 )
-                val negotiatedServer = negotiateSoloCapability(
+                val messagingServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
                     server = worktreeServer,
                     request = ::aidenRequestBotMessaging
                 )
+                val negotiatedServer = negotiateSoloCapability(generation, installation, newClient, messagingServer, ::aidenRequestBotAllowed)
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(
                     instanceId = installation.instanceId,

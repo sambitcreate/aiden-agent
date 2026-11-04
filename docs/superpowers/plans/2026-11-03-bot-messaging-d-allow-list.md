@@ -578,20 +578,20 @@ B's optional journal approvalTally stores version1, the original authorization f
 - Consumes: the Task 7 wire shapes and the `botAllowed` fixture.
 - Produces: on the Bot approval card, when `alwaysCount` is present, the line `You’ve allowed this N times in the last 2 weeks.` and a third button `Always allow for <Bot>` that responds with `scope: "always"`. And a profile row "Allowed without asking" (with the count) shown only when the Mac granted `bot:allowed`. It opens a list of `what` with "Added …" and "Used N times", and a Remove action. Remove is a swipe action on iOS and a trailing text button on Android; both ask for no confirmation, matching the desktop. A failed Remove keeps the row and shows the existing error banner.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - iOS `AidenBotAllowedTests`:
     - `testDecodesFixtureList` decodes `botAllowed.list` from `contract.json` like `AidenBackgroundJobsTests`;
     - `testRemoveReplacesListWithResponse` uses a stub client returning the post-remove fixture, and the model has one entry;
     - `testRowHiddenWithoutCapability`;
     - `testApprovalOffersAlwaysOnlyWithCount`: a fixture approval with `alwaysCount` shows the button and responds with `scope: "always"`; one without it shows Allow and Deny only.
   - Android `AidenBotAllowedTest`: the same four cases, mirroring `AidenBackgroundJobsTest`.
-- [ ] **Step 2: Run and see them fail.**
+- [x] **Step 2: Run and see them fail.**
   - iOS: `xcodebuild test -project ios/AidenOnTheGo.xcodeproj -scheme AidenOnTheGo -only-testing:AidenOnTheGoTests/AidenBotAllowedTests -destination 'platform=iOS Simulator,name=iPhone 17'`, or the command in `ios/README.md`.
   - Android: `cd android && ./gradlew :app:testDebugUnitTest --tests '*AidenBotAllowed*'`.
   - Expected: FAIL.
-- [ ] **Step 3: Implement** the models, client calls, capability negotiation (asked for alone, like `chat:jobs`), screens and profile rows. Decode `nextCursor`, load all subsequent pages on request, and refresh the list after remove or an expired cursor. Do not cap the combined list at 50. Test maximum rules plus folders on both native clients.
-- [ ] **Step 4: Run the tests,** plus `AidenRemotePhase0Tests` and the Android protocol tests. Expected: PASS.
-- [ ] **Step 5: Commit.** "Allowed without asking on iOS and Android"
+- [x] **Step 3: Implement** the models, client calls, capability negotiation (asked for alone, like `chat:jobs`), screens and profile rows. Decode `nextCursor`, load all subsequent pages on request, and refresh the list after remove or an expired cursor. Do not cap the combined list at 50. Test maximum rules plus folders on both native clients.
+- [x] **Step 4: Run the tests,** plus `AidenRemotePhase0Tests` and the Android protocol tests. Expected: PASS.
+- [x] **Step 5: Commit.** "Allowed without asking on iOS and Android"
 
 ---
 
@@ -685,3 +685,10 @@ Remote57 canonical botAllowed fixtures are stable, with rule/folder list and com
 ### 2026-11-04 — Task 7 host complete locally
 
 Remote57 host source and stable canonical fixtures are frozen. Parent registered the new service suite in test:aiden-remote and the CI lane. Focused314, fullRemote1300pass+2existing conditional skips, final B holder/legacy SSE3pass, wholetypes0/scoped10-filelint0/diff0. Handoff /tmp/aiden-bot-allowed-d-task7-host-handoff.md lists exact files and actual REDs. Parent rebuiltCLI268files/27.1MiB, full183pass+3existing skips andCLItypes0. An extended existing real HTTPS test proves CLI never advertises bot:allowed and its allow-list route is unavailable. Its standalone run hit the existing A messaging reply deadline before those assertions, then passed on the one allowed unchanged-limit rerun; this remains a reported timing flake, not a resolved bug. Logs /tmp/bot-allowed-d-task7-cli-{build,tests,types,exclusion,exclusion-rerun}.log. No test assertion/timeout/retry was weakened. NativeTask8 is implementing the stable contract separately, so wholeD/native/Gate6/physical/rendered/live/package/CI acceptance remains pending. Reclaim revision57 against main before the PR.
+
+
+### 2026-11-04 — Task 8 locally complete, Gate6 pending
+
+Both native clients implement independent bot:allowed negotiation, strict list/count decoding, complete pagination, pending Remove with failure recovery, held-capability counts, scoped Always retry identities and lifecycle fences. Xcode explicitly registers the new Swift model, view and tests. The canonical Remote57 fixture is unchanged. Actual offered-count and control/bidi/trailing-newline REDs were captured before their corrections, without weakening assertions, timeouts or retries. Final iOS simulator checks passed406 with5existing conditional configuration/physical-device skips; Android focused225 plus navigation22 passed, lint reported0errors/51warnings/5hints and instrumented tests compiled. No native rendered UI or physical-device claim is made. Native handoff: /tmp/aiden-bot-allowed-d-task8-native-handoff.md.
+
+Parent final checks passed Bots1012/runtime474/rules66/messaging89/access98/plans144/allowed102, whole types and registry15. Post-Task7 production startup and desktop flows passed2Cua tests with retries0. Task7 host Remote1300+2existing skips and rebuiltCLI183+3existing skips remain the relevant full checks. The standalone CLI messaging timing flake remains recorded, despite its one unchanged-limit passing rerun. Whole-D Gate6, final Astra high review, four stacked PRs and exact-head hosted CI remain pending. Main a5c5db8b1/Remote53 was freshly fetched and remains an ancestor of A; revision57 is still provisional until the pre-PR recheck. No full-D, live-provider, packaging, release or hosted-CI acceptance is claimed.

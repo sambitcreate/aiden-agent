@@ -44,3 +44,8 @@
 - Task7 targeted CLI messaging run failed before D’s new assertions: recipient submission was acknowledged after the test’s 10-second reply-poll window, with no recipient inference yet. /tmp/bot-allowed-d-task7-cli-exclusion.log retains the ledger/request trace. Full rebuilt CLI had183pass/3existing skips earlier. One diagnostic rerun is allowed, unchanged limits; a passing rerun still must be reported as a timing flake in the PR.
 
 - The one permitted CLI rerun passed with new real HTTPS D-capability/route assertions, unchanged deadlines. Keep the original missed-reply run as a timing flake and report both logs in the PR. Final rerun /tmp/bot-allowed-d-task7-cli-exclusion-rerun.log; no extra reruns or timeout increases.
+
+- Task8 native final handoff verified against machine summaries:406iOS+5existing skips,225Android+22navigation, no failures. New Swift sources/tests explicitly registered. All workers stopped before root staging.
+- Review catalog search treats a combined model query literally and returned no models. Individual exact model searches returned requested Opus5.5 medium and OpenCode Go DeepSeekV4.1 Flash high options; no fallback model used.
+
+- Task8 explicit git add returned1 for the ignored .memory directory after staging the tracked/native paths. Inspected the index, then force-added only the intended project memory and two papercut files.

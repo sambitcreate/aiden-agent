@@ -865,6 +865,7 @@ final class AidenRemoteCoordinator {
         [.botMessaging],
         [.botAccessRequests],
         [.botPlans],
+        [.botAllowed],
     ]
 
     /// Existing pairings predate the progress opt-in field. Upgrade them only

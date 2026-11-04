@@ -46,3 +46,5 @@ A folder approved for a Bot does not appear in the phone's file browser or its l
 The CLI host does not offer `request_access`. Configure its saved Bot grants through the existing administration controls. See [durable CLI Bots](cli-durable-bots.md).
 
 The [implementation plan](plans/bot-messaging-plan.md) tracks phase B review and acceptance. Local tests and simulator checks are separate from physical-device, live-provider and release acceptance.
+
+On supported paired iOS and Android clients, a repeated folder card shows its approval count only while the host grants both `bot:access-requests` and `bot:allowed`. Older clients keep the same access choices without that count.

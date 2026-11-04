@@ -35,16 +35,22 @@ Hosts that announce Remote revision 55's `bot:access-requests` are asked for tha
 
 Hosts that offer Remote revision 56's `bot:plans` are asked for it in a separate capability call. Bot chats show the host's plan with its reason, ordered steps and coverage. **Approve plan**, **Not now**, **Show details**, and an active plan's **Stop plan** use the same wording as desktop. Active checklists show step states, remaining minutes and usage counts; ended plans show compact progress. Long reviews scroll with decisions kept outside the review area. Visible pending plans hold Send while the draft stays editable. File coverage names the enforced location, read/change mode and any plan-only lifetime. Show details retains the exact location. If the location cannot fit safely, the phone omits that pending card and keeps the waiting signal; review and approve on the host desktop. Send remains available in that fallback, and a delayed phone approval is refused before granting access. Active plans retain Stop with a safe folder summary. A receipt acknowledges the answer; the host's session or event stream changes or clears the card. A `409 plan_expired` clears only the matching unchanged card. Unknown-outcome retries reuse the same plan-and-decision key and body; another decision gets its own key and body. Late answers cannot replace a newer card. Older hosts show no plan card or controls.
 
-For focused plan regression tests from the repository root, use an explicitly selected simulator and a new result path for each run:
+Hosts offering Remote revision 57’s `bot:allowed` are asked for that capability alone. When it is held, Bot profiles show **Allowed without asking**, with a count from the complete paginated rule-and-folder list. Remove keeps the row disabled until the host returns a fresh list; failures retain the row and show an error. Stale or foreign cursors restart from the first page. Rule rows show usage; folder rows show only their added date. Host-offered approval counts enable **Always allow for <Bot>**. B folder counts require both `bot:access-requests` and `bot:allowed`. Unknown outcomes retain the exact wait, decision and scope key/body; another scope or decision uses another key. **Always allow requested.** acknowledges the choice, while the host confirms saved access. Earlier hosts retain their existing UI.
+
+For focused allowed-list, approval and protocol regression tests from the repository root, use an explicitly selected simulator and a new result path for each run:
 
 ```sh
 DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer xcodebuild test \
   -project ios/AidenOnTheGo.xcodeproj -scheme AidenOnTheGo \
   -destination 'platform=iOS Simulator,id=2FBB28DB-0E20-495C-B964-5A678C417E89' \
   -derivedDataPath /tmp/aiden-bot-messaging-ios-derived \
-  -resultBundlePath "/tmp/aiden-bot-plan-$(date +%s).xcresult" \
+  -resultBundlePath "/tmp/aiden-bot-allowed-$(date +%s).xcresult" \
   -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
   -collect-test-diagnostics never \
+  -only-testing:AidenOnTheGoTests/AidenBotAllowedTests \
+  -only-testing:AidenOnTheGoTests/AidenBotSessionApprovalTests \
+  -only-testing:AidenOnTheGoTests/AidenRemoteClientTests \
+  -only-testing:AidenOnTheGoTests/AidenRemotePhase0Tests \
   -only-testing:AidenOnTheGoTests/AidenBotPlanTests \
   CODE_SIGNING_ALLOWED=NO
 ```
