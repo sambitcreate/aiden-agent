@@ -18,3 +18,5 @@
 
 - Review orchestration has a 120,000-character task limit. The accumulated full review history exceeded it before task creation; keep original reports in an accessible history file and include a complete finding/disposition summary plus current reports in each fresh review brief. Stable request IDs were reused after the validation rejection.
 - The stranded-notice issue had a second reader in memory ownership. Its shared provenance walk now uses the Bot input kind and never guesses from an unresolved Bot notice; routine and intro fallbacks stay unchanged. The new real-harness case failed before the fix, then the memory/review/recall/compaction suites passed.
+
+- Explicit Bot input ownership exposed a stale generic routine/intro guess: it could survive the Bot input and exclude a later person turn. Clear the guess at that host-owned input boundary. Both notice types have real-session red-to-green tests; this keeps the original fallback for an immediately following ordinary input.

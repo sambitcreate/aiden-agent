@@ -99,3 +99,5 @@ These files implement the core checkpoint. Tasks 8–11 additionally update desk
 - `scripts/ci-test-registry.json`
 
 Full-A review corrections: phone status notifications use the neutral title "Bot message" when the saved title already equals the body, avoiding a repeated sentence. An id-less Bot change notification also invalidates desktop settings, so a phone's global messaging switch change updates open Settings and Advanced controls. Ordinary session-state changes still refresh only that Bot's summary.
+
+An unresolved routine or self-introduction notice may still classify its immediately following input conservatively. A host-owned Bot input clears that guess, so it cannot exclude a later person turn from memory or recall. Notice lookup continues to bind actual run answers.

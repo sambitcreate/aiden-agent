@@ -357,6 +357,8 @@ function ownership(steps: readonly Step[], unattended: ReadonlyMap<string, Unatt
     }
     if (step.kind === "input") {
       known = true;
+      // A routine/intro guess cannot cross a different, host-owned input kind.
+      if (step.botMessage) pendingGuess = false;
       let isUnattended = step.botMessage || answers.has(step.id);
       if (!isUnattended && pendingGuess) {
         isUnattended = true;
