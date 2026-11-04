@@ -41,9 +41,10 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
     const electron = createRequire(import.meta.url)("electron") as string;
     // As in browser-throttling.spec.ts: no GPU on hosted runners, and SIGKILL
     // on timeout so a hang shows its stderr instead of a clean exit.
+    // Keep exact pixel controls independent of the host display's color profile.
     // Chromium refuses to start as root (a container) unless its sandbox is off.
     const sandbox = process.getuid?.() === 0 ? ["--no-sandbox"] : [];
-    const run = await promisify(execFile)(electron, ["--disable-gpu", ...sandbox, entry], {
+    const run = await promisify(execFile)(electron, ["--disable-gpu", "--force-color-profile=srgb", ...sandbox, entry], {
       timeout: 75_000,
       killSignal: "SIGKILL",
       env: {
@@ -141,6 +142,7 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
     expect(seen.leaked, `${who}: the value stays out of the snapshot`).toBe(false);
   }
   expect(result.reveal.shownType, "the page did show the field as text").toBe("text");
+  expect(result.reveal.heldObservation).toEqual({ delayedRead: true, passwordObserved: true });
   expect(result.reveal.typingShownByBot).toBe(result.expected.typingRefusal);
   expect(result.reveal.pressingShownByPerson, "a printable key into the focused field").toBe(result.expected.typingRefusal);
   expect(result.reveal.typingShownByPerson).toBe(result.expected.typingRefusal);

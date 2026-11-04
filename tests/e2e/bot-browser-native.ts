@@ -10,7 +10,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { app, BrowserWindow, nativeImage, session } from "electron";
+import { app, BrowserWindow, nativeImage, session, webContents } from "electron";
 import type { BrowserCommand, BrowserCommandResult, BrowserSnapshot } from "../../renderer/shared/browser";
 
 const root = process.env.AIDEN_BOT_BROWSER_ROOT!;
@@ -102,8 +102,7 @@ function serve(request: IncomingMessage, response: ServerResponse): void {
       return html(`
         <input id="secret" type="password" value="open-sesame-77" aria-label="Password" style="left:20px;top:20px;${FIELD}">
         <button id="show" onclick="const f=document.getElementById('secret');f.type=f.type==='password'?'text':'password'" style="position:absolute;left:320px;top:20px;width:120px;height:44px">Show</button>
-        <div id="control" style="position:absolute;left:20px;top:100px;width:240px;height:44px;background:rgb(255,0,0)"></div>
-        <script>const after=Number(new URLSearchParams(location.search).get("show"));if(after>0)setTimeout(()=>document.getElementById("show").click(),after);</script>`);
+        <div id="control" style="position:absolute;left:20px;top:100px;width:240px;height:44px;background:rgb(255,0,0)"></div>`);
     case "/reveal-table":
       // A table-layout sign-in row and a password field inside a role=button, both with no
       // sensitive autocomplete; "Show" turns them into plain text.
@@ -164,6 +163,12 @@ void app.whenReady().then(async () => {
     assert.ok(result.snapshot);
     return result.snapshot;
   };
+  const renderedSnapshot = async (tabId: string): Promise<BrowserSnapshot> => {
+    // Pixel controls need the page's paint, beyond load or click completion.
+    // This is a person's page action, so it cannot prime Bot field memory.
+    await user(BOT_WORKSPACE, { action: "evaluate", tabId, expression: "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))" });
+    return snapshot(tabId);
+  };
   const cookieNames = async (partition: string) =>
     (await session.fromPartition(partition).cookies.get({})).map((cookie) => `${cookie.name}=${cookie.value}`).sort();
 
@@ -208,7 +213,7 @@ void app.whenReady().then(async () => {
   };
   step("2 masking");
   await navigate(BOT_WORKSPACE, botTab, `${origin}/login`);
-  const masking = loginAsSeen(await snapshot(botTab));
+  const masking = loginAsSeen(await renderedSnapshot(botTab));
   step("2 typing");
   const outcome = (run: Promise<unknown>) => run.then(() => "ran", (error: Error) => error.message);
   const typing = await outcome(agent({ action: "type", tabId: botTab, selector: "#password", text: "guess" }));
@@ -300,7 +305,7 @@ void app.whenReady().then(async () => {
   await navigate(BOT_WORKSPACE, botTab, `${origin}/callback?code=held-sign-in-code`);
   await navigate(BOT_WORKSPACE, botTab, `${origin}/login`);
   browser.release(BOT_WORKSPACE, "wait-1");
-  const released = await snapshot(botTab).catch((error: Error) => error.message);
+  const released = await renderedSnapshot(botTab).catch((error: Error) => error.message);
   const afterRelease = typeof released === "string" ? released : loginAsSeen(released);
   const heldTraces = typeof released === "string" ? null : JSON.stringify(released).includes("held-sign-in-code");
 
@@ -321,27 +326,69 @@ void app.whenReady().then(async () => {
     return { field: pixel(140, 42), control: pixel(140, 122), leaked: JSON.stringify(shot).includes("open-sesame-77") };
   };
   await navigate(BOT_WORKSPACE, botTab, `${origin}/reveal`);
-  await snapshot(botTab);
+  await renderedSnapshot(botTab);
   await agent({ action: "click", tabId: botTab, selector: "#show" });
-  const shownByBot = revealAsSeen(await snapshot(botTab));
+  const shownByBot = revealAsSeen(await renderedSnapshot(botTab));
   // What the approval of the Bot's typing and the rules read first, as in a Bot's call.
   const probedShownByBot = (await browser.probeAgentTarget(BOT_WORKSPACE, botTab, { selector: "#secret" }))?.type;
   const typingShownByBot = await outcome(agent({ action: "type", tabId: botTab, selector: "#secret", text: "guess" }));
-  browser.hold(BOT_WORKSPACE, botTab, { holdId: "wait-2", reason: "sign_in" });
-  // The person reads the page, then presses Show (the page shows the field after 2 s).
-  await navigate(BOT_WORKSPACE, botTab, `${origin}/reveal?show=2000`);
-  await new Promise((resolve) => setTimeout(resolve, 3_000));
-  const shownType = (await user(BOT_WORKSPACE, { action: "evaluate", tabId: botTab, expression: "document.getElementById('secret').type" })).value;
+  const heldUrl = `${origin}/reveal?held=1`;
+  const heldContents = webContents.getAllWebContents().filter((contents) => contents.getURL() === `${origin}/reveal`);
+  assert.equal(heldContents.length, 1);
+  const debuggerPort = heldContents[0]!.debugger;
+  const originalSend = debuggerPort.sendCommand;
+  const heldObservation = { delayedRead: false, passwordObserved: false };
+  let oldDocumentRead!: () => void;
+  let observed!: () => void;
+  const oldDocument = new Promise<void>((resolve) => { oldDocumentRead = resolve; });
+  const observation = new Promise<void>((resolve) => { observed = resolve; });
+  // Observe the real held-tab scanner, without asking the Bot to read or mark
+  // this document first. A slow old-document read deliberately exercises its
+  // backoff across navigation; a fixed Show timer can beat the next scan.
+  debuggerPort.sendCommand = async (method, params, sessionId) => {
+    const result = await originalSend.call(debuggerPort, method, params, sessionId);
+    if (method === "DOM.getDocument") {
+      if (!heldObservation.delayedRead) {
+        assert.equal(result.root?.documentURL, `${origin}/reveal`);
+        heldObservation.delayedRead = true;
+        oldDocumentRead();
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      if (result.root?.documentURL === heldUrl) {
+        const nodes = [result.root];
+        while (nodes.length) {
+          const node = nodes.pop()!;
+          const attributes = node.attributes ?? [];
+          if (node.nodeName === "INPUT" && attributes.some((value: string, index: number) => index % 2 === 0 && value === "id" && attributes[index + 1] === "secret") &&
+              attributes.some((value: string, index: number) => index % 2 === 0 && value === "type" && attributes[index + 1] === "password")) heldObservation.passwordObserved = true;
+          nodes.push(...(node.children ?? []));
+        }
+      }
+    }
+    // recallSensitiveFields remembers the DOM result before disabling DOM.
+    if (method === "DOM.disable" && heldObservation.passwordObserved) observed();
+    return result;
+  };
+  try {
+    browser.hold(BOT_WORKSPACE, botTab, { holdId: "wait-2", reason: "sign_in" });
+    await oldDocument;
+    await navigate(BOT_WORKSPACE, botTab, heldUrl);
+    await observation;
+  } finally {
+    debuggerPort.sendCommand = originalSend;
+  }
+  assert.equal((await user(BOT_WORKSPACE, { action: "evaluate", tabId: botTab, expression: "document.getElementById('secret').type" })).value, "password");
+  const shownType = (await user(BOT_WORKSPACE, { action: "evaluate", tabId: botTab, expression: "document.getElementById('show').click();document.getElementById('secret').type" })).value;
   // They leave the cursor in the field.
   await user(BOT_WORKSPACE, { action: "evaluate", tabId: botTab, expression: "document.getElementById('secret').focus()" });
   browser.release(BOT_WORKSPACE, "wait-2");
-  const shownByPerson = revealAsSeen(await snapshot(botTab));
+  const shownByPerson = revealAsSeen(await renderedSnapshot(botTab));
   // A printable key into the focused field is typing too (asked before anything else touches the field).
   const pressingShownByPerson = await outcome(agent({ action: "press", tabId: botTab, key: "x" }));
   const typingShownByPerson = await outcome(agent({ action: "type", tabId: botTab, selector: "#secret", text: "guess" }));
   // What an approval and the rules read about the field.
   const probedType = (await browser.probeAgentTarget(BOT_WORKSPACE, botTab, { selector: "#secret" }))?.type;
-  const reveal = { shownByBot, probedShownByBot, typingShownByBot, shownByPerson, pressingShownByPerson, typingShownByPerson, shownType, probedType };
+  const reveal = { shownByBot, probedShownByBot, typingShownByBot, shownByPerson, pressingShownByPerson, typingShownByPerson, shownType, probedType, heldObservation };
   // A remembered field is marked before any Bot locator runs, not only before
   // typing: a wait, a scroll's target and the snapshot's own locators. Each is
   // checked on a page nothing has marked yet: the Bot reads it while the fields

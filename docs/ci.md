@@ -138,6 +138,21 @@ the dispatcher's drain before advancing again. It checks the full five-minute
 boundary, exact run order and settled durable receipts without a timing guess.
 The production event dispatcher and its limits are unchanged.
 
+Electron shard 2 in run [41813917090](https://github.com/sambitcreate/aiden-agent/actions/runs/41813917090/job/126521250640)
+failed the flaky-test gate on the Bot-browser held-tab reveal case: its first
+attempt failed the gray-pixel assertion and its existing retry passed. The
+fixture showed a new password field after two seconds without establishing that
+the periodic held-tab scanner had observed it first. A controlled slow scan
+reproduced the unmasked field and text leak under that unsupported premise.
+The fixture now waits for the real scanner to finish observing the new password
+before the person presses Show, then retains every pixel, no-secret and typing
+refusal assertion. Its standalone Electron uses sRGB so exact red controls do
+not depend on a host display profile, and pixel snapshots follow two animation
+frames after the person's page action rather than assuming load/click means
+paint has finished. Production masking, its documented
+first-observation limitation, timeouts, retries and the flaky-test gate remain
+unchanged.
+
 Release workflows, signing/notarization, publication and repository protection
 settings remain unchanged. The previous draft's release-admission rewrite has
 been removed to keep release hardening separate from this CI rollout.
