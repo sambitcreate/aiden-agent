@@ -14,3 +14,7 @@
 - Task2 staging reported ignored .memory/.papercuts paths after staging the tracked files; the unique worker log needed explicit force-add. Included it in the local unpublished task commit before releasing Task3.
 
 - Task3 changed-book fallback must recompute ordinary rules without another C reservation. Worker actual REDs caught stale Ask and hand-off execution; fresh ordinary fallback and initial browser verdict now pass. Registered target test with existing tallies, official51 and registry15 pass.
+
+- Task4 parent inspection found settlement precedes the post-answer current-requirements comparison. Requested behavioral proof and a bounded fix so a stale Always card cannot publish through Task5 before the runtime re-asks; Task5 needs a live validation hook at first publication in addition to atomic consent generation. Registration/commit remains held.
+
+- Task4 stale publication concern reproduced two real-book REDs, then focused275/runtime474 green with preflight and revocable live publication guard. Registered bridge/tally/target suite64 and registry15 pass; root current type-check0. Initial follow-up types log was the earlier ES2020 Object.hasOwn failure; later types-final and current root run confirm the corrected tree.

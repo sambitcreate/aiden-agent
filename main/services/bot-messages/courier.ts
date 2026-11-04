@@ -274,7 +274,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
       .filter((prompt) => prompt.owner?.inputs.some((i) => i.botMessage?.deliveryId === id));
     for (const prompt of prompts) {
       if (prompt.owner?.inputs.some((i) => i.botMessage?.deliveryId === id))
-        deps.approvals.decide(prompt.waitId, "deny", "expiry");
+        deps.approvals.decide(prompt.waitId, "deny", undefined, "expiry");
     }
     if (unfinished(row) && row.parentDeliveryId) {
       const parent = await deps.ledger.get(row.parentDeliveryId);
@@ -450,7 +450,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     if (deps.now() >= row.deadline) {
       for (const prompt of deps.approvals.pending())
         if (prompt.owner?.inputs.some((i) => i.botMessage?.deliveryId === row.id))
-          deps.approvals.decide(prompt.waitId, "deny", "expiry");
+          deps.approvals.decide(prompt.waitId, "deny", undefined, "expiry");
     }
     await deps.ledger.update(row.id, (r) => {
       if (!unfinished(r) || r.initialAnswer === undefined) return r;
@@ -643,7 +643,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
           .pending()
           .filter((p) => p.owner?.inputs.some((i) => i.botMessage?.deliveryId === id));
         if (deps.now() >= row.deadline) {
-          for (const prompt of pending) deps.approvals.decide(prompt.waitId, "deny", "expiry");
+          for (const prompt of pending) deps.approvals.decide(prompt.waitId, "deny", undefined, "expiry");
           if (pending.length) outcome = "gave_up";
           else if (outcome === "gave_up") outcome = "expired";
         } else if (outcome === "gave_up") outcome = "failed";
@@ -950,7 +950,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
                 try {
                   await courier.announceWaiting(botId, ids, prompt.summary, prompt.waitId);
                 } catch (error) {
-                  deps.approvals.decide(prompt.waitId, "deny", "expiry");
+                  deps.approvals.decide(prompt.waitId, "deny", undefined, "expiry");
                   report(error);
                 }
               }
@@ -990,7 +990,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
         deadline = Math.min(deadline, row.deadline);
         if (deps.now() >= row.deadline || (row.status !== "delivered" && turn.kind === "message")) {
           expired = true;
-          deps.approvals.decide(waitId, "deny", "expiry");
+          deps.approvals.decide(waitId, "deny", undefined, "expiry");
           continue;
         }
         await deps.ledger.update(row.id, (r) =>
@@ -1022,13 +1022,13 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
           prompt.botId === botId ||
           prompt.owner?.inputs.some((i) => i.botMessage?.botId === botId || deleted.has(i.botMessage?.botId ?? ""))
         )
-          deps.approvals.decide(prompt.waitId, "deny", "expiry");
+          deps.approvals.decide(prompt.waitId, "deny", undefined, "expiry");
       }
       const removed = await deps.ledger.forgetBot(botId);
       const removedIds = new Set(removed.map((r) => r.id));
       for (const prompt of deps.approvals.pending()) {
         if (prompt.owner?.inputs.some((i) => removedIds.has(i.botMessage?.deliveryId ?? "")))
-          deps.approvals.decide(prompt.waitId, "deny", "expiry");
+          deps.approvals.decide(prompt.waitId, "deny", undefined, "expiry");
       }
       // Abort all observation only if bookkeeping is unavailable; never stop a session.
       let live: BotMessageDelivery[];

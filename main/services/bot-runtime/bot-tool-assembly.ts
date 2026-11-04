@@ -141,6 +141,7 @@ export interface BotToolAssemblyPorts {
 export interface BotToolAssembly {
   /** Fresh evidence only: no C reservation, D use, offer or execution binding. */
   approvalRequirements(botId: string, toolName: string, call: BotToolCallCheck): Promise<BotApprovalRequirements | undefined>;
+  approvalEvidence(botId: string, toolName: string, call: BotToolCallCheck): Promise<BotApprovalRequirement | undefined>;
   currentTools(botId: string, turn: BotTurnContext): Promise<BotToolEntry[]>;
   checkPolicy(botId: string, toolName: string, call?: BotToolCallCheck): Promise<BotPolicyDecision>;
   /** The bounded `mcp_servers` section for the connection tools last offered to the Bot, or "". */
@@ -250,6 +251,37 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       } };
   }
 
+  function requirementFingerprint(botId: string, toolName: string, call: BotToolCallCheck,
+    authority: Readonly<BotRuntimeEffectiveAuthority>, policy: Awaited<ReturnType<typeof describePolicy>>) {
+    return hash({ version: 1, botId, toolName, call: callData(call), authority,
+      operation: operationIdentity(toolName, call.args, policy.action, policy.live?.browserTarget),
+      rules: policy.rulesIdentity, baseline: policy.baseline !== undefined });
+  }
+
+  async function ordinaryApproval(botId: string, toolName: string, call: BotToolCallCheck, original: BotToolCallCheck,
+    admission: BotAdmission, facts: BotToolFacts, policy: Awaited<ReturnType<typeof describePolicy>>, approval: BotApprovalRequirement) {
+    let requirements = approval.requirements;
+    if (!requirements) {
+      try { requirements = await requirementsFrom(botId, toolName, call, original, admission, facts, policy); } catch { /* Once-only evidence. */ }
+    }
+    await call.assertCurrent?.();
+    await admission.revalidateBeforeEffect();
+    if (!(await policy.rulesCurrent())) throw new Error("This Bot's approval requirements changed. Ask again.");
+    active(call, original);
+    const requirementsFingerprint = requirements?.requirementsFingerprint ?? requirementFingerprint(botId, toolName, call, admission.authority, policy);
+    const described = botApprovalTargetOf(toolName, policy.action);
+    const evidence = { requirementsFingerprint, authorizationFingerprint: requirements?.authorizationFingerprint ??
+      hash(["bot-ordinary-approval-v1", requirementsFingerprint, described && ports.allowList && !policy.rule ? "consent-unavailable" : null]) };
+    const expected = requirements;
+    return { ...approval, ...(expected ? { requirements: expected } : {}), evidence,
+      ...(expected?.matchedRuleId && policy.baseline ? { allowFromList: async (grant: import("./bot-extension.js").BotAllowListRelease) => {
+        if (grant.ruleId !== expected.matchedRuleId || grant.consentRevision !== expected.consentRevision ||
+            canonical(grant.target) !== canonical(expected.target)) throw new Error("This remembered approval changed.");
+        await allowEntry(botId, toolName, call, expected, policy.baseline!);
+      } } : {}),
+      revalidate: () => assembly.approvalEvidence(botId, toolName, call) };
+  }
+
   async function requirementsFrom(botId: string, toolName: string, call: BotToolCallCheck, original: BotToolCallCheck,
     admission: BotAdmission, facts: BotToolFacts, policy: Awaited<ReturnType<typeof describePolicy>>): Promise<BotApprovalRequirements | undefined> {
     const list = ports.allowList;
@@ -260,9 +292,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
     if (!described || (described.target.kind === "site" && !policy.live?.browserTarget)) return undefined;
     const authority = structuredClone(admission.authority);
     if (canonical(facts.authority) !== canonical(authority)) return undefined;
-    const binding = (value: typeof policy) => hash({ version: 1, botId, toolName, call: callData(call), authority,
-      operation: operationIdentity(toolName, call.args, value.action, value.live?.browserTarget),
-      rules: value.rulesIdentity, baseline: value.baseline !== undefined });
+    const binding = (value: typeof policy) => requirementFingerprint(botId, toolName, call, authority, value);
     const requirementsFingerprint = binding(policy);
     const consentRevision = await list.consentRevision(botId, described.target);
     if (!consentRevision) return undefined;
@@ -308,6 +338,17 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
     const current = await approvalRequirements(botId, toolName, call);
     if (!current || current.authorizationFingerprint !== expected.authorizationFingerprint || current.matchedRuleId !== expected.matchedRuleId)
       throw new Error("This Bot's remembered approval changed. Ask again.");
+  }
+
+  async function allowEntry(botId: string, toolName: string, call: BotToolCallCheck, expected: BotApprovalRequirements, baseline: BotApprovalRequirement) {
+    await assertEntryCurrent(botId, toolName, call, expected);
+    await baseline.onAllow?.();
+    await assertEntryCurrent(botId, toolName, call, expected);
+    await ports.allowList!.used(botId, expected.matchedRuleId!);
+    await assertEntryCurrent(botId, toolName, call, expected);
+    const executionId = call.executionId!;
+    entryExecutions.set(executionId, { requirements: expected, owner: structuredClone(call.owner) });
+    call.signal?.addEventListener("abort", () => entryExecutions.delete(executionId), { once: true });
   }
 
   /**
@@ -374,7 +415,11 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
     };
   }
 
-  return {
+  const assembly: BotToolAssembly = {
+    async approvalEvidence(botId, toolName, call) {
+      const decision = await assembly.checkPolicy(botId, toolName, { ...call, skipPlanCoverage: true, skipAllowList: true, approvalProbe: true });
+      return decision.allowed && decision.approval && !decision.approval.preapproved ? decision.approval : undefined;
+    },
     async currentTools(botId, turn) {
       const admission = await ports.admit(botId);
       try {
@@ -408,7 +453,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
     approvalRequirements,
 
     checkPolicy: async function checkPolicy(botId, toolName, original): Promise<BotPolicyDecision> {
-      if (original?.executionId) entryExecutions.delete(original.executionId);
+      if (original?.executionId && !original.approvalProbe) entryExecutions.delete(original.executionId);
       let call: BotToolCallCheck | undefined;
       try { call = original === undefined ? undefined : snapshot(original); } catch { return { allowed: false, reason: "This action's authorization could not be read." }; }
       let admission: BotAdmission;
@@ -465,16 +510,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
               if (requirements?.matchedRuleId) {
                 const expected = requirements;
                 return { allowed: true, approval: { ...approval, requirements: expected, preapproved: true,
-                  onAllow: async () => {
-                    await assertEntryCurrent(botId, toolName, call, expected);
-                    await baseline.onAllow?.();
-                    await assertEntryCurrent(botId, toolName, call, expected);
-                    await ports.allowList!.used(botId, expected.matchedRuleId!);
-                    await assertEntryCurrent(botId, toolName, call, expected);
-                    const executionId = call.executionId!;
-                    entryExecutions.set(executionId, { requirements: expected, owner: structuredClone(call.owner) });
-                    call.signal?.addEventListener("abort", () => entryExecutions.delete(executionId), { once: true });
-                  } } };
+                  onAllow: () => allowEntry(botId, toolName, call, expected, baseline) } };
               }
               if (!requirements) return checkPolicy(botId, toolName, { ...call, skipPlanCoverage: true, skipAllowList: true });
               let offer: { count: number } | undefined;
@@ -483,13 +519,14 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
               const fresh = await approvalRequirements(botId, toolName, call);
               if (!fresh || fresh.authorizationFingerprint !== requirements.authorizationFingerprint)
                 return checkPolicy(botId, toolName, { ...call, skipPlanCoverage: true, skipAllowList: true });
-              return { allowed: true, approval: { ...approval,
-                remember: { ...described, ...(offer ? { offer } : {}) }, requirements } };
+              return { allowed: true, approval: await ordinaryApproval(botId, toolName, call, original!, admission, facts, policy,
+                { ...approval, remember: { ...described, ...(offer ? { offer } : {}) }, requirements }) };
             }
           }
           if (baseline === undefined && rule && unattended) return { allowed: false, reason: ruleAskUnattendedBlock(label) };
           const described = call.skipAllowList && baseline && !rule ? botApprovalTargetOf(toolName, action) : undefined;
-          return { allowed: true, approval: described ? { ...approval, remember: described } : approval };
+          return { allowed: true, approval: await ordinaryApproval(botId, toolName, call, original!, admission, facts, policy,
+            described ? { ...approval, remember: described } : approval) };
         }
         if (!rule || !ruleRef) return { allowed: false, reason: RULES_UNREADABLE };
         if (unattended || turns.some(turn => turn.botMessage)) return { allowed: false, reason: ruleUnattendedBlock(label) };
@@ -524,4 +561,5 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       return offered.get(botId)?.skillSnapshot;
     },
   };
+  return assembly;
 }

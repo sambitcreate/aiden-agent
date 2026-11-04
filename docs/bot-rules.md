@@ -26,6 +26,10 @@ implementation notes are in `.memory/bot-rules.md`.
 - A rule that asks shows an approval card for that call unless an approved
   plan covers it and every matching Ask first rule. Remembered approval
   scopes never answer it.
+  Each answer belongs to the call and requirements shown. If access, rules or
+  the page binding changes before execution, Aiden checks again and may ask
+  with a fresh card. Stopping a waiting turn withdraws its card without
+  recording a decline.
 - A rule that hands off shows a hand-off card ("Your turn: …") with Done and
   Skip; the Bot waits for the answer and never does the step itself.
 - On a routine or Telegram turn nobody is there to answer, so a step a rule

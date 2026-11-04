@@ -2137,3 +2137,89 @@ test("allow list: an unavailable browser capability refuses before probing the p
   assert.equal(probes, 0);
   assert.deepEqual(f.book.calls, []);
 });
+
+test("approval evidence: every rule-made ask binds the complete rules without consulting D or reserving C", async () => {
+  let rules: BotRule[] = [{ id: "custom.send", text: "send email", behavior: "ask", locked: false }];
+  const f = allowFixture(allowBook(), { rules: () => rules });
+  const probe = () => f.deps.checkPolicy("bot-1", SEND_EMAIL_TOOL, { ...f.check, approvalProbe: true, skipPlanCoverage: true, skipAllowList: true });
+  const first = await probe();
+  assert.ok(first.allowed && first.approval?.rule && first.approval.evidence);
+  if (!first.allowed || !first.approval?.evidence) return;
+  const fingerprint = first.approval.evidence.authorizationFingerprint;
+  assert.equal(first.approval.requirements, undefined);
+  assert.deepEqual(f.book.calls, []);
+  const stable = await probe();
+  assert.ok(stable.allowed && stable.approval?.evidence?.authorizationFingerprint === fingerprint);
+  rules = [{ ...rules[0]!, text: "please send email" }];
+  const edited = await probe();
+  assert.ok(edited.allowed && edited.approval?.evidence?.authorizationFingerprint !== fingerprint);
+  assert.deepEqual(f.book.calls, []);
+  assert.deepEqual(f.book.uses, []);
+});
+
+test("approval evidence: repeated ordinary probes at a real exhausted C cap have no coverage/use/binding effects", async () => {
+  const p = await approvedRuntimePlan([planConnector(1)]);
+  let covers = 0, binds = 0;
+  const book = allowBook(); book.remove();
+  const f = allowFixture(book, { plans: { cover: (...args) => { covers++; return p.plans.cover(...args); }, admit: p.plans.admit },
+    approvalFor: async () => ({ approval: { summary: "Send email", onAllow() { binds++; } }, action: { surface: "mcp", modelName: SEND_EMAIL_TOOL,
+      serverId: MAIL_SERVER.id, remoteName: "send_email", summary: "Send email", destructive: "additive" } }) });
+  try {
+    const first = await f.deps.checkPolicy(PLAN_BOT, SEND_EMAIL_TOOL, f.check);
+    assert.ok(first.allowed && first.approval?.planPermit);
+    const fallback = await f.deps.checkPolicy(PLAN_BOT, SEND_EMAIL_TOOL, { ...f.check, executionId: "other" });
+    assert.ok(fallback.allowed && fallback.approval?.evidence);
+    for (let index = 0; index < 3; index++) {
+      const proof = await f.deps.checkPolicy(PLAN_BOT, SEND_EMAIL_TOOL, { ...f.check, executionId: "other", approvalProbe: true, skipPlanCoverage: true, skipAllowList: true });
+      assert.ok(proof.allowed && proof.approval?.evidence?.authorizationFingerprint === (fallback.allowed ? fallback.approval?.evidence?.authorizationFingerprint : undefined));
+    }
+    assert.equal(covers, 2); assert.equal(binds, 0); assert.deepEqual(book.uses, []);
+    assert.equal((await p.plans.current(PLAN_BOT))?.items[0]?.used, 1);
+  } finally { await p.plans.endRuns(PLAN_BOT, "finished"); }
+});
+
+for (const drift of ["none", "rules", "authority", "page", "ingress", "revoked", "unreadable"] as const) {
+  test(`approval release: old baseline card without an offer validates fresh ${drift} proof`, async () => {
+    let rules: BotRule[] = [], page = "page-1", ingressChanged = false;
+    const book = allowBook(); book.remove(); book.port.offer = async () => undefined;
+    const f = allowFixture(book, { toolName: "browser_click", rules: () => rules, approvalFor: async (_name, call) => {
+      if (ingressChanged) call.requestIds = ["other-owner-input"];
+      return {
+      approval: { summary: "Save" }, action: { surface: "browser", tool: "browser_click", url: "https://docs.example/edit", field: { accessibleName: "Save" } },
+      browserTarget: { workspaceId: "b", tabId: "t", url: "https://docs.example/edit", documentRevision: page, controlRevision: 0 },
+    }; } });
+    const bridge = createBotApprovals({ publish() {} });
+    const settlements: Parameters<NonNullable<BotExtensionDeps["settleApproval"]>>[0][] = [];
+    f.deps.requestApproval = async input => { f.deps.approvals.push(input); return bridge.request(input); };
+    f.deps.settleApproval = async input => { settlements.push(input); return {}; };
+    const faux = createFauxModels([fauxAssistantMessage([fauxToolCall(f.tool.name, { text: "Save" })], { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
+    const { harness, root } = await memoryHarness(f.deps, faux);
+    try {
+      const submission = await root.submit({ type: "input", content: "go", requestId: "person" }, ctx);
+      await waitFor(() => bridge.pending().length === 1);
+      const original = bridge.pending()[0]!;
+      assert.equal(original.always, undefined); assert.ok(original.allowList?.target);
+      book.port.match = async () => ({ id: "new-rule" }); book.setRevision("new-consent");
+      if (drift === "rules") rules = [{ id: "custom.save", text: "save", behavior: "ask", locked: false }];
+      if (drift === "authority") f.state.revoked = true;
+      if (drift === "page") page = "page-2";
+      if (drift === "ingress") ingressChanged = true;
+      if (drift === "revoked") { book.port.match = async () => undefined; book.setRevision("removed-consent"); }
+      if (drift === "unreadable") book.port.consentRevision = async () => { throw new Error("unreadable receipts"); };
+      const released = await bridge.releaseFromAllowList(original.waitId, { target: { kind: "site", host: "docs.example", action: "click" }, ruleId: "new-rule", consentRevision: "new-consent" });
+      assert.equal(released, drift === "none");
+      if (drift !== "none") {
+        assert.equal(bridge.pending()[0]?.waitId, original.waitId);
+        bridge.decide(original.waitId, "deny");
+      }
+      await submission.wait(ctx);
+      assert.equal(f.tool.executions.length, drift === "none" ? 1 : 0);
+      if (drift === "none") {
+        assert.equal(settlements.length, 1); assert.equal(settlements[0]!.decision.source, "allow_list");
+        assert.notEqual(settlements[0]!.decision.id, original.waitId);
+        assert.notEqual(settlements[0]!.decision.authorizationFingerprint, original.authorizationFingerprint);
+        assert.deepEqual(book.uses, [["bot-1", "new-rule"]]);
+      } else assert.deepEqual(book.uses, []);
+    } finally { await harness.close(ctx); }
+  });
+}

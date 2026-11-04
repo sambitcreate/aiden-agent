@@ -291,7 +291,7 @@ The precedence is authority/ingress, rules, existing routine go-ahead, plan cove
     botId: string;
     remember: NonNullable<BotApprovalRequirement["remember"]>;
     decision: BotApprovalDecision;
-  }): Promise<{ hint?: string }>;
+  }, context?: { validatePublication?(): Promise<void> }): Promise<{ hint?: string; publication?: BotAllowListRelease }>;
 
   // bot-approvals.ts
   // BotApprovalPrompt gains: always?: { key: string; count: number }
@@ -304,16 +304,17 @@ The precedence is authority/ingress, rules, existing routine go-ahead, plan cove
   - `request` first checks a durable settled decision for this attempt id AND authorization fingerprint. Replay returns that exact answer/provenance without reopening a card only while the fingerprint still matches, while current authority, rules, deadlines and page binding are still rechecked before an effect. Otherwise pass `scopes: ["once", "always"]` to the coordinator only when `request.always` is set. Read its offered scope on allow and return `{id: waitId, authorizationFingerprint, answer, source}`. Wire the optional persisted-decision lookup through an injected port to `BotApprovalTallies.decision`; with no port the CLI keeps ordinary once-only approvals. The coordinator still drops an unoffered scope. Provenance is supplied internally, never by renderer or Remote request bodies.
   - `beforeTool` sets `always: {key: botApprovalRuleKey(remember.target), count: remember.offer.count}` when there is an offer.
   - `deny` blocks as today. `allow` and `allow_always` both run `onAllow`.
+  - Before publication-capable Always settlement, compare fresh exact evidence for the captured attempt. Supply a separate main-only revocable validatePublication guard. Task5 must await it inside the atomic first-publication path after exact operation replay lookup and before mutation, alongside the captured consent-generation compare. Replays of committed publications acknowledge history without calling the stale guard. Never serialize or retain the callback; settlement revokes it. Historical Once/deny receipts remain the actual person event even when later requirements changed.
   - After any answer with `remember`, key the settlement cache by BOTH `decision.id` and `decision.authorizationFingerprint`, for example `aiden.approval.settled:<id>:<fingerprint>`. A cache record also contains those identities and is accepted only for the current attempt. An old task-level cache for a different attempt cannot suppress settlement. When this attempt's cache is absent, call idempotent `settleApproval` with its durable decision and cache that exact recorded result. The store commits decision id + provenance + tally/hint effects atomically; the task memo is only a replay cache, not the exactly-once guarantee. A crash between store and memo reuses the saved result. Fresh current-policy/page checks precede execution even when the human answer was already settled.
   - `afterTool` appends `{type:"text", text: "\n\n" + hint}` to `result.output` only from the executed attempt's matched decision-id/fingerprint cache, when the result is not `isError` and output is an array. Never reuse a previous attempt's hint; retain the executed attempt identity in host-owned execution context.
 
-- [ ] **Step 1: Write the failing bridge tests** in `bot-approvals.test.ts`. Use `createBotApprovals({publish})` and capture prompts:
+- [x] **Step 1: Write the failing bridge tests** in `bot-approvals.test.ts`. Use `createBotApprovals({publish})` and capture prompts:
   - `Always is honored only when the card offered it`:
     - with `always: {key:"k", count:3}`, `decide(waitId, "allow", "always")` resolves `"allow_always"`, and the published prompt has `always.count === 3`;
     - without `always`, the same decide resolves `"allow"`.
   - `a deny with a scope is still a deny`.
   - `pending lists the offer` until the answer, then nothing.
-- [ ] **Step 2: Write the failing extension tests** in `bot-extension.test.ts`. Use the existing scenario helpers, and a `checkPolicy` returning an approval with `remember: {target: CAL_TARGET, title: "Create event", offer: {count: 3}}`:
+- [x] **Step 2: Write the failing extension tests** in `bot-extension.test.ts`. Use the existing scenario helpers, and a `checkPolicy` returning an approval with `remember: {target: CAL_TARGET, title: "Create event", offer: {count: 3}}`:
   - `an offered card asks with always and settles allow_always without a hint`: the recorded request has `always.count === 3`. `settleApproval` is called once with `answer "allow_always"`, the tool runs, and the result text has no `Aiden note`.
   - `Allow once on an offered card appends the hint to the tool's result`: `settleApproval` returns `{hint: "Aiden note: test"}`. The committed tool result ends with `Aiden note: test`. A tool that returns `isError` gets no hint.
   - `Deny settles a denial and blocks`: one settle with `"deny"`, and the result is "The person declined this action.".
@@ -322,10 +323,10 @@ The precedence is authority/ingress, rules, existing routine go-ahead, plan cove
   - Allow a baseline call, crash before execution, add an Ask first rule, then Resume: the new fingerprint gets a new card/decision identity, and the saved baseline answer cannot satisfy it. Repeat after editing a custom rule and after a relevant revocation-generation change.
   - Allow once, persist its settlement cache, crash before execution, change binding requirements while keeping an eligible baseline approval, Resume and choose Always. The new id/fingerprint must settle and publish once despite the old cache; retransmissions do not recount and `afterTool` never emits the old attempt's hint.
   - `a re-run hook settles once`: run `beforeTool` twice for the same call through the scenario's resume path, like the existing share_image resume test, answering allow both times. Expect `settleApproval` called once.
-- [ ] **Step 3: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-approvals.test.ts main/services/bot-runtime/bot-extension.test.ts`. Expected: FAIL.
-- [ ] **Step 4: Implement** the bridge and the extension changes above. Read `decision.answer` explicitly. The deny check becomes `decision.answer === "deny"`; callers and CLI adapters adopt the wrapper while preserving ordinary allowance behavior.
-- [ ] **Step 5: Run the tests.** The same files, then `npm run test:bot-runtime` and `npm run test:cli`. Expected: PASS.
-- [ ] **Step 6: Register and commit.** Add `bot-approvals.test.ts` to `test:bot-allowed` and the registry. Commit: "Offer Always allow on a repeated Bot approval".
+- [x] **Step 3: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-approvals.test.ts main/services/bot-runtime/bot-extension.test.ts`. Expected: FAIL.
+- [x] **Step 4: Implement** the bridge and the extension changes above. Read `decision.answer` explicitly. The deny check becomes `decision.answer === "deny"`; callers and CLI adapters adopt the wrapper while preserving ordinary allowance behavior.
+- [x] **Step 5: Run the tests.** The same files, then `npm run test:bot-runtime` and `npm run test:cli`. Expected: PASS.
+- [x] **Step 6: Register and commit.** Add `bot-approvals.test.ts` to `test:bot-allowed` and the registry. Commit: "Offer Always allow on a repeated Bot approval".
 
 ### Task 5: The allow-list service, wiring, folders and delete
 
@@ -631,3 +632,12 @@ Exact connection/server/tool and normalized site/action classes now feed D only 
 The required target-specific consentRevision port and private read-only approvalRequirements probe are available for Task4. Usage and display changes do not change the authorization identity; Remove and binding/rule changes do. The probe never reserves a plan, records a use, offers consent or invokes a binding callback. Main singleton wiring remains deferred to Task5.
 
 Worker focused target/assembly123pass, runtime441pass, rules62pass, wholetypes/scopedlint/diff0. Initial RED95pass16fail includes missing module/API; two later genuine drift REDs caught stale Ask/hand-off fallback, and a separate RED caught probing a browser page before initial authority refusal. Logs: /tmp/bot-allowed-d-task3-{red,drift-red,probe-order-red}.log and /tmp/bot-allowed-d-task3-{focused,runtime,rules,types,lint,diff}-final.log. Parent registered the target suite in test:bot-allowed and the rules CI lane: official51pass and registry15pass at /tmp/bot-allowed-d-task3-parent-{allowed,registry}.log. Task4 follows this commit; Tasks5–8 remain held. No fullD/native/Cua/live/package/CI acceptance.
+
+
+### Task 4 complete locally, 2026-11-04
+
+Structured decisions and attempt-specific authorization fingerprints now cover ordinary and rule-made approvals. Durable execution IDs remain separate from provider call IDs; changed authority, full rules, page binding or target consent produces a fresh host attempt. Exact-pair receipt lookup and settlement caches survive restart without recounting or mixing hints. The coordinator honors Always only when offered; expiry and automatic sibling provenance remain main-owned. Validated sibling release uses a fresh automatic pair, including older eligible cards without an offer. Public prompts copy safe fields explicitly, including only offer key/count. Hint output comes only from the exact executed settlement and never from failed tools. CLI adapters retain once-only behavior with no allow-list port.
+
+Parent inspection found stale Always could reach publication before the post-answer check. Real-book REDs reproduced page and new-Ask-rule drift. The follow-up validates before settlement and exposes a revocable live publication guard for Task5's atomic first grant. Original target/title/requirements/consent remain immutable private data; callbacks never enter a cache or receipt. Committed publication proofs still permit their one-time call after the intentional generation change, without surviving Remove.
+
+Final focused275pass and runtime474pass; rules62, messaging89, access84 and plans144 passed in the preceding validation. Rebuilt CLI183pass with3 existing skips; whole-project/CLI types, scoped lint and diff passed. Parent registered bridge tests: test:bot-allowed64pass and registry15pass results are in /tmp/bot-allowed-d-task4-parent-{allowed,registry}.log; current root types in /tmp/bot-allowed-d-task4-parent-types.log passed. Original actual REDs and setup-only failures are separated in the Task4 papercut. Publication correction evidence is /tmp/bot-allowed-d-task4-publication-{red,focused,runtime,types-final,cli-types,lint}.log. Task5 follows this commit; Tasks6–8 remain held. No fullD/native/Cua/live/package/hosted-CI acceptance.

@@ -467,11 +467,10 @@ const extension: BotExtensionDeps = {
   turnAllows: withBotMemoryIngress(botIngressAllowsTool),
   afterReply: (botId) => memoryReview.afterReply(botId),
   beforeCompact: compactionSteering,
-  requestApproval: botApprovals.request,
-  requestApprovalOutcome: async (request) => {
+  requestApproval: async (request) => {
     const window = await botMessages().announceWaiting(request.botId, request.owner?.inputs.map(i => i.requestId) ?? [], request.summary, request.waitId);
-    if (window?.expired) return { decision: "deny", decisionSource: "expiry" };
-    return botApprovals.requestOutcome(request);
+    if (window?.expired) return { id: request.waitId, authorizationFingerprint: request.authorizationFingerprint, answer: "deny", source: "expiry" };
+    return botApprovals.request(request);
   },
   // A rule that hands a call to the person opens a card on the same bridge as `hand_off`.
   requestHandoff: (request) => botHandoffs.request(ruleHandoffRequest(request, ruleHandoffTarget(request.toolName))),

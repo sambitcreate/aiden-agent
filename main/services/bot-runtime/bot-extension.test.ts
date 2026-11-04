@@ -24,6 +24,7 @@ import { createBotApprovals, publicBotApprovalPrompt } from "./bot-approvals.js"
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
 import { createBotMemoryService, type BotMemoryRuntime } from "../bot-memory/service.js";
 import { createBotMemoryStore } from "../bot-memory/store.js";
+import { botSessionDirectory } from "../bot-routine-notes.js";
 import { createBotPauseStore } from "../bot-pause-store.js";
 import { botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
 import { botTranscriptRows } from "../../../renderer/main/bots/bot-transcript-rows.js";
@@ -37,7 +38,7 @@ import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
 import { projectBotTranscript } from "./live-projection.js";
 import { inputIdentityDeps, type PlanReplayArgs } from "./test-support/assembly-fixtures.js";
 import { spawnHarnessChild } from "./test-support/child.js";
-import { SCENARIO_RULE_HANDOFF, SCENARIO_SCRIPT_TOOL } from "./test-support/extension-scenario.js";
+import { approvalReplayDeps, SCENARIO_RULE_HANDOFF, SCENARIO_SCRIPT_TOOL } from "./test-support/extension-scenario.js";
 import { countingTool, recordingDeps } from "./test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor, type FauxModels } from "./test-support/faux.js";
 
@@ -766,7 +767,7 @@ test("(j2) an answer stored before a crash is applied on Resume without asking a
   }
 });
 
-test("(j3) a wait first opened as a hand-off that the rules turned into an approval asks today's summary under the same waitId", async () => {
+test("(j3) a wait first opened as a hand-off that the rules turned into an approval asks today's summary under a fresh waitId", async () => {
   const profile = tempProfile();
   const child = spawnHarnessChild("scenario", [
     scenarioFile,
@@ -786,10 +787,9 @@ test("(j3) a wait first opened as a hand-off that the rules turned into an appro
     const [placed] = (await harness.inspect(ctx)).submissions;
     harness.resume();
     assert.equal((await (await harness.submission(placed!.id, ctx))!.wait(ctx)).status, "done");
-    assert.deepEqual(
-      deps.approvals.map((request) => [request.waitId, request.summary]),
-      [[childWaitId, "Rule · Make a purchase or booking — Click Buy"]],
-    );
+    assert.equal(deps.approvals.length, 1);
+    assert.notEqual(deps.approvals[0]!.waitId, childWaitId);
+    assert.equal(deps.approvals[0]!.summary, "Rule · Make a purchase or booking — Click Buy");
     assert.equal(gated.executions.length, 1);
   } finally {
     await host.shutdown();
@@ -958,7 +958,7 @@ test('several approval cards retain actual run ownership when the first input is
    assert.equal(prompt.owner?.inputs[0]?.requestId,'person-first');
    assert.equal(prompt.owner?.inputs[1]?.botMessage?.deliveryId,'00112233-4455-4677-8899-aabbccddeeff');
   }
-  now=101;for(const prompt of approvals.pending())approvals.decide(prompt.waitId,'deny','expiry');
+  now=101;for(const prompt of approvals.pending())approvals.decide(prompt.waitId,'deny',undefined,'expiry');
   await Promise.all([person.wait(ctx),bot.wait(ctx)]);
   assert.deepEqual(sources,['expiry','expiry']);assert.equal(change.executions.length,0);
   assert.equal((await root.commit(tx=>tx.submissionByRequest(root.id,'person-first'),ctx))?.status,'done');
@@ -1010,9 +1010,9 @@ for (const source of ["person", "expiry", "allow_list"] as const) {
       await waitFor(() => approvals.pending().length === 1);
       const prompt = approvals.pending()[0]!;
       const decision = source === "allow_list" ? "allow" : "deny";
-      assert.equal(approvals.decide(prompt.waitId, decision, source), true);
+      assert.equal(approvals.decide(prompt.waitId, decision, undefined, source), true);
       assert.equal(
-        approvals.decide(prompt.waitId, "allow", "person"),
+        approvals.decide(prompt.waitId, "allow", undefined, "person"),
         false,
         "a late responder cannot replace the source",
       );
@@ -1036,7 +1036,7 @@ test("approval cancellation rejects without a decision, and public/request field
   const controller = new AbortController();
   const request = {
     botId: "bot-1",
-    waitId: "cancelled",
+    waitId: "cancelled", authorizationFingerprint: "private-attempt-fingerprint",
     toolCallId: "call-1",
     toolName: "change",
     summary: "Change",
@@ -1049,7 +1049,7 @@ test("approval cancellation rejects without a decision, and public/request field
   controller.abort(new Error("The person stopped the turn"));
   await rejected;
   assert.deepEqual(approvals.pending(), []);
-  assert.equal(approvals.decide("cancelled", "deny", "expiry"), false);
+  assert.equal(approvals.decide("cancelled", "deny", undefined, "expiry"), false);
 
   const answer = approvals.requestOutcome({ ...request, waitId: "person", signal: undefined });
   const hostPrompt = approvals.pending()[0]!;
@@ -1058,14 +1058,14 @@ test("approval cancellation rejects without a decision, and public/request field
   assert.equal("decisionSource" in publicPrompt, false);
   Object.assign(publicPrompt, { decisionSource: "expiry", owner: { runId: "forged", inputs: [] } });
   approvals.decide("person", "deny");
-  assert.deepEqual(await answer, { decision: "deny", decisionSource: "person" });
+  assert.deepEqual(await answer, { id: "person", authorizationFingerprint: "private-attempt-fingerprint", answer: "deny", source: "person" });
   assert.equal(hostPrompt.owner?.runId, "host-run");
   assert.equal(hostPrompt.decisionSource, "person");
   assert.equal("decisionSource" in publicBotApprovalPrompt(hostPrompt), false, "even a settled host source stays private");
 
   const remembered = approvals.requestOutcome({ ...request, waitId: "remembered", signal: undefined });
-  approvals.decide("remembered", "allow", "allow_list");
-  assert.deepEqual(await remembered, { decision: "allow", decisionSource: "allow_list" });
+  approvals.decide("remembered", "allow", undefined, "allow_list");
+  assert.deepEqual(await remembered, { id: "remembered", authorizationFingerprint: "private-attempt-fingerprint", answer: "allow", source: "allow_list" });
 });
 
 for (const missingAt of ["request", "tool", "person"] as const) {
@@ -1301,3 +1301,370 @@ test("unnamed input identity survives SIGKILL and a fresh session DB mints a dif
     assert.notDeepEqual(fresh[0], original);
   } finally { await next.harness.close(ctx); }
 });
+
+const D_TARGET = { kind: "connection", serverId: "calendar", tool: "create_event" } as const;
+for (const answer of ["allow", "allow_always", "deny"] as const) {
+  test(`D: an offered ${answer} settles its exact attempt and only Allow once appends its hint`, async () => {
+    const tool = countingTool("calendar__create_event");
+    const deps = recordingDeps({ tools: [{ tool, replay: "unsafe" }], policy: () => ({ allowed: true,
+      approval: { summary: "Create event", remember: { target: D_TARGET, title: "Create event", offer: { count: 3 } } } }) });
+    const settled: unknown[] = [];
+    deps.requestApproval = async request => {
+      deps.approvals.push(request);
+      return { id: request.waitId, authorizationFingerprint: request.authorizationFingerprint, answer, source: "person" };
+    };
+    const extended = { ...deps, settleApproval: async (input: unknown) => { settled.push(input); return answer === "allow" ? { hint: "Aiden note: test" } : {}; } };
+    const faux = createFauxModels([fauxAssistantMessage([fauxToolCall(tool.name, { text: "event" })], { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
+    const { harness, root } = await memoryHarness(extended, faux);
+    try {
+      await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+      assert.equal(deps.approvals[0]?.always?.count, 3);
+      assert.equal(settled.length, 1);
+      assert.equal(tool.executions.length, answer === "deny" ? 0 : 1);
+      const text = resultText((await toolResults(root))[0]);
+      if (answer === "deny") assert.match(text, /person declined/u);
+      else assert.equal(text.includes("Aiden note: test"), answer === "allow");
+    } finally { await harness.close(ctx); }
+  });
+}
+
+
+for (const gap of ["receipt", "binding"] as const) {
+  test(`D: SIGKILL after ${gap} reuses the durable decision, one tally and one hint entitlement`, async () => {
+    const profile = tempProfile(), botId = `replay-${gap}`;
+    const args = { profileDir: profile, botId, kind: `approval-${gap}` as const };
+    const child = spawnHarnessChild("scenario", [scenarioFile, JSON.stringify(args)]);
+    const original = JSON.parse(await child.waitFor(gap === "receipt" ? "RECEIPT" : "BINDING"));
+    await child.kill();
+    const f = await approvalReplayDeps(args);
+    assert.deepEqual(await f.tallies.decision(botId, original.id, original.authorizationFingerprint), original);
+    const { host, harness, conversation } = await reopenAfterKill(profile, botId, f.deps, createFauxModels([fauxAssistantMessage("done")]));
+    try {
+      const [placed] = (await harness.inspect(ctx)).submissions; harness.resume();
+      assert.equal((await (await harness.submission(placed!.id, ctx))!.wait(ctx)).status, "done");
+      assert.equal(f.deps.approvals.length, 1);
+      assert.equal(f.deps.approvals[0]!.waitId, original.id);
+      assert.equal(f.deps.approvals[0]!.authorizationFingerprint, original.authorizationFingerprint);
+      assert.equal(f.settlements.length, gap === "receipt" ? 1 : 0, "a saved task cache suppresses only its own exact receipt");
+      assert.equal(f.tool.executions.length, 1);
+      assert.equal((resultText((await toolResults(conversation))[0]).match(/Aiden note:/gu) ?? []).length, 1);
+      const ledger = JSON.parse(readFileSync(path.join(botSessionDirectory(profile, botId), "approval-tallies.json"), "utf8"));
+      assert.equal(ledger.decisions.length, 4);
+      assert.equal(ledger.classes[0].allowed.length, 4);
+      assert.deepEqual(await f.tallies.nudge(botId, f.target), { count: 4 }, "one settled attempt adds exactly one approval");
+      assert.deepEqual(await f.tallies.record(botId, f.target, { ...original, offered: true }), { counted: true, hintCount: 4 });
+      assert.equal(ledger.decisions.filter((r: { result: { hintCount?: number } }) => r.result.hintCount !== undefined).length, 1);
+      assert.equal((await f.book.listBot(botId)).length, 0);
+    } finally { await host.shutdown(); }
+  });
+}
+
+for (const drift of ["rule-added", "rule-edited", "consent-revoked"] as const) {
+  test(`D: ${drift} after a cached Allow creates a fresh attempt on Resume`, async () => {
+    const profile = tempProfile(), botId = `drift-${drift}`;
+    const args = { profileDir: profile, botId, kind: "approval-binding" as const, ...(drift === "rule-edited" ? { rule: "first" as const } : {}) };
+    const child = spawnHarnessChild("scenario", [scenarioFile, JSON.stringify(args)]);
+    const original = JSON.parse(await child.waitFor("BINDING")); await child.kill();
+    const f = await approvalReplayDeps(args, { rule: drift === "rule-added" ? "first" : drift === "rule-edited" ? "edited" : undefined });
+    if (drift === "consent-revoked") {
+      const publication = await f.book.grantBot(botId, f.target, "Save", "another-person");
+      assert.equal(publication.status, "published");
+      if (publication.status === "published") await f.book.revokeBot(botId, publication.rule.id);
+    }
+    const { host, harness, conversation } = await reopenAfterKill(profile, botId, f.deps, createFauxModels([fauxAssistantMessage("done")]));
+    try {
+      const [placed] = (await harness.inspect(ctx)).submissions; harness.resume();
+      await (await harness.submission(placed!.id, ctx))!.wait(ctx);
+      assert.equal(f.deps.approvals.length, 1);
+      assert.notEqual(f.deps.approvals[0]!.waitId, original.id);
+      assert.notEqual(f.deps.approvals[0]!.authorizationFingerprint, original.authorizationFingerprint);
+      assert.equal(f.tool.executions.length, 1);
+      if (drift !== "consent-revoked") {
+        assert.match(f.deps.approvals[0]!.summary, /^Rule/u);
+        assert.equal(f.settlements.length, 0, "rule-made asks never settle D history");
+      }
+      assert.doesNotMatch(resultText((await toolResults(conversation))[0]), /Aiden note/u);
+    } finally { await host.shutdown(); }
+  });
+}
+
+test("D: changed page after a cached Allow gets a new Always publication and no old hint", async () => {
+  const profile = tempProfile(), botId = "binding-new-always";
+  const args = { profileDir: profile, botId, kind: "approval-binding" as const };
+  const child = spawnHarnessChild("scenario", [scenarioFile, JSON.stringify(args)]);
+  const original = JSON.parse(await child.waitFor("BINDING")); await child.kill();
+  const f = await approvalReplayDeps(args, { page: "page-2", always: true });
+  const before = await f.book.botConsentRevision(botId, f.target);
+  const { host, harness, conversation } = await reopenAfterKill(profile, botId, f.deps, createFauxModels([fauxAssistantMessage("done")]));
+  try {
+    const [placed] = (await harness.inspect(ctx)).submissions; harness.resume();
+    await (await harness.submission(placed!.id, ctx))!.wait(ctx);
+    assert.equal(f.settlements.length, 1);
+    const input = f.settlements[0]!;
+    assert.notEqual(input.decision.id, original.id);
+    assert.notEqual(input.decision.authorizationFingerprint, original.authorizationFingerprint);
+    assert.equal(input.decision.answer, "allow_always");
+    assert.equal(input.requirements?.consentRevision, before, "publication receives the original generation");
+    assert.equal(input.remember.title, "docs.example");
+    assert.equal(f.tool.executions.length, 1);
+    assert.equal((await f.book.listBot(botId)).length, 1);
+    assert.doesNotMatch(resultText((await toolResults(conversation))[0]), /Aiden note/u);
+    const replay = await f.book.grantBot(botId, f.target, input.remember.title, input.decision.id);
+    assert.equal(replay.status, "published");
+    assert.equal((await f.book.listBot(botId)).length, 1);
+    await f.tallies.record(botId, f.target, { ...input.decision, offered: true });
+    assert.equal(await f.tallies.nudge(botId, f.target), undefined);
+  } finally { await host.shutdown(); }
+});
+
+test("D: a saved allowance still runs actual page binding and cannot emit a hint after failure", async () => {
+  const profile = tempProfile(), botId = "binding-failed";
+  const args = { profileDir: profile, botId, kind: "approval-receipt" as const };
+  const child = spawnHarnessChild("scenario", [scenarioFile, JSON.stringify(args)]);
+  await child.waitFor("RECEIPT"); await child.kill();
+  const f = await approvalReplayDeps(args, { bindingError: true });
+  const { host, harness, conversation } = await reopenAfterKill(profile, botId, f.deps, createFauxModels([fauxAssistantMessage("done")]));
+  try {
+    const [placed] = (await harness.inspect(ctx)).submissions; harness.resume();
+    await (await harness.submission(placed!.id, ctx))!.wait(ctx);
+    assert.equal(f.tool.executions.length, 0);
+    const result = (await toolResults(conversation))[0];
+    assert.equal(result?.isError, true); assert.match(resultText(result), /page changed/u);
+    assert.doesNotMatch(resultText(result), /Aiden note/u);
+  } finally { await host.shutdown(); }
+});
+
+test("D: approvals without remember never settle, and error outputs never receive a hint", async () => {
+  for (const remember of [false, true]) {
+    const tool = { ...countingTool("gated"), execute: async () => ({ isError: true, content: [{ type: "text" as const, text: "Tool failed" }], details: {} }) };
+    const deps = recordingDeps({ tools: [{ tool, replay: "unsafe" }], policy: () => ({ allowed: true, approval: { summary: "Run",
+      ...(remember ? { remember: { target: D_TARGET, title: "Create event", offer: { count: 3 } } } : {}) } }) });
+    let settles = 0;
+    deps.settleApproval = async () => { settles++; return { hint: "Aiden note: must not appear" }; };
+    const { harness, root } = await memoryHarness(deps, createFauxModels([fauxAssistantMessage([fauxToolCall(tool.name, { text: "x" })], { stopReason: "toolUse" }), fauxAssistantMessage("done")]));
+    try {
+      await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+      assert.equal(settles, remember ? 1 : 0);
+      const result = (await toolResults(root))[0]; assert.equal(result?.isError, true);
+      assert.doesNotMatch(resultText(result), /Aiden note/u);
+    } finally { await harness.close(ctx); }
+  }
+});
+
+test("D: repeated provider call IDs have distinct durable attempt identities and settlements", async () => {
+  const profile = tempProfile();
+  const f = await approvalReplayDeps({ profileDir: profile, botId: "bot-1", kind: "approval-binding" });
+  const { harness, root } = await memoryHarness(f.deps, createFauxModels([
+    fauxAssistantMessage([fauxToolCall(f.tool.name, { text: "one" }, { id: "provider-reuse" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall(f.tool.name, { text: "two" }, { id: "provider-reuse" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ]));
+  try {
+    await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+    assert.equal(f.tool.executions.length, 2); assert.equal(f.settlements.length, 2);
+    assert.equal(f.deps.approvals[0]?.always?.count, 3, "unnamed input proof works with D and no C port");
+    assert.equal(f.deps.approvals[0]?.toolCallId, f.deps.approvals[1]?.toolCallId);
+    assert.notEqual(f.settlements[0]!.decision.id, f.settlements[1]!.decision.id);
+    assert.notEqual(f.settlements[0]!.decision.authorizationFingerprint, f.settlements[1]!.decision.authorizationFingerprint);
+    const ledger = JSON.parse(readFileSync(path.join(botSessionDirectory(profile, "bot-1"), "approval-tallies.json"), "utf8"));
+    assert.equal(ledger.decisions.filter((r: { result: { hintCount?: number } }) => r.result.hintCount !== undefined).length, 1);
+  } finally { await harness.close(ctx); }
+});
+
+
+for (const removed of [false, true]) {
+  test(`D: committed Always before task memo survives restart without regrant (removed=${removed})`, async () => {
+    const profile = tempProfile(), botId = `published-${removed}`;
+    const args = { profileDir: profile, botId, kind: "approval-publication" as const };
+    const child = spawnHarnessChild("scenario", [scenarioFile, JSON.stringify(args)]);
+    const original = JSON.parse(await child.waitFor("PUBLICATION")); await child.kill();
+    const f = await approvalReplayDeps(args);
+    const entry = (await f.book.listBot(botId))[0]!; assert.ok(entry);
+    if (removed) await f.book.revokeBot(botId, entry.id);
+    const { host, harness, conversation } = await reopenAfterKill(profile, botId, f.deps, createFauxModels([fauxAssistantMessage("done")]));
+    try {
+      const [placed] = (await harness.inspect(ctx)).submissions; harness.resume();
+      await (await harness.submission(placed!.id, ctx))!.wait(ctx);
+      assert.equal(f.tool.executions.length, 1);
+      assert.equal(f.deps.approvals.length, removed ? 1 : 0);
+      assert.equal(f.settlements.length, removed ? 1 : 0);
+      if (removed) {
+        assert.notEqual(f.settlements[0]!.decision.id, original.id);
+        assert.notEqual(f.settlements[0]!.decision.authorizationFingerprint, original.authorizationFingerprint);
+        const history = await f.book.grantBot(botId, f.target, "Save", original.id);
+        assert.deepEqual(history, { status: "revoked" });
+      }
+      assert.equal((await f.book.listBot(botId)).length, removed ? 0 : 1);
+      assert.doesNotMatch(resultText((await toolResults(conversation))[0]), /Aiden note/u);
+    } finally { await host.shutdown(); }
+  });
+}
+
+test("D: Remove after own publication cannot execute under the old human fingerprint", async () => {
+  const profile = tempProfile();
+  const f = await approvalReplayDeps({ profileDir: profile, botId: "bot-1", kind: "approval-binding" });
+  let answers = 0, publications = 0;
+  const bridge = createBotApprovals({ publish(prompt) {
+    queueMicrotask(() => bridge.decide(prompt.waitId, ++answers === 1 ? "allow" : "deny", answers === 1 ? "always" : undefined));
+  } });
+  f.deps.requestApproval = async request => { f.deps.approvals.push(request); return bridge.request(request); };
+  const settle = f.deps.settleApproval!;
+  f.deps.settleApproval = async input => {
+    const result = await settle(input);
+    if (result.publication) {
+      publications++;
+      await f.book.revokeBot(input.botId, result.publication.ruleId);
+    }
+    return result;
+  };
+  const { harness, root } = await memoryHarness(f.deps, createFauxModels([
+    fauxAssistantMessage([fauxToolCall(f.tool.name, { text: "Save" })], { stopReason: "toolUse" }), fauxAssistantMessage("done"),
+  ]));
+  try {
+    await (await root.submit({ type: "input", content: "go", requestId: "person" }, ctx)).wait(ctx);
+    assert.equal(publications, 1); assert.equal(f.tool.executions.length, 0);
+    assert.equal(f.deps.approvals.length, 2); assert.equal(f.settlements.length, 2);
+    assert.notEqual(f.settlements[0]!.decision.id, f.settlements[1]!.decision.id);
+    assert.notEqual(f.settlements[0]!.decision.authorizationFingerprint, f.settlements[1]!.decision.authorizationFingerprint);
+    assert.equal(f.settlements[1]!.decision.answer, "deny");
+    assert.equal((await f.book.listBot("bot-1")).length, 0);
+    assert.doesNotMatch(resultText((await toolResults(root))[0]), /Aiden note/u);
+  } finally { await harness.close(ctx); }
+});
+
+for (const drift of ["page", "rule"] as const) {
+  test(`D publication: ${drift} drift before an Always answer cannot publish the stale pair`, async () => {
+    const profile = tempProfile();
+    const options: NonNullable<Parameters<typeof approvalReplayDeps>[1]> = { page: "page-1" };
+    const f = await approvalReplayDeps({ profileDir: profile, botId: "bot-1", kind: "approval-binding" }, options);
+    const bridge = createBotApprovals({ publish() {} });
+    f.deps.requestApproval = async request => { f.deps.approvals.push(request); return bridge.request(request); };
+    let publications = 0;
+    const grant = f.book.grantBot.bind(f.book);
+    f.book.grantBot = async (...args) => { publications++; return grant(...args); };
+    const { harness, root } = await memoryHarness(f.deps, createFauxModels([
+      fauxAssistantMessage([fauxToolCall(f.tool.name, { text: "Save" })], { stopReason: "toolUse" }), fauxAssistantMessage("done"),
+    ]));
+    try {
+      const submission = await root.submit({ type: "input", content: "go", requestId: "person" }, ctx);
+      await waitFor(() => bridge.pending().length === 1);
+      const original = bridge.pending()[0]!;
+      assert.equal(original.always?.count, 3);
+      if (drift === "page") options.page = "page-2";
+      else options.rule = "first";
+      bridge.decide(original.waitId, "allow", "always");
+      await waitFor(async () => bridge.pending().length > 0 || (await toolResults(root)).length > 0);
+      const replacement = bridge.pending()[0];
+      if (replacement) bridge.decide(replacement.waitId, "deny");
+      await submission.wait(ctx);
+      assert.equal(publications, 0, "the real consent book must never receive the stale Always publication");
+      assert.equal((await f.book.listBot("bot-1")).length, 0);
+      assert.equal(f.tool.executions.length, 0);
+      assert.ok(replacement, "fresh requirements get their own card");
+      assert.notEqual(replacement.waitId, original.waitId);
+      assert.notEqual(replacement.authorizationFingerprint, original.authorizationFingerprint);
+      if (drift === "rule") assert.match(replacement.summary, /^Rule/u);
+    } finally { await harness.close(ctx); }
+  });
+}
+
+for (const drift of ["page", "rule", "authority", "unreadable"] as const) {
+  test(`D publication: the live boundary guard rejects late ${drift} drift after recording the human receipt`, async () => {
+    const options: NonNullable<Parameters<typeof approvalReplayDeps>[1]> = { page: "page-1" };
+    const f = await approvalReplayDeps({ profileDir: tempProfile(), botId: "bot-1", kind: "approval-binding" }, options);
+    const bridge = createBotApprovals({ publish() {} });
+    f.deps.requestApproval = async request => { f.deps.approvals.push(request); return bridge.request(request); };
+    let publications = 0, validations = 0;
+    const grant = f.book.grantBot.bind(f.book);
+    f.book.grantBot = async (...args) => { publications++; return grant(...args); };
+    const settle = f.deps.settleApproval!;
+    f.deps.settleApproval = async (input, settlementContext) => {
+      if (input.decision.answer === "allow_always") {
+        await f.tallies.record(input.botId, input.remember.target, { ...input.decision, offered: !!input.remember.offer });
+        if (drift === "page") options.page = "page-2";
+        if (drift === "rule") options.rule = "first";
+        if (drift === "authority") f.state.revoked = true;
+        if (drift === "unreadable") f.book.botConsentRevision = async () => { throw new Error("consent unreadable"); };
+        assert.ok(settlementContext?.validatePublication);
+        validations++;
+        await settlementContext.validatePublication();
+      }
+      return settle(input);
+    };
+    const { harness, root } = await memoryHarness(f.deps, createFauxModels([
+      fauxAssistantMessage([fauxToolCall(f.tool.name, { text: "Save" })], { stopReason: "toolUse" }), fauxAssistantMessage("done"),
+    ]));
+    try {
+      const submission = await root.submit({ type: "input", content: "go", requestId: "person" }, ctx);
+      await waitFor(() => bridge.pending().length === 1);
+      const original = bridge.pending()[0]!;
+      bridge.decide(original.waitId, "allow", "always");
+      await waitFor(async () => bridge.pending().length > 0 || (await toolResults(root)).length > 0);
+      const replacement = bridge.pending()[0];
+      if (replacement) bridge.decide(replacement.waitId, "deny");
+      await submission.wait(ctx);
+      assert.equal(validations, 1); assert.equal(publications, 0); assert.equal(f.tool.executions.length, 0);
+      assert.equal((await f.book.listBot("bot-1")).length, 0);
+      assert.deepEqual(await f.tallies.decision("bot-1", original.waitId, original.authorizationFingerprint!), {
+        id: original.waitId, authorizationFingerprint: original.authorizationFingerprint, answer: "allow_always", source: "person",
+      }, "a rejected publication never invents a decline or changes the recorded human event");
+      if (drift !== "authority") {
+        assert.ok(replacement); assert.notEqual(replacement.waitId, original.waitId);
+      }
+    } finally { await harness.close(ctx); }
+  });
+}
+
+test("D publication: a successful own grant keeps its receipt proof and revokes the live callback before caching", async () => {
+  const f = await approvalReplayDeps({ profileDir: tempProfile(), botId: "bot-1", kind: "approval-binding" }, { always: true });
+  const settle = f.deps.settleApproval!;
+  let validation: (() => Promise<void>) | undefined;
+  let retainedContext: Parameters<NonNullable<BotExtensionDeps["settleApproval"]>>[1];
+  f.deps.settleApproval = async (input, settlementContext) => {
+    assert.ok(settlementContext?.validatePublication);
+    retainedContext = settlementContext; validation = settlementContext.validatePublication;
+    await validation();
+    assert.equal((await f.book.listBot(input.botId)).length, 0, "the guard itself grants nothing");
+    const result = await settle(input);
+    assert.notEqual(result.publication?.consentRevision, input.requirements?.consentRevision);
+    return result;
+  };
+  const { harness, root } = await memoryHarness(f.deps, createFauxModels([
+    fauxAssistantMessage([fauxToolCall(f.tool.name, { text: "Save" })], { stopReason: "toolUse" }), fauxAssistantMessage("done"),
+  ]));
+  try {
+    await (await root.submit({ type: "input", content: "go", requestId: "person" }, ctx)).wait(ctx);
+    assert.equal(f.tool.executions.length, 1); assert.equal(f.settlements.length, 1);
+    assert.equal((await f.book.listBot("bot-1")).length, 1);
+    assert.equal(retainedContext?.validatePublication, undefined);
+    assert.ok(validation); await assert.rejects(validation(), /no longer active/u);
+    assert.equal(Object.prototype.hasOwnProperty.call(f.settlements[0]!, "validatePublication"), false);
+    assert.doesNotMatch(resultText((await toolResults(root))[0]), /Aiden note/u);
+  } finally { await harness.close(ctx); }
+});
+
+for (const answer of ["allow", "deny"] as const) {
+  test(`D publication: ${answer} after page drift preserves the original historical human pair`, async () => {
+    const options = { page: "page-1" };
+    const f = await approvalReplayDeps({ profileDir: tempProfile(), botId: "bot-1", kind: "approval-binding" }, options);
+    const bridge = createBotApprovals({ publish() {} });
+    f.deps.requestApproval = async request => { f.deps.approvals.push(request); return bridge.request(request); };
+    const { harness, root } = await memoryHarness(f.deps, createFauxModels([
+      fauxAssistantMessage([fauxToolCall(f.tool.name, { text: "Save" })], { stopReason: "toolUse" }), fauxAssistantMessage("done"),
+    ]));
+    try {
+      const submission = await root.submit({ type: "input", content: "go", requestId: "person" }, ctx);
+      await waitFor(() => bridge.pending().length === 1);
+      const original = bridge.pending()[0]!; options.page = "page-2";
+      bridge.decide(original.waitId, answer);
+      await waitFor(async () => bridge.pending().length > 0 || (await toolResults(root)).length > 0);
+      for (const pending of bridge.pending()) bridge.decide(pending.waitId, "deny");
+      await submission.wait(ctx);
+      assert.deepEqual(await f.tallies.decision("bot-1", original.waitId, original.authorizationFingerprint!), {
+        id: original.waitId, authorizationFingerprint: original.authorizationFingerprint, answer, source: "person",
+      });
+      assert.equal(f.tool.executions.length, 0); assert.equal((await f.book.listBot("bot-1")).length, 0);
+      assert.doesNotMatch(resultText((await toolResults(root))[0]), /Aiden note/u);
+    } finally { await harness.close(ctx); }
+  });
+}

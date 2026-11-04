@@ -107,6 +107,7 @@ function approve(
   return approvals.request({
     botId,
     waitId,
+    authorizationFingerprint: `attention-${waitId}`,
     toolCallId: `call-${waitId}`,
     toolName: "write_file",
     summary: "Write secret-notes.txt",
@@ -154,7 +155,7 @@ test("an approval being asked and decided each tell the sidebar, with only the B
     { channel: "bots:attention", payload: { botId: "bot-a" } },
   ]);
   assert.equal(approvals.decide("a1", "allow"), true);
-  assert.equal(await decided, "allow");
+  assert.deepEqual(await decided, { id: "a1", authorizationFingerprint: "attention-a1", answer: "allow", source: "person" });
   assert.equal(sent.length, 2);
   assert.equal(
     JSON.stringify(sent).includes("secret-notes"),
