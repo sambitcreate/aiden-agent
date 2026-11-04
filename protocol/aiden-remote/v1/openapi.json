@@ -19666,7 +19666,7 @@
           "savedForFuture": {
             "type": "boolean",
             "const": true,
-            "description": "Access was saved durably for future tasks. No temporary run access was issued by this acknowledgement."
+            "description": "Records the exact earlier durable folder approval, including a replay after removal. It does not confirm current saved access or issue temporary run access."
           }
         }
       }
