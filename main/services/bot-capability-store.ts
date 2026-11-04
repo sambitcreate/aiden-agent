@@ -48,6 +48,7 @@ import {
   parseBoundBotProviderModel,
   parseBoundBotCustomSelection,
   type BoundBotCustomSelection,
+  type BoundBotConnection,
 } from "./bot-capability-bindings.js";
 import type { BotCapabilityCatalogSnapshot } from "./bot-capability-catalog-core.js";
 import {
@@ -694,6 +695,28 @@ export class BotCapabilityStore {
         ...(visionModelAuthority ? { visionModelAuthority } : {}),
         lease,
       };
+    });
+  }
+
+  /** Source reads have no inference/model authority and never repair model bindings. */
+  async admitConnectorSource(input: { audienceId: string; botId: string; chatId: string; serverId: string; sourceSelectionIds?: { connectionId: string; schedulesId: string } }): Promise<BotCapabilityAdmission & { connection?: BoundBotConnection }> {
+    this.requireInitialized();
+    return this.serialized(async () => {
+      const editor = this.editor(await this.persistence.load());
+      const authority = editor.assertBotMayAct(input);
+      let connection: BoundBotConnection | undefined;
+      if (authority.effectiveCustom) {
+        const binding = editor.getBotBinding(input.botId);
+        connection = binding?.connections.find(item => item.sourceId === input.serverId && authority.effectiveCustom!.connectionIds.includes(item.option.id));
+        const schedules = binding?.otherCapabilities.some(item => item.kind === "schedules" && authority.effectiveCustom!.otherCapabilityIds.includes(item.option.id));
+        const fullReduction = authority.policy.accessMode === "full" && input.sourceSelectionIds
+          && authority.effectiveCustom.connectionIds.includes(input.sourceSelectionIds.connectionId)
+          && authority.effectiveCustom.otherCapabilityIds.includes(input.sourceSelectionIds.schedulesId);
+        if ((!connection || !schedules) && !fullReduction) throw new BotCapabilityUnavailableError("Allow this exact connector and Schedules in this Bot's current access.");
+      }
+      const lease = this.leases.acquire({ audienceId: input.audienceId, botId: input.botId, botPolicyEpoch: authority.policy.policyEpoch,
+        chatId: input.chatId, chatPolicyEpoch: authority.chat!.policyEpoch });
+      return { ...authority, ...(connection ? { connection: structuredClone(connection) } : {}), lease };
     });
   }
 

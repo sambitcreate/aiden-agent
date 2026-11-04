@@ -14,9 +14,9 @@ import {
 } from "../../../renderer/shared/bot-routine-trigger.js";
 import { botIdFromDirectoryName } from "../bot-runtime/harness-host.js";
 import { botSessionDirectory, createKeyedSerial } from "../bot-routine-notes.js";
-import { writeJsonAtomic } from "../durable-fs.js";
-import { parseConnectorPrivate, parseConnectorBaseline, type BotConnectorWatchPrivate } from "./connector-types.js";
-import type { ConnectorWatchBaseline } from "./connector-watch-imcp.js";
+import { writeJsonAtomic, type DurableFsIo } from "../durable-fs.js";
+import { parseConnectorPrivate, parseConnectorBaseline, ConnectorWatchStorageError, type BotConnectorWatchPrivate, type BotConnectorWatchBinding, type BotConnectorWatchBaseline } from "./connector-types.js";
+
 
 export const BOT_EVENT_ROUTINES_FILE = "event-routines.json";
 export const BOT_EVENT_ROUTINES_MAX = 16;
@@ -56,7 +56,7 @@ export interface BotEventRoutine {
 }
 
 export interface BotWatchState {
-  connectorBaseline?: ConnectorWatchBaseline;
+  connectorBaseline?: BotConnectorWatchBaseline;
   connectorItemCount?: number;
   /** A detected change owed to the dispatcher; saved atomically with its baseline. */
   pending?: { eventId: string; payload: string; revision: number; nextAttemptAt: number };
@@ -92,11 +92,20 @@ function watchPending(value: unknown): BotWatchState["pending"] {
   return { eventId, payload, revision, nextAttemptAt };
 }
 
-function parseWatchState(value: unknown): BotWatchState {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return { failures: 0 };
+function parseWatchState(value: unknown,binding?:BotConnectorWatchBinding): BotWatchState {
+  if (!value || typeof value !== "object" || Array.isArray(value)) { if(binding && value !== undefined)throw new ConnectorWatchStorageError(); return { failures: 0 }; }
   const record = value as Record<string, unknown>;
   const pending = watchPending(record.pending);
-  const connectorBaseline = parseConnectorBaseline(record.connectorBaseline);
+  const connectorBaseline = parseConnectorBaseline(record.connectorBaseline,binding);
+  if(binding){
+    const known=["pending","connectorBaseline","connectorItemCount","hash","snapshot","sameSince","lastCheckAt","nextCheckAt","lastResult","failures","lastError","unsettledFailure"];
+    if(Object.keys(record).some(key=>!known.includes(key)) || record.pending!==undefined&&!pending || record.hash!==undefined&&(typeof record.hash!=="string"||!/^[a-f0-9]{64}$/u.test(record.hash)||!connectorBaseline)
+      || record.connectorItemCount!==undefined&&(!Number.isSafeInteger(record.connectorItemCount)||(record.connectorItemCount as number)<0)
+      || ["sameSince","lastCheckAt","nextCheckAt"].some(key=>record[key]!==undefined&&(!Number.isSafeInteger(record[key])||(record[key] as number)<0))
+      || record.failures!==undefined&&(!Number.isSafeInteger(record.failures)||(record.failures as number)<0)
+      || record.lastResult!==undefined&&!WATCH_RESULTS.has(record.lastResult as BotWatchResult))throw new ConnectorWatchStorageError();
+  }
+
   const time = (key: string) => typeof record[key] === "number" && Number.isFinite(record[key]) ? { [key]: record[key] as number } : {};
   return {
     ...(pending ? { pending } : {}),
@@ -171,7 +180,7 @@ function parseRoutine(value: unknown, botId: string): BotEventRoutine | undefine
     return undefined;
   }
   const connector = parseConnectorPrivate(record.connector);
-  if (trigger.kind === "watch" && trigger.source.type === "connector" && (!connector || trigger.source.watchId !== record.id)) return undefined;
+  if (trigger.kind === "watch" && trigger.source.type === "connector" && (!connector || trigger.source.watchId !== record.id)) throw new ConnectorWatchStorageError();
   if (trigger.kind === "webhook" && (typeof record.tokenHash !== "string" || !/^[a-f0-9]{64}$/u.test(record.tokenHash))) return undefined;
   const seen = Array.isArray(record.seenEventIds)
     ? record.seenEventIds.filter((id): id is string => typeof id === "string").slice(-BOT_ROUTINE_EVENT_LIMITS.seenIds)
@@ -206,7 +215,7 @@ function parseRoutine(value: unknown, botId: string): BotEventRoutine | undefine
         ...(typeof held.watchRevision === "number" && Number.isSafeInteger(held.watchRevision) ? { watchRevision: held.watchRevision } : {}) } }
       : {}),
     ...(running.length ? { running } : {}),
-    ...(trigger.kind === "watch" ? { watch: parseWatchState(record.watch) } : {}),
+    ...(trigger.kind === "watch" ? { watch: parseWatchState(record.watch,connector?.binding) } : {}),
   };
 }
 
@@ -253,7 +262,8 @@ function nextWatchState(state: BotWatchState, before: WatchTrigger, after: Watch
   return next;
 }
 
-export function createBotEventRoutineStore(options: { profileDir(): string; now?(): number }) {
+export interface BotEventPublicationGuard { beforePublish?():Promise<void>; assertCurrent():void }
+export function createBotEventRoutineStore(options: { profileDir(): string; now?(): number; /** Test-only durable I/O seams. */ io?:Partial<DurableFsIo> }) {
   const now = options.now ?? Date.now;
   const serial = createKeyedSerial();
   const fileOf = (botId: string) => path.join(botSessionDirectory(options.profileDir(), botId), BOT_EVENT_ROUTINES_FILE);
@@ -261,16 +271,17 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
   async function load(botId: string): Promise<BotEventRoutine[]> {
     try {
       const parsed = JSON.parse(await fs.readFile(fileOf(botId), "utf8")) as unknown;
-      return Array.isArray(parsed)
-        ? parsed.map((item) => parseRoutine(item, botId)).filter((item): item is BotEventRoutine => item !== undefined)
-        : [];
-    } catch {
-      return [];
+      if(!Array.isArray(parsed))throw new ConnectorWatchStorageError();
+      return parsed.map((item)=>parseRoutine(item,botId)).filter((item):item is BotEventRoutine=>item!==undefined);
+    } catch(error) {
+      if((error as NodeJS.ErrnoException).code==="ENOENT")return [];
+      throw error instanceof ConnectorWatchStorageError?error:new ConnectorWatchStorageError();
     }
   }
 
-  async function save(botId: string, routines: BotEventRoutine[]): Promise<void> {
-    await writeJsonAtomic(fileOf(botId), routines, { mode: 0o600, mkdirMode: 0o700 });
+  async function save(botId: string, routines: BotEventRoutine[], guard?:BotEventPublicationGuard): Promise<void> {
+    guard?.assertCurrent();
+    await writeJsonAtomic(fileOf(botId), routines, { mode: 0o600, mkdirMode: 0o700, ...guard, io:options.io });
   }
 
   async function botIds(): Promise<string[]> {
@@ -300,7 +311,7 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
      * its hash is stored. Creating from a suggestion that already made one
      * returns that routine, with no new token.
      */
-    create(botId: string, input: BotEventRoutineCreateInput, validate?: (routines: readonly BotEventRoutine[]) => void): Promise<{ routine: BotEventRoutine; token?: string }> {
+    create(botId: string, input: BotEventRoutineCreateInput, validate?: (routines: readonly BotEventRoutine[]) => void, guard?:BotEventPublicationGuard): Promise<{ routine: BotEventRoutine; token?: string }> {
       return serial(botId, async () => {
         const clean = cleanInput(input);
         if (clean.trigger.kind === "watch" && clean.trigger.source.type === "connector" && (!input.connector || input.id !== clean.trigger.source.watchId)) throw new Error("A connector watch requires an approved host binding.");
@@ -330,8 +341,8 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
           ...(clean.trigger.kind === "watch" ? { watch: freshWatch(at) } : {}),
         };
         const next = [...routines, routine];
-        validate?.(next);
-        await save(botId, next);
+        guard?.assertCurrent();validate?.(next);
+        await save(botId, next, guard);
         return { routine, ...(minted ? { token: minted.token } : {}) };
       });
     },
@@ -434,15 +445,16 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
     },
 
     /** Read-modify-write one routine's bookkeeping under the Bot's lock. */
-    mutate<T>(botId: string, id: string, change: (routine: BotEventRoutine, routines: readonly BotEventRoutine[]) => { next?: BotEventRoutine; result: T } | Promise<{ next?: BotEventRoutine; result: T }>): Promise<T | undefined> {
+    mutate<T>(botId: string, id: string, change: (routine: BotEventRoutine, routines: readonly BotEventRoutine[]) => { next?: BotEventRoutine; result: T } | Promise<{ next?: BotEventRoutine; result: T }>, guard?:BotEventPublicationGuard): Promise<T | undefined> {
       return serial(botId, async () => {
         const routines = await load(botId);
         const index = routines.findIndex((routine) => routine.id === id);
         if (index < 0) return undefined;
-        const { next, result } = await change(structuredClone(routines[index]!), routines);
+        guard?.assertCurrent();
+        const { next, result } = await change(structuredClone(routines[index]!), structuredClone(routines));
         if (next) {
           routines[index] = next;
-          await save(botId, routines);
+          await save(botId, routines, guard);
         }
         return result;
       });

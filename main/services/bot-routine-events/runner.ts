@@ -80,7 +80,7 @@ export function createBotEventRunner(dependencies: BotEventRunnerDependencies) {
           runId: requestId,
           signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
         });
-        const run = await (routine.connector ? withBotConnectorExecutionRestriction({ routineId: routine.id, revision: routine.updatedAt, binding: routine.connector.binding }, execute) : execute());
+        const run = await (routine.connector ? withBotConnectorExecutionRestriction({ routineId: routine.id, revision: routine.updatedAt, binding: routine.connector.binding,...(routine.connector.binding.adapter==="composio-calendar-v1"?{condition:routine.connector.condition}:{}) }, execute) : execute());
         // Only a run recorded under the event's own id, and handed to the
         // delivery log, is settled; anything else is replayed on next start
         // (the replay reads the saved run and only retries its delivery).

@@ -241,6 +241,7 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
     const epoch = generation;
     const abort = new AbortController();
     inFlight.set(id, { revision: -1, abort });
+    let sourcePublication:import("./watch-sources.js").BotWatchPublication|undefined;
     try {
       const routine = await current(botId, id);
       if (!live(epoch) || !routine || !routine.enabled || routine.trigger.kind !== "watch") return "skipped";
@@ -268,6 +269,7 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
       let check: BotWatchCheck;
       try {
         check = await dependencies.check(routine, abort.signal);
+        if(check.ok)sourcePublication=check.publication;
       } catch {
         check = { ok: false, error: "The check couldn't run." };
       }
@@ -294,7 +296,7 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
           const { lastError: _error, unsettledFailure: _failure, pending: _oldPending, ...rest } = state;
           const watch: BotWatchState = { ...rest, failures: 0, hash, connectorBaseline: semantic.baseline,
             connectorItemCount: semantic.itemCount, lastCheckAt: checkedAt, nextCheckAt };
-          if (!state.connectorBaseline || semantic.changeCount === 0) {
+          if (semantic.changeCount === 0 || !state.connectorBaseline && fresh.connector?.binding.adapter !== "composio-calendar-v1") {
             const outcome = state.connectorBaseline ? "no_change" as const : "baseline" as const;
             return { next: { ...fresh, watch: { ...watch, lastResult: outcome } }, result: { outcome, routine: { ...fresh, watch }, hadFailure } };
           }
@@ -324,7 +326,7 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
         };
         const next = { ...fresh, watch: { ...base, hash, snapshot, pending, sameSince: checkedAt, lastResult: "changed" as const } };
         return { next, result: { outcome: "changed", routine: next, hadFailure } };
-      });
+      },sourcePublication?.guard);
       if (!decision || !live(epoch)) return "skipped";
       const delivered = decision.outcome !== "changed" || await deliverPending(decision.routine, epoch);
       if (decision.outcome === "paused") {
@@ -338,6 +340,7 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
       dependencies.checked?.(await current(botId, id) ?? decision.routine);
       return decision.outcome;
     } finally {
+      sourcePublication?.release();
       inFlight.delete(id);
       // A rearm skipped this watch while it was checking (an edit, say): arm it now.
       if (live(epoch)) {

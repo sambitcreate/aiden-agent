@@ -9,7 +9,8 @@ import {
 import { copyBoundedJson, utf8Size } from "../bounded-json.js";
 import { createKeyedSerial } from "../bot-routine-notes.js";
 import { compareImcpWatch, type ConnectorWatchItem, type ImcpWatchPort, readImcpWatch } from "./connector-watch-imcp.js";
-import { parseConnectorPrivate, type BotConnectorWatchBinding, type BotConnectorWatchPrivate } from "./connector-types.js";
+import { parseConnectorPrivate, connectorBindingMatchesCondition, parseConnectorBaseline, type BotConnectorWatchBinding, type BotConnectorWatchPrivate, type ImcpMailWatchBinding, type ComposioCalendarWatchBinding } from "./connector-types.js";
+import { readComposioCalendarWatch, type ComposioCalendarReadPort } from "./connector-watch-composio.js";
 import type { BotEventRoutine, BotEventRoutineStore } from "./store.js";
 import type { BotWatchCheck } from "./watch-sources.js";
 import type { BotRoutineEventDispatcher } from "./dispatcher.js";
@@ -39,10 +40,12 @@ function string(value: unknown, maximum: number): string {
 export function connectorId(value: unknown): string { const id = string(value, 36); if (!UUID.test(id)) fail("Invalid connector watch identity."); return id.toLowerCase(); }
 function condition(value: unknown): BotConnectorWatchCondition {
   const fields = connectorFields(value, ["kind", "sender", "subject", "unreadOnly", "lookAheadMinutes", "timezone"]);
-  if (fields.kind !== "email" || fields.lookAheadMinutes !== undefined || fields.timezone !== undefined || typeof fields.unreadOnly !== "boolean") fail("Choose an available Mail watch template.");
-  return { kind: "email", unreadOnly: fields.unreadOnly,
-    ...(fields.sender !== undefined ? { sender: string(fields.sender, LIMITS.filterChars) } : {}),
-    ...(fields.subject !== undefined ? { subject: string(fields.subject, LIMITS.filterChars) } : {}) };
+  if(fields.kind==="calendar"){
+    if(fields.sender!==undefined||fields.subject!==undefined||fields.unreadOnly!==undefined||!Number.isSafeInteger(fields.lookAheadMinutes)||(fields.lookAheadMinutes as number)<LIMITS.lookAheadMinMinutes||(fields.lookAheadMinutes as number)>LIMITS.lookAheadMaxMinutes)fail("Choose a Calendar window between fifteen minutes and one day.");
+    const timezone=string(fields.timezone,LIMITS.timezoneChars);try{new Intl.DateTimeFormat("en",{timeZone:timezone});}catch{fail("Choose a valid Calendar timezone.");}return {kind:"calendar",lookAheadMinutes:fields.lookAheadMinutes as number,timezone};
+  }
+  if(fields.kind!=="email"||fields.lookAheadMinutes!==undefined||fields.timezone!==undefined||typeof fields.unreadOnly!=="boolean")fail("Choose a supported watch template.");
+  return {kind:"email",unreadOnly:fields.unreadOnly,...(fields.sender!==undefined?{sender:string(fields.sender,LIMITS.filterChars)}:{}),...(fields.subject!==undefined?{subject:string(fields.subject,LIMITS.filterChars)}:{})};
 }
 function config(record: Record<string, unknown>): BotConnectorWatchConfig {
   if (![15, 30, 60].includes(record.everyMinutes as number)) fail("Choose a check interval of 15, 30 or 60 minutes.");
@@ -55,7 +58,7 @@ function view(routine: BotEventRoutine): BotConnectorWatchView {
   if (!privateState || !isConnector(routine) || privateState.deletedAt !== undefined || routine.trigger.kind !== "watch") throw new BotConnectorWatchError("not_found", "This connector watch no longer exists.");
   const watch = routine.watch;
   return { id: routine.id, botId: routine.botId, revision: String(routine.updatedAt), name: routine.name, prompt: routine.prompt,
-    templateId: "mail_messages", condition: structuredClone(privateState.condition), everyMinutes: routine.trigger.everyMinutes as 15 | 30 | 60,
+    templateId: privateState.binding.adapter==="imcp-mail-v1"?"mail_messages":"calendar_upcoming", condition: structuredClone(privateState.condition), everyMinutes: routine.trigger.everyMinutes as 15 | 30 | 60,
     source: connectorSourceLabels(privateState.binding.labels), enabled: routine.enabled,
     state: !routine.enabled ? "paused" : watch?.lastResult === "error" ? "error" : watch?.connectorItemCount === 0 ? "empty"
       : watch?.lastResult === "changed" ? "changed" : watch?.lastResult === "no_change" ? "unchanged" : "waiting",
@@ -67,10 +70,13 @@ function view(routine: BotEventRoutine): BotConnectorWatchView {
 export interface BotConnectorWatchServicePorts {
   store: BotEventRoutineStore;
   supported(): boolean;
+  mailAvailable?():boolean;
+  calendarAvailable?():boolean;
   knownBot(botId: string): Promise<boolean>;
   discover(botId: string, signal: AbortSignal, assertActive: () => Promise<void>): Promise<{ bindings: BotConnectorWatchBinding[]; unavailableReasons: string[] }>;
-  withPort<T>(botId: string, binding: BotConnectorWatchBinding, signal: AbortSignal, action: (port: ImcpWatchPort) => Promise<T>): Promise<T>;
-  authorize(botId: string, binding: BotConnectorWatchBinding): Promise<{ signal: AbortSignal; release(): void }>;
+  withPort<T>(botId: string, binding: ImcpMailWatchBinding, signal: AbortSignal, action: (port: ImcpWatchPort) => Promise<T>): Promise<T>;
+  withCalendarPort?<T>(botId:string,binding:ComposioCalendarWatchBinding,signal:AbortSignal,action:(port:ComposioCalendarReadPort)=>Promise<T>):Promise<T>;
+  authorize(botId: string, binding: BotConnectorWatchBinding, signal?:AbortSignal): Promise<{ signal: AbortSignal; assertCurrent?():void; revalidateBeforeEffect?():Promise<void>; release(): void }>;
   dispatcher: Pick<BotRoutineEventDispatcher, "emit">;
   changed(botId: string): void;
   isPaused(botId: string): Promise<boolean>;
@@ -92,7 +98,7 @@ export function createBotConnectorWatchService(ports: BotConnectorWatchServicePo
   const retainedSources = new Map<string, () => void>();
   function projection(routines: readonly BotEventRoutine[]): BotConnectorWatchList {
     const supported = ports.supported();
-    return { supported, ...(!supported ? { unavailableReason: "Connector watches are not available on this host." } : {}), templates: structuredClone([...BOT_CONNECTOR_WATCH_TEMPLATES]), watches: routines.filter((row) => isConnector(row) && row.connector?.deletedAt === undefined).map(view) };
+    return { supported, ...(!supported ? { unavailableReason: "Connector watches are not available on this host." } : {}), templates: structuredClone(BOT_CONNECTOR_WATCH_TEMPLATES.map(template=>template.kind==="calendar"&&ports.calendarAvailable?.()?{...template,available:true,unavailableReason:undefined}:template.kind==="email"&&ports.mailAvailable?.()===false?{...template,available:false,unavailableReason:"Local Mail watches require the owning Mac and iMCP."}:template)), watches: routines.filter((row) => isConnector(row) && row.connector?.deletedAt === undefined).map(view) };
   }
   function withinListBudget(routines: readonly BotEventRoutine[]): void {
     if (Buffer.byteLength(JSON.stringify(projection(routines)), "utf8") > MAX_LIST_BYTES) fail("These watches have too much saved text. Shorten the instructions or remove a watch before adding more.");
@@ -128,7 +134,10 @@ export function createBotConnectorWatchService(ports: BotConnectorWatchServicePo
     return state;
   }
   function receipts(state: BotConnectorWatchPrivate) { return state.mutations.filter((receipt) => receipt.at >= ports.now() - DAY); }
-  async function mutate(input: BotConnectorWatchIdentityInput, raw: Record<string, unknown>, update: (routine: BotEventRoutine) => BotEventRoutine): Promise<BotConnectorWatchView> {
+  function publicationGuard(grant:Awaited<ReturnType<BotConnectorWatchServicePorts["authorize"]>>) {
+    return {assertCurrent:()=>{grant.signal.throwIfAborted();grant.assertCurrent?.();},beforePublish:async()=>{grant.signal.throwIfAborted();await grant.revalidateBeforeEffect?.();grant.signal.throwIfAborted();}};
+  }
+  async function mutate(input: BotConnectorWatchIdentityInput, raw: Record<string, unknown>, update: (routine: BotEventRoutine) => BotEventRoutine, guard?:ReturnType<typeof publicationGuard>): Promise<BotConnectorWatchView> {
     await bot(input.botId);
     const id = connectorId(input.id); const mutationId = connectorId(input.mutationId); const hash = digest(raw);
     const result = await ports.store.mutate(input.botId, id, (routine, routines) => {
@@ -142,16 +151,26 @@ export function createBotConnectorWatchService(ports: BotConnectorWatchServicePo
       if (raw.action === "update") withinListBudget(routines.map((row) => row.id === id ? next : row));
       next.connector = checkedPrivate({ ...next.connector!, mutations: [...retained, { id: mutationId, digest: hash, at: ports.now(), result }] });
       return { next, result };
-    });
+    },guard);
     if (!result) throw new BotConnectorWatchError("not_found", "This connector watch no longer exists.");
     cancelWatch(input.botId, id); ports.changed(input.botId); return result;
   }
   async function read(botId: string, binding: BotConnectorWatchBinding, selected: BotConnectorWatchCondition, previous: BotEventRoutine["watch"], signal: AbortSignal, id?: string) {
-    if (selected.kind !== "email") fail("Calendar watches are not available yet.");
+    if(!connectorBindingMatchesCondition(binding,selected))fail("Choose a source matching this watch template.");
+    if(binding.adapter==="composio-calendar-v1"&&(!ports.calendarAvailable?.()||!ports.withCalendarPort))throw new BotConnectorWatchError("unavailable","Calendar watches require the verified read transport on the owning host.");
     const controller = new AbortController(); active.set(controller, { botId, ...(id ? { id } : {}) });
     const combined = AbortSignal.any([signal, controller.signal]);
     try {
       await assertActive(botId, combined, controller);
+      if(binding.adapter==="composio-calendar-v1"&&selected.kind==="calendar"){
+        const baseline=parseConnectorBaseline(previous?.connectorBaseline,binding);
+        if (baseline && !("version" in baseline)) throw new BotConnectorWatchError("unavailable", "This Calendar watch has invalid saved history.");
+        return await ports.withCalendarPort!(botId,binding,combined,port=>readComposioCalendarWatch({accountId:binding.accountId,calendarId:binding.calendarId,labels:binding.labels},{lookAheadMinutes:selected.lookAheadMinutes,timezone:selected.timezone},baseline,{
+          assertCurrent:async(read,callSignal)=>{await assertActive(botId,combined,controller);callSignal.throwIfAborted();await port.assertCurrent(read,callSignal);await assertActive(botId,combined,controller);},
+          read:async(read,callSignal)=>{await assertActive(botId,combined,controller);callSignal.throwIfAborted();const result=await port.read(read,callSignal);await assertActive(botId,combined,controller);return result;},
+        },ports.now(),combined));
+      }
+      if(binding.adapter!=="imcp-mail-v1"||selected.kind!=="email")fail("Choose a source matching this watch template.");
       const items = await ports.withPort(botId, binding, combined, (port) => readImcpWatch({ kind: "email", mailbox: binding.mailbox, account: binding.account,
         ...(selected.sender ? { sender: selected.sender } : {}), ...(selected.subject ? { subject: selected.subject } : {}), unreadOnly: selected.unreadOnly }, {
         async assertEligible(tool, callSignal) {
@@ -166,7 +185,7 @@ export function createBotConnectorWatchService(ports: BotConnectorWatchServicePo
         },
       }, ports.now(), combined));
       await assertActive(botId, combined, controller);
-      const compared = compareImcpWatch("email", previous?.connectorBaseline, items, ports.now());
+      const compared = compareImcpWatch("email", parseConnectorBaseline(previous?.connectorBaseline,binding) as import("./connector-watch-imcp.js").ConnectorWatchBaseline|undefined, items, ports.now());
       return { items, ...compared };
     } catch (error) {
       if (controller.signal.aborted) throw new ConnectorReadInterrupted();
@@ -195,7 +214,7 @@ export function createBotConnectorWatchService(ports: BotConnectorWatchServicePo
         const result = discovered.bindings.map((binding) => {
           const labels = connectorSourceLabels(binding.labels);
           const id = randomUUID();
-          return { id, templateId: "mail_messages" as const, ...labels, available: true };
+          return { id, templateId: binding.adapter==="imcp-mail-v1"?"mail_messages" as const:"calendar_upcoming" as const, ...labels, available: true };
         });
         const response = { choices: result, unavailableReasons: discovered.unavailableReasons.map((reason) => boundedConnectorText(reason, LIMITS.errorChars)).slice(0, 16) };
         if (Buffer.byteLength(JSON.stringify(response), "utf8") > MAX_LIST_BYTES) throw new BotConnectorWatchError("unavailable", "Source labels are too large to show together. Narrow the connected account selection and check again.");
@@ -217,12 +236,13 @@ export function createBotConnectorWatchService(ports: BotConnectorWatchServicePo
         const old = (await ports.store.list(input.botId)).find((row) => row.id === id);
         if (old) { if (old.connector?.createDigest !== hash) throw new BotConnectorWatchError("idempotency_conflict", "This create identity was already used."); return view(old); }
         const binding = choice(input.botId, fields.sourceChoiceId);
+        if(!connectorBindingMatchesCondition(binding,clean.condition))fail("Choose a source matching this watch template.");
         const grant = await ports.authorize(input.botId, binding);
         try {
           grant.signal.throwIfAborted();
           const created = await ports.store.create(input.botId, { id, name: clean.name, prompt: clean.prompt,
             trigger: { kind: "watch", source: { type: "connector", watchId: id }, everyMinutes: clean.everyMinutes },
-            connector: checkedPrivate({ binding, condition: clean.condition, createDigest: hash, mutations: [] }) }, withinListBudget);
+            connector: checkedPrivate({ binding, condition: clean.condition, createDigest: hash, mutations: [] }) }, withinListBudget,publicationGuard(grant));
           grant.signal.throwIfAborted(); ports.changed(input.botId); return view(created.routine);
         } finally { grant.release(); }
       });
@@ -233,19 +253,22 @@ export function createBotConnectorWatchService(ports: BotConnectorWatchServicePo
         const clean = config(fields); const old = await current(input.botId, connectorId(input.id));
         if (old.connector!.mutations.some((receipt) => receipt.id === connectorId(input.mutationId))) return mutate(input, { action: "update", ...fields }, (row) => row);
         const binding = fields.sourceChoiceId === undefined ? old.connector!.binding : choice(input.botId, fields.sourceChoiceId);
+        if(!connectorBindingMatchesCondition(binding,clean.condition))fail("Choose a source matching this watch template.");
         const grant = await ports.authorize(input.botId, binding);
         try { return await mutate(input, { action: "update", ...fields }, (row) => {
-          const changedSource = digest(row.connector!.binding) !== digest(binding) || digest(row.connector!.condition) !== digest(clean.condition);
+          const changedBinding = digest(row.connector!.binding) !== digest(binding);
+          const changedSource = changedBinding || digest(row.connector!.condition) !== digest(clean.condition);
+          const calendarHistory = !changedBinding && binding.adapter === "composio-calendar-v1" ? row.watch?.connectorBaseline : undefined;
           const changedPrompt = row.prompt !== clean.prompt;
           const revision = Math.max(ports.now(), row.updatedAt + 1);
           const next: BotEventRoutine = { ...row, name: clean.name, prompt: clean.prompt, updatedAt: revision,
             trigger: { kind: "watch", source: { type: "connector", watchId: row.id }, everyMinutes: clean.everyMinutes },
             connector: { ...row.connector!, binding, condition: clean.condition },
-            watch: changedSource ? { failures: 0, nextCheckAt: ports.now() } : { ...row.watch!, nextCheckAt: (row.watch?.lastCheckAt ?? ports.now()) + clean.everyMinutes * 60_000 } };
+            watch: changedSource ? { failures: 0, nextCheckAt: ports.now(), ...(calendarHistory ? { connectorBaseline: calendarHistory } : {}) } : { ...row.watch!, nextCheckAt: (row.watch?.lastCheckAt ?? ports.now()) + clean.everyMinutes * 60_000 } };
           if (changedSource || changedPrompt) { delete next.held; delete next.running; if (next.watch) delete next.watch.pending; }
           else { if (next.watch?.pending) next.watch.pending.revision = revision; if (next.held?.watchRevision === row.updatedAt) next.held.watchRevision = revision; next.running = next.running?.filter((event) => event.watchRevision === row.updatedAt).map((event) => ({ ...event, watchRevision: revision })); }
           return next;
-        }); } finally { grant.release(); }
+        },publicationGuard(grant)); } finally { grant.release(); }
       });
     },
     setEnabled(input: BotConnectorWatchEnableInput) {
@@ -262,7 +285,7 @@ export function createBotConnectorWatchService(ports: BotConnectorWatchServicePo
           return { ...fresh, enabled: fields.enabled as boolean, updatedAt: revision, watch,
             ...(fresh.held?.watchRevision === fresh.updatedAt ? { held: { ...fresh.held, watchRevision: revision } } : {}),
             running: fresh.running?.filter((event) => event.watchRevision === fresh.updatedAt).map((event) => ({ ...event, watchRevision: revision })) };
-        }); } finally { grant?.release(); }
+        },grant?publicationGuard(grant):undefined); } finally { grant?.release(); }
       });
     },
     remove(input: BotConnectorWatchIdentityInput) {
@@ -317,7 +340,7 @@ export function createBotConnectorWatchService(ports: BotConnectorWatchServicePo
               ...(fresh.held?.watchRevision === fresh.updatedAt ? { held: { ...fresh.held, watchRevision: nextRevision } } : {}),
               running: fresh.running?.filter((event) => event.watchRevision === fresh.updatedAt).map((event) => ({ ...event, watchRevision: nextRevision })) };
             return { next, result: { routine: next, result } };
-          });
+          },publicationGuard(grant));
           if (!reserved) throw new BotConnectorWatchError("not_found", "This connector watch no longer exists.");
           ports.changed(input.botId);
           const emitted = await ports.dispatcher.emit(input.botId, row.id, { eventId, payload: reserved.routine.watch!.pending!.payload,
@@ -334,11 +357,15 @@ export function createBotConnectorWatchService(ports: BotConnectorWatchServicePo
       });
     },
     async check(routine: BotEventRoutine, signal: AbortSignal): Promise<BotWatchCheck> {
+      let held:Awaited<ReturnType<BotConnectorWatchServicePorts["authorize"]>>|undefined;
+      const combined=AbortSignal.any([signal,AbortSignal.timeout(15_000)]);
       try {
-        const result = await read(routine.botId, routine.connector!.binding, routine.connector!.condition, routine.watch, signal, routine.id);
-        return { ok: true, bytes: new TextEncoder().encode(JSON.stringify(result.baseline)), connector: { baseline: result.baseline, itemCount: result.items.length, changeCount: result.changes.length,
+        held=await ports.authorize(routine.botId,routine.connector!.binding,combined);combined.throwIfAborted();
+        const result = await read(routine.botId, routine.connector!.binding, routine.connector!.condition, routine.watch, combined, routine.id);
+        return { ok: true, publication:{signal:held.signal,guard:publicationGuard(held),release:()=>held!.release()}, bytes: new TextEncoder().encode(JSON.stringify(result.baseline)), connector: { baseline: result.baseline, itemCount: result.items.length, changeCount: result.changes.length,
           payload: boundedConnectorText(result.changes.slice(0, 8).map((change) => `${change.kind}: ${change.item.title}`).join("\n"), 3_900) } };
       } catch (error) {
+        held?.release();
         if (error instanceof ConnectorReadInterrupted) return { ok: false, skipped: true, error: error.message };
         return { ok: false, error: error instanceof BotConnectorWatchError ? boundedConnectorText(error.message, 200) : "The connector could not be read. Check its existing access in Settings → Connectors.", pause: error instanceof BotConnectorWatchError };
       }

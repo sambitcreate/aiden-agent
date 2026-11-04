@@ -1,3 +1,6 @@
+import { withBotConnectorModelEffect } from "../bot-connector-inventory-scope.js";
+import { botExecutionScope } from "./bot-execution.js";
+import { calendarWatchCallAllowed } from "../bot-routine-events/connector-calendar-policy.js";
 // Turns a Bot's current authority into the `aiden-bot` extension's tool,
 // policy and guidance dependencies.
 //
@@ -206,6 +209,12 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
           }
           if (admission.signal.aborted) throw admission.signal.reason;
           const effectSignal = signal ? AbortSignal.any([signal, admission.signal]) : admission.signal;
+          const execution=botExecutionScope(botId);
+          if (mcp && execution?.claim.connectorRestriction?.binding.adapter === "composio-calendar-v1") {
+            const result = await withBotConnectorModelEffect(() => execution.runtime.revalidate(), () => tool.execute(toolCallId, params, effectSignal, onUpdate));
+            effectSignal.throwIfAborted();
+            return result;
+          }
           return await tool.execute(toolCallId, params, effectSignal, onUpdate);
         } finally {
           admission.release();
@@ -283,7 +292,9 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         const ask = (approval: BotApprovalRequirement): BotPolicyDecision =>
           turns.some((turn) => turn.peer) ? { allowed: false, reason: "Peer work cannot obtain fresh person approval for this action." } : goAhead ? { allowed: true, approval: { ...approval, preapproved: true } } : { allowed: true, approval };
         const asBaseline: BotPolicyDecision = baseline === undefined ? { allowed: true } : ask(baseline);
-        const action = live !== undefined ? live.action : await describeMcpAction(toolName, call.args, facts);
+        const scopedWatch=botExecutionScope()?.claim.connectorRestriction;
+        const calendarRead=scopedWatch?.binding.adapter==="composio-calendar-v1"&&calendarWatchCallAllowed(scopedWatch,call.args);
+        const action = live !== undefined ? live.action : calendarRead?undefined:await describeMcpAction(toolName, call.args, facts);
         if (action === undefined || ports.rules === undefined) return asBaseline;
         let rules: readonly BotRule[];
         try {

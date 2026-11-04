@@ -4,7 +4,7 @@ import addFormats from "ajv-formats";
 import type { CallToolResult, ServerCapabilities, Tool } from "@earendil-works/pi-mcp";
 import { mcpRequest, type McpCallOptions, type McpRequester } from "./mcp-client.js";
 import { copyBoundedJson, utf8Size } from "./bounded-json.js";
-import { botConnectorForegroundLifetime } from "./bot-connector-inventory-scope.js";
+import { assertBotConnectorMetadataRenewalCurrent, botConnectorForegroundLifetime } from "./bot-connector-inventory-scope.js";
 
 export const MCP_TOOL_INVENTORY_MAX_PAGES = 64;
 export const MCP_TOOL_INVENTORY_MAX_TOOLS = 512;
@@ -131,9 +131,11 @@ export async function listMcpToolInventory<T extends { name: string }>(options: 
   let cursor: string | undefined;
   let totalBytes = 0;
   for (let page = 0; page < (limits?.maxPages ?? MCP_TOOL_INVENTORY_MAX_PAGES); page++) {
+    await assertBotConnectorMetadataRenewalCurrent();
     await foreground?.assertCurrent();
     assertCurrent();
     const result = await options.listPage(cursor, signal);
+    await assertBotConnectorMetadataRenewalCurrent();
     await foreground?.assertCurrent();
     assertCurrent();
     if (limits) {
@@ -218,6 +220,8 @@ export function createMcpToolCallGuard(
     return validator;
   };
   return {
+    /** Inventory revision only; no tool validator compilation or RPC. */
+    assertCurrent:()=>assertCurrent?.(),
     /** Whether this inventory offers `name` at all. */
     has(name: string): boolean {
       return operations.has(name);
@@ -349,8 +353,12 @@ export const MCP_TOOL_INVENTORY_TTL_MS = 30_000;
 export function createMcpToolInventoryCache<T>(options: { ttlMs?: number; now?: () => number } = {}) {
   const now = options.now ?? Date.now;
   const revisions = new WeakMap<object, object>();
-  const entries = new WeakMap<object, { pending: Promise<T>; expiresAt: number }>();
+  const entries = new WeakMap<object, { pending: Promise<T>; expiresAt: number; settled:boolean; value?:T }>();
   return {
+    /** Observe only a completed valid inventory. Never reads, joins or refreshes. */
+    peek(client:McpCapabilitySource):T|undefined {const entry=entries.get(client);if(!revisions.has(client)||!entry||!entry.settled)return undefined;if(entry.expiresAt<=now()){entries.delete(client);return undefined;}return entry.value;},
+    /** Capture the current live-client revision before an explicit foreground read. */
+    publisher(client:McpCapabilitySource):(value:T)=>void {const revision=revisions.get(client);return value=>{if(!revision||revisions.get(client)!==revision)throw new Error("MCP tool inventory changed during its foreground read.");const announces=client.serverCapabilities?.tools?.listChanged===true;if(!announces&&options.ttlMs===undefined)return;entries.set(client,{pending:Promise.resolve(value),value,settled:true,expiresAt:announces?Infinity:now()+options.ttlMs!});};},
     /** Register before connect so a change during initialization is not missed. */
     watch(client: McpNotificationSource): void {
       revisions.set(client, {});
@@ -379,11 +387,11 @@ export function createMcpToolInventoryCache<T>(options: { ttlMs?: number; now?: 
       }
       if (!entry) {
         const loading = load();
-        const created = { pending: loading, expiresAt: Number.POSITIVE_INFINITY };
+        const created:{pending:Promise<T>;expiresAt:number;settled:boolean;value?:T} = { pending: loading, expiresAt: Number.POSITIVE_INFINITY,settled:false };
         entry = created;
         entries.set(client, created);
         loading.then(
-          () => { if (!announcesChanges) created.expiresAt = now() + options.ttlMs!; },
+          value => { created.value=value;created.settled=true;if (!announcesChanges) created.expiresAt = now() + options.ttlMs!; },
           () => { if (entries.get(client) === created) entries.delete(client); },
         );
       }

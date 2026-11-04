@@ -83,7 +83,7 @@ async function fixture(t: test.TestContext) {
     preflight: async () => { if (!allowed || oldPartial) throw new BotConnectorWatchError("capability_denied", "Allow Composio once before inspection."); },
     admit: async () => ({ authority: { connections: [grant] } as unknown as BotRuntimeEffectiveAuthority, signal: authority.signal,
       revalidateBeforeEffect: async () => { if (!known || !allowed) throw new Error("Authority changed."); }, release: () => { released++; } }),
-    connection: async (_admission: BotRuntimeAuthorityAdmission) => ({ ...grant, tools: oldPartial ? [botMcpLiveToolGrantFacts(metadata()[0]!)!] : allowed ? grant.tools : [] }),
+    connection: async (_admission) => ({ ...grant, tools: oldPartial ? [botMcpLiveToolGrantFacts(metadata()[0]!)!] : allowed ? grant.tools : [] }),
     withClient: async (_server, signal, action) => {
       opened++; signal.throwIfAborted();
       return action({ list: async (limits) => {

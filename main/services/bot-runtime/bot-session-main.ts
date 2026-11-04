@@ -427,7 +427,19 @@ const execution: BotExecutionPort = {
     const chatId = await canonicalChatId(botId);
     const peerLease = claim.peer ? await (await import("../bot-peers/host-main.js")).botPeerHost.executionLease(claim.peer) : undefined;
     let admission: BotRuntimeAuthorityAdmission;
-    try { admission = await botRuntimeAuthority.admit({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, chatId, routineModelGrant: grant }); }
+    try {
+      const sourceSignal=AbortSignal.any([signal,...(peerLease?[peerLease.signal]:[])]);sourceSignal.throwIfAborted();await peerLease?.revalidate();
+    if (claim.connectorRestriction?.binding.adapter === "composio-calendar-v1") {
+      const restriction = claim.connectorRestriction, binding = claim.connectorRestriction.binding, owner = claim.peer?.watch?.botId ?? botId;
+      const fresh = (await (await import("../bot-routine-events/sources-main.js")).botEventRoutines.list(owner)).find(row => row.id === restriction.routineId);
+      assertBotExecutionConnectorSource(owner, restriction, fresh, restriction.binding.connection);
+      const host = await import("../bot-routine-events/connector-host-main.js");
+      await host.validateCalendarConnectorExecution(owner, binding, undefined, sourceSignal);
+      if (owner !== botId) await host.validateCalendarConnectorExecution(botId, binding, undefined, sourceSignal);
+    }
+      await peerLease?.revalidate();sourceSignal.throwIfAborted();
+      admission = await botRuntimeAuthority.admit({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, chatId, routineModelGrant: grant });
+    }
     catch(error) { peerLease?.release(); throw error; }
     try {
       const boundSignal = AbortSignal.any([signal, admission.signal, ...(peerLease ? [peerLease.signal] : [])]); boundSignal.throwIfAborted();
@@ -437,16 +449,17 @@ const execution: BotExecutionPort = {
         const watchOwner = claim.peer?.watch?.botId ?? botId;
         const fresh = (await (await import("../bot-routine-events/sources-main.js")).botEventRoutines.list(watchOwner)).find((row) => row.id === restriction.routineId);
         const current = admission.authority.connections.find((row) => row.sourceId === restriction.binding.serverId);
-        if (watchOwner === botId) assertBotExecutionConnectorSource(botId, restriction, fresh, current);
+        if (watchOwner === botId) {assertBotExecutionConnectorSource(botId, restriction, fresh, current);if(restriction.binding.adapter==="composio-calendar-v1")await (await import("../bot-routine-events/connector-host-main.js")).validateCalendarConnectorExecution(botId,restriction.binding,admission);}
         else {
           // The originating source keeps its account/credential binding; this
           // recipient must independently grant that exact connection and reads.
           const originClaim = await botRoutineModels.claimByRequest(watchOwner,claim.root.requestId);
           if (!originClaim || !originClaim.connectorRestriction) throw new Error("The original watch admission is unavailable.");
           const origin = await botRuntimeAuthority.admit({audienceId:BOT_DESKTOP_AUDIENCE_ID,botId:watchOwner,chatId:await canonicalChatId(watchOwner),routineModelGrant:await botRoutineModels.grant(watchOwner,originClaim.id,originClaim.requestId)});
-          try { await origin.revalidateBeforeEffect(); assertBotExecutionConnectorSource(watchOwner,restriction,fresh,origin.authority.connections.find(row=>row.sourceId===restriction.binding.serverId)); }
+          try { await origin.revalidateBeforeEffect(); assertBotExecutionConnectorSource(watchOwner,restriction,fresh,origin.authority.connections.find(row=>row.sourceId===restriction.binding.serverId));if(restriction.binding.adapter==="composio-calendar-v1")await (await import("../bot-routine-events/connector-host-main.js")).validateCalendarConnectorExecution(watchOwner,restriction.binding,origin); }
           finally {origin.release();}
           if (!current || current.connectionFingerprint !== restriction.binding.connection.connectionFingerprint || restriction.binding.tools.some(tool=>!current.tools.some(granted=>granted.exactFingerprint===tool.exactFingerprint))) throw new Error("The receiving Bot does not allow the original watch account and read tools.");
+          if(restriction.binding.adapter==="composio-calendar-v1")await (await import("../bot-routine-events/connector-host-main.js")).validateCalendarConnectorExecution(botId,restriction.binding,admission);
         }
       };
       await sourceCurrent();

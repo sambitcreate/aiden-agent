@@ -17,7 +17,8 @@ import { BOT_WATCH_LIMITS, parseBotWatchUrl, type BotWatchSource } from "../../.
 import { isPathInside } from "../../shared/path-containment.js";
 import { runScheduledScript, type ScriptProcessResult } from "../schedule-script.js";
 
-export type BotWatchCheck = { ok: true; bytes: Uint8Array; connector?: { baseline: import("./connector-watch-imcp.js").ConnectorWatchBaseline; itemCount: number; changeCount: number; payload: string } } | { ok: false; error: string; pause?: boolean; skipped?: boolean };
+export interface BotWatchPublication { signal:AbortSignal; guard:import("./store.js").BotEventPublicationGuard; release():void }
+export type BotWatchCheck = { ok: true; publication?:BotWatchPublication; bytes: Uint8Array; connector?: { baseline: import("./connector-types.js").BotConnectorWatchBaseline; itemCount: number; changeCount: number; payload: string } } | { ok: false; error: string; pause?: boolean; skipped?: boolean };
 
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 

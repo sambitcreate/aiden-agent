@@ -1,3 +1,4 @@
+import { calendarWatchCallAllowed } from "../bot-routine-events/connector-calendar-policy.js";
 // Which tools a Bot may use, and which need the person's approval.
 //
 // This is the legacy Bot classification from `llm-client.ts`
@@ -225,8 +226,12 @@ export async function botToolVerdict(
     const watch = botExecutionScope()?.claim.connectorRestriction;
     if (watch) {
       const granted = (await facts.mcpTools()).get(name), raw = await facts.mcpToolDescriptor?.(name);
-      if (raw?.name !== "mail_messages_search" || !granted || !watch.binding.tools.some(tool => tool.exactFingerprint === granted.exactFingerprint)) return {allowed:false,reason:"This watch may read only its accepted mailbox with its verified read operation."};
-      if (args !== undefined && (!args || typeof args !== "object" || Array.isArray(args) || (args as {mailbox?:unknown}).mailbox !== watch.binding.mailbox)) return {allowed:false,reason:"This watch cannot switch its accepted mailbox or account."};
+      if(watch.binding.adapter==="composio-calendar-v1"){
+        if(!isComposioServiceToolDescriptor(raw)||!granted||!watch.binding.tools.some(tool=>tool.exactFingerprint===granted.exactFingerprint)||args!==undefined&&!calendarWatchCallAllowed(watch,args))return {allowed:false,reason:"This Calendar watch permits one verified read of its accepted account, calendar and window."};
+      }else{
+        if (raw?.name !== "mail_messages_search" || !granted || !watch.binding.tools.some(tool => tool.exactFingerprint === granted.exactFingerprint)) return {allowed:false,reason:"This watch may read only its accepted mailbox with its verified read operation."};
+        if (args !== undefined && (!args || typeof args !== "object" || Array.isArray(args) || (args as {mailbox?:unknown}).mailbox !== watch.binding.mailbox)) return {allowed:false,reason:"This watch cannot switch its accepted mailbox or account."};
+      }
     }
     if ((turn.routine || turn.telegram || turn.peer) && composioServiceCallRequiresForeground(args)
       && isComposioServiceToolDescriptor(await facts.mcpToolDescriptor?.(name))) {
@@ -253,6 +258,8 @@ export async function botToolApprovalSummary(
   if (name === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(name)) return undefined;
   // Inside the Bot's own computer the baseline is allowed; rules read the intent (§8.7).
   if (name === BOT_COMPUTER_TOOL_NAME || name === BOT_COMPUTER_SHELL_TOOL_NAME) return undefined;
+  const watch=botExecutionScope()?.claim.connectorRestriction;
+  if(watch?.binding.adapter==="composio-calendar-v1"&&calendarWatchCallAllowed(watch,args)&&isComposioServiceToolDescriptor(await facts.mcpToolDescriptor?.(name)))return undefined;
   const grant = (await facts.mcpTools()).get(name);
   return grant?.effect === "mutating" ? summarizeToolCall(name, args) : undefined;
 }

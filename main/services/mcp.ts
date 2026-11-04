@@ -1,7 +1,7 @@
 import { withForegroundComposioSettingsClientCore, type ForegroundComposioSettingsClientPort } from "./foreground-composio-settings-client.js";
-import { botConnectorInventoryServer } from "./bot-connector-inventory-scope.js";
+import { assertBotConnectorModelEffectCurrent, botConnectorInventoryCacheOnly, botConnectorInventoryServer } from "./bot-connector-inventory-scope.js";
 import { composioServiceStatusTools, composioServiceToolDescriptor, createComposioServiceAgentTool, isComposioServiceServer, projectComposioServiceInventory } from "./composio-service-tool.js";
-import { bindMcpConnectorInventoryScope, existingOrConnectMcpClient } from "./mcp-connector-client-boundary.js";
+import { bindMcpConnectorInventoryScope, existingOrConnectMcpClient, McpConnectorSourceAttestations, admitMcpConnectorDiscovery } from "./mcp-connector-client-boundary.js";
 import { mcpProviderAuthenticatedFetch } from "./mcp-provider-auth.js";
 import { admitMcpProviderAuthServers, withMcpProviderOperation, type McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
 import { inspectInitializedMcpStatus } from "./mcp-status.js";
@@ -41,7 +41,7 @@ import { markMcpToolExposure, planMcpServerExposure } from "./mcp-exposure.js";
 import { executeMcpAgentTool, mcpAgentToolPresentation } from "./mcp-tool-result.js";
 import { markToolOutputSource } from "./tool-output-context.js";
 import { configStore } from "./config-store.js";
-import { mcpRuntimeConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
+import { mcpRuntimeConnectionSnapshot, sameMcpRuntimeConnection } from "./mcp-credential-cleanup-core.js";
 import {
   reconcilePendingMcpCredentialCleanup,
   withConfiguredMcp,
@@ -431,6 +431,9 @@ class McpManager {
    * waiting on its own signal and re-checks its lease afterwards.
    */
   private cachedInventory(server: McpServer, generation: number, client: McpClient, signal?: AbortSignal, fresh = false, limits?: McpToolInventoryLimits): Promise<McpInventory> {
+    if(botConnectorInventoryCacheOnly()){
+      signal?.throwIfAborted();this.assertGeneration(server.id,generation);const inventory=this.toolInventories.peek(client);if(!inventory)return Promise.reject(new Error("Refresh this connector’s metadata in the foreground first."));inventory.guard.assertCurrent();return Promise.resolve(inventory);
+    }
     return this.toolInventories.load(
       client,
       (assertInventoryCurrent) => this.readInventory(client, () => {
@@ -464,6 +467,8 @@ class McpManager {
     return this.activity.begin(id);
   }
 
+  private readonly connectorFingerprints = new McpConnectorSourceAttestations();
+
   async withExistingConnectorClient<T>(server: McpServer, signal: AbortSignal, operation: (port: BotConnectorMcpClientPort) => Promise<T>): Promise<T> {
     const client = this.clients.peekConnected(server.id);
     if (!client) throw new Error("Connect iMCP in the foreground first. Watches never create a new approval session.");
@@ -473,11 +478,26 @@ class McpManager {
     const assertCurrent = () => { lease.assertCurrent(); currentSignal.throwIfAborted(); this.assertGeneration(server.id, generation); if (!this.clients.isConnected(server.id, client)) throw new Error("The approved connector session ended."); return true; };
     const end = this.activity.begin(server.id);
     try {
-      return await withConfiguredMcp(server.id, mcpRuntimeConnectionSnapshot(server), async () => {
+      const operationOnExistingClient = async () => {
         let inventory: McpInventory | undefined;
-        return operation({ list: async (limits) => { assertCurrent(); inventory = undefined; inventory = await this.cachedInventory(server, generation, client, currentSignal, true, limits); assertCurrent(); return inventory.tools.map(mcpRemoteToolDescriptor); },
+        return operation({
+          assertCurrent:()=>{assertCurrent();inventory?.guard.assertCurrent();},
+          attestConnectionFingerprint: (fingerprint) => { this.connectorFingerprints.attest(client,lease.epoch,fingerprint,assertCurrent); },
+          connectionFingerprint: () => { return this.connectorFingerprints.get(client,lease.epoch,assertCurrent); },
+          list: async (limits) => { assertCurrent(); inventory = undefined; const publish=this.toolInventories.publisher(client); inventory = await this.cachedInventory(server, generation, client, currentSignal, true, limits); assertCurrent();publish(inventory); return inventory.tools.map(mcpRemoteToolDescriptor); },
+          cached:async()=>{assertCurrent();inventory=this.toolInventories.peek(client);if(!inventory)throw new Error("Refresh this connector’s metadata in the foreground first.");inventory.guard.assertCurrent();assertCurrent();return inventory.tools.map(mcpRemoteToolDescriptor);},
           call: async (name, args) => { assertCurrent(); if (!inventory) throw new Error("Connector metadata was not checked."); return guardedMcpToolCall(inventory.guard, client, { name, arguments: args }, botMcpRequestOptions(currentSignal)); } });
-      }, assertCurrent);
+      };
+      if (botConnectorInventoryCacheOnly()) {
+        // A background source read must not enter generic admission's pending
+        // credential-cleanup/repair queue. Its existing client + attestation,
+        // configuration epoch and exact saved snapshot are independently fenced.
+        const configured=(await configStore.listMcpServers()).find(row=>row.id===server.id);
+        assertCurrent();
+        if(!configured||!sameMcpRuntimeConnection(mcpRuntimeConnectionSnapshot(configured),mcpRuntimeConnectionSnapshot(server)))throw new Error("This approved connector's configuration changed.");
+        const result=await operationOnExistingClient();assertCurrent();return result;
+      }
+      return await withConfiguredMcp(server.id,mcpRuntimeConnectionSnapshot(server),operationOnExistingClient,assertCurrent);
     } finally { end(); }
   }
 
@@ -570,7 +590,7 @@ class McpManager {
     void this.prewarmer.start(id, discover, onFailure);
   }
 
-  /** One disposable Settings metadata connection, never an agent/watch cache entry. */
+  /** One disposable Settings connection for explicit metadata or typed Calendar acceptance reads; never an agent/watch cache entry. */
   withForegroundComposioSettingsClient<T>(server: McpServer, signal: AbortSignal, operation: (port: ForegroundComposioSettingsClientPort) => Promise<T>): Promise<T> {
     return withForegroundComposioSettingsClientCore({
       server, signal, operation, lease: mcpConfigurationLeases.acquire(server.id), attempts: this.statusClients,
@@ -722,7 +742,7 @@ class McpManager {
     // Same client, same inventory, same server identity and a still-current
     // lease: reuse the very same tool objects, so per-tool work (name hashing,
     // schema normalization, provider validator caches) is not redone.
-    const dependencies = [cachedClient, metadata.inventory, key, Boolean(resourceTool), connectorScope];
+    const dependencies = [cachedClient, metadata.inventory, key, Boolean(resourceTool), connectorScope,botConnectorInventoryCacheOnly()];
     const reused = cachedClient ? this.built.get(server.id, dependencies) : undefined;
     if (reused) return withResources(reused);
     // Named against the full inventory, so hiding one tool never renames another.
@@ -740,7 +760,8 @@ class McpManager {
         return this.withLiveClient(server, generation, cachedClient!, async (live) => {
           const current = await this.cachedInventory(server, generation, live, signal, true);
           lease.assertCurrent(); signal?.throwIfAborted();
-          return { tools: current.tools.map(mcpRemoteToolDescriptor), call: (name, args, callSignal) => {
+          return { tools: current.tools.map(mcpRemoteToolDescriptor), call: async (name, args, callSignal) => {
+            await assertBotConnectorModelEffectCurrent();
             lease.assertCurrent(); this.assertGeneration(server.id, generation);
             const currentSignal = AbortSignal.any([lease.signal, ...(callSignal ? [callSignal] : [])]);
             currentSignal.throwIfAborted();
@@ -838,16 +859,14 @@ function discoverMcpServer(
     if (recent) return Promise.reject(new McpRecentFailureError(recent.error, recent.retryInMs));
   }
   let generation = 0;
-  return withConfiguredMcp(
-    server.id,
-    mcpRuntimeConnectionSnapshot(server),
-    () => mcpManager.agentContextFor(server, generation, options.providerScope, options.configured),
-    () => true,
-    () => {
-      generation = mcpManager.connectionGeneration(server.id);
-      generations.set(server.id, generation);
-    },
-  ).then(
+  const lease=mcpConfigurationLeases.acquire(server.id);
+  const admit=()=>{generation=mcpManager.connectionGeneration(server.id);generations.set(server.id,generation);};
+  return admitMcpConnectorDiscovery({serverId:server.id,
+    assertExisting:()=>{lease.assertCurrent();if(!mcpManager.hasExistingConnector(server.id)||server.authProvider)throw new Error("Connect this selected app in the foreground before using the watch.");},
+    assertConfigured:async()=>{const current=(await configStore.listMcpServers()).find(row=>row.id===server.id);lease.assertCurrent();if(!current||!sameMcpRuntimeConnection(mcpRuntimeConnectionSnapshot(current),mcpRuntimeConnectionSnapshot(server)))throw new Error("This selected connector's configuration changed.");},
+    runExisting:async()=>{admit();const context=await mcpManager.agentContextFor(server,generation,options.providerScope,options.configured);lease.assertCurrent();return context;},
+    normalAdmission:()=>withConfiguredMcp(server.id,mcpRuntimeConnectionSnapshot(server),()=>mcpManager.agentContextFor(server,generation,options.providerScope,options.configured),()=>true,admit),
+  }).then(
     (context) => {
       mcpManager.clearFailure(server.id);
       mcpDiagnostics.recovered(server);
@@ -963,6 +982,13 @@ export async function collectMcpAgentTools(
 }
 
 export interface BotConnectorMcpClientPort {
+  /** Synchronous client/configuration/current-inventory revision fence, no I/O. */
+  assertCurrent?():void;
+  /** Host-only attestation bound to this actual live client, never diagnostics. */
+  attestConnectionFingerprint?(fingerprint: string): void;
+  connectionFingerprint?(): string | undefined;
+  /** Completed current live metadata only, with no RPC or pending-read join. */
+  cached?():Promise<readonly SubagentMcpRemoteTool[]>;
   list(limits?: McpToolInventoryLimits): Promise<readonly SubagentMcpRemoteTool[]>;
   call(name: string, args: Record<string, unknown>): Promise<unknown>;
 }
@@ -973,7 +999,13 @@ export function withBotConnectorMcpClient<T>(server: McpServer, signal: AbortSig
     ? { ...raw, list: () => raw.list(COMPOSIO_WATCH_INVENTORY_LIMITS) } : raw));
 }
 
-/** Explicit foreground Settings metadata only; no agent-cache warming or background repair. */
+/** Background reads never refresh inventory or create/repair an MCP connection. */
+export function withCachedBotConnectorMcpClient<T>(server:McpServer,signal:AbortSignal,operation:(port:BotConnectorMcpClientPort)=>Promise<T>):Promise<T>{
+  if(!isComposioServiceServer(server))throw new Error("Unsupported cached connector transport.");
+  return mcpManager.withExistingConnectorClient(server,signal,raw=>operation({...raw,list:async()=>{if(!raw.cached)throw new Error("Cached connector metadata is unavailable.");return raw.cached();}}));
+}
+
+/** Explicit foreground Settings checks only; no agent-cache warming or background repair. */
 export function withForegroundComposioSettingsMcpClient<T>(server: McpServer, signal: AbortSignal, operation: (port: ForegroundComposioSettingsClientPort) => Promise<T>): Promise<T> {
   return mcpManager.withForegroundComposioSettingsClient(server, signal, operation);
 }

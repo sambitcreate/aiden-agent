@@ -808,7 +808,9 @@
         "main/services/bot-routine-events/composio-calendar-contract.test.ts",
         "main/services/bot-routine-events/composio-calendar-read-check.test.ts",
         "main/services/bot-routine-events/composio-calendar-transport.test.ts",
-        "main/services/bot-routine-events/composio-settings-calendar-check.test.ts"
+        "main/services/bot-routine-events/composio-settings-calendar-check.test.ts",
+        "main/services/bot-routine-events/composio-calendar-host.test.ts",
+        "main/services/bot-routine-events/imcp-mail-host.test.ts"
       ],
       "preserved": [
         "worktree-remover-native",

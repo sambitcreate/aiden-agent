@@ -1,6 +1,7 @@
+import type { BotConnectorSourceAdmission } from "./connector-source-admission.js";
 import { COMPOSIO_SERVICE_TOOL_NAME, composioServiceToolDescriptor, isComposioServiceServer } from "../composio-service-tool.js";
 import { botMcpLiveToolMatchesGrant } from "../bot-tool-authority.js";
-import type { BotRuntimeAuthorityAdmission, BotRuntimeConnectionAuthority } from "../bot-runtime-authority.js";
+import type { BotRuntimeConnectionAuthority } from "../bot-runtime-authority.js";
 import type { BotConnectorMcpClientPort } from "../mcp.js";
 import type { McpServer } from "../types.js";
 import { COMPOSIO_WATCH_INVENTORY_LIMITS } from "../mcp-tool-inventory.js";
@@ -11,8 +12,8 @@ import { inspectComposioWatchSchemas, publicComposioWatchProbeResult, type Compo
 interface ComposioSourceInspectionPorts {
   hasExistingConnector(serverId: string): boolean;
   preflight(botId: string, server: McpServer, signal: AbortSignal): Promise<void>;
-  admit(botId: string, serverId: string): Promise<BotRuntimeAuthorityAdmission>;
-  connection(admission: BotRuntimeAuthorityAdmission, serverId: string): Promise<BotRuntimeConnectionAuthority>;
+  admit(botId: string, serverId: string): Promise<BotConnectorSourceAdmission>;
+  connection(admission: BotConnectorSourceAdmission, serverId: string, raw:BotConnectorMcpClientPort): Promise<BotRuntimeConnectionAuthority>;
   withClient<T>(server: McpServer, signal: AbortSignal, action: (raw: BotConnectorMcpClientPort) => Promise<T>): Promise<T>;
   /** The host serializes publication with Bot mutation/deletion and writes only structural evidence. */
   publish(botId: string, result: ComposioWatchProbeResult, assertCurrent: () => Promise<void>): Promise<void>;
@@ -29,7 +30,7 @@ export function createComposioSourceInspection(ports: ComposioSourceInspectionPo
     const deadline = new AbortController();
     const timeout = setTimeout(() => deadline.abort(new BotConnectorWatchError("unavailable", "Composio inspection timed out. Try again in the foreground.")), timeoutMs);
     const operationSignal = AbortSignal.any([signal, deadline.signal]);
-    let admission: BotRuntimeAuthorityAdmission | undefined; let released = false;
+    let admission: BotConnectorSourceAdmission | undefined; let released = false;
     const release = () => { if (admission && !released) { released = true; admission.release(); } };
     const foreground = async () => {
       operationSignal.throwIfAborted(); await assertActive();
@@ -45,18 +46,18 @@ export function createComposioSourceInspection(ports: ComposioSourceInspectionPo
       const held = admission;
       const combined = AbortSignal.any([operationSignal, held.signal]);
       try {
-        const grant = await ports.connection(held, server.id);
-        combined.throwIfAborted(); await foreground();
-        const service = grant.tools.find((tool) => tool.name === COMPOSIO_SERVICE_TOOL_NAME);
-        if (!service || !botMcpLiveToolMatchesGrant(service, composioServiceToolDescriptor())) {
-          throw new BotConnectorWatchError("capability_denied", "Allow Composio once in this Bot’s Access settings, then find sources again.");
-        }
         const current = async (callSignal = combined) => {
           callSignal.throwIfAborted(); combined.throwIfAborted(); await foreground();
           await held.revalidateBeforeEffect();
           await foreground(); callSignal.throwIfAborted(); combined.throwIfAborted();
         };
         return await ports.withClient(server, combined, async (raw) => {
+          const grant = await ports.connection(held, server.id,raw);
+          combined.throwIfAborted(); await foreground();
+          const service = grant.tools.find((tool) => tool.name === COMPOSIO_SERVICE_TOOL_NAME);
+          if (!service || !botMcpLiveToolMatchesGrant(service, composioServiceToolDescriptor())) {
+            throw new BotConnectorWatchError("capability_denied", "Allow Composio once in this Bot’s Access settings, then find sources again.");
+          }
           const result = await inspectComposioWatchSchemas({
             foreground: true,
             assertCurrent: current,

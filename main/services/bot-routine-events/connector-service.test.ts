@@ -1,12 +1,20 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createBotConnectorWatchService, type BotConnectorWatchServicePorts } from "./connector-service.js";
 import { createBotEventRoutineStore } from "./store.js";
 import { createBotWatches } from "./watch.js";
+import { composioSourceConnection } from "./connector-source-admission.js";
+import { verifyCalendarContract } from "./composio-calendar-contract.js";
+import { syntheticCalendarMetadata, syntheticCalendarSchemas, syntheticCalendarExecutor } from "./composio-calendar-test-support.js";
+import { botSessionDirectory } from "../bot-routine-notes.js";
+import type { ComposioCalendarWatchBinding } from "./connector-types.js";
 import type { BotConnectorWatchBinding } from "./connector-types.js";
 import type { BotConnectorWatchCreateInput } from "../../../renderer/shared/bot-connector-watches.js";
 import { eventRoutineAfterRun } from "./after-run.js";
@@ -38,7 +46,7 @@ function fixture(t: test.TestContext, overrides: Partial<BotConnectorWatchServic
     authorize: async () => { if (!allowed) throw new Error("revoked"); return { signal: new AbortController().signal, release() {} }; },
     dispatcher: { emit: async (_bot, _id, event) => { events.push(event.eventId); return "queued"; } }, changed() {}, isPaused: async () => false, now: () => now, ...overrides };
   const make = () => createBotConnectorWatchService(ports);
-  return { store, ports, make, events, now: () => now, advance: (ms: number) => { now += ms; }, revoke: () => { allowed = false; }, deleteBot: () => { exists = false; }, setMessages: (ids: string[]) => { messages = ids.map(message); }, reads: () => reads, discoveries: () => discovery };
+  return { root, store, ports, make, events, now: () => now, advance: (ms: number) => { now += ms; }, revoke: () => { allowed = false; }, deleteBot: () => { exists = false; }, setMessages: (ids: string[]) => { messages = ids.map(message); }, reads: () => reads, discoveries: () => discovery };
 }
 async function create(service: ReturnType<typeof createBotConnectorWatchService>) {
   const sources = await service.discoverSources(BOT);
@@ -298,9 +306,12 @@ test("connector event model execution inherits the selected scope across awaits 
     const restriction = botConnectorExecutionRestriction()!;
     assert.equal(restriction.routineId, routine.id);
     assert.equal(restriction.revision, routine.updatedAt);
+    assert.equal(restriction.binding.adapter, "imcp-mail-v1");
+    if (restriction.binding.adapter !== "imcp-mail-v1") throw new Error("Expected Mail source");
     assert.equal(restriction.binding.account, "private-account-id");
     restriction.binding.mailbox = "forged-other-mailbox";
-    assert.equal(botConnectorExecutionRestriction()?.binding.mailbox, "V10:12", "callers cannot mutate the task's captured source");
+    const frozen = botConnectorExecutionRestriction()?.binding;
+    assert.equal(frozen?.adapter === "imcp-mail-v1" ? frozen.mailbox : undefined, "V10:12", "callers cannot mutate the task's captured source");
     await assert.rejects(withBotConnectorExecutionRestriction({ ...restriction, binding: { ...restriction.binding, account: "other-account" } }, async () => undefined), /cannot switch its accepted account/u);
     const scopes = await resolveBotMcpInventory(new AbortController().signal, { scopeCache: createBotMcpScopeCache(),
       listServers: async () => [binding.serverId, "unrelated-connector"].map((id) => ({ id, name: id, transport: "stdio", command: "synthetic-only", enabled: true })), credentialSignature: async () => "c".repeat(64),
@@ -312,4 +323,110 @@ test("connector event model execution inherits the selected scope across awaits 
   assert.equal((await runner.run(routine, { eventId: "synthetic-change", source: "watch", payload: "New mail" })).settled, true);
   assert.deepEqual(inspected, [binding.serverId], "model admission inventory cannot incidentally connect the unrelated server");
   assert.equal(botConnectorInventoryServer(), undefined); assert.equal(botConnectorExecutionRestriction(), undefined); assert.equal(view.id, routine.id);
+});
+
+
+function calendarFixture(t:test.TestContext) {
+  const connection=composioSourceConnection("preset-composio","a".repeat(64));
+  const calendar:ComposioCalendarWatchBinding={adapter:"composio-calendar-v1",serverId:"preset-composio",connection,tools:[...connection.tools],accountId:"ca_syntheticactive00001",calendarId:"planning@example.test",labels:{providerLabel:"Calendar",accountLabel:"Person",resourceLabel:"Planning"},contract:verifyCalendarContract(syntheticCalendarMetadata(),syntheticCalendarSchemas()).contract};
+  let reads=0;
+  const f=fixture(t,{calendarAvailable:()=>true,mailAvailable:()=>false,discover:async()=>({bindings:[calendar],unavailableReasons:[]}),withCalendarPort:async(_bot,_binding,_signal,action)=>action({assertCurrent:async()=>{},read:async(read)=>{reads++;return syntheticCalendarExecutor(read,{items:[{id:"first-upcoming",status:"confirmed",summary:"Planning",start:{dateTime:"2026-11-03T15:30:00Z"},end:{dateTime:"2026-11-03T16:00:00Z"}}]});}})});
+  return {...f,calendar,calendarReads:()=>reads};
+}
+async function createCalendar(f:ReturnType<typeof calendarFixture>){const service=f.make(),sources=await service.discoverSources(BOT);const input:BotConnectorWatchCreateInput={botId:BOT,mutationId:randomUUID(),sourceChoiceId:sources.choices[0]!.id,name:"Planning",prompt:"Prepare for upcoming events.",condition:{kind:"calendar",lookAheadMinutes:60,timezone:"America/New_York"},everyMinutes:15};return {service,view:await service.create(input),input};}
+
+test("Calendar initial upcoming events durably hand off once while Mail keeps its quiet first baseline",async t=>{
+  const f=calendarFixture(t); const {service,view}=await createCalendar(f);
+  const preview=await service.testCheck({botId:BOT,id:view.id,expectedRevision:view.revision});assert.equal(preview.changeCount,1);
+  const templates=(await service.list(BOT)).templates;assert.equal(templates.find(row=>row.kind==="calendar")?.available,true);assert.equal(templates.find(row=>row.kind==="email")?.available,false);
+  let fail=true;const delivered:string[]=[];
+  const watches=()=>createBotWatches({store:f.store,routines:()=>f.store.all(),check:service.check,dispatcher:{emit:async(_bot,_id,event)=>{if(fail)throw new Error("dispatcher lost before ownership");delivered.push(event.eventId);return "queued";}},authorizeDispatch:service.authorize,isPaused:async()=>false,paused:async()=>{},recovered:async()=>{},now:f.now,setTimer:()=>({cancel(){}})});
+  let runner=watches();assert.equal(await runner.checkNow(BOT,view.id),"changed",JSON.stringify(await f.store.list(BOT)));runner.dispose();
+  const saved=(await createBotEventRoutineStore({profileDir:()=>f.root,now:f.now}).list(BOT))[0]!;
+  assert.equal(saved.watch!.connectorBaseline&&"version"in saved.watch!.connectorBaseline?saved.watch!.connectorBaseline.version:undefined,1);assert.ok(saved.watch!.pending);assert.equal(f.calendarReads(),2);
+  fail=false;runner=watches();t.after(()=>runner.dispose());await runner.checkNow(BOT,view.id);assert.deepEqual(delivered,[saved.watch!.pending!.eventId]);assert.equal(f.calendarReads(),2,"recovery delivers the saved transition before another app read");
+  assert.equal(await runner.checkNow(BOT,view.id),"no_change");assert.equal(delivered.length,1);
+  await assert.rejects(service.create({...inputForWrongTemplate(view),sourceChoiceId:(await service.discoverSources(BOT)).choices[0]!.id}),/matching/u);
+});
+function inputForWrongTemplate(view:{name:string;prompt:string}):BotConnectorWatchCreateInput{return {botId:BOT,mutationId:randomUUID(),sourceChoiceId:"replaced",name:view.name,prompt:view.prompt,condition:{kind:"email",unreadOnly:false},everyMinutes:15};}
+
+test("malformed or cross-account saved Calendar history refuses reads and edits without resetting or overwriting it",async t=>{
+  for(const corruption of ["account","identity","undefined-kind"]){
+    const f=calendarFixture(t);const {service,view}=await createCalendar(f);
+    const checked=await service.check((await f.store.list(BOT))[0]!,new AbortController().signal);assert.equal(checked.ok,true,JSON.stringify(checked));if(!checked.ok||!checked.connector)throw new Error("Calendar check failed");
+    await f.store.mutate(BOT,view.id,row=>({next:{...row,watch:{failures:0,connectorBaseline:checked.connector!.baseline}},result:true}));
+    const file=path.join(botSessionDirectory(f.root,BOT),"event-routines.json"),raw=JSON.parse(readFileSync(file,"utf8"));
+    if(corruption==="account")raw[0].watch.connectorBaseline.accountId="different-account";
+    else if(corruption==="identity")raw[0].watch.connectorBaseline.items[0].id="forged-occurrence";
+    else raw[0].watch.connectorBaseline={items:[]};
+    writeFileSync(file,JSON.stringify(raw));const before=readFileSync(file,"utf8"),reads=f.calendarReads();
+    const reopened=createBotEventRoutineStore({profileDir:()=>f.root,now:f.now});await assert.rejects(reopened.list(BOT),/history is invalid/u);
+    await assert.rejects(reopened.mutate(BOT,view.id,row=>({next:{...row,enabled:false},result:true})),/history is invalid/u);
+    assert.equal(readFileSync(file,"utf8"),before);assert.equal(f.calendarReads(),reads);
+  }
+});
+
+
+test("SIGKILL after Calendar's first baseline publication recovers the exact transition without reading or firing twice",{timeout:15000},async t=>{
+  const f=calendarFixture(t),{view}=await createCalendar(f);
+  const module=(name:string)=>JSON.stringify(pathToFileURL(path.resolve("main/services/bot-routine-events",name)).href);
+  const code=`
+    import {createBotEventRoutineStore} from ${module("store.ts")};
+    import {createBotConnectorWatchService} from ${module("connector-service.ts")};
+    import {createBotWatches} from ${module("watch.ts")};
+    import {syntheticCalendarExecutor} from ${module("composio-calendar-test-support.ts")};
+    const store=createBotEventRoutineStore({profileDir:()=>${JSON.stringify(f.root)},now:()=>${f.now()}});
+    const service=createBotConnectorWatchService({store,supported:()=>true,calendarAvailable:()=>true,knownBot:async()=>true,discover:async()=>{throw Error("No discovery during recovery")},withPort:async()=>{throw Error("No Mail read")},withCalendarPort:async(_bot,_binding,_signal,action)=>action({assertCurrent:async()=>{},read:async read=>syntheticCalendarExecutor(read,{items:[{id:"first-upcoming",status:"confirmed",summary:"Planning",start:{dateTime:"2026-11-03T15:30:00Z"},end:{dateTime:"2026-11-03T16:00:00Z"}}]})}),authorize:async()=>({signal:new AbortController().signal,release(){}}),dispatcher:{emit:async()=>"queued"},changed(){},isPaused:async()=>false,now:()=>${f.now()}});
+    const watches=createBotWatches({store,routines:()=>store.all(),check:service.check,dispatcher:{emit:async(_bot,_id,event)=>{process.stdout.write("SAVED:"+event.eventId+String.fromCharCode(10));setInterval(()=>{},1000);return new Promise(()=>{});}},authorizeDispatch:service.authorize,isPaused:async()=>false,paused:async()=>{},recovered:async()=>{},now:()=>${f.now()},setTimer:()=>({cancel(){}})});
+    await watches.checkNow(${JSON.stringify(BOT)},${JSON.stringify(view.id)});
+  `;
+  const child=spawn(process.execPath,["--import","tsx","--input-type=module","-e",code],{cwd:process.cwd(),stdio:["ignore","pipe","pipe"]});
+  t.after(()=>child.kill("SIGKILL"));let output="",errors="";child.stderr.on("data",chunk=>{errors+=chunk;});
+  const saved=await new Promise<string>((resolve,reject)=>{child.stdout.on("data",chunk=>{output+=chunk;const matched=/SAVED:([^\n]+)/u.exec(output);if(matched)resolve(matched[1]!);});child.once("exit",code=>reject(new Error(`Child exited ${code}: ${errors}`)));});
+  const exited=once(child,"exit");child.kill("SIGKILL");await exited;
+  const reopened=createBotEventRoutineStore({profileDir:()=>f.root,now:f.now});const persisted=(await reopened.list(BOT))[0]!;
+  assert.equal(persisted.watch?.pending?.eventId,saved);assert.equal(persisted.watch?.connectorBaseline?.items.length,1);
+  const service=createBotConnectorWatchService({...f.ports,store:reopened});const watchers=createBotWatches({store:reopened,routines:()=>reopened.all(),check:service.check,dispatcher:f.ports.dispatcher,authorizeDispatch:service.authorize,isPaused:async()=>false,paused:async()=>{},recovered:async()=>{},now:f.now,setTimer:()=>({cancel(){}})});t.after(()=>watchers.dispose());
+  assert.equal(await watchers.checkNow(BOT,view.id),"changed");assert.deepEqual(f.events,[saved]);assert.equal(f.calendarReads(),0);
+  assert.equal(await watchers.checkNow(BOT,view.id),"no_change");assert.deepEqual(f.events,[saved]);assert.equal(f.calendarReads(),1);
+  const changed=await service.update({botId:BOT,id:view.id,expectedRevision:view.revision,mutationId:randomUUID(),name:view.name,prompt:view.prompt,condition:{kind:"calendar",lookAheadMinutes:120,timezone:"UTC"},everyMinutes:15});
+  assert.equal(await watchers.checkNow(BOT,changed.id),"no_change","window/timezone edits preserve the same source's occurrence ledger");assert.deepEqual(f.events,[saved]);
+});
+
+test("source revocation at the real create/update durable publication boundary leaves no edit, receipt or history mutation",async t=>{
+  const {syncFile}=await import("../durable-fs.js");
+  for(const action of ["create","update"] as const)for(const stage of ["before-store","staged-fsync","validation-await"] as const)await t.test(`${action}:${stage}`,async t=>{
+    const f=calendarFixture(t);let controller=new AbortController(),armed=false;
+    const guardedStore=createBotEventRoutineStore({profileDir:()=>f.root,now:f.now,io:{syncFile:async target=>{await syncFile(target);if(armed&&stage==="staged-fsync")controller.abort(new Error("Source revoked after staged fsync"));}}});
+    f.ports.store=guardedStore;
+    f.ports.authorize=async()=>({signal:controller.signal,revalidateBeforeEffect:async()=>{await Promise.resolve();if(armed&&stage==="validation-await")controller.abort(new Error("Source revoked during final validation"));},release(){}});
+    const service=f.make(),sources=await service.discoverSources(BOT),input:BotConnectorWatchCreateInput={botId:BOT,mutationId:randomUUID(),sourceChoiceId:sources.choices[0]!.id,name:"Original",prompt:"Prepare.",condition:{kind:"calendar",lookAheadMinutes:60,timezone:"UTC"},everyMinutes:15};
+    let view:Awaited<ReturnType<typeof service.create>>|undefined;
+    if(action==="update"){
+      view=await service.create(input);
+      const check=await service.check((await guardedStore.list(BOT))[0]!,new AbortController().signal);if(!check.ok||!check.connector)throw new Error("Calendar test fixture did not produce a baseline");
+      await guardedStore.mutate(BOT,view.id,row=>({next:{...row,watch:{failures:0,connectorBaseline:check.connector!.baseline,pending:{eventId:"aaaaaaaaaaaaaaaaaaaaaaaa-owed",payload:"Prior obligation",revision:row.updatedAt,nextAttemptAt:f.now()}}},result:true}));
+    }
+    const before=await guardedStore.list(BOT),nonce=randomUUID(),update=view?{botId:BOT,id:view.id,expectedRevision:view.revision,mutationId:nonce,name:"Revoked edit",prompt:"Changed prompt",condition:{kind:"calendar"as const,lookAheadMinutes:120,timezone:"America/New_York"},everyMinutes:15 as const}:undefined;
+    if(stage==="before-store"){
+      const create=guardedStore.create,mutate=guardedStore.mutate;
+      guardedStore.create=(...args)=>{if(armed)controller.abort(new Error("Source revoked before actual create"));return create(...args);};
+      guardedStore.mutate=(...args)=>{if(armed)controller.abort(new Error("Source revoked before actual mutate"));return mutate(...args);};
+    }
+    armed=true;
+    await assert.rejects(update?service.update(update):service.create(input));
+    assert.deepEqual(await guardedStore.list(BOT),before,"no revision, receipt, baseline or owed event changed on refusal");
+    const disk=createBotEventRoutineStore({profileDir:()=>f.root,now:f.now});assert.deepEqual(await disk.list(BOT),before);
+    armed=false;controller=new AbortController();const accepted=await (update?service.update(update):service.create(input));
+    assert.equal(accepted.name,update?"Revoked edit":"Original");
+    assert.deepEqual(await (update?service.update(update):service.create(input)),accepted,"a never-published request can first admit safely under the same nonce; then replay is stable");
+  });
+});
+
+test("a source revoked after a successful Calendar read cannot advance its baseline or lose the initial owed event",async t=>{
+  const {syncFile}=await import("../durable-fs.js");const f=calendarFixture(t);let controller=new AbortController(),armed=false,released=0;
+  const store=createBotEventRoutineStore({profileDir:()=>f.root,now:f.now,io:{syncFile:async target=>{await syncFile(target);if(armed)controller.abort(new Error("source revoked before baseline publication"));}}});f.ports.store=store;f.ports.authorize=async()=>({signal:controller.signal,revalidateBeforeEffect:async()=>{controller.signal.throwIfAborted();},release(){released++;}});
+  const {service,view}=await createCalendar(f);const watcher=createBotWatches({store,routines:()=>store.all(),check:service.check,dispatcher:f.ports.dispatcher,authorizeDispatch:service.authorize,isPaused:async()=>false,paused:async()=>{},recovered:async()=>{},now:f.now,setTimer:()=>({cancel(){}})});t.after(()=>watcher.dispose());
+  const before=await store.list(BOT);armed=true;await assert.rejects(watcher.checkNow(BOT,view.id),/revoked/u);assert.deepEqual(await store.list(BOT),before);assert.deepEqual(f.events,[]);assert.equal(released,2,"both create and the abandoned read lease are released");
+  armed=false;controller=new AbortController();assert.equal(await watcher.checkNow(BOT,view.id),"changed");assert.equal(f.events.length,1);assert.equal(await watcher.checkNow(BOT,view.id),"no_change");assert.equal(f.events.length,1);
 });

@@ -62,3 +62,32 @@ test("built tool memo separates watch callbacks from an earlier attended context
   assert.equal(memo.get("selected", [identity, undefined]), undefined);
   assert.equal(await watch.execute(), "selected");
 });
+
+test("Calendar source attestation never transfers to a replacement client or changed credential/configuration epoch", async () => {
+  const { McpConnectorSourceAttestations } = await import("./mcp-connector-client-boundary.js");
+  const { withBotConnectorForegroundLifetime, withBotConnectorCachedInventoryScope, botConnectorInventoryCacheOnly } = await import("./bot-connector-inventory-scope.js");
+  const identities = new McpConnectorSourceAttestations(), original = {}, replacement = {}; let current = true;
+  const assertCurrent = () => { if (!current) throw new Error("approved session closed"); };
+  assert.throws(() => identities.attest(original, 1, "a".repeat(64), assertCurrent), /foreground/u);
+  await withBotConnectorForegroundLifetime({ signal: new AbortController().signal, assertCurrent }, async () => identities.attest(original, 1, "a".repeat(64), assertCurrent));
+  assert.equal(identities.get(original, 1, assertCurrent), "a".repeat(64));
+  assert.equal(identities.get(replacement, 1, assertCurrent), undefined);
+  assert.equal(identities.get(original, 2, assertCurrent), undefined, "even the same still-closing client cannot authorize changed credentials");
+  const callback = await withBotConnectorCachedInventoryScope("selected", async () => bindMcpConnectorInventoryScope(async () => { assert.equal(botConnectorInventoryCacheOnly(), true); return identities.get(original, 1, assertCurrent); }));
+  assert.equal(await callback(), "a".repeat(64)); current = false; await assert.rejects(callback(), /closed/u);
+});
+
+test("actual source-scoped discovery bypasses an unrelated cleanup barrier and never invokes credential admission",{timeout:2000},async()=>{
+  const {admitMcpConnectorDiscovery}=await import("./mcp-connector-client-boundary.js");
+  const {withBotConnectorCachedInventoryScope}=await import("./bot-connector-inventory-scope.js");
+  let admissions=0,keys=0,configured=0,runs=0,live=true,current=true,release!:()=>void;
+  const barrier=new Promise<void>(resolve=>{release=resolve;});
+  const ports={serverId:"selected",assertExisting(){if(!live)throw new Error("cold");},assertConfigured:async()=>{configured++;if(!current)throw new Error("config changed");},runExisting:async()=>{runs++;return "cached current tool assembly";},normalAdmission:async()=>{admissions++;await barrier;keys++;return "ordinary admitted tools";}};
+  const ordinary=admitMcpConnectorDiscovery(ports);await Promise.resolve();
+  await withBotConnectorCachedInventoryScope("selected",async()=>{
+    assert.equal(await admitMcpConnectorDiscovery(ports),"cached current tool assembly");assert.equal(configured,1);assert.equal(admissions,1);assert.equal(keys,0);
+    await assert.rejects(admitMcpConnectorDiscovery({...ports,serverId:"other"}),/another connector/u);
+    live=false;await assert.rejects(admitMcpConnectorDiscovery(ports),/cold/u);live=true;current=false;await assert.rejects(admitMcpConnectorDiscovery(ports),/config changed/u);
+  });
+  assert.equal(runs,1);assert.equal(admissions,1);assert.equal(keys,0,"the source path neither waits for cleanup nor reads a key");release();assert.equal(await ordinary,"ordinary admitted tools");assert.equal(keys,1);
+});

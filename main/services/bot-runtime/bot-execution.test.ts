@@ -168,17 +168,18 @@ test("delayed background A compaction keeps A model, thinking and owner while B 
   assert.equal(env.charges.filter((row) => row.owner === "A").length, 2); assert.equal(env.charges.filter((row) => row.owner === "B").length, 1);
 });
 test("queued watch execution restores its exact connector boundary and cannot connect cold or follow a changed account", async (t) => {
-  for (const mode of ["cold", "changed"] as const) await t.test(mode, async (t) => {
+  for (const adapter of ["mail", "calendar"] as const) for (const mode of ["cold", "changed"] as const) await t.test(`${adapter}:${mode}`, async (t) => {
     const folder = await mkdtemp(path.join(os.tmpdir(), "aiden-execution-watch-")); t.after(() => rm(folder, { recursive: true, force: true }));
     const env = await environment(path.join(folder, "unused.sqlite")); await env.harness.close(ctx);
-    const accepted: BotConnectorWatchBinding = { adapter: "imcp-mail-v1", serverId: "selected-mail", connection: { sourceId: "selected-mail", connectionFingerprint: "connection-one", toolsetFingerprint: "tools-one", exactFingerprint: "grant-one", tools: [] }, tools: [], account: "accepted-account", mailbox: "Inbox", labels: { providerLabel: "Mail", accountLabel: "Accepted", resourceLabel: "Inbox" } };
-    const restriction = { routineId: "watch-one", revision: 1, binding: accepted };
+    const mail: BotConnectorWatchBinding = { adapter: "imcp-mail-v1", serverId: "selected-mail", connection: { sourceId: "selected-mail", connectionFingerprint: "connection-one", toolsetFingerprint: "tools-one", exactFingerprint: "grant-one", tools: [] }, tools: [], account: "accepted-account", mailbox: "Inbox", labels: { providerLabel: "Mail", accountLabel: "Accepted", resourceLabel: "Inbox" } };
+    const accepted: BotConnectorWatchBinding = adapter === "mail" ? mail : {adapter:"composio-calendar-v1",serverId:"preset-composio",connection:{...mail.connection,sourceId:"preset-composio"},tools:[],accountId:"accepted-account",calendarId:"planning@example.test",labels:mail.labels,contract:{revision:"composio-calendar-v1",executorSchemaHash:"a".repeat(64),readSchemaHashes:{listCalendars:"b".repeat(64),listEvents:"c".repeat(64),getEvent:"d".repeat(64)}}};
+    const restriction = { routineId: "watch-one", revision: 1, binding: accepted, ...(adapter==="calendar"?{condition:{kind:"calendar"as const,lookAheadMinutes:60,timezone:"UTC"}}:{}) };
     const selected = await env.port.getClaim("bot:one", "B", "B"); selected.connectorRestriction = structuredClone(restriction); selected.connectorServerId = accepted.serverId;
     let live = true, current = structuredClone(accepted.connection), connectAttempts = 0, entered = false; const barrier = gate(), observed: string[] = [];
     const original = env.port.resolve;
     env.port.resolve = async (...args) => {
       if (args[1].id === "B") {
-        observed.push(`${botConnectorInventoryServer()}:${botConnectorExecutionRestriction()?.binding.account}`);
+        observed.push(`${botConnectorInventoryServer()}:${((source) => source?.adapter === "imcp-mail-v1" ? source.account : source?.accountId)(botConnectorExecutionRestriction()?.binding)}`);
         assertBotExecutionConnectorSource("bot:one", args[1].connectorRestriction!, { id: "watch-one", botId: "bot:one", enabled: true, updatedAt: 1, connector: { binding: accepted } }, current);
         await existingOrConnectMcpClient({ peek: () => live ? {} : undefined, connect: async () => { connectAttempts++; return {}; } });
       }
@@ -194,7 +195,7 @@ test("queued watch execution restores its exact connector boundary and cannot co
     barrier.release();
     for (let n = 0; n < 100 && (await service.routineState("bot:one")).kind !== "interrupted"; n++) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal((await service.routineState("bot:one")).kind, "interrupted"); assert.equal(connectAttempts, 0); assert.deepEqual(env.calls.map((row) => row.model), ["A"]);
-    assert.deepEqual(observed, ["selected-mail:accepted-account", "selected-mail:accepted-account"]);
+    assert.deepEqual(observed, [`${accepted.serverId}:accepted-account`, `${accepted.serverId}:accepted-account`]);
     assert.equal((await service.awaitReply("bot:one", person.submissionId, new AbortController().signal)).kind, "interrupted", "unrelated queued input remains unfinished and available for later Resume");
   });
 });
@@ -866,4 +867,21 @@ test("known-response recovery cannot retarget an acknowledged dispatch, owner or
   assert.equal((await spending.dispatchReceipt(dispatch.dispatchId))?.state, "acknowledged_unknown"); assert.equal((await spending.status("bot", "bot:one"))?.spentUsd, 0);
   await recordKnownBotExecutionResponse(spending, "bot:one", dispatch.dispatchId, response, dispatch, digest); await recordKnownBotExecutionResponse(spending, "bot:one", dispatch.dispatchId, response, dispatch, digest);
   assert.equal((await spending.dispatchReceipt(dispatch.dispatchId))?.state, "recorded"); assert.equal((await spending.status("bot", "bot:one"))?.spentUsd, 0.25); assert.equal(Object.keys(document.dispatches!).length, 1);
+});
+
+test("Mail source reads remain model-free with a missing Bot default, then queued changed work uses its frozen routine model",{timeout:10000},async t=>{
+  const {createModelFreeMailFixture}=await import("../bot-routine-events/imcp-mail-test-support.js"),{readImcpWatch,compareImcpWatch}=await import("../bot-routine-events/connector-watch-imcp.js");
+  const folder=await mkdtemp(path.join(os.tmpdir(),"aiden-mail-explicit-model-"));t.after(()=>rm(folder,{recursive:true,force:true}));
+  const source=await createModelFreeMailFixture(path.join(folder,"source")),signal=new AbortController().signal;
+  const [binding]=await source.host.discover(source.botId,source.serverId,signal,async()=>{});assert.ok(binding);
+  const env=await environment(path.join(folder,"unused.sqlite"));await env.harness.close(ctx);let defaultResolutions=0;
+  const service=await createBotSessionService({profileDir:folder,models:env.models,execution:env.port,extension:recordingDeps(),resolveModel:async()=>{defaultResolutions++;throw new Error("Bot default unavailable");},knownBotIds:async()=>new Set(["bot:one"]),settings:{compaction:{enabled:false}}});t.after(()=>service.shutdown());
+  const read=()=>source.host.withPort("bot:one",binding!,signal,port=>readImcpWatch({kind:"email",account:binding!.account,mailbox:binding!.mailbox,unreadOnly:false},port,Date.parse("2026-11-03T15:00:00Z"),signal));
+  const baseline=await read();source.setMessages(["new-message"]);const items=await read();assert.equal(compareImcpWatch("email",{kind:"email",items:baseline},items,Date.parse("2026-11-03T15:00:00Z")).changes.length,1);
+  assert.equal(defaultResolutions,0);assert.equal(env.calls.length,0,"finding a Mail change does not query or dispatch a model");
+  const restriction={routineId:"watch-one",revision:1,binding:binding!},bound=await env.port.getClaim("bot:one","B","B");bound.connectorRestriction=restriction;bound.connectorServerId=binding!.serverId;
+  const barrier=gate();let entered=false;t.after(()=>barrier.release());env.faux.setResponses([async()=>{entered=true;await barrier.promise;return fauxAssistantMessage("Earlier explicit routine A");},fauxAssistantMessage("Selected routine B response")]);
+  const a=await service.send("bot:one",{requestId:"A",text:"Earlier routine",routineOrigin:issueBotRoutineInputOrigin({version:1,botId:"bot:one",routineId:"another-routine",runId:"A",kind:"scheduled"})});await waitFor(()=>entered);
+  const b=await withBotConnectorExecutionRestriction(restriction,()=>service.send("bot:one",{requestId:"B",text:"A new Mail message arrived",routineOrigin:issueBotRoutineInputOrigin({version:1,botId:"bot:one",routineId:"watch-one",runId:"B",kind:"event"})}));assert.deepEqual(env.calls.map(row=>row.model),["A"]);
+  barrier.release();await service.awaitReply("bot:one",a.submissionId,signal);assert.equal((await service.awaitReply("bot:one",b.submissionId,signal)).kind,"completed");assert.deepEqual(env.calls.map(row=>row.model),["A","B"]);assert.equal(defaultResolutions,0);
 });
