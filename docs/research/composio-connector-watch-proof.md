@@ -245,3 +245,10 @@ The owner-authorized actual check (`checkedAt:1793781961316`) passed the previou
 The paginated-read null-cursor compatibility (`f7f0fc1a8`) was clear after Sol high review: 194 independent cases plus eight pagination controls. Immutable pre-Open-work snapshot `551cf817a` passed its build, 411 focused cases, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793782878543`) again passed exact invalid-account refusal, then rejected one Calendar-list response at optional string data.nextPageToken returning null. The narrowly recognized page context was not established, so the exception did not apply. No event or GET read ran.
 
 Closed page-shape and schema-context diagnostics are being added to identify the actual representation before changing parser or validation acceptance. Calendar remains gated; credentials, access settings and the installed app remain unchanged.
+
+
+### V23 declared Calendar-list collection — 2026-11-04
+
+Closed page/schema diagnostics (`9dd2765a1`) were clear after Sol high review: 196 independent cases, bounded projection and actual private-publication controls. Immutable pre-Open-work snapshot `abb76d8cd` passed its build, 413 focused cases, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793783873882`) again passed exact invalid-account refusal. Its successful Calendar-list output has a simple object data schema declaring a `calendars` array, rather than `items`, and an optional plain-string `next_page_token` returning null. The first collection record exposes the expected string `id`, `accessRole` and `summary` fields. No raw identities or content were retained.
+
+A curated Calendar-list collection correction is being implemented and reviewed; other aliases, event-list/GET collection changes and generic coercion remain excluded. No events or GET ran, and Calendar remains gated.

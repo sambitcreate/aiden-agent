@@ -210,7 +210,7 @@ Progress (2026-11-03): W0 is complete for source research and offline acceptance
 - [ ] W1 watches complete on desktop, iOS and Android.
 - [x] Open work implemented on desktop, iOS and Android; core and client Sol high reviews clear after fixes, with packaged/physical checks retained in final acceptance.
 - [x] Routine models/thinking/fallback implemented on all clients; runtime proof and core/client Sol high reviews clear, with packaged/physical checks retained in final acceptance.
-- [ ] Approved Bot pairs, peer delivery/results and budgets complete on all clients.
+- [x] Approved Bot pairs, peer delivery/results and budgets implemented on all clients; core, public and native Sol high reviews clear. Packaged/physical checks and the three initial iOS nil-pending observations remain in final acceptance.
 - [ ] Docs, onboarding/gallery and focused suites complete in each feature PR.
 - [ ] Integrated packaged/native acceptance recorded; remaining limitations explicit.
 - [ ] Plan inventory status updated and completed plan archived when appropriate.

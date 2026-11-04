@@ -2,7 +2,7 @@
 // response. New semantic/guard fields require reviewing this protected policy.
 import { copyBoundedJson, utf8Size } from "../bounded-json.js";
 
-export const CALENDAR_OUTPUT_COMPATIBILITY_VERSION = "optional-inert-null-string-and-page-end-v2";
+export const CALENDAR_OUTPUT_COMPATIBILITY_VERSION = "optional-null-and-calendar-collection-v3";
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as ObjectValue : undefined;
 const own = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key);
@@ -58,8 +58,20 @@ function omitInertNulls(value: ObjectValue, schema: ObjectValue): void {
     if (value[key] === null && optionalPlainString(schema, key) && eligibleName(key)) delete value[key];
   }
 }
-function omitNullPageEnd(value: ObjectValue, schema: ObjectValue): void {
-  if (!Array.isArray(value.items)) return;
+const COLLECTIONS = ["items", "calendars", "calendarList", "calendar_list", "events"] as const;
+function pageContext(root: ObjectValue, schema: ObjectValue): { value: ObjectValue; schema: ObjectValue } | undefined {
+  if (root.successful === undefined && root.error === undefined && root.data === undefined) return { value: root, schema };
+  const data = object(root.data), dataSchema = simpleObjectSchema(object(schema.properties)?.data);
+  if (root.successful === true && (root.error === undefined || root.error === null || root.error === "") && root.id === undefined && !COLLECTIONS.some((key) => own(root, key)) && data && dataSchema) return { value: data, schema: dataSchema };
+  return undefined;
+}
+function declaredCalendars(value: ObjectValue, schema: ObjectValue): boolean {
+  const collections = COLLECTIONS.filter((key) => own(value, key));
+  return collections.length === 1 && collections[0] === "calendars" && Array.isArray(value.calendars) && object(object(schema.properties)?.calendars)?.type === "array";
+}
+function omitNullPageEnd(value: ObjectValue, schema: ObjectValue, operation: "listCalendars" | "listEvents"): void {
+  const collections = COLLECTIONS.filter((key) => own(value, key));
+  if (!(collections.length === 1 && collections[0] === "items" && Array.isArray(value.items)) && !(operation === "listCalendars" && declaredCalendars(value, schema))) return;
   for (const key of ["nextPageToken", "next_page_token"]) if (value[key] === null && optionalPlainString(schema, key)) delete value[key];
 }
 function bounded(value: unknown): unknown {
@@ -80,8 +92,21 @@ export function calendarOutputValidationCopy(compiledSchema: unknown, response: 
   if (operation === "listCalendars" || operation === "listEvents") {
     // These are exactly the two page representations consumed by the semantic
     // reader. It still receives the original cursors, including null/conflicts.
-    if (root.successful === undefined && root.error === undefined && root.data === undefined) omitNullPageEnd(root, schema);
-    else if (root.successful === true && (root.error === undefined || root.error === null || root.error === "") && root.items === undefined && root.id === undefined && data && dataSchema) omitNullPageEnd(data, dataSchema);
+    const page = pageContext(root, schema);
+    if (page) omitNullPageEnd(page.value, page.schema, operation);
   }
   return copy;
+}
+/** The only additional collection is the observed LIST_CALENDARS array, and
+ * only an explicit current array declaration can authorize that representation.
+ * Call after the unchanged output validator; no aliases/defaults are supplied. */
+export function calendarOutputRepresentationAllowed(compiledSchema: unknown, response: unknown, operation: "listCalendars" | "listEvents" | "getEvent"): boolean {
+  const root = object(bounded(response)), schema = simpleObjectSchema(bounded(compiledSchema));
+  if (!root) return false;
+  const data = object(root.data);
+  const aliasPresent = [root, ...(data ? [data] : [])].some((value) => COLLECTIONS.slice(1).some((key) => own(value, key)));
+  if (!aliasPresent) return true;
+  if (operation !== "listCalendars" || !schema) return false;
+  const page = pageContext(root, schema);
+  return !!page && declaredCalendars(page.value, page.schema);
 }

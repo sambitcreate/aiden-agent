@@ -7,7 +7,7 @@ import { compileComposioWatchInputSchema, composioWatchSchemaDiagnosticDialect, 
 import { buildComposioCalendarExecutorRequest, parseComposioCalendarExecutorResponse, type ComposioCalendarRead } from "./connector-watch-composio.js";
 import type { ComposioCalendarContract } from "./composio-calendar-host-port.js";
 import { ComposioCalendarOutputSchemaError, normalizeComposioCalendarOutputSchema, type ComposioCalendarReferenceFailure } from "./composio-calendar-output-schema.js";
-import { CALENDAR_OUTPUT_COMPATIBILITY_VERSION, calendarOutputValidationCopy } from "./composio-calendar-output-compatibility.js";
+import { CALENDAR_OUTPUT_COMPATIBILITY_VERSION, calendarOutputRepresentationAllowed, calendarOutputValidationCopy } from "./composio-calendar-output-compatibility.js";
 import { composioCalendarPageShapeFacts, type ComposioCalendarPageShapeFacts } from "./composio-calendar-page-diagnostics.js";
 
 export const CALENDAR_SCHEMA_SLUGS = ["GOOGLECALENDAR_LIST_CALENDARS", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_EVENTS_GET"] as const;
@@ -334,6 +334,7 @@ export function verifyCalendarContract(metadata: readonly SubagentMcpRemoteTool[
       const upstream = parseComposioCalendarExecutorResponse(boundedCalendarContractJson(response), read);
       const validator = outputValidators.get(item.tool_slug)!;
       if (!validator(calendarOutputValidationCopy(validator.schema, upstream, read.kind))) return validationFailure("read_response", validator, { operation: read.kind, direction: "output" }, undefined, upstream);
+      if (!calendarOutputRepresentationAllowed(validator.schema, upstream, read.kind)) throw new ComposioCalendarContractError("read_response", "invalid", { keyword: "other", dialect: composioWatchSchemaDiagnosticDialect(optionalObject(validator.schema)?.$schema), operation: read.kind, direction: "output", pageShape: composioCalendarPageShapeFacts(validator.schema, upstream) });
     },
   });
 }

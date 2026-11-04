@@ -114,10 +114,13 @@ function executorResult(value: unknown, read: ComposioCalendarRead): RecordValue
   // Candidate forms are explicit and non-overlapping. Both remain gated until
   // the installed operation's real output contract is independently accepted.
   if (response.successful !== undefined) {
-    if (response.items !== undefined || response.id !== undefined) return fail();
-    const inner = action(response); noPartial(inner, true); return inner;
+    if (response.items !== undefined || response.id !== undefined || ["calendars", "calendarList", "calendar_list", "events"].some((key) => Object.prototype.hasOwnProperty.call(response, key))) return fail();
+    const inner = action(response); noPartial(inner, true);
+    if (read.kind === "getEvent" && ["calendars", "calendarList", "calendar_list", "events"].some((key) => Object.prototype.hasOwnProperty.call(inner, key))) return fail();
+    return inner;
   }
   if (response.error !== undefined || response.data !== undefined) return fail();
+  if (read.kind === "getEvent" && ["calendars", "calendarList", "calendar_list", "events"].some((key) => Object.prototype.hasOwnProperty.call(response, key))) return fail();
   return response;
 }
 
@@ -149,14 +152,17 @@ function source(value: ComposioCalendarSource): ComposioCalendarSource {
   keys(record, ["accountId", "calendarId", "labels"]); const labels = object(record.labels); keys(labels, ["providerLabel", "accountLabel", "resourceLabel"]);
   return { accountId: accountId(record.accountId), calendarId: calendarId(record.calendarId), labels: { providerLabel: text(labels.providerLabel), accountLabel: text(labels.accountLabel), resourceLabel: text(labels.resourceLabel) } };
 }
-function page(value: RecordValue, maximum: number): { items: unknown[]; next?: string } {
+function page(value: RecordValue, maximum: number, operation: "listCalendars" | "listEvents"): { items: unknown[]; next?: string } {
   noPartial(value, true);
-  if (!Array.isArray(value.items) || value.items.length > maximum) return fail();
+  const collections = ["items", "calendars", "calendarList", "calendar_list", "events"].filter((key) => Object.prototype.hasOwnProperty.call(value, key));
+  if (collections.length !== 1 || (collections[0] !== "items" && !(operation === "listCalendars" && collections[0] === "calendars"))) return fail();
+  const items = value[collections[0]!];
+  if (!Array.isArray(items) || items.length > maximum) return fail();
   const camel = value.nextPageToken, snake = value.next_page_token;
   if (camel !== undefined && snake !== undefined) return fail("Calendar returned conflicting page cursors.");
   const cursor = camel ?? snake;
-  if (cursor === undefined || cursor === null || cursor === "") return { items: value.items };
-  return { items: value.items, next: text(cursor, 2_000) };
+  if (cursor === undefined || cursor === null || cursor === "") return { items };
+  return { items, next: text(cursor, 2_000) };
 }
 /** Parse only a freshly guarded Search reply; this data never grants a read. */
 export function parseComposioCalendarAccounts(value: unknown): Array<{ id: string; label: string }> {
@@ -223,7 +229,7 @@ export function discoverComposioCalendarSources(port: ComposioCalendarDiscoveryP
     for (const account of activeAccounts) {
       let token: string | undefined; const cursors = new Set<string>(); const calendars = new Set<string>();
       for (let index = 0; index < LIMITS.pages; index++) {
-        const response = page(await read(port, { kind: "listCalendars", accountId: account.id, ...(token ? { pageToken: token } : {}) }, current, bounded), 100);
+        const response = page(await read(port, { kind: "listCalendars", accountId: account.id, ...(token ? { pageToken: token } : {}) }, current, bounded), 100, "listCalendars");
         for (const value of response.items) {
           const calendar = object(value); const id = calendarId(calendar.id);
           if (calendars.has(id)) fail("Calendar repeated a source identity."); calendars.add(id);
@@ -321,7 +327,7 @@ export function readComposioCalendarWatch(binding: ComposioCalendarSource, condi
     let token: string | undefined, eventCount = 0;
     const add = (item: ComposioCalendarItem) => { if (identities.has(item.id) || items.length >= LIMITS.items) fail("Calendar repeated an occurrence or exceeded this check's item limit."); identities.add(item.id); items.push(item); };
     for (let index = 0; index < LIMITS.pages; index++) {
-      const response = page(await read(port, { kind: "listEvents", accountId: selected.accountId, calendarId: selected.calendarId, timeMin: new Date(now).toISOString(), timeMax: new Date(end).toISOString(), timezone, ...(token ? { pageToken: token } : {}) }, current, bounded), 50);
+      const response = page(await read(port, { kind: "listEvents", accountId: selected.accountId, calendarId: selected.calendarId, timeMin: new Date(now).toISOString(), timeMax: new Date(end).toISOString(), timezone, ...(token ? { pageToken: token } : {}) }, current, bounded), 50, "listEvents");
       eventCount += response.items.length; if (eventCount > LIMITS.items) fail();
       for (const value of response.items) {
         const eventId = text(object(value).id); if (received.has(eventId)) fail("Calendar repeated an event across pages."); received.add(eventId);

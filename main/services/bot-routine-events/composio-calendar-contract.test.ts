@@ -249,10 +249,41 @@ test("rejected list output exposes only fixed collection, first-record and null-
     assert.deepEqual(data.cursors.nextPageToken, { value: "null", declaredType: singleton ? "singleton_array" : "exact", required: false, default: "missing", plainString: !singleton });
     const selected = data.collections[collection as "items" | "calendars" | "calendarList" | "calendar_list"];
     assert.equal(selected.value, "array"); assert.equal(selected.declaredArray, true); assert.equal(selected.count, 1);
-    assert.deepEqual(selected.first, { value: "object", fields: { id: "string", accessRole: "string", access_role: "string", summary: "string", name: "string", calendar_id: "string", calendarId: "string" } });
+    assert.deepEqual(selected.first, { value: "object", fields: { id: "string", accessRole: "string", access_role: "string", summary: "string", name: "string", calendar_id: "string", calendarId: "string", status: "missing", start: "missing", end: "missing", recurringEventId: "missing", originalStartTime: "missing" } });
     for (const secret of ["private-id", "private-summary", "private-name", "private-calendar", "private-account", "private_unknown", "private-value", "reader", "owner"]) assert.equal(JSON.stringify(failure.facts).includes(secret), false);
     assert.ok(Buffer.byteLength(JSON.stringify(failure.facts), "utf8") < 16 * 1024);
   }
+});
+
+test("calendars representation requires a current explicit array declaration and never extends other operations", () => {
+  const read = { kind: "listCalendars" as const, accountId: "account" };
+  for (const schema of [
+    { type: "object", properties: {}, additionalProperties: true },
+    { type: "object", properties: { calendars: { type: ["array"] } } },
+    { type: "object", properties: { calendars: { type: "object" } } },
+    { type: "object", properties: { calendars: { type: "array" } }, allOf: [{ type: "object" }] },
+  ]) {
+    const schemas = syntheticCalendarSchemas(); schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = schema as never;
+    assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, syntheticCalendarExecutor(read, { calendars: [] })));
+  }
+  for (const [operation, slug] of [
+    [{ kind: "listEvents", accountId: "account", calendarId: "calendar", timeMin: "2026-11-03T15:00:00Z", timeMax: "2026-11-03T16:00:00Z", timezone: "UTC" }, "GOOGLECALENDAR_EVENTS_LIST"],
+    [{ kind: "getEvent", accountId: "account", calendarId: "calendar", eventId: "event", timezone: "UTC" }, "GOOGLECALENDAR_EVENTS_GET"],
+  ] as const) {
+    const schemas = syntheticCalendarSchemas(); schemas.data.tool_schemas[slug]!.output_schema = { type: "object", properties: { calendars: { type: "array" } } } as never;
+    assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(operation, syntheticCalendarExecutor(operation, { calendars: [] })));
+  }
+  const schemas = syntheticCalendarSchemas();
+  schemas.data.tool_schemas.GOOGLECALENDAR_EVENTS_LIST!.output_schema = { type: "object", properties: { events: { type: "array", items: { type: "object" } } } } as never;
+  const events = { kind: "listEvents" as const, accountId: "account", calendarId: "calendar", timeMin: "2026-11-03T15:00:00Z", timeMax: "2026-11-03T16:00:00Z", timezone: "UTC" };
+  let failure: unknown;
+  try { verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(events, syntheticCalendarExecutor(events, { events: [{ id: "private-event", status: "confirmed", start: {}, end: {}, recurringEventId: "private-series", originalStartTime: {} }] })); } catch (error) { failure = error; }
+  assert.ok(failure instanceof ComposioCalendarContractError);
+  const collection = failure.facts!.pageShape!.locations!.root.collections.events;
+  assert.equal(collection.declaredArray, true); assert.equal(collection.count, 1);
+  assert.equal(collection.first.fields.status, "string"); assert.equal(collection.first.fields.start, "object"); assert.equal(collection.first.fields.end, "object");
+  assert.equal(collection.first.fields.recurringEventId, "string"); assert.equal(collection.first.fields.originalStartTime, "object");
+  for (const secret of ["private-event", "private-series", "confirmed"]) assert.equal(JSON.stringify(failure.facts).includes(secret), false);
 });
 
 test("page shape projections cap counts and classify schema context without unknown names or accessor execution", () => {

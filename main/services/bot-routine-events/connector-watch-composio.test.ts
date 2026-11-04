@@ -35,10 +35,13 @@ function discovery(metadata = search(), respond: (read: ComposioCalendarRead) =>
   return { ...f, port, counts: () => ({ searches, discoveryChecks }) };
 }
 const read = (f: ReturnType<typeof fixture>, previous?: ComposioCalendarBaseline, now = NOW) => readComposioCalendarWatch(source, condition, previous, f.port, now, signal());
-function validatedPages<T extends { port: ComposioCalendarReadPort }>(value: T, wrapped = false): T {
+function validatedPages<T extends { port: ComposioCalendarReadPort }>(value: T, wrapped = false, calendarCollection: "items" | "calendars" = "items"): T {
   const schemas = syntheticCalendarSchemas();
-  const page = { type: "object", properties: { items: { type: "array", items: { type: "object" } }, nextPageToken: { type: "string" }, next_page_token: { type: "string" } }, required: ["items"] };
-  for (const slug of ["GOOGLECALENDAR_LIST_CALENDARS", "GOOGLECALENDAR_EVENTS_LIST"]) schemas.data.tool_schemas[slug]!.output_schema = (wrapped ? { type: "object", properties: { successful: { type: "boolean" }, data: page } } : page) as never;
+  for (const slug of ["GOOGLECALENDAR_LIST_CALENDARS", "GOOGLECALENDAR_EVENTS_LIST"]) {
+    const collection = slug === "GOOGLECALENDAR_LIST_CALENDARS" ? calendarCollection : "items";
+    const page = { type: "object", properties: { [collection]: { type: "array", items: { type: "object" } }, nextPageToken: { type: "string" }, next_page_token: { type: "string" } }, required: [collection] };
+    schemas.data.tool_schemas[slug]!.output_schema = (wrapped ? { type: "object", properties: { successful: { type: "boolean" }, data: page } } : page) as never;
+  }
   const verified = verifyCalendarContract(syntheticCalendarMetadata(), schemas), original = value.port.read.bind(value.port);
   value.port.read = async (request, current) => { const reply = await original(request, current); verified.response(request, reply); return reply; };
   return value;
@@ -91,6 +94,46 @@ test("source enumeration follows exact empty-page cursors and excludes insuffici
   await assert.rejects(discoverComposioCalendarSources(loop.port, signal())); assert.equal(loop.calls.length, 2);
   let count = 0; const fifth = validatedPages(discovery(search(), () => ({ items: [], next_page_token: `next-${++count}` })));
   await assert.rejects(discoverComposioCalendarSources(fifth.port, signal())); assert.equal(fifth.calls.length, 5, "never requests a sixth page");
+});
+
+test("current declared calendars pages preserve discovery, exact empty-page continuation and caps", async () => {
+  const calendar = { id: source.calendarId, accessRole: "reader", summary: "Planning" };
+  const pages: unknown[] = [], originals: unknown[] = [];
+  const f = validatedPages(discovery(search(), (request) => {
+    const payload = { successful: true, data: request.kind === "listCalendars" && request.pageToken ? { calendars: [calendar], next_page_token: null } : { calendars: [], next_page_token: "opaque calendar-page==" } };
+    pages.push(payload); originals.push(structuredClone(payload)); return payload;
+  }), true, "calendars");
+  const choices = await discoverComposioCalendarSources(f.port, signal());
+  assert.equal(choices.length, 1); assert.equal(choices[0]!.calendarId, source.calendarId); assert.equal(choices[0]!.accountId, source.accountId);
+  assert.deepEqual(f.calls.map((request) => request.kind === "listCalendars" ? request.pageToken : "wrong"), [undefined, "opaque calendar-page=="]);
+  assert.deepEqual(pages, originals); assert.equal(f.counts().searches, 1);
+  let page = 0;
+  const complete = validatedPages(discovery(search(), () => { const index = page++; return { successful: true, data: { calendars: Array.from({ length: 100 }, (_, item) => ({ id: `calendar-${index}-${item}@example.test`, accessRole: "owner" })), next_page_token: index < 4 ? `page-${index + 1}` : null } }; }), true, "calendars");
+  assert.equal((await discoverComposioCalendarSources(complete.port, signal())).length, 500); assert.equal(complete.calls.length, 5);
+  let next = 0;
+  const incomplete = validatedPages(discovery(search(), () => ({ calendars: [], next_page_token: `page-${++next}` })), false, "calendars");
+  await assert.rejects(discoverComposioCalendarSources(incomplete.port, signal())); assert.equal(incomplete.calls.length, 5);
+});
+
+test("calendar collection parsing rejects ambiguity, partial data, role aliases, foreign identities and other operations", async () => {
+  const calendar = { id: source.calendarId, accessRole: "reader", summary: "Planning" };
+  for (const payload of [
+    { calendars: [calendar], items: [] }, { calendars: [calendar], calendarList: [] }, { calendars: [calendar], events: [] },
+    { calendars: [calendar], truncated: true }, { calendars: [calendar], remote_file_info: { path: "private-offload" } },
+    { calendars: [calendar], nextPageToken: null, next_page_token: null }, { calendars: [calendar, calendar] },
+    { calendars: [{ id: "primary", accessRole: "reader" }] }, { calendars: [{ id: "ca_foreign_account", accessRole: "reader" }] },
+    { calendars: [{ calendar_id: source.calendarId, accessRole: "reader" }] }, { calendars: [{ id: source.calendarId, access_role: "reader" }] },
+    { calendars: Array.from({ length: 101 }, (_, index) => ({ id: `calendar-${index}@example.test`, accessRole: "reader" })) },
+  ]) {
+    const f = validatedPages(discovery(search(), () => payload), false, "calendars");
+    await assert.rejects(discoverComposioCalendarSources(f.port, signal())); assert.equal(f.calls.length, 1);
+  }
+  const defaulted = validatedPages(discovery(search(), () => ({ default_calendar: calendar })), false, "calendars");
+  await assert.rejects(discoverComposioCalendarSources(defaulted.port, signal())); assert.equal(defaulted.calls.length, 1);
+  const events = fixture(() => ({ calendars: [event("one")] })); await assert.rejects(read(events)); assert.equal(events.calls.length, 1);
+  const prior = await read(fixture(() => ({ items: [event("one")] })));
+  const get = fixture((request) => request.kind === "listEvents" ? { items: [] } : { ...event("one"), calendars: [] });
+  await assert.rejects(read(get, prior.baseline)); assert.deepEqual(get.calls.map((request) => request.kind), ["listEvents", "getEvent"]);
 });
 
 test("source display truncation preserves surrogate pairs without exposing arbitrary user_info", async () => {
