@@ -9,7 +9,10 @@ import { createBotApprovals } from "../bot-runtime/bot-approvals.js";
 import { createBotMessageLedger } from "./ledger.js";
 import { createBotMessageCourier, type BotRosterEntry } from "./courier.js";
 import { waitFor } from "../bot-runtime/test-support/faux.js";
-async function setup(t: TestContext) {
+async function setup(t: TestContext, options: {
+  botExists?(botId: string): Promise<boolean>;
+  beforeRoster?(): void;
+} = {}) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "bot-courier-"));
   let now = 1000,
     enabled = true;
@@ -105,7 +108,8 @@ async function setup(t: TestContext) {
     createBotMessageCourier({
       ledger,
       sessions,
-      roster: async () => roster,
+      roster: async () => { options.beforeRoster?.(); return roster; },
+      ...(options.botExists ? { botExists: options.botExists } : {}),
       enabled: async () => enabled,
       approvals,
       onStateChange: (fn) => {
@@ -249,6 +253,77 @@ test("post accepts durably without any session call and later carries one final 
   await f.restart();
   assert.equal(f.sends.length, 2);
   assert.equal(f.deliveries.length, 1);
+});
+test("accepted deliveries use identity reads without repeating full roster availability discovery", async t => {
+  let accepted = false, rosterReads = 0;
+  const f = await setup(t, {
+    botExists: async id => ["A", "B", "C"].includes(id),
+    beforeRoster: () => {
+      rosterReads++;
+      if (accepted) throw new Error("unrelated Bot availability cannot be read");
+    },
+  });
+  assert.equal((await f.post()).status, "sent");
+  accepted = true;
+  await waitFor(() => f.sends.length > 0 || f.errors.length > 0, { what: "identity-only target dispatch" });
+  assert.deepEqual(f.errors, [], "unrelated availability cannot strand an accepted message");
+  assert.equal(f.sends[0]!.botId, "B");
+  f.finish(0, "Pong");
+  await f.until(() => f.sends.length === 2);
+  assert.equal(f.sends[1]!.botId, "A");
+  f.finish(1, "Beta says Pong");
+  await f.until(() => f.deliveries.length === 1);
+  assert.equal(rosterReads, 1, "posting still performs the full availability checks");
+});
+
+for (const unavailable of ["missing", "read error"] as const) {
+  test(`identity-only dispatch refuses ${unavailable} without invoking a session`, async t => {
+    const failure = new Error("Bot identity store unavailable");
+    const f = await setup(t, { botExists: async id => {
+      if (id !== "B") return true;
+      if (unavailable === "read error") throw failure;
+      return false;
+    } });
+    const result = await f.post();
+    assert.equal(result.status, "sent");
+    await waitFor(() => f.notices.length > 0 || f.errors.length > 0 || f.sends.length > 0, { what: "missing identity dispatch" });
+    assert.deepEqual(f.sends, [], "existence never authorizes sending to an absent or unreadable Bot");
+    if (unavailable === "read error") {
+      assert.deepEqual(f.errors, [failure]);
+      assert.equal((await f.ledger.get((result as { deliveryId: string }).deliveryId))!.status, "delivered");
+    } else {
+      assert.deepEqual(f.errors, []);
+      assert.equal((await f.ledger.get((result as { deliveryId: string }).deliveryId))!.status, "failed");
+    }
+  });
+}
+test("deletion during an identity read fences a late positive result", async t => {
+  let entered!: () => void, release!: () => void;
+  const checking = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const f = await setup(t, { botExists: async id => {
+    if (id === "B") { entered(); await held; }
+    return true;
+  } });
+  await f.post();
+  await checking;
+  try { await f.courier.forgetBot("B"); } finally { release(); }
+  await f.until(() => f.notices.length === 1);
+  assert.deepEqual(f.sends, [], "a completed identity read cannot resurrect deleted work");
+});
+
+test("a positive identity read still submits through the fresh session refusal", async t => {
+  const f = await setup(t, { botExists: async () => true });
+  let checked = 0;
+  f.sessions.send = async () => {
+    checked++;
+    throw Object.assign(new Error("paused after posting"), { reason: "paused_by_person" });
+  };
+  const result = await f.post();
+  await f.until(() => f.notices.length === 1);
+  assert.equal(checked, 1);
+  assert.deepEqual(f.sends, []);
+  assert.equal((await f.ledger.get((result as { deliveryId: string }).deliveryId))!.status, "failed");
 });
 test("busy targets expire with one notice and no queued session input", async (t) => {
   const f = await setup(t);

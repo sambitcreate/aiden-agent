@@ -74,6 +74,8 @@ export interface BotMessageCourierDeps {
   > &
     Partial<Pick<BotSessionRuntime, "awaitMessageTaskSettlement">>;
   roster(): Promise<readonly BotRosterEntry[]>;
+  /** Identity only. Session state/send still enforce fresh access and availability. */
+  botExists?(botId: string): Promise<boolean>;
   enabled(): Promise<boolean>;
   approvals: Pick<BotApprovals, "pending" | "decide" | "onChange">;
   onStateChange(listener: (botId: string) => void): () => void;
@@ -185,9 +187,12 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     workers.set(id, { controller, promise });
   }
   async function exists(botId: string, id: string): Promise<boolean> {
-    const row = await deps.ledger.get(id),
-      roster = await deps.roster();
-    return !disposed && !deleted.has(botId) && !!row && roster.some((b) => b.id === botId);
+    const row = await deps.ledger.get(id);
+    if (!row || disposed || deleted.has(botId)) return false;
+    const known = deps.botExists
+      ? await deps.botExists(botId)
+      : (await deps.roster()).some((bot) => bot.id === botId);
+    return !disposed && !deleted.has(botId) && known;
   }
   function liveDeadline(row: BotMessageDelivery): boolean {
     return (
