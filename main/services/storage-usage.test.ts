@@ -254,7 +254,7 @@ test("a worktree attached to an active chat is never removed", async () => {
       h.setBusy("chat-a");
       const report = await h.service.refresh();
       assert.equal(report.worktrees[0]?.protectionReason, "active");
-      const result = await h.service.cleanup({ action: "remove-worktrees", inactiveDays: 0 });
+      const result = await h.service.cleanup({ action: "remove-worktrees", inactiveDays: 7 });
       assert.deepEqual(h.removed.worktrees, []);
       assert.equal(result.freedBytes, 0);
     },

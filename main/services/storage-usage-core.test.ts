@@ -313,7 +313,7 @@ test("naming a protected worktree explicitly still keeps it", () => {
     classifyWorktree(worktreeFacts({ workspaceId: "dirty", uncommitted: 1 }), NOW),
   ];
   const plan = planWorktreeCleanup(worktrees, {
-    inactiveDays: 0,
+    inactiveDays: 7,
     now: NOW,
     targetIds: ["dirty"],
   });

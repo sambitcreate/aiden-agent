@@ -93,7 +93,7 @@ export interface StorageServiceDependencies {
   clearLogs(): Promise<void>;
   now?(): number;
   broadcast?(event: { kind: "scan-started" | "scan-finished" }): void;
-  logError?(message: string, error: unknown): void;
+  logError?(area: string, message: string, error: unknown): void;
   /** Test seam for the walk budget. */
   limits?: StorageScanBudgetLimits;
 }

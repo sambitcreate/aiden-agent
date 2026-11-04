@@ -1,18 +1,18 @@
 // Settings → Storage page: the total, the category bar, the largest-items list,
 // and the review dialog that shows what a cleanup removes before it runs.
 
-import "../main/bots/test-dom";
+import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { installBotTestIpc } from "../main/bots/test-dom";
+import { installBotTestIpc } from "../../main/bots/test-dom";
 import {
   assembleStorageReport,
   classifyThread,
   classifyWorktree,
   emptyStorageReport,
   type StorageReport,
-} from "../shared/storage";
+} from "../../shared/storage";
 import { StorageSettings } from "./storage-settings";
 
 afterEach(cleanup);

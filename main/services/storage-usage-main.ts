@@ -89,5 +89,5 @@ export const storageUsageService = createStorageUsageService({
     }
   },
   broadcast: (event) => ipcMain.broadcast("storage:changed", event),
-  logError: (message, error) => logger.warn("storage", message, error),
+  logError: (area, message, error) => logger.warn(area, message, error),
 });
