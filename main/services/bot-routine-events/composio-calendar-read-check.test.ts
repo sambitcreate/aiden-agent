@@ -27,6 +27,7 @@ const options = () => ({ signal: new AbortController().signal, current: async ()
 test("foreground check proves unknown-account rejection before explicit-account/calendar read", async () => {
   const f = fixture(); const result = await checkComposioCalendarRead(f.port, options());
   assert.equal(result.code, "verified"); assert.equal(result.available, false); assert.equal(result.privateProof.invalidAccountRejected, true);
+  assert.equal(result.privateProof.executorOutputSource, "declared");
   assert.deepEqual(f.metaCalls, ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_GET_TOOL_SCHEMAS"]);
   assert.deepEqual(f.reads.map((read) => read.kind), ["listCalendars", "listCalendars", "listEvents", "getEvent"]);
   assert.notEqual(f.reads[0]!.accountId, actualAccount); assert.match(f.reads[0]!.accountId, /^ca_[a-f0-9]+$/u);
@@ -48,15 +49,15 @@ test("multiple or missing ACTIVE accounts perform no executor read and never cho
 });
 
 test("invalid-account fallback, generic failure and payload beside an account error remain unverified", async () => {
-  for (const resultForInvalid of [
-    (read: ComposioCalendarRead) => syntheticCalendarExecutor(read, { items: [{ id: "leaked-default-calendar" }] }),
-    (read: ComposioCalendarRead) => syntheticCalendarExecutor(read, undefined, "provider temporarily unavailable"),
-    (read: ComposioCalendarRead) => { const value = syntheticCalendarExecutor(read, undefined, "CONNECTED_ACCOUNT_NOT_FOUND"); Object.assign(value.data.results[0]!, { response: { items: [{ id: "unexpected data" }] } }); return value; },
-    (read: ComposioCalendarRead) => { const value = syntheticCalendarExecutor(read, undefined, "CONNECTED_ACCOUNT_NOT_FOUND"); value.data.results[0]!.index = 1; return value; },
-  ]) {
+  for (const [resultForInvalid, expectedCode] of [
+    [(read: ComposioCalendarRead) => syntheticCalendarExecutor(read, { items: [{ id: "leaked-default-calendar" }] }), "invalid_account_unverified"],
+    [(read: ComposioCalendarRead) => syntheticCalendarExecutor(read, undefined, "provider temporarily unavailable"), "invalid_account_unverified"],
+    [(read: ComposioCalendarRead) => { const value = syntheticCalendarExecutor(read, undefined, "CONNECTED_ACCOUNT_NOT_FOUND"); Object.assign(value.data.results[0]!, { response: { items: [{ id: "unexpected data" }] } }); return value; }, "unsupported_contract"],
+    [(read: ComposioCalendarRead) => { const value = syntheticCalendarExecutor(read, undefined, "CONNECTED_ACCOUNT_NOT_FOUND"); value.data.results[0]!.index = 1; return value; }, "unsupported_contract"],
+  ] as const) {
     const f = fixture(); let calls = 0; f.port.readCalendar = async (read) => { calls++; return resultForInvalid(read); };
     const result = await checkComposioCalendarRead(f.port, options());
-    assert.equal(result.code, "invalid_account_unverified"); assert.equal(result.privateProof.invalidAccountRejected, false); assert.equal(calls, 1);
+    assert.equal(result.code, expectedCode); assert.equal(result.privateProof.invalidAccountRejected, false); assert.equal(calls, 1);
   }
 });
 
@@ -113,7 +114,7 @@ test("explicit null response permits negative proof but an app-data object never
   assert.equal(result.code, "verified"); assert.equal(result.privateProof.negative!.result.response, "null");
   assert.equal(result.privateProof.negative!.blockedField, "none");
   const offloaded = fixture(); offloaded.port.readCalendar = async (read) => { const reply = syntheticCalendarExecutor(read, undefined, "Connected account not found"); Object.assign(reply.data, { remote_file_info: { path: "/private/app-data" } }); return reply; };
-  const refused = await checkComposioCalendarRead(offloaded.port, options()); assert.equal(refused.code, "invalid_account_unverified"); assert.equal(refused.privateProof.negative!.blockedField, "remote_file_info");
+  const refused = await checkComposioCalendarRead(offloaded.port, options()); assert.equal(refused.code, "unsupported_contract"); assert.equal(refused.privateProof.contractFailure!.field, "executor_output");
 });
 
 test("failure diagnostics retain only capped shape/classification and output compatibility facts", async () => {
@@ -159,10 +160,26 @@ test("stale or partial GET cannot complete proof after successful window reads",
   assert.equal(invalidated.code, "access_changed"); assert.equal(invalidated.privateProof.counts.gets, 0); assert.equal(invalidated.privateProof.calls.get, true);
 });
 
-test("unsafe or missing executor output schema refuses before raw executor I/O", async () => {
-  for (const invalidOutput of [undefined, { type: "object", properties: { data: { type: "string", pattern: "(a+)+$" } } }, { type: "object", properties: { data: { $ref: "https://example.test/output" } } }]) {
-    const f = fixture(); if (invalidOutput === undefined) delete f.metadata[2]!.outputSchema; else f.metadata[2]!.outputSchema = invalidOutput;
+test("unsafe or malformed declared executor output refuses before raw executor I/O", async () => {
+  for (const invalidOutput of [null, {}, [], { type: "object", properties: { data: { type: "string", pattern: "(a+)+$" } } }, { type: "object", properties: { data: { $ref: "https://example.test/output" } } }]) {
+    const f = fixture(); f.metadata[2]!.outputSchema = invalidOutput;
     const result = await checkComposioCalendarRead(f.port, options());
     assert.equal(result.code, "unsupported_contract"); assert.equal(f.reads.length, 0); assert.equal(result.privateProof.calls.invalidAccount, false);
+  }
+});
+
+test("an omitted output declaration permits host-contract proof without inventing server schema evidence", async () => {
+  const f = fixture(); delete f.metadata[2]!.outputSchema;
+  const result = await checkComposioCalendarRead(f.port, options());
+  assert.equal(result.code, "verified"); assert.equal(result.available, false); assert.equal(result.privateProof.executorOutputSource, "host_contract");
+  assert.equal(result.privateProof.invalidAccountRejected, true); assert.equal(result.privateProof.counts.gets, 1); assert.equal(f.reads.length, 4);
+});
+
+test("absent output declaration cannot accept contradictory counts or payload on failed routing", async () => {
+  for (const withPayload of [false, true]) {
+    const f = fixture(); delete f.metadata[2]!.outputSchema;
+    f.port.readCalendar = async (read) => { const reply = syntheticCalendarExecutor(read, undefined, "Connected account not found"); if (withPayload) Object.assign(reply.data.results[0]!, { response: { items: [] } }); else reply.data.success_count = 1; return reply; };
+    const result = await checkComposioCalendarRead(f.port, options());
+    assert.equal(result.code, "unsupported_contract"); assert.equal(result.privateProof.executorOutputSource, "host_contract"); assert.equal(result.privateProof.contractFailure!.field, "executor_output"); assert.equal(result.privateProof.invalidAccountRejected, false);
   }
 });

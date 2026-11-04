@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { copyBoundedJson, utf8Size } from "../bounded-json.js";
 import type { SubagentMcpRemoteTool } from "../subagents/subagent-mcp-read.js";
 import type { ComposioCalendarContract } from "./composio-calendar-host-port.js";
-import { buildCalendarSchemasRequest, buildCalendarSearchRequest, calendarContractAction, calendarContractObject, ComposioCalendarContractError, verifyCalendarContract } from "./composio-calendar-contract.js";
+import { buildCalendarSchemasRequest, buildCalendarSearchRequest, calendarContractAction, calendarContractObject, ComposioCalendarContractError, verifyCalendarContract, type ComposioCalendarExecutorOutputSource } from "./composio-calendar-contract.js";
 import { discoverComposioCalendarSources, normalizeComposioCalendarEventGet, parseComposioCalendarAccounts, readComposioCalendarWatch, type ComposioCalendarRead } from "./connector-watch-composio.js";
 
 export const COMPOSIO_CALENDAR_READ_CHECK_CODES = ["verified", "get_proof_incomplete", "needs_account_selection", "no_active_account", "unsupported_contract", "invalid_account_unverified", "source_unavailable", "invalid_response", "limit_exceeded", "access_changed", "cancelled", "timed_out", "inspection_failed"] as const;
@@ -27,8 +27,9 @@ export interface ComposioCalendarReadCheckProof {
   counts: { activeAccounts: number; calendars: number; events: number; gets: number };
   invalidAccountRejected: boolean;
   contract?: ComposioCalendarContract;
+  executorOutputSource?: ComposioCalendarExecutorOutputSource;
   negative?: NegativeShape;
-  contractFailure?: { stage: ComposioCalendarContractError["stage"]; reason: ComposioCalendarContractError["reason"]; facts?: ComposioCalendarContractError["facts"] };
+  contractFailure?: { stage: ComposioCalendarContractError["stage"]; reason: ComposioCalendarContractError["reason"]; facts?: ComposioCalendarContractError["facts"]; field?: ComposioCalendarContractError["field"] };
 }
 export interface ComposioCalendarReadCheckPublicResult {
   available: false;
@@ -129,6 +130,8 @@ export async function checkComposioCalendarRead(raw: ComposioCalendarReadCheckPo
     proof.stage = "schemas";
     const schemaArgs = buildCalendarSchemasRequest(metadata, sessionId); proof.calls.schemas = true;
     const schemaReply = bounded(await call(() => raw.call("COMPOSIO_GET_TOOL_SCHEMAS", schemaArgs)));
+    const executors = metadata.filter((tool) => tool.name === "COMPOSIO_MULTI_EXECUTE_TOOL");
+    if (executors.length === 1) proof.executorOutputSource = executors[0]!.outputSchema === undefined ? "host_contract" : "declared";
     const verified = verifyCalendarContract(metadata, schemaReply); proof.contract = verified.contract;
     proof.stage = "account_selection";
     if (active.length === 0) reject("no_active_account", "no_account");
@@ -142,8 +145,8 @@ export async function checkComposioCalendarRead(raw: ComposioCalendarReadCheckPo
     verified.request(negative, sessionId); // Client refusal is not routing proof.
     proof.calls.invalidAccount = true;
     const negativeReply = bounded(await call(() => readCalendar(negative, sessionId)));
-    verified.executorResponse(negativeReply);
     const blocked = accountSelectionFailure(negativeReply); proof.negative = negativeShape(negativeReply, blocked);
+    verified.executorResponse(negativeReply);
     if (blocked !== "none") reject("invalid_account_unverified", "routing_unverified");
     proof.invalidAccountRejected = true;
     const port = {
@@ -180,7 +183,7 @@ export async function checkComposioCalendarRead(raw: ComposioCalendarReadCheckPo
   } catch (error) {
     const code = options.signal.aborted ? "cancelled" : controller.signal.aborted ? "timed_out" : error instanceof CheckFailure ? error.code : error instanceof ComposioCalendarContractError && (error.stage !== "read_response" || error.reason === "unsupported") ? "unsupported_contract" : "invalid_response";
     proof.reason = options.signal.aborted ? "cancelled" : controller.signal.aborted ? "timed_out" : error instanceof CheckFailure ? error.reason : error instanceof ComposioCalendarContractError ? error.reason : "failed";
-    if (error instanceof ComposioCalendarContractError) proof.contractFailure = { stage: error.stage, reason: error.reason, ...(error.facts ? { facts: error.facts } : {}) };
+    if (error instanceof ComposioCalendarContractError) proof.contractFailure = { stage: error.stage, reason: error.reason, ...(error.facts ? { facts: error.facts } : {}), ...(error.field ? { field: error.field } : {}) };
     return { ...publicComposioCalendarReadCheckResult({ checkedAt, code }), privateProof: structuredClone(proof) };
   } finally { clearTimeout(timer); signal.removeEventListener("abort", onAbort); controller.abort(); }
 }

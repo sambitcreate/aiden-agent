@@ -64,3 +64,11 @@ test("production output validation rejects an executor root that violates its de
   f.context.execute = async (read) => ({ ...syntheticCalendarExecutor(read, { items: [] }), unexpected_output: true });
   await assert.rejects(ready.port.read(request, f.context.signal));
 });
+
+test("background binding refuses absent-to-declared output source drift before executor I/O", async () => {
+  const f = fixture(); delete f.context.metadata[2]!.outputSchema;
+  const fallback = verifyCalendarContract(f.context.metadata, f.response).contract;
+  const ready = await createComposioCalendarTransport().prepare(f.context, fallback);
+  f.context.metadata[2]!.outputSchema = syntheticCalendarMetadata()[2]!.outputSchema;
+  await assert.rejects(ready.port.read(request, f.context.signal)); assert.equal(f.executions.length, 0);
+});

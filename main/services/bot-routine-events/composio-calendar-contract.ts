@@ -12,12 +12,27 @@ type ObjectValue = Record<string, unknown>;
 const EXECUTOR = "COMPOSIO_MULTI_EXECUTE_TOOL";
 const SEARCH = "COMPOSIO_SEARCH_TOOLS";
 const SCHEMAS = "COMPOSIO_GET_TOOL_SCHEMAS";
+export type ComposioCalendarExecutorOutputSource = "declared" | "host_contract";
+const HOST_EXECUTOR_OUTPUT_VERSION = "calendar-single-read-output-v1";
+// MCP outputSchema is optional. This fixed contract applies ALWAYS; a declared
+// schema can only narrow it. No vendor schema can enable batching or partial data.
+const hostObject = (properties: ObjectValue, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
+const emptyError = { anyOf: [{ type: "null" }, { type: "string", maxLength: 0 }] };
+const resultIdentity = { tool_slug: { type: "string", enum: [...CALENDAR_SCHEMA_SLUGS] }, index: { type: "integer", const: 0 } };
+const resultSchema = (success: boolean) => hostObject({ ...resultIdentity, response: { type: success ? "object" : "null" }, error: success ? emptyError : { type: "string", minLength: 1, maxLength: 4_096 } }, ["tool_slug", "index", success ? "response" : "error"]);
+const dataSchema = (success: boolean) => hostObject({
+  results: { type: "array", minItems: 1, maxItems: 1, items: resultSchema(success) },
+  total_count: { type: "integer", const: 1 }, success_count: { type: "integer", const: success ? 1 : 0 }, error_count: { type: "integer", const: success ? 0 : 1 },
+  remote_file_info: { type: "null" }, next_steps: { type: ["string", "null"], maxLength: 4_096 },
+  session: { anyOf: [{ type: "null" }, hostObject({ id: { type: "string", maxLength: 256 }, instructions: { type: "string", maxLength: 4_096 } })] },
+}, ["results", "total_count", "success_count", "error_count"]);
+const HOST_EXECUTOR_OUTPUT = hostObject({ successful: { type: "boolean", const: true }, error: emptyError, data: { oneOf: [dataSchema(true), dataSchema(false)] } }, ["successful", "data"]);
 export class ComposioCalendarContractError extends Error {
-  constructor(readonly stage: "inventory" | "search" | "schemas" | "executor" | "read_arguments" | "read_response" | "schema_drift", readonly reason: "shape" | "missing" | "unsupported" | "invalid" | "changed", readonly facts?: { keyword: "ref" | "pattern" | "nullable" | "format" | "dialect" | "other"; dialect: "draft-07" | "draft-2020-12" | "missing" | "other" }) {
+  constructor(readonly stage: "inventory" | "search" | "schemas" | "executor" | "read_arguments" | "read_response" | "schema_drift", readonly reason: "shape" | "missing" | "unsupported" | "invalid" | "changed", readonly facts?: { keyword: "ref" | "pattern" | "nullable" | "format" | "dialect" | "other"; dialect: "draft-07" | "draft-2020-12" | "missing" | "other" }, readonly field?: "executor_input" | "executor_output" | "account_selector") {
     super("Calendar's current read contract could not be verified.");
   }
 }
-function fail(stage: ComposioCalendarContractError["stage"], reason: ComposioCalendarContractError["reason"] = "shape"): never { throw new ComposioCalendarContractError(stage, reason); }
+function fail(stage: ComposioCalendarContractError["stage"], reason: ComposioCalendarContractError["reason"] = "shape", field?: ComposioCalendarContractError["field"]): never { throw new ComposioCalendarContractError(stage, reason, undefined, field); }
 export function calendarContractObject(value: unknown): ObjectValue {
   if (!value || typeof value !== "object" || Array.isArray(value)) return fail("schemas");
   return value as ObjectValue;
@@ -47,13 +62,13 @@ function digest(value: unknown): string {
     ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, entry]) => [key, canonical(entry)])) : item;
   return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
 }
-function compile(value: unknown, stage: ComposioCalendarContractError["stage"]): ValidateFunction {
+function compile(value: unknown, stage: ComposioCalendarContractError["stage"], field?: ComposioCalendarContractError["field"]): ValidateFunction {
   try { return compileComposioWatchInputSchema(value); } catch (error) {
     const rejected = optionalObject(optionalObject(error)?.rejection)?.keyword;
     const keyword = rejected === "$ref" ? "ref" : rejected === "pattern" ? "pattern" : rejected === "nullable" ? "nullable" : rejected === "format" ? "format" : rejected === "$schema" ? "dialect" : "other";
     const annotation = optionalObject(value)?.$schema;
     const dialect = annotation === undefined ? "missing" : typeof annotation === "string" && /^https?:\/\/json-schema\.org\/draft-07\/schema#?$/u.test(annotation) ? "draft-07" : typeof annotation === "string" && /^https?:\/\/json-schema\.org\/draft\/2020-12\/schema#?$/u.test(annotation) ? "draft-2020-12" : "other";
-    throw new ComposioCalendarContractError(stage, "unsupported", { keyword, dialect });
+    throw new ComposioCalendarContractError(stage, "unsupported", { keyword, dialect }, field);
   }
 }
 function property(value: unknown, key: string): ObjectValue | undefined { return optionalObject(optionalObject(value)?.properties)?.[key] as ObjectValue | undefined; }
@@ -93,13 +108,15 @@ export function buildCalendarSchemasRequest(metadata: readonly SubagentMcpRemote
  * Fingerprints detect drift; neither fingerprints nor editable diagnostics grant access. */
 export function verifyCalendarContract(metadata: readonly SubagentMcpRemoteTool[], response: unknown, expected?: ComposioCalendarContract) {
   const executor = uniqueTool(metadata, EXECUTOR);
-  const executorInput = calendarContractObject(executor.inputSchema);
+  const executorInput = optionalObject(executor.inputSchema);
+  if (!executorInput) return fail("executor", executor.inputSchema === undefined ? "missing" : "invalid", "executor_input");
   const items = property(executorInput, "tools")?.items;
   const selector = property(items, "account");
-  if (!selector || typeof selector !== "object" || Array.isArray(selector)) return fail("executor", "missing");
-  const executeValidator = compile(executorInput, "executor");
-  if (!executor.outputSchema) return fail("executor", "missing");
-  const executorOutputValidator = compile(executor.outputSchema, "executor");
+  if (!selector || typeof selector !== "object" || Array.isArray(selector)) return fail("executor", "missing", "account_selector");
+  const executeValidator = compile(executorInput, "executor", "executor_input");
+  const executorOutputSource: ComposioCalendarExecutorOutputSource = executor.outputSchema === undefined ? "host_contract" : "declared";
+  const hostOutputValidator = compile(HOST_EXECUTOR_OUTPUT, "executor");
+  const executorOutputValidator = executor.outputSchema === undefined ? undefined : compile(executor.outputSchema, "executor", "executor_output");
   const data = calendarContractData(response);
   if (data.success !== true || (data.not_found !== undefined && (!Array.isArray(data.not_found) || data.not_found.length))) return fail("schemas", "missing");
   const definitions = calendarContractObject(data.tool_schemas);
@@ -116,28 +133,33 @@ export function verifyCalendarContract(metadata: readonly SubagentMcpRemoteTool[
     outputValidators.set(slug, compile(output, "read_response"));
     hashes.push(digest({ input, output }));
   }
-  const contract: ComposioCalendarContract = { revision: "composio-calendar-v1", executorSchemaHash: digest({ input: executor.inputSchema, output: executor.outputSchema }), readSchemaHashes: { listCalendars: hashes[0]!, listEvents: hashes[1]!, getEvent: hashes[2]! } };
+  const contract: ComposioCalendarContract = { revision: "composio-calendar-v1", executorSchemaHash: digest({ input: executor.inputSchema, output: executor.outputSchema ?? null, outputSource: executorOutputSource, hostOutputVersion: HOST_EXECUTOR_OUTPUT_VERSION, hostOutput: HOST_EXECUTOR_OUTPUT }), readSchemaHashes: { listCalendars: hashes[0]!, listEvents: hashes[1]!, getEvent: hashes[2]! } };
   if (expected && digest(expected) !== digest(contract)) return fail("schema_drift", "changed");
   Object.freeze(contract.readSchemaHashes); Object.freeze(contract);
+  const validateExecutorOutput = (response: unknown): void => {
+    const action = calendarContractAction(response);
+    if (!hostOutputValidator(action) || (executorOutputValidator && !executorOutputValidator(action))) return fail("executor", "invalid", "executor_output");
+    const data = calendarContractObject(action.data), result = calendarContractObject((data.results as unknown[])[0]);
+    if (data.error_count === 1 && !(result.error as string).trim()) return fail("executor", "invalid", "executor_output");
+  };
   return Object.freeze({
     contract,
+    executorOutputSource,
     request(read: ComposioCalendarRead, sessionId?: string) {
       const args = buildComposioCalendarExecutorRequest(read);
       const item = args.tools[0];
       if (!validators.get(item.tool_slug)?.(item.arguments)) return fail("read_arguments", "invalid");
       const result = { ...args, ...sessionArgs(executorInput, sessionId) };
-      if (!executeValidator(result)) return fail("executor", "invalid");
+      if (!executeValidator(result)) return fail("executor", "invalid", "executor_input");
       return result;
     },
     /** Includes genuine failed items; their account semantics remain a separate
      * strict negative oracle. Compile eligibility is checked BEFORE any send. */
     executorResponse(response: unknown): void {
-      const action = calendarContractAction(response);
-      if (!executorOutputValidator(action)) return fail("executor", "invalid");
+      validateExecutorOutput(response);
     },
     response(read: ComposioCalendarRead, response: unknown): void {
-      const action = calendarContractAction(response);
-      if (!executorOutputValidator(action)) return fail("executor", "invalid");
+      validateExecutorOutput(response);
       const item = buildComposioCalendarExecutorRequest(read).tools[0];
       const upstream = parseComposioCalendarExecutorResponse(boundedCalendarContractJson(response), read);
       if (!outputValidators.get(item.tool_slug)?.(upstream)) return fail("read_response", "invalid");

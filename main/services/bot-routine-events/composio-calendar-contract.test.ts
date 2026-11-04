@@ -69,8 +69,8 @@ test("declared upstream output is enforced separately from executor correlation 
   assert.throws(() => verified.response(read, mismatched));
 });
 
-test("executor output uses the restricted compiler before requests, including genuine failure representation", () => {
-  for (const output of [undefined, { type: "object", properties: { data: { type: "string", pattern: "(a+)+$" } } }, { type: "object", properties: { data: { $ref: "https://example.test/output" } } }, { $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", properties: {} }]) {
+test("present executor output uses the restricted compiler before requests, including genuine failure representation", () => {
+  for (const output of [null, {}, [], { type: "object", properties: { data: { type: "string", pattern: "(a+)+$" } } }, { type: "object", properties: { data: { $ref: "https://example.test/output" } } }, { $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", properties: {} }]) {
     const metadata = syntheticCalendarMetadata(); metadata[2]!.outputSchema = output;
     assert.throws(() => verifyCalendarContract(metadata, syntheticCalendarSchemas()));
   }
@@ -81,4 +81,29 @@ test("executor output uses the restricted compiler before requests, including ge
   verified.executorResponse(negative);
   const wrongType = { ...negative, successful: "true" };
   assert.throws(() => verified.executorResponse(wrongType));
+});
+
+test("absent executor output uses the fixed host contract and declaration changes invalidate bindings", () => {
+  const metadata = syntheticCalendarMetadata(), schemas = syntheticCalendarSchemas();
+  const declared = verifyCalendarContract(metadata, schemas);
+  delete metadata[2]!.outputSchema;
+  const fallback = verifyCalendarContract(metadata, schemas);
+  assert.equal(declared.executorOutputSource, "declared"); assert.equal(fallback.executorOutputSource, "host_contract");
+  assert.notEqual(declared.contract.executorSchemaHash, fallback.contract.executorSchemaHash);
+  assert.throws(() => verifyCalendarContract(metadata, schemas, declared.contract));
+  assert.throws(() => verifyCalendarContract(syntheticCalendarMetadata(), schemas, fallback.contract));
+  const read = { kind: "listCalendars" as const, accountId: "account" };
+  fallback.response(read, syntheticCalendarExecutor(read, { items: [] }));
+  fallback.executorResponse(syntheticCalendarExecutor(read, undefined, "Connected account not found"));
+});
+
+test("host result invariants apply even when a declared output schema permits anything", () => {
+  const metadata = syntheticCalendarMetadata(); metadata[2]!.outputSchema = { type: "object", properties: {}, additionalProperties: true };
+  const verified = verifyCalendarContract(metadata, syntheticCalendarSchemas()), read = { kind: "listCalendars" as const, accountId: "account" };
+  const contradictory = syntheticCalendarExecutor(read, { items: [] }); contradictory.data.error_count = 1;
+  const withPayload = syntheticCalendarExecutor(read, undefined, "Connected account not found"); Object.assign(withPayload.data.results[0]!, { response: { items: [] } });
+  const offloaded = syntheticCalendarExecutor(read, { items: [] }); Object.assign(offloaded.data, { remote_file_info: { path: "not-inline" } });
+  const wrongIndex = syntheticCalendarExecutor(read, { items: [] }); wrongIndex.data.results[0]!.index = 1;
+  const extraResult = syntheticCalendarExecutor(read, { items: [] }); extraResult.data.results.push({ ...extraResult.data.results[0]! });
+  for (const reply of [contradictory, withPayload, offloaded, wrongIndex, extraResult]) assert.throws(() => verified.executorResponse(reply));
 });
