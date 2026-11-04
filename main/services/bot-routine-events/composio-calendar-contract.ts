@@ -17,7 +17,7 @@ export type ComposioCalendarExecutorOutputSource = "declared" | "host_contract";
 const HOST_EXECUTOR_OUTPUT_VERSION = "calendar-single-read-output-v3";
 // Account proof also rejects replies outside the fixed attempted-ID lookup
 // refusal grammar. Its revision is part of binding compatibility.
-const ACCOUNT_REFUSAL_VERSION = "exact-attempt-account-refusal-v1";
+const ACCOUNT_REFUSAL_VERSION = "exact-attempt-account-refusal-v2";
 // MCP outputSchema is optional. This fixed contract applies ALWAYS; a declared
 // schema can only narrow it. No vendor schema can enable batching or partial data.
 const hostObject = (properties: ObjectValue, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });

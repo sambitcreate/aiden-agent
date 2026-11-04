@@ -14,12 +14,20 @@ type Stage = "inventory" | "search" | "schemas" | "account_selection" | "invalid
 type Reason = "accepted" | "not_started" | "shape" | "missing" | "unsupported" | "invalid" | "changed" | "multiple_accounts" | "no_account" | "routing_unverified" | "no_readable_calendar" | "no_timed_event" | "limit" | "access_changed" | "cancelled" | "timed_out" | "failed";
 type ValueType = "missing" | "null" | "object" | "array" | "string" | "number" | "boolean" | "other";
 type NegativeBlock = "none" | "envelope" | "unexpected_action_field" | "unexpected_data_field" | "remote_file_info" | "counts" | "unexpected_result_field" | "correlation" | "response" | "error";
+interface NoAccountStructure {
+  adjective: "none" | "active" | "connected" | "active_connected" | "other";
+  relation: "for" | "with" | "matching" | "other";
+  selector: "none" | "id" | "identifier" | "alias" | "alias_or_id" | "id_or_alias" | "alias_slash_id" | "id_slash_alias" | "account" | "selector" | "account_selector" | "other";
+  quote: "unquoted" | "single" | "double" | "backtick" | "other" | "missing";
+  trailing: "none" | "period" | "calendar_toolkit" | "available_accounts" | "permission" | "control" | "other" | "missing";
+}
 interface NegativeErrorGrammar {
   attemptedAccountMention: boolean;
   curatedToolkitMention: boolean;
   prefix: "account" | "connected_account" | "unknown_account" | "no_account_found" | "no_account_with_id" | "invalid_account" | "other" | "missing";
   grammar: "exact_known" | "account_not_found" | "connected_account_not_found" | "unknown_account" | "no_account_found" | "no_account_with_id" | "invalid_account" | "other" | "missing";
   availableAccounts: "none" | "empty" | "bracketed" | "other";
+  structure?: NoAccountStructure;
 }
 interface NegativeShape {
   blockedField: NegativeBlock;
@@ -74,6 +82,12 @@ class CheckFailure extends Error { constructor(readonly code: ComposioCalendarRe
 function reject(code: ComposioCalendarReadCheckCode, reason: Reason): never { throw new CheckFailure(code, reason); }
 
 type AttemptRefusal = "account_not_found" | "connected_account_not_found" | "no_account_found" | "no_account_with_id";
+const NO_ACCOUNT_SELECTORS: readonly (readonly [string, NoAccountStructure["selector"]])[] = [
+  ["id", "id"], ["ID", "id"], ["identifier", "identifier"], ["alias", "alias"],
+  ["alias or id", "alias_or_id"], ["alias or ID", "alias_or_id"], ["id or alias", "id_or_alias"], ["ID or alias", "id_or_alias"],
+  ["alias/id", "alias_slash_id"], ["alias/ID", "alias_slash_id"], ["id/alias", "id_slash_alias"], ["ID/alias", "id_slash_alias"],
+  ["account", "account"], ["selector", "selector"], ["account selector", "account_selector"],
+];
 /** Whole-string lookup refusals only: this is separate from the diagnostic
  * prefix/mention classifier. No trimming, case folding or arbitrary suffixes. */
 function attemptAccountRefusal(error: string, attemptedId: string): AttemptRefusal | undefined {
@@ -82,21 +96,45 @@ function attemptAccountRefusal(error: string, attemptedId: string): AttemptRefus
   for (const suffix of [" for toolkit googlecalendar", " for toolkit 'googlecalendar'", ' for toolkit "googlecalendar"']) {
     if (body.endsWith(suffix)) { body = body.slice(0, -suffix.length); break; }
   }
-  for (const id of [attemptedId, `'${attemptedId}'`, `"${attemptedId}"`]) {
+  for (const id of [attemptedId, `'${attemptedId}'`, `"${attemptedId}"`, `\`${attemptedId}\``]) {
     if (body === `Account ${id} not found` || body === `Account ${id} does not exist`) return "account_not_found";
     if (body === `Connected account ${id} not found` || body === `Connected account ${id} does not exist`) return "connected_account_not_found";
     if (body === `No account with id ${id}`) return "no_account_with_id";
     for (const adjective of ["", "active ", "connected ", "active connected "]) {
-      for (const relation of ["for", "with"]) {
+      for (const relation of ["for", "with", "matching"]) {
         const prefix = `No ${adjective}account found ${relation} `;
         if (body === prefix + id) return "no_account_found";
-        for (const selector of ["id", "ID", "identifier", "alias"]) {
+        for (const [selector] of NO_ACCOUNT_SELECTORS) {
           if ([`${selector} `, `${selector}: `, `${selector} : `].some((label) => body === prefix + label + id)) return "no_account_found";
         }
       }
     }
   }
   return undefined;
+}
+/** Bounded fixed categories only, including when a whole-string match failed.
+ * This function is never used by attemptAccountRefusal or the account oracle. */
+function noAccountStructure(error: string, attemptedId: string): NoAccountStructure {
+  const facts: NoAccountStructure = { adjective: "other", relation: "other", selector: "other", quote: "missing", trailing: "missing" };
+  let remainder = error;
+  for (const [prefix, category] of [["No active connected account found ", "active_connected"], ["No connected account found ", "connected"], ["No active account found ", "active"], ["No account found ", "none"]] as const) {
+    if (remainder.startsWith(prefix)) { facts.adjective = category; remainder = remainder.slice(prefix.length); break; }
+  }
+  for (const relation of ["for", "with", "matching"] as const) {
+    if (remainder.startsWith(relation + " ")) { facts.relation = relation; remainder = remainder.slice(relation.length + 1); break; }
+  }
+  const index = remainder.indexOf(attemptedId);
+  if (index === -1) return facts;
+  const before = remainder.slice(0, index), after = remainder.slice(index + attemptedId.length);
+  const quote = before.endsWith("'") ? "'" : before.endsWith('"') ? '"' : before.endsWith("`") ? "`" : "";
+  const selector = quote ? before.slice(0, -1) : before;
+  facts.selector = selector === "" ? "none" : NO_ACCOUNT_SELECTORS.find(([text]) => [`${text} `, `${text}: `, `${text} : `].includes(selector))?.[1] ?? "other";
+  facts.quote = quote ? !after.startsWith(quote) ? "other" : quote === "'" ? "single" : quote === '"' ? "double" : "backtick" : /^[\x27\x22`]/u.test(after) ? "other" : "unquoted";
+  const tail = quote && after.startsWith(quote) ? after.slice(1) : after;
+  facts.trailing = /\p{Cc}/u.test(tail) ? "control" : tail === "" ? "none" : tail === "." ? "period" :
+    [" for toolkit googlecalendar", " for toolkit 'googlecalendar'", ' for toolkit "googlecalendar"'].some((suffix) => tail === suffix || tail === suffix + ".") ? "calendar_toolkit" :
+    tail.startsWith(" Available accounts: ") || tail.startsWith(". Available accounts: ") ? "available_accounts" : /permission|auth|forbidden/iu.test(tail) ? "permission" : "other";
+  return facts;
 }
 /** Diagnostic prefixes, mentions and available-list suffixes never authorize
  * a read. Only the separate whole-string matcher can add attempted-ID proof. */
@@ -115,6 +153,7 @@ function negativeErrorGrammar(error: string | undefined, attemptedId: string, ex
   }
   if (body.endsWith(".")) body = body.slice(0, -1);
   facts.prefix = /^Connected account(?: |:)/u.test(body) ? "connected_account" : /^Unknown account(?: |:)/u.test(body) ? "unknown_account" : /^No (?:active )?(?:connected )?account found(?: |:)/u.test(body) ? "no_account_found" : /^No account with id(?: |:)/u.test(body) ? "no_account_with_id" : /^Invalid (?:connected )?account(?: |:)/u.test(body) ? "invalid_account" : /^Account(?: |:)/u.test(body) ? "account" : "other";
+  if (facts.prefix === "no_account_found") facts.structure = noAccountStructure(error, attemptedId);
   if (exact) { facts.grammar = "exact_known"; return facts; }
   if (facts.availableAccounts === "other") return facts;
   const refusal = attemptAccountRefusal(body, attemptedId);

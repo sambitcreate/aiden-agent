@@ -157,6 +157,68 @@ test("only complete explicit account-not-found templates naming this attempt aut
   }
 });
 
+test("closed selector terminology and backtick quoting can prove only this exact attempted account", async () => {
+  for (const makeError of [
+    (id: string) => `No connected account found matching alias or id: \`${id}\``,
+    (id: string) => `No account found with ID or alias '${id}'.`,
+    (id: string) => `No active account found for alias/id: ${id}`,
+    (id: string) => `No connected account found for id/alias: "${id}"`,
+    (id: string) => `No active connected account found matching account ${id}`,
+    (id: string) => `No connected account found with selector: \`${id}\` for toolkit googlecalendar.`,
+    (id: string) => `No connected account found matching account selector: '${id}'`,
+  ]) {
+    const f = fixture(), original = f.port.readCalendar!;
+    f.port.readCalendar = async (read, session) => {
+      if (read.accountId === actualAccount) return original(read, session);
+      f.reads.push(read); return syntheticCalendarExecutor(read, undefined, makeError(read.accountId));
+    };
+    const result = await checkComposioCalendarRead(f.port, options());
+    assert.equal(result.code, "verified"); assert.equal(result.privateProof.invalidAccountRejected, true); assert.equal(f.reads.length, 4);
+    assert.equal(JSON.stringify(result).includes(f.reads[0]!.accountId), false);
+  }
+});
+
+test("unmatched no-account replies expose only fixed structure categories and never accept foreign data or suffixes", async () => {
+  const f = fixture();
+  f.port.readCalendar = async (read) => {
+    f.reads.push(read);
+    return syntheticCalendarExecutor(read, undefined, `No active connected account found matching account selector: \`${read.accountId}\`. Permission denied`);
+  };
+  const result = await checkComposioCalendarRead(f.port, options());
+  assert.equal(result.code, "invalid_account_unverified"); assert.equal(f.reads.length, 1);
+  const structure = result.privateProof.negative!.errorGrammar.structure;
+  assert.deepEqual(structure, { adjective: "active_connected", relation: "matching", selector: "account_selector", quote: "backtick", trailing: "permission" });
+  assert.equal(JSON.stringify(result).includes(f.reads[0]!.accountId), false);
+  const unknown = fixture();
+  unknown.port.readCalendar = async (read) => {
+    unknown.reads.push(read); return syntheticCalendarExecutor(read, undefined, `No connected account found using private-selector "${read.accountId}"; private-tail`);
+  };
+  const unknownResult = await checkComposioCalendarRead(unknown.port, options());
+  assert.equal(unknownResult.code, "invalid_account_unverified"); assert.equal(unknown.reads.length, 1);
+  assert.deepEqual(unknownResult.privateProof.negative!.errorGrammar.structure, { adjective: "connected", relation: "other", selector: "other", quote: "double", trailing: "other" });
+  assert.equal(JSON.stringify(unknownResult).includes("private-selector"), false); assert.equal(JSON.stringify(unknownResult).includes("private-tail"), false);
+  for (const makeError of [
+    (_id: string) => "No connected account found matching alias/id: `ca_otheraccount`",
+    (id: string) => `No connected account found matching alias/id: \`${id}\` but it exists`,
+    (id: string) => `No connected account found matching alias/id: \`${id}\`\n`,
+    (id: string) => `No connected account found matching alias/id: \`${id}\`. Available accounts: []`,
+  ]) {
+    const fixtureValue = fixture();
+    fixtureValue.port.readCalendar = async (read) => { fixtureValue.reads.push(read); return syntheticCalendarExecutor(read, undefined, makeError(read.accountId)); };
+    const refused = await checkComposioCalendarRead(fixtureValue.port, options());
+    assert.equal(refused.code, "invalid_account_unverified"); assert.equal(refused.privateProof.invalidAccountRejected, false); assert.equal(fixtureValue.reads.length, 1);
+  }
+  const foreign = fixture();
+  foreign.port.readCalendar = async (read) => {
+    foreign.reads.push(read);
+    const reply = syntheticCalendarExecutor(read, undefined, `No connected account found matching alias/id: \`${read.accountId}\``);
+    Object.assign(reply.data.results[0]!, { response: { items: [{ id: "private-foreign-data" }] } }); return reply;
+  };
+  const refused = await checkComposioCalendarRead(foreign.port, options());
+  assert.equal(refused.code, "unsupported_contract"); assert.equal(refused.privateProof.invalidAccountRejected, false); assert.equal(foreign.reads.length, 1);
+  assert.equal(JSON.stringify(refused).includes("private-foreign-data"), false);
+});
+
 test("wrong identities, auth, negation, generic errors, extra text and default data never prove account rejection", async () => {
   for (const makeError of [
     (_id: string) => "No active connected account found with ID ca_differentaccount",
