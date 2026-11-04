@@ -49,7 +49,7 @@ async function fixture(t: test.TestContext, timeoutMs?: number, inspectPort?: (p
   let pages = 0, published = 0, paged = false, oversized = false, created = 0, connected = 0, closed = 0, credentials = 0, backgroundConnections = 0;
   const attempts = new GenerationBoundConnectionAttempts<ForegroundComposioClient>(), leases = new McpConfigurationLeaseRegistry(), agentCache = new GenerationBoundConnectionCache<object>();
   t.after(async () => { await attempts.shutdown(); await agentCache.shutdown(); });
-  let hasBoundKey = true;
+  let hasBoundKey = true; const listedMetadata = structuredClone(metadata);
   let beforeCredentials = async () => {}, beforeConnect = async () => {}, beforeCall = async (_tool: string) => {};
   const background = () => withBotConnectorInventoryScope(server.id, () => existingOrConnectMcpClient({ peek: () => agentCache.peekConnected(server.id), connect: async () => { backgroundConnections++; return {}; } }));
   let beforeConfig = async () => {};
@@ -63,7 +63,7 @@ async function fixture(t: test.TestContext, timeoutMs?: number, inspectPort?: (p
         return { onNotification() {}, onClose(listener) { closeListeners.push(listener); },
           async request<Result>(method: string, params?: Record<string, unknown>): Promise<Result> {
             if (ended) throw new Error("Synthetic connection closed.");
-            if (method === "tools/list") { pages++; return { tools: paged ? [] : metadata, ...(paged ? { nextCursor: String(pages) } : {}), ...(oversized ? { vendorProse: "x".repeat(256 * 1024) } : {}) } as Result; }
+            if (method === "tools/list") { pages++; return { tools: paged ? [] : listedMetadata, ...(paged ? { nextCursor: String(pages) } : {}), ...(oversized ? { vendorProse: "x".repeat(256 * 1024) } : {}) } as Result; }
             if (method !== "tools/call") throw new Error("Unexpected synthetic MCP request.");
             const tool = String(params?.name); sent.push(tool); await beforeCall(tool);
             return { content: [], structuredContent: tool === SEARCH ? searchReply() : schemaReply(params?.arguments as Record<string, unknown>) } as Result;
@@ -80,7 +80,7 @@ async function fixture(t: test.TestContext, timeoutMs?: number, inspectPort?: (p
     now: () => 100, ...(timeoutMs ? { timeoutMs } : {}),
   });
   return { directory, server, permissionFile, sent, inspect, background, get created() { return created; }, get connected() { return connected; }, get closed() { return closed; }, get credentials() { return credentials; }, get backgroundConnections() { return backgroundConnections; }, get pages() { return pages; }, get published() { return published; },
-    unboundKey: () => { hasBoundKey = false; }, revoke: () => leases.invalidate(server.id), disconnect: () => attempts.disconnect(server.id), credentialsBarrier: (action: () => Promise<void>) => { beforeCredentials = action; }, connectBarrier: (action: () => Promise<void>) => { beforeConnect = action; }, callBarrier: (action: (tool: string) => Promise<void>) => { beforeCall = action; }, oversize: () => { oversized = true; }, paginate: () => { paged = true; }, configBarrier: (action: () => Promise<void>) => { beforeConfig = action; } };
+    changeMetadata: (action: (tools: typeof listedMetadata) => void) => action(listedMetadata), unboundKey: () => { hasBoundKey = false; }, revoke: () => leases.invalidate(server.id), disconnect: () => attempts.disconnect(server.id), credentialsBarrier: (action: () => Promise<void>) => { beforeCredentials = action; }, connectBarrier: (action: () => Promise<void>) => { beforeConnect = action; }, callBarrier: (action: (tool: string) => Promise<void>) => { beforeCall = action; }, oversize: () => { oversized = true; }, paginate: () => { paged = true; }, configBarrier: (action: () => Promise<void>) => { beforeConfig = action; } };
 }
 const owner = () => ({ signal: new AbortController().signal, assertCurrent() {} });
 
@@ -224,4 +224,13 @@ test("owner or client generation invalidation during the final filesystem check 
     assert.equal(invalidated, true, "authority changed after the final filesystem await began"); assert.equal(await fs.readFile(file, "utf8"), previous, "invalidated work publishes no replacement evidence");
     assert.deepEqual((await fs.readdir(f.directory)).sort(), [COMPOSIO_SETTINGS_INSPECTION_FILE, "existing-bot-grants.json"].sort()); assert.equal(await fs.readFile(f.permissionFile, "utf8"), "original grant data");
   });
+});
+
+test("Settings retains bounded structural rejection reasons privately while the public result stays unchanged", async (t) => {
+  const f = await fixture(t); f.changeMetadata((tools) => { tools[0]!.inputSchema = { ...tools[0]!.inputSchema, $schema: "https://json-schema.org/draft/2020-12/schema", description: marker } as typeof tools[0]["inputSchema"]; });
+  const result = await f.inspect(owner()); assert.equal(result.code, "unsupported_meta_schema"); assert.equal(f.connected, 1); assert.equal(f.closed, 1); assert.deepEqual(f.sent, []);
+  const file = path.join(f.directory, COMPOSIO_SETTINGS_INSPECTION_FILE), retained = await fs.readFile(file, "utf8"), diagnostic = JSON.parse(retained);
+  assert.equal(diagnostic.privateProof.rejection.reason, "unsupported_keyword"); assert.equal(diagnostic.privateProof.rejection.keyword, "$schema"); assert.equal(diagnostic.privateProof.rejection.root.dialect, "draft-2020-12"); assert.match(diagnostic.privateProof.rejection.schemaHash, /^[a-f0-9]{64}$/u);
+  assert.equal(retained.includes(marker), false); assert.equal(retained.includes("https://json-schema.org"), false); assert.ok(Buffer.byteLength(retained) < 32 * 1024); assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+  assert.equal(JSON.stringify(result).includes("privateProof"), false); assert.equal(await fs.readFile(f.permissionFile, "utf8"), "original grant data");
 });

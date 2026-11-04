@@ -38,6 +38,18 @@ const MAX_TOOLS = 128;
 const TIMEOUT_MS = 15_000;
 
 export type ComposioWatchProbeCode = "account_routing_unverified" | "foreground_required" | "unsupported_request" | "access_changed" | "cancelled" | "timed_out" | "invalid_inventory" | "unsupported_meta_schema" | "tool_failed" | "invalid_response" | "schemas_incomplete" | "no_matching_tools" | "limit_exceeded" | "inspection_failed";
+type DiagnosticTool = ComposioWatchProbeTool | "COMPOSIO_MULTI_EXECUTE_TOOL";
+type DiagnosticStage = "initial_inventory" | "refreshed_inventory" | "search_arguments" | "schemas_arguments";
+type DiagnosticReason = "missing_tool" | "read_only_false" | "schema_not_object" | "schema_limit" | "unsupported_keyword" | "schema_structure" | "root_type" | "root_properties" | "schema_compile" | "argument_shape" | "argument_validation";
+const DIAGNOSTIC_KEYWORDS = ["$schema", "$id", "$ref", "$defs", "definitions", "pattern", "patternProperties", "format", "dependencies", "dependentRequired", "if", "then", "else", "not", "contains", "prefixItems", "propertyNames", "additionalItems", "nullable", "properties", "items", "additionalProperties", "anyOf", "oneOf", "allOf", "required", "enum", "type", "const", "minItems", "maxItems", "minLength", "maxLength", "minimum", "maximum", "other"] as const;
+type DiagnosticKeyword = typeof DIAGNOSTIC_KEYWORDS[number];
+export interface ComposioWatchProbeRejection {
+  stage: DiagnosticStage; tool: DiagnosticTool; reason: DiagnosticReason;
+  schemaHash?: string; keyword?: DiagnosticKeyword;
+  inventory: { searchSeen: boolean; schemasSeen: boolean; executorSeen: boolean };
+  root: { type: "object" | "array" | "string" | "number" | "integer" | "boolean" | "null" | "union" | "missing" | "other"; dialect: "draft-07" | "draft-2019-09" | "draft-2020-12" | "missing" | "other"; propertiesObject: boolean; requiredArray: boolean; unknownRequired: boolean | null };
+  compatibility: { queriesArray: boolean; useCaseString: boolean; sessionObject: boolean; generateIdBoolean: boolean; toolSlugsArray: boolean; toolSlugItemsString: boolean; sessionIdString: boolean };
+}
 export interface ComposioWatchProbePrivateProof {
   revision: "composio-watch-inspection-v1";
   meta: { tool: ComposioWatchProbeTool; schemaHash: string; readOnlyHint: boolean | null }[];
@@ -52,6 +64,8 @@ export interface ComposioWatchProbePrivateProof {
     inputFields: string[];
   }[];
   activeConnectionReported: { email: boolean; calendar: boolean };
+  /** Closed structural rejection facts only; never AJV error prose or schema paths. */
+  rejection?: ComposioWatchProbeRejection;
 }
 export interface ComposioWatchProbeResult {
   available: false;
@@ -82,7 +96,7 @@ export function publicComposioWatchProbeResult(result: ComposioWatchProbeResult)
 }
 
 class ProbeFailure extends Error {
-  constructor(readonly code: ComposioWatchProbeCode) { super("Composio watch inspection could not be completed."); }
+  constructor(readonly code: ComposioWatchProbeCode, readonly rejection?: Omit<ComposioWatchProbeRejection, "stage" | "inventory">) { super("Composio watch inspection could not be completed."); }
 }
 function fail(code: ComposioWatchProbeCode): never { throw new ProbeFailure(code); }
 function record(value: unknown, code: ComposioWatchProbeCode = "invalid_response"): RecordValue {
@@ -111,27 +125,50 @@ function hash(value: unknown): string {
 // Only a bounded, understood JSON Schema subset is compiled. In particular,
 // no remote references, arbitrary regular expressions or custom formats run.
 const SCHEMA_KEYS = new Set(["type", "properties", "required", "additionalProperties", "items", "enum", "const", "anyOf", "oneOf", "allOf", "minLength", "maxLength", "minItems", "maxItems", "uniqueItems", "minProperties", "maxProperties", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "title", "description", "default", "examples", "deprecated", "$comment"]);
-function metaValidator(schema: unknown): ValidateFunction {
-  let nodes = 0;
+function object(value: unknown): value is RecordValue { return value !== null && typeof value === "object" && !Array.isArray(value); }
+function diagnosticKeyword(value: string): DiagnosticKeyword { return DIAGNOSTIC_KEYWORDS.includes(value as DiagnosticKeyword) ? value as DiagnosticKeyword : "other"; }
+function diagnosticDialect(value: unknown): ComposioWatchProbeRejection["root"]["dialect"] {
+  if (value === undefined) return "missing";
+  for (const [dialect, suffix] of [["draft-07", "draft-07/schema"], ["draft-2019-09", "draft/2019-09/schema"], ["draft-2020-12", "draft/2020-12/schema"]] as const) {
+    if ([`http://json-schema.org/${suffix}`, `https://json-schema.org/${suffix}`, `http://json-schema.org/${suffix}#`, `https://json-schema.org/${suffix}#`].includes(value as string)) return dialect;
+  }
+  return "other";
+}
+function rejectMeta(tool: DiagnosticTool, reason: DiagnosticReason, schema: unknown, keyword?: string): never {
+  const root = object(schema) ? schema : {}, rawType = root.type;
+  const type: ComposioWatchProbeRejection["root"]["type"] = rawType === undefined ? "missing" : Array.isArray(rawType) ? "union" : typeof rawType === "string" && ["object", "array", "string", "number", "integer", "boolean", "null"].includes(rawType) ? rawType as ComposioWatchProbeRejection["root"]["type"] : "other";
+  const knownRequired = tool === SEARCH ? ["queries", "session"] : tool === SCHEMAS ? ["tool_slugs", "include", "session_id"] : [];
+  const queries = property(schema, "queries"), session = property(schema, "session"), slugs = property(schema, "tool_slugs"), slugItems = slugs?.items;
+  throw new ProbeFailure("unsupported_meta_schema", { tool, reason, ...(schema === undefined ? {} : { schemaHash: hash(schema) }), ...(keyword === undefined ? {} : { keyword: diagnosticKeyword(keyword) }),
+    root: { type, dialect: diagnosticDialect(root.$schema), propertiesObject: object(root.properties), requiredArray: Array.isArray(root.required), unknownRequired: root.required === undefined ? null : !Array.isArray(root.required) || root.required.some((entry) => typeof entry !== "string" || !knownRequired.includes(entry)) },
+    compatibility: { queriesArray: queries?.type === "array", useCaseString: property(queries?.items, "use_case")?.type === "string", sessionObject: session?.type === "object", generateIdBoolean: property(session, "generate_id")?.type === "boolean", toolSlugsArray: slugs?.type === "array", toolSlugItemsString: object(slugItems) && slugItems.type === "string", sessionIdString: property(schema, "session_id")?.type === "string" } });
+}
+function metaValidator(schema: unknown, tool: ComposioWatchProbeTool): ValidateFunction {
+  let nodes = 0, compiler: Ajv | undefined;
   const inspect = (value: unknown, depth = 0): void => {
-    if (++nodes > 512 || depth > 12) fail("unsupported_meta_schema");
+    if (++nodes > 512 || depth > 12) rejectMeta(tool, "schema_limit", schema);
     if (typeof value === "boolean") return;
-    const part = record(value, "unsupported_meta_schema");
-    if (Object.keys(part).some((key) => !SCHEMA_KEYS.has(key))) fail("unsupported_meta_schema");
-    if (part.properties !== undefined) for (const child of Object.values(record(part.properties, "unsupported_meta_schema"))) inspect(child, depth + 1);
-    for (const key of ["items", "additionalProperties"] as const) if (part[key] !== undefined) inspect(part[key], depth + 1);
-    for (const key of ["anyOf", "oneOf", "allOf"] as const) if (part[key] !== undefined) {
-      if (!Array.isArray(part[key]) || part[key].length > 8) fail("unsupported_meta_schema");
-      for (const child of part[key]) inspect(child, depth + 1);
+    if (!object(value)) rejectMeta(tool, "schema_structure", schema);
+    const unsupported = Object.keys(value).find((key) => !SCHEMA_KEYS.has(key));
+    if (unsupported !== undefined) rejectMeta(tool, "unsupported_keyword", schema, unsupported);
+    if (value.properties !== undefined) {
+      if (!object(value.properties)) rejectMeta(tool, "schema_structure", schema, "properties");
+      for (const child of Object.values(value.properties)) inspect(child, depth + 1);
+    }
+    for (const key of ["items", "additionalProperties"] as const) if (value[key] !== undefined) inspect(value[key], depth + 1);
+    for (const key of ["anyOf", "oneOf", "allOf"] as const) if (value[key] !== undefined) {
+      if (!Array.isArray(value[key]) || value[key].length > 8) rejectMeta(tool, "schema_structure", schema, key);
+      for (const child of value[key]) inspect(child, depth + 1);
     }
   };
   try {
     inspect(schema);
-    const root = record(schema, "unsupported_meta_schema");
-    if (root.type !== "object" || !root.properties) fail("unsupported_meta_schema");
-    const ajv = new Ajv({ strict: false, allErrors: false, validateSchema: true });
-    return ajv.compile(root);
-  } catch { return fail("unsupported_meta_schema"); }
+    if (!object(schema)) rejectMeta(tool, "schema_not_object", schema);
+    if (schema.type !== "object") rejectMeta(tool, "root_type", schema);
+    if (!schema.properties) rejectMeta(tool, "root_properties", schema);
+    compiler = new Ajv({ strict: false, allErrors: false, validateSchema: true });
+    return compiler.compile(schema);
+  } catch (error) { if (error instanceof ProbeFailure) throw error; return rejectMeta(tool, "schema_compile", schema, compiler?.errors?.[0]?.keyword); }
 }
 function property(schema: unknown, name: string): RecordValue | undefined {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) return undefined;
@@ -182,8 +219,14 @@ export async function inspectComposioWatchSchemas(port: ComposioWatchProbePort, 
     try { await port.assertCurrent(controller.signal); } catch { controller.signal.throwIfAborted(); fail("access_changed"); }
     controller.signal.throwIfAborted();
   };
+  let inventoryPass: "initial_inventory" | "refreshed_inventory" = "initial_inventory", inventoryReads = 0;
+  const present = { searchSeen: false, schemasSeen: false, executorSeen: false };
+  const observedMeta = new Map<ComposioWatchProbeTool, ComposioWatchProbePrivateProof["meta"][number]>();
+  let rejectionStage: DiagnosticStage = "initial_inventory";
   type Meta = { schema: RecordValue; validate?: ValidateFunction; readOnlyHint: boolean | null };
   const inventory = async (): Promise<Map<string, Meta>> => {
+    inventoryPass = inventoryReads++ === 0 ? "initial_inventory" : "refreshed_inventory"; rejectionStage = inventoryPass;
+    present.searchSeen = false; present.schemasSeen = false; present.executorSeen = false;
     const selected = new Map<string, Meta>(); const seen = new Set<string>(); const cursors = new Set<string>();
     let cursor: string | undefined; let toolCount = 0;
     for (let page = 0; page < MAX_PAGES; page++) {
@@ -195,12 +238,16 @@ export async function inspectComposioWatchSchemas(port: ComposioWatchProbePort, 
         const tool = record(entry, "invalid_inventory"); const name = text(tool.name, 128);
         if (seen.has(name)) fail("invalid_inventory"); seen.add(name);
         if (![SEARCH, SCHEMAS, EXECUTE].includes(name)) continue;
-        const schema = record(tool.inputSchema, "unsupported_meta_schema");
+        const knownTool = name as DiagnosticTool;
+        if (name === SEARCH) present.searchSeen = true; else if (name === SCHEMAS) present.schemasSeen = true; else present.executorSeen = true;
+        if (!object(tool.inputSchema)) rejectMeta(knownTool, "schema_not_object", tool.inputSchema);
+        const schema = tool.inputSchema;
         const annotations = tool.annotations === undefined ? {} : record(tool.annotations, "invalid_inventory");
         if (annotations.readOnlyHint !== undefined && typeof annotations.readOnlyHint !== "boolean") fail("invalid_inventory");
         if (name !== EXECUTE) {
-          if (annotations.readOnlyHint === false) fail("unsupported_meta_schema");
-          selected.set(name, { schema, validate: metaValidator(schema), readOnlyHint: typeof annotations.readOnlyHint === "boolean" ? annotations.readOnlyHint : null });
+          observedMeta.set(name as ComposioWatchProbeTool, { tool: name as ComposioWatchProbeTool, schemaHash: hash(schema), readOnlyHint: typeof annotations.readOnlyHint === "boolean" ? annotations.readOnlyHint : null });
+          if (annotations.readOnlyHint === false) rejectMeta(knownTool, "read_only_false", schema);
+          selected.set(name, { schema, validate: metaValidator(schema, name as ComposioWatchProbeTool), readOnlyHint: typeof annotations.readOnlyHint === "boolean" ? annotations.readOnlyHint : null });
         } else selected.set(name, { schema, readOnlyHint: typeof annotations.readOnlyHint === "boolean" ? annotations.readOnlyHint : null });
       }
       if (response.nextCursor === undefined || response.nextCursor === null || response.nextCursor === "") return selected;
@@ -210,9 +257,10 @@ export async function inspectComposioWatchSchemas(port: ComposioWatchProbePort, 
     return fail("invalid_inventory");
   };
   const call = async (name: ComposioWatchProbeTool, metadata: Map<string, Meta>, build: (schema: RecordValue) => RecordValue): Promise<RecordValue> => {
-    const meta = metadata.get(name); if (!meta?.validate) return fail("unsupported_meta_schema");
+    const meta = metadata.get(name); if (!meta?.validate) { rejectionStage = inventoryPass; return rejectMeta(name, "missing_tool", meta?.schema); }
+    rejectionStage = name === SEARCH ? "search_arguments" : "schemas_arguments";
     const args = build(meta.schema);
-    if (!meta.validate(args)) fail("unsupported_meta_schema");
+    if (!meta.validate(args)) rejectMeta(name, "argument_validation", meta.schema, meta.validate.errors?.[0]?.keyword);
     await current();
     let raw: unknown;
     try { raw = await port.call(name, args, controller.signal); } catch { controller.signal.throwIfAborted(); return fail("inspection_failed"); }
@@ -232,10 +280,10 @@ export async function inspectComposioWatchSchemas(port: ComposioWatchProbePort, 
   const run = async (): Promise<ComposioWatchProbeResult> => {
     const kinds: ComposioWatchProbeKind[] = options.kind === "both" ? ["email", "calendar"] : [options.kind];
     const metadata = await inventory();
-    if (!metadata.has(SEARCH) || !metadata.has(SCHEMAS)) fail("unsupported_meta_schema");
+    if (!metadata.has(SEARCH) || !metadata.has(SCHEMAS)) rejectMeta(!metadata.has(SEARCH) ? SEARCH : SCHEMAS, "missing_tool", undefined);
     const search = await call(SEARCH, metadata, (schema) => {
       const queries = property(schema, "queries"); const item = queries?.items;
-      if (queries?.type !== "array" || !supportsString(item, "use_case", QUERIES[kinds[0]!]) || property(schema, "session")?.type !== "object" || property(property(schema, "session"), "generate_id")?.type !== "boolean") return fail("unsupported_meta_schema");
+      if (queries?.type !== "array" || !supportsString(item, "use_case", QUERIES[kinds[0]!]) || property(schema, "session")?.type !== "object" || property(property(schema, "session"), "generate_id")?.type !== "boolean") return rejectMeta(SEARCH, "argument_shape", schema);
       return { queries: kinds.map((kind) => ({ use_case: QUERIES[kind] })), session: { generate_id: true } };
     });
     if (!Array.isArray(search.results) || search.results.length !== kinds.length || !search.tool_schemas || !Array.isArray(search.toolkit_connection_statuses) || search.toolkit_connection_statuses.length > 16 || !search.time_info || !Array.isArray(search.next_steps_guidance)) fail("invalid_response");
@@ -271,12 +319,12 @@ export async function inspectComposioWatchSchemas(port: ComposioWatchProbePort, 
     const fresh = await inventory();
     const schemas = await call(SCHEMAS, fresh, (schema) => {
       const slugs = property(schema, "tool_slugs");
-      if (slugs?.type !== "array" || (slugs.items as RecordValue | undefined)?.type !== "string") return fail("unsupported_meta_schema");
+      if (slugs?.type !== "array" || (slugs.items as RecordValue | undefined)?.type !== "string") return rejectMeta(SCHEMAS, "argument_shape", schema);
       const args: RecordValue = { tool_slugs: [...requested.keys()] };
       const include = property(schema, "include");
       if (include?.type === "array" && supportsString({ properties: { item: include.items } }, "item", "input_schema") && supportsString({ properties: { item: include.items } }, "item", "output_schema")) args.include = ["input_schema", "output_schema"];
       if (property(schema, "session_id")) {
-        if (!supportsString(schema, "session_id", sessionId)) return fail("unsupported_meta_schema");
+        if (!supportsString(schema, "session_id", sessionId)) return rejectMeta(SCHEMAS, "argument_shape", schema);
         args.session_id = sessionId;
       }
       return args;
@@ -304,6 +352,12 @@ export async function inspectComposioWatchSchemas(port: ComposioWatchProbePort, 
     return result("account_routing_unverified", proof);
   };
   try { return await Promise.race([run(), aborted]); }
-  catch (error) { return result(error instanceof ProbeFailure ? error.code : controller.signal.aborted && controller.signal.reason instanceof ProbeFailure ? controller.signal.reason.code : "inspection_failed"); }
+  catch (error) {
+    const proof: ComposioWatchProbePrivateProof | undefined = error instanceof ProbeFailure && error.rejection ? {
+      revision: "composio-watch-inspection-v1", meta: [...observedMeta.values()], accountDeclarations: { executor: false, executorItem: false, upstream: false }, candidates: [], activeConnectionReported: { email: false, calendar: false },
+      rejection: { ...error.rejection, stage: rejectionStage, inventory: { ...present } },
+    } : undefined;
+    return result(error instanceof ProbeFailure ? error.code : controller.signal.aborted && controller.signal.reason instanceof ProbeFailure ? controller.signal.reason.code : "inspection_failed", proof);
+  }
   finally { clearTimeout(timer); options.signal?.removeEventListener("abort", onParentAbort); controller.signal.removeEventListener("abort", onAbort); }
 }

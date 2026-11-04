@@ -249,3 +249,48 @@ test("offloaded or explicitly truncated metadata cannot be treated as a complete
     assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH]);
   }
 });
+
+test("rejected meta-tool contracts retain only closed structural reasons and hashes", async (t) => {
+  const privateMarker = "private-account-credential-schema-name-and-default";
+  const cases = [
+    { label: "missing Search", change: (h: ReturnType<typeof harness>) => { h.tools.shift(); }, reason: "missing_tool", stage: "initial_inventory", keyword: undefined },
+    { label: "explicitly not read-only", change: (h: ReturnType<typeof harness>) => { (h.tools[0] as { annotations: unknown }).annotations = { readOnlyHint: false }; }, reason: "read_only_false", stage: "initial_inventory", keyword: undefined },
+    { label: "known unsupported dialect keyword", change: (h: ReturnType<typeof harness>) => { (h.tools[0] as { inputSchema: unknown }).inputSchema = { ...searchSchema, $schema: privateMarker }; }, reason: "unsupported_keyword", stage: "initial_inventory", keyword: "$schema" },
+    { label: "unknown keyword", change: (h: ReturnType<typeof harness>) => { (h.tools[0] as { inputSchema: unknown }).inputSchema = { ...searchSchema, [privateMarker]: { default: privateMarker } }; }, reason: "unsupported_keyword", stage: "initial_inventory", keyword: "other" },
+    { label: "empty unknown keyword", change: (h: ReturnType<typeof harness>) => { (h.tools[0] as { inputSchema: unknown }).inputSchema = { ...searchSchema, "": privateMarker }; }, reason: "unsupported_keyword", stage: "initial_inventory", keyword: "other" },
+    { label: "non-object root", change: (h: ReturnType<typeof harness>) => { (h.tools[0] as { inputSchema: unknown }).inputSchema = { type: "array", properties: {} }; }, reason: "root_type", stage: "initial_inventory", keyword: undefined },
+    { label: "missing root properties", change: (h: ReturnType<typeof harness>) => { (h.tools[0] as { inputSchema: unknown }).inputSchema = { type: "object" }; }, reason: "root_properties", stage: "initial_inventory", keyword: undefined },
+    { label: "invalid schema compilation", change: (h: ReturnType<typeof harness>) => { (h.tools[0] as { inputSchema: unknown }).inputSchema = { ...searchSchema, required: privateMarker }; }, reason: "schema_compile", stage: "initial_inventory", keyword: "type" },
+    { label: "incompatible host argument shape", change: (h: ReturnType<typeof harness>) => { (h.tools[0] as { inputSchema: unknown }).inputSchema = { ...searchSchema, properties: { ...searchSchema.properties, queries: { type: "string", default: privateMarker } } }; }, reason: "argument_shape", stage: "search_arguments", keyword: undefined },
+    { label: "required unknown argument", change: (h: ReturnType<typeof harness>) => { (h.tools[0] as { inputSchema: unknown }).inputSchema = { ...searchSchema, required: [...searchSchema.required, privateMarker] }; }, reason: "argument_validation", stage: "search_arguments", keyword: "required" },
+  ];
+  for (const sample of cases) await t.test(sample.label, async () => {
+    const h = harness(); sample.change(h); const result = await inspectComposioWatchSchemas(h.port, { kind: "email" });
+    assert.equal(result.code, "unsupported_meta_schema"); assert.equal(result.available, false); assert.deepEqual(h.calls, []);
+    const rejection = result.privateProof?.rejection; assert.ok(rejection); assert.equal(rejection.tool, SEARCH); assert.equal(rejection.reason, sample.reason); assert.equal(rejection.stage, sample.stage); assert.equal(rejection.keyword, sample.keyword);
+    assert.deepEqual(Object.keys(rejection).sort(), ["compatibility", "inventory", ...(sample.keyword === undefined ? [] : ["keyword"]), "reason", "root", ...(sample.reason === "missing_tool" ? [] : ["schemaHash"]), "stage", "tool"].sort());
+    if (sample.reason !== "missing_tool") assert.match(rejection.schemaHash!, /^[a-f0-9]{64}$/u);
+    assert.deepEqual(result.privateProof!.candidates, []); assert.ok(Buffer.byteLength(JSON.stringify(result.privateProof)) < 4096);
+    const retained = JSON.stringify(result); assert.equal(retained.includes(privateMarker), false); assert.equal(retained.includes("instancePath"), false); assert.equal(retained.includes("schemaPath"), false);
+    const publicView = JSON.stringify(publicComposioWatchProbeResult(result)); assert.equal(publicView.includes("rejection"), false); assert.equal(publicView.includes("schemaHash"), false);
+    if (sample.reason === "argument_validation") { assert.equal(rejection.root.unknownRequired, true); assert.equal(rejection.root.requiredArray, true); assert.equal(rejection.compatibility.queriesArray, true); assert.equal(rejection.compatibility.generateIdBoolean, true); }
+    if (sample.reason === "argument_shape") assert.equal(rejection.compatibility.queriesArray, false);
+  });
+});
+
+test("a refreshed GetSchemas rejection identifies its stage without retaining unknown required names", async () => {
+  const h = harness(), privateMarker = "private-name-not-retained"; let lists = 0;
+  h.port.listTools = async () => ({ tools: ++lists === 1 ? metadata() : metadata().map((tool) => tool.name === SCHEMAS ? { ...tool, inputSchema: { ...getSchema, required: ["tool_slugs", privateMarker] } } : tool) });
+  const result = await inspectComposioWatchSchemas(h.port, { kind: "email" });
+  assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH]); assert.equal(result.code, "unsupported_meta_schema");
+  assert.equal(result.privateProof?.rejection?.tool, SCHEMAS); assert.equal(result.privateProof?.rejection?.stage, "schemas_arguments"); assert.equal(result.privateProof?.rejection?.reason, "argument_validation"); assert.equal(result.privateProof?.rejection?.keyword, "required"); assert.equal(result.privateProof?.rejection?.root.unknownRequired, true);
+  assert.equal(JSON.stringify(result).includes(privateMarker), false);
+});
+
+test("known schema dialects are fixed diagnostics and never enable unsupported meta schemas", async () => {
+  for (const [uri, dialect] of [["https://json-schema.org/draft-07/schema#", "draft-07"], ["https://json-schema.org/draft/2019-09/schema", "draft-2019-09"], ["https://json-schema.org/draft/2020-12/schema", "draft-2020-12"], ["https://private-account.example/schema?credential=never-retain", "other"]]) {
+    const h = harness(); (h.tools[0] as { inputSchema: unknown }).inputSchema = { ...searchSchema, $schema: uri };
+    const result = await inspectComposioWatchSchemas(h.port, { kind: "email" }); assert.equal(result.code, "unsupported_meta_schema"); assert.deepEqual(h.calls, []);
+    assert.equal(result.privateProof?.rejection?.keyword, "$schema"); assert.equal(result.privateProof?.rejection?.root.dialect, dialect); assert.equal(JSON.stringify(result).includes(uri), false);
+  }
+});
