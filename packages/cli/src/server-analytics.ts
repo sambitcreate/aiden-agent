@@ -79,12 +79,22 @@ export function serverAnalyticsFile(agentDir: string): string {
   return join(agentDir, SERVER_ANALYTICS_FILE);
 }
 
-/** A missing or damaged file reads as the default, which has no notice and so sends nothing. */
+/** A file that is there but unreadable may have held an opt-out, so it counts as off. */
+const UNREADABLE_STATE: AnalyticsState = { enabled: false };
+
+/** A missing file reads as the default, which has no notice and so sends nothing. */
 export function readServerAnalyticsState(agentDir: string): AnalyticsState {
+  let text: string;
   try {
-    return parseAnalyticsState(JSON.parse(readFileSync(serverAnalyticsFile(agentDir), "utf8")));
+    text = readFileSync(serverAnalyticsFile(agentDir), "utf8");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? DEFAULT_ANALYTICS_STATE : UNREADABLE_STATE;
+  }
+  try {
+    const raw = JSON.parse(text) as { enabled?: unknown } | null;
+    return typeof raw?.enabled === "boolean" ? parseAnalyticsState(raw) : UNREADABLE_STATE;
   } catch {
-    return DEFAULT_ANALYTICS_STATE;
+    return UNREADABLE_STATE;
   }
 }
 
@@ -119,7 +129,8 @@ export function serverTransportFactory(context: ServerAnalyticsContext): ServerT
         ...(allowSend
           ? {
               fetch: async (url, options) => {
-                if (!allowSend()) throw new Error("Usage data was turned off.");
+                // Answered here because the SDK prints a stack trace for a failed flush.
+                if (!allowSend()) return new Response("{}", { status: 200 });
                 return fetch(url, options);
               },
             }
@@ -334,8 +345,7 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
     async finish() {
       // A fatal crash ends the process through its own rethrow, whatever exit was coming.
       await crash;
-      // Checked here too: a flush the gate stops makes the SDK print a stack trace.
-      await within(activation.then(() => (consentHolds() ? transport?.shutdown(SERVE_EXIT_FLUSH_CAP_MS) : undefined)), SERVE_EXIT_FLUSH_CAP_MS);
+      await within(activation.then(() => transport?.shutdown(SERVE_EXIT_FLUSH_CAP_MS)), SERVE_EXIT_FLUSH_CAP_MS);
       // A failure during the stop decides how the process ends, not this stop.
       while (crash) await crash;
       stopped = true;

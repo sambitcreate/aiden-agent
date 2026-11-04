@@ -52,7 +52,7 @@ A keyed server adds `server_started`, crash reports and, as feature-use events a
 Consent and a separate random install ID live in `aiden-analytics.json` in the agent directory (`~/.aiden/agent`, or `AIDEN_CODING_AGENT_DIR`):
 
 - **Notice:** one line on stderr at `aiden service install`, and at the first `aiden serve` on a terminal: "This Aiden server sends anonymous usage and crash data. Turn off: aiden telemetry off". `aiden serve --daemon` shows it in the terminal that starts it. A server that never showed the notice sends nothing, so a container or a script that runs `aiden serve` without a terminal stays silent.
-- **`aiden telemetry status|on|off`:** `off` saves the choice, sends one `analytics_disabled` with the old ID, and forgets the ID. A running server re-reads the file before every event and request, so it stops too and drops its queue. `on` also answers the notice; a running server starts sending again at its next start, with a new ID.
+- **`aiden telemetry status|on|off`:** `off` saves the choice, sends one `analytics_disabled` with the old ID, and forgets the ID. A running server re-reads the file before every event and request, so it stops too and drops its queue. `on` also answers the notice; a running server starts sending again at its next start, with a new ID. A consent file that cannot be read counts as off, since it may have held your opt-out; `on` replaces it.
 - **Environment:** `DO_NOT_TRACK=1` and `AIDEN_ANALYTICS=0` work as on the desktop, and with `CI` set nothing is ever sent. These are read per process: a service started by systemd or launchd does not see your shell's environment, so use `aiden telemetry off` for a service.
 - `--version`, help and every other admin command never show the notice or send.
 

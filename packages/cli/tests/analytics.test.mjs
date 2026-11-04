@@ -191,11 +191,20 @@ test("the install ID is created on the first send, kept afterwards and stored in
   assert.equal(existsSync(join(h.agentDir, "settings.json")), false, "Pi's settings file is not touched");
 });
 
-test("a damaged consent file sends nothing and does not stop the server", async (t) => {
-  const h = harness(t);
-  writeFileSync(stateFile(h.agentDir), "{ not json");
-  await started(h).finish();
-  assert.equal(h.created(), 0);
+test("a damaged consent file counts as off, so it can never undo an opt-out", async (t) => {
+  for (const damaged of ['{"enabled":false,"noticeSh', '{"enabled":"false","noticeShownAt":"2026-11-01T00:00:00.000Z"}', "null", "[]", ""]) {
+    const h = harness(t, { isTTY: true });
+    writeFileSync(stateFile(h.agentDir), damaged);
+    await started(h).finish();
+    api.showServerNotice(h.context);
+    assert.equal(h.stderr(), "", damaged);
+    assert.equal(h.created(), 0, damaged);
+    assert.equal(readFileSync(stateFile(h.agentDir), "utf8"), damaged, "left for the person to see");
+    assert.equal((await api.telemetryCommand(h.agentDir, ["status"], h.context)).reason, "disabled");
+
+    const report = await api.telemetryCommand(h.agentDir, ["on"], h.context);
+    assert.equal(report.sending, true, "telemetry on replaces it");
+  }
 });
 
 test("DO_NOT_TRACK=1 and AIDEN_ANALYTICS=0 turn everything off", async (t) => {
@@ -354,8 +363,10 @@ test("a shutdown flush that hangs is capped", async (t) => {
 
 test("a failing client leaves the server and the crash path as they were", async (t) => {
   const h = harness(t, { state: allowed, createTransport: async () => { throw new Error("no client"); } });
-  await started(h).finish();
-  assert.equal(h.crashHost.listenerCount("uncaughtException"), 0);
+  const run = started(h);
+  await settle();
+  assert.equal(h.crashHost.listenerCount("uncaughtException"), 0, "without waiting for the server to stop");
+  await run.finish();
 });
 
 test("an uncaught exception is sanitized, flushed with a cap, then rethrown", async (t) => {
@@ -448,6 +459,7 @@ test("when another listener owns uncaught exceptions the process keeps running",
   await run.finish();
   assert.deepEqual(h.rethrown, []);
   assert.equal(h.sent.at(-1).properties.level, "error");
+  assert.equal(existsSync(join(h.agentDir, api.SERVER_CRASH_COUNT_FILE)), false, "only a crash that ends the process counts towards the budget");
 });
 
 test("a crash loop stops reporting for the day instead of flooding the project", async (t) => {
@@ -505,8 +517,10 @@ test("a keyed client reaches only PostHog, and stops the moment the switch is of
   // Queued before the switch, so stopping must take it back out of the queue.
   api.reportAnalyticsEvent("web_search_used", { search_provider: "brave" });
   writeFileSync(stateFile(h.agentDir), JSON.stringify({ enabled: false, noticeShownAt: SHOWN }));
+  const printed = t.mock.method(console, "error", () => {});
   await run.finish();
   assert.equal(requests.length, 1);
+  assert.equal(printed.mock.callCount(), 0, "turning it off leaves no stack trace in the server's log");
 });
 
 test("a keyed client delivers what is queued at exit while the switch stays on", async (t) => {
@@ -537,7 +551,7 @@ function runBundle(args, agentDir, env = {}, nodeArgs = []) {
 }
 
 /** Runs `aiden serve` until `ready` appears on its output, then stops it with SIGTERM. */
-async function serveUntil(t, agentDir, env, ready) {
+async function serveUntil(t, agentDir, env, ready, whileRunning = () => {}) {
   const child = spawn(process.execPath, [cli, "serve", "--no-remote", "--no-pair"], { env: bundleEnv(agentDir, env), stdio: ["ignore", "pipe", "pipe"] });
   t.after(() => child.kill("SIGKILL"));
   let output = "";
@@ -548,6 +562,7 @@ async function serveUntil(t, agentDir, env, ready) {
     assert.ok(Date.now() < deadline, `serve did not reach ${ready}:\n${output}`);
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
+  whileRunning();
   const exited = once(child, "exit");
   child.kill("SIGTERM");
   const [code] = await exited;
@@ -573,6 +588,18 @@ test("a real server with no terminal and no prior notice sends nothing, and neit
     assert.equal(code, 0, output);
     assert.doesNotMatch(output, /analytics debug|anonymous usage/u);
   }
+});
+
+test("a server that fails to start is not counted", async (t) => {
+  const agentDir = agentDirFor(t, allowed);
+  const debug = { AIDEN_ANALYTICS_DEBUG: "1" };
+  let second;
+  await serveUntil(t, agentDir, debug, /\[analytics debug\] server_started/u, () => {
+    second = runBundle(["serve", "--no-remote", "--no-pair"], agentDir, debug);
+  });
+  assert.notEqual(second.status, 0);
+  assert.match(second.stderr, /Another Aiden process owns/u);
+  assert.doesNotMatch(second.stderr, /server_started/u);
 });
 
 test("admin commands, help and version send nothing, even when a server would", (t) => {

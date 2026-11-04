@@ -68,8 +68,8 @@ const allowedExternalPackages = new Set([
 	// Optional Negotiate proxy auth (pi 0.87 proxy-agent-negotiate). Imported
 	// lazily inside try/catch and only reached behind a Negotiate proxy.
 	"kerberos",
-	// posthog-node's optional peer, imported lazily and only by the SDK's own
-	// exception capture. Analytics sends `$exception` itself and never calls it.
+	// posthog-node's optional peer, imported lazily inside a try/catch for trace
+	// IDs on `$exception`. Without it the SDK carries on, and none are sent.
 	"@opentelemetry/api",
 ]);
 

@@ -53,6 +53,10 @@ jobs:
           set -euo pipefail
           grep -rqF "$AIDEN_POSTHOG_PROJECT_KEY" packages/cli/dist/app/chunks packages/cli/dist/app/cli.js || { echo "::error::The server bundle does not carry the analytics project key."; exit 1; }
           test "$(node packages/cli/dist/app/cli.js --version)" = "$(node -p 'require("./packages/cli/package.json").version')"
+          # A client chunk that fails to load would only mean silence at run time.
+          client_chunk="$(grep -rlF us.i.posthog.com packages/cli/dist/app/chunks)"
+          test "$(wc -l <<< "$client_chunk")" -eq 1
+          node --input-type=module -e 'await import(process.argv[1])' "$PWD/$client_chunk"
 
       - name: Pack the server
         run: |
