@@ -493,6 +493,52 @@ test("an action held during start is dropped when sending isn't allowed, even af
   assert.deepEqual(h.names(), ["app_opened", "app_active"]);
 });
 
+test("a yes that arrives during start doesn't cover what was held before it", async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  await Promise.all([h.service.start(), h.service.markNoticeShown()]);
+  assert.deepEqual(h.names().filter((name) => name === "terminal_opened"), []);
+});
+
+test("quitting during start still sends what was held", async (t) => {
+  let release = () => {};
+  const ready = new Promise<void>((resolve) => { release = resolve; });
+  const fake = fakeTransport();
+  const h = harness({
+    initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" },
+    createTransport: async () => { await ready; return fake.transport; },
+  });
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  void h.service.start();
+  const quit = h.service.shutdown();
+  release();
+  await quit;
+  assert.ok(fake.sent.some((message) => message.event === "terminal_opened"));
+});
+
+test("a startup that outlives quitting makes no transport and sends nothing", async (t) => {
+  let release = () => {};
+  const ready = new Promise<void>((resolve) => { release = resolve; });
+  const fake = fakeTransport();
+  const h = harness({
+    initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" },
+    createTransport: async () => { await ready; return fake.transport; },
+  });
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  const starting = h.service.start();
+  // The service's own timers don't hold a process open.
+  const open = setTimeout(() => undefined, 5_000);
+  t.after(() => clearTimeout(open));
+  await h.service.shutdown(30);
+  release();
+  await starting;
+  assert.equal(fake.state(), "discarded");
+  assert.deepEqual(fake.sent, []);
+});
+
 test("turning usage data off during start drops what was held", async (t) => {
   const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
   t.after(h.cleanup);

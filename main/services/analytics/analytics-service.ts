@@ -139,9 +139,11 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
   let activeDay: string | undefined;
   let activation: Promise<void> | undefined;
   // Remote and IPC open before start() settles, so an action in that window
-  // waits here. Nothing leaves until start() has found sending allowed; if it
-  // isn't, these are dropped.
+  // waits here. It goes out only under the consent saved when the launch began:
+  // start() drops these if that consent doesn't allow sending, and any consent
+  // change during startup drops them too, so a later yes can't cover them.
   let heldUntilStarted: Array<() => void> | undefined = [];
+  let startup: Promise<void> = Promise.resolve();
   // Bumped on every stop so an activation that started before it cannot
   // bring a transport back to life.
   let generation = 0;
@@ -253,9 +255,14 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
     return activation;
   }
 
+  // A late activation sees the new generation and discards its transport.
+  function cancelStartup(): void {
+    generation += 1;
+    heldUntilStarted = undefined;
+  }
+
   // Stops capture and drops whatever is queued, without sending it.
   function stop(): void {
-    heldUntilStarted = undefined;
     generation += 1;
     activation = undefined;
     if (timer !== undefined) stopTimer(timer);
@@ -308,40 +315,47 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
     }
   }
 
+  async function runStartup(): Promise<void> {
+    let previousRunUnclean = false;
+    try {
+      previousRunUnclean = beginRun(options.runDirectory).previousRunUnclean;
+    } catch (error) {
+      log("The analytics run marker could not be written.", error);
+    }
+    try {
+      const version = options.superProperties.app_version;
+      const state = await options.store.read();
+      const updated = state.lastVersion !== undefined && state.lastVersion !== version;
+      launchKind = previousRunUnclean ? "after_crash" : updated ? "after_update" : "cold";
+      if (updated) pendingUpdate = { from_version: state.lastVersion!, to_version: version };
+      // While only the notice holds sending back, keep the old version so an
+      // update the person quits before answering is still reported next launch.
+      const sendStatus = analyticsSendStatus(state, { env: options.env, hasKey });
+      if (!sendStatus.canSend) heldUntilStarted = undefined;
+      const waitingForNotice = !sendStatus.canSend && sendStatus.reason === "notice_pending";
+      if (state.lastVersion !== version && !(updated && waitingForNotice)) {
+        await options.store.update((current) => ({ ...current, lastVersion: version }));
+      }
+      await activateIfAllowed();
+    } catch (error) {
+      log("Analytics could not start.", error);
+    } finally {
+      const held = heldUntilStarted;
+      heldUntilStarted = undefined;
+      held?.forEach((send) => send());
+    }
+  }
+
   return {
-    async start() {
-      let previousRunUnclean = false;
-      try {
-        previousRunUnclean = beginRun(options.runDirectory).previousRunUnclean;
-      } catch (error) {
-        log("The analytics run marker could not be written.", error);
-      }
-      try {
-        const version = options.superProperties.app_version;
-        const state = await options.store.read();
-        const updated = state.lastVersion !== undefined && state.lastVersion !== version;
-        launchKind = previousRunUnclean ? "after_crash" : updated ? "after_update" : "cold";
-        if (updated) pendingUpdate = { from_version: state.lastVersion!, to_version: version };
-        // While only the notice holds sending back, keep the old version so an
-        // update the person quits before answering is still reported next launch.
-        const sendStatus = analyticsSendStatus(state, { env: options.env, hasKey });
-        const waitingForNotice = !sendStatus.canSend && sendStatus.reason === "notice_pending";
-        if (state.lastVersion !== version && !(updated && waitingForNotice)) {
-          await options.store.update((current) => ({ ...current, lastVersion: version }));
-        }
-        await activateIfAllowed();
-      } catch (error) {
-        log("Analytics could not start.", error);
-      } finally {
-        const held = heldUntilStarted;
-        heldUntilStarted = undefined;
-        held?.forEach((send) => send());
-      }
+    start() {
+      startup = runStartup();
+      return startup;
     },
 
     status,
 
     setEnabled(enabled, isCurrent) {
+      heldUntilStarted = undefined;
       return inOrder(async () => {
         if (isCurrent && !isCurrent()) throw new Error("Inactive usage data request.");
         try {
@@ -362,6 +376,7 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
     },
 
     markNoticeShown(choice, isCurrent) {
+      heldUntilStarted = undefined;
       return inOrder(async () => {
         if (isCurrent && !isCurrent()) throw new Error("Inactive usage data request.");
         try {
@@ -405,11 +420,16 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
     async shutdown(timeoutMs = 1_500) {
       // A queued opt-in can create a fresh transport and activity timer.
       // Finish the accepted consent changes before shutting down either one.
-      await within(consentQueue.then(() => {
+      await within(consentQueue.then(async () => {
+        // A startup still running gets a short share of the budget, so what it
+        // held reaches this flush. Past that it is cancelled.
+        await within(startup, timeoutMs / 3);
+        cancelStartup();
         if (timer !== undefined) stopTimer(timer);
         timer = undefined;
         return transport?.shutdown(timeoutMs);
       }), timeoutMs + 250);
+      cancelStartup();
     },
 
     markCleanExit() {
