@@ -170,7 +170,7 @@ for (const status of ["finished", "stopped", "expired"] as const) {
   });
 }
 
-test("keyboard: Approve plan is the first native Tab stop and retains native Enter activation", () => {
+test("keyboard: Approve plan is the first answer control and retains native Enter activation", () => {
   render(card());
   const buttons = screen.getAllByRole("button") as HTMLButtonElement[];
   assert.equal(buttons[0]!.textContent, "Approve plan");
@@ -180,4 +180,18 @@ test("keyboard: Approve plan is the first native Tab stop and retains native Ent
   buttons[0]!.focus();
   assert.equal(document.activeElement, buttons[0]);
   assert.equal(fireEvent.keyDown(buttons[0]!, { key: "Enter" }), true, "native Enter is not intercepted");
+});
+
+
+test("the complete review can receive keyboard focus independently of the answer controls", () => {
+  render(card());
+  const review = screen.getByRole("region", { name: "Plan review" });
+  review.focus();
+  assert.equal(document.activeElement, review);
+  within(review).getByText("Keep the team ready for next week.");
+  within(review).getByRole("list", { name: "Plan steps" });
+  within(review).getByRole("list", { name: "Plan coverage" });
+  assert.equal(within(review).queryByRole("button", { name: "Approve plan" }), null);
+  fireEvent.click(screen.getByRole("button", { name: "Show details" }));
+  within(review).getByText("Create a calendar event");
 });

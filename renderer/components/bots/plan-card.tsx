@@ -90,42 +90,44 @@ function PlanCardBody({ plan, botName, avatar, onRespond }: PlanCardProps) {
         </>
       }
     >
-      <p className="whitespace-pre-line">{plan.why}</p>
-      {active ? (
-        <ul aria-label="Plan steps" className="mt-2 space-y-1">
-          {plan.steps.map((step, index) => {
-            const Icon = step.status === "done" ? Check : step.status === "skipped" ? Minus : Circle;
-            const label = step.status === "done" ? "Done" : step.status === "skipped" ? "Skipped" : "Pending";
-            return (
-              <li key={index} className="flex min-w-0 items-start gap-2">
-                <span role="img" aria-label={label} className={step.status === "done" ? "shrink-0 rounded-full bg-status-green-surface p-0.5 text-status-green" : "shrink-0 p-0.5 text-tertiary"}>
-                  <Icon aria-hidden="true" className="size-3.5" />
-                </span>
-                <span className="min-w-0">{step.text}</span>
-              </li>
-            );
-          })}
-        </ul>
-      ) : (
-        <ol aria-label="Plan steps" className="mt-2 list-decimal space-y-1 pl-5">
-          {plan.steps.map((step, index) => <li key={index}>{step.text}</li>)}
-        </ol>
-      )}
-      <ul aria-label="Plan coverage" className="mt-2 space-y-1">
-        {plan.items.map((item) => (
-          <li key={item.id}>
-            <span>{item.line}</span>
-            {active && item.used !== undefined && item.max !== undefined ? <span className="ml-1.5 text-tertiary">{`${item.used} of ${item.max} used`}</span> : null}
-          </li>
-        ))}
-      </ul>
-      {expanded ? (
-        <div id={detailsId} role="region" aria-label="Plan details" className="mt-2 rounded-card bg-well p-2">
-          <ul className="space-y-1">
-            {plan.items.flatMap((item) => item.details.map((detail, index) => <li key={`${item.id}:${index}`}>{detail}</li>))}
+      <div role="region" aria-label="Plan review" tabIndex={0} className="max-h-[min(40vh,24rem)] overflow-y-auto overscroll-contain focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring">
+        <p className="whitespace-pre-line">{plan.why}</p>
+        {active ? (
+          <ul aria-label="Plan steps" className="mt-2 space-y-1">
+            {plan.steps.map((step, index) => {
+              const Icon = step.status === "done" ? Check : step.status === "skipped" ? Minus : Circle;
+              const label = step.status === "done" ? "Done" : step.status === "skipped" ? "Skipped" : "Pending";
+              return (
+                <li key={index} className="flex min-w-0 items-start gap-2">
+                  <span role="img" aria-label={label} className={step.status === "done" ? "shrink-0 rounded-full bg-status-green-surface p-0.5 text-status-green" : "shrink-0 p-0.5 text-tertiary"}>
+                    <Icon aria-hidden="true" className="size-3.5" />
+                  </span>
+                  <span className="min-w-0">{step.text}</span>
+                </li>
+              );
+            })}
           </ul>
-        </div>
-      ) : null}
+        ) : (
+          <ol aria-label="Plan steps" className="mt-2 list-decimal space-y-1 pl-5">
+            {plan.steps.map((step, index) => <li key={index}>{step.text}</li>)}
+          </ol>
+        )}
+        <ul aria-label="Plan coverage" className="mt-2 space-y-1">
+          {plan.items.map((item) => (
+            <li key={item.id}>
+              <span>{item.line}</span>
+              {active && item.used !== undefined && item.max !== undefined ? <span className="ml-1.5 text-tertiary">{`${item.used} of ${item.max} used`}</span> : null}
+            </li>
+          ))}
+        </ul>
+        {expanded ? (
+          <div id={detailsId} role="region" aria-label="Plan details" className="mt-2 rounded-card bg-well p-2">
+            <ul className="space-y-1">
+              {plan.items.flatMap((item) => item.details.map((detail, index) => <li key={`${item.id}:${index}`}>{detail}</li>))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
       {error ? <p role="alert" className="mt-2 text-status-red">{error}</p> : null}
     </BotNoticeCard>
   );

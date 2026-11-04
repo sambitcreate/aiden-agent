@@ -25,3 +25,5 @@
 - A combined UI-reference read exceeded the output budget. Recovered the relevant button, approval, motion and verification sections with bounded reads before Task7.
 
 - Task7 first Cua attempt reached the pending card but failed its composer locator: readiness changes the placeholder, so Ask Planner is absent while Send is held. Used the actual textarea for draft/Enter assertions, preserving the behavioral oracle. Failure log /tmp/bot-plan-c-task7-cua.log.
+
+- Task7 max-length Cua acceptance reproduced a clipped review: first step had viewport ratio0 and no scrollable review ancestor. Added a bounded keyboard-scrollable Plan review region keeping heading/actions outside; retained failing log /tmp/bot-plan-c-task7-long-review-red.log.

@@ -129,5 +129,23 @@ test("plan approval waits for the host, then becomes a stoppable checklist", asy
     { botId: bot.id, planId: plan.planId, decision: "approve" }, { botId: bot.id, planId: plan.planId, decision: "approve" },
     { botId: bot.id, planId: plan.planId, decision: "stop" }, { botId: bot.id, planId: declined.planId, decision: "not_now" },
   ]);
+  const longPlan: BotPlanView = { ...plan, planId: "long-review", from: undefined,
+    why: "Review each step before allowing the task. ".repeat(7).slice(0, 300),
+    steps: Array.from({ length: 10 }, (_, index) => ({ text: `${index + 1}. ${"Read the receipts carefully and prepare the report for the team. ".repeat(4)}`.slice(0, 200), status: "pending" })),
+    items: Array.from({ length: 8 }, (_, index) => ({ id: `long-${index}`, line: `Calendar ${index + 1} · create events for this reporting period (up to 5)`, details: ["Create an event"] })),
+  };
+  await aiden.app.evaluate((_electron, next) => (globalThis as unknown as { planE2e: PlanE2eState }).planE2e.replace(next), longPlan);
+  await expect(page.getByText(longPlan.steps[0]!.text, { exact: true })).toBeInViewport();
+  const review = page.getByRole("region", { name: "Plan review", exact: true });
+  await review.focus();
+  await review.press("End");
+  await expect(page.getByText(longPlan.items[7]!.line, { exact: true })).toBeInViewport();
+  await review.press("Home");
+  await expect(page.getByText(longPlan.steps[0]!.text, { exact: true })).toBeInViewport();
+  await page.getByText(longPlan.steps[9]!.text, { exact: true }).scrollIntoViewIfNeeded();
+  await expect(page.getByText(longPlan.steps[9]!.text, { exact: true })).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Approve plan", exact: true })).toBeInViewport();
+  await expect(draft).toHaveValue("Keep this draft while the plan waits");
+  await page.screenshot({ path: testInfo.outputPath("plan-long-review-dark.png") });
   expect(aiden.lmStudio.requests.filter(request => request.url === "/v1/chat/completions")).toHaveLength(0);
 });
