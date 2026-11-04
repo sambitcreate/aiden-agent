@@ -188,6 +188,48 @@ for (const drift of ["grant removed", "directory replaced"] as const) {
   });
 }
 
+test("committed issue replay preserves the open issue and publication on folder-validation I/O", async t => {
+  const app = await folderFixture(t);
+  let interrupt = true;
+  const issues = createBotIssueService({
+    store: createBotIssueStore({ profileDir: () => app.privateRoot }),
+    appendEntry: async () => {}, funnel: { deliver: async () => "sent" }, now: Date.now,
+    actions: {
+      resumeRoutine: async () => "missing", stopRun: async () => {}, snoozeStall() {}, openSettings() {},
+      allowFolder: async (botId, access, operationId) => {
+        const result = await app.service.grantBotFolder({ ...app.input, botId, operationId,
+          folderPath: access.authorization.root, expectedRevision: access.authorization.policyRevision });
+        if (interrupt) { interrupt = false; throw new Error("interrupted after publication"); }
+        return result;
+      },
+    },
+  });
+  const issue = await issues.raise({ botId: app.owner.id, kind: "access_needed", dedupeKey: "access:Taxes",
+    title: "Needs Taxes", body: "Prepare a return", actions: [{ kind: "dismiss_access" }, { kind: "allow_folder" }],
+    access: { label: "Taxes", folderPath: app.folderPath, authorization: {
+      policyRevision: app.input.expectedRevision, requestIds: ["routine:r1:1"], target: "folder", root: app.folderPath,
+      identity: app.input.expectedIdentity, choices: ["not_now", "always", "once"],
+    } },
+  });
+  await assert.rejects(issues.act(app.owner.id, issue.id, { kind: "allow_folder" }), /interrupted after publication/u);
+  const policy = structuredClone(app.policies.get(app.owner.id));
+  const roots = (await app.state.snapshot()).approvedRoots;
+  const journalFile = path.join(app.privateRoot, "bot-folder-grants.json");
+  const journal = await fs.readFile(journalFile, "utf8");
+  const list = app.deps.approvedFolders!.list;
+  const unavailable = Object.assign(new Error("approved folder inventory I/O"), { code: "EIO" });
+  app.deps.approvedFolders!.list = async () => { throw unavailable; };
+  await assert.rejects(issues.act(app.owner.id, issue.id, { kind: "allow_folder" }), error => error === unavailable);
+  assert.deepEqual((await issues.list(app.owner.id, { open: true })).map(row => row.id), [issue.id]);
+  assert.deepEqual(app.policies.get(app.owner.id), policy);
+  assert.deepEqual((await app.state.snapshot()).approvedRoots, roots);
+  assert.equal(await fs.readFile(journalFile, "utf8"), journal);
+  app.deps.approvedFolders!.list = list;
+  assert.equal(await issues.act(app.owner.id, issue.id, { kind: "allow_folder" }), "done");
+  assert.deepEqual(await issues.list(app.owner.id, { open: true }), []);
+  assert.deepEqual(app.counts, { adds: 1, removes: 0, saves: 1 });
+});
+
 test("an unavailable folder journal read leaves ordinary Bot operations available without inferring a committed receipt", async (t) => {
   const app = await folderFixture(t);
   let writes = 0;
