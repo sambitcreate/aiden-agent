@@ -51,6 +51,7 @@ async function fixture(t: test.TestContext, timeoutMs?: number, inspectPort?: (p
   t.after(async () => { await attempts.shutdown(); await agentCache.shutdown(); });
   let hasBoundKey = true; const listedMetadata = structuredClone(metadata);
   let beforeCredentials = async () => {}, beforeConnect = async () => {}, beforeCall = async (_tool: string) => {};
+  let transformReply = (_tool: string, reply: unknown): unknown => reply;
   const background = () => withBotConnectorInventoryScope(server.id, () => existingOrConnectMcpClient({ peek: () => agentCache.peekConnected(server.id), connect: async () => { backgroundConnections++; return {}; } }));
   let beforeConfig = async () => {};
   const sent: string[] = [];
@@ -66,7 +67,7 @@ async function fixture(t: test.TestContext, timeoutMs?: number, inspectPort?: (p
             if (method === "tools/list") { pages++; return { tools: paged ? [] : listedMetadata, ...(paged ? { nextCursor: String(pages) } : {}), ...(oversized ? { vendorProse: "x".repeat(256 * 1024) } : {}) } as Result; }
             if (method !== "tools/call") throw new Error("Unexpected synthetic MCP request.");
             const tool = String(params?.name); sent.push(tool); await beforeCall(tool);
-            return { content: [], structuredContent: tool === SEARCH ? searchReply() : schemaReply(params?.arguments as Record<string, unknown>) } as Result;
+            return transformReply(tool, { content: [], structuredContent: tool === SEARCH ? searchReply() : schemaReply(params?.arguments as Record<string, unknown>) }) as Result;
           }, async close() { if (!ended) { ended = true; closed++; for (const listener of closeListeners) listener(); } },
         };
       },
@@ -80,7 +81,7 @@ async function fixture(t: test.TestContext, timeoutMs?: number, inspectPort?: (p
     now: () => 100, ...(timeoutMs ? { timeoutMs } : {}),
   });
   return { directory, server, permissionFile, sent, inspect, background, get created() { return created; }, get connected() { return connected; }, get closed() { return closed; }, get credentials() { return credentials; }, get backgroundConnections() { return backgroundConnections; }, get pages() { return pages; }, get published() { return published; },
-    changeMetadata: (action: (tools: typeof listedMetadata) => void) => action(listedMetadata), unboundKey: () => { hasBoundKey = false; }, revoke: () => leases.invalidate(server.id), disconnect: () => attempts.disconnect(server.id), credentialsBarrier: (action: () => Promise<void>) => { beforeCredentials = action; }, connectBarrier: (action: () => Promise<void>) => { beforeConnect = action; }, callBarrier: (action: (tool: string) => Promise<void>) => { beforeCall = action; }, oversize: () => { oversized = true; }, paginate: () => { paged = true; }, configBarrier: (action: () => Promise<void>) => { beforeConfig = action; } };
+    changeMetadata: (action: (tools: typeof listedMetadata) => void) => action(listedMetadata), changeReply: (action: typeof transformReply) => { transformReply = action; }, unboundKey: () => { hasBoundKey = false; }, revoke: () => leases.invalidate(server.id), disconnect: () => attempts.disconnect(server.id), credentialsBarrier: (action: () => Promise<void>) => { beforeCredentials = action; }, connectBarrier: (action: () => Promise<void>) => { beforeConnect = action; }, callBarrier: (action: (tool: string) => Promise<void>) => { beforeCall = action; }, oversize: () => { oversized = true; }, paginate: () => { paged = true; }, configBarrier: (action: () => Promise<void>) => { beforeConfig = action; } };
 }
 const owner = () => ({ signal: new AbortController().signal, assertCurrent() {} });
 
@@ -233,4 +234,30 @@ test("Settings retains bounded structural rejection reasons privately while the 
   assert.equal(diagnostic.privateProof.rejection.reason, "unsupported_keyword"); assert.equal(diagnostic.privateProof.rejection.keyword, "$schema"); assert.equal(diagnostic.privateProof.rejection.root.dialect, "draft-2020-12"); assert.match(diagnostic.privateProof.rejection.schemaHash, /^[a-f0-9]{64}$/u);
   assert.equal(retained.includes(marker), false); assert.equal(retained.includes("https://json-schema.org"), false); assert.ok(Buffer.byteLength(retained) < 32 * 1024); assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
   assert.equal(JSON.stringify(result).includes("privateProof"), false); assert.equal(await fs.readFile(f.permissionFile, "utf8"), "original grant data");
+});
+
+test("Settings saves closed response-stage evidence while keeping response contents and diagnostics out of IPC", async (t) => {
+  for (const tool of [SEARCH, SCHEMAS]) await t.test(tool, async (t) => {
+    const f = await fixture(t), unknownName = "private-unknown-field-name-and-schema";
+    f.changeReply((name, reply) => {
+      if (name !== tool) return reply;
+      const envelope = reply as { structuredContent: { data: Record<string, unknown> } }, data = envelope.structuredContent.data;
+      data[unknownName] = { account_id: marker, user_info: marker, schema: marker };
+      if (tool === SEARCH) (data.session as Record<string, unknown>).instructions = { [unknownName]: marker };
+      else ((data.tool_schemas as Record<string, Record<string, unknown>>).GMAIL_FETCH_EMAILS!.input_schema as Record<string, unknown>).properties = [];
+      return reply;
+    });
+    const result = await f.inspect(owner()), file = path.join(f.directory, COMPOSIO_SETTINGS_INSPECTION_FILE), retained = await fs.readFile(file, "utf8"), proof = JSON.parse(retained).privateProof;
+    assert.equal(result.code, "invalid_response"); assert.equal(result.available, false); assert.equal(f.closed, 1);
+    assert.deepEqual(f.sent, tool === SEARCH ? [SEARCH] : [SEARCH, SCHEMAS]);
+    assert.equal(proof.responseRejection.stage, tool === SEARCH ? "search_response" : "schemas");
+    assert.equal(proof.responseRejection.field, tool === SEARCH ? "session.instructions" : "input_schema.properties");
+    assert.equal(proof.responseRejection.reason, tool === SEARCH ? "expected_string" : "expected_object");
+    assert.equal(proof.responseRejection.calls.schemasStarted, tool === SCHEMAS); assert.equal(proof.accountDeclarations.executor, true);
+    assert.equal(proof.responseRejection.inventory.initialComplete, true); assert.equal(proof.responseRejection.inventory.refreshedComplete, tool === SCHEMAS);
+    assert.equal(retained.includes(marker), false); assert.equal(retained.includes(unknownName), false);
+    assert.ok(Buffer.byteLength(retained) < 32 * 1024); assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+    assert.equal(JSON.stringify(result).includes("privateProof"), false); assert.equal(JSON.stringify(result).includes("responseRejection"), false);
+    assert.equal(await fs.readFile(f.permissionFile, "utf8"), "original grant data");
+  });
 });

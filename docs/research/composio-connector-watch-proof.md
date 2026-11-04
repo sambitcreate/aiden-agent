@@ -107,3 +107,10 @@ The reviewed V3 diagnostic (`2e1266847`, isolated from the later feature state) 
 The probe now accepts only the four canonical HTTP/HTTPS draft-07 root annotations, with or without the trailing fragment marker. It normalizes that annotation to Ajv's bundled draft-07 identity and compiles synchronously without a schema loader or network request. Other dialects, nested annotations, references, identifiers, patterns and custom formats remain refused. This changes metadata compatibility only: every result still leaves account routing and execution unavailable until independently verified.
 
 The Bot-specific inspection writer also rechecks the initiating authority after its final directory, realpath and target checks, immediately before atomic publication. Revocation during any of those awaited checks preserves prior evidence and removes the staging file. Both changes passed the requested GPT-6.1 Sol high review; independent focused suites passed88/88 and strict probe types and lint passed. Live verification of the corrected snapshot follows separately.
+
+
+## Live metadata response check — 2026-11-03
+
+The corrected V4 snapshot (`3e1b6ad2e`) passed its build,80 snapshot tests, signed-runtime preflight and isolated startup. Native computer use confirmed the running V4 build before the explicit Settings check. That check now advances past the draft-07 declaration and reports `invalid_response`. Its returned metadata format has not yet been established; no app-data operation or account selection was attempted.
+
+A separate closed `responseRejection` diagnostic now records the fixed validation stage, field and reason; call progress; completed-inventory flags; and capped type/count facts for known envelope fields. It retains no returned strings, numeric values, map keys, session identifiers, account information or vendor prose. Already-read account-selector declarations remain booleans and do not verify routing. Parsing, public output and all watch gates remain unchanged. The requested Sol high review is clear, with163 independent focused cases and strict types/lint passing. Live response evidence follows from a new isolated reviewed snapshot.

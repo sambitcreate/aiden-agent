@@ -132,7 +132,9 @@ test("partial, unknown and tool-error envelopes never become accepted schema pro
   ]) {
     const h = harness(); h.port.call = async () => response;
     const result = await inspectComposioWatchSchemas(h.port, { kind: "email" });
-    assert.equal(result.available, false); assert.equal(result.privateProof, undefined);
+    assert.equal(result.available, false); assert.deepEqual(result.privateProof?.candidates, []);
+    assert.equal(result.privateProof?.responseRejection?.calls.searchStarted, true); assert.equal(result.privateProof?.responseRejection?.calls.schemasStarted, false);
+    assert.ok(!JSON.stringify(result).includes("credential-fixture"));
     assert.ok(!JSON.stringify(publicComposioWatchProbeResult(result)).includes("credential-fixture"));
   }
   const h = harness(); const call = h.port.call;
@@ -332,4 +334,139 @@ test("draft-07 compatibility refuses lookalike root URIs and rechecks dialect dr
   const h = harness(); let lists = 0;
   h.port.listTools = async () => { lists++; return { tools: metadata().map((tool) => tool.name === SEARCH || tool.name === SCHEMAS ? { ...tool, inputSchema: { ...tool.inputSchema, $schema: lists === 1 || tool.name === SEARCH ? "https://json-schema.org/draft-07/schema#" : "https://json-schema.org/draft/2020-12/schema" } } : tool) }; };
   const result = await inspectComposioWatchSchemas(h.port, { kind: "email" }); assert.equal(result.code, "unsupported_meta_schema"); assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH]); assert.equal(result.privateProof?.rejection?.tool, SCHEMAS); assert.equal(result.privateProof?.rejection?.stage, "refreshed_inventory"); assert.equal(result.privateProof?.rejection?.root.dialect, "draft-2020-12");
+});
+
+test("response diagnostics distinguish MCP, action and data gates for both permitted operations without retaining values", async (t) => {
+  const marker = "private-response-schema-account-session-credential-and-unknown-key";
+  const cases = [
+    { name: "non-object response", reply: () => marker, code: "invalid_response", field: "response", reason: "expected_object" },
+    { name: "multiple MCP parts", reply: () => ({ content: [{ type: "text", text: marker }, { type: "text", text: marker }] }), code: "tool_failed", field: "mcp_json", reason: "mcp_json_rejected" },
+    { name: "non-JSON MCP text", reply: () => ({ content: [{ type: "text", text: marker }] }), code: "tool_failed", field: "mcp_json", reason: "mcp_json_rejected" },
+    { name: "primitive MCP JSON", reply: () => ({ content: [{ type: "text", text: JSON.stringify(marker) }] }), code: "tool_failed", field: "mcp_json", reason: "mcp_json_rejected" },
+    { name: "MCP error", reply: () => ({ isError: true, content: [{ type: "text", text: marker }] }), code: "tool_failed", field: "mcp_json", reason: "mcp_json_rejected" },
+    { name: "conflicting MCP representations", reply: () => ({ content: [{ type: "text", text: JSON.stringify({ successful: true, data: {} }) }], structuredContent: { successful: false, error: marker } }), code: "tool_failed", field: "mcp_json", reason: "mcp_json_rejected" },
+    { name: "missing action success", reply: () => ({ success: true, data: { [marker]: marker } }), code: "tool_failed", field: "successful", reason: "action_unsuccessful" },
+    { name: "action error", reply: () => ({ successful: true, error: marker, data: {} }), code: "tool_failed", field: "error", reason: "reported_error" },
+    { name: "non-object action data", reply: () => ({ content: [], structuredContent: { successful: true, data: [marker] } }), code: "invalid_response", field: "data", reason: "expected_object" },
+  ];
+  for (const tool of [SEARCH, SCHEMAS] as const) for (const entry of cases) await t.test(`${tool}/${entry.name}`, async () => {
+    const h = harness(), call = h.port.call;
+    h.port.call = async (name, args, signal) => { const value = await call(name, args, signal); return name === tool ? entry.reply() : value; };
+    const result = await inspectComposioWatchSchemas(h.port, { kind: "email" }), diagnostic = result.privateProof?.responseRejection;
+    assert.equal(result.code, entry.code); assert.equal(result.available, false); assert.equal(diagnostic?.tool, tool);
+    assert.equal(diagnostic?.stage, tool === SEARCH ? "search_response" : "get_schemas_response");
+    assert.equal(diagnostic?.field, entry.field); assert.equal(diagnostic?.reason, entry.reason);
+    assert.deepEqual(diagnostic?.calls, { searchStarted: true, searchReturned: true, schemasStarted: tool === SCHEMAS, schemasReturned: tool === SCHEMAS });
+    assert.deepEqual(diagnostic?.inventory, { initialComplete: true, refreshedComplete: tool === SCHEMAS });
+    assert.equal(result.privateProof?.accountDeclarations.executor, true); assert.deepEqual(result.privateProof?.candidates, []);
+    const retained = JSON.stringify(result); assert.ok(!retained.includes(marker)); assert.ok(Buffer.byteLength(retained) < 32 * 1024);
+    assert.deepEqual(Object.keys(publicComposioWatchProbeResult(result)).sort(), ["available", "checkedAt", "code", "message", "status"]);
+    if (entry.name === "non-JSON MCP text") assert.equal(diagnostic?.envelope?.firstContent?.textJson, "invalid");
+    if (entry.name === "primitive MCP JSON") { assert.equal(diagnostic?.envelope?.firstContent?.textJson, "valid"); assert.equal(diagnostic?.value?.type, "string"); }
+    if (entry.name === "missing action success") { assert.equal(diagnostic?.action?.successful.type, "missing"); assert.deepEqual(diagnostic?.action?.success, { type: "boolean", boolean: true }); }
+  });
+});
+
+test("Search rejection diagnostics identify strict field, completeness and connection gates with closed type/count facts", async (t) => {
+  type Data = Record<string, unknown>;
+  const result = (data: Data) => (data.results as Data[])[0]!;
+  const connection = (data: Data) => (data.toolkit_connection_statuses as Data[])[0]!;
+  const cases: { name: string; change(data: Data): void; field: string; stage?: string; reason?: string; code?: string }[] = [
+    { name: "missing results", change: (data) => { delete data.results; }, field: "results", reason: "expected_array" },
+    { name: "results count", change: (data) => { data.results = []; }, field: "results", reason: "unexpected_count" },
+    { name: "schema map shape", change: (data) => { data.tool_schemas = []; }, field: "tool_schemas", reason: "expected_object" },
+    { name: "schema map limit", change: (data) => { data.tool_schemas = Object.fromEntries(Array.from({ length: 65 }, (_, index) => [`private-${index}`, {}])); }, field: "tool_schemas", reason: "limit", code: "limit_exceeded" },
+    { name: "connection list shape", change: (data) => { data.toolkit_connection_statuses = {}; }, field: "toolkit_connection_statuses", reason: "expected_array" },
+    { name: "connection list limit", change: (data) => { data.toolkit_connection_statuses = Array(17).fill({}); }, field: "toolkit_connection_statuses", reason: "unexpected_count" },
+    { name: "missing time", change: (data) => { delete data.time_info; }, field: "time_info", reason: "expected_object" },
+    { name: "guidance shape", change: (data) => { data.next_steps_guidance = {}; }, field: "next_steps_guidance", reason: "expected_array" },
+    { name: "guidance element", change: (data) => { data.next_steps_guidance = [null]; }, field: "next_steps_guidance", reason: "expected_string" },
+    { name: "session shape", change: (data) => { data.session = []; }, field: "session", reason: "expected_object" },
+    { name: "session ID", change: (data) => { (data.session as Data).id = ""; }, field: "session.id", reason: "invalid_text" },
+    { name: "session generation", change: (data) => { (data.session as Data).generate_id = "private-value"; }, field: "session.generate_id", reason: "expected_boolean" },
+    { name: "session instructions", change: (data) => { delete (data.session as Data).instructions; }, field: "session.instructions", reason: "expected_string" },
+    { name: "time text", change: (data) => { (data.time_info as Data).current_time_utc = null; }, field: "time_info.current_time_utc", reason: "expected_string" },
+    { name: "time integer", change: (data) => { (data.time_info as Data).current_time_utc_epoch_seconds = 1.5; }, field: "time_info.current_time_utc_epoch_seconds", reason: "expected_integer" },
+    { name: "time message", change: (data) => { (data.time_info as Data).message = null; }, field: "time_info.message", reason: "expected_string" },
+    { name: "result shape", change: (data) => { data.results = [null]; }, field: "result", stage: "results", reason: "expected_object" },
+    { name: "result index", change: (data) => { result(data).index = 0; }, field: "result.index", stage: "results", reason: "unexpected_value" },
+    { name: "result use case", change: (data) => { delete result(data).use_case; }, field: "result.use_case", stage: "results", reason: "expected_string" },
+    { name: "result toolkit list", change: (data) => { result(data).toolkits = {}; }, field: "result.toolkits", stage: "results", reason: "expected_array" },
+    { name: "result reasoning", change: (data) => { result(data).reasoning = null; }, field: "result.reasoning", stage: "results", reason: "expected_string" },
+    { name: "result difficulty", change: (data) => { delete result(data).task_difficulty; }, field: "result.task_difficulty", stage: "results", reason: "expected_string" },
+    { name: "result error", change: (data) => { result(data).error = "private-value"; }, field: "result.error", stage: "results", reason: "reported_error" },
+    { name: "primary slug list", change: (data) => { result(data).primary_tool_slugs = {}; }, field: "result.primary_tool_slugs", stage: "results", reason: "expected_array" },
+    { name: "related slug list", change: (data) => { result(data).related_tool_slugs = [""]; }, field: "result.related_tool_slugs", stage: "results", reason: "invalid_text" },
+    { name: "missing candidate definition", change: (data) => { data.tool_schemas = {}; }, field: "tool_schemas", stage: "results", reason: "missing_definition" },
+    { name: "connection shape", change: (data) => { data.toolkit_connection_statuses = [null]; }, field: "connection", stage: "connections", reason: "expected_object" },
+    { name: "connection toolkit", change: (data) => { connection(data).toolkit = 1; }, field: "connection.toolkit", stage: "connections", reason: "expected_string" },
+    { name: "duplicate connection", change: (data) => { data.toolkit_connection_statuses = [connection(data), connection(data)]; }, field: "connection.toolkit", stage: "connections", reason: "duplicate" },
+    { name: "connection active state", change: (data) => { connection(data).has_active_connection = "private-value"; }, field: "connection.has_active_connection", stage: "connections", reason: "expected_boolean" },
+    { name: "connection detail shape", change: (data) => { connection(data).connection_details = []; }, field: "connection.connection_details", stage: "connections", reason: "expected_object" },
+    { name: "connection description", change: (data) => { delete connection(data).description; }, field: "connection.description", stage: "connections", reason: "expected_string" },
+    { name: "connection status message", change: (data) => { connection(data).status_message = null; }, field: "connection.status_message", stage: "connections", reason: "expected_string" },
+    { name: "partial response", change: (data) => { data.next_page_token = "private-value"; }, field: "next_page_token", reason: "incomplete" },
+  ];
+  for (const entry of cases) await t.test(entry.name, async () => {
+    const h = harness(), call = h.port.call;
+    h.port.call = async (tool, args, signal) => {
+      const value = await call(tool, args, signal) as { data: Data };
+      if (tool === SEARCH) entry.change(value.data);
+      return value;
+    };
+    const inspected = await inspectComposioWatchSchemas(h.port, { kind: "email" }), diagnostic = inspected.privateProof?.responseRejection;
+    assert.equal(inspected.code, entry.code ?? "invalid_response"); assert.equal(inspected.available, false);
+    assert.equal(diagnostic?.stage, entry.stage ?? "search_response"); assert.equal(diagnostic?.field, entry.field); assert.equal(diagnostic?.reason, entry.reason);
+    assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH]); assert.equal(diagnostic?.calls.schemasStarted, false);
+    assert.ok(!JSON.stringify(inspected).includes("private-value")); assert.ok(!JSON.stringify(inspected).includes("private-0"));
+    if (entry.name === "missing results") { assert.equal(diagnostic?.data?.results.type, "missing"); assert.equal(diagnostic?.data?.session.type, "object"); assert.deepEqual(diagnostic?.data?.toolkit_connection_statuses, { type: "array", count: 2 }); }
+    if (entry.name === "time integer") assert.deepEqual(diagnostic?.value, { type: "number", safeInteger: false });
+    if (entry.name === "session generation") assert.equal(diagnostic?.entry?.instructions?.type, "string");
+  });
+});
+
+test("GetSchemas diagnostics distinguish incomplete definitions and schema shapes after both metadata reads", async (t) => {
+  type Data = Record<string, unknown>;
+  const definitions = (data: Data) => data.tool_schemas as Data;
+  const definition = (data: Data) => definitions(data).GMAIL_FETCH_EMAILS as Data;
+  const cases: { name: string; change(data: Data): void; field: string; reason: string; code?: string }[] = [
+    { name: "action data success", change: (data) => { data.success = false; }, field: "success", reason: "unexpected_value" },
+    { name: "missing schemas", change: (data) => { data.not_found = ["private-value"]; }, field: "not_found", reason: "missing_definition" },
+    { name: "missing list shape", change: (data) => { data.not_found = {}; }, field: "not_found", reason: "expected_array", code: "invalid_response" },
+    { name: "definitions shape", change: (data) => { data.tool_schemas = []; }, field: "tool_schemas", reason: "expected_object", code: "invalid_response" },
+    { name: "definitions count", change: (data) => { data.tool_schemas = {}; }, field: "tool_schemas", reason: "unexpected_count" },
+    { name: "different definition", change: (data) => { data.tool_schemas = { "private-value": definition(data) }; }, field: "tool_schemas", reason: "unexpected_definition" },
+    { name: "definition shape", change: (data) => { definitions(data).GMAIL_FETCH_EMAILS = null; }, field: "definition", reason: "expected_object", code: "invalid_response" },
+    { name: "different slug", change: (data) => { definition(data).tool_slug = "private-value"; }, field: "definition.tool_slug", reason: "unexpected_value" },
+    { name: "different toolkit", change: (data) => { definition(data).toolkit = "private-value"; }, field: "definition.toolkit", reason: "unexpected_value" },
+    { name: "partial definition", change: (data) => { definition(data).hasFullSchema = false; }, field: "definition.hasFullSchema", reason: "incomplete" },
+    { name: "reference definition", change: (data) => { definition(data).schemaRef = { "private-value": "private-value" }; }, field: "definition.schemaRef", reason: "incomplete" },
+    { name: "input shape", change: (data) => { definition(data).input_schema = []; }, field: "input_schema", reason: "expected_object", code: "invalid_response" },
+    { name: "input type", change: (data) => { (definition(data).input_schema as Data).type = "private-value"; }, field: "input_schema.type", reason: "unexpected_value", code: "invalid_response" },
+    { name: "missing properties", change: (data) => { delete (definition(data).input_schema as Data).properties; }, field: "input_schema.properties", reason: "expected_object", code: "invalid_response" },
+    { name: "properties shape", change: (data) => { (definition(data).input_schema as Data).properties = []; }, field: "input_schema.properties", reason: "expected_object", code: "invalid_response" },
+    { name: "output shape", change: (data) => { definition(data).output_schema = []; }, field: "output_schema", reason: "expected_object", code: "invalid_response" },
+  ];
+  for (const entry of cases) await t.test(entry.name, async () => {
+    const h = harness(), call = h.port.call;
+    h.port.call = async (tool, args, signal) => { const value = await call(tool, args, signal) as { data: Data }; if (tool === SCHEMAS) entry.change(value.data); return value; };
+    const inspected = await inspectComposioWatchSchemas(h.port, { kind: "email" }), diagnostic = inspected.privateProof?.responseRejection;
+    assert.equal(inspected.code, entry.code ?? "schemas_incomplete"); assert.equal(inspected.available, false);
+    assert.equal(diagnostic?.stage, "schemas"); assert.equal(diagnostic?.field, entry.field); assert.equal(diagnostic?.reason, entry.reason);
+    assert.deepEqual(diagnostic?.calls, { searchStarted: true, searchReturned: true, schemasStarted: true, schemasReturned: true });
+    assert.deepEqual(diagnostic?.inventory, { initialComplete: true, refreshedComplete: true });
+    assert.deepEqual(h.calls.map((call) => call.tool), [SEARCH, SCHEMAS]); assert.deepEqual(inspected.privateProof?.candidates, []);
+    assert.ok(!JSON.stringify(inspected).includes("private-value")); assert.ok(!JSON.stringify(inspected).includes("private-session-fixture"));
+  });
+});
+
+test("response diagnostics publish only declarations from a completed inventory and do not infer account semantics", async () => {
+  const h = harness(); (h.tools[2] as { inputSchema: unknown }).inputSchema = { type: "object", properties: { tools: { type: "array", items: { type: "object", properties: { connected_account_id: { type: "string" } } } } } };
+  const call = h.port.call;
+  h.port.call = async (tool, args, signal) => { await call(tool, args, signal); return { successful: true, data: {} }; };
+  const inspected = await inspectComposioWatchSchemas(h.port, { kind: "email" });
+  assert.equal(inspected.code, "invalid_response"); assert.equal(inspected.available, false);
+  assert.deepEqual(inspected.privateProof?.accountDeclarations, { executor: false, executorItem: true, upstream: false });
+  assert.deepEqual(inspected.privateProof?.responseRejection?.inventory, { initialComplete: true, refreshedComplete: false });
+  assert.deepEqual(inspected.privateProof?.activeConnectionReported, { email: false, calendar: false });
 });
