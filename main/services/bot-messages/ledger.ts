@@ -37,6 +37,8 @@ export interface BotMessageDelivery {
   toName: string;
   initialAnswer?: string;
   childOutcome?: BotMessageStatusOutcome;
+  /** Recover the ancestor settlement if a child display fallback committed first. */
+  parentFallbackOutcome?: "failed" | "expired";
   childReserved?: boolean;
   replayTarget?: string;
   taskId?: string;
@@ -199,6 +201,7 @@ function validRow(row: BotMessageDelivery): boolean {
     row.message.length <= L.messageChars &&
     (row.outcome === undefined || outcomes.has(row.outcome)) &&
     (row.childOutcome === undefined || statusOutcomes.has(row.childOutcome)) &&
+    (row.parentFallbackOutcome === undefined || ["failed", "expired"].includes(row.parentFallbackOutcome)) &&
     (row.childReserved === undefined || typeof row.childReserved === "boolean") &&
     (row.replayTarget === undefined || str(row.replayTarget)) &&
     (row.taskId === undefined || str(row.taskId)) &&

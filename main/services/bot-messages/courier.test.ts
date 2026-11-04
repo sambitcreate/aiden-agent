@@ -1054,7 +1054,7 @@ for (const kind of ["failed", "interrupted"] as const) {
     f.finish(1, "C answered already");
     await f.until(async () => (await f.ledger.get(child.deliveryId))?.initialAnswer === "C answered already");
     f.finishOutcome(0, kind === "failed" ? { kind, error: "parent failed" } : { kind, settled: true });
-    await f.until(async () => (await f.ledger.get(child.deliveryId))?.status === "failed");
+    await f.until(async () => (await f.ledger.get(child.deliveryId))?.status === "answered");
     await f.until(async () => (await f.ledger.open()).length === 0);
     assert.equal(
       f.notices.some((n) => (n as { outcome: string }).outcome === "expired"),
@@ -1065,7 +1065,7 @@ for (const kind of ["failed", "interrupted"] as const) {
   });
 }
 
-test("deadline recovery uses the ended parent's outcome for an already answered child", async (t) => {
+test("deadline recovery preserves an already answered child when its parent ended", async (t) => {
   const f = await setup(t);
   const root = await f.post();
   if (root.status !== "sent") throw new Error("not admitted");
@@ -1083,7 +1083,7 @@ test("deadline recovery uses the ended parent's outcome for an already answered 
     effects: row.effects.map((e) => ({ ...e, acknowledgedAt: 1000 })),
   }));
   await f.advance(1800001);
-  await f.until(async () => (await f.ledger.get(child.deliveryId))?.status === "failed");
+  await f.until(async () => (await f.ledger.get(child.deliveryId))?.status === "answered");
   assert.equal(
     f.notices.some((n) => (n as { outcome: string }).outcome === "expired"),
     false,
@@ -1113,3 +1113,188 @@ test("restart derives the child's committed quiet outcome if the parent hint was
   await f.until(async () => (await f.ledger.get(root.deliveryId))?.outcome === "failed");
   assert.equal(f.sends.length, 2);
 });
+
+for (const parentOutcome of ["expired", "gave_up", "live", "live_card"] as const) {
+  test(`a saved child answer is displayed once when its ancestor ends via ${parentOutcome}`, async (t) => {
+    const f = await setup(t);
+    const root = await f.post();
+    if (root.status !== "sent") throw new Error("not admitted");
+    await f.until(() => f.sends.length === 1);
+    const child = await f.post("B", "C", [f.sends[0]!.input.requestId]);
+    if (child.status !== "sent") throw new Error("not admitted");
+    await f.until(() => f.sends.length === 2);
+    f.finish(1, "C answered before the deadline");
+    await f.until(async () => !!(await f.ledger.get(child.deliveryId))?.initialAnswer);
+    let card: Promise<unknown> | undefined;
+    if (parentOutcome === "live_card") {
+      const sent = f.sends[0]!;
+      card = f.approvals.requestOutcome({
+        botId: "B",
+        waitId: "parent",
+        toolCallId: "call",
+        toolName: "change",
+        summary: "Parent action",
+        signal: undefined,
+        owner: {
+          runId: "parent",
+          inputs: [
+            { submissionId: sent.submissionId, requestId: sent.input.requestId, botMessage: sent.input.botMessage },
+          ],
+        },
+      });
+      await f.until(async () => (await f.ledger.get(root.deliveryId))!.waiting.length === 1);
+    } else if (parentOutcome !== "live") {
+      await f.ledger.update(root.deliveryId, (row) => ({
+        ...row,
+        status: "expired",
+        outcome: parentOutcome,
+        effects: row.effects.map((e) => ({ ...e, acknowledgedAt: 1000 })),
+      }));
+    }
+    await f.advance(1800001);
+    if (card) assert.deepEqual(await card, { decision: "deny", decisionSource: "expiry" });
+    await f.until(async () => (await f.ledger.open()).length === 0);
+    assert.equal(
+      (await f.ledger.get(root.deliveryId))!.outcome,
+      parentOutcome === "live_card" ? "gave_up" : parentOutcome === "live" ? "expired" : parentOutcome,
+    );
+    const rows = f.notices.filter((n) => (n as { botName: string }).botName === "C") as Array<{
+      outcome: string;
+      text?: string;
+    }>;
+    assert.deepEqual(
+      rows.map((n) => [n.outcome, n.text]),
+      [["replied_while_paused", "C answered before the deadline"]],
+    );
+    assert.equal((await f.ledger.get(child.deliveryId))!.status, "answered");
+    assert.equal(f.sends.length, 2);
+    await f.restart();
+    assert.equal(f.notices.filter((n) => (n as { botName: string }).botName === "C").length, 1);
+  });
+}
+
+for (const ownCard of [false, true]) {
+  test(`a child inherits no approval claim from its parent, own child card=${ownCard}`, async (t) => {
+    const f = await setup(t);
+    const root = await f.post();
+    if (root.status !== "sent") throw new Error("not admitted");
+    await f.until(() => f.sends.length === 1);
+    const child = await f.post("B", "C", [f.sends[0]!.input.requestId]);
+    if (child.status !== "sent") throw new Error("not admitted");
+    await f.until(() => f.sends.length === 2);
+    let card: Promise<unknown> | undefined;
+    if (ownCard) {
+      const sent = f.sends[1]!;
+      card = f.approvals.requestOutcome({
+        botId: "C",
+        waitId: "child",
+        toolCallId: "call",
+        toolName: "change",
+        summary: "Child action",
+        signal: undefined,
+        owner: {
+          runId: "child",
+          inputs: [
+            { submissionId: sent.submissionId, requestId: sent.input.requestId, botMessage: sent.input.botMessage },
+          ],
+        },
+      });
+      await f.until(async () => (await f.ledger.get(child.deliveryId))!.waiting.length === 1);
+    }
+    await f.ledger.update(root.deliveryId, (row) => ({
+      ...row,
+      status: "expired",
+      outcome: "gave_up",
+      effects: row.effects.map((e) => ({ ...e, acknowledgedAt: 1000 })),
+    }));
+    await f.advance(1800001);
+    if (card) assert.deepEqual(await card, { decision: "deny", decisionSource: "expiry" });
+    await f.until(async () => (await f.ledger.open()).length === 0);
+    assert.equal((await f.ledger.get(child.deliveryId))!.outcome, ownCard ? "gave_up" : "expired");
+    assert.equal(f.approvals.pending().length, 0);
+  });
+}
+
+test("nested saved-text fallback has one truthful child row and one parent failure", async (t) => {
+  const f = await setup(t);
+  const root = await f.post();
+  if (root.status !== "sent") throw new Error("not admitted");
+  await f.until(() => f.sends.length === 1);
+  const child = await f.post("B", "C", [f.sends[0]!.input.requestId]);
+  if (child.status !== "sent") throw new Error("not admitted");
+  await f.until(() => f.sends.length === 2);
+  f.finish(1, "C's saved answer");
+  await f.until(async () => !!(await f.ledger.get(child.deliveryId))?.initialAnswer);
+  f.states.set("B", { kind: "interrupted", submissionId: "paused" });
+  f.finish(0, "Initial B turn ended");
+  await f.until(async () => (await f.ledger.open()).length === 0);
+  const rows = f.notices as Array<{ botName: string; outcome: string; text?: string }>;
+  assert.deepEqual(
+    rows.filter((n) => n.botName === "C").map((n) => [n.outcome, n.text]),
+    [["replied_while_paused", "C's saved answer"]],
+  );
+  assert.deepEqual(
+    rows.filter((n) => n.botName === "B").map((n) => n.outcome),
+    ["failed"],
+  );
+  assert.equal(f.sends.length, 2);
+  for (let i = 0; i < 3; i++) assert.equal((await f.post("B", "A")).status, "sent");
+});
+
+for (const checkpoint of ["acknowledged_reply", "terminal_fallback"] as const) {
+  test(`restart completes nested fallback checkpoint ${checkpoint} and becomes quiescent`, async (t) => {
+    const f = await setup(t);
+    const root = await f.post();
+    if (root.status !== "sent") throw new Error("not admitted");
+    await f.until(() => f.sends.length === 1);
+    const child = await f.post("B", "C", [f.sends[0]!.input.requestId]);
+    if (child.status !== "sent") throw new Error("not admitted");
+    await f.until(() => f.sends.length === 2);
+    f.finish(1, "C's persisted answer");
+    f.finish(0, "B initial ended");
+    await f.until(() => f.sends.length === 3);
+    await f.courier.dispose();
+    // The child's fallback write survived, but the parent's failure write did not.
+    await f.ledger.update(child.deliveryId, (row) => {
+      const data = {
+        deliveryId: child.deliveryId,
+        botId: "C",
+        botName: "C",
+        outcome: "replied_while_paused" as const,
+        text: "C's persisted answer",
+      };
+      const key = `${child.deliveryId}:replied_while_paused:final`;
+      return {
+        ...row,
+        ...(checkpoint === "terminal_fallback"
+          ? ({ status: "answered", outcome: "replied_while_paused", parentFallbackOutcome: "failed" } as const)
+          : {}),
+        effects: [
+          ...row.effects.map((e) => (e.kind === "reply" ? { ...e, acknowledgedAt: 1000 } : e)),
+          { id: `${key}:notice`, kind: "notice", botId: "B", data },
+          { id: `${key}:notification`, kind: "notification", botId: "B", data },
+        ],
+      };
+    });
+    let reads = 0;
+    const get = f.ledger.get;
+    f.ledger.get = async (id) => {
+      reads++;
+      return get(id);
+    };
+    await f.restart();
+    await f.until(async () => (await f.ledger.open()).length === 0 && f.pendingTimers() === 0);
+    assert.equal((await f.ledger.get(root.deliveryId))!.outcome, "failed");
+    assert.equal((await f.ledger.get(child.deliveryId))!.status, "answered");
+    const rows = f.notices as Array<{ botName: string; outcome: string; text?: string }>;
+    assert.deepEqual(
+      rows.filter((n) => n.botName === "C").map((n) => [n.outcome, n.text]),
+      [["replied_while_paused", "C's persisted answer"]],
+    );
+    const settledReads = reads;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(reads, settledReads);
+    assert.equal(f.pendingTimers(), 0);
+    assert.equal(f.sends.length, 3);
+  });
+}

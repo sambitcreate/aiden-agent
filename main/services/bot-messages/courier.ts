@@ -278,7 +278,13 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     }
     if (unfinished(row) && row.parentDeliveryId) {
       const parent = await deps.ledger.get(row.parentDeliveryId);
+      if (parent?.status === "answered" && parent.outcome === "replied") {
+        queue(id);
+        return;
+      }
+      if (row.initialAnswer !== undefined) return settleSavedChild(row);
       if (!parent || !unfinished(parent)) {
+        if (prompts.length) return quiet(id, "gave_up");
         queue(id); // The normal worker settles against the parent's saved outcome.
         return;
       }
@@ -419,6 +425,11 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     parentOutcome: "failed" | "expired",
   ): Promise<void> {
     if (!(await exists(effect.botId, row.id))) return;
+    if (row.parentDeliveryId) {
+      await settleSavedChild(row, parentOutcome);
+      await quiet(row.parentDeliveryId, parentOutcome);
+      return;
+    }
     await deps.ledger.update(row.id, (r) => {
       if (r.effects.find((e) => e.id === effect.id)?.acknowledgedAt !== undefined) return r;
       const effects = notice(r, "replied_while_paused", effect.text);
@@ -430,7 +441,34 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
         ],
       };
     });
-    if (row.parentDeliveryId) await quiet(row.parentDeliveryId, parentOutcome);
+    queue(row.id);
+  }
+  async function settleSavedChild(
+    row: BotMessageDelivery,
+    parentFallbackOutcome?: "failed" | "expired",
+  ): Promise<void> {
+    if (deps.now() >= row.deadline) {
+      for (const prompt of deps.approvals.pending())
+        if (prompt.owner?.inputs.some((i) => i.botMessage?.deliveryId === row.id))
+          deps.approvals.decide(prompt.waitId, "deny", "expiry");
+    }
+    await deps.ledger.update(row.id, (r) => {
+      if (!unfinished(r) || r.initialAnswer === undefined) return r;
+      const effects = notice(r, "replied_while_paused", r.initialAnswer);
+      return {
+        ...r,
+        status: "answered",
+        outcome: "replied_while_paused",
+        settledAt: deps.now(),
+        ...(parentFallbackOutcome ? { parentFallbackOutcome } : {}),
+        effects: [
+          ...r.effects.map((e) =>
+            e.kind === "target" || e.kind === "reply" ? { ...e, acknowledgedAt: deps.now() } : e,
+          ),
+          ...effects.filter((e) => !r.effects.some((saved) => saved.id === e.id)),
+        ],
+      };
+    });
     queue(row.id);
   }
   async function reply(row: BotMessageDelivery, effect: BotMessageEffect, signal: AbortSignal): Promise<void> {
@@ -594,14 +632,26 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
           queue(id);
           return;
         }
-        await quiet(id, parent?.outcome && parent.outcome !== "replied" ? parent.outcome : "failed");
+        if (row.initialAnswer !== undefined) return settleSavedChild(row);
+        let outcome = parent?.outcome && parent.outcome !== "replied" ? parent.outcome : "failed";
+        const pending = deps.approvals
+          .pending()
+          .filter((p) => p.owner?.inputs.some((i) => i.botMessage?.deliveryId === id));
+        if (deps.now() >= row.deadline) {
+          for (const prompt of pending) deps.approvals.decide(prompt.waitId, "deny", "expiry");
+          if (pending.length) outcome = "gave_up";
+          else if (outcome === "gave_up") outcome = "expired";
+        } else if (outcome === "gave_up") outcome = "failed";
+        await quiet(id, outcome);
         return;
       }
     }
     if (row.childDeliveryId && unfinished(row) && !row.childOutcome) {
       const child = await deps.ledger.get(row.childDeliveryId);
-      if (child && !unfinished(child) && child.outcome && child.outcome !== "replied") {
-        const outcome = child.outcome;
+      const outcome =
+        child?.parentFallbackOutcome ??
+        (child?.outcome !== "replied" && child?.outcome !== "replied_while_paused" ? child?.outcome : undefined);
+      if (child && !unfinished(child) && outcome) {
         row = await deps.ledger.update(id, (r) => (unfinished(r) ? { ...r, childOutcome: outcome } : r));
         if (!row || disposed || signal.aborted) return;
       }
@@ -688,9 +738,14 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
       if (row.childOutcome) return quiet(id, row.childOutcome);
       if (row.parentDeliveryId) {
         const parent = await deps.ledger.get(row.parentDeliveryId);
-        if (!parent || !unfinished(parent)) return quiet(id, "failed");
+        if (!parent || !unfinished(parent)) {
+          queue(id);
+          return;
+        }
         if (parent.initialAnswer === undefined) return;
-        if (!row.effects.some((e) => e.kind === "reply"))
+        const replyEffect = row.effects.find((e) => e.kind === "reply");
+        if (replyEffect?.acknowledgedAt !== undefined) return quiet(row.parentDeliveryId, "failed");
+        if (!replyEffect)
           await deps.ledger.update(id, (r) => ({
             ...r,
             effects: [
