@@ -7,7 +7,7 @@ import { mcpServerOffersTools } from "../../../renderer/shared/mcp-exposure.js";
 import { isComposioServiceServer } from "../composio-service-tool.js";
 import { withBotConnectorForegroundLifetime, withBotConnectorInventoryScope } from "../bot-connector-inventory-scope.js";
 import { COMPOSIO_WATCH_INVENTORY_LIMITS } from "../mcp-tool-inventory.js";
-import type { BotConnectorMcpClientPort } from "../mcp.js";
+import type { ForegroundComposioSettingsClientPort } from "../foreground-composio-settings-client.js";
 import type { McpServer } from "../types.js";
 import { inspectComposioWatchSchemas, publicComposioWatchProbeResult, type ComposioWatchProbeResult, type ComposioWatchProbePublicResult } from "./connector-watch-composio-probe.js";
 
@@ -32,6 +32,7 @@ export async function saveComposioSettingsInspection(profileDir: string, result:
         const target = await fs.lstat(file);
         if (!target.isFile() || target.isSymbolicLink() || target.nlink !== 1 || target.size > 32 * 1024) throw new Error("Inspection storage is unavailable.");
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      await current();
     };
     await check();
     try {
@@ -47,8 +48,7 @@ export async function saveComposioSettingsInspection(profileDir: string, result:
 /** An explicit Settings action uses the person's service allowance, without editing Bot grants. */
 export function createComposioSettingsInspection(ports: {
   configured(): Promise<McpServer | undefined>;
-  hasExisting(serverId: string): boolean;
-  withClient<T>(server: McpServer, signal: AbortSignal, action: (raw: BotConnectorMcpClientPort) => Promise<T>): Promise<T>;
+  withClient<T>(server: McpServer, signal: AbortSignal, action: (raw: ForegroundComposioSettingsClientPort) => Promise<T>): Promise<T>;
   publish(result: ComposioWatchProbeResult, current: () => Promise<void>): Promise<void>;
   now?(): number;
   timeoutMs?: number;
@@ -65,7 +65,7 @@ export function createComposioSettingsInspection(ports: {
       const server = await ports.configured();
       signal.throwIfAborted();
       if (!server || server.id !== COMPOSIO_SERVICE_SERVER_ID || !isComposioServiceServer(server) || !server.enabled
-        || !mcpServerOffersTools(server) || server.hiddenTools?.length || !ports.hasExisting(server.id)) throw new Error("The existing Composio service allowance is unavailable.");
+        || !mcpServerOffersTools(server) || server.hiddenTools?.length) throw new Error("The existing Composio service allowance is unavailable.");
       await lifetime.assertCurrent(); signal.throwIfAborted();
     };
     const work = withBotConnectorForegroundLifetime({ signal, assertCurrent: current }, () =>
@@ -74,20 +74,21 @@ export function createComposioSettingsInspection(ports: {
         const server = (await ports.configured())!;
         await current();
         return ports.withClient(server, signal, async (raw) => {
+          const connectedCurrent = async () => { await current(); await raw.assertCurrent(); await current(); };
           const result = await inspectComposioWatchSchemas({
             foreground: true,
-            assertCurrent: current,
+            assertCurrent: connectedCurrent,
             listTools: async (cursor) => {
               if (cursor !== undefined) throw new Error("Incomplete tool metadata.");
-              await current(); const tools = await raw.list(COMPOSIO_WATCH_INVENTORY_LIMITS); await current();
+              await connectedCurrent(); const tools = await raw.list(COMPOSIO_WATCH_INVENTORY_LIMITS); await connectedCurrent();
               return { tools, nextCursor: null };
             },
             call: async (tool, args) => {
               if (tool !== "COMPOSIO_SEARCH_TOOLS" && tool !== "COMPOSIO_GET_TOOL_SCHEMAS") throw new Error("Unsupported inspection operation.");
-              await current(); return raw.call(tool, args);
+              await connectedCurrent(); return raw.call(tool, args);
             },
           }, { kind: "both", signal, now });
-          await current(); await ports.publish(result, current); await current();
+          await connectedCurrent(); await ports.publish(result, connectedCurrent); await connectedCurrent();
           return publicComposioWatchProbeResult(result);
         });
       }));

@@ -1,3 +1,4 @@
+import { withForegroundComposioSettingsClientCore, type ForegroundComposioSettingsClientPort } from "./foreground-composio-settings-client.js";
 import { botConnectorInventoryServer } from "./bot-connector-inventory-scope.js";
 import { composioServiceStatusTools, composioServiceToolDescriptor, createComposioServiceAgentTool, isComposioServiceServer, projectComposioServiceInventory } from "./composio-service-tool.js";
 import { bindMcpConnectorInventoryScope, existingOrConnectMcpClient } from "./mcp-connector-client-boundary.js";
@@ -569,6 +570,27 @@ class McpManager {
     void this.prewarmer.start(id, discover, onFailure);
   }
 
+  /** One disposable Settings metadata connection, never an agent/watch cache entry. */
+  withForegroundComposioSettingsClient<T>(server: McpServer, signal: AbortSignal, operation: (port: ForegroundComposioSettingsClientPort) => Promise<T>): Promise<T> {
+    return withForegroundComposioSettingsClientCore({
+      server, signal, operation, lease: mcpConfigurationLeases.acquire(server.id), attempts: this.statusClients,
+      configured: async () => (await configStore.listMcpServers()).find((entry) => entry.id === server.id),
+      create: () => createMcpClient(AIDEN_MCP_CLIENT_NAME),
+      resolveAuth: (configured, isCurrent) => resolveMcpConnectionCredentials(configured, {
+        resolveFieldSecrets: resolveStoredMcpFieldSecrets,
+        presetKey: (saved, binding) => secrets.getProviderKey(presetSecretId(saved.id), binding),
+        isCurrent, missingKey: () => "Composio needs its saved, bound API key before metadata inspection.",
+      }),
+      connect: async (client, resolved, operationSignal, isCurrent) => {
+        await connectMcpWithinDeadline(
+          connectMcpClient(client, makeTransport(resolved, isCurrent, { signal: operationSignal, forceNoRedirect: true }), { signal: operationSignal, timeoutMs: 10_000 }),
+          () => client.close(), { signal: operationSignal },
+        );
+      },
+      close: (client) => client.close(),
+    });
+  }
+
   /** Connect and return status (used by the settings "test" action). */
   async status(
     server: McpServer,
@@ -949,4 +971,9 @@ export function withBotConnectorMcpClient<T>(server: McpServer, signal: AbortSig
   if (!isComposioServiceServer(server) && (server.presetId !== "imcp" || server.authProvider || server.transport !== "stdio")) throw new Error("Unsupported connector watch transport.");
   return mcpManager.withExistingConnectorClient(server, signal, (raw) => operation(isComposioServiceServer(server)
     ? { ...raw, list: () => raw.list(COMPOSIO_WATCH_INVENTORY_LIMITS) } : raw));
+}
+
+/** Explicit foreground Settings metadata only; no agent-cache warming or background repair. */
+export function withForegroundComposioSettingsMcpClient<T>(server: McpServer, signal: AbortSignal, operation: (port: ForegroundComposioSettingsClientPort) => Promise<T>): Promise<T> {
+  return mcpManager.withForegroundComposioSettingsClient(server, signal, operation);
 }

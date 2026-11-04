@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
+import mutableFs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { getMcpPreset, serverFromPreset } from "../mcp-presets.js";
-import { listMcpToolInventory } from "../mcp-tool-inventory.js";
+import { GenerationBoundConnectionAttempts, GenerationBoundConnectionCache } from "../generation-bound-connection-cache.js";
+import { McpConfigurationLeaseRegistry } from "../mcp-config-lease.js";
+import { resolveMcpConnectionCredentials } from "../mcp-connection-credentials.js";
+import { existingOrConnectMcpClient } from "../mcp-connector-client-boundary.js";
+import { withBotConnectorInventoryScope } from "../bot-connector-inventory-scope.js";
+import { withForegroundComposioSettingsClientCore, type ForegroundComposioClient, type ForegroundComposioSettingsClientPort } from "../foreground-composio-settings-client.js";
 import { registerComposioWatchInspection } from "../../handlers/composio-watch-inspection.js";
 import { COMPOSIO_SETTINGS_INSPECTION_FILE, createComposioSettingsInspection, saveComposioSettingsInspection } from "./composio-settings-inspection.js";
 
@@ -34,31 +41,53 @@ function schemaReply(args: Record<string, unknown>) {
   }])) } };
 }
 function barrier() { let release!: () => void; return { promise: new Promise<void>((resolve) => { release = resolve; }), release: () => release() }; }
-async function fixture(t: test.TestContext, timeoutMs?: number) {
+async function fixture(t: test.TestContext, timeoutMs?: number, inspectPort?: (port: ForegroundComposioSettingsClientPort) => Promise<void>) {
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-composio-settings-")));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const server = serverFromPreset(getMcpPreset("composio")!);
   const permissionFile = path.join(directory, "existing-bot-grants.json"); await fs.writeFile(permissionFile, "original grant data");
-  let live = true, pages = 0, published = 0, paged = false;
+  let pages = 0, published = 0, paged = false, oversized = false, created = 0, connected = 0, closed = 0, credentials = 0, backgroundConnections = 0;
+  const attempts = new GenerationBoundConnectionAttempts<ForegroundComposioClient>(), leases = new McpConfigurationLeaseRegistry(), agentCache = new GenerationBoundConnectionCache<object>();
+  t.after(async () => { await attempts.shutdown(); await agentCache.shutdown(); });
+  let hasBoundKey = true;
+  let beforeCredentials = async () => {}, beforeConnect = async () => {}, beforeCall = async (_tool: string) => {};
+  const background = () => withBotConnectorInventoryScope(server.id, () => existingOrConnectMcpClient({ peek: () => agentCache.peekConnected(server.id), connect: async () => { backgroundConnections++; return {}; } }));
   let beforeConfig = async () => {};
   const sent: string[] = [];
   const inspect = createComposioSettingsInspection({
     configured: async () => { await beforeConfig(); return server; },
-    hasExisting: () => live,
-    withClient: async (_server, signal, action) => action({
-      list: async (limits) => paged ? listMcpToolInventory({ limits, signal, assertCurrent() {}, listPage: async () => { pages++; return { tools: [], nextCursor: String(pages) }; } }) : (pages++, metadata),
-      call: async (tool, args) => { sent.push(tool); return tool === SEARCH ? searchReply() : schemaReply(args); },
+    withClient: (configured, signal, operation) => withForegroundComposioSettingsClientCore({
+      server: configured, signal, operation: async (port) => { await inspectPort?.(port); return operation(port); }, attempts, lease: leases.acquire(server.id), configured: async () => server,
+      create: () => {
+        created++; let ended = false; const closeListeners: (() => void)[] = [];
+        return { onNotification() {}, onClose(listener) { closeListeners.push(listener); },
+          async request<Result>(method: string, params?: Record<string, unknown>): Promise<Result> {
+            if (ended) throw new Error("Synthetic connection closed.");
+            if (method === "tools/list") { pages++; return { tools: paged ? [] : metadata, ...(paged ? { nextCursor: String(pages) } : {}), ...(oversized ? { vendorProse: "x".repeat(256 * 1024) } : {}) } as Result; }
+            if (method !== "tools/call") throw new Error("Unexpected synthetic MCP request.");
+            const tool = String(params?.name); sent.push(tool); await beforeCall(tool);
+            return { content: [], structuredContent: tool === SEARCH ? searchReply() : schemaReply(params?.arguments as Record<string, unknown>) } as Result;
+          }, async close() { if (!ended) { ended = true; closed++; for (const listener of closeListeners) listener(); } },
+        };
+      },
+      resolveAuth: (saved, isCurrent) => resolveMcpConnectionCredentials(saved, { isCurrent, resolveFieldSecrets: async (value) => value,
+        presetKey: async () => { await beforeCredentials(); credentials++; return hasBoundKey ? marker : null; }, missingKey: () => "No saved bound key.",
+      }),
+      connect: async (_client, resolved, _signal, isCurrent) => { await beforeConnect(); if (!isCurrent()) throw new Error("Synthetic connection changed."); assert.equal(resolved.headers?.["x-consumer-api-key"], marker); connected++; },
+      close: async (client) => (client as ForegroundComposioClient & { close(): Promise<void> }).close(),
     }),
     publish: async (result, current) => { published++; await saveComposioSettingsInspection(directory, result, current); },
     now: () => 100, ...(timeoutMs ? { timeoutMs } : {}),
   });
-  return { directory, server, permissionFile, sent, inspect, get pages() { return pages; }, get published() { return published; },
-    cold: () => { live = false; }, paginate: () => { paged = true; }, configBarrier: (action: () => Promise<void>) => { beforeConfig = action; } };
+  return { directory, server, permissionFile, sent, inspect, background, get created() { return created; }, get connected() { return connected; }, get closed() { return closed; }, get credentials() { return credentials; }, get backgroundConnections() { return backgroundConnections; }, get pages() { return pages; }, get published() { return published; },
+    unboundKey: () => { hasBoundKey = false; }, revoke: () => leases.invalidate(server.id), disconnect: () => attempts.disconnect(server.id), credentialsBarrier: (action: () => Promise<void>) => { beforeCredentials = action; }, connectBarrier: (action: () => Promise<void>) => { beforeConnect = action; }, callBarrier: (action: (tool: string) => Promise<void>) => { beforeCall = action; }, oversize: () => { oversized = true; }, paginate: () => { paged = true; }, configBarrier: (action: () => Promise<void>) => { beforeConfig = action; } };
 }
 const owner = () => ({ signal: new AbortController().signal, assertCurrent() {} });
 
-test("Settings inspection reads only two schema operations and leaves existing Bot grants untouched", async (t) => {
-  const f = await fixture(t); const result = await f.inspect(owner());
+test("cold Settings inspection uses a disposable metadata connection and leaves existing Bot grants untouched", async (t) => {
+  const f = await fixture(t); await assert.rejects(f.background(), /foreground/u); const result = await f.inspect(owner());
+  assert.equal(f.created, 1); assert.equal(f.connected, 1); assert.equal(f.closed, 1); assert.equal(f.credentials, 1);
+  await assert.rejects(f.background(), /foreground/u); assert.equal(f.backgroundConnections, 0, "the Settings connection never warms the background agent cache");
   assert.deepEqual(f.sent, [SEARCH, SCHEMAS]); assert.equal(result.available, false); assert.equal(result.code, "account_routing_unverified");
   assert.ok(!JSON.stringify(result).includes("privateProof")); assert.ok(!JSON.stringify(result).includes(marker));
   assert.equal(await fs.readFile(f.permissionFile, "utf8"), "original grant data");
@@ -68,12 +97,12 @@ test("Settings inspection reads only two schema operations and leaves existing B
   assert.deepEqual((await fs.readdir(f.directory)).sort(), [COMPOSIO_SETTINGS_INSPECTION_FILE, "existing-bot-grants.json"].sort());
 });
 
-test("cold, globally hidden and legacy-excluded services issue no metadata request", async (t) => {
-  for (const mode of ["cold", "hidden", "legacy"] as const) {
+test("disabled, off-model, globally hidden and legacy-excluded services resolve no credentials or metadata", async (t) => {
+  for (const mode of ["disabled", "off-model", "hidden", "legacy"] as const) {
     const f = await fixture(t);
-    if (mode === "cold") f.cold(); else f.server.hiddenTools = [mode === "hidden" ? "composio" : SEARCH];
+    if (mode === "disabled") f.server.enabled = false; else if (mode === "off-model") f.server.exposure = "hidden"; else f.server.hiddenTools = [mode === "hidden" ? "composio" : SEARCH];
     const result = await f.inspect(owner());
-    assert.equal(result.available, false); assert.equal(f.pages, 0); assert.deepEqual(f.sent, []); assert.equal(f.published, 0);
+    assert.equal(result.available, false); assert.equal(f.pages, 0); assert.deepEqual(f.sent, []); assert.equal(f.published, 0); assert.equal(f.created, 0); assert.equal(f.credentials, 0);
   }
 });
 
@@ -118,4 +147,81 @@ test("the private Settings record preserves newer evidence and refuses symlink o
   await fs.unlink(file); await fs.symlink(f.permissionFile, file);
   await assert.rejects(saveComposioSettingsInspection(f.directory, { ...result, checkedAt: 3 }, async () => {}));
   assert.equal(await fs.readFile(f.permissionFile, "utf8"), "original grant data");
+});
+
+test("foreground connection lifetime and saved configuration changes fence credentials, connect, calls and publication", async (t) => {
+  for (const boundary of ["credentials", "connect", "search"] as const) for (const change of ["owner", "config", "generation"] as const) await t.test(`${boundary}/${change}`, async (t) => {
+    const f = await fixture(t), entered = barrier(), release = barrier(), controller = new AbortController(); t.after(release.release);
+    const wait = async () => { entered.release(); await release.promise; };
+    if (boundary === "credentials") f.credentialsBarrier(wait); else if (boundary === "connect") f.connectBarrier(wait); else f.callBarrier(async (tool) => { if (tool === SEARCH) await wait(); });
+    const pending = f.inspect({ signal: controller.signal, assertCurrent() {} }); await entered.promise;
+    if (change === "owner") controller.abort(); else if (change === "config") { f.server.enabled = false; f.revoke(); } else await f.disconnect();
+    release.release(); const result = await pending; await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(result.available, false); assert.equal(f.published, 0); assert.equal(f.connected, boundary === "search" ? 1 : 0); assert.equal(f.closed, 1); assert.ok(!f.sent.includes(SCHEMAS));
+    await assert.rejects(fs.stat(path.join(f.directory, COMPOSIO_SETTINGS_INSPECTION_FILE)), { code: "ENOENT" }); assert.equal(await fs.readFile(f.permissionFile, "utf8"), "original grant data");
+  });
+});
+
+test("the disposable metadata client requires a private foreground lifetime before any connection or credential lookup", async () => {
+  const server = serverFromPreset(getMcpPreset("composio")!), attempts = new GenerationBoundConnectionAttempts<ForegroundComposioClient>();
+  let effects = 0;
+  await assert.rejects(withBotConnectorInventoryScope(server.id, () => withForegroundComposioSettingsClientCore({ server, signal: new AbortController().signal, lease: new McpConfigurationLeaseRegistry().acquire(server.id), attempts,
+    configured: async () => server, create: () => { effects++; throw new Error("forbidden"); }, resolveAuth: async () => { effects++; return server; }, connect: async () => { effects++; }, close: async () => {}, operation: async () => { effects++; },
+  })), /foreground Settings/u);
+  assert.equal(effects, 0);
+});
+
+test("an unbound saved key refuses the disposable connection without credential migration or publication", async (t) => {
+  const f = await fixture(t); f.unboundKey(); const result = await f.inspect(owner());
+  assert.equal(result.code, "inspection_failed"); assert.equal(f.created, 1); assert.equal(f.credentials, 1); assert.equal(f.connected, 0); assert.equal(f.closed, 1); assert.equal(f.pages, 0); assert.deepEqual(f.sent, []); assert.equal(f.published, 0);
+  assert.equal(await fs.readFile(f.permissionFile, "utf8"), "original grant data");
+});
+
+test("the disposable raw port refuses app dispatch and connection-management operations before sending", async (t) => {
+  const f = await fixture(t, undefined, async (port) => {
+    for (const name of ["COMPOSIO_MULTI_EXECUTE_TOOL", "COMPOSIO_MANAGE_CONNECTIONS", "COMPOSIO_PROXY_EXECUTE", "COMPOSIO_REMOTE_BASH_TOOL", "GMAIL_FETCH_EMAILS"]) await assert.rejects(port.call(name, {}), /Unsupported Composio inspection/u);
+  });
+  assert.equal((await f.inspect(owner())).code, "account_routing_unverified"); assert.deepEqual(f.sent, [SEARCH, SCHEMAS]); assert.equal(f.closed, 1);
+});
+
+test("a deadline during noncooperative credential lookup closes the disposable client and prevents late I/O", async (t) => {
+  const f = await fixture(t, 20), entered = barrier(), release = barrier(); t.after(release.release);
+  f.credentialsBarrier(async () => { entered.release(); await release.promise; });
+  const pending = f.inspect(owner()); await entered.promise; assert.equal((await pending).code, "timed_out"); assert.equal(f.closed, 1);
+  release.release(); await new Promise<void>((resolve) => setImmediate(resolve)); assert.equal(f.connected, 0); assert.equal(f.pages, 0); assert.deepEqual(f.sent, []); assert.equal(f.published, 0);
+});
+
+test("the disposable raw inventory rejects an oversized reply before schema calls", async (t) => {
+  const f = await fixture(t); f.oversize(); const result = await f.inspect(owner());
+  assert.equal(result.available, false); assert.equal(f.pages, 1); assert.deepEqual(f.sent, []); assert.equal(f.closed, 1);
+});
+
+test("a changed canonical configuration during saved-key lookup refuses transport even before a lease update", async (t) => {
+  const f = await fixture(t), entered = barrier(), release = barrier(); t.after(release.release);
+  f.credentialsBarrier(async () => { entered.release(); await release.promise; });
+  const pending = f.inspect(owner()); await entered.promise; f.server.url = "https://other.invalid/mcp"; release.release();
+  assert.equal((await pending).code, "inspection_failed"); assert.equal(f.connected, 0); assert.equal(f.pages, 0); assert.equal(f.closed, 1); assert.equal(f.published, 0);
+});
+
+test("owner or client generation invalidation during the final filesystem check preserves previous evidence", async (t) => {
+  for (const change of ["owner", "generation"] as const) await t.test(change, async (t) => {
+    const f = await fixture(t), file = path.join(f.directory, COMPOSIO_SETTINGS_INSPECTION_FILE), controller = new AbortController();
+    const attempts = new GenerationBoundConnectionAttempts<object>(), generation = attempts.generation(f.server.id);
+    const current = async () => { controller.signal.throwIfAborted(); if (attempts.generation(f.server.id) !== generation) throw new Error("The inspection client generation changed."); };
+    const result = { available: false as const, checkedAt: 1, status: "unavailable" as const, code: "unsupported_meta_schema" as const };
+    await saveComposioSettingsInspection(f.directory, result, current); const previous = await fs.readFile(file, "utf8");
+    const lstat = mutableFs.lstat; let invalidated = false;
+    const intercepted = t.mock.method(mutableFs, "lstat", (async (...args: Parameters<typeof mutableFs.lstat>) => {
+      const info = await lstat(...args);
+      if (!invalidated && String(args[0]) === f.directory && (await fs.readdir(f.directory)).some((name) => name.endsWith(".tmp"))) {
+        invalidated = true; if (change === "owner") controller.abort(); else await attempts.disconnect(f.server.id);
+      }
+      return info;
+    }) as typeof mutableFs.lstat);
+    syncBuiltinESMExports();
+    try { await assert.rejects(saveComposioSettingsInspection(f.directory, { ...result, checkedAt: 2 }, current)); }
+    finally { intercepted.mock.restore(); syncBuiltinESMExports(); }
+    assert.equal(invalidated, true, "authority changed after the final filesystem await began"); assert.equal(await fs.readFile(file, "utf8"), previous, "invalidated work publishes no replacement evidence");
+    assert.deepEqual((await fs.readdir(f.directory)).sort(), [COMPOSIO_SETTINGS_INSPECTION_FILE, "existing-bot-grants.json"].sort()); assert.equal(await fs.readFile(f.permissionFile, "utf8"), "original grant data");
+  });
 });

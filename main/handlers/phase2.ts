@@ -12,7 +12,7 @@ import { COMPOSIO_SERVICE_SERVER_ID } from "../../renderer/shared/composio-servi
 import { configStore } from "../services/config-store.js";
 import { publishAppControlsChanged } from "../services/app-controls-events-main.js";
 import { secrets } from "../services/secrets.js";
-import { mcpManager, prewarmMcpServers, withBotConnectorMcpClient } from "../services/mcp.js";
+import { mcpManager, prewarmMcpServers, withForegroundComposioSettingsMcpClient } from "../services/mcp.js";
 import {
   authorizeMcpServer,
   cancelMcpAuthorization,
@@ -538,8 +538,7 @@ export function registerPhase2Handlers(): void {
   });
   const inspectComposio = createComposioSettingsInspection({
     configured: async () => (await configStore.listMcpServers()).find((server) => server.id === COMPOSIO_SERVICE_SERVER_ID),
-    hasExisting: (serverId) => mcpManager.hasExistingConnector(serverId),
-    withClient: withBotConnectorMcpClient,
+    withClient: withForegroundComposioSettingsMcpClient,
     publish: (result, current) => saveComposioSettingsInspection(app.getPath("userData"), result, current),
   });
   registerComposioWatchInspection<Electron.IpcMainInvokeEvent>({
