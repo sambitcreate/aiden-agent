@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ValidateFunction } from "ajv";
+import type { ErrorObject, ValidateFunction } from "ajv";
 import { copyBoundedJson, utf8Size } from "../bounded-json.js";
 import type { SubagentMcpRemoteTool } from "../subagents/subagent-mcp-read.js";
 import { connectorWatchJson } from "./connector-watch-imcp.js";
@@ -48,6 +48,24 @@ interface ExecutorResponseFacts {
   indexZero: boolean; calendarListSlug: boolean; responseAbsentOrNull: boolean;
   itemError: "exact_known" | "other" | "missing";
 }
+const RESPONSE_FIELDS = [
+  "successful", "data", "error", "log_id", "results", "tool_slug", "index", "response", "total_count", "success_count", "error_count",
+  "items", "id", "kind", "etag", "summary", "description", "location", "timeZone", "time_zone", "accessRole", "primary", "selected", "hidden", "deleted",
+  "colorId", "backgroundColor", "foregroundColor", "defaultReminders", "notificationSettings", "notifications", "method", "minutes",
+  "nextPageToken", "next_page_token", "nextSyncToken", "updated", "created", "status", "start", "end", "date", "dateTime", "recurringEventId", "originalStartTime", "recurrence",
+  "creator", "organizer", "attendees", "email", "displayName", "self", "resource", "optional", "responseStatus", "reminders", "useDefault", "overrides",
+  "visibility", "transparency", "sequence", "eventType", "htmlLink", "hangoutLink", "iCalUID", "attendeesOmitted", "endTimeUnspecified",
+  "conferenceData", "conferenceProperties", "conferenceSolution", "allowedConferenceSolutionTypes", "entryPoints", "entryPointType", "uri", "label", "conferenceId",
+  "extendedProperties", "private", "shared", "attachments", "fileUrl", "fileId", "mimeType", "iconLink", "source", "url", "title",
+] as const;
+const JSON_SCHEMA_TYPES = ["object", "array", "string", "number", "integer", "boolean", "null"] as const;
+type JsonSchemaType = typeof JSON_SCHEMA_TYPES[number];
+interface TypeMismatchFacts {
+  expected: JsonSchemaType[];
+  actual: Exclude<JsonSchemaType, "integer"> | "missing" | "other";
+  path: (typeof RESPONSE_FIELDS[number] | "array_index" | "other")[];
+  truncated: boolean;
+}
 export interface ComposioCalendarFailureFacts {
   keyword: ComposioWatchSchemaCompileFacts["keyword"];
   dialect: ComposioWatchSchemaCompileFacts["dialect"];
@@ -57,6 +75,7 @@ export interface ComposioCalendarFailureFacts {
   direction?: "input" | "output";
   referenceFailure?: ComposioCalendarReferenceFailure;
   executorResponse?: ExecutorResponseFacts;
+  typeMismatch?: TypeMismatchFacts;
 }
 export class ComposioCalendarContractError extends Error {
   constructor(readonly stage: "inventory" | "search" | "schemas" | "executor" | "read_arguments" | "read_response" | "schema_drift", readonly reason: "shape" | "missing" | "unsupported" | "invalid" | "changed", readonly facts?: ComposioCalendarFailureFacts, readonly field?: "executor_input" | "executor_output" | "account_selector") {
@@ -139,8 +158,27 @@ function compile(value: unknown, stage: ComposioCalendarContractError["stage"], 
     throw new ComposioCalendarContractError(stage, "unsupported", { keyword: rejection?.keyword ?? "other", dialect: rejection?.dialect ?? composioWatchSchemaDiagnosticDialect(optionalObject(value)?.$schema), ...(rejection ? { rejectionReason: rejection.reason, work: rejection.work } : {}), ...context }, field);
   }
 }
-function validationFailure(stage: ComposioCalendarContractError["stage"], validator: ValidateFunction, context: Pick<ComposioCalendarFailureFacts, "operation" | "direction" | "executorResponse">, field?: ComposioCalendarContractError["field"]): never {
-  throw new ComposioCalendarContractError(stage, "invalid", { keyword: composioWatchSchemaDiagnosticKeyword(validator.errors?.[0]?.keyword ?? ""), dialect: composioWatchSchemaDiagnosticDialect(optionalObject(validator.schema)?.$schema), ...context }, field);
+/** The instance and schema already passed bounded copying/compilation. Resolve
+ * the pointer privately, preserving only known fields and collapsed indexes. */
+function typeMismatchFacts(error: ErrorObject, value: unknown): TypeMismatchFacts {
+  const types: unknown[] = Array.isArray(error.params.type) ? error.params.type : [error.params.type];
+  const facts: TypeMismatchFacts = { expected: JSON_SCHEMA_TYPES.filter((type) => types.includes(type)), actual: "other", path: [], truncated: false };
+  if (typeof error.instancePath !== "string" || error.instancePath.length > 256 * 1024 || (error.instancePath !== "" && !error.instancePath.startsWith("/"))) return { ...facts, path: ["other"], truncated: true };
+  const parts = error.instancePath === "" ? [] : error.instancePath.slice(1).split("/");
+  facts.truncated = parts.length > 18;
+  let actual = value;
+  for (const part of parts.slice(0, 18)) {
+    const key = part.replace(/~1/gu, "/").replace(/~0/gu, "~");
+    facts.path.push(Array.isArray(actual) && /^(?:0|[1-9][0-9]*)$/u.test(key) ? "array_index" : RESPONSE_FIELDS.find((field) => field === key) ?? "other");
+    const descriptor = actual !== null && typeof actual === "object" ? Object.getOwnPropertyDescriptor(actual, key) : undefined;
+    actual = descriptor && "value" in descriptor ? descriptor.value : undefined;
+  }
+  if (!facts.truncated) facts.actual = actual === undefined ? "missing" : actual === null ? "null" : Array.isArray(actual) ? "array" : typeof actual === "object" ? "object" : typeof actual === "string" ? "string" : typeof actual === "number" ? "number" : typeof actual === "boolean" ? "boolean" : "other";
+  return facts;
+}
+function validationFailure(stage: ComposioCalendarContractError["stage"], validator: ValidateFunction, context: Pick<ComposioCalendarFailureFacts, "operation" | "direction" | "executorResponse">, field?: ComposioCalendarContractError["field"], value?: unknown): never {
+  const error = validator.errors?.[0];
+  throw new ComposioCalendarContractError(stage, "invalid", { keyword: composioWatchSchemaDiagnosticKeyword(error?.keyword ?? ""), dialect: composioWatchSchemaDiagnosticDialect(optionalObject(validator.schema)?.$schema), ...context, ...(stage === "read_response" && error?.keyword === "type" ? { typeMismatch: typeMismatchFacts(error, value) } : {}) }, field);
 }
 function compileCalendarOutput(value: unknown, operation: ComposioCalendarRead["kind"]): ValidateFunction {
   let normalized: ReturnType<typeof normalizeComposioCalendarOutputSchema>;
@@ -251,7 +289,7 @@ export function verifyCalendarContract(metadata: readonly SubagentMcpRemoteTool[
       const item = buildComposioCalendarExecutorRequest(read).tools[0];
       const upstream = parseComposioCalendarExecutorResponse(boundedCalendarContractJson(response), read);
       const validator = outputValidators.get(item.tool_slug)!;
-      if (!validator(upstream)) return validationFailure("read_response", validator, { operation: read.kind, direction: "output" });
+      if (!validator(upstream)) return validationFailure("read_response", validator, { operation: read.kind, direction: "output" }, undefined, upstream);
     },
   });
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCalendarSchemasRequest, buildCalendarSearchRequest, CALENDAR_SCHEMA_SLUGS, verifyCalendarContract } from "./composio-calendar-contract.js";
+import { buildCalendarSchemasRequest, buildCalendarSearchRequest, CALENDAR_SCHEMA_SLUGS, ComposioCalendarContractError, verifyCalendarContract } from "./composio-calendar-contract.js";
 import { syntheticCalendarExecutor, syntheticCalendarMetadata, syntheticCalendarSchemas } from "./composio-calendar-test-support.js";
 import { compileComposioWatchInputSchema, type ComposioWatchSchemaCompileFacts } from "./connector-watch-composio-probe.js";
 import { normalizeComposioCalendarOutputSchema } from "./composio-calendar-output-schema.js";
@@ -69,6 +69,37 @@ test("declared upstream output is enforced separately from executor correlation 
   verified.response(read, syntheticCalendarExecutor(read, { items: "declared representation" }));
   const mismatched = syntheticCalendarExecutor(read, { items: "declared representation" }); mismatched.data.results[0]!.index = 1;
   assert.throws(() => verified.response(read, mismatched));
+});
+
+test("Calendar output type failures report closed expected/actual types at known fields and collapsed array positions", () => {
+  const cases = [
+    { index: 0, read: { kind: "listCalendars", accountId: "account" }, schema: { items: { type: "array", items: { type: "object", properties: { id: { type: "string" } } } } }, value: { items: [{ id: null }] }, expected: ["string"], actual: "null", path: ["items", "array_index", "id"] },
+    { index: 1, read: { kind: "listEvents", accountId: "account", calendarId: "calendar", timeMin: "2026-11-04T15:00:00Z", timeMax: "2026-11-04T16:00:00Z", timezone: "UTC" }, schema: { data: { type: "object", properties: { items: { type: "array", items: { type: "object", properties: { start: { type: "object", properties: { dateTime: { type: "string" } } } } } } } } }, value: { data: { items: [{ start: { dateTime: 918273645 } }] } }, expected: ["string"], actual: "number", path: ["data", "items", "array_index", "start", "dateTime"] },
+    { index: 2, read: { kind: "getEvent", accountId: "account", calendarId: "calendar", eventId: "event", timezone: "UTC" }, schema: { error: { type: ["string", "null"] } }, value: { error: { private_secret: "private-value" } }, expected: ["string", "null"], actual: "object", path: ["error"] },
+  ] as const;
+  for (const fixture of cases) {
+    const schemas = syntheticCalendarSchemas();
+    schemas.data.tool_schemas[CALENDAR_SCHEMA_SLUGS[fixture.index]]!.output_schema = { type: "object", properties: fixture.schema } as never;
+    const verified = verifyCalendarContract(syntheticCalendarMetadata(), schemas);
+    let failure: unknown;
+    try { verified.response(fixture.read, syntheticCalendarExecutor(fixture.read, fixture.value)); } catch (error) { failure = error; }
+    assert.ok(failure instanceof ComposioCalendarContractError); assert.equal(failure.stage, "read_response"); assert.equal(failure.reason, "invalid");
+    const facts = failure.facts;
+    assert.deepEqual(facts?.typeMismatch, { expected: fixture.expected, actual: fixture.actual, path: fixture.path, truncated: false });
+    for (const secret of ["918273645", "private_secret", "private-value"]) assert.equal(JSON.stringify(facts).includes(secret), false);
+  }
+});
+
+test("type diagnostics resolve escaped and dynamic names without exposing names, indexes, paths or values", () => {
+  const schemas = syntheticCalendarSchemas();
+  schemas.data.tool_schemas.GOOGLECALENDAR_LIST_CALENDARS!.output_schema = { type: "object", properties: { data: { type: "object", properties: { "private~/secret": { type: "object", properties: { "314159": { type: "integer" } } } } } } } as never;
+  const read = { kind: "listCalendars" as const, accountId: "private-account" };
+  let failure: unknown;
+  try { verifyCalendarContract(syntheticCalendarMetadata(), schemas).response(read, syntheticCalendarExecutor(read, { data: { "private~/secret": { "314159": false } } })); } catch (error) { failure = error; }
+  assert.ok(failure instanceof ComposioCalendarContractError);
+  const facts = failure.facts;
+  assert.deepEqual(facts?.typeMismatch, { expected: ["integer"], actual: "boolean", path: ["data", "other", "other"], truncated: false });
+  for (const secret of ["private~/secret", "private~0~1secret", "314159", "private-account", "instancePath", "schemaPath"]) assert.equal(JSON.stringify(facts).includes(secret), false);
 });
 
 test("present executor output uses the restricted compiler before requests, including genuine failure representation", () => {
