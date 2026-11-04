@@ -307,7 +307,7 @@ final class AidenBotWatchModel {
     private func perform(_ mutation: AidenBotWatchMutation, replay: Bool = false) async {
         guard isCurrent(), mayWrite(), !isBusy else { return }
         // A denied retry says nothing about whether the earlier attempt was
-        // accepted. Only its receipt or authoritative state can settle it.
+        // accepted. Only its response or identity-proving state can settle it.
         let hadUnknownOutcome = uncertain
         isBusy = true
         pending = mutation
@@ -395,27 +395,16 @@ final class AidenBotWatchModel {
                 draft = nil; baseline = nil; conflict = nil; clearPending()
                 message = "Watch saved on your host."
             }
-        case let .save(id?, request):
-            if let current = loaded.watches.first(where: { $0.id == id }),
-               current.revision != request.expectedRevision,
-               current.name == request.name, current.prompt == request.prompt,
-               current.condition == request.condition, current.everyMinutes == request.everyMinutes,
-               request.sourceChoiceId == nil {
-                draft = nil; baseline = nil; conflict = nil; clearPending()
-                message = "Watch saved on your host."
-            }
-        case let .enabled(id, request):
-            if let current = loaded.watches.first(where: { $0.id == id }),
-               current.revision != request.expectedRevision, current.enabled == request.enabled {
-                clearPending(); message = current.enabled ? "Watch resumed." : "Watch paused."
-            }
         case let .remove(id, _):
             if !loaded.watches.contains(where: { $0.id == id }) {
                 clearPending()
                 if baseline?.id == id { draft = nil; baseline = nil }
                 message = "Watch deleted on your host."
             }
-        case .run: break // A timestamp cannot prove which concurrent run was admitted.
+        case .save, .enabled, .run:
+            // Another client can publish the same values at a newer revision.
+            // Only the frozen command's successful response/replay settles it.
+            break
         }
     }
 }

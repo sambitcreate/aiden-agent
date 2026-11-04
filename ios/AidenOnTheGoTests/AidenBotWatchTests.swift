@@ -23,6 +23,9 @@ private actor WatchHost: AidenBotWatchTransport {
     var heldSave: CheckedContinuation<AidenBotWatch, Error>?
     var holdNextAction = false
     var heldAction: CheckedContinuation<AidenBotWatch, Error>?
+    var saveReceipts: [UUID: (AidenBotWatchSaveRequest, AidenBotWatch)] = [:]
+    var enabledReceipts: [UUID: (AidenBotWatchActionRequest, AidenBotWatch)] = [:]
+    var replayError: Error?
 
     init(list: AidenBotWatchList, sources: AidenBotWatchSources) { self.list = list; self.sources = sources }
     func setList(_ value: AidenBotWatchList) { list = value }
@@ -32,11 +35,23 @@ private actor WatchHost: AidenBotWatchTransport {
     func setRun(_ value: Result<AidenBotWatchRunResult, Error>) { runResult = value }
     func setRemoval(_ value: AidenBotWatchRemoval) { removal = value }
     func setTest(_ value: AidenBotWatchTestResult) { testResult = value }
+    func denyReplay(_ error: Error?) { replayError = error }
+    func acceptSave(_ index: Int, watch: AidenBotWatch, current: AidenBotWatchList) {
+        let request = saves[index].1
+        saveReceipts[request.mutationId] = (request, watch)
+        list = current
+    }
+    func acceptEnabled(_ index: Int, watch: AidenBotWatch, current: AidenBotWatchList) {
+        let request = actions[index].1
+        enabledReceipts[request.mutationId] = (request, watch)
+        list = current
+    }
     func holdRead() { holdNextRead = true }
     func holdSave() { holdNextSave = true }
     func holdAction() { holdNextAction = true }
     func releaseAction(_ result: Result<AidenBotWatch, Error>) { heldAction?.resume(with: result); heldAction = nil }
     func releaseSave(_ value: AidenBotWatch) { heldSave?.resume(returning: value); heldSave = nil }
+    func denyHeldSave(_ error: Error) { heldSave?.resume(throwing: error); heldSave = nil }
     func releaseRead(_ value: AidenBotWatchList) { heldRead?.resume(returning: value); heldRead = nil }
     func botWatches(botId: String) async throws -> AidenBotWatchList {
         reads += 1
@@ -50,6 +65,11 @@ private actor WatchHost: AidenBotWatchTransport {
     func discoverBotWatchSources(botId: String) async throws -> AidenBotWatchSources { discoveries += 1; return sources }
     func saveBotWatch(botId: String, id: String?, request: AidenBotWatchSaveRequest) async throws -> AidenBotWatch {
         saves.append((id, request))
+        if let replayError { throw replayError }
+        if let (original, receipt) = saveReceipts[request.mutationId] {
+            guard request == original else { throw AidenRemoteClientError.invalidResponse }
+            return receipt
+        }
         if holdNextSave {
             holdNextSave = false
             return try await withCheckedThrowingContinuation { heldSave = $0 }
@@ -59,6 +79,11 @@ private actor WatchHost: AidenBotWatchTransport {
     }
     func setBotWatchEnabled(botId: String, id: String, request: AidenBotWatchActionRequest) async throws -> AidenBotWatch {
         actions.append(("enabled", request))
+        if let replayError { throw replayError }
+        if let (original, receipt) = enabledReceipts[request.mutationId] {
+            guard request == original else { throw AidenRemoteClientError.invalidResponse }
+            return receipt
+        }
         if holdNextAction {
             holdNextAction = false
             return try await withCheckedThrowingContinuation { heldAction = $0 }
@@ -322,12 +347,130 @@ final class AidenBotWatchTests: XCTestCase {
         XCTAssertNil(model.draft)
     }
 
-    func testUncertainPauseSettlesFromAuthoritativeRead() async throws {
+    func testUncertainPauseRequiresExactReplayDespiteMatchingHostState() async throws {
         let (model, host) = try await setup()
         await host.setList(try list([watchObject(["revision": "2", "enabled": false, "state": "paused"])]))
         await model.setEnabled(try decode(AidenBotWatch.self, watchObject()), false)
-        XCTAssertFalse(model.uncertain)
+        XCTAssertTrue(model.uncertain)
         XCTAssertEqual(model.list?.watches.first?.enabled, false)
+        await host.setAction(.success(try decode(AidenBotWatch.self, watchObject(["revision": "2", "enabled": false, "state": "paused"]))))
+        await model.retryPending()
+        let actions = await host.actions
+        XCTAssertEqual(actions.count, 2)
+        XCTAssertEqual(actions.first?.1, actions.last?.1)
+        XCTAssertFalse(model.uncertain)
+    }
+
+    func testSameValueConcurrentEditRetainsFrozenRequestAcrossRestartUntilExactReplay() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "watch-edit-identity-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AidenBotWatchDraftStore(root: root)
+        let scope = AidenBotWatchDraftStore.Scope(instanceID: "host-1", deviceID: "phone-1", botID: bot)
+        let host = try WatchHost(list: list(), sources: sources())
+        let first = AidenBotWatchModel(botID: bot, transport: host, draftStore: store, draftScope: scope)
+        await first.load()
+        first.begin(watch: try decode(AidenBotWatch.self, watchObject()))
+        first.draft?.name = "Changed by either client"
+        await first.saveDraft()
+        let retained = try XCTUnwrap(try store.load(scope))
+        let firstRequests = await host.saves
+        let original = try XCTUnwrap(firstRequests.first?.1)
+        // The host finishes the first request after its reply was lost, then
+        // another client saves the same values under a different identity.
+        let accepted = watchObject(["revision": "2", "name": "Changed by either client"])
+        await host.acceptSave(0, watch: try decode(AidenBotWatch.self, accepted), current: try list([accepted]))
+        let other = AidenBotWatchModel(botID: bot, transport: host)
+        await other.load()
+        other.begin(watch: try XCTUnwrap(other.list?.watches.first))
+        let concurrent = watchObject(["revision": "3", "name": "Changed by either client"])
+        await host.queueSave(.success(try decode(AidenBotWatch.self, concurrent)))
+        await other.saveDraft()
+        await host.acceptSave(1, watch: try decode(AidenBotWatch.self, concurrent), current: try list([concurrent]))
+        let both = await host.saves
+        XCTAssertEqual(both.count, 2)
+        guard both.count == 2 else { return }
+        XCTAssertNotEqual(both[0].1.mutationId, both[1].1.mutationId)
+        XCTAssertEqual(both[1].1.expectedRevision, "2")
+        await first.load()
+        XCTAssertTrue(first.uncertain, "Equal values at a newer revision do not identify our mutation")
+        XCTAssertFalse(first.canEditDraft)
+        XCTAssertEqual(first.draft?.name, "Changed by either client")
+        XCTAssertEqual(first.conflict?.revision, "3")
+        first.useLatestRevision()
+        XCTAssertEqual(first.baseline?.revision, "1", "An unknown request cannot be rebased into a fresh write")
+        XCTAssertEqual(try store.load(scope)?.pending, retained.pending)
+        XCTAssertEqual(try store.load(scope)?.pendingSince, retained.pendingSince)
+        let restored = AidenBotWatchModel(botID: bot, transport: host, draftStore: store, draftScope: scope)
+        await restored.load()
+        XCTAssertTrue(restored.uncertain)
+        await host.denyReplay(try serverError(409, "revision_conflict"))
+        await restored.retryPending()
+        XCTAssertTrue(restored.uncertain)
+        XCTAssertEqual(try store.load(scope)?.pending, retained.pending)
+        XCTAssertEqual(try store.load(scope)?.pendingSince, retained.pendingSince)
+        await host.denyReplay(nil)
+        await restored.retryPending()
+        let replayed = await host.saves
+        XCTAssertEqual(replayed.count, 4)
+        guard replayed.count == 4 else { return }
+        XCTAssertEqual(replayed[2].1, original)
+        XCTAssertEqual(replayed[3].1, original)
+        XCTAssertEqual(replayed.map { $0.0 }, [watchID, watchID, watchID, watchID])
+        XCTAssertFalse(restored.uncertain)
+        XCTAssertNil(restored.draft)
+        XCTAssertNil(try store.load(scope))
+        XCTAssertEqual(restored.list?.watches.first?.revision, "3", "The historical receipt must not replace the current host view")
+    }
+
+    func testSameValueConcurrentToggleRetainsFrozenRequestAcrossRestartUntilExactReplay() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "watch-toggle-identity-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AidenBotWatchDraftStore(root: root)
+        let scope = AidenBotWatchDraftStore.Scope(instanceID: "host-1", deviceID: "phone-1", botID: bot)
+        let host = try WatchHost(list: list(), sources: sources())
+        let first = AidenBotWatchModel(botID: bot, transport: host, draftStore: store, draftScope: scope)
+        await first.load()
+        await first.setEnabled(try decode(AidenBotWatch.self, watchObject()), false)
+        let retained = try XCTUnwrap(try store.load(scope))
+        let firstActions = await host.actions
+        let original = try XCTUnwrap(firstActions.first?.1)
+        let accepted = watchObject(["revision": "2", "enabled": false, "state": "paused"])
+        await host.acceptEnabled(0, watch: try decode(AidenBotWatch.self, accepted), current: try list([accepted]))
+        let other = AidenBotWatchModel(botID: bot, transport: host)
+        await other.load()
+        let concurrent = watchObject(["revision": "3", "enabled": false, "state": "paused"])
+        await host.setAction(.success(try decode(AidenBotWatch.self, concurrent)))
+        await other.setEnabled(try XCTUnwrap(other.list?.watches.first), false)
+        await host.acceptEnabled(1, watch: try decode(AidenBotWatch.self, concurrent), current: try list([concurrent]))
+        let both = await host.actions
+        XCTAssertEqual(both.count, 2)
+        guard both.count == 2 else { return }
+        XCTAssertNotEqual(both[0].1.mutationId, both[1].1.mutationId)
+        XCTAssertEqual(both[1].1.expectedRevision, "2")
+        await first.load()
+        XCTAssertTrue(first.uncertain, "Another client's same-value toggle is not our receipt")
+        XCTAssertEqual(try store.load(scope)?.pending, retained.pending)
+        XCTAssertEqual(try store.load(scope)?.pendingSince, retained.pendingSince)
+        let restored = AidenBotWatchModel(botID: bot, transport: host, draftStore: store, draftScope: scope)
+        await restored.load()
+        await restored.setEnabled(try decode(AidenBotWatch.self, concurrent), true)
+        let beforeReplay = await host.actions
+        XCTAssertEqual(beforeReplay.count, 2, "Uncertainty prevents a fresh toggle identity")
+        await host.denyReplay(try serverError(403, "capability_denied"))
+        await restored.retryPending()
+        XCTAssertTrue(restored.uncertain)
+        XCTAssertEqual(try store.load(scope)?.pending, retained.pending)
+        XCTAssertEqual(try store.load(scope)?.pendingSince, retained.pendingSince)
+        await host.denyReplay(nil)
+        await restored.retryPending()
+        let replayed = await host.actions
+        XCTAssertEqual(replayed.count, 4)
+        guard replayed.count == 4 else { return }
+        XCTAssertEqual(replayed[2].1, original)
+        XCTAssertEqual(replayed[3].1, original)
+        XCTAssertFalse(restored.uncertain)
+        XCTAssertNil(try store.load(scope))
+        XCTAssertEqual(restored.list?.watches.first?.revision, "3")
     }
 
     func testRunFalseIsHonestAndUnknownRunNeedsSameKeyReplay() async throws {
@@ -389,23 +532,26 @@ final class AidenBotWatchTests: XCTestCase {
 
     func testAuthoritativeSettlementWinsOverALateDeniedRetry() async throws {
         let (model, host) = try await setup()
-        let watch = try decode(AidenBotWatch.self, watchObject())
-        await model.setEnabled(watch, false)
+        await host.setList(try list([]))
+        await newDraft(model)
+        await model.saveDraft()
         XCTAssertTrue(model.uncertain)
-        await host.holdAction()
+        let sent = await host.saves
+        let request = try XCTUnwrap(sent.first?.1)
+        await host.holdSave()
         let retry = Task { await model.retryPending() }
-        while await host.heldAction == nil { await Task.yield() }
-        await host.setList(try list([watchObject(["revision": "2", "enabled": false, "state": "paused"])]))
+        while await host.heldSave == nil { await Task.yield() }
+        await host.setList(try list([watchObject(["id": request.mutationId.uuidString])]))
         await model.load()
-        XCTAssertFalse(model.uncertain, "The host confirmed the intended saved state")
-        await host.releaseAction(.failure(try serverError(403, "capability_denied")))
+        XCTAssertFalse(model.uncertain, "The create resource ID proves this exact mutation")
+        await host.denyHeldSave(try serverError(403, "capability_denied"))
         await retry.value
         XCTAssertFalse(model.uncertain, "A late denial cannot undo authoritative settlement")
-        XCTAssertEqual(model.list?.watches.first?.enabled, false)
+        XCTAssertEqual(model.list?.watches.first?.id, request.mutationId.uuidString)
         XCTAssertTrue(model.canWrite)
         await model.retryPending()
-        let actions = await host.actions
-        XCTAssertEqual(actions.count, 2, "A settled request has no remaining replay obligation")
+        let saves = await host.saves
+        XCTAssertEqual(saves.count, 2, "A settled request has no remaining replay obligation")
     }
 
     func testFirstAttemptDefinitiveDenialDoesNotCreateAnUnknownRun() async throws {
