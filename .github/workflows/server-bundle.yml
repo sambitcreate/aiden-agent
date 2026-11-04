@@ -62,7 +62,8 @@ jobs:
       - name: Upload the server package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: aiden-server-keyed
+          # Native helpers come from the build host: this package is Linux x64 only.
+          name: aiden-server-keyed-linux-x64
           path: ${{ runner.temp }}/server-bundle/*.tgz
           if-no-files-found: error
           retention-days: 30

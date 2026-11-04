@@ -1,10 +1,9 @@
 /**
  * Product analytics for the `aiden serve` process, kept apart from the
  * desktop's Electron binding. Only that process sends, plus the switch in
- * telemetry.ts; admin commands never load this module. Consent lives in its own
- * file in the agent directory, never in Pi's settings.json. The sanitizer, core
- * and PostHog client are imported only once a server may send. See
- * docs/analytics.md.
+ * telemetry.ts; admin commands never run it. Consent lives in its own file in
+ * the agent directory, never in Pi's settings.json. The sanitizer, core and
+ * PostHog client are imported only once a server may send. See docs/analytics.md.
  */
 
 import { randomUUID as nodeRandomUUID } from "node:crypto";
@@ -101,7 +100,7 @@ export type ServerSendStatus = { readonly canSend: true } | { readonly canSend: 
 
 /** The desktop's rules plus one of the server's own: nothing is ever sent with `CI` set. */
 export function serverSendStatus(state: AnalyticsState, context: { readonly env: Env; readonly hasKey: boolean }): ServerSendStatus {
-  if (!envDisablesAnalytics(context.env) && context.env.CI) return { canSend: false, reason: "ci" };
+  if (!envDisablesAnalytics(context.env) && context.env.CI !== undefined) return { canSend: false, reason: "ci" };
   return analyticsSendStatus(state, context);
 }
 
@@ -170,6 +169,30 @@ function within(work: Promise<unknown>, ms: number): Promise<void> {
     work.then(() => undefined, () => undefined),
     new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); }),
   ]).finally(() => clearTimeout(timer));
+}
+
+const NODE_ERROR_CODE = /^[A-Z][A-Z0-9_]{1,63}$/u;
+const MAX_REPORTED_CAUSES = 4;
+
+/**
+ * What a server's crash report may say about an error: its type, frames and
+ * Node error code. A server's messages quote file names, hosts and prompt text
+ * that no redactor can recognize, so the message itself never leaves.
+ */
+function withoutMessage(value: unknown, depth = 0): unknown {
+  try {
+    if (typeof value !== "object" || value === null) return { name: "NonError", message: "" };
+    const { name, stack, code, cause } = value as { name?: unknown; stack?: unknown; code?: unknown; cause?: unknown };
+    return {
+      name,
+      stack,
+      message: typeof code === "string" && NODE_ERROR_CODE.test(code) ? code : "",
+      ...(cause !== undefined && cause !== null && depth < MAX_REPORTED_CAUSES ? { cause: withoutMessage(cause, depth + 1) } : {}),
+    };
+  } catch {
+    // Reading an exotic thrown object can itself throw.
+    return { name: "NonError", message: "" };
+  }
 }
 
 export interface ServerAnalyticsRun {
@@ -268,7 +291,7 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
       }
     }
     const reported = within(activation.then(() => {
-      core?.captureException(error, {
+      core?.captureException(withoutMessage(error), {
         source: "server",
         level: fatal ? "fatal" : "error",
         processType: "server",
@@ -288,7 +311,7 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
   setAnalyticsReporter(reporter);
   crashHost.on("uncaughtException", onUncaught);
   reportRejection = (reason) => {
-    void activation.then(() => core?.captureException(reason, {
+    void activation.then(() => core?.captureException(withoutMessage(reason), {
       source: "server",
       level: "error",
       processType: "server",
@@ -313,6 +336,8 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
       await crash;
       // Checked here too: a flush the gate stops makes the SDK print a stack trace.
       await within(activation.then(() => (consentHolds() ? transport?.shutdown(SERVE_EXIT_FLUSH_CAP_MS) : undefined)), SERVE_EXIT_FLUSH_CAP_MS);
+      // A failure during the stop decides how the process ends, not this stop.
+      while (crash) await crash;
       stopped = true;
       detach();
     },

@@ -140,7 +140,7 @@ test("a notice that cannot be recorded stays pending and the server still starts
 });
 
 test("with CI set nothing is shown, recorded or sent, whatever the state", async (t) => {
-  for (const CI of ["true", "1", "false"]) {
+  for (const CI of ["true", "1", "false", ""]) {
     const fresh = harness(t, { isTTY: true, env: { CI } });
     await started(fresh).finish();
     api.showServerNotice(fresh.context);
@@ -381,6 +381,48 @@ test("an uncaught exception is sanitized, flushed with a cap, then rethrown", as
   assert.equal(report.properties.origin, "uncaught_exception");
   assert.equal(h.sent.filter((message) => message.event === "$exception").length, 1);
   assert.doesNotMatch(JSON.stringify(report), /jane|sk-abc|\/Users/u);
+});
+
+test("a crash report keeps the error's type, frames and code, and never its message", async (t) => {
+  const h = harness(t, { state: allowed, crashFlushCapMs: 20 });
+  started(h);
+  await settle();
+  const value = (message) => message.properties.$exception_list.map((entry) => entry.value);
+
+  const unreadable = Object.assign(new TypeError("EACCES: permission denied, open 'acme-merger-q3.md'"), { code: "EACCES" });
+  unreadable.cause = new Error('Your prompt "fire Bob next Tuesday" was flagged by db.internal.acme.com');
+  h.crashHost.emit("uncaughtException", unreadable, "uncaughtException");
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const crash = h.sent.at(-1);
+  assert.deepEqual(crash.properties.$exception_list.map((entry) => entry.type), ["TypeError", "Error"]);
+  assert.deepEqual(value(crash), ["EACCES", ""]);
+  assert.ok(crash.properties.$exception_list[0].stacktrace.frames.length > 0, "frames still say where it failed");
+  assert.doesNotMatch(JSON.stringify(crash), /acme|Bob|prompt/u);
+
+  const logged = harness(t, { state: allowed });
+  started(logged);
+  await settle();
+  for (const reason of ["notes/board-minutes.pdf is gone", new Error("~/work/acme/plan.md failed"), Object.assign(new Error("hello my ssn"), { code: "not a code" })]) api.reportServerRejection(reason);
+  await settle();
+  const reports = logged.sent.filter((message) => message.event === "$exception");
+  assert.equal(reports.length, 3);
+  for (const report of reports) assert.deepEqual(value(report), [""]);
+});
+
+test("a crash during the stop still ends the process with the crash, not a clean exit", async (t) => {
+  const slowStop = fakeTransport({ shutdown: () => new Promise((resolve) => setTimeout(resolve, 20)), flush: () => new Promise((resolve) => setTimeout(resolve, 60)) });
+  const h = harness(t, { state: allowed, transport: slowStop, crashFlushCapMs: 500 });
+  const run = started(h);
+  await settle();
+  let finished = false;
+  void run.finish().then(() => { finished = true; });
+  const failure = new Error("failed while stopping");
+  // The stop has already passed its first look at the crash path.
+  await Promise.resolve();
+  h.crashHost.emit("uncaughtException", failure, "uncaughtException");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.deepEqual(h.rethrown, [failure]);
+  assert.equal(finished, false, "a normal exit must not overtake the crash's exit code");
 });
 
 test("a fatal rejection is reported as one, and a stop in progress waits for the crash path", async (t) => {

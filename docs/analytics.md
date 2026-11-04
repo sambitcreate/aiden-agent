@@ -1,6 +1,6 @@
 # Usage data and crash reports
 
-Aiden's desktop app, and distributed builds of its headless server, send anonymous usage data so we can see how many people use it. This release sends only the app lifecycle events below; feature-use events and crash reports, which show which big features people use and what breaks, arrive in later releases. This page is the reference for what is sent and how to turn it off. The design and rollout plan is [`plans/posthog-product-analytics-plan.md`](plans/posthog-product-analytics-plan.md).
+Aiden's desktop app, and distributed builds of its headless server, send anonymous usage data so we can see how many people use it. The desktop app's current release sends only the app lifecycle events below; feature-use events and its crash reports, which show which big features people use and what breaks, arrive in later releases. This page is the reference for what is sent and how to turn it off. The design and rollout plan is [`plans/posthog-product-analytics-plan.md`](plans/posthog-product-analytics-plan.md).
 
 ## What is sent
 
@@ -22,7 +22,7 @@ Lifecycle events in this release:
 | `analytics_disabled` | When you turn usage data off (the last event sent) | none |
 | `server_started` | Each time `aiden serve` is ready to serve | `launch`: foreground, daemon or service |
 
-Feature-use events and crash reports are listed in the registry and arrive in later releases; the in-app sheet always shows the current list.
+Feature-use events and desktop crash reports are listed in the registry and arrive in later releases; the in-app sheet always shows the current list.
 
 ## What is never sent
 
@@ -45,9 +45,9 @@ Only distribution builds carry the project key, injected from the `AIDEN_POSTHOG
 
 ## Headless server (`aiden serve`)
 
-The server follows the same event list and sends with `surface: "server"`. Only the `aiden serve` process sends: admin commands such as `aiden workspace list` send nothing and never load the analytics client. Only a build made with `npm run cli:dist` can send, and the `Build keyed server bundle` workflow is the one place that happens. A server built from a clone (`npm run cli:build`) and the Docker image have no key, send nothing and show no notice.
+The server follows the same event list and sends with `surface: "server"`. Only the `aiden serve` process sends: admin commands such as `aiden workspace list` send nothing and never load the analytics client. The one exception is `aiden telemetry off`, which sends the single `analytics_disabled` described below. Only a build made with `npm run cli:dist` can send, and the `Build keyed server bundle` workflow, which builds for Linux x64, is the one place that happens. A server built from a clone (`npm run cli:build`) and the Docker image have no key, send nothing and show no notice.
 
-A keyed server adds `server_started`, the shared events its own work triggers, and crash reports: uncaught exceptions and rejections, sanitized like the desktop's. A crash waits at most one second for its report, then exits exactly as it would have. A rejection the server logs and survives is reported as an error. At most 25 crashes are reported per day, so a service restarting in a loop cannot flood the project; after that the server sends nothing until the next day. The server has no `app_active` event; `server_started` covers it. `server_started` is sent once the server is ready, so a server that fails to start is not counted.
+A keyed server adds `server_started`, crash reports and, as feature-use events arrive, the shared events its own work triggers. A crash report covers an uncaught exception or rejection and carries only the error's type, its sanitized stack frames and a Node error code such as `ENOENT`, never its message: a server's messages can quote file names, hosts and prompt text that redaction cannot recognize. A crash waits at most one second for its report, then exits exactly as it would have. A rejection the server logs and survives is reported as an error. At most 25 crashes are reported per day, so a service restarting in a loop cannot flood the project; after that the server sends nothing until the next day. The server has no `app_active` event; `server_started` covers it. `server_started` is sent once the server is ready, so a server that fails to start is not counted.
 
 Consent and a separate random install ID live in `aiden-analytics.json` in the agent directory (`~/.aiden/agent`, or `AIDEN_CODING_AGENT_DIR`):
 
