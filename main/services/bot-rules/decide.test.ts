@@ -121,3 +121,13 @@ test("the baseline is today's approval decision", () => {
   assert.equal(botBaselineOf(null), "allowed");
   assert.equal(botBaselineOf({ summary: "Send email" }), "ask");
 });
+
+test("all matching asks are exposed without changing the displayed winner", () => {
+  const custom: BotRule = { id: "custom.travel", text: "book a table", behavior: "ask", locked: false };
+  const decision = decideBotRule("ask", [custom, ...BOT_DEFAULT_RULES], classification(["purchase", "communicate"], [custom.id]));
+  assert.equal(decision.rule?.id, "default.purchase");
+  assert.deepEqual(decision.allMatchingAsk.map(rule => rule.id).sort(), ["custom.travel", "default.communicate", "default.purchase"]);
+  const locked = decideBotRule("ask", [custom], classification(["money"], [custom.id]));
+  assert.equal(locked.rule?.id, "locked.money");
+  assert.deepEqual(locked.allMatchingAsk.map(rule => rule.id), [custom.id]);
+});

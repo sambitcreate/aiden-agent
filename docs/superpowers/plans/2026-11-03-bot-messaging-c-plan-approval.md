@@ -318,7 +318,7 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
   - After all awaited `onAllow`/page-binding and fresh authority checks, the tool adapter submits the permit to `plans.admit`. Under the same per-Bot plan serial used by Stop/finish/expiry, verify plan status/deadline, execution identity and operation fingerprint, consume admission, and synchronously invoke the actual tool execution callback. Return its promise inside `{admitted: true, started}` without awaiting external I/O under that serial. This invocation is the execution-admission boundary; persist its admission identity before starting, without converting an unsafe tool into a replay-safe one. The durable runtime's existing safe/unsafe replay rules still govern uncertain external effects. Stop before admission invalidates the permit; re-evaluate ordinary policy to ask/block, without another speculative plan reservation. Stop after admission revokes future admissions but cannot undo an already-started external action.
   - The adapter applies this boundary to direct and nested codemode calls. Add a barrier test after coverage and after `onAllow` but before execution: Stop plan wins, no connector side effect starts, and an ordinary card or block replaces the stale permit. Another test admits first, then Stop, and permits only that already-started action to finish.
 
-- [ ] **Step 1: Write the failing tests** in `bot-tool-assembly.test.ts`. Use the existing MCP fixtures (the end-to-end `describeMcpAction` cases) and a real `createBotPlans` on a temp profile, with a plan approved through `request`/`respond` and bound to the turn's request id:
+- [x] **Step 1: Write the failing tests** in `bot-tool-assembly.test.ts`. Use the existing MCP fixtures (the end-to-end `describeMcpAction` cases) and a real `createBotPlans` on a temp profile, with a plan approved through `request`/`respond` and bound to the turn's request id:
   - `a mutating connector call inside the plan runs with no approval card`: `deps.approvals` stays empty and the tool runs once.
   - `a call outside the plan still asks`: a second granted mutating tool on the same server, not listed, gives exactly one approval.
   - `past the cap the call asks on its own card`: with `max: 1` and two calls, there is one approval (for the second call) and both run after an allow.
@@ -328,10 +328,10 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
   - `Stop between coverage and execution invalidates the permit`: a real adapter barrier keeps the connector untouched until admission. Stop first yields a card/block; admission first permits that one action and prevents the next.
   - `a plan never widens access`: after approval, remove the connection from the authority (`assemblyState`). The call is blocked with the access-changed or not-available reason, and the tool never runs.
   - `a script's calls are checked against the plan`: build a codemode turn like `(cm1)` in `bot-extension.test.ts` (`scriptTurn`), over `assemblyDeps` with two granted mutating tools. Calls are inside and outside a plan that lists one. There is one approval, its `toolCallId` is `script-1/c2`, and the covered call ran with no card.
-- [ ] **Step 2: Run them and see them fail.** `npx tsx --test main/services/bot-runtime/bot-tool-assembly.test.ts`. Expected: the new tests FAIL.
-- [ ] **Step 3: Implement** the port and the `checkPolicy` changes.
-- [ ] **Step 4: Run** `npx tsx --test main/services/bot-runtime/bot-tool-assembly.test.ts main/services/bot-runtime/bot-extension.test.ts`, then `npm run test:bot-rules`. Expected: PASS, including every existing routines-go-ahead case.
-- [ ] **Step 5: Commit:** "Let an approved plan cover a Bot's calls".
+- [x] **Step 2: Run them and see them fail.** `npx tsx --test main/services/bot-runtime/bot-tool-assembly.test.ts`. Expected: the new tests FAIL.
+- [x] **Step 3: Implement** the port and the `checkPolicy` changes.
+- [x] **Step 4: Run** `npx tsx --test main/services/bot-runtime/bot-tool-assembly.test.ts main/services/bot-runtime/bot-extension.test.ts`, then `npm run test:bot-rules`. Expected: PASS, including every existing routines-go-ahead case.
+- [x] **Step 5: Commit:** "Let an approved plan cover a Bot's calls".
 
 ### Task 5: The `propose_plan` and `plan_step` tools
 
@@ -522,3 +522,10 @@ Core handoff: `/tmp/aiden-bot-plan-c-core-handoff.md`. Final evidence: `/tmp/bot
 
 
 Pre-Gate-4 integration correction: the new shared/store identifier guards initially rejected production `bot:<uuid>` identities. Two behavioral red failures, including `newBotId()` from the real application service, are captured at `/tmp/bot-plans-production-id-red.log`. Both guards now reuse the existing shared path-safe identifier grammar and Bot length bound. Approval, restart replay, cap accounting and unsafe-ID checks pass, bringing the plan suite to 51. Scoped lint and whitespace checks pass. A contemporaneous whole type-check found two errors in Task4's active extension edits; no full integration green is claimed until those are resolved.
+
+
+Task 4 complete locally. Covered approvals now carry invocation-local permits to the actual callback inside the fresh authority fence. Direct and nested durable calls have host execution UUIDs and canonical operation/target identities. All matching Ask-first rules are required without changing display precedence. A stale permit rechecks ordinary policy with coverage disabled, preserves page binding, releases its admission while waiting and reacquires authority before execution.
+
+Raw request IDs remain the ingress authority. Separate host input identities use durable UUID bookkeeping for unlabeled inputs, survive restart and are not reused by a recovered database. The entries remain hidden from transcript and memory projection. Three existing memory fixtures were completed with real host metadata; their assertions were preserved.
+
+Worker runtime 391, focused/memory 153, browser 36, rules 62, registry 15, types, scoped lint and whitespace checks passed. Parent reran the 153 focused/memory tests successfully at `/tmp/bot-plan-c-task4-parent-focused.log`. Meaningful reds covered missing coverage, restored onAllow invalidation, new rule drift and same-URL browser document replacement. Handoff `/tmp/aiden-bot-plan-c-task4-handoff.md` includes exact logs and files. Task 5 must bind complete effective rule-set identity in final admission revalidation, use host input identities consistently for plan/folder ownership and preserve raw IDs for provenance. No Gate 4 or whole-phase acceptance is implied.

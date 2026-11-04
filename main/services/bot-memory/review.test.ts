@@ -361,7 +361,7 @@ test('another Bots input and answer never have person provenance',async()=>{
   await personTurns(1);
   const requestId='bot:J:1:00112233-4455-4677-8899-aabbccddeeff';
   await conversation.submit({type:'write',entry:{kind:BOT_NOTICE_ENTRY_KIND,data:{notice:'bot_message',requestId}}},ctx);
-  await (await conversation.submit({type:'input',content:'other Bot',requestId,entry:{kind:'aiden.bot-message-input',data:{kind:'request',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:Date.now()+60_000}}},ctx)).wait(ctx);
+  await (await conversation.submit({type:'input',content:'other Bot',requestId,entry:{kind:'aiden.bot-message-input',data:{kind:'request',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',botId:'J',botName:'Jester',text:'other Bot',deadline:Date.now()+60_000}}},ctx)).wait(ctx);
   await personTurns(1);
   const entries=(await conversation.context(ctx)).entries;
   const provenance=await provenanceOfHistory(entries,ids=>conversation.commit(tx=>Promise.all(ids.map(id=>tx.submissionByRequest(conversation.id,id))),ctx));
@@ -378,7 +378,7 @@ test("a host-owned Bot input ends a stranded routine or intro notice's ownership
       const {harness, conversation} = await setup(Array.from({length: 4}, () => fauxAssistantMessage("answer")));
       try {
         await conversation.submit({type: "write", entry: {kind: BOT_NOTICE_ENTRY_KIND, data: {notice, requestId: notice === "routine" ? "routine:missing:1" : "intro:missing"}}}, ctx);
-        await (await conversation.submit({type: "input", content: "<bot_message>other Bot text</bot_message>", requestId: "bot:j:1:00112233-4455-4677-8899-aabbccddeeff", entry: {kind: "aiden.bot-message-input", data: {kind: "request", deliveryId: "00112233-4455-4677-8899-aabbccddeeff", deadline: Date.now() + 60_000}}}, ctx)).wait(ctx);
+        await (await conversation.submit({type: "input", content: "<bot_message>other Bot text</bot_message>", requestId: "bot:j:1:00112233-4455-4677-8899-aabbccddeeff", entry: {kind: "aiden.bot-message-input", data: {kind: "request", deliveryId: "00112233-4455-4677-8899-aabbccddeeff", botId: "j", botName: "Jester", text: "other Bot text", deadline: Date.now() + 60_000}}}, ctx)).wait(ctx);
         await (await conversation.submit({type: "input", content: "I prefer tea"}, ctx)).wait(ctx);
         const entries = (await conversation.context(ctx)).entries;
         const ownership = await provenanceOfHistory(entries, ids => conversation.commit(tx => Promise.all(ids.map(id => tx.submissionByRequest(conversation.id, id))), ctx));
@@ -402,7 +402,7 @@ test("a stranded Bot notice preserves person memory while later Bot inputs remai
     assert.deepEqual(personEntries.filter(e => e.model?.[0]?.role === "user" || e.kind === "pi.assistant").map(e => personOwnership.get(e.id)), ["person", "person"]);
     assert.deepEqual(projectPersonTurns(personEntries, personOwnership), {personInputs: 1, transcript: "[Person]: My name is Sam and I like tea\n\n[Bot]: answer"});
 
-    await (await conversation.submit({type: "input", content: "<bot_message>private other Bot input</bot_message>", requestId: "bot:new:1:11112233-4455-4677-8899-aabbccddeeff", entry: {kind: "aiden.bot-message-input", data: {kind: "request", deliveryId: "11112233-4455-4677-8899-aabbccddeeff", deadline: Date.now() + 60_000}}}, ctx)).wait(ctx);
+    await (await conversation.submit({type: "input", content: "<bot_message>private other Bot input</bot_message>", requestId: "bot:new:1:11112233-4455-4677-8899-aabbccddeeff", entry: {kind: "aiden.bot-message-input", data: {kind: "request", deliveryId: "11112233-4455-4677-8899-aabbccddeeff", botId: "new", botName: "New Bot", text: "private other Bot input", deadline: Date.now() + 60_000}}}, ctx)).wait(ctx);
     const entries = (await conversation.context(ctx)).entries;
     for (const history of [entries, entries.filter(e => e.kind !== BOT_NOTICE_ENTRY_KIND)]) {
       const ownership = await provenanceOfHistory(history, lookup);
