@@ -4,7 +4,7 @@
 import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { installBotTestIpc } from "../../main/bots/test-dom";
 import {
   assembleStorageReport,
@@ -20,6 +20,9 @@ afterEach(cleanup);
 const NOW = 1_800_000_000_000;
 const DAY = 24 * 60 * 60 * 1_000;
 
+/** Lets effects and resolved promises settle before asserting. */
+const flush = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+
 function report(): StorageReport {
   return assembleStorageReport({
     categories: [
@@ -31,7 +34,7 @@ function report(): StorageReport {
       classifyWorktree(
         {
           workspaceId: "ws-idle",
-          name: "aiden · feature",
+          name: "idle-worktree",
           branch: "feature",
           bytes: 3_000_000_000,
           lastUsedAt: NOW - 40 * DAY,
@@ -46,7 +49,7 @@ function report(): StorageReport {
       classifyWorktree(
         {
           workspaceId: "ws-dirty",
-          name: "aiden · wip",
+          name: "dirty-worktree",
           branch: "wip",
           bytes: 1_000_000_000,
           lastUsedAt: NOW - 60 * DAY,
@@ -77,31 +80,34 @@ function report(): StorageReport {
   });
 }
 
-function mount(options: {
-  report?: StorageReport;
-  preview?: unknown;
-  cleanup?: unknown;
-} = {}) {
+const PREVIEW = {
+  action: "remove-worktrees" as const,
+  inactiveDays: 14 as const,
+  items: [
+    {
+      id: "ws-idle",
+      kind: "worktree" as const,
+      label: "idle-worktree",
+      detail: "feature",
+      bytes: 3_000_000_000,
+    },
+  ],
+  skipped: [{ id: "ws-dirty", label: "dirty-worktree", reason: "uncommitted", bytes: 1_000_000_000 }],
+  totalBytes: 3_000_000_000,
+};
+
+function mount(options: { report?: StorageReport; preview?: unknown; cleanup?: unknown } = {}) {
   const calls = installBotTestIpc({
     "storage:report": () => options.report ?? report(),
     "storage:refresh": () => options.report ?? report(),
-    "storage:preview": () => options.preview ?? {
-      action: "remove-worktrees",
-      inactiveDays: 14,
-      items: [
-        { id: "ws-idle", kind: "worktree", label: "aiden · feature", detail: "feature", bytes: 3_000_000_000 },
-      ],
-      skipped: [
-        { id: "ws-dirty", label: "aiden · wip", reason: "uncommitted", bytes: 1_000_000_000 },
-      ],
-      totalBytes: 3_000_000_000,
-    },
-    "storage:cleanup": () => options.cleanup ?? {
-      removed: [{ id: "ws-idle", kind: "worktree", label: "aiden · feature", bytes: 3_000_000_000 }],
-      skipped: [],
-      failed: [],
-      freedBytes: 3_000_000_000,
-    },
+    "storage:preview": () => options.preview ?? PREVIEW,
+    "storage:cleanup": () =>
+      options.cleanup ?? {
+        removed: [{ id: "ws-idle", kind: "worktree", label: "idle-worktree", bytes: 3_000_000_000 }],
+        skipped: [],
+        failed: [],
+        freedBytes: 3_000_000_000,
+      },
   });
   render(<StorageSettings />);
   return calls;
@@ -109,34 +115,37 @@ function mount(options: {
 
 test("the page shows the total, the category breakdown, and the largest items", async () => {
   mount();
-  await screen.findByText("5.00 GB");
+  await screen.findByText("idle-worktree");
   // The total is the sum of the categories, labelled as Aiden's own use.
+  assert.ok(screen.getAllByText("5.00 GB").length >= 1, "the total is shown");
   assert.ok(screen.getByText("used by Aiden"));
   assert.ok(screen.getByRole("img", { name: /Disk use by category/u }));
   for (const label of ["Worktrees", "Threads", "Logs and diagnostics"]) {
     assert.ok(screen.getAllByText(label).length > 0, label);
   }
-  assert.ok(screen.getByText("aiden · feature"));
   assert.ok(screen.getByText("Old chat"));
-  // A protected item reads its reason and offers no delete button.
+  // A protected item says why it is kept and offers no delete button.
   assert.ok(screen.getByText(/Has uncommitted changes/u));
-  assert.equal(screen.queryByRole("button", { name: "Delete aiden · wip" }), null);
+  assert.equal(screen.queryByRole("button", { name: "Delete dirty-worktree" }), null);
+  assert.ok(screen.getByRole("button", { name: "Delete idle-worktree" }));
 });
 
 test("a cleanup preview lists what will be removed, what is kept, and the space freed", async () => {
   mount();
-  const reviewButton = (await screen.findAllByRole("button", { name: "Review…" }))[0]!;
-  fireEvent.click(reviewButton);
+  const review = (await screen.findAllByRole("button", { name: "Review…" }))[0]!;
+  fireEvent.click(review);
   const dialog = await screen.findByRole("alertdialog");
-  assert.match(dialog.textContent ?? "", /Remove unused worktrees\?/u);
-  assert.match(dialog.textContent ?? "", /3\.00 GB/u, "the dialog names what will be freed");
-  assert.match(dialog.textContent ?? "", /aiden · feature/u);
-  assert.match(dialog.textContent ?? "", /Kept/u);
-  assert.match(dialog.textContent ?? "", /Has uncommitted changes/u);
+  const text = dialog.textContent ?? "";
+  assert.match(text, /Remove unused worktrees\?/u);
+  assert.match(text, /This frees 3\.00 GB/u, "the dialog names what will be freed");
+  assert.match(text, /idle-worktree/u, "the dialog names what will be removed");
+  assert.match(text, /Kept/u);
+  assert.match(text, /Has uncommitted changes/u, "the kept section says why");
   // The confirmation states the count and the size before the person commits.
-  const confirm = within(dialog).getByRole("button", { name: /Remove 1 · 3\.00 GB/u });
+  const confirm = within(dialog).getByRole("button", { name: /Remove 1/u });
+  assert.match(confirm.textContent ?? "", /3\.00 GB/u);
   fireEvent.click(confirm);
-  await waitFor(() => assert.doesNotMatch(document.body.textContent ?? "", /Remove unused worktrees\?/u));
+  await waitFor(() => assert.equal(screen.queryByRole("alertdialog"), null));
 });
 
 test("confirming a cleanup sends only the ids the preview listed", async () => {
@@ -156,28 +165,29 @@ test("confirming a cleanup sends only the ids the preview listed", async () => {
 });
 
 test("a scan that is still running says so and keeps the page usable", async () => {
-  const scanning = emptyStorageReport({
-    status: "scanning",
-    scannedAt: null,
-    error: null,
-    truncated: false,
+  mount({
+    report: emptyStorageReport({
+      status: "scanning",
+      scannedAt: null,
+      error: null,
+      truncated: false,
+    }),
   });
-  mount({ report: scanning });
+  await flush();
   await screen.findByText(/Measuring how much disk Aiden uses/u);
-  const refresh = screen.getByRole("button", { name: /Measuring…/u });
+  const refresh = screen.getByRole("button", { name: /Measuring/u });
   assert.equal(refresh.hasAttribute("disabled"), true);
 });
 
 test("a truncated scan says the total is only a minimum", async () => {
-  const truncated = {
-    ...report(),
-    scan: { status: "ready" as const, scannedAt: NOW, error: null, truncated: true },
-  };
-  mount({ report: truncated });
+  mount({
+    report: { ...report(), scan: { status: "ready", scannedAt: NOW, error: null, truncated: true } },
+  });
+  await flush();
   await screen.findByText(/the total is a minimum/u);
 });
 
-test("a failed scan explains itself without claiming anything was deleted", async () => {
+test("a scan that failed explains itself and offers no cleanup", async () => {
   mount({
     report: emptyStorageReport({
       status: "failed",
@@ -186,13 +196,31 @@ test("a failed scan explains itself without claiming anything was deleted", asyn
       truncated: false,
     }),
   });
+  await flush();
   await screen.findByText("Aiden could not finish measuring local storage. Try again.");
-  assert.match(document.body.textContent ?? "", /Nothing was changed|Your files are unchanged/u);
+  // A failed measurement must not offer cleanup as if the numbers were known.
+  const review = screen.getAllByRole("button", { name: "Review…" })[0]!;
+  assert.equal(review.hasAttribute("disabled"), true);
+});
+
+test("a read that throws says the files are unchanged", async () => {
+  installBotTestIpc({
+    "storage:report": () => {
+      throw new Error("unreachable");
+    },
+    "storage:refresh": () => {
+      throw new Error("unreachable");
+    },
+  });
+  render(<StorageSettings />);
+  await flush();
+  await screen.findByText(/Nothing was changed/u);
+  await screen.findByText(/Your files are unchanged/u);
 });
 
 test("deleting one item asks first, then removes exactly that item", async () => {
   const calls = mount();
-  const deleteButton = await screen.findByRole("button", { name: "Delete aiden · feature" });
+  const deleteButton = await screen.findByRole("button", { name: "Delete idle-worktree" });
   fireEvent.click(deleteButton);
   const dialog = await screen.findByRole("alertdialog");
   assert.match(dialog.textContent ?? "", /Remove this worktree\?/u);
