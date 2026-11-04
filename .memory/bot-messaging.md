@@ -25,3 +25,8 @@ Full-A review fixes: display projection now takes Bot identity and clean text fr
 Memory ownership also follows the host-owned Bot input kind. Bot notices still resolve request IDs to input/answer ownership but cannot guess that a later person input is unattended. This preserves person memory and recall after a stranded notice and excludes Bot frames even when the notice is absent from the scan. Routine and self-intro fallback semantics are unchanged.
 
 Pre-existing limitation, unchanged from the phase base: a stranded routine or intro notice can exclude a later person turn from memory/recall even across a resolved routine/intro input. This is outside the Bot messaging fix. A host-owned Bot input clears the stale guess; actual notice-to-answer lookup remains intact. Record this limitation in the PR.
+
+
+### 2026-11-04: Hosted onboarding-copy assertion corrected
+
+PR #727's renderer-other job exposed an outdated rendered-gallery assertion. A's Bots description already explains one chat, memory, asking other Bots for help and scheduled check-ins, but the test still expected the pre-messaging sentence. Root reproduced 83 passes and that single failure in `test:onboarding`, then updated the rendered-text assertions to require the shipped one-chat/memory, messaging and schedule promises. No production UI, timeout, retry or assertion removal is involved. The correction is applied on A and merged upward; C keeps its plan-specific description assertions and the shared messaging assertion. Fresh exact-head CI remains required.
