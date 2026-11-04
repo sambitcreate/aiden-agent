@@ -423,7 +423,7 @@ B's optional journal approvalTally stores version1, the original authorization f
   - before raising a folder card, call `folderOffer(botId, path)`, and when it returns a count show the line `You’ve allowed this folder ${count} times in the last 2 weeks.` (B's card already has Always for this folder);
   - after a successfully validated person answer, call `settleFolder` with this authorization attempt's wait id as `decisionId` and source `person`; B's logical request id is not a decision id. Quit/Resume reapproval creates a new attempt, whereas transport retries keep the current attempt and native idempotency key; stale/aborted answers do not count. Replays are deduplicated by the same durable receipt mechanism;
   - append the returned hint to the tool result.
-  
+
   Whole Mac requests are never counted, since only Allow once exists for them. Extend B's card test: `the fourth request for the same folder shows the count`, and `a Whole Mac request never does`.
 - [x] **Step 6: Run the tests.** `npm run test:bot-allowed`, `npm run test:bot-runtime`, `npm run test:bot-rules`, and B's suite. Expected: PASS.
 - [x] **Step 7: Update** `.memory/bot-rules.md`, `.memory/bot-durable-runtime.md` and `docs/bot-rules.md`. The doc section covers: what counts as a class; 3 in 14 days with no denial; Always allow for <Bot>; what entries never cover (locked rules, rule-made asks, Computer Use on your Mac); entries apply on every turn kind; Remove.
@@ -489,7 +489,7 @@ B's optional journal approvalTally stores version1, the original authorization f
     - the text `You’ve allowed this 3 times in the last 2 weeks.`;
     - clicking `Always allow for Ada` invokes `bots:approve` with `{waitId, decision:"allow", scope:"always"}`;
     - a toast `Ada won’t ask about this again.`
-    
+
     A prompt without `always` has no such button.
   - `bot-allowed-list.test.tsx`: two entries render their `describeBotApprovalRule` text and `Added 3 Nov 2026 · Used 12 times`. `Remove` on the second calls `onRemove` with it, and the button is disabled while `removing` names it.
   - `bot-profile.test.tsx`: the `Allowed without asking` row shows `2` and navigates to `/bots/bot%3Aa?page=allowed`. `bots-view.test.tsx`: that URL renders the page heading `Allowed without asking`, and its back button returns to Profile.
