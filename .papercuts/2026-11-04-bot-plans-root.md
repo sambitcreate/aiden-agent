@@ -17,3 +17,5 @@
 - Initial fresh-grant Stop fix also changed an already-started grant callback return, failing the existing serialized-grant test. Kept that assertion and narrowed the intent check to before invocation; an already-started callback completes, then Stop revokes it under the serial.
 
 - Authority adapter worker ended at selected-model capacity after its final 21-test/type/lint run. Preserved all shared edits, read its exact source/tests, and parent reran 21 tests and scoped lint successfully. No duplicate implementation or model switch was needed.
+
+- Gate4 reviewers accepted c9fc2045d, but identified misleading replay/step copy, pending-card precedence, avoidable identity scans and a site grammar mismatch. Root captured four behavioral core/validation failures before adding plan-specific reads, truthful conflicting/final step replay outcomes and early hostname refusal. The tool worker handles replay cleanup and sequential step scheduling while keeping the conservative core termination fence.

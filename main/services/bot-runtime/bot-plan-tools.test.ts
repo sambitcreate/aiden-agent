@@ -6,13 +6,13 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
-import { Harness, MemoryStorage, ToolResultEntry } from "@earendil-works/pi-durable";
+import { Harness, LiveDoc, MemoryStorage, ToolResultEntry } from "@earendil-works/pi-durable";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { botMessageRequestId, botMessageTurnOf } from "../../../renderer/shared/bot-messages.js";
 import { createBotPlans } from "../bot-plans/plans.js";
 import { createBotPlanAuthority } from "../bot-plans/authority.js";
 import type { BotPlanAccessPort, BotPlanBotTurnPort } from "../bot-plans/ports.js";
-import { validateBotPlanProposal } from "../bot-plans/validate.js";
+import { botPlanProposalFingerprint, validateBotPlanProposal, type BotPlanProposal } from "../bot-plans/validate.js";
 import { createBotMessageLedger } from "../bot-messages/ledger.js";
 import { createBotMessageCourier } from "../bot-messages/courier.js";
 import { resolveBotAccessTarget, coveredByBotLocations } from "./bot-access-target.js";
@@ -23,7 +23,7 @@ import { createBotRunAccess } from "./bot-run-access.js";
 import { createBotRegistry, type BotRegistry } from "./bot-extension.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
 import { botIngressAllowsTool, type BotToolFacts } from "./bot-tool-policy.js";
-import { testAuthority } from "./test-support/assembly-fixtures.js";
+import { assemblyDeps, assemblyState, MAIL_SERVER, SEND_EMAIL_TOOL, testAuthority } from "./test-support/assembly-fixtures.js";
 import { countingTool, recordingDeps } from "./test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor } from "./test-support/faux.js";
 import type { BotToolCall } from "./tool-adapter.js";
@@ -47,7 +47,7 @@ async function fixture(t: TestContext, useProductionAuthority = false) {
   let grants = 0, validations = 0, requests = 0;
   let beforeGrant: (() => Promise<void>) | undefined;
   const memos = new Map<string, JsonValue>();
-  const base = testAuthority({ mode: "custom", home, shell: true, botHome: true });
+  const base = testAuthority({ mode: "custom", home, shell: true, botHome: true, other: ["browser"] });
   const facts: BotToolFacts = { authority: { ...base, botId: BOT, managedHome: { ...base.managedHome, botId: BOT } }, supportsImages: true, fileLocations: 1, hasComputer: false, mcpTools: async () => new Map(), skillToolNames: async () => new Set() };
   const access: BotPlanAccessPort = {
     async scopeOf(_botId, requested, requiredAccess) {
@@ -96,7 +96,7 @@ async function fixture(t: TestContext, useProductionAuthority = false) {
   const deps: BotPlanToolDeps = {
     plans: {
       request: request => { requests++; return plans.request(request); },
-      current: id => plans.current(id), markStep: (...args) => plans.markStep(...args),
+      current: (...args) => plans.current(...args), markStep: (...args) => plans.markStep(...args),
       grantFreshAccess: (...args) => plans.grantFreshAccess(...args), respond: (...args) => plans.respond(...args),
     },
     validate: async (_id, value, current) => {
@@ -222,9 +222,11 @@ test("plan_step is idempotent, binds current mapped inputs and maps every outcom
   assert.equal(textOf(await step(3)), "This plan has no step 3.");
   assert.equal(textOf(await step(1)), "Step 1 marked done.");
   assert.equal(textOf(await step(1)), "Step 1 marked done.");
+  assert.equal(textOf(await step(1, "skipped")), "Step 1 was already marked done.");
   f.setIds(["req-1", "joined"]);
   assert.equal(textOf(await step(2, "skipped")), "All steps are marked; the plan has ended.");
-  assert.equal(textOf(await step(1)), "No approved plan is running in this turn.");
+  assert.equal(textOf(await step(2, "skipped")), "All steps are marked; the plan has ended.");
+  assert.equal(textOf(await step(1, "skipped")), "No approved plan is running in this turn.");
   await assert.rejects(step(0), /step|1|10/iu);
 });
 
@@ -390,6 +392,7 @@ test("replay rejects a changed authoritative deadline instead of renewing its or
   await a.ledger.update(a.deliveryId, row => ({ ...row, deadline: deadline + 10_000 }));
   assert.match(textOf(await f.execute()), /deadline changed/u);
   assert.equal((await f.plans().current(BOT))?.expiresAt, deadline);
+  assert.equal((await f.plans().current(BOT))?.status, "stopped");
 });
 
 const entryOf = (candidate: BotToolCandidate) => ({ ...candidate, replay: candidate.replay ?? "unsafe" as const });
@@ -404,6 +407,126 @@ async function memoryHarness(f: Awaited<ReturnType<typeof fixture>>, responses: 
   return { harness, conversation, faux, deps };
 }
 const toolStep = (name: string, args: unknown) => fauxAssistantMessage([fauxToolCall(name, JSON.parse(JSON.stringify(args)) as import("@earendil-works/pi-ai").JsonObject)], { stopReason: "toolUse" });
+
+const browserCheck = (requestIds: string[], executionId = randomUUID()) => ({ executionId, operationFingerprint: executionId,
+  toolName: "browser_click", requestIds, baseline: true, rules: [], action: { surface: "browser" as const, tool: "browser_click" as const, url: "https://example.com/report" } });
+
+async function pendingOtherPlan(f: Awaited<ReturnType<typeof fixture>>, planId = "other-plan") {
+  const memo = f.memos.get(BOT_PLAN_MEMO) as { proposal: JsonValue; requestIds: string[] };
+  const waiting = f.plans().request({ botId: BOT, planId, toolCallId: "other-call", requestIds: memo.requestIds,
+    proposal: memo.proposal as unknown as BotPlanProposal, signal: undefined });
+  assert.equal((await f.plans().current(BOT))?.planId, planId);
+  return { waiting, planId };
+}
+
+test("an approved plan replay remains approved while another plan card is pending", async t => {
+  const f = await fixture(t), value = input([{ files: f.outside, action: "read" }, { site: "example.com", action: "browse" }]);
+  const execution = f.execute(value), planId = await f.approve(); await execution;
+  const other = await pendingOtherPlan(f);
+  try {
+    assert.equal((await f.plans().current(BOT))?.status, "pending");
+    assert.equal((await f.plans().current(BOT, planId))?.status, "active");
+    assert.match(textOf(await f.execute(value)), /The person approved/u);
+    assert.equal(f.counts().grants, 1, "replay cannot reinstall the folder");
+    assert.ok(await f.plans().cover(BOT, browserCheck(["req-1"])));
+    await f.plans().respond(BOT, planId, "stop");
+    assert.equal((await f.plans().current(BOT))?.planId, other.planId);
+    assert.equal((await f.plans().current(BOT))?.status, "pending");
+  } finally { await f.plans().respond(BOT, other.planId, "not_now"); await other.waiting; }
+});
+
+for (const loss of ["expired", "throws", "missing", "changed"] as const) {
+  test(`approved replay with ${loss} A authority stops only its owner and removes coverage and folder access`, async t => {
+    const f = await fixture(t), deadline = Date.now() + 60_000;
+    await courierPort(t, f, deadline);
+    const value = input([{ files: f.outside, action: "read" }, { site: "example.com", action: "browse" }]);
+    const execution = f.execute(value), planId = await f.approve(); await execution;
+    const ids = [...await f.call().runInputIds!()];
+    assert.ok(f.runAccess.location(BOT, ids, "p1"));
+    const permit = await f.plans().cover(BOT, browserCheck(ids));
+    assert.ok(permit);
+    const other = await pendingOtherPlan(f);
+    f.deps.botTurns!.announceWaiting = async () => {
+      if (loss === "throws") throw new Error("A row unavailable");
+      if (loss === "missing") return undefined;
+      return { deadline: loss === "changed" ? deadline + 10_000 : deadline, expired: loss === "expired" };
+    };
+    try {
+      const replay = textOf(await f.execute(value));
+      assert.match(replay, loss === "expired" ? /plan has ended/u : loss === "changed" ? /deadline changed/u : /delivery is unavailable/u);
+      assert.doesNotMatch(replay, /Nobody approved/u);
+      assert.equal((await f.plans().current(BOT, planId))?.status, "stopped");
+      assert.equal(await f.plans().cover(BOT, browserCheck(ids)), undefined);
+      let started = false;
+      assert.deepEqual(await f.plans().admit(permit, async () => { started = true; }), { admitted: false });
+      assert.equal(started, false, "an already issued permit cannot survive authority loss");
+      assert.equal(f.runAccess.location(BOT, ids, "p1"), undefined);
+      assert.equal(f.counts().grants, 1);
+      assert.equal((await f.plans().current(BOT))?.planId, other.planId);
+      assert.equal((await f.plans().current(BOT))?.status, "pending", "stopping P1 never dismisses P2");
+    } finally { await f.plans().respond(BOT, other.planId, "not_now"); await other.waiting; }
+  });
+}
+
+test("authority loss on an ended replay never stops a different active plan", async t => {
+  const f = await fixture(t), deadline = Date.now() + 60_000;
+  await courierPort(t, f, deadline);
+  const execution = f.execute(), planId = await f.approve(); await execution;
+  const other = await pendingOtherPlan(f);
+  await f.plans().respond(BOT, other.planId, "approve"); await other.waiting;
+  f.deps.botTurns!.announceWaiting = async () => ({ deadline, expired: true });
+  assert.equal(textOf(await f.execute()), "This plan has ended. Ask again for a new task.");
+  assert.equal((await f.plans().current(BOT, planId))?.status, "finished");
+  assert.equal((await f.plans().current(BOT))?.planId, other.planId);
+  assert.equal((await f.plans().current(BOT))?.status, "active");
+});
+
+test("a skipped step cannot be reported as changed to done", async t => {
+  const f = await fixture(t), execution = f.execute(); await f.approve(); await execution;
+  const tool = planStepCandidate(BOT, f.plans()).bind!(f.call());
+  assert.equal(textOf(await tool.execute("skip", { step: 1, status: "skipped" })), "Step 1 marked skipped.");
+  assert.equal(textOf(await tool.execute("conflict", { step: 1, status: "done" })), "Step 1 was already marked skipped.");
+});
+
+for (const final of [false, true]) test(`durable mixed tool round ${final ? "ends coverage before work after a final mark" : "marks a non-final step without a spurious ordinary card"}`, async t => {
+  const f = await fixture(t), entered = deferred(), release = deferred(), markQueued = deferred();
+  const proposal: BotPlanProposal = { title: "Send reports", why: "Finish the task", steps: final ? ["Send reports"] : ["Read reports", "Send reports"],
+    items: [{ id: "i1", kind: "connector", app: "Mail", action: "send mail", max: 10, tools: [{ modelName: SEND_EMAIL_TOOL, serverId: MAIL_SERVER.id, remoteName: "send_email", title: "Send mail" }] }],
+    authorization: { policyRevision: "1", bindingRevision: "binding-1", rules: [], proposalFingerprint: "" } };
+  proposal.authorization.proposalFingerprint = botPlanProposalFingerprint(proposal);
+  let held = false, arm = false;
+  const plans = createBotPlans({ profileDir: f.dir, knownBot: async () => true, revokeAccess() {}, revalidate: async () => {
+    if (arm && !held) { held = true; entered.resolve(); await release.promise; }
+  } });
+  const waiting = plans.request({ botId: BOT, planId: "round-plan", toolCallId: "proposal", proposal, requestIds: ["person"], signal: undefined });
+  await plans.current(BOT); await plans.respond(BOT, "round-plan", "approve"); await waiting;
+  const step = planStepCandidate(BOT, { markStep: (...args) => { const marked = plans.markStep(...args); markQueued.resolve(); return marked; } });
+  const tool = countingTool(SEND_EMAIL_TOOL), state = assemblyState(testAuthority({ mode: "custom", home: f.home, connections: true }));
+  const deps = assemblyDeps(state, { plans, candidates: () => [step, { tool, mcp: true }], approve: async () => "deny" });
+  const work = fauxToolCall(tool.name, { text: "report" }, { id: "work" }), mark = fauxToolCall("plan_step", { step: 1, status: "done" }, { id: "mark" });
+  const faux = createFauxModels([fauxAssistantMessage(final ? [mark, work] : [work, mark], { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
+  const registry = createBotRegistry(BOT, deps); await registry.refresh();
+  const harness = await Harness.open(new MemoryStorage(), { registry, models: faux.models }, ctx); registry.attachHarness(harness);
+  const conversation = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  try {
+    arm = !final;
+    const submitted = await conversation.submit({ type: "input", content: "Send reports", requestId: "person" }, ctx);
+    if (!final) {
+      await entered.promise;
+      // A parallel round creates the mark task immediately; a sequential round
+      // leaves its slot without a task until the covered call has finished.
+      const markStarted = await conversation.commit(async tx => (await tx.doc(LiveDoc, conversation.id))?.tools?.some(slot => slot.name === "plan_step" && slot.taskId !== undefined), ctx);
+      if (markStarted) await markQueued.promise;
+      release.resolve();
+    }
+    await submitted.wait(ctx);
+    assert.equal(deps.approvals.length, final ? 1 : 0);
+    assert.equal(tool.executions.length, final ? 0 : 1);
+    const view = await plans.current(BOT);
+    assert.equal(view?.status, final ? "finished" : "active");
+    assert.equal(view?.steps[0]?.status, "done");
+  } finally { release.resolve(); await harness.close(ctx); await plans.endRuns(BOT, "finished"); }
+});
 
 test("both plan tools are model-only in the real codemode registry", async t => {
   const f = await fixture(t);
@@ -492,8 +615,8 @@ for (const checkpoint of ["after approval", "after folder grant"] as const) test
     return answer;
   };
   const current = f.deps.plans.current;
-  f.deps.plans.current = async id => {
-    const view = await current(id);
+  f.deps.plans.current = async (...args) => {
+    const view = await current(...args);
     if (hold && checkpoint === "after folder grant" && view?.status === "active") await holdUntilAbort();
     return view;
   };

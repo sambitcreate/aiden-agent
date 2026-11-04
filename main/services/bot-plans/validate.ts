@@ -106,7 +106,7 @@ export async function validateBotPlanProposal(input: unknown, context: BotPlanVa
       let host: string | undefined;
       try {
         const url = new URL(raw.site.includes("://") ? raw.site : `https://${raw.site}`);
-        if (["https:", "http:"].includes(url.protocol) && !url.username && !url.password && url.hostname.includes(".") && !url.hostname.endsWith(".")) host = url.hostname.toLowerCase();
+        if (["https:", "http:"].includes(url.protocol) && !url.username && !url.password && url.hostname.length <= 253 && /^[a-z0-9.-]+$/u.test(url.hostname) && url.hostname.includes(".") && !url.hostname.endsWith(".")) host = url.hostname.toLowerCase();
       } catch { /* Invalid sites never match. */ }
       if (!host) problems.push(`${raw.site} isn't a site hostname.`);
       else if (isPaymentHost(host)) problems.push("Payments always go to the person.");

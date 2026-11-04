@@ -26,7 +26,7 @@ export interface BotPlanRequest {
   botId: string; planId: string; toolCallId: string; proposal: BotPlanProposal;
   requestIds: readonly string[]; from?: string; deadline?: number; signal: AbortSignal | undefined;
 }
-export type BotPlanStepOutcome = "marked" | "finished" | "no_plan" | "no_step";
+export type BotPlanStepOutcome = "marked" | "finished" | "no_plan" | "no_step" | "already_done" | "already_skipped";
 export interface BotPlanPermit { planId: string; botId: string; executionId: string; operationFingerprint: string }
 type RequestResult = { status: "approved"; fresh: boolean; expiresAt: number } | { status: "declined" | "ended" };
 export interface BotPlans {
@@ -37,7 +37,8 @@ export interface BotPlans {
   admit<T>(permit: BotPlanPermit, start: () => Promise<T>): Promise<{ admitted: false } | { admitted: true; started: Promise<T> }>;
   markStep(botId: string, requestIds: readonly (string | undefined)[], step: number, status: "done" | "skipped"): Promise<BotPlanStepOutcome>;
   endRuns(botId: string, reason: "stopped" | "finished"): Promise<void>;
-  current(botId: string): Promise<BotPlanView | null>;
+  /** A plan ID reads that retained plan; omitting it selects the visible card. */
+  current(botId: string, planId?: string): Promise<BotPlanView | null>;
   onChange(listener: (botId: string) => void): () => void;
   forgetBot(botId: string): Promise<void>;
 }
@@ -415,9 +416,15 @@ export function createBotPlans(options: BotPlansOptions): BotPlans {
       // queued marks rather than infer completion from a stale snapshot.
       return transition(botId, true, async () => {
         const file = await load(botId), plan = file && active(file, requestIds);
-        if (!plan) return "no_plan";
+        if (!plan) {
+          const last = file?.plans.filter(p => p.requestIds.some(id => requestIds.includes(id)))
+            .sort((a, b) => b.approvedAt - a.approvedAt)[0];
+          return last?.status === "finished" && last.steps.every(s => s !== "pending") &&
+            Number.isInteger(step) && step >= 1 && step <= last.steps.length && last.steps[step - 1] === status ? "finished" : "no_plan";
+        }
         if (!Number.isInteger(step) || step < 1 || step > plan.steps.length || (status !== "done" && status !== "skipped")) return "no_step";
-        if (plan.steps[step - 1] !== "pending") return "marked";
+        const stored = plan.steps[step - 1]!;
+        if (stored !== "pending") return stored === status ? "marked" : stored === "done" ? "already_done" : "already_skipped";
         plan.steps[step - 1] = status; plan.revision++;
         const finished = plan.steps.every((s) => s !== "pending");
         if (finished) rememberEnd(plan, "finished");
@@ -433,14 +440,18 @@ export function createBotPlans(options: BotPlansOptions): BotPlans {
         if (plans.length || wait) emit(botId);
       });
     },
-    current(botId) {
+    current(botId, planId) {
       return serial(botId, async () => {
         const file = await load(botId); if (!file) return null;
         const wait = waiting.get(botId);
-        if (wait) {
+        if (wait && (planId === undefined || wait.request.planId === planId)) {
           const r = wait.request;
           return { planId: r.planId, botId, status: "pending", title: r.proposal.title, why: r.proposal.why,
             steps: r.proposal.steps.map((text) => ({ text, status: "pending" as const })), items: r.proposal.items.map((item) => botPlanItemView(item, 0)), revision: 1, ...(r.from === undefined ? {} : { from: r.from }) };
+        }
+        if (planId !== undefined) {
+          const record = file.plans.find(p => p.planId === planId);
+          return record ? view(record) : null;
         }
         const record = active(file) ?? file.plans.filter((p) => p.endedAt !== undefined && now() >= p.endedAt && now() - p.endedAt < BOT_PLAN_ENDED_SHOWN_MS).sort((a, b) => b.endedAt! - a.endedAt!)[0];
         return record ? view(record) : null;

@@ -34,7 +34,7 @@ export const botPlans: BotPlans = {
   admit: (permit, start) => currentService().admit(permit, start),
   markStep: (botId, requestIds, step, status) => currentService().markStep(botId, requestIds, step, status),
   endRuns: (botId, reason) => currentService().endRuns(botId, reason),
-  current: (botId) => currentService().current(botId),
+  current: (botId, planId) => currentService().current(botId, planId),
   onChange: (listener) => currentService().onChange(listener),
   forgetBot: (botId) => currentService().forgetBot(botId),
 };

@@ -73,6 +73,17 @@ test("browser capability and shell are required, payment sites never qualify", a
   assert.equal((await validateBotPlanProposal(input([{ shell: "bot_home" }]), context())).ok, false);
 });
 
+test("invalid site hostnames are proposal problems before a task memo is saved", async () => {
+  for (const site of ["my_site.example.com", `${"a".repeat(254)}.example.com`]) {
+    const result = await validateBotPlanProposal(input([{ site, action: "browse" }]), context({ browser: true }));
+    assert.equal(result.ok, false, site);
+    if (!result.ok) assert.deepEqual(result.problems, [`${site} isn't a site hostname.`]);
+  }
+  const international = await validateBotPlanProposal(input([{ site: "https://bücher.example/", action: "browse" }]), context({ browser: true }));
+  assert.equal(international.ok, true);
+  if (international.ok) assert.deepEqual(international.proposal.items, [{ id: "i1", kind: "site", host: "xn--bcher-kva.example", max: 10 }]);
+});
+
 test("shape and bounds are strict, caps default and text is cleaned", async () => {
   for (const covers of [[{ ...connector, max: 26 }], [{ ...connector, max: 1.5 }], [{ ...connector, extra: true }], [{ shell: "other" }]]) {
     assert.equal((await validateBotPlanProposal(input(covers), context())).ok, false);

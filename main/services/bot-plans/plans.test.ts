@@ -173,6 +173,52 @@ test("Stop, idle, all steps done and replacement revoke only the owned plan", as
   assert.deepEqual(f.revoked, ["p1", "p2", "p3", "p4"]);
 });
 
+test("a plan-specific read keeps an approved plan distinct from another pending card", async (t) => {
+  const f = await fixture(t); await approve(f.plans);
+  const pending = await waiting(f.plans, request("p2"));
+  assert.equal((await f.plans.current("b"))?.planId, "p2");
+  const approved = await f.plans.current("b", "p1");
+  assert.equal(approved?.planId, "p1");
+  assert.equal(approved?.status, "active");
+  assert.equal((await f.plans.current("b", "p2"))?.status, "pending");
+  assert.equal(await f.plans.current("b", "absent"), null);
+  assert.ok(await f.plans.cover("b", check("still-approved")));
+  assert.equal(await f.plans.respond("b", "p1", "stop"), "done");
+  assert.equal((await f.plans.current("b", "p1"))?.status, "stopped");
+  assert.equal((await f.plans.current("b"))?.planId, "p2", "ending the old plan preserves the new waiting card");
+  await f.plans.respond("b", "p2", "not_now");
+  assert.deepEqual(await pending.result, { status: "declined" });
+});
+
+test("conflicting step marks report the stored status without changing it", async (t) => {
+  const f = await fixture(t); await approve(f.plans);
+  assert.equal(await f.plans.markStep("b", ["req-1"], 1, "done"), "marked");
+  const before = await readFile(f.file, "utf8");
+  let changes = 0; const off = f.plans.onChange(() => { changes++; });
+  assert.equal(await f.plans.markStep("b", ["req-1"], 1, "skipped"), "already_done");
+  assert.equal(await f.plans.markStep("b", ["req-1"], 1, "done"), "marked");
+  assert.equal(await readFile(f.file, "utf8"), before);
+  assert.equal(changes, 0);
+  off();
+  await approve(f.plans, request("p2"));
+  assert.equal(await f.plans.markStep("b", ["req-1"], 1, "skipped"), "marked");
+  assert.equal(await f.plans.markStep("b", ["req-1"], 1, "done"), "already_skipped");
+  assert.deepEqual((await f.plans.current("b"))?.steps.map(s => s.status), ["skipped", "pending"]);
+});
+
+test("an exact final step replay reports finished without another status transition", async (t) => {
+  const f = await fixture(t); await approve(f.plans);
+  await f.plans.markStep("b", ["req-1"], 1, "done");
+  assert.equal(await f.plans.markStep("b", ["req-1"], 2, "skipped"), "finished");
+  const before = await readFile(f.file, "utf8");
+  let changes = 0; const off = f.plans.onChange(() => { changes++; });
+  assert.equal(await f.plans.markStep("b", ["req-1"], 2, "skipped"), "finished");
+  assert.equal(await f.plans.markStep("b", ["another-run"], 2, "skipped"), "no_plan");
+  assert.equal(await readFile(f.file, "utf8"), before);
+  assert.equal(changes, 0); assert.deepEqual(f.revoked, ["p1"]);
+  off();
+});
+
 test("fresh folder entitlement is one-use and serialized against Stop", async (t) => {
   const f = await fixture(t); await approve(f.plans);
   const entered = deferred(), release = deferred(); let grants = 0;

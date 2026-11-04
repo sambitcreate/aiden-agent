@@ -234,7 +234,7 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
     botId: string; planId: string; toolCallId: string; proposal: BotPlanProposal;
     requestIds: readonly string[]; from?: string; deadline?: number; signal: AbortSignal | undefined;
   }
-  export type BotPlanStepOutcome = "marked" | "finished" | "no_plan" | "no_step";
+  export type BotPlanStepOutcome = "marked" | "finished" | "no_plan" | "no_step" | "already_done" | "already_skipped";
   export interface BotPlanPermit {
     planId: string; botId: string; executionId: string; operationFingerprint: string;
   }
@@ -257,7 +257,7 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
     /** Turn Stop or Dismiss → "stopped"; the Bot went idle → "finished". Ends every active plan of the Bot. */
     endRuns(botId: string, reason: "stopped" | "finished"): Promise<void>;
     /** The waiting card, else the active plan, else one that ended under BOT_PLAN_ENDED_SHOWN_MS ago; else null. */
-    current(botId: string): Promise<BotPlanView | null>;
+    current(botId: string, planId?: string): Promise<BotPlanView | null>; // omitted: visible card; supplied: exact retained plan
     onChange(listener: (botId: string) => void): () => void;
     forgetBot(botId: string): Promise<void>;
   }
@@ -371,7 +371,7 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
   - approved: `The person approved “${title}”. Covered steps run without asking for the next 60 minutes or until an item's limit is used; anything else still asks. Call plan_step after each step.`
   - declined: `The person said Not now to “${title}”. Don't start it. Ask what they'd like instead.`
   - deadline passed: `Nobody approved “${title}” in time, so it didn't start.`
-  - `plan_step`: `Step ${n} marked ${status}.`, `All steps are marked; the plan has ended.`, `No approved plan is running in this turn.`, or `This plan has no step ${n}.`
+  - `plan_step`: `Step ${n} marked ${status}.`, `Step ${n} was already marked done.`, `Step ${n} was already marked skipped.`, `All steps are marked; the plan has ended.`, `No approved plan is running in this turn.`, or `This plan has no step ${n}.`
 - Ingress: in `botIngressAllowsTool`, both tools are allowed only when every `botMessageTurnOf(requestId).kind` is `person` or `message`, with A's host provenance/deadline checks also passing. They are withheld on `routine:`, `tg:`, intro and `botreply:` inputs. In `botToolVerdict`: `verdict(turn.telegram !== true && turn.routine !== true, "Plans are off for this Bot turn.")`.
 
 - [x] **Step 1: Write the failing tests:**
@@ -545,3 +545,28 @@ Parent validation: plan suite **102**, runtime **391**, Bots **992**, access **8
 Evidence: `/tmp/aiden-bot-plan-c-task5-handoff.md`, `/tmp/bot-plan-c-task5-parent-{plans-final,runtime,bots,access,messaging,rules,pause,registry-final,types-final,lint-final}.log`, `/tmp/bot-plan-c-startup-cua.log`, `/tmp/bot-plan-c-cli-{build,tests,types}.log`. Tool reds include missing implementation/ingress, expired-approved replay wording and concurrent changed-argument replay (`/tmp/bot-plan-tools-task5-*-red.log`). Adapter mutation/inventory audit reds are `/tmp/bot-plan-authority-audit-red.log`; captured-binding-before-grant red is `/tmp/bot-plan-c-fresh-grant-binding-red.log`.
 
 Gate 4 is pending independent Opus 5.5 medium and OpenCode Go DeepSeek V4.1 Flash high reviews of the same committed checkpoint. Tasks 6–9 and D remain gated. These results establish local source/test behavior, not physical-device, live-provider, package/release or hosted-CI acceptance.
+
+
+### Gate 4 review round 1, 2026-11-04
+
+Both independent reviewers accepted frozen `c9fc2045db1fe2daa3119a9a061996d5de72108b` with no blocking or important findings. Opus 5.5 medium reported five Lows: concurrent non-final step marking can force an ordinary card, A authority-loss replay can falsely report ended while coverage stays active, named inputs unnecessarily scan identity history, site validation/store grammars disagree, and step-change/replay copy can be false. DeepSeek V4.1 Flash high independently reported the Bot-wide current-view precedence problem when another plan is pending. Full reports are `/tmp/aiden-bot-plan-c-opus-r1.md` and `/tmp/aiden-bot-plan-c-deepseek-r1.md`.
+
+All six reported Lows are being addressed before Task6. The core retains the conservative queued-mark termination fence; sequential plan_step scheduling addresses its normal concurrent-tool trigger. Exact plan reads leave the no-ID UI view unchanged. New already_done/already_skipped outcomes are main-only and preserve completed step state; exact final replay is inert. Four core/validation RED failures are recorded at `/tmp/bot-plan-c-r1-core-red.log`, followed by53 passing tests at `/tmp/bot-plan-c-r1-core-green.log`. Tool/identity corrections and a fresh independent correction review remain pending; no Task6/native/Remote work has started.
+
+Retained observations are not reopened as defects: conservative reservations remain charged when invocation does not start, compact receipts carry the already-clamped expiresAt plus hashed original deadline identity, strict revalidation can delay serialized revocation, and a failed durable termination write can only retain its in-process overlay until restart. Existing lifetime, access and cap checks still apply. No physical-device, live-provider, release/package or exact-head hosted-CI evidence is claimed.
+
+
+### Gate 4 Low corrections implemented, 2026-11-04
+
+The runtime/tool worker stopped all edits. plan_step now executes sequentially, with a real durable mixed-round test that proves a non-final mark produces no ordinary card and a final-first mark still ends coverage before subsequent work. All named inputs keep their original IDs without an identity-history scan; mixed runs preserve exactly one stable host UUID. The core's conservative all-mark intent fence and final admission rules are unchanged.
+
+propose_plan uses current(botId, planId) for every state check. Missing, thrown, explicitly expired or changed A delivery authority stops that same active plan before returning, invalidating even an issued permit and revoking only its folder. A different pending card or newer active plan is preserved. Conflicting marks now report the stored status, and exact final replay reports finished without another write/event/revoke. Site hostname refusal happens in validation before the task memo can become unusable. No public/Remote DTO or revision changed.
+
+Worker evidence: focused tools/policy/extension93, plans115, runtime393, whole types, scoped lint and whitespace checks passed. Full handoff `/tmp/aiden-bot-plan-c-r1-tools-handoff.md` distinguishes actual behavioral REDs from corrected test instrumentation. Runtime/tool RED logs are `/tmp/bot-plan-c-r1-tools-red2.log`, `/tmp/bot-plan-c-r1-scheduling-inputs-red.log`, and `/tmp/bot-plan-c-r1-tools-red.log`; core/validation RED4 is `/tmp/bot-plan-c-r1-core-red.log`. Parent final integration and fresh independent R2 review remain in progress. C6–9/D remain held.
+
+
+### Gate 4 correction checkpoint ready, 2026-11-04
+
+Root inspected all source/test changes and independently verified the combined correction: plans115, runtime393, Bots992, rules62 and registry15 passed, as did whole-project types, scoped lint for9 TypeScript files and whitespace checks. Rebuilt CLI:268 files/27MiB,186 tests with183 passed and3 existing PTY skips, plus CLI types passed. Production startup/access-card Cua E2E passed1. Logs use `/tmp/bot-plan-c-r1-parent-{plans,runtime,bots,rules,types,lint,registry}.log`, `/tmp/bot-plan-c-r1-cli-{build,tests,types}.log`, and `/tmp/bot-plan-c-r1-startup-cua.log`. The earlier access84/messaging89/pause34 runs belong to c9fc2045d and have not been relabeled as correction-head evidence.
+
+All six R1 Lows have concrete corrections and behavioral coverage. No R1 finding was rejected. The conservative cap-reservation and queued-termination contracts are unchanged. Fresh Opus5.5medium and DeepSeekV4.1Flashhigh correction reviews must read the original brief, both full R1 reports, dispositions and this delta before C6 begins. No source acceptance of the new checkpoint, phone/device, live-model, packaging or hosted-CI outcome is implied yet.

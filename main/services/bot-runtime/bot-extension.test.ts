@@ -1189,6 +1189,75 @@ test("host input UUIDs are shared by concurrent tools, hidden, and distinct for 
   } finally { await harness.close(ctx); }
 });
 
+for (const mixed of [false, true]) test(`runInputIds ${mixed ? "keeps stable UUIDs for mixed inputs" : "avoids bookkeeping transactions and history scans for fully named inputs"}`, async t => {
+  let generate!: () => void, generating!: () => void;
+  const released = new Promise<void>(resolve => { generate = resolve; });
+  const reached = new Promise<void>(resolve => { generating = resolve; });
+  const measurements: Array<{ ids: readonly string[]; commits: number; scans: number; identities: number }> = [];
+  let measuring = false, commits = 0, scans = 0, identities = 0;
+  const tool = countingTool("identity_probe");
+  const waitingTool = countingTool("wait_for_steer", async () => { generating(); await released; return "ready"; });
+  const deps = recordingDeps({ tools: [{ tool: waitingTool, replay: "safe" }, { tool, replay: "safe", bind: call => ({ ...tool, async execute(...args) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      commits = 0; scans = 0; identities = 0; measuring = true;
+      try {
+        const ids = await call.runInputIds!();
+        measurements.push({ ids, commits, scans, identities });
+      } finally { measuring = false; }
+    }
+    return tool.execute(...args);
+  } }) }] });
+  const faux = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(waitingTool.name, { text: "wait" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall(tool.name, { text: "inspect inputs" })], { stopReason: "toolUse" }), fauxAssistantMessage("done"),
+  ]);
+  const { harness, root } = await memoryHarness(deps, faux);
+  const conversation = harness.conversation.bind(harness);
+  t.mock.method(harness, "conversation", async (...args: Parameters<Harness["conversation"]>) => {
+    const current = await conversation(...args);
+    if (!current) return current;
+    return new Proxy(current, { get(target, key, receiver) {
+      if (key !== "commit") return Reflect.get(target, key, receiver);
+      const commit: Conversation["commit"] = (fn, context) => {
+        if (measuring) commits++;
+        return target.commit(tx => fn(new Proxy(tx, { get(transaction, field, transactionReceiver) {
+          if (field === "scanEntries") return (...scanArgs: Parameters<typeof tx.scanEntries>) => { if (measuring) scans++; return transaction.scanEntries(...scanArgs); };
+          if (field === "appendEntry") {
+            return (...entryArgs: unknown[]) => {
+              if (measuring && entryArgs.some(arg => arg && typeof arg === "object" && "kind" in arg && arg.kind === "aiden.bot-input-identity")) identities++;
+              return Reflect.apply(transaction.appendEntry, transaction, entryArgs);
+            };
+          }
+          const value = Reflect.get(transaction, field, transactionReceiver);
+          return typeof value === "function" ? value.bind(transaction) : value;
+        } })), context);
+      };
+      return commit;
+    } });
+  });
+  try {
+    const submitted = await root.submit({ type: "input", content: "first", ...(mixed ? {} : { requestId: "named-first" }) }, ctx);
+    await reached;
+    const joined = await root.submit({ type: "input", content: "joined", requestId: "named-steer", whenBusy: "steer" }, ctx);
+    generate();
+    await submitted.wait(ctx); await joined.wait(ctx);
+    assert.equal(measurements.length, 2, JSON.stringify(await toolResults(root)));
+    for (const measurement of measurements) {
+      assert.equal(measurement.ids[1], "named-steer");
+      if (mixed) {
+        assert.match(measurement.ids[0]!, /^input:[0-9a-f-]{36}$/u);
+        assert.ok(measurement.scans > 0);
+      } else {
+        assert.deepEqual(measurement.ids, ["named-first", "named-steer"]);
+        assert.equal(measurement.scans, 0, "fully named input ownership needs no history scan");
+        assert.equal(measurement.commits, 2, "only the two owner-entry validation reads transact");
+      }
+    }
+    assert.deepEqual(measurements[0]!.ids, measurements[1]!.ids);
+    assert.deepEqual(measurements.map(measurement => measurement.identities), mixed ? [1, 0] : [0, 0]);
+  } finally { generate(); await harness.close(ctx); }
+});
+
 for (const malformed of [
   { kind: "reply", deliveryId: "00112233-4455-4677-8899-aabbccddeeff", botId: "J" },
   { kind: "request", deliveryId: "11112233-4455-4677-8899-aabbccddeeff", botId: "J" },

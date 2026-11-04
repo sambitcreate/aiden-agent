@@ -525,6 +525,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   async function runInputIds(api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId }, context: Context): Promise<string[]> {
     const owner = await runOwner(api, context);
     if (!owner.inputs.length) throw new Error("This tool is not available without an active input.");
+    if (owner.inputs.every(input => input.requestId !== undefined)) return owner.inputs.map(input => input.requestId!);
     const conversation = await harness!.conversation(api.conversationId, context);
     if (!conversation) throw new Error("This Bot conversation is unavailable.");
     // One transaction makes concurrent tools share the identity. A fresh

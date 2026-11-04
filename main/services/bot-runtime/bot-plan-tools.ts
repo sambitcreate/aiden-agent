@@ -119,9 +119,15 @@ export function proposePlanCandidate(botId: string, deps: BotPlanToolDeps): BotT
       if (memo.inputHash !== argumentsHash || memo.taskId !== call.taskId || memo.toolCallId !== call.callId) throw new Error("The plan replay arguments or task identity changed.");
       const proposal = memo.proposal as unknown as BotPlanProposal;
       const deadlineText = () => result(`Nobody approved “${proposal.title}” in time, so it didn't start.`);
+      const stopActivePlan = async () => {
+        const current = await deps.plans.current(botId, memo.planId);
+        if (current?.planId === memo.planId && current.status === "active") await deps.plans.respond(botId, memo.planId, "stop");
+        return current;
+      };
+      const unavailableResult = async () => { await stopActivePlan(); return result(UNAVAILABLE, true); };
       const expiredResult = async () => {
         const approved = await call.readMemo!<{ approved: boolean }>(`${BOT_PLAN_MEMO}.approved`);
-        const current = await deps.plans.current(botId);
+        const current = await stopActivePlan();
         return approved?.approved || (current?.planId === memo.planId && current.status !== "pending") ? result(ENDED) : deadlineText();
       };
       run = await currentRun(call, BOT_PROPOSE_PLAN_TOOL_NAME);
@@ -130,13 +136,16 @@ export function proposePlanCandidate(botId: string, deps: BotPlanToolDeps): BotT
       // read on every replay, regardless of whether it published a notice.
       let window: { deadline: number; expired: boolean } | undefined;
       if (run.raw.some(id => botMessageTurnOf(id).kind === "message")) {
-        if (!deps.botTurns) return result(UNAVAILABLE, true);
+        if (!deps.botTurns) return unavailableResult();
         try { window = await deps.botTurns.announceWaiting(botId, run.raw, proposal.title, memo.planId); }
-        catch { return result(UNAVAILABLE, true); }
-        if (!window || !Number.isFinite(window.deadline)) return result(UNAVAILABLE, true);
+        catch { return unavailableResult(); }
+        if (!window || !Number.isFinite(window.deadline)) return unavailableResult();
       }
       const savedWindow = await call.memo(`${BOT_PLAN_MEMO}.deadline`, { deadline: window?.deadline ?? null });
-      if (savedWindow.deadline !== (window?.deadline ?? null)) return result("The plan's Bot delivery deadline changed. Ask again in a new task.", true);
+      if (savedWindow.deadline !== (window?.deadline ?? null)) {
+        await stopActivePlan();
+        return result("The plan's Bot delivery deadline changed. Ask again in a new task.", true);
+      }
       const deadline = savedWindow.deadline ?? undefined;
       if (window?.expired || (deadline !== undefined && now() >= deadline)) return expiredResult();
       const timed = new AbortController();
@@ -146,7 +155,7 @@ export function proposePlanCandidate(botId: string, deps: BotPlanToolDeps): BotT
       const request = () => deps.plans.request({ botId, planId: memo.planId, toolCallId: memo.toolCallId, proposal, requestIds: memo.requestIds, ...(memo.from === undefined ? {} : { from: memo.from }), ...(deadline === undefined ? {} : { deadline }), signal });
       try {
         await currentRun(call, BOT_PROPOSE_PLAN_TOOL_NAME);
-        if (deadline !== undefined && now() >= deadline) return deadlineText();
+        if (deadline !== undefined && now() >= deadline) return expiredResult();
         const answer = await request();
         if (answer.status === "approved") await call.memo(`${BOT_PLAN_MEMO}.approved`, { approved: true });
         if (call.signal.aborted) throw call.signal.reason;
@@ -176,7 +185,7 @@ export function proposePlanCandidate(botId: string, deps: BotPlanToolDeps): BotT
         }
         const currentRunState = await currentRun(call, BOT_PROPOSE_PLAN_TOOL_NAME);
         if (!memo.requestIds.some(id => currentRunState.ids.includes(id))) throw new Error("The plan's owning run ended.");
-        const current = await deps.plans.current(botId);
+        const current = await deps.plans.current(botId, memo.planId);
         if (call.signal.aborted) throw call.signal.reason;
         if (deadline !== undefined && now() >= deadline) return result(ENDED);
         if (current?.planId !== memo.planId || current.status !== "active" || current.expiresAt === undefined || now() >= current.expiresAt) return result(ENDED);
@@ -196,6 +205,7 @@ export function proposePlanCandidate(botId: string, deps: BotPlanToolDeps): BotT
 
 export function planStepCandidate(botId: string, plans: Pick<BotPlans, "markStep">): BotToolCandidate {
   const schema: AgentTool = { name: BOT_PLAN_STEP_TOOL_NAME, label: "Mark a plan step", description: "Mark an approved plan's step done or skipped. Use its step number, from 1 to 10. Repeating the same mark is safe.",
+    executionMode: "sequential",
     parameters: Type.Object({ step: Type.Integer({ minimum: 1, maximum: L.steps }), status: Type.Union([Type.Literal("done"), Type.Literal("skipped")]) }, { additionalProperties: false }),
     async execute() { throw new Error("A plan step needs the Bot's live task."); },
   };
@@ -206,6 +216,6 @@ export function planStepCandidate(botId: string, plans: Pick<BotPlans, "markStep
     const run = await currentRun(call, BOT_PLAN_STEP_TOOL_NAME), n = value.step as number, status = value.status;
     const outcome = await plans.markStep(botId, run.ids, n, status);
     if (call.signal.aborted) throw call.signal.reason;
-    return result(outcome === "finished" ? "All steps are marked; the plan has ended." : outcome === "no_plan" ? "No approved plan is running in this turn." : outcome === "no_step" ? `This plan has no step ${n}.` : `Step ${n} marked ${status}.`);
+    return result(outcome === "finished" ? "All steps are marked; the plan has ended." : outcome === "no_plan" ? "No approved plan is running in this turn." : outcome === "no_step" ? `This plan has no step ${n}.` : outcome === "already_done" ? `Step ${n} was already marked done.` : outcome === "already_skipped" ? `Step ${n} was already marked skipped.` : `Step ${n} marked ${status}.`);
   } }) };
 }
