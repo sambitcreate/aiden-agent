@@ -21,7 +21,7 @@ Lifecycle events:
 | `app_updated` | First launch on a new version | `from_version`, `to_version` |
 | `analytics_disabled` | When you turn usage data off (the last event sent) | none |
 
-Feature events fire once, at the moment the action succeeded, from the service that owns it, so an action from a paired phone counts the same way as one on the Mac. A refused, cancelled or failed action sends nothing, and a subagent's own turns are not messages. Nothing is sent until the notice or the onboarding row has been shown, so actions during first-run setup aren't counted: the first provider appears only as `provider_id` on `onboarding_finished`.
+Feature events fire once, at the moment the action succeeded, from the service that owns it, so an action from a paired phone counts the same way as one on the Mac. A refused, cancelled or failed action sends nothing, and a subagent's own turns are not messages. Nothing is sent until the notice or the onboarding row has been shown, so actions during first-run setup aren't counted: the first provider appears only as `provider_id` on `onboarding_finished`. An action in the first moments of a launch waits in memory, up to 100 events, until usage data has started, and is dropped if sending isn't allowed.
 
 | Event | When | Extra fields |
 | --- | --- | --- |

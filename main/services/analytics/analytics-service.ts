@@ -119,6 +119,8 @@ export function createLoggingTransport(write: (line: string) => void): PostHogTr
   };
 }
 
+const MAX_HELD_EVENTS = 100;
+
 export function createAnalyticsService(options: AnalyticsServiceOptions): AnalyticsService {
   const now = options.now ?? (() => new Date());
   const randomUUID = options.randomUUID ?? nodeRandomUUID;
@@ -136,6 +138,10 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
   let timer: unknown;
   let activeDay: string | undefined;
   let activation: Promise<void> | undefined;
+  // Remote and IPC open before start() settles, so an action in that window
+  // waits here. Nothing leaves until start() has found sending allowed; if it
+  // isn't, these are dropped.
+  let heldUntilStarted: Array<() => void> | undefined = [];
   // Bumped on every stop so an activation that started before it cannot
   // bring a transport back to life.
   let generation = 0;
@@ -249,6 +255,7 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
 
   // Stops capture and drops whatever is queued, without sending it.
   function stop(): void {
+    heldUntilStarted = undefined;
     generation += 1;
     activation = undefined;
     if (timer !== undefined) stopTimer(timer);
@@ -325,6 +332,10 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
         await activateIfAllowed();
       } catch (error) {
         log("Analytics could not start.", error);
+      } finally {
+        const held = heldUntilStarted;
+        heldUntilStarted = undefined;
+        held?.forEach((send) => send());
       }
     },
 
@@ -384,7 +395,11 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
     },
 
     track(event, props) {
-      core?.track(event, props);
+      if (heldUntilStarted && heldUntilStarted.length < MAX_HELD_EVENTS) {
+        heldUntilStarted.push(() => core?.track(event, props));
+      } else {
+        core?.track(event, props);
+      }
     },
 
     async shutdown(timeoutMs = 1_500) {

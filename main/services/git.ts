@@ -5891,7 +5891,7 @@ export class GitService {
     const requestedOwnershipToken = options?.ownershipToken === undefined
       ? undefined
       : this.validatedWorktreeOwnershipToken(options.ownershipToken);
-    const worktree = await this.enqueueMutation(repo.commonDir, async () => {
+    return this.enqueueMutation(repo.commonDir, async () => {
       const createdFromHead = options?.startPoint === undefined
         ? await this.requireHead(repo)
         : await this.requireStartCommit(repo, options.startPoint, signal);
@@ -6000,7 +6000,6 @@ export class GitService {
         throw error;
       }
     });
-    return worktree;
   }
 
   async rollbackWorktree(

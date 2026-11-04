@@ -474,6 +474,42 @@ test("quitting flushes what is queued and a clean exit clears the run marker", a
   assert.equal(existsSync(join(h.runDirectory, RUN_MARKER_FILE)), false);
 });
 
+test("an action while start is still reading settings is sent once sending is allowed", async (t) => {
+  const consented = { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" };
+  const h = harness({ initial: consented });
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  assert.deepEqual(h.names(), []);
+  await h.service.start();
+  assert.deepEqual(h.names(), ["app_opened", "app_active", "terminal_opened"]);
+});
+
+test("an action held during start is dropped when sending isn't allowed, even after a later yes", async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  await h.service.start();
+  await h.service.markNoticeShown();
+  assert.deepEqual(h.names(), ["app_opened", "app_active"]);
+});
+
+test("turning usage data off during start drops what was held", async (t) => {
+  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  await h.service.setEnabled(false);
+  await h.service.start();
+  assert.deepEqual(h.names().filter((name) => name === "terminal_opened"), []);
+});
+
+test("a burst before start is held only up to its limit", async (t) => {
+  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
+  t.after(h.cleanup);
+  for (let count = 0; count < 500; count += 1) h.service.track("terminal_opened", {});
+  await h.service.start();
+  assert.equal(h.names().filter((name) => name === "terminal_opened").length, 100);
+});
+
 test("a feature event reaches the transport only while sending is allowed", async (t) => {
   const h = harness();
   t.after(h.cleanup);
