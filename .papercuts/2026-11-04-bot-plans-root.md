@@ -5,3 +5,5 @@
 - Plan API lacks originating durable task identity/settlement GC port. Core worker retains minimal hashed ended receipts rather than unsafe time/size eviction; full display history remains bounded.
 
 - Sorting registry lane files created unrelated order churn. Rebuilt only the two added entries against the preserved HEAD layout; no existing membership changed.
+
+- Core audit: persist-before-start does not itself fence time spent awaiting publication. Requested a final post-write deadline check and held-write test before callback invocation. Captured plan binding must also be checked at coverage/admission rather than inferred only from current allowed server/name.

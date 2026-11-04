@@ -545,6 +545,7 @@
         "main/services/bot-runtime/bot-handoff-notifications.test.ts",
         "main/services/bot-runtime/bot-handoff-open.test.ts",
         "main/services/bot-rules/classify.test.ts",
+        "main/services/bot-plans/plans.test.ts",
         "main/services/bot-plans/validate.test.ts",
         "main/services/bot-rules/decide.test.ts",
         "main/services/bot-rules/store.test.ts",

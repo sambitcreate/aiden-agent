@@ -278,7 +278,7 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
 - `grantFreshAccess` consumes a process-local, one-use fresh-approval entitlement. Under the plan serial it checks active status, deadline and original live entitlement before the bounded grant callback. This callback performs no session operation. It cannot run for a stored replay or after Stop. Every termination path calls `revokeAccess(botId, planId)` before acknowledging the transition: Stop plan, Stop/Dismiss, all steps marked, replacement, idle, expiry and delete. The callback only revokes that plan's grant. A quit drops all ephemeral grants and fresh entitlements automatically.
 - A new approval ends every other active plan of the Bot as `finished`, revoking its owned access first. `current` and `cover` check expiry and revoke an expired owner before returning; lazy history persistence must not delay permission revocation. The file location resolver also checks the saved `expiresAt` independently. `onChange` fires once.
 
-- [ ] **Step 1: Write the failing tests** in `plans.test.ts`, against a temp profile and a fake `now`:
+- [x] **Step 1: Write the failing tests** in `plans.test.ts`, against a temp profile and a fake `now`:
   - `approving stores the plan and resolves the wait`: `request` stays pending until `respond(…, "approve")`, then resolves `{status: "approved", fresh: true, expiresAt}`, and `current` returns status `active` with `expiresAt === approvedAt + 3_600_000`.
   - `not now resolves {status: "declined"} and stores nothing`: `current` is then null.
   - `an approved plan survives a restart`: a second `createBotPlans` over the same directory gives `request` with the same `planId` resolving `{status: "approved", fresh: false, expiresAt}` without a waiter, and `cover` returning a permit for a matching independently authorized call. `grantFreshAccess` returns false and creates no folder grant.
@@ -295,10 +295,10 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
   - Concurrent calls at the last cap admit one reservation, and plan+allow-list matches consume only the plan reservation.
   - Fresh-approval crash before tool-result commit returns replayed approval without restoring the outside folder. Stop, all-steps-done, replacement, expiry and run end each revoke only their own folder grant; a subsequent operation in the still-running Bot fails.
   - A joined steer stays covered; a queued follow-up and a later run are not covered, verified with the real harness.
-- [ ] **Step 2: Run them and see them fail.** `npx tsx --test main/services/bot-plans/plans.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement** `botPlanCoveredItems`, `createBotPlans` and the singleton `botPlans` in `plans-main.ts` (`profileDir: app.getPath("userData")`, `knownBot` through `botStore.get(id) != null`, like `bot-rules/store-main.ts`).
-- [ ] **Step 4: Run the tests.** Expected: PASS.
-- [ ] **Step 5: Register and commit:** "Keep approved Bot plans and check calls against them".
+- [x] **Step 2: Run them and see them fail.** `npx tsx --test main/services/bot-plans/plans.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement** `botPlanCoveredItems`, `createBotPlans` and the singleton `botPlans` in `plans-main.ts` (`profileDir: app.getPath("userData")`, `knownBot` through `botStore.get(id) != null`, like `bot-rules/store-main.ts`).
+- [x] **Step 4: Run the tests.** Expected: PASS.
+- [x] **Step 5: Register and commit:** "Keep approved Bot plans and check calls against them".
 
 ### Task 4: Covered approvals run without a card
 
@@ -514,3 +514,8 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
 C starts from B acceptance status commit `1f108d931` on `feature/bot-plan-approval`. Both Gate 3 reviewers accepted B source at `494d6b39f`. Tasks 1–2 are implemented and registered. Worker missing-module red runs are recorded at `/tmp/bot-plans-core-task1-red.log` and `/tmp/bot-plans-core-task2-red.log`. Parent contract/validation checks passed 12 tests and the registry passed 15 checks. Task 3 is in progress. Tasks 4–9 and C review gates remain pending.
 
 The production approval-time option takes `revalidate(botId, proposal)` so the singleton can re-admit the correct Bot. Rule and proposal fingerprints have shared main-only helpers in validate.ts. Compact ended receipts retain only hash identity, necessary IDs, status and deadline until an authoritative durable-task-settlement collection port exists. Full private proposals remain in bounded display history. An admission persisted without its live started promise cannot authorize another callback after restart. These are enforcement contracts awaiting Gate 4 review, not phase acceptance.
+
+
+Tasks 1–3 complete locally. Parent reran `npm run test:bot-plans` with 49 passes and the registry with 15 passes. Worker whole type-check and scoped lint passed; parent singleton lint and whitespace checks passed. Meaningful audit reds cover time crossing publication, deletion while awaiting admission, equal-time retention, lost stores and queued Stop/endRuns during the final admission await. Stop, step and replacement intents fence invocation while their durable transitions remain serialized. Coverage and admission both revalidate the captured proposal. Final callback invocation has no intervening await after deadline/deletion/termination checks. The production singleton is lazy, holds no static tool-source/session imports, and fails closed until desktop authority ports are configured.
+
+Core handoff: `/tmp/aiden-bot-plan-c-core-handoff.md`. Final evidence: `/tmp/bot-plans-core-final-suite.log`, `/tmp/bot-plans-core-final-typecheck.log`, `/tmp/bot-plans-core-final-lint.log`; parent `/tmp/bot-plan-c-core-parent-suite.log` and `/tmp/bot-plan-c-core-parent-registry.log`. Task 4 runtime enforcement and Task 5 tool wiring are next. Gate 4 remains pending.
