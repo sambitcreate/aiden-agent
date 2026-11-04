@@ -182,12 +182,16 @@ test("a name the runtime quotes can be a value from data, so it never survives",
   }
 });
 
-test("an error's name is kept only when it looks like an error class", () => {
+test("an error's name is kept only when it is a known error type", () => {
   for (const [name, expected] of [
     ["TypeError", "TypeError"],
     ["AbortError", "AbortError"],
     ["DOMException", "DOMException"],
     ["PostHogFetchError", "PostHogFetchError"],
+    // Shaped like a class, but a name can be set from anything.
+    ["AliceCancerError", "Error"],
+    ["JaneDoeBiopsyResultsException", "Error"],
+    ["ProjectFalconAcmeMergerError", "Error"],
     ["Project_Falcon_Acme_merger", "Error"],
     ["hunter2", "Error"],
     ["Xk9fQ2mZpL7vT3rB8nW4yH6jD1sA5gC0eU", "Error"],
@@ -197,6 +201,8 @@ test("an error's name is kept only when it looks like an error class", () => {
     assert.equal(sanitizeException({ message: "x", cause: { name, message: "hi" } }, { appRoots }).errors[1]!.type, expected);
   }
   assert.equal(parseSanitizedError({ type: "Project_Falcon", value: "", frames: [] }), undefined);
+  assert.equal(parseSanitizedError({ type: "AliceCancerError", value: "", frames: [] }), undefined);
+  assert.ok(parseSanitizedError({ type: "NonError", value: "", frames: [] }));
 });
 
 test("a folder named like the bundle, in any form, is not the bundle", () => {

@@ -44,7 +44,7 @@ An `$exception` holds the error's type, a message and up to 30 stack frames, for
 
 - **Messages.** Only messages the JavaScript runtime, Node, Chromium or Electron write themselves are kept, and what is kept is fixed text. A name the runtime quotes becomes `[name]`, as in `Cannot read properties of undefined (reading '[name]')`, because it can be a value from data. Paths are redacted. Every other message becomes `[message withheld]`. An app-thrown message can quote a prompt or a reply, and no redactor can tell a sentence of chat from anything else, so the type and stack identify those errors instead.
 - **Stacks.** A frame inside the app bundle keeps its app-relative file (`app:///…`), function name and position. A frame in Node's own code keeps only the module (`node:fs`). Anything else becomes `<external>`, and a function name that is not a single code identifier becomes `?`. A function in the bundle that takes its name from a computed key shows that key.
-- **Types.** An error name that does not look like an error class (`TypeError`, `SomethingError`, `SomethingException`), or that looks like a token, becomes `Error`.
+- **Types.** An error name is kept only if it is on the fixed list in `analytics-sanitize.ts` (the language's, Node's and the web platform's own names, plus `ZodError` and `PostHogFetchError`). Any other name becomes `Error`, because a name can be set from anything, so a custom class name is not reported.
 
 ### Errors from the app window
 

@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { E2E_PROFILE_NAME, expect, skipBotsOnboardingStep, test } from "./fixtures";
+import { E2E_PROFILE_NAME, E2E_WORKSPACE_ID, expect, skipBotsOnboardingStep, test } from "./fixtures";
 
 // E2E has no project key, so nothing can reach PostHog. AIDEN_ANALYTICS_DEBUG
 // routes every message through the same outgoing guard into the dev log, which
@@ -31,6 +33,7 @@ async function debugLines(userDataDir: string): Promise<string[]> {
 test.describe("crash reports", () => {
   test.use({
     portableConfigSeed: "empty",
+    workspaceSeed: true,
     // Set explicitly: CI jobs that launch the app turn analytics off in their environment.
     appEnvironment: { AIDEN_ANALYTICS_DEBUG: "1", AIDEN_ANALYTICS: "1", DO_NOT_TRACK: "0" },
   });
@@ -78,6 +81,24 @@ test.describe("crash reports", () => {
     }, SECRET);
     await expect.poll(() => reportsMatching(/\$exception.*"source":"main".*"origin":"unhandled_rejection"|\$exception.*"origin":"unhandled_rejection".*"source":"main"/u)).toBe(1);
     expect(existsSync(pendingFile)).toBe(false);
+
+    // A browser tab's renderer dies: reported once, and the page still recovers.
+    const server = createServer((_request, response) => response.end("<!doctype html><title>Crash target</title>"));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+    const tabIsLive = () => aiden.app.evaluate(({ webContents }, target) => webContents.getAllWebContents().some((guest) => guest.getURL() === target && !guest.isCrashed() && guest.getTitle() === "Crash target"), url);
+    try {
+      await aiden.page.evaluate(({ id, url }) => (window as unknown as { aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } } }).aidenAPI.ipc.invoke("browser:command", id, { action: "create", url }), { id: E2E_WORKSPACE_ID, url });
+      await expect.poll(tabIsLive).toBe(true);
+      await aiden.app.evaluate(({ webContents }, target) => {
+        webContents.getAllWebContents().find((guest) => guest.getURL() === target)!.forcefullyCrashRenderer();
+      }, url);
+      await expect.poll(() => reportsMatching(/app_crashed.*"kind":"browser_tab"/u)).toBe(1);
+      await expect.poll(tabIsLive).toBe(true);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
 
     // The main renderer dies: no stack exists, only the categorical event.
     await aiden.app.evaluate(({ BrowserWindow }) => {

@@ -27,9 +27,55 @@ const MAX_FRAME_POSITION = 99_999_999;
 
 const EXTERNAL_FILE = "<external>";
 const ANONYMOUS_FILE = "<anonymous>";
-// Shaped like an error class. A name can be set from anything, so a free-form
-// identifier (a project, a provider, a password) is reported as plain `Error`.
-const SAFE_ERROR_NAME = /^(?=.{1,64}$)(?:[A-Z][A-Za-z0-9]*)?(?:Error|Exception)$/u;
+// A name can be set from anything, and text shaped like a class can still say
+// something private, so only these fixed names leave the device: the language's
+// own, Node's and the web platform's. Every other name is reported as `Error`.
+const KNOWN_ERROR_NAMES: ReadonlySet<string> = new Set([
+  "AbortError",
+  "AggregateError",
+  "AssertionError",
+  "ConstraintError",
+  "DOMException",
+  "DataCloneError",
+  "DataError",
+  "EncodingError",
+  "Error",
+  "EvalError",
+  "HierarchyRequestError",
+  "IndexSizeError",
+  "InvalidAccessError",
+  "InvalidCharacterError",
+  "InvalidModificationError",
+  "InvalidNodeTypeError",
+  "InvalidStateError",
+  "NamespaceError",
+  "NetworkError",
+  "NoModificationAllowedError",
+  "NonError",
+  "NotAllowedError",
+  "NotFoundError",
+  "NotReadableError",
+  "NotSupportedError",
+  "OperationError",
+  "PostHogFetchError",
+  "QuotaExceededError",
+  "RangeError",
+  "ReadOnlyError",
+  "ReferenceError",
+  "SecurityError",
+  "SuppressedError",
+  "SyntaxError",
+  "SystemError",
+  "TimeoutError",
+  "TransactionInactiveError",
+  "TypeError",
+  "URIError",
+  "URLMismatchError",
+  "UnknownError",
+  "VersionError",
+  "WrongDocumentError",
+  "ZodError",
+]);
 const SAFE_RELATIVE_PATH = /^[A-Za-z0-9_@+][A-Za-z0-9._@+-]*(?:\/[A-Za-z0-9_@+][A-Za-z0-9._@+-]*)*$/u;
 // Only code can run from the bundle, so nothing else belongs in a frame.
 const CODE_FILE = /\.(?:[cm]?js|[cm]?ts|[jt]sx|html)$/u;
@@ -162,10 +208,8 @@ function errorLike(value: unknown): { name?: unknown; message?: unknown; stack?:
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
 }
 
-// A long random token can still end in `Error`, so a name also has to come
-// through the redactor unchanged.
 function isSafeErrorName(value: unknown): value is string {
-  return typeof value === "string" && SAFE_ERROR_NAME.test(value) && sanitizeDiagnosticText(value) === value;
+  return typeof value === "string" && KNOWN_ERROR_NAMES.has(value);
 }
 
 function safeErrorName(value: unknown): string {
