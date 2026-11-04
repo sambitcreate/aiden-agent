@@ -365,10 +365,14 @@ test("real durable tool settlement collects its receipt before display pruning",
 
 test("a real ConversationBusy admission race remains pending and wakes on the competing submission", async (t) => {
   const busy = gate("Competing person's result");
+  const personTool = countingTool("person_action");
   t.after(busy.release);
   const f = await setup(t, {
     A: [fauxAssistantMessage("For person")],
-    B: [busy.response, fauxAssistantMessage("B answer")],
+    B: [async () => {
+      await busy.response();
+      return fauxAssistantMessage([fauxToolCall("person_action", { text: "winning person's action" })], { stopReason: "toolUse" });
+    }, fauxAssistantMessage("Person complete"), fauxAssistantMessage("B answer")],
   });
   const conversation = await f.runtime.conversation("B");
   const admissionErrors: string[] = [];
@@ -397,7 +401,9 @@ test("a real ConversationBusy admission race remains pending and wakes on the co
         BACKGROUND_CONTEXT,
       );
     }
-    return tools(bot, turn);
+    const ordinary = await tools(bot, turn);
+    return turn.requestId?.startsWith("bot:") || turn.requestId?.startsWith("botreply:")
+      ? ordinary : [...ordinary, { tool: personTool, replay: "unsafe" as const }];
   };
   const sent = await f.post();
   await waitFor(() => f.models.get("B")!.calls() === 1 && f.activeWaits.size === 1);
@@ -407,6 +413,7 @@ test("a real ConversationBusy admission race remains pending and wakes on the co
   await waitFor(() => f.deliveries.length === 1);
   assert.equal(f.sends.length, 2);
   assert.deepEqual(admissionErrors, ["ConversationBusy"]);
+  assert.deepEqual(personTool.executions, [{ text: "winning person's action" }], "the person who wins admission keeps the attended inventory");
   assert.deepEqual(f.errors, []);
 });
 

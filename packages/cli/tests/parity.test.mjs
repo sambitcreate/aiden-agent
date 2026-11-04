@@ -2130,7 +2130,7 @@ test("CLI Bot spending stays with the runner, persists limits and refuses unread
 
 test("durable CLI Bots can message each other", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "aiden-cli-messaging-")), daemon = api.createDaemonChats(dir), requests = [];
-  let preparingReply = false, replyRosterReads = 0;
+  let preparingReply = false, unrelatedAvailabilityReads = 0;
   const original = process.env.AIDEN_CLI_ENTRY;
   process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
   t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
@@ -2156,16 +2156,16 @@ test("durable CLI Bots can message each other", async (t) => {
   const audienceId = "cli:local", notice = await host.application.noticeStatus(audienceId);
   await host.application.acknowledgeNotice(audienceId, { version: notice.version, decision: "customize_first", confirmedForeground: true });
   const bots = [];
-  for (const name of ["Alpha", "Beta"]) {
+  for (const name of ["Alpha", "Beta", "Gamma"]) {
     const catalog = await host.application.capabilityCatalog(audienceId), provider = catalog.providers.find((item) => item.label === "cli-test");
     bots.push(await host.application.createBot({ audienceId, bot: { name, instructions: "Reply briefly", avatar: { version: 1, shape: "wisp", color: "lilac" } }, access: { accessMode: "custom", catalogRevision: catalog.revision, custom: { providerId: provider.id, modelId: provider.models[0].id, fileScopeIds: [], shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] } } }));
   }
   await host.command(["enable-durable"]); await host.stop();
   host = await api.createCliBots(dir, daemon); daemon.setBots(host);
-  const listBotIdentities = host.botStore.list;
-  host.botStore.list = async () => {
-    if (preparingReply) replyRosterReads++;
-    return listBotIdentities();
+  const readModelAuthority = host.capabilities.getBotModelAuthority.bind(host.capabilities);
+  host.capabilities.getBotModelAuthority = async (botId) => {
+    if (preparingReply && botId === bots[2].id) unrelatedAvailabilityReads++;
+    return readModelAuthority(botId);
   };
   const sent = await host.durable.runtime.send(bots[0].id, { text: "Ask Beta for Ping", requestId: "ask-beta" });
   assert.equal((await host.durable.runtime.awaitReply(bots[0].id, sent.submissionId, AbortSignal.timeout(20_000))).kind, "completed");
@@ -2176,7 +2176,7 @@ test("durable CLI Bots can message each other", async (t) => {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   preparingReply = false;
-  assert.equal(replyRosterReads, 0, "a reply turn cannot send messages and must not discover the outbound roster");
+  assert.equal(unrelatedAvailabilityReads, 0, "reply preparation must not inspect an unrelated Bot's availability");
   const incoming = (await entries(bots[1].id)).find((entry) => entry.type === "bot_message");
   assert.equal(incoming.text, "Ping");
   assert.equal(incoming.botId, bots[0].id);

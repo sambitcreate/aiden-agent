@@ -70,3 +70,20 @@ test("refusals are error results and refresh descriptions list eligible peers on
     "ambiguous_bot",
   );
 });
+
+
+test("captured declaration identities avoid availability reads and leave posting authoritative", async () => {
+  const candidate = await messageBotCandidate("A", {
+    descriptionRoster: [{ id: "B", name: "Bee", purpose: "Review", acceptsMessages: true, sendsMessages: true }],
+    roster: async () => { throw new Error("Declaration must not discover availability"); },
+    post: async () => ({ status: "refused", code: "bot_paused", message: "Paused now" }),
+  });
+  assert.ok(candidate.tool.description.includes("Bee"));
+  const result = await candidate.bind!({
+    callId: "call", signal: new AbortController().signal,
+    memo: async (_key, value) => value, runRequestIds: async () => ["person"],
+    entries: async () => [], submissions: async () => [], appendEntry: async () => undefined,
+  }).execute("call", { bot: "B", message: "Review" });
+  assert.equal(result.isError, true);
+  assert.equal((result.details as { code: string }).code, "bot_paused");
+});
