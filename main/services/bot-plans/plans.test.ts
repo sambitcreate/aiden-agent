@@ -7,6 +7,7 @@ import { rm } from "node:fs/promises";
 import { BOT_PLAN_MAX_MS, type BotPlanItem } from "../../../renderer/shared/bot-plans.js";
 import { botSessionDirectory } from "../bot-routine-notes.js";
 import { createBotRunAccess } from "../bot-runtime/bot-run-access.js";
+import { newBotId } from "../bot-application-service.js";
 import { botPlanProposalFingerprint, type BotPlanProposal } from "./validate.js";
 import { createBotPlans, type BotPlans, type BotPlanRequest } from "./plans.js";
 import type { BotPlanCoverCheck } from "./coverage.js";
@@ -510,4 +511,31 @@ test("overlapping Stop and failed/irrelevant transitions always release their ad
   const result = await f.plans.admit(healthy, async () => { effects++; });
   assert.equal(result.admitted, true); if (result.admitted) await result.started;
   assert.equal(effects, 1, "no stale counter may fence the next plan");
+});
+
+test("a production-minted Bot can approve, replay after restart and reserve its exact cap", async (t) => {
+  const profileDir = await mkdtemp(path.join(tmpdir(), "bot-plans-production-id-"));
+  const botId = newBotId();
+  const options = { profileDir, knownBot: async (id: string) => id === botId, now: () => 1000,
+    revalidate: async (id: string) => { assert.equal(id, botId); }, revokeAccess: () => {} };
+  const plans = createBotPlans(options);
+  const restarted = createBotPlans(options);
+  t.after(async () => { await plans.forgetBot(botId); await restarted.forgetBot(botId); await rm(profileDir, { recursive: true, force: true }); });
+  const r = { ...request(), botId };
+  const result = plans.request(r);
+  void result.catch(() => undefined);
+  assert.equal((await plans.current(botId))?.status, "pending");
+  assert.equal(await plans.respond(botId, r.planId, "approve"), "done");
+  assert.deepEqual(await result, { status: "approved", fresh: true, expiresAt: 1000 + BOT_PLAN_MAX_MS });
+  assert.deepEqual(await restarted.request(r), { status: "approved", fresh: false, expiresAt: 1000 + BOT_PLAN_MAX_MS });
+  assert.ok(await restarted.cover(botId, check("production-first")));
+  assert.ok(await restarted.cover(botId, check("production-first")), "same durable identity reuses one reservation");
+  assert.ok(await restarted.cover(botId, check("production-second")));
+  assert.equal(await restarted.cover(botId, check("production-over-cap")), undefined);
+  assert.equal((await restarted.current(botId))?.items[0]?.used, 2);
+  const file = JSON.parse(await readFile(path.join(botSessionDirectory(profileDir, botId), "plans.json"), "utf8"));
+  assert.equal(file.plans[0].botId, botId);
+  for (const invalid of ["../bot", "bot/../other", "bot\\other", "bot:\u0000escape", "bot:\nnext", "bot:\u202ehidden", `bot:${"x".repeat(157)}`]) {
+    await assert.rejects(plans.request({ ...r, botId: invalid }), /Invalid plan request/u);
+  }
 });

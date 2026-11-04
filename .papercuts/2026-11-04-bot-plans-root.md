@@ -7,3 +7,6 @@
 - Sorting registry lane files created unrelated order churn. Rebuilt only the two added entries against the preserved HEAD layout; no existing membership changed.
 
 - Core audit: persist-before-start does not itself fence time spent awaiting publication. Requested a final post-write deadline check and held-write test before callback invocation. Captured plan binding must also be checked at coverage/admission rather than inferred only from current allowed server/name.
+
+- Integration found C shared response/store Bot ID regex rejected production `bot:<uuid>` IDs. Requested real-mint behavioral red and reuse of the existing path-safe shared guard before Gate4.
+- Unlabelled person inputs cannot use numeric submission IDs alone for persistent plan ownership because recovery can reuse them. Proposed separate durable host UUID identities; raw request IDs remain the provenance authority.

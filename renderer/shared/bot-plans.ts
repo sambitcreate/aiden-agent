@@ -1,3 +1,6 @@
+import { isPathSafeBotCapabilityId } from "./bot-capabilities.js";
+import { BOT_LIMITS } from "./bots.js";
+
 export const BOT_PROPOSE_PLAN_TOOL_NAME = "propose_plan";
 export const BOT_PLAN_STEP_TOOL_NAME = "plan_step";
 export const BOT_PLAN_MAX_MS = 3_600_000;
@@ -49,7 +52,7 @@ export function parseBotPlanResponse(value: unknown): { botId: string; planId: s
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid plan response.");
   const v = value as Record<string, unknown>;
   if (Object.keys(v).sort().join(",") !== "botId,decision,planId" ||
-      typeof v.botId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(v.botId) ||
+      !isPathSafeBotCapabilityId(v.botId, BOT_LIMITS.idChars) ||
       typeof v.planId !== "string" || !/^[A-Za-z0-9-]{1,64}$/u.test(v.planId) ||
       (v.decision !== "approve" && v.decision !== "not_now" && v.decision !== "stop")) throw new Error("Invalid plan response.");
   return { botId: v.botId, planId: v.planId, decision: v.decision };

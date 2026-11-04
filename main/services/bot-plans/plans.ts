@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { BOT_PLAN_ENDED_SHOWN_MS, BOT_PLAN_MAX_MS, botPlanItemView, type BotPlanDecision, type BotPlanStatus, type BotPlanStepStatus, type BotPlanView } from "../../../renderer/shared/bot-plans.js";
+import { isPathSafeBotCapabilityId } from "../../../renderer/shared/bot-capabilities.js";
+import { BOT_LIMITS } from "../../../renderer/shared/bots.js";
 import { writeJsonAtomic } from "../durable-fs.js";
 import { botSessionDirectory, createKeyedSerial } from "../bot-routine-notes.js";
 import { botPlanCoveredItems, type BotPlanCoverCheck } from "./coverage.js";
@@ -228,7 +230,7 @@ export function createBotPlans(options: BotPlansOptions): BotPlans {
   return {
     async request(input) {
       const copy: BotPlanRequest = { ...input, proposal: structuredClone(input.proposal), requestIds: [...input.requestIds] };
-      if (!/^[A-Za-z0-9_-]{1,128}$/u.test(copy.botId) || !/^[A-Za-z0-9-]{1,64}$/u.test(copy.planId) ||
+      if (!isPathSafeBotCapabilityId(copy.botId, BOT_LIMITS.idChars) || !/^[A-Za-z0-9-]{1,64}$/u.test(copy.planId) ||
           !copy.toolCallId || copy.toolCallId.length > 256 || !copy.requestIds.length || copy.requestIds.length > 256 || copy.requestIds.some((id) => typeof id !== "string" || !id.trim() || id.length > 256) || new Set(copy.requestIds).size !== copy.requestIds.length || !isBotPlanProposal(copy.proposal) || (copy.from !== undefined && (!copy.from.trim() || [...copy.from].length > 120))) throw new Error("Invalid plan request or proposal identity.");
       const result = await serial(copy.botId, async (): Promise<{ result: RequestResult } | { pending: Promise<RequestResult> }> => {
         const file = await load(copy.botId);

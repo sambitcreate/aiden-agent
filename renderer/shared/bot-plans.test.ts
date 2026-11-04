@@ -37,3 +37,13 @@ test("response parser refuses malformed decisions, identifiers and extra keys", 
     assert.throws(() => parseBotPlanResponse(value));
   }
 });
+
+test("plan responses accept production Bot identities and refuse path/control characters", () => {
+  const botId = "bot:1cb9c9cc-ffb2-41b2-9df9-b329ba7897de";
+  assert.deepEqual(parseBotPlanResponse({ botId, planId: "p", decision: "approve" }), { botId, planId: "p", decision: "approve" });
+  const longest = `bot:${"x".repeat(156)}`;
+  assert.equal(parseBotPlanResponse({ botId: longest, planId: "p", decision: "stop" }).botId, longest);
+  for (const invalid of [longest + "x", "../bot", "bot/../other", "bot\\other", "bot:\u0000escape", "bot:\nnext", "bot:\u202ehidden"]) {
+    assert.throws(() => parseBotPlanResponse({ botId: invalid, planId: "p", decision: "approve" }));
+  }
+});
