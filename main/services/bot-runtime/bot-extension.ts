@@ -23,7 +23,8 @@ import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
 //   hands to the person is refused, so the model makes it directly and the
 //   person gets the card. Scripts never reach cards, the Bot's own computer or
 //   browser, routines or subagents (those tools are `callers: ["model"]`).
-// - Ingress: the installed tools are the attended set. Each request and each
+// - Ingress: preparation normally installs the attended set; idle Bot messages
+//   can prepare a narrower set. Each request and each
 //   call reads which inputs its run serves (`pi.live.run`, durable, so a
 //   queued or restarted input keeps its own sender) and withholds what those
 //   inputs may not use (routine and Telegram turns get no question card), so a

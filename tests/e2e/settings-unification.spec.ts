@@ -368,10 +368,16 @@ test("chat width setting resizes the transcript and composer together and persis
   // The preference is durable: a relaunch restores the same column width.
   await chooseWidth("Wide");
   await expect.poll(async () => {
-    const appearance = JSON.parse(
-      await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
-    ).settings?.appearance;
-    return appearance?.chatWidth;
+    try {
+      const appearance = JSON.parse(
+        await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
+      ).settings?.appearance;
+      return appearance?.chatWidth;
+    } catch (error) {
+      // The preview precedes the first debounced durable write in a fresh profile.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
   }).toBe("wide");
   page = await aiden.relaunch();
   await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1800, 900));

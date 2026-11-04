@@ -1144,6 +1144,23 @@ test('idle-only Bot delivery cannot queue behind person work', async () => {
   } finally {release();await service.shutdown();}
 });
 
+test("ordinary sends keep the attended preparation for their tools", async () => {
+  const tool = countingTool("person_tool");
+  const base = recordingDeps({ tools: [{ tool, replay: "unsafe" }] });
+  const faux = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("person_tool", { text: "person action" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("person complete"),
+  ]);
+  const service = await serviceFor(tempProfile(), faux, { extension: { ...base,
+    currentTools: async (bot, turn) => turn.requestId === undefined ? base.currentTools(bot, turn) : [],
+  } });
+  try {
+    const person = await service.send("bot:a", { text: "An ordinary action", requestId: "person" });
+    assert.deepEqual(await service.awaitReply("bot:a", person.submissionId, new AbortController().signal), { kind: "completed", text: "person complete" });
+    assert.deepEqual(tool.executions, [{ text: "person action" }]);
+  } finally { await service.shutdown(); }
+});
+
 test("queued Bot replies preserve the active person's tool inventory", async () => {
   let entered!: () => void, release!: () => void;
   const started = new Promise<void>(resolve => { entered = resolve; });
