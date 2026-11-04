@@ -1,3 +1,4 @@
+import { analyticsWorkspaceKind } from "./analytics/analytics-ids.js";
 import { workspaceIntakeService } from "./workspace-intake-main.js";
 import { mcpLiveStatus } from "./mcp-status-events.js";
 import { remoteAppControls } from "./aiden-remote-app-controls.js";
@@ -651,8 +652,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               const workspace = await configStore.getWorkspace(workspaceId);
               return workspace ? workspaceFolderRemoteRefusal(workspace) : undefined;
             },
+            isFolderWorkspace: async (workspaceId) =>
+              analyticsWorkspaceKind(await configStore.getWorkspace(workspaceId)) !== "none",
             noWorkspace: {
-              isHidden: async (workspaceId) => (await configStore.getWorkspace(workspaceId))?.noWorkspace === true,
               // The desktop's sidebar lists a chat only once it knows the chat's workspace, so a
               // hidden record made or removed here is announced like any other workspace change.
               target: async (workspaceId) => {

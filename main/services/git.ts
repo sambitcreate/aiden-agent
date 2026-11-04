@@ -6000,7 +6000,6 @@ export class GitService {
         throw error;
       }
     });
-    reportAnalyticsEvent("worktree_created", {});
     return worktree;
   }
 

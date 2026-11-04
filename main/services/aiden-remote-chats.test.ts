@@ -74,6 +74,7 @@ function fixture(
     spendingRefusal?: (chat: { id: string; botId?: string }) => Promise<string | undefined>;
     workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
     noWorkspace?: ConstructorParameters<typeof AidenRemoteChatService>[0]["noWorkspace"];
+    isFolderWorkspace?: ConstructorParameters<typeof AidenRemoteChatService>[0]["isFolderWorkspace"];
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
@@ -297,6 +298,7 @@ function fixture(
     ...(fixtureOptions.botPaused ? { botPaused: fixtureOptions.botPaused } : {}),
     ...(fixtureOptions.spendingRefusal ? { spendingRefusal: fixtureOptions.spendingRefusal } : {}),
     ...(fixtureOptions.noWorkspace ? { noWorkspace: fixtureOptions.noWorkspace } : {}),
+    ...(fixtureOptions.isFolderWorkspace ? { isFolderWorkspace: fixtureOptions.isFolderWorkspace } : {}),
     ...(fixtureOptions.workspaceFolderRefusal
       ? { workspaceFolderRefusal: fixtureOptions.workspaceFolderRefusal }
       : {}),
@@ -3327,7 +3329,9 @@ test("a phone's message counts once for the turn it started, and a turn that nev
   await analyticsSettled();
   assert.deepEqual(sent.filter(({ event }) => event === "chat_message_sent"), []);
 
-  const app = fixture(chat({ workspaceId: "workspace-9" }));
+  const app = fixture(chat({ workspaceId: "workspace-9" }), {
+    isFolderWorkspace: async (workspaceId) => workspaceId === "workspace-9",
+  });
   const accepted = await app.service.startTurn("device-1", "chat-1", "counted-turn-00000002", { text: "hello" });
   assert.equal(accepted.status, "accepted");
   await analyticsSettled();
@@ -3337,18 +3341,13 @@ test("a phone's message counts once for the turn it started, and a turn that nev
   }]);
 });
 
-test("a phone's message in a hidden No workspace folder is not counted as in a workspace", async (t) => {
+test("a phone's message outside a real workspace is not counted as in one", async (t) => {
   const sent = captureAnalyticsEvents(t);
-  const app = fixture(chat({ workspaceId: "workspace-9" }), {
-    noWorkspace: {
-      target: async (workspaceId) => workspaceId,
-      release: async () => undefined,
-      isHidden: async () => true,
-    },
-  });
+  const app = fixture(chat({ workspaceId: "assistant" }), { isFolderWorkspace: async () => false });
   await app.service.startTurn("device-1", "chat-1", "counted-turn-00000003", { text: "hello" });
   await analyticsSettled();
   assert.equal(sent[0]?.props?.in_workspace, false);
+  assert.equal(sent[0]?.props?.origin, "phone");
 });
 
 test("a phone's skill turn counts its skill once", async (t) => {
@@ -3374,3 +3373,15 @@ test("a phone's skill turn counts its skill once", async (t) => {
   });
   assert.deepEqual(sent.filter(({ event }) => event === "skill_used"), [{ event: "skill_used", props: { source: "user" } }]);
 });
+
+test("a phone's message to a Bot counts as a Bot message, outside any workspace", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const app = fixture(chat({ botId: "bot-1", workspaceId: "workspace-9" }), {
+    retainedBotChatAuthorizer: () => true,
+    isFolderWorkspace: async () => true,
+  });
+  await app.service.startTurn("device-1", "chat-1", "counted-turn-00000005", { text: "hello" });
+  await analyticsSettled();
+  assert.deepEqual(sent.map(({ props }) => [props?.origin, props?.in_workspace]), [["bot", false]]);
+});
+

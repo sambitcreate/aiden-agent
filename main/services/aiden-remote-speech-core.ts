@@ -174,7 +174,7 @@ export class AidenRemoteSpeechServiceCore {
         transcribe: this.dependencies.transcribePcm16Base64,
         recordUsage: (usage) => this.dependencies.recordUsage(usage),
       });
-      reportAnalyticsEvent("voice_used", { mode: "dictation", engine: "local" });
+      if (transcript.text.trim()) reportAnalyticsEvent("voice_used", { mode: "dictation", engine: "local" });
       return transcript;
     });
   }

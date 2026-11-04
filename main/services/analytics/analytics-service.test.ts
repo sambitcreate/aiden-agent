@@ -485,5 +485,5 @@ test("a feature event reaches the transport only while sending is allowed", asyn
   h.service.track("terminal_opened", {});
   h.service.track("provider_connected", { provider_id: "anthropic", auth: "key" });
   assert.deepEqual(h.names(), ["app_opened", "app_active", "terminal_opened", "provider_connected"]);
-  assert.equal(h.events().at(-1)!.properties.$process_person_profile, false);
+  assert.ok(h.events().every((message) => message.properties.$process_person_profile === false));
 });

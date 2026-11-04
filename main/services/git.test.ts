@@ -5449,7 +5449,7 @@ test("GitService validates public info after joining branch-owned status work", 
   }
 });
 
-test("a commit and a new worktree each count once, and a refused commit counts nothing", async (t) => {
+test("a commit counts once, and a refused commit counts nothing", async (t) => {
   const sent = captureAnalyticsEvents(t);
   const repository = await createRepository(t);
   const service = new GitService({ cacheTtlMs: 0 });
@@ -5463,8 +5463,4 @@ test("a commit and a new worktree each count once, and a refused commit counts n
     service.commit(repository, { expectedSnapshot: review.commit.snapshot!, message: "Stale", mode: "all" }),
   );
   assert.equal(sent.length, 1);
-
-  sent.length = 0;
-  await service.createWorktree(repository, await temporaryDirectory(t), "codex/counted");
-  assert.deepEqual(sent, [{ event: "worktree_created", props: {} }]);
 });

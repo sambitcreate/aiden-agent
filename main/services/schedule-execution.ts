@@ -349,7 +349,6 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       reportChatMessageSent({
         providerId: surface.params.providerId,
         model: surface.params.model,
-        thinkingLevel: surface.params.thinkingLevel,
         origin: "schedule",
         inWorkspace: () => isFolderWorkspace(surface.params.workspaceId),
       });

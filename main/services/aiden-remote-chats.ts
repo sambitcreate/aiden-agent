@@ -1460,8 +1460,9 @@ export class AidenRemoteChatService {
       noWorkspace?: {
         target(workspaceId: string): Promise<string>;
         release(workspaceId: string): Promise<void>;
-        isHidden?(workspaceId: string): Promise<boolean>;
       };
+      /** For usage data: a real workspace record, not a hidden folder or a default. */
+      isFolderWorkspace?: (workspaceId: string) => Promise<boolean>;
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
@@ -2938,9 +2939,9 @@ export class AidenRemoteChatService {
                 providerId: selection.providerId,
                 model: selection.modelId,
                 thinkingLevel: parsed.thinkingLevel,
-                origin: "phone",
+                origin: authoritative.botId ? "bot" : "phone",
                 inWorkspace: async () =>
-                  workspaceId !== undefined && !(await this.options.noWorkspace?.isHidden?.(workspaceId)),
+                  !authoritative.botId && (await this.options.isFolderWorkspace?.(workspaceId)) === true,
               });
             }
             if (!started && !accepted) {

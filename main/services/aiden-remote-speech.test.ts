@@ -250,9 +250,10 @@ test("remote speech status reports the model Automatic actually uses", async () 
   assert.equal((await service.status()).selectedModelId, null);
 });
 
-test("a phone transcription counts once as local dictation, and a failed one counts nothing", async (t) => {
+test("a phone transcription counts once as local dictation; a failed or silent one counts nothing", async (t) => {
   const sent = captureAnalyticsEvents(t);
   let failing = true;
+  let spoken = "   ";
   const service = new AidenRemoteSpeechServiceCore({
     configStore: { getSettings: async () => ({ localVoiceModel: "parakeet-v3" }), setSettings: async () => {} },
     listModels: () => [{ id: "parakeet-v3", name: "Parakeet", description: "", sizeLabel: "", quant: "int8", languagesLabel: "", accuracy: 1, speed: 1, recommended: true, installed: true,
@@ -263,7 +264,7 @@ test("a phone transcription counts once as local dictation, and a failed one cou
     releaseRecognizer: async () => {}, engineStatus: async () => ({ ready: true, error: null }),
     transcribePcm16Base64: async () => {
       if (failing) throw new Error("recognizer failed");
-      return "Hello";
+      return spoken;
     },
     recordUsage: async () => {},
   });
@@ -271,6 +272,9 @@ test("a phone transcription counts once as local dictation, and a failed one cou
   await assert.rejects(service.transcribe(request), /recognizer failed/u);
   assert.deepEqual(sent, []);
   failing = false;
+  await service.transcribe(request);
+  assert.deepEqual(sent, [], "silence is not a dictation");
+  spoken = "Hello";
   await service.transcribe(request);
   assert.deepEqual(sent, [{ event: "voice_used", props: { mode: "dictation", engine: "local" } }]);
 });
