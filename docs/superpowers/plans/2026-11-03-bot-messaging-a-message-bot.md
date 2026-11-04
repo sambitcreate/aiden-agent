@@ -2,6 +2,8 @@
 
 > **Execution:** Follow the numbered tasks and the review gates in [the master plan](../../plans/bot-messaging-plan.md#how-it-gets-built). The main session owns implementation and commits. Fresh read-only Opus 5.5 medium and OpenCode Go DeepSeek V4.1 Flash high reviewers check each gate. No additional execution skill is required. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status, 2026-11-03:** Tasks 1–11 implemented and accepted by both requested reviewers at `dc89b16ce`, full-A round 4. Core review passed at `79d485a75`. Local desktop, CLI, Remote and native evidence is recorded below and in the core guide; physical-device, release and live-provider acceptance remain separate. Historical preimplementation red runs without recorded evidence remain unchecked; they are not runtime acceptance gaps.
+
 **Goal:** A Bot can send another of the person's Bots a message with `message_bot`, return at once, and get the one final reply later as a new labelled turn in its own chat, with a hop chain, a durable courier, limits, per-Bot and global switches, Needs-you approvals in the asked Bot, and the same rows on desktop and phones.
 
 **Architecture:**
@@ -129,7 +131,7 @@ Tasks 1–7 are implemented in the shared checkout and locally verified. The par
 - [x] **Step 3: Run and see them fail.** `npx tsx --test renderer/shared/bot-messages.test.ts main/services/bot-messages/framing.test.ts`. Expected: FAIL, modules not found.
 - [x] **Step 4: Implement both modules.** Parse with `lastIndexOf(":")` twice, accept hop `1 | 2` only, and check the UUID with the standard 8-4-4-4-12 hex pattern.
 - [x] **Step 5: Run the tests.** Expected: PASS.
-- [ ] **Step 6: Register and commit.** Add both files to a new `test:bot-messaging` script and its `pretest`, and to the CI registry lanes. Then:
+- [x] **Step 6: Register and commit.** Add both files to a new `test:bot-messaging` script and its `pretest`, and to the CI registry lanes. Then:
   ```bash
   git add renderer/shared/bot-messages.ts renderer/shared/bot-messages.test.ts main/services/bot-messages package.json scripts/ci-test-registry.json
   git commit -m "Add the Bot messaging contract and message framing"
@@ -165,7 +167,7 @@ Tasks 1–7 are implemented in the shared checkout and locally verified. The par
 - [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-session-service.test.ts main/services/bot-runtime/bot-extension.test.ts`.
 - [x] **Step 3: Implement.** In `send`, after the existing `label`/`hidden` notices, write the `bot_message` notice and pass `entry: { kind: BOT_MESSAGE_INPUT_KIND }`.
 - [x] **Step 4: Run** the two suites and `npm run test:bot-runtime`. Expected: PASS.
-- [ ] **Step 5: Commit:** "Give Bot-to-Bot messages their own turn kind".
+- [x] **Step 5: Commit:** included in the core checkpoint commits.
 
 ### Task 3: Policy, ingress and memory on Bot-message turns
 
@@ -200,7 +202,7 @@ Tasks 1–7 are implemented in the shared checkout and locally verified. The par
 - [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-tool-policy.test.ts main/services/bot-runtime/bot-tool-assembly.test.ts main/services/bot-memory/*.test.ts`.
 - [x] **Step 3: Implement.** Keep `UNATTENDED_WITHHELD` a single set. A Bot-message input uses it exactly as telegram and routine inputs do.
 - [x] **Step 4: Run** the suites above, `npm run test:bot-runtime`, `npm run test:bot-handoffs` and `npm run test:bot-rules`. Expected: PASS.
-- [ ] **Step 5: Commit:** "Treat Bot-to-Bot turns as another Bot's words".
+- [x] **Step 5: Commit:** included in the core checkpoint commits.
 
 ### Task 4: The three switches (desktop)
 
@@ -234,7 +236,7 @@ Tasks 1–7 are implemented in the shared checkout and locally verified. The par
 - [ ] **Step 2: Run and see them fail.**
 - [x] **Step 3: Implement.** Build the fields the way `SelfWakeUpsField` (`bot-advanced.tsx:449`) is built, with optimistic save through `updateBotIdentity`, on the grouped-card settings primitives.
 - [x] **Step 4: Run** `npx tsx --test` on every file above, then `npm run test:bots`. Expected: PASS.
-- [ ] **Step 5: Register the new test and commit:** "Add Bot messaging switches".
+- [x] **Step 5: Register the new test and commit:** included in the core checkpoint commits.
 
 ### Task 5: Delivery ledger, recoverable effects and limits
 
@@ -296,7 +298,7 @@ export function createBotMessageLedger(options: { file(): string; now(): number 
 
 - [x] **Step 1: Write behavioral tests** against a temp profile and a fake clock: atomic opposite-direction admission at 29; concurrent child admission; 3-in-flight; burst at minute 6 and after restart; daily limits surviving 500 settled rows; capacity with all rows unfinished; same-id replay and mismatched-envelope refusal; corruption fails closed; terminal transition race; terminal rows with pending notices remain in `open()`; pruning does not remove replayable receipts.
 - [x] **Step 2:** Run `npx tsx --test main/services/bot-messages/ledger.test.ts`, implement and rerun to PASS. Register in `test:bot-messaging`, `test:serial` and the CI registry.
-- [ ] **Step 3: Commit:** "Add the durable Bot message outbox and atomic limits".
+- [x] **Step 3: Commit:** included in the core checkpoint commits.
 
 ### Task 6: The courier
 
@@ -367,7 +369,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
 - [x] **Step 2:** Inject crashes before/after each target submit, reply submit, ledger transition, notice append and funnel delivery. Reopen twice. Require one target submission, at most one permitted root reply, one effective terminal notice and no lost effects. Verify recovery when intent exists without a submission.
 - [x] **Step 3:** Exercise Jester/COS/X with both completion orderings, silence, failure, expiry and restart. Count every reply submission to Jester, not just a chosen request id; d1 has at most one and d2 never adds another.
 - [x] **Step 4:** Add real-harness barrier cases for simultaneous A-to-B/B-to-A posts with pause, delete and shutdown. Neither tool awaits a session host; close completes without timeout. Test busy target past expiry, multiple pending approvals, a later tool after expiry denial, a mixed human steer, and queued human follow-ups. No stale Bot effect or renewed card, and no human input is canceled. These cases supplement courier fakes.
-- [ ] **Step 5:** Run the new suites, existing funnel suite, `npm run test:bot-runtime`, `npm run test:bot-rules` and `npm run test:bot-pause`; register tests and commit "Carry Bot messages with recoverable effects and bounded provenance".
+- [x] **Step 5:** Run the new suites, existing funnel suite, `npm run test:bot-runtime`, `npm run test:bot-rules` and `npm run test:bot-pause`; register tests and commit "Carry Bot messages with recoverable effects and bounded provenance".
 
 ### Task 7: The `message_bot` tool and desktop wiring
 
@@ -411,7 +413,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
 - [x] **Step 3: Implement** the tool, the candidate and `messages-main.ts`. The roster is `botStore.list()` mapped to `BotRosterEntry`, with `purpose = description ?? ""`. `enabled` reads `botMessagingEnabled(await configStore.getSettings())`. `onStateChange` is `onBotSessionStateChange`.
 - [x] **Step 4: Extend `bot-tool-assembly.test.ts`:** `message_bot is offered on a person's turn and withheld on a hop-2, botreply, routine or Telegram turn`, through `currentTools` with a candidates fake that always includes it.
 - [x] **Step 5: Extend `main/services/bot-runtime/bot-delete.test.ts`** with `deleting a Bot forgets its message deliveries`. After the delete, `ledger.get(id)` is `undefined` for a row on either side. Then run `npx tsx --test main/services/bot-messages/*.test.ts renderer/shared/bot-activity.test.ts main/services/bot-runtime/bot-activity-detail.test.ts main/services/bot-runtime/bot-tool-assembly.test.ts`, followed by `npm run test:bot-runtime`, which holds `bot-delete.test.ts`. Expected: PASS.
-- [ ] **Step 6: Register and commit:** "Let a Bot message another Bot".
+- [x] **Step 6: Register and commit:** included in the core checkpoint commits.
 
 ### Task 8: Transcript rows on desktop
 

@@ -1,6 +1,6 @@
 # Bot messaging core
 
-Implementation checkpoint for phase A, 2026-11-03. Both independent reviewers accepted Tasks 1–7 at `79d485a75` in round 5. Desktop transcript rows, CLI hosting, Remote and native clients, and onboarding are implemented for Tasks 8–11; integration checks pass and full phase A review remains pending. This is not a release or device acceptance record.
+Implementation checkpoint for phase A, 2026-11-03. Both independent reviewers accepted Tasks 1–7 at `79d485a75` in round 5. Desktop transcript rows, CLI hosting, Remote and native clients, and onboarding are implemented for Tasks 8–11. Both reviewers accepted full phase A at `dc89b16ce` in round 4 after the integration checks and attribution fixes. This is not a release or device acceptance record.
 
 Desktop and CLI hosts share the ledger, courier, ingress policy and projection. The CLI has no delivery funnel; paired phones read labelled transcript entries through Remote revision 54 and the negotiated `bot:messaging` capability. The CLI's Bot runner records paid response costs with the shared spending ledger in its local profile, and checks configured monthly Bot and routine-run limits. Subscription and local-model requests do not count. It adds no usage-limit waiting, spending editor or temporary-allowance UI.
 
@@ -100,4 +100,4 @@ These files implement the core checkpoint. Tasks 8–11 additionally update desk
 
 Full-A review corrections: phone status notifications use the neutral title "Bot message" when the saved title already equals the body, avoiding a repeated sentence. An id-less Bot change notification also invalidates desktop settings, so a phone's global messaging switch change updates open Settings and Advanced controls. Ordinary session-state changes still refresh only that Bot's summary.
 
-An unresolved routine or self-introduction notice may still classify its immediately following input conservatively. A host-owned Bot input clears that guess, so it cannot exclude a later person turn from memory or recall. Notice lookup continues to bind actual run answers.
+Pre-existing memory limitation: an unresolved routine or self-introduction notice can still exclude a later person turn from memory and recall, including after an already-resolved routine or intro input. This conservative fallback exists on the phase base and is unchanged here. A host-owned Bot input clears that guess. Notice lookup continues to bind actual run answers.
