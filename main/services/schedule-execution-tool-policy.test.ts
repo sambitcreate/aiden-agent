@@ -58,7 +58,10 @@ function task(patch: Partial<ScheduledTask> = {}): ScheduledTask {
   };
 }
 
-async function executionHarness(webSearch: () => Promise<{ ready?: boolean }>) {
+async function executionHarness(
+  webSearch: () => Promise<{ ready?: boolean }>,
+  finish: [channel: string, payload: unknown] = ["chat:done", { content: "Done." }],
+) {
   const started: StartedGeneration[] = [];
   let availabilityReads = 0;
   const chat = { id: "chat-1", title: "Morning brief", updatedAt: 1 };
@@ -105,7 +108,7 @@ async function executionHarness(webSearch: () => Promise<{ ready?: boolean }>) {
           options: StartedGeneration["options"],
         ) => {
           started.push({ params, options });
-          owner.send("chat:done", { content: "Done." });
+          owner.send(...finish);
           return true;
         },
         waitForChatIdle: async () => true,
@@ -160,6 +163,7 @@ async function executionHarness(webSearch: () => Promise<{ ready?: boolean }>) {
       assert.equal(started.length, 1, "exactly one generation starts");
       return started[0]!;
     },
+    runToEnd: (scheduled: ScheduledTask) => execution.run(scheduled),
     availabilityReads: () => availabilityReads,
   };
 }
@@ -216,6 +220,17 @@ test("an unattended Assistant run carries its approved provider fingerprint into
   );
   assert.equal(params.mode, "assistant-unattended");
   assert.equal(options.providerFingerprint, FINGERPRINT);
+});
+
+test("a run stopped by a permission counts as failed", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const h = await executionHarness(notReady, ["chat:error", { message: "Blocked: this tool is read-only." }]);
+  const run = await h.runToEnd(task());
+  assert.equal(run.result, "blocked");
+  assert.deepEqual(
+    sent.filter(({ event }) => event === "scheduled_task_ran").map(({ props }) => props?.result),
+    ["failed"],
+  );
 });
 
 test("a scheduled run counts its one generated message as coming from the schedule", async (t) => {

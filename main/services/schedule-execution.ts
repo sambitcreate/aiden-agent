@@ -112,12 +112,17 @@ async function isFolderWorkspace(workspaceId: string | undefined): Promise<boole
   return analyticsWorkspaceKind(await configStore.getWorkspace(workspaceId)) !== "none";
 }
 
-// A cancelled run is neither a success nor a failure, so it is not counted.
-function reportScheduledTaskRan(result: ScheduledRun["result"], trigger: ScheduledRunTrigger | undefined): void {
-  if (result !== "success" && result !== "silent" && result !== "error") return;
+// A cancelled or skipped run is neither a success nor a failure, so it is not
+// counted. A run that ended blocked by a permission did fail.
+function reportScheduledTaskRan(
+  result: ScheduledRun["result"],
+  trigger: ScheduledRunTrigger | undefined,
+  cancelled: boolean,
+): void {
+  if (cancelled || result === "skipped") return;
   reportAnalyticsEvent("scheduled_task_ran", {
     trigger: trigger ? analyticsRunTrigger(trigger) : "manual",
-    result: result === "error" ? "failed" : result,
+    result: result === "success" || result === "silent" ? result : "failed",
   });
 }
 
@@ -444,7 +449,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
           error,
           chatId,
         });
-        reportScheduledTaskRan(result, trigger);
+        reportScheduledTaskRan(result, trigger, controller.signal.aborted);
         if (result !== "silent") notify(task, error ?? output, chatId);
         ipcMain.broadcast("schedule:updated", { taskId: task.id, run });
         return run;

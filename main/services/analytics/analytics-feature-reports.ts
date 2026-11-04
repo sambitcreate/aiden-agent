@@ -11,29 +11,33 @@ import {
 } from "./analytics-ids.js";
 import { reportAnalyticsEvent } from "./analytics-report.js";
 
+type MessageOrigin = AnalyticsEventProps<"chat_message_sent">["origin"];
+
 export interface ChatMessageSent {
   readonly providerId: string;
   readonly model: string;
   readonly thinkingLevel?: GenerationThinkingLevel;
-  readonly origin: AnalyticsEventProps<"chat_message_sent">["origin"];
-  // Looked up after the turn has started, so a send never waits for it.
+  // Both looked up after the turn has started, so a send never waits for them.
+  readonly origin: MessageOrigin | (() => Promise<MessageOrigin>);
   readonly inWorkspace: () => boolean | Promise<boolean>;
 }
 
 /** One person's message reached a running turn. Subagent turns never come through here. */
 export function reportChatMessageSent(sent: ChatMessageSent): void {
-  void Promise.resolve()
-    .then(sent.inWorkspace)
-    .catch(() => false)
-    .then((inWorkspace) =>
+  void Promise.all([
+    Promise.resolve().then(sent.inWorkspace).catch(() => false),
+    Promise.resolve().then(() => (typeof sent.origin === "function" ? sent.origin() : sent.origin)),
+  ])
+    .then(([inWorkspace, origin]) =>
       reportAnalyticsEvent("chat_message_sent", {
         provider_id: analyticsProviderId(sent.providerId),
         model_id: analyticsModelId(sent.providerId, sent.model),
         in_workspace: inWorkspace,
         thinking: analyticsThinking(sent.thinkingLevel),
-        origin: sent.origin,
+        origin,
       }),
-    );
+    )
+    .catch(() => undefined);
 }
 
 /** A person's own connection is only ever counted as "custom"; its name and URL stay here. */

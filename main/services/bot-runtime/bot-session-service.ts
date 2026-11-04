@@ -771,8 +771,10 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
           ctx,
         );
         if (input.hidden === true) hiddenSubmissions.add(String(submission.id));
-        // A routine's input and the hidden self-intro are not the person's message.
-        if (input.label === undefined && input.hidden !== true) {
+        // A routine's input and the hidden self-intro are not the person's message,
+        // and a steer joins the running turn, as a mid-turn message does in a chat.
+        const joinsRunningTurn = input.whenBusy === "steer" && before.kind === "running";
+        if (input.label === undefined && input.hidden !== true && !joinsRunningTurn) {
           reportChatMessageSent({
             providerId: model.provider,
             model: model.modelId,

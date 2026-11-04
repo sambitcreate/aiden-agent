@@ -5,12 +5,14 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import type { McpServer, StoredProvider } from "../types.js";
 import * as featureReports from "./analytics-feature-reports.js";
+import * as analyticsReport from "./analytics-report.js";
 import { captureAnalyticsEvents } from "./test-support.js";
 
 const nodeRequire = createRequire(import.meta.url);
 
-// These two services reach Electron through `platform.ts`, so they run here as a
-// bundle with their stores replaced. Everything under test is the real module.
+// These services reach Electron through `platform.ts`, so each runs here as a
+// bundle: the service file itself is real, and its direct imports listed in
+// `ports` are replaced. The report path and the registry filter are the real ones.
 async function load<T>(relativeEntry: string, ports: Record<string, unknown>): Promise<T> {
   const entry = fileURLToPath(new URL(relativeEntry, import.meta.url));
   const everyPort: Record<string, unknown> = {
@@ -154,3 +156,34 @@ test("adding a connector counts once; editing it, a failed save or a declined la
   );
   assert.equal(sent.length, 1);
 });
+
+test("the desktop binding connects shared services to the analytics service", async (t) => {
+  // Electron adds this to `process`; plain Node has no such method.
+  const electronProcess = process as { getSystemVersion?: () => string };
+  electronProcess.getSystemVersion = () => "26.0";
+  t.after(() => {
+    delete electronProcess.getSystemVersion;
+    analyticsReport.setAnalyticsReporter(undefined);
+  });
+  const tracked: string[] = [];
+  const { analyticsService } = await load<typeof import("./analytics-main.js")>("./analytics-main.ts", {
+    "../../platform.js": {
+      app: { getVersion: () => "1.0.0", getAppPath: () => "/app", getPath: () => "/data", isPackaged: true },
+      logger: { warn: () => undefined, info: () => undefined },
+    },
+    "../config-store.js": { configStore: {} },
+    "../provider-registry.js": { providerRegistry: {} },
+    "./analytics-build-config.js": { ANALYTICS_BUILD_CONFIG: {} },
+    "./analytics-client.js": {},
+    "./analytics-report.js": analyticsReport,
+    "./analytics-service.js": {
+      createAnalyticsService: () => ({ track: (event: string) => tracked.push(event) }),
+    },
+  });
+  analyticsReport.reportAnalyticsEvent("terminal_opened", {});
+  assert.deepEqual(tracked, [], "nothing is connected until the service exists");
+  analyticsService();
+  analyticsReport.reportAnalyticsEvent("terminal_opened", {});
+  assert.deepEqual(tracked, ["terminal_opened"]);
+});
+

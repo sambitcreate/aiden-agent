@@ -811,6 +811,29 @@ test("an open session keeps its memory snapshot; reopening after the idle close 
   }
 });
 
+test("a steer into a running Bot turn is not a new message; a queued follow-up is", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const fauxModels = createFauxModels(
+    [slowAnswer(), fauxAssistantMessage("steered"), fauxAssistantMessage("followed")],
+    { tokensPerSecond: 40 },
+  );
+  const service = await serviceFor(tempProfile(), fauxModels);
+  try {
+    await service.send("bot:a", { text: "write a lot", requestId: "desk-1" });
+    await waitFor(async () => (await service.state("bot:a")).kind === "running" && fauxModels.calls() === 1, {
+      what: "turn start",
+    });
+    await service.send("bot:a", { text: "shorter", requestId: "desk-2", whenBusy: "steer" });
+    await analyticsSettled();
+    assert.equal(sent.length, 1, "the steer joined the turn that was already counted");
+    await service.send("bot:a", { text: "then this", requestId: "desk-3" });
+    await analyticsSettled();
+    assert.equal(sent.length, 2);
+  } finally {
+    await service.shutdown();
+  }
+});
+
 test("a person's message to a Bot counts once; a repeat, a routine and a refused send do not", async (t) => {
   const sent = captureAnalyticsEvents(t);
   const fauxModels = createFauxModels([fauxAssistantMessage("hi"), fauxAssistantMessage("[SILENT]")]);

@@ -654,6 +654,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             },
             isFolderWorkspace: async (workspaceId) =>
               analyticsWorkspaceKind(await configStore.getWorkspace(workspaceId)) !== "none",
+            deviceIsPeer: async (deviceId) => {
+              const device = (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId);
+              return device?.type === "mac" || device?.type === "linux";
+            },
             noWorkspace: {
               // The desktop's sidebar lists a chat only once it knows the chat's workspace, so a
               // hidden record made or removed here is announced like any other workspace change.

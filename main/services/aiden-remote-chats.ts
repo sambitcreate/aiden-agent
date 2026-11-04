@@ -1463,6 +1463,8 @@ export class AidenRemoteChatService {
       };
       /** For usage data: a real workspace record, not a hidden folder or a default. */
       isFolderWorkspace?: (workspaceId: string) => Promise<boolean>;
+      /** For usage data: this device is another paired Mac or Linux host, not a phone. */
+      deviceIsPeer?: (deviceId: string) => Promise<boolean>;
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
@@ -2939,7 +2941,9 @@ export class AidenRemoteChatService {
                 providerId: selection.providerId,
                 model: selection.modelId,
                 thinkingLevel: parsed.thinkingLevel,
-                origin: authoritative.botId ? "bot" : "phone",
+                origin: authoritative.botId
+                  ? "bot"
+                  : async () => ((await this.options.deviceIsPeer?.(deviceId)) === true ? "peer" : "phone"),
                 inWorkspace: async () =>
                   !authoritative.botId && (await this.options.isFolderWorkspace?.(workspaceId)) === true,
               });

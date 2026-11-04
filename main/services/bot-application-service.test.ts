@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
 import { analyticsSettled, captureAnalyticsEvents } from "./analytics/test-support.js";
 import {
   BOT_FULL_ACCESS_NOTICE_VERSION,
@@ -2280,6 +2281,18 @@ test("a created Bot counts once with its preset and how many there are, and a fa
   });
   await analyticsSettled();
   assert.deepEqual(sent, [{ event: "bot_created", props: { preset_id: "custom", bot_count: "1" } }]);
+
+  sent.length = 0;
+  const preset = BOT_PRESETS[0]!;
+  const shipped = fixture();
+  await shipped.service.initialize();
+  await shipped.service.createBot({
+    audienceId: "device:a",
+    presetId: preset.id,
+    bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
+  });
+  await analyticsSettled();
+  assert.equal(sent[0]?.props?.preset_id, preset.id);
 
   sent.length = 0;
   const failing = fixture({ failIdentityCreate: true });

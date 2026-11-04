@@ -75,6 +75,7 @@ function fixture(
     workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
     noWorkspace?: ConstructorParameters<typeof AidenRemoteChatService>[0]["noWorkspace"];
     isFolderWorkspace?: ConstructorParameters<typeof AidenRemoteChatService>[0]["isFolderWorkspace"];
+    deviceIsPeer?: ConstructorParameters<typeof AidenRemoteChatService>[0]["deviceIsPeer"];
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
@@ -299,6 +300,7 @@ function fixture(
     ...(fixtureOptions.spendingRefusal ? { spendingRefusal: fixtureOptions.spendingRefusal } : {}),
     ...(fixtureOptions.noWorkspace ? { noWorkspace: fixtureOptions.noWorkspace } : {}),
     ...(fixtureOptions.isFolderWorkspace ? { isFolderWorkspace: fixtureOptions.isFolderWorkspace } : {}),
+    ...(fixtureOptions.deviceIsPeer ? { deviceIsPeer: fixtureOptions.deviceIsPeer } : {}),
     ...(fixtureOptions.workspaceFolderRefusal
       ? { workspaceFolderRefusal: fixtureOptions.workspaceFolderRefusal }
       : {}),
@@ -3334,11 +3336,20 @@ test("a phone's message counts once for the turn it started, and a turn that nev
   });
   const accepted = await app.service.startTurn("device-1", "chat-1", "counted-turn-00000002", { text: "hello" });
   assert.equal(accepted.status, "accepted");
+  await app.service.startTurn("device-1", "chat-1", "counted-turn-00000002", { text: "hello" });
   await analyticsSettled();
   assert.deepEqual(sent, [{
     event: "chat_message_sent",
     props: { provider_id: "custom", model_id: "custom", in_workspace: true, thinking: "other", origin: "phone" },
-  }]);
+  }], "a resend with the same key replays the first answer");
+});
+
+test("a paired Mac's message is not counted as a phone's", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const app = fixture(chat({ workspaceId: "workspace-9" }), { deviceIsPeer: async () => true });
+  await app.service.startTurn("device-1", "chat-1", "counted-turn-00000006", { text: "hello" });
+  await analyticsSettled();
+  assert.equal(sent[0]?.props?.origin, "peer");
 });
 
 test("a phone's message outside a real workspace is not counted as in one", async (t) => {

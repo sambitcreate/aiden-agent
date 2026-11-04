@@ -84,6 +84,10 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
   const chats = new AidenRemoteChatService({ application, chatStore: daemon.chatStore, generation: daemon.llmClient,
     streams, models: modelService, bots: bots.botStore, botMutations: bots.mutationGate,
     isFolderWorkspace: async (workspaceId) => analyticsWorkspaceKind(await workspace.configStore.getWorkspace(workspaceId)) !== "none",
+    deviceIsPeer: async (deviceId) => {
+      const device = (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId);
+      return device?.type === "mac" || device?.type === "linux";
+    },
     retainedBotChatAuthorizer: (input) => bots.application.authorizeRetainedChat({ ...input, audienceId: input.deviceId }),
     botTurnAuthorityPreflight: (input) => bots.preflight(input),
     // Refused before the ledger records anything, so the same key runs after `aiden bots unpause`.

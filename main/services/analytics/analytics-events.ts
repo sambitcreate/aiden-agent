@@ -44,7 +44,7 @@ export const ANALYTICS_EVENTS = {
     model_id: id,
     in_workspace: bool,
     thinking: enumProp("off", "minimal", "low", "medium", "high", "xhigh", "max", "other"),
-    origin: enumProp("desktop", "phone", "bot", "schedule"),
+    origin: enumProp("desktop", "phone", "peer", "bot", "schedule"),
   },
   chat_created: { workspace_kind: enumProp("folder", "scratch", "worktree", "none") },
   provider_connected: { provider_id: id, auth: enumProp("key", "oauth", "local") },

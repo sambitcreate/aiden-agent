@@ -1612,7 +1612,8 @@ test("Set up installs the guest driver, waits in the base's live view for the gr
   }, guest.overrides);
 });
 
-test("skipping the grants keeps the screen-only lane, and element control can be set up later on the ready base", async () => {
+test("skipping the grants keeps the screen-only lane, and element control can be set up later on the ready base", async (t) => {
+  const sent = captureAnalyticsEvents(t);
   const guest = guestDriverHarness();
   await withHost(async (context) => {
     answerGuest(context);
@@ -1643,6 +1644,8 @@ test("skipping the grants keeps the screen-only lane, and element control can be
     await later;
     const ready = (await context.host.status()).setup;
     assert.equal(ready.kind === "ready" && ready.elementControl, true);
+    await analyticsSettled();
+    assert.deepEqual(sent.map(({ props }) => props?.element_control), [false, true], "Set up, then element control");
     const cli = context.calls().filter((call) => call.kind === "cli");
     assert.equal(cli.filter((call) => call.op === "run").length, runsBefore + 1);
     assert.equal(last(cli)?.op, "stop", "the base is shut down again");

@@ -21,17 +21,17 @@ Lifecycle events:
 | `app_updated` | First launch on a new version | `from_version`, `to_version` |
 | `analytics_disabled` | When you turn usage data off (the last event sent) | none |
 
-Feature events fire once, at the moment the action succeeded, from the service that owns it, so an action from a paired phone counts the same way as one on the Mac. A refused, cancelled or failed action sends nothing, and a subagent's own turns are not messages.
+Feature events fire once, at the moment the action succeeded, from the service that owns it, so an action from a paired phone counts the same way as one on the Mac. A refused, cancelled or failed action sends nothing, and a subagent's own turns are not messages. Nothing is sent until the notice or the onboarding row has been shown, so actions during first-run setup aren't counted: the first provider appears only as `provider_id` on `onboarding_finished`.
 
 | Event | When | Extra fields |
 | --- | --- | --- |
-| `chat_message_sent` | A person's message started a turn, including a scheduled run and a message to a Bot. Telegram chats, Design runs and Aiden's own follow-up notices are not counted. | `provider_id`, `model_id`, `in_workspace`, `thinking`, `origin`: desktop, phone, bot or schedule |
+| `chat_message_sent` | A person's message started a turn or was queued for one, including a scheduled run and a message to a Bot. A message that joins a running Bot turn, Telegram chats, Design runs and Aiden's own follow-up notices are not counted. | `provider_id`, `model_id`, `in_workspace`, `thinking`, `origin`: desktop, phone, peer (another paired Mac or Linux host), bot or schedule |
 | `chat_created` | A new chat from the sidebar, a phone, the first message of a draft, or the Assistant. Bots, schedules and forks are not counted. | `workspace_kind`: folder, scratch, worktree or none |
 | `provider_connected` | A sign-in or key was saved for a built-in provider, or a custom provider was added | `provider_id`, `auth`: key, oauth or local (a custom provider on this machine or one with no key) |
 | `workspace_added` | A folder, named or scratch workspace was added. A hidden No workspace folder is not. | `kind`: folder, scratch or path (a typed path or a clone) |
 | `bot_created` | A Bot was created | `preset_id`, `bot_count` bucket |
 | `bot_routine_ran` | A Bot routine finished with a result | `trigger`, `result`: success or failed |
-| `scheduled_task_ran` | A scheduled task finished with a result | `trigger`, `result`: success, silent or failed |
+| `scheduled_task_ran` | A scheduled task finished with a result. A cancelled or skipped run is not counted; one blocked by a permission is `failed`. | `trigger`, `result`: success, silent or failed |
 | `subagent_launched` | A subagent started | `role` |
 | `skill_used` | A skill was run by name and its message was saved | `source`: builtin or user, and `skill_id` for a bundled skill only |
 | `connector_added` | A connector was added. Editing one is not counted. | `preset_id`, `transport`: stdio or http |

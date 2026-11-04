@@ -159,7 +159,7 @@ export function UsageDataSheet({
       open={open}
       onOpenChange={onOpenChange}
       title="What’s sent"
-      description="Aiden can send only these events and fields, with a random install ID that isn’t tied to you. This release sends the app lifecycle events; feature use and crash reports arrive later. Your IP address is discarded."
+      description="Aiden can send only these events and fields, with a random install ID that isn’t tied to you. This release sends app lifecycle and feature events; crash reports arrive later. Your IP address is discarded."
       confirmHidden
       size="large"
       layer={layer}

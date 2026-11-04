@@ -187,6 +187,7 @@ async function executionHarness(
     notificationFailure?: "create" | "show";
     scriptFailure?: boolean;
     output?: string;
+    duringScript?: () => void;
   } = {},
 ) {
   const records: ScheduledRun[] = [];
@@ -245,6 +246,7 @@ async function executionHarness(
     "./schedule-script.js": {
       resolveScheduledScript: async () => "/synthetic/script.sh",
       runScheduledScript: async () => {
+        options.duringScript?.();
         if (options.scriptFailure) throw new Error("synthetic script failure");
         return { stdout: output, stderr: "", exitCode: 0 };
       },
@@ -422,4 +424,15 @@ test("a finished task run counts once by its result and what started it", async 
     { event: "scheduled_task_ran", props: { trigger: "automatic", result: "failed" } },
     { event: "scheduled_task_ran", props: { trigger: "manual", result: "silent" } },
   ]);
+});
+
+test("a cancelled task run is not counted", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const script = task({ mode: "script", permission: "full", script: "/synthetic/script.sh" });
+  let cancel = () => {};
+  const h = await executionHarness({ scriptFailure: true, duringScript: () => cancel() });
+  cancel = () => void h.execution.cancel(script.id);
+  const run = await h.execution.run(script);
+  assert.equal(run.result, "blocked");
+  assert.deepEqual(sent, []);
 });
