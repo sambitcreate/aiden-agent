@@ -25,6 +25,7 @@ import {
 import type { BotDeliveryFunnel } from "../bot-delivery/funnel.js";
 import type { BotIssueStore, StoredBotIssue } from "./store.js";
 import { BotAccessRequestStaleError } from "../bot-runtime/bot-access-requests.js";
+import { BotFolderGrantReplayStaleError } from "../bot-folder-grant-journal.js";
 
 export type BotIssueActResult = "done" | "not_open" | "invalid";
 
@@ -388,6 +389,10 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
           if (!issue.actions.some((offered) => sameAction(offered, action)) || !access?.folderPath || !dependencies.actions.allowFolder || access.authorization.target !== "folder" || !access.authorization.choices.includes("always")) return "invalid";
           try { await dependencies.actions.allowFolder(botId, { folderPath: access.folderPath, ...(access.rootId ? { rootId: access.rootId } : {}), authorization: access.authorization }, issue.id); }
           catch (error) {
+            if (error instanceof BotFolderGrantReplayStaleError) {
+              await settle(botId, issue.dedupeKey, "superseded", issue.id);
+              return "not_open";
+            }
             if (error instanceof BotAccessRequestStaleError) await settle(botId, issue.dedupeKey, "superseded", issue.id);
             throw error;
           }

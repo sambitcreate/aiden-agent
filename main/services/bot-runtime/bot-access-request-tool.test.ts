@@ -560,6 +560,32 @@ test("historical publication acknowledgement is not a new decline or a claim tha
   assert.equal(await app.runAccess.savedLocation(BOT,["r1"],"rev1",{signal:new AbortController().signal,validate:async()=>{}}),undefined);
 });
 
+test("a bound saved-file read retries a transient inner policy read without asking again", async t => {
+  const app = await fixture(t), waiting = app.execute();
+  await waitFor(() => app.requests.pending().length === 1);
+  await app.answer("always"); await waiting;
+  let reads = 0;
+  const call: BotToolCall = { callId: "saved-read", signal: new AbortController().signal,
+    runRequestIds: async () => ["r1"], assertRunActive: async () => {},
+    entries: async () => [], submissions: async () => [], appendEntry: async () => {},
+    memo: async (_name, value) => value,
+  };
+  const candidates = botFileCandidates([{ id: "home", label: "Bot folder", root: app.botHome }], {
+    routine: false, recordOwnWrite() {},
+    savedAccess: { resolve: current => botSavedLocationForCall(BOT, {
+      runAccess: app.runAccess, policyRevision: async () => {
+        if (++reads === 2) throw Object.assign(new Error("policy store temporarily unreadable"), { code: "EIO" });
+        return app.revision();
+      },
+    }, current) },
+  });
+  const read = candidates.find(candidate => candidate.tool.name === "read_file")!.bind!(call);
+  await assert.rejects(read.execute("first", { location: "run.saved", path: "report.txt" }), /policy store temporarily unreadable/u);
+  const result = await read.execute("retry", { location: "run.saved", path: "report.txt" });
+  assert.match(JSON.stringify(result.content), /original/u);
+  assert.deepEqual(app.requests.pending(), [], "the retry uses the original publication, not another consent card");
+});
+
 test("current file-call validation refuses a formerly attended publication after unattended input joins",async(t)=>{
   const app=await fixture(t),waiting=app.execute();await waitFor(()=>app.requests.pending().length===1);
   await app.answer("always");await waiting;

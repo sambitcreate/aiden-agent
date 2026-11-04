@@ -2,6 +2,12 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { writeFileAtomic } from "./durable-fs.js";
 
+/** The original operation published, but its authority is no longer current.
+ * This is historical settlement, never a pre-publication refusal or a grant. */
+export class BotFolderGrantReplayStaleError extends Error {
+  readonly name = "BotFolderGrantReplayStaleError";
+}
+
 export class BotFolderGrantJournalReadError extends Error {
   readonly cause: unknown;
   constructor(cause: unknown) {
