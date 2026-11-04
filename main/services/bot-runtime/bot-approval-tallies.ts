@@ -33,11 +33,23 @@ export interface BotApprovalPublicationRecord {
   status: "pending" | "published" | "revoked";
 }
 export type BotApprovalTallyKey = BotApprovalRuleTarget | { kind: "folder"; path: string };
-export interface BotApprovalTallyResult { counted: boolean; hintCount?: number }
+export interface BotApprovalHintContext { label: string; choice: string; place?: string }
+export function botApprovalNudgeHint(input: BotApprovalHintContext & { count: number }): string {
+  return `Aiden note: the person has approved “${input.label}” ${input.count} times in the last 14 days. Once, in one short sentence of your own, tell them they can stop being asked: “${input.choice}” on the next card${input.place ? `, or ${input.place}` : ""}. Don't bring it up again.`;
+}
+export interface BotApprovalTallyResult { counted: boolean; hintCount?: number; hint?: string }
+export interface BotApprovalRecordingContext {
+  /** Main-only provenance of this bookkeeping call, independent of event time. Defaults to live. */
+  origin?: "live" | "historical";
+  /** A recomputed card offer is not new person consent. All other receipt identity checks remain strict. */
+  replayOffer?: "stored";
+  /** Display text captured before I/O, saved only if this decision owns the hint. */
+  hint?: BotApprovalHintContext;
+}
 export interface BotApprovalTallies {
   /** decidedAt is trusted original event time for delayed host-journal recovery.
    * Omitted replay time uses the receipt; explicit replay time must match it. */
-  record(botId: string, key: BotApprovalTallyKey, decision: BotApprovalDecision & { offered: boolean; decidedAt?: number; publicationContext?: BotApprovalPublicationContext }): Promise<BotApprovalTallyResult>;
+  record(botId: string, key: BotApprovalTallyKey, decision: BotApprovalDecision & { offered: boolean; decidedAt?: number; publicationContext?: BotApprovalPublicationContext }, context?: BotApprovalRecordingContext): Promise<BotApprovalTallyResult>;
   /** Grants nothing. First terminal result sticks; publication clears earlier history and its own exact event. */
   completePublication(botId: string, decisionId: string, authorizationFingerprint: string, status: "published" | "revoked"): Promise<void>;
   decision(botId: string, id: string, authorizationFingerprint: string): Promise<BotApprovalDecision | undefined>;
@@ -98,7 +110,7 @@ function decisionFields(v: unknown): v is BotApprovalDecision {
 
 function safePublicationDisplay(value: unknown): value is string {
   return text(value, 200) && value === value.replace(/\s+/gu, " ").trim() &&
-    !/[\p{Cc}\p{Cf}]/u.test(value) && !/(?:https?|file):\/\//iu.test(value);
+    !/[\p{Cc}\p{Cf}\p{Cs}]/u.test(value) && !/(?:https?|file):\/\//iu.test(value);
 }
 function validPublicationContext(value: unknown): value is BotApprovalPublicationContext {
   return obj(value) && keys(value, ["consentRevision", "label", "title"]) &&
@@ -162,7 +174,8 @@ function parseFile(value: unknown): TallyFile | undefined {
   for (const r of value.decisions) {
     if (!obj(r) || !keys(r, ["id", "authorizationFingerprint", "answer", "source", "key", "offered", "at", "result", "publication", "publicationContext"]) ||
       !decisionFields(r) || ids.has(r.id) || !canonicalKey(r.key) || typeof r.offered !== "boolean" || !timestamp(r.at) ||
-      !obj(r.result) || !keys(r.result, ["counted", "hintCount"]) || r.result.counted !== (r.source === "person")) return undefined;
+      !obj(r.result) || !keys(r.result, ["counted", "hintCount", "hint"]) || r.result.counted !== (r.source === "person") ||
+      (r.result.hint !== undefined && (r.result.hintCount === undefined || !text(r.result.hint, 2_048)))) return undefined;
     if (r.source === "person" && r.answer === "allow_always"
       ? r.publication !== "pending" && r.publication !== "published" && r.publication !== "revoked"
       : r.publication !== undefined) return undefined;
@@ -213,7 +226,7 @@ function assertActive(context: Context): void {
 function observe(context: Context, document: TallyFile): void {
   const next = new Map(document.decisions.map((r) => [r.id, JSON.stringify([
     r.id, r.authorizationFingerprint, r.answer, r.source, r.key, r.offered, r.at,
-    r.result.counted, r.result.hintCount ?? null, publicationContextIdentity(r.publicationContext),
+    r.result.counted, r.result.hintCount ?? null, r.result.hint ?? null, publicationContextIdentity(r.publicationContext),
   ])]));
   const publications = new Map(document.decisions.map((r) => [r.id, r.publication]));
   for (const [id, previous] of context.state.receipts) {
@@ -314,7 +327,7 @@ export function createBotApprovalTallies(options: { profileDir(): string; now?()
     return at;
   }
   return {
-    async record(botId, target, decision) {
+    async record(botId, target, decision, recordingContext) {
       // Capture only scalar data before the first await; never retain a caller's object.
       const key = keyOf(target);
       if (!decisionFields(decision) || typeof decision.offered !== "boolean" ||
@@ -322,6 +335,11 @@ export function createBotApprovalTallies(options: { profileDir(): string; now?()
       const captured = { id: decision.id, authorizationFingerprint: decision.authorizationFingerprint,
         answer: decision.answer, source: decision.source, offered: decision.offered };
       const decidedAt = decision.decidedAt;
+      const origin = recordingContext?.origin ?? "live", replayOffer = recordingContext?.replayOffer;
+      const hint = recordingContext?.hint ? { ...recordingContext.hint } : undefined;
+      if ((origin !== "live" && origin !== "historical") || (replayOffer !== undefined && replayOffer !== "stored") ||
+        (hint && (!safePublicationDisplay(hint.label) || !safePublicationDisplay(hint.choice) ||
+          (hint.place !== undefined && !safePublicationDisplay(hint.place))))) throw new Error("Invalid Bot approval recording context.");
       let publicationContext: BotApprovalPublicationContext | undefined;
       if (decision.publicationContext !== undefined) {
         if (!validPublicationContext(decision.publicationContext) || captured.source !== "person" ||
@@ -336,7 +354,8 @@ export function createBotApprovalTallies(options: { profileDir(): string; now?()
         const existing = document.decisions.find((r) => r.id === captured.id);
         if (existing) {
           if (existing.authorizationFingerprint !== captured.authorizationFingerprint || existing.key !== key ||
-            existing.answer !== captured.answer || existing.source !== captured.source || existing.offered !== captured.offered ||
+            existing.answer !== captured.answer || existing.source !== captured.source ||
+            (replayOffer !== "stored" && existing.offered !== captured.offered) ||
             (decidedAt !== undefined && existing.at !== decidedAt) ||
             (publicationContext !== undefined && publicationContextIdentity(publicationContext) !== publicationContextIdentity(existing.publicationContext))) {
             throw new Error("Bot approval decision changed its immutable identity.");
@@ -354,9 +373,11 @@ export function createBotApprovalTallies(options: { profileDir(): string; now?()
           ...(publicationContext ? { publicationContext } : {}),
           ...(captured.source === "person" && captured.answer === "allow_always" ? { publication: "pending" as const } : {}) };
         if (captured.source === "person") {
-          if (captured.answer === "allow" && captured.offered && at === observedAt && allowed.length >= BOT_APPROVAL_NUDGE_THRESHOLD && !denied &&
+          if (captured.answer === "allow" && captured.offered && origin === "live" && at <= observedAt &&
+            at >= observedAt - BOT_APPROVAL_NUDGE_WINDOW_MS && allowed.length >= BOT_APPROVAL_NUDGE_THRESHOLD && !denied &&
             (hintedAt === undefined || at - hintedAt >= BOT_APPROVAL_HINT_COOLDOWN_MS)) {
             result.hintCount = allowed.length + 1;
+            if (hint) result.hint = botApprovalNudgeHint({ ...hint, count: result.hintCount });
           }
           const deniedAt = captured.answer === "deny" && at >= cutoff
             ? Math.max(lastReceiptTime(document, key, "deny") ?? at, at) : lastReceiptTime(document, key, "deny");

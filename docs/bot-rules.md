@@ -161,7 +161,10 @@ the repeat count and a short hint after Allow once. Whole-Mac requests never
 count. Home or another folder without an Always choice never offers the nudge.
 The CLI host has no remembered-approval port. Counts, saved entries and replay
 receipts stay in the host profile; recovery acknowledges history and never
-recreates removed access.
+recreates removed access. If remembered-approval evidence is damaged,
+remembered approvals fail closed. Rule-made and Computer Use cards still work.
+Deleting a Bot preserves the damaged evidence and continues removing that Bot’s
+data; a genuine storage-write failure still requires deletion to be retried.
 
 ## What rules check
 

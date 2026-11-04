@@ -504,6 +504,94 @@ test("damaged publication receipts retain evidence and missing visible entries n
   }
 });
 
+test("forgetBot preserves quarantined disk evidence and leaves all remembered authority fenced across restart", async (t) => {
+  for (const damage of ["malformed JSON", "unrelated Bot receipt", "persisted quarantine"]) {
+    await t.test(damage, async (child) => {
+      const disk = await diskBook(child);
+      const open = () => new ToolApprovalRuleBook(disk.open(), undefined, undefined, { knownBot: async () => true });
+      const warm = open();
+      await warm.grantBot("bot:a", CAL, "Calendar A", "own-decision");
+      await warm.grantBot("bot:b", CAL, "Calendar B", "peer-decision");
+      await warm.grant("always", "chat", { toolName: "run_command", pattern: "npm test", workspaceId: "ws" });
+      const healthy = JSON.parse(await fs.readFile(disk.file, "utf8"));
+      const evidence = damage === "malformed JSON" ? '{"version":1,"botGrantOperations":['
+        : JSON.stringify(damage === "unrelated Bot receipt" ? {
+          ...healthy,
+          botGrantOperations: [...healthy.botGrantOperations, { botId: "bot:b", operationId: "damaged-peer" }],
+        } : { ...healthy, botGrantOperationsUnreadable: true, botGrantOperationsEvidence: { damaged: "retained" } }, null, 2) + "\n";
+      await fs.writeFile(disk.file, evidence);
+      let changes = 0;
+      warm.onBotChange(() => { changes++; });
+      // The book was healthy when cached. The transaction must see the later damage.
+      assert.equal(await warm.forgetBot("bot:a"), 0);
+      assert.equal(await warm.forgetBot("bot:a"), 0);
+      for (const rules of [warm, open()]) {
+        assert.equal(await rules.forgetBot("bot:a"), 0);
+        for (const botId of ["bot:a", "bot:b"]) {
+          await assert.rejects(rules.matchBot(botId, CAL), /receipt/u);
+          await assert.rejects(rules.botConsentRevision(botId, CAL), /receipt/u);
+          await assert.rejects(rules.grantBot(botId, CAL, "Calendar", "fresh-decision"), /receipt/u);
+        }
+        await assert.rejects(rules.grantBot("bot:a", CAL, "Calendar A", "own-decision"), /receipt/u);
+      }
+      assert.equal(changes, 0, "quarantine cleanup publishes no changed rows");
+      assert.equal(await fs.readFile(disk.file, "utf8"), evidence);
+      assert.deepEqual(await fs.readdir(disk.dir), ["tool-approval-rules.json"], "evidence keeps its original path without a replacement or rescue copy");
+    });
+  }
+});
+
+test("healthy disk forget tombstones only the deleted Bot and preserves workspace and peer consent", async (t) => {
+  const disk = await diskBook(t);
+  const known = new Set(["bot:a", "bot:b"]);
+  const open = () => new ToolApprovalRuleBook(disk.open(), undefined, undefined, { knownBot: async (id) => known.has(id) });
+  const rules = open();
+  await rules.grantBot("bot:a", CAL, "Calendar A", "own-decision");
+  await rules.grantBot("bot:a", CAL, "Calendar A", "own-second-decision");
+  await rules.grantBot("bot:b", CAL, "Calendar B", "peer-decision");
+  const workspace = { toolName: "run_command", pattern: "npm test", workspaceId: "ws" } as const;
+  await rules.grant("always", "chat", workspace);
+  const peer = await rules.matchBot("bot:b", CAL);
+  const peerRevision = await rules.botConsentRevision("bot:b", CAL);
+  known.delete("bot:a");
+  assert.equal(await rules.forgetBot("bot:a"), 1);
+  assert.equal(await rules.forgetBot("bot:a"), 0);
+  const restarted = open();
+  assert.deepEqual(await restarted.listBot(), [peer]);
+  assert.equal(await restarted.matchBot("bot:a", CAL), undefined);
+  assert.equal(await restarted.botConsentRevision("bot:b", CAL), peerRevision);
+  assert.equal(await restarted.match("other-chat", workspace), "always");
+  for (const id of ["own-decision", "own-second-decision"]) {
+    assert.equal((await restarted.botGrantOperation("bot:a", id))?.status, "revoked");
+    assert.deepEqual(await restarted.grantBot("bot:a", CAL, "Calendar A", id), { status: "revoked" });
+  }
+  assert.equal((await restarted.botGrantOperation("bot:b", "peer-decision"))?.status, "published");
+  await assert.rejects(restarted.grantBot("bot:a", CAL, "Calendar A", "fresh"), /no longer exists/u);
+});
+
+test("forgetBot propagates transient write failures and retains its synchronous deletion fence", async (t) => {
+  const disk = await diskBook(t);
+  const healthy = new ToolApprovalRuleBook(disk.open(), undefined, undefined, { knownBot: async () => true });
+  await healthy.grantBot("bot:a", CAL, "Calendar", "own-decision");
+  const before = await fs.readFile(disk.file, "utf8");
+  const failure = Object.assign(new Error("temporary write failure"), { code: "EIO" });
+  let failWrites = true;
+  const store = new DataStore<ToolApprovalRulesDocument>("tool-approval-rules.json", emptyToolApprovalRulesDocument(), () => disk.dir, {
+    normalize: normalizeToolApprovalRulesDocument, reloadBeforeWrite: true,
+    beforeWritePublish: () => { if (failWrites) throw failure; },
+  });
+  const rules = new ToolApprovalRuleBook(store, undefined, undefined, { knownBot: async () => true });
+  await assert.rejects(rules.forgetBot("bot:a"), (error) => error === failure);
+  assert.equal(await fs.readFile(disk.file, "utf8"), before);
+  assert.equal(await rules.matchBot("bot:a", CAL), undefined);
+  await assert.rejects(rules.grantBot("bot:a", CAL, "Calendar", "fresh"), /no longer exists/u);
+  failWrites = false;
+  assert.equal(await rules.forgetBot("bot:a"), 1);
+  assert.deepEqual(await rules.listBot(), []);
+  const restarted = new ToolApprovalRuleBook(disk.open());
+  assert.equal((await restarted.botGrantOperation("bot:a", "own-decision"))?.status, "revoked");
+});
+
 test("Bot consent revision changes for publication, Remove and fresh consent but remains stable on replay and reopen", async (t) => {
   const { open } = await diskBook(t);
   const reopen = () => new ToolApprovalRuleBook(open(), () => new Date(BOT_DATE), undefined, { knownBot: async (id) => id === "bot:a" });

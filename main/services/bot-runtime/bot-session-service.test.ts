@@ -9,7 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, rm } from "node:fs/promises";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentSystemPrompt, getCurrentTools, type Message } from "@earendil-works/pi-ai";
@@ -19,6 +19,11 @@ import { createBotRoutineExecutor } from "../scheduled-bot-routines.js";
 import type { ScheduledRun, ScheduledTask } from "../types.js";
 import { createBotMemoryService } from "../bot-memory/service.js";
 import { createBotMemoryStore } from "../bot-memory/store.js";
+import { DataStore } from "../data-store.js";
+import { emptyToolApprovalRulesDocument, normalizeToolApprovalRulesDocument, ToolApprovalRuleBook, TOOL_APPROVAL_RULES_MAX_BYTES, type ToolApprovalRulesDocument } from "../tool-approval-rules.js";
+import { createBotAllowList } from "./bot-allow-list.js";
+import { BOT_APPROVAL_TALLIES_FILE, createBotApprovalTallies } from "./bot-approval-tallies.js";
+import { createBotApprovals } from "./bot-approvals.js";
 import { createBotMessageLedger, type BotMessageDelivery } from "../bot-messages/ledger.js";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { ToolResultEntry, type ModelRef } from "@earendil-works/pi-durable";
@@ -523,6 +528,106 @@ test("deleteBot during a running turn erases the session and every owned record"
     assert.equal(existsSync(path.join(profile, "bots", botDirectoryName("bot:a"))), false);
   } finally {
     await service.shutdown();
+  }
+});
+
+test("quarantined approval evidence permits deletion and startup roll-forward through every cleanup effect", async (t) => {
+  for (const damage of ["malformed JSON", "unrelated Bot receipt"]) {
+    for (const pendingAtStartup of [false, true]) await t.test(`${damage}, ${pendingAtStartup ? "restart pending delete" : "person delete"}`, async () => {
+      const profile = tempProfile();
+      const file = path.join(profile, "tool-approval-rules.json");
+      const journal = path.join(profile, "bots", "pending-deletes.json");
+      const target = { kind: "connection", serverId: "gcal", tool: "create_event" } as const;
+      const bots = new Set(["bot:a", "bot:b"]);
+      const openRules = () => new ToolApprovalRuleBook(new DataStore<ToolApprovalRulesDocument>(
+        "tool-approval-rules.json", emptyToolApprovalRulesDocument(), () => profile,
+        { normalize: normalizeToolApprovalRulesDocument, reloadBeforeWrite: true, maxBytes: TOOL_APPROVAL_RULES_MAX_BYTES, fileMode: 0o600 },
+      ), undefined, undefined, { knownBot: async (id) => {
+        if (!bots.has(id)) return false;
+        try { return !JSON.parse(await readFile(journal, "utf8")).botIds.includes(id); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return true; throw error; }
+      } });
+      const rules = openRules();
+      await rules.grantBot("bot:a", target, "Calendar A", "own-decision");
+      await rules.grantBot("bot:b", target, "Calendar B", "peer-decision");
+      const healthy = JSON.parse(await readFile(file, "utf8"));
+      const evidence = damage === "malformed JSON" ? '{"version":1,"botGrantOperations":[' : JSON.stringify({
+        ...healthy, botGrantOperations: [...healthy.botGrantOperations, { botId: "bot:b", operationId: "damaged-peer" }],
+      }, null, 2) + "\n";
+      writeFileSync(file, evidence);
+      const tallies = createBotApprovalTallies({ profileDir: () => profile });
+      for (const botId of bots) await tallies.record(botId, target, {
+        id: `decision-${botId}`, authorizationFingerprint: `fingerprint-${botId}`, source: "person", answer: "allow", offered: false,
+      });
+      const allowed = createBotAllowList({ rules, tallies, approvals: createBotApprovals({ publish() {} }),
+        folderEntries: async () => [], revokeFolder: async () => false,
+        botName: async () => "Ada", connectionName: async () => "Calendar" });
+      const computer = path.join(profile, "computers", "bot-a");
+      const home = path.join(profile, "homes", "bot-a");
+      for (const directory of [computer, home]) {
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(path.join(directory, "owned-data"), "private Bot data");
+      }
+      if (pendingAtStartup) writeFileSync(journal, JSON.stringify({ version: 1, botIds: ["bot:a"] }));
+      const order: string[] = [];
+      const reports: unknown[] = [];
+      const faux = createFauxModels([]);
+      const overrides: Partial<BotSessionServiceDeps> = {
+        knownBotIds: async () => new Set(bots), onReport: (_id, error) => { reports.push(error); },
+        deleteEffects: [
+          async (id) => {
+            assert.equal(await rules.matchBot(id, target).catch(() => undefined), undefined);
+            assert.ok(JSON.parse(await readFile(journal, "utf8")).botIds.includes(id), "intent is durable before cleanup");
+            await allowed.forgetBot(id); order.push("allowed");
+          },
+          async () => { order.push("rules"); },
+          async () => { await rm(computer, { recursive: true, force: true }); order.push("computer"); },
+          async () => { order.push("dismissals"); },
+          async () => { order.push("telegram"); },
+          async (id) => { await rm(home, { recursive: true, force: true }); bots.delete(id); order.push("data"); },
+        ],
+      };
+      const assertErased = async () => {
+        assert.equal(bots.has("bot:a"), false);
+        assert.equal(bots.has("bot:b"), true);
+        assert.equal(existsSync(computer), false);
+        assert.equal(existsSync(home), false);
+        assert.equal(existsSync(path.join(profile, "bots", botDirectoryName("bot:a"))), false);
+        assert.equal(existsSync(path.join(profile, "bots", botDirectoryName("bot:b"), BOT_APPROVAL_TALLIES_FILE)), true);
+        assert.deepEqual(JSON.parse(await readFile(journal, "utf8")), { version: 1, botIds: [] });
+        assert.equal(await readFile(file, "utf8"), evidence);
+        assert.deepEqual((await readdir(profile)).filter(name => name.startsWith("tool-approval-rules")), ["tool-approval-rules.json"]);
+        for (const book of [rules, openRules()]) {
+          await assert.rejects(book.matchBot("bot:a", target), /receipt/u);
+          await assert.rejects(book.matchBot("bot:b", target), /receipt/u);
+          await assert.rejects(book.grantBot("bot:a", target, "Calendar A", "own-decision"), /receipt/u);
+          await assert.rejects(book.grantBot("bot:a", target, "Calendar A", "new-decision"), /receipt/u);
+        }
+      };
+      const service = await serviceFor(profile, faux, overrides);
+      try {
+        if (pendingAtStartup) {
+          await assert.rejects(service.send("bot:a", { text: "cannot reopen", requestId: "pending" }), BotSessionError);
+          await service.initialize();
+        } else {
+          await service.deleteBot("bot:a");
+        }
+        assert.deepEqual(reports, []);
+        assert.deepEqual(order, ["allowed", "rules", "computer", "dismissals", "telegram", "data"]);
+        await assertErased();
+        await service.deleteBot("bot:a");
+        await assertErased();
+      } finally { await service.shutdown(); }
+      const restarted = await serviceFor(profile, faux, overrides);
+      try {
+        await restarted.initialize();
+        await restarted.deleteBot("bot:a");
+        await assertErased();
+        await assert.rejects(restarted.send("bot:a", { text: "cannot reopen", requestId: "deleted" }), BotSessionError);
+        assert.deepEqual(reports, []);
+        assert.equal(faux.calls(), 0);
+      } finally { await restarted.shutdown(); }
+    });
   }
 });
 

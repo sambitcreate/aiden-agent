@@ -85,6 +85,20 @@ async function reopenAfterKill(profileDir: string, botId: string, deps: BotExten
   return { host, harness, conversation, registry: registry! };
 }
 
+// The existing child runner imports this assigned test module for the bounded
+// threshold scenario. Pause before registering this module's ordinary tests.
+if (process.argv[2] === "scenario" && process.argv[3] === fileURLToPath(import.meta.url)) {
+  const args = JSON.parse(process.argv[4]!) as { profileDir: string; botId: string };
+  const f = await thresholdReplay(args, true);
+  const opened = await reopenAfterKill(args.profileDir, args.botId, f.deps, createFauxModels([
+    fauxAssistantMessage([fauxToolCall(f.tool.name, { text: "Save" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ]));
+  await opened.conversation.configure({ model: FAUX_MODEL_REF }, ctx);
+  await (await opened.conversation.submit({ type: "input", content: "Save", requestId: "threshold-person" }, ctx)).wait(ctx);
+  throw new Error("Threshold child should stop after the durable receipt");
+}
+
 test("(a) the provider receives the sections in the order base, persona, authority", async () => {
   const prompts: string[] = [];
   const fauxModels = createFauxModels([
@@ -1303,6 +1317,54 @@ test("unnamed input identity survives SIGKILL and a fresh session DB mints a dif
 });
 
 const D_TARGET = { kind: "connection", serverId: "calendar", tool: "create_event" } as const;
+
+async function thresholdReplay(args: { profileDir: string; botId: string }, child = false) {
+  const f = await approvalReplayDeps({ ...args, kind: "approval-receipt" });
+  if (child) {
+    await f.tallies.forget(args.botId, f.target);
+    for (let index = 0; index < 2; index++) await f.tallies.record(args.botId, f.target, {
+      id: `threshold-seed-${index}`, authorizationFingerprint: `threshold-fp-${index}`, source: "person", answer: "allow", offered: false,
+    });
+    assert.equal(await f.tallies.nudge(args.botId, f.target), undefined);
+  }
+  const { createBotAllowList } = await import("./bot-allow-list.js");
+  const service = createBotAllowList({ rules: f.book, tallies: f.tallies,
+    approvals: { pending: () => [], releaseFromAllowList: async () => false }, folderEntries: async () => [], revokeFolder: async () => false,
+    botName: async () => "Ada", connectionName: async () => "Calendar" });
+  f.deps.settleApproval = async (input, context) => {
+    f.settlements.push(structuredClone(input));
+    const result = await service.settle(input, context);
+    if (child) {
+      assert.equal(input.remember.offer, undefined);
+      process.stdout.write(`THRESHOLD_RECEIPT ${JSON.stringify(input.decision)}\n`);
+      await new Promise<never>(() => {});
+    }
+    return result;
+  };
+  return { ...f, service };
+}
+
+test("D: SIGKILL after the third approval replays the recomputed offer through the real service and executes exactly once", async () => {
+  const args = { profileDir: tempProfile(), botId: "threshold-replay" };
+  const child = spawnHarnessChild("scenario", [fileURLToPath(import.meta.url), JSON.stringify(args)]);
+  let original: import("./bot-extension.js").BotApprovalDecision;
+  try { original = JSON.parse(await child.waitFor("THRESHOLD_RECEIPT")); } finally { await child.kill(); }
+  const f = await thresholdReplay(args);
+  assert.deepEqual(await f.service.offer(args.botId, f.target), { count: 3 });
+  const { host, harness, conversation } = await reopenAfterKill(args.profileDir, args.botId, f.deps, createFauxModels([fauxAssistantMessage("done")]));
+  try {
+    const [submission] = (await harness.inspect(ctx)).submissions; harness.resume();
+    assert.equal((await (await harness.submission(submission!.id, ctx))!.wait(ctx)).status, "done");
+    assert.equal(f.tool.executions.length, 1);
+    assert.equal(f.settlements.length, 1);
+    assert.deepEqual(f.settlements[0]!.decision, original!);
+    assert.deepEqual(f.settlements[0]!.remember.offer, { count: 3 });
+    assert.deepEqual(await f.tallies.nudge(args.botId, f.target), { count: 3 });
+    const ledger = JSON.parse(readFileSync(path.join(botSessionDirectory(args.profileDir, args.botId), "approval-tallies.json"), "utf8"));
+    assert.equal(ledger.decisions.filter((receipt: { id: string }) => receipt.id === original!.id).length, 1);
+    assert.doesNotMatch(resultText((await toolResults(conversation))[0]), /Aiden note:/u);
+  } finally { await host.shutdown(); }
+});
 for (const answer of ["allow", "allow_always", "deny"] as const) {
   test(`D: an offered ${answer} settles its exact attempt and only Allow once appends its hint`, async () => {
     const tool = countingTool("calendar__create_event");

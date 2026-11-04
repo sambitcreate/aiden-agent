@@ -3,7 +3,8 @@ import {
   type BotAllowedEntry, type BotApprovalRuleTarget,
 } from "../../../renderer/shared/tool-approval-scope.js";
 import { BOT_APPROVAL_RULES_PROFILE_MAX, type ToolApprovalRuleBook } from "../tool-approval-rules.js";
-import type { BotApprovalDecision, BotApprovalTallies } from "./bot-approval-tallies.js";
+import { botApprovalNudgeHint, type BotApprovalDecision, type BotApprovalTallies } from "./bot-approval-tallies.js";
+export { botApprovalNudgeHint } from "./bot-approval-tallies.js";
 import type { BotApprovals } from "./bot-approvals.js";
 import type { BotApprovalSettlement, BotApprovalSettlementContext, BotApprovalSettlementInput, BotAllowListRelease } from "./bot-extension.js";
 import type { BotAllowListPort } from "./bot-tool-assembly.js";
@@ -15,6 +16,8 @@ export interface BotFolderApprovalReceipt {
 export interface BotFolderApprovalInput {
   botId: string; path: string; decisionId: string; authorizationFingerprint: string; source: "person";
   answer: "once" | "always" | "not_now"; offered: boolean; decidedAt?: number; label?: string;
+  /** Main-only recovery provenance. An original timestamp alone never implies recovery. */
+  origin?: "live" | "historical";
 }
 export interface BotAllowList extends BotAllowListPort {
   settle(input: BotApprovalSettlementInput, context?: BotApprovalSettlementContext): Promise<BotApprovalSettlement>;
@@ -39,9 +42,6 @@ export interface BotAllowListDeps {
   connectionName(serverId: string): Promise<string | undefined>;
   log?(message: string, error: unknown): void;
 }
-export function botApprovalNudgeHint(input: { label: string; count: number; choice: string; place?: string }): string {
-  return `Aiden note: the person has approved “${input.label}” ${input.count} times in the last 14 days. Once, in one short sentence of your own, tell them they can stop being asked: “${input.choice}” on the next card${input.place ? `, or ${input.place}` : ""}. Don't bring it up again.`;
-}
 /** Startup has no live publication guard. Reconcile history independently for each Bot. */
 export async function reconcileBotAllowListHistory(
   service: Pick<BotAllowList, "reconcile">,
@@ -49,8 +49,9 @@ export async function reconcileBotAllowListHistory(
   receipts: readonly BotFolderApprovalReceipt[],
   failed: (botId: string, error: unknown) => void,
 ): Promise<void> {
-  for (const botId of botIds) {
-    try { await service.reconcile(botId, receipts.filter(receipt => receipt.botId === botId)); }
+  const capturedBotIds = [...botIds], capturedReceipts = structuredClone(receipts);
+  for (const botId of capturedBotIds) {
+    try { await service.reconcile(botId, capturedReceipts.filter(receipt => receipt.botId === botId)); }
     catch (error) { failed(botId, error); }
   }
 }
@@ -59,7 +60,12 @@ export function createBotAllowList(deps: BotAllowListDeps): BotAllowList {
   const changed = (botId: string) => { for (const listener of listeners) { try { listener(botId); } catch { /* observer */ } } };
   deps.rules.onBotChange(changed);
   const log = (error: unknown) => deps.log?.("The Bot's remembered approval could not be saved.", error);
-  const clean = (value: string, fallback: string) => value.replace(/(?:https?:\/\/|file:\/\/)\S+/giu, "").replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/gu, " ").trim().slice(0, 200) || fallback;
+  const clean = (value: string, fallback: string) => {
+    const normalized = value.replace(/(?:https?:\/\/|file:\/\/)\S*/giu, "").replace(/[\p{Cc}\p{Cf}\p{Cs}]/gu, " ").replace(/\s+/gu, " ").trim();
+    let bounded = "";
+    for (const scalar of normalized) { if (bounded.length + scalar.length > 200) break; bounded += scalar; }
+    return bounded.trim() || fallback;
+  };
   async function label(target: BotApprovalRuleTarget, title: string) {
     return target.kind === "connection" ? clean(`${clean(await deps.connectionName(target.serverId) ?? "Connected app", "Connected app")} · ${clean(title, "Action")}`, "Connected app")
       : describeBotApprovalRule({ target, label: title });
@@ -84,6 +90,7 @@ export function createBotAllowList(deps: BotAllowListDeps): BotAllowList {
     },
     async settle(original, context) {
       const input = structuredClone(original), { botId, remember, decision } = input;
+      const validatePublication = context?.validatePublication;
       const always = decision.source === "person" && decision.answer === "allow_always";
       // A replay's original publication context wins over today's names/title.
       const prior = always ? await deps.tallies.publication(botId, decision.id, decision.authorizationFingerprint) : undefined;
@@ -106,12 +113,16 @@ export function createBotAllowList(deps: BotAllowListDeps): BotAllowList {
           label: await label(remember.target, remember.title) };
       }
       const target = prior?.target ?? remember.target;
+      const savedDecision = !always ? await deps.tallies.decision(botId, decision.id, decision.authorizationFingerprint) : undefined;
+      const hintDisplay = async () => ({ label: await label(target, remember.title),
+        choice: clean(botAlwaysAllowLabel(clean(await deps.botName(botId) ?? "this Bot", "this Bot")), "Always allow"),
+        place: "Allowed without asking on your profile" });
+      const hint = !savedDecision && remember.offer && decision.source === "person" && decision.answer === "allow" ? await hintDisplay() : undefined;
       const result = await deps.tallies.record(botId, target, { ...decision, offered: prior?.offered ?? !!remember.offer,
-        ...(publicationContext ? { publicationContext } : {}) });
+        ...(publicationContext ? { publicationContext } : {}) }, { origin: "live", replayOffer: "stored", ...(hint ? { hint } : {}) });
       if (!always) {
         if (decision.source !== "person" || decision.answer !== "allow" || result.hintCount === undefined) return {};
-        return { hint: botApprovalNudgeHint({ label: await label(target, remember.title), count: result.hintCount,
-          choice: botAlwaysAllowLabel(await deps.botName(botId) ?? "this Bot"), place: "Allowed without asking on your profile" }) };
+        return { hint: result.hint ?? botApprovalNudgeHint({ ...(hint ?? await hintDisplay()), count: result.hintCount }) };
       }
       let guardRefused = false;
       try {
@@ -122,12 +133,12 @@ export function createBotAllowList(deps: BotAllowListDeps): BotAllowList {
         return {}; // Historical acknowledgement never grants or releases a card.
       }
       if (prior && prior.status !== "pending") return {};
-      if (!context?.validatePublication || !publicationContext) { log(new Error("A new approval publication needs its live validation guard.")); return {}; }
+      if (!validatePublication || !publicationContext) { log(new Error("A new approval publication needs its live validation guard.")); return {}; }
       let published: Awaited<ReturnType<ToolApprovalRuleBook["grantBot"]>>;
       try {
         published = await deps.rules.grantBot(botId, target, publicationContext.label, decision.id, {
           expectedConsentRevision: publicationContext.consentRevision,
-          validatePublication: async () => { try { await context.validatePublication!(); } catch (error) { guardRefused = true; throw error; } },
+          validatePublication: async () => { try { await validatePublication(); } catch (error) { guardRefused = true; throw error; } },
         });
       } catch (error) {
         if (guardRefused) throw error;
@@ -175,20 +186,22 @@ export function createBotAllowList(deps: BotAllowListDeps): BotAllowList {
       const decision: BotApprovalDecision = { id: input.decisionId, authorizationFingerprint: input.authorizationFingerprint,
         answer: input.answer === "once" ? "allow" : input.answer === "always" ? "allow_always" : "deny", source: input.source };
       const result = await deps.tallies.record(input.botId, { kind: "folder", path: input.path }, { ...decision, offered: input.offered,
-        ...(input.decidedAt === undefined ? {} : { decidedAt: input.decidedAt }) });
+        ...(input.decidedAt === undefined ? {} : { decidedAt: input.decidedAt }) }, { origin: input.origin ?? "live", replayOffer: "stored",
+        hint: { label: clean(input.label ?? input.path, "this folder"), choice: "Always for this folder" } });
       if (input.answer === "always") { await deps.tallies.completePublication(input.botId, decision.id, decision.authorizationFingerprint, "published"); return {}; }
-      return input.answer === "once" && result.hintCount !== undefined ? { hint: botApprovalNudgeHint({ label: input.label ?? input.path,
+      return input.answer === "once" && result.hintCount !== undefined ? { hint: result.hint ?? botApprovalNudgeHint({ label: clean(input.label ?? input.path, "this folder"),
         count: result.hintCount, choice: "Always for this folder" }) } : {};
     },
     async reconcile(botId, folderReceipts = []) {
+      const capturedReceipts = structuredClone(folderReceipts);
       for (const receipt of await deps.tallies.pendingPublications(botId)) {
         const operation = await deps.rules.botGrantOperation(botId, receipt.decision.id);
         if (!operation) continue;
         if (operation.targetKey !== botApprovalRuleKey(receipt.target)) throw new Error("The saved approval target changed.");
         await deps.tallies.completePublication(botId, receipt.decision.id, receipt.decision.authorizationFingerprint, operation.status);
       }
-      for (const receipt of folderReceipts) {
-        if (receipt.botId === botId) await service.settleFolder(receipt);
+      for (const receipt of capturedReceipts) {
+        if (receipt.botId === botId) await service.settleFolder({ ...receipt, origin: "historical" });
       }
     },
     async forgetBot(botId) { await Promise.all([deps.rules.forgetBot(botId), deps.tallies.forgetBot(botId)]); },

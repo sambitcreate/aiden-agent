@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -59,6 +59,59 @@ test("service: three approvals offer Always, once assigns one durable weekly hin
   assert.equal((await f.rules.listBot("bot"))[0]?.uses, 1);
 });
 
+test("service: Once and Deny replay use the original offer while keeping exact decision identity", async t => {
+  const f = await fixture(t);
+  for (const id of ["first", "second"]) await f.service.settle(await f.input(id));
+  const third = await f.input("third");
+  assert.deepEqual(await f.service.settle(third), {});
+  third.remember.offer = await f.service.offer("bot", CAL);
+  assert.deepEqual(third.remember.offer, { count: 3 });
+  assert.deepEqual(await createBotAllowList(f.deps).settle(third), {});
+  assert.deepEqual(await f.tallies.nudge("bot", CAL), { count: 3 });
+  const deny = await f.input("denied", "deny", true);
+  assert.deepEqual(await f.service.settle(deny), {});
+  delete deny.remember.offer;
+  assert.equal(await f.service.offer("bot", CAL), undefined);
+  const ledgerPath = path.join(botSessionDirectory(f.dir, "bot"), BOT_APPROVAL_TALLIES_FILE);
+  const beforeReplay = await readFile(ledgerPath, "utf8");
+  assert.deepEqual(await createBotAllowList(f.deps).settle(deny), {});
+  assert.equal(await readFile(ledgerPath, "utf8"), beforeReplay, "a recomputed no-offer denial replay does not recount or rewrite its receipt");
+  for (const changed of [
+    { ...deny, decision: { ...deny.decision, answer: "allow" as const } },
+    { ...deny, decision: { ...deny.decision, source: "expiry" as const } },
+    { ...deny, decision: { ...deny.decision, authorizationFingerprint: "other" } },
+    { ...deny, remember: { ...deny.remember, target: { ...CAL, tool: "delete_event" } } },
+  ]) await assert.rejects(f.service.settle(changed), /immutable identity/u);
+});
+
+test("service: a replay returns the original hint after app and title changes", async t => {
+  const f = await fixture(t); await f.seed();
+  const input = await f.input("hint-replay", "allow", true);
+  const first = await f.service.settle(input);
+  assert.match(first.hint!, /Google Calendar · Create event/u);
+  f.rename("Changed app"); input.remember.title = "Changed title"; delete input.remember.offer;
+  f.deps.connectionName = async () => { throw new Error("Replay must not read today's display metadata"); };
+  f.advance(8 * 86_400_000);
+  assert.deepEqual(await createBotAllowList(f.deps).settle(input), first);
+});
+
+for (const title of ["x".repeat(199) + " remainder", "https:// foo", "file:// /secret", "x".repeat(199) + "😀 tail", "bad\ud800 title\u202e\u0000"]) {
+  test(`service: Always publishes a canonical sanitized title ${JSON.stringify(title.slice(-24))}`, async t => {
+    const f = await fixture(t), input = await f.input("display", "allow_always", true);
+    input.remember.title = title;
+    const result = await f.service.settle(input, { validatePublication: async () => {} });
+    assert.ok(result.publication);
+    const saved = (await f.tallies.publication("bot", "display", "fp-display"))!;
+    assert.ok(saved);
+    for (const value of [saved.context.title, saved.context.label]) {
+      assert.ok(value.length <= 200); assert.equal(value, value.trim());
+      assert.doesNotMatch(value, /[\p{Cc}\p{Cf}]|(?:https?|file):\/\//iu);
+      assert.ok([...value].every(character => { const cp = character.codePointAt(0)!; return cp < 0xd800 || cp > 0xdfff; }));
+    }
+    assert.equal((await f.rules.listBot("bot"))[0]?.label, saved.context.label);
+  });
+}
+
 test("service: a failed publication keeps its immutable original context across rename and live retry", async t => {
   const f = await fixture(t); await f.seed();
   const input = await f.input("save", "allow_always", true);
@@ -97,6 +150,12 @@ test("service: list/remove joins owned folders and rules newest first; folder ro
   const f = await fixture(t);
   await f.service.settle(await f.input("save", "allow_always", true), { validatePublication: async () => {} });
   const rows = await f.service.list("bot"); assert.deepEqual(rows.map(row => row.kind), ["folder", "rule"]);
+  f.advance(2_000);
+  const newer = await f.rules.grantBot("bot", { ...CAL, tool: "update_event" }, "Update event", "newer-rule");
+  assert.equal(newer.status, "published");
+  if (newer.status !== "published") throw new Error("Newer rule did not publish");
+  assert.deepEqual((await f.service.list("bot")).map(row => row.id), [newer.rule.id, "folder_root_a", rows[1]!.id], "the combined list interleaves newer rules, folders and older rules");
+  assert.equal(await f.service.remove("bot", newer.rule.id), true);
   assert.equal(await f.service.remove("other", "folder_root_a"), false);
   assert.equal(await f.service.remove("bot", "folder_root_a"), true);
   assert.deepEqual((await f.service.list("bot")).map(row => row.kind), ["rule"]);

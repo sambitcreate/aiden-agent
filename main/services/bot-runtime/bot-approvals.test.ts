@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { createBotApprovalTallies, BOT_APPROVAL_TALLIES_FILE } from "./bot-approval-tallies.js";
+import { botSessionDirectory } from "../bot-routine-notes.js";
 import { createBotApprovals, publicBotApprovalPrompt } from "./bot-approvals.js";
 import type { BotApprovalRequest, BotApprovalDecision, BotAllowListRelease } from "./bot-extension.js";
 import { waitFor } from "./test-support/faux.js";
@@ -7,6 +12,8 @@ import { waitFor } from "./test-support/faux.js";
 const target = { kind: "connection", serverId: "calendar", tool: "create_event" } as const;
 const request = (waitId = "w1"): BotApprovalRequest => ({ botId: "bot-1", waitId, toolCallId: "provider-duplicate", toolName: "calendar__create_event",
   summary: "Create event", authorizationFingerprint: `fp-${waitId}`, signal: undefined });
+const rememberedRequest = (waitId = "w1"): BotApprovalRequest => ({ ...request(waitId),
+  allowList: { target, requirementsFingerprint: "requirements", consentRevision: "consent" } });
 const grant: BotAllowListRelease = { target, ruleId: "rule1", consentRevision: "published-generation" };
 
 for (const offered of [true, false]) {
@@ -41,7 +48,7 @@ test("bridge: exact durable lookup replays without a card, but validates the liv
   let published = 0, lookups = 0, current = true;
   const saved: BotApprovalDecision = { id: "w1", authorizationFingerprint: "fp-w1", answer: "allow", source: "person" };
   const bridge = createBotApprovals({ publish() { published++; }, lookupDecision: async () => { lookups++; return saved; } });
-  const input = { ...request(), assertCurrent: async () => { if (!current) throw new Error("delivery expired"); } };
+  const input = { ...rememberedRequest(), assertCurrent: async () => { if (!current) throw new Error("delivery expired"); } };
   assert.deepEqual(await bridge.request(input), saved);
   current = false;
   await assert.rejects(bridge.request(input), /delivery expired/u);
@@ -50,7 +57,7 @@ test("bridge: exact durable lookup replays without a card, but validates the liv
 
 test("bridge: a mismatched saved decision cannot satisfy another fingerprint", async () => {
   const bridge = createBotApprovals({ publish() {}, lookupDecision: async () => ({ id: "w1", authorizationFingerprint: "old", answer: "allow", source: "person" }) });
-  await assert.rejects(bridge.request(request()), /decision.*identity|fingerprint/iu);
+  await assert.rejects(bridge.request(rememberedRequest()), /decision.*identity|fingerprint/iu);
 });
 
 test("bridge: eligible old cards without an offer release under a new automatic pair", async () => {
@@ -124,7 +131,7 @@ test("bridge: expiry during a durable lookup cannot replay a saved human allowan
   const bridge = createBotApprovals({ publish() { assert.fail("expired replay must not publish"); }, lookupDecision: async () => {
     current = false; return { id: "w1", authorizationFingerprint: "fp-w1", answer: "allow", source: "person" };
   } });
-  await assert.rejects(bridge.request({ ...request(), assertCurrent: async () => { if (!current) throw new Error("deadline expired"); } }), /deadline expired/u);
+  await assert.rejects(bridge.request({ ...rememberedRequest(), assertCurrent: async () => { if (!current) throw new Error("deadline expired"); } }), /deadline expired/u);
   assert.deepEqual(bridge.pending(), []);
 });
 
@@ -152,3 +159,24 @@ test("bridge: the optional public offer copies only its key and count", async ()
   bridge.decide("w1", "deny"); await pending;
   assert.deepEqual(projected.always, { key: "k", count: 3 });
 });
+
+for (const toolName of ["calendar__create_event", "computer_use"]) {
+  test(`bridge: unreadable tally evidence does not block an unremembered ${toolName} card`, async t => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-approval-isolation-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const botDirectory = botSessionDirectory(directory, "bot-1");
+    await mkdir(botDirectory, { recursive: true });
+    await writeFile(path.join(botDirectory, BOT_APPROVAL_TALLIES_FILE), "corrupt tally evidence");
+    const tallies = createBotApprovalTallies({ profileDir: () => directory });
+    const bridge = createBotApprovals({ publish() {}, lookupDecision: (...args) => tallies.decision(...args) });
+    let failure: unknown;
+    const pending = bridge.request({ ...request(toolName), toolName });
+    void pending.catch(error => { failure = error; });
+    await waitFor(() => bridge.pending().length === 1 || failure !== undefined);
+    if (bridge.pending().length) bridge.decide(toolName, "allow");
+    assert.equal(failure, undefined, "an ordinary rule or Computer Use card has no tally recovery obligation");
+    assert.equal((await pending).answer, "allow");
+    await assert.rejects(bridge.request(rememberedRequest("remembered")), /tally|approval|read|repair/iu);
+    assert.deepEqual(bridge.pending(), [], "remembered classes remain fenced by the damaged evidence");
+  });
+}

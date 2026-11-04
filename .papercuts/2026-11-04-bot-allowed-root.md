@@ -49,3 +49,15 @@
 - Review catalog search treats a combined model query literally and returned no models. Individual exact model searches returned requested Opus5.5 medium and OpenCode Go DeepSeekV4.1 Flash high options; no fallback model used.
 
 - Task8 explicit git add returned1 for the ignored .memory directory after staging the tracked/native paths. Inspected the index, then force-added only the intended project memory and two papercut files.
+
+- Gate6 first whole-D review rejected5c43f4a81: Opus live-folder hint/replay/deletion plus bridge/title Lows; DeepSeek independently confirmed deletion. Separate bounded workers own settlement and quarantined deletion. Root owns approval-bridge isolation and docs/status.
+- DeepSeek ordering Low appears to misread the existing combined sort. Will independently exercise interleaved rows and record evidence before disposition.
+
+- Root bridge actual corrupted-ledger RED2fail/13pass became15pass; scopedlint0. Saved-lookup test fixtures now carry real eligible metadata so their recovery claims apply to classes that actually persist tally receipts.
+- Initial ordering probe reused a folder object, so a later mutation altered the earlier logged date. Its ordering assertions passed. A second immutable-row probe records both independently expected sorted orders, no production change.
+
+- Deletion worker isolated quarantine with a typed private error, preserving original evidence bytes/path and retaining transient write failure behavior. Root inspected production diff and real lifecycle tests; full84 worker tests pass.
+
+- Settlement review uncovered a missing production-clock oracle and a crash-at-threshold case. Worker captured9behavioral failures plus realSIGKILL failure, then192focused/27finalservice pass. Root broaderchecks run only after both workers froze.
+
+- Corrected integration first-run green: allowed113/runtime480/access101/plans144/rules66/messaging89/Bots1012/types0/registry15/scopedlint12files0/fullRemote1300+2existing skips/Cua2retries0/rebuiltCLI183+3existing skips+CLItypes0. Earlier standaloneCLI timingflake remains carried. No mobile DTO/source changes warranted another native run.

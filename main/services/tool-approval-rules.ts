@@ -335,6 +335,13 @@ export interface ToolApprovalRuleStore {
 
 export type ToolApprovalRuleMatch = Exclude<ToolApprovalScope, "once">;
 
+/** Quarantine is distinct from a failed filesystem publication. */
+class BotApprovalReceiptsUnreadableError extends Error {
+  constructor() {
+    super("Bot approval receipts could not be read. Remembered approvals are unavailable.");
+  }
+}
+
 /** Same canonical digest for external reads and the atomic first-publication compare. */
 function botConsentRevisionOf(document: ToolApprovalRulesDocument, botId: string, key: string): string {
   const operations = (document.botGrantOperations ?? [])
@@ -450,7 +457,7 @@ export class ToolApprovalRuleBook {
 
   private async assertBotReceipts(document: ToolApprovalRulesDocument): Promise<void> {
     await this.preserveBotReceiptHealth(document);
-    if (document.botGrantOperationsUnreadable) throw new Error("Bot approval receipts could not be read. Remembered approvals are unavailable.");
+    if (document.botGrantOperationsUnreadable) throw new BotApprovalReceiptsUnreadableError();
   }
 
   private async isKnownBot(botId: string): Promise<boolean> {
@@ -602,13 +609,22 @@ export class ToolApprovalRuleBook {
 
   async forgetBot(botId: string): Promise<number> {
     this.forgottenBots.add(botId);
-    const removed = await this.store.update(async (draft) => {
-      await this.assertBotReceipts(draft);
-      const count = draft.botRules?.filter((r) => r.botId === botId).length ?? 0;
-      draft.botRules = (draft.botRules ?? []).filter((r) => r.botId !== botId);
-      this.tombstone(draft, botId);
-      return count;
-    });
+    let removed: number;
+    try {
+      removed = await this.store.update(async (draft) => {
+        await this.assertBotReceipts(draft);
+        const count = draft.botRules?.filter((r) => r.botId === botId).length ?? 0;
+        draft.botRules = (draft.botRules ?? []).filter((r) => r.botId !== botId);
+        this.tombstone(draft, botId);
+        return count;
+      });
+    } catch (error) {
+      // Abort the transaction, preserving the damaged book at its original
+      // path. Quarantine already fences every grant/match; deletion can erase
+      // the Bot without rewriting evidence. Genuine write failures still retry.
+      if (error instanceof BotApprovalReceiptsUnreadableError) return 0;
+      throw error;
+    }
     if (removed) this.notifyBot(botId);
     return removed;
   }

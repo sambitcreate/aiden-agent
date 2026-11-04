@@ -86,6 +86,33 @@ test("hint ownership is atomic, at most once per seven days, and replay never mo
   assert.deepEqual(await tallies.record("bot:a", CAL, person("allow", true)), { counted: true, hintCount: 7 });
 });
 
+test("live hint provenance and display are snapshotted independently of the advancing event clock", async t => {
+  const f = await setup(t); await f.allow(); await f.allow(); await f.allow();
+  const decision = { ...f.person("allow", true), decidedAt: START };
+  const context: import("./bot-approval-tallies.js").BotApprovalRecordingContext = {
+    origin: "live", hint: { label: "Create event", choice: "Always allow for Ada" },
+  };
+  f.at(0, 5);
+  const pending = f.tallies.record("bot:a", CAL, decision, context);
+  context.origin = "historical"; context.hint!.label = "Changed title"; decision.decidedAt = START + DAY;
+  const result = await pending;
+  assert.equal(result.hintCount, 4);
+  assert.match(result.hint!, /“Create event” 4 times/u);
+  const bytes = await fs.readFile(f.file(), "utf8"), ledger = JSON.parse(bytes);
+  assert.equal(ledger.decisions.at(-1).at, START, "the recorded event time is the validated original time");
+  f.at(8);
+  assert.deepEqual(await f.open().record("bot:a", CAL, { ...decision, decidedAt: START }, { origin: "historical" }), result);
+  assert.equal(await fs.readFile(f.file(), "utf8"), bytes);
+});
+
+test("historical settlement at exactly now never consumes the next live hint entitlement", async t => {
+  const f = await setup(t); await f.allow(); await f.allow(); await f.allow();
+  const historical = { ...f.person("allow", true), decidedAt: START };
+  assert.deepEqual(await f.tallies.record("bot:a", CAL, historical, { origin: "historical" }), { counted: true });
+  assert.deepEqual(await f.tallies.record("bot:a", CAL, f.person("allow", true)), { counted: true, hintCount: 5 });
+  assert.deepEqual(await f.open().record("bot:a", CAL, historical, { origin: "live" }), { counted: true });
+});
+
 test("a hint requires an offered eligible Allow once; Always and denial never own a hint", async (t) => {
   const { tallies, person } = await setup(t);
   assert.deepEqual(await tallies.record("bot:a", CAL, person("allow", true)), { counted: true });
