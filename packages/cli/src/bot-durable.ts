@@ -176,7 +176,11 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       memorySection: async (botId, offer) => renderBotMemorySection(await memory.snapshot(botId), offer),
       currentTools: async (bot, turn) => {
         const available = botMessageChainOf([turn.requestId]).canSend && (await (ports.messagingEnabled?.() ?? Promise.resolve(true)))
-          ? await roster() : [];
+          ? (await ports.botStore.list()).map((peer) => ({
+            id: peer.id, name: peer.name, purpose: peer.description ?? "",
+            acceptsMessages: peer.acceptsBotMessages !== false,
+            sendsMessages: peer.messagesOtherBots !== false,
+          })) : [];
         const offer = available.find((item) => item.id === bot.id)?.sendsMessages && available.some((item) => item.id !== bot.id && item.acceptsMessages);
         return [
           ...(await currentTools(bot.id)).map((tool) => ({
@@ -185,7 +189,7 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
             replay: "unsafe" as const, ...(mcpAgentToolDescriptor(tool) ? { mcp: true } : {}),
           })),
           botMemoryToolEntry(bot.id, memory), botRecallToolEntry(),
-          ...(offer ? [{ ...await messageBotCandidate(bot.id, { roster, post: (input) => messages.post(input) }), replay: "safe" as const }] : []),
+          ...(offer ? [{ ...await messageBotCandidate(bot.id, { roster, descriptionRoster: available, post: (input) => messages.post(input) }), replay: "safe" as const }] : []),
         ];
       },
       checkPolicy: async (botId, name) => admitted(botId, async (lease) => {
