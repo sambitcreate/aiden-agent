@@ -33,6 +33,15 @@ const HOST_EXECUTOR_OUTPUT = { type: "object", properties: {}, oneOf: [
   // Only a complete failed item with NO application response is eligible.
   hostObject({ successful: { type: "boolean" }, error: { anyOf: [{ type: "null" }, { type: "string", maxLength: 4_096 }] }, data: dataSchema(false) }, ["successful", "data"]),
 ] };
+type ExecutorExtraField = "log_id" | "request_id" | "session_id" | "execution_time" | "toolkit" | "other";
+interface ExecutorResponseFacts {
+  extraFields: Record<"action" | "data" | "result", ExecutorExtraField[]>;
+  mcpIsError: boolean;
+  actionSuccessful: boolean | "other";
+  oneResult: boolean; totalOne: boolean; successZero: boolean; errorOne: boolean;
+  indexZero: boolean; calendarListSlug: boolean; responseAbsentOrNull: boolean;
+  itemError: "exact_known" | "other" | "missing";
+}
 export interface ComposioCalendarFailureFacts {
   keyword: ComposioWatchSchemaCompileFacts["keyword"];
   dialect: ComposioWatchSchemaCompileFacts["dialect"];
@@ -41,6 +50,7 @@ export interface ComposioCalendarFailureFacts {
   operation?: ComposioCalendarRead["kind"];
   direction?: "input" | "output";
   referenceFailure?: ComposioCalendarReferenceFailure;
+  executorResponse?: ExecutorResponseFacts;
 }
 export class ComposioCalendarContractError extends Error {
   constructor(readonly stage: "inventory" | "search" | "schemas" | "executor" | "read_arguments" | "read_response" | "schema_drift", readonly reason: "shape" | "missing" | "unsupported" | "invalid" | "changed", readonly facts?: ComposioCalendarFailureFacts, readonly field?: "executor_input" | "executor_output" | "account_selector") {
@@ -53,6 +63,31 @@ export function calendarContractObject(value: unknown): ObjectValue {
   return value as ObjectValue;
 }
 function optionalObject(value: unknown): ObjectValue | undefined { return value && typeof value === "object" && !Array.isArray(value) ? value as ObjectValue : undefined; }
+/** Diagnostic projection only. Inputs have already passed bounded JSON copying;
+ * unknown names collapse to one fixed category and values are never retained. */
+function executorResponseFacts(action: ObjectValue, response: unknown): ExecutorResponseFacts {
+  const known = ["log_id", "request_id", "session_id", "execution_time", "toolkit"] as const;
+  const extras = (value: ObjectValue, allowed: readonly string[]): ExecutorExtraField[] => {
+    const keys = Object.keys(value).filter((key) => !allowed.includes(key));
+    return [...known.filter((key) => keys.includes(key)), ...(keys.some((key) => !(known as readonly string[]).includes(key)) ? ["other" as const] : [])];
+  };
+  const data = optionalObject(action.data) ?? {}, results = data.results;
+  const result = Array.isArray(results) ? optionalObject(results[0]) ?? {} : {};
+  const envelope = calendarContractObject(boundedCalendarContractJson(response));
+  return {
+    extraFields: {
+      action: extras(action, ["successful", "error", "data"]),
+      data: extras(data, ["results", "total_count", "success_count", "error_count", "remote_file_info", "next_steps", "session"]),
+      result: extras(result, ["tool_slug", "index", "response", "error"]),
+    },
+    mcpIsError: envelope.isError === true, actionSuccessful: typeof action.successful === "boolean" ? action.successful : "other",
+    oneResult: Array.isArray(results) && results.length === 1, totalOne: data.total_count === 1, successZero: data.success_count === 0, errorOne: data.error_count === 1,
+    indexZero: result.index === 0, calendarListSlug: result.tool_slug === "GOOGLECALENDAR_LIST_CALENDARS", responseAbsentOrNull: result.response === undefined || result.response === null,
+    // Same five exact strings as the negative oracle. This classification is
+    // never consumed as authority, including when extra fields caused refusal.
+    itemError: result.error === undefined ? "missing" : ["ACCOUNT_NOT_FOUND", "CONNECTED_ACCOUNT_NOT_FOUND", "INVALID_CONNECTED_ACCOUNT", "Connected account not found", "Connected account does not exist"].includes(result.error as string) ? "exact_known" : "other",
+  };
+}
 export function boundedCalendarContractJson(value: unknown): unknown {
   const result = copyBoundedJson(value, { maxDepth: 18, maxNodes: 12_000, maxSize: 256 * 1024, measure: utf8Size });
   if (result === undefined || Buffer.byteLength(JSON.stringify(result), "utf8") > 256 * 1024) return fail("schemas", "invalid");
@@ -98,7 +133,7 @@ function compile(value: unknown, stage: ComposioCalendarContractError["stage"], 
     throw new ComposioCalendarContractError(stage, "unsupported", { keyword: rejection?.keyword ?? "other", dialect: rejection?.dialect ?? composioWatchSchemaDiagnosticDialect(optionalObject(value)?.$schema), ...(rejection ? { rejectionReason: rejection.reason, work: rejection.work } : {}), ...context }, field);
   }
 }
-function validationFailure(stage: ComposioCalendarContractError["stage"], validator: ValidateFunction, context: Pick<ComposioCalendarFailureFacts, "operation" | "direction">, field?: ComposioCalendarContractError["field"]): never {
+function validationFailure(stage: ComposioCalendarContractError["stage"], validator: ValidateFunction, context: Pick<ComposioCalendarFailureFacts, "operation" | "direction" | "executorResponse">, field?: ComposioCalendarContractError["field"]): never {
   throw new ComposioCalendarContractError(stage, "invalid", { keyword: composioWatchSchemaDiagnosticKeyword(validator.errors?.[0]?.keyword ?? ""), dialect: composioWatchSchemaDiagnosticDialect(optionalObject(validator.schema)?.$schema), ...context }, field);
 }
 function compileCalendarOutput(value: unknown, operation: ComposioCalendarRead["kind"]): ValidateFunction {
@@ -183,8 +218,8 @@ export function verifyCalendarContract(metadata: readonly SubagentMcpRemoteTool[
   Object.freeze(contract.readSchemaHashes); Object.freeze(contract);
   const validateExecutorOutput = (response: unknown, operation?: ComposioCalendarRead["kind"]): void => {
     const action = calendarContractExecutorAction(response);
-    if (!hostOutputValidator(action)) return validationFailure("executor", hostOutputValidator, { ...(operation ? { operation } : {}), direction: "output" }, "executor_output");
-    if (executorOutputValidator && !executorOutputValidator(action)) return validationFailure("executor", executorOutputValidator, { ...(operation ? { operation } : {}), direction: "output" }, "executor_output");
+    if (!hostOutputValidator(action)) return validationFailure("executor", hostOutputValidator, { ...(operation ? { operation } : {}), direction: "output", executorResponse: executorResponseFacts(action, response) }, "executor_output");
+    if (executorOutputValidator && !executorOutputValidator(action)) return validationFailure("executor", executorOutputValidator, { ...(operation ? { operation } : {}), direction: "output", executorResponse: executorResponseFacts(action, response) }, "executor_output");
     const data = calendarContractObject(action.data), result = calendarContractObject((data.results as unknown[])[0]);
     if (data.error_count === 1 && !(result.error as string).trim()) return fail("executor", "invalid", "executor_output");
   };

@@ -136,6 +136,29 @@ test("Calendar executor accepts a complete MCP error JSON failure without making
   assert.throws(() => verifyCalendarContract(declared, syntheticCalendarSchemas()).executorResponse(envelope), "a declared output still narrows failures");
 });
 
+test("executor rejection exposes only closed extra-field locations and correlated failure facts", () => {
+  const metadata = syntheticCalendarMetadata(); delete metadata[2]!.outputSchema;
+  const verified = verifyCalendarContract(metadata, syntheticCalendarSchemas());
+  const read = { kind: "listCalendars" as const, accountId: "private-account" };
+  for (const error of ["CONNECTED_ACCOUNT_NOT_FOUND", "Account private-account was not found"]) {
+    const action = { ...syntheticCalendarExecutor(read, undefined, error), successful: false, error: "private-error-prose", log_id: "private-log-value" };
+    Object.assign(action.data, { request_id: "private-request-value", private_data_key: { credential: "private-credential" } });
+    Object.assign(action.data.results[0]!, { session_id: "private-session-value", execution_time: 918273645, toolkit: "private-toolkit-value", private_result_key: "private" });
+    let rejected: unknown;
+    try { verified.executorResponse({ isError: true, content: [{ type: "text", text: JSON.stringify(action) }] }); } catch (caught) { rejected = caught; }
+    assert.ok(rejected instanceof Error);
+    const facts = (rejected as { facts?: { executorResponse?: unknown } }).facts!.executorResponse;
+    assert.deepEqual(facts, {
+      extraFields: { action: ["log_id"], data: ["request_id", "other"], result: ["session_id", "execution_time", "toolkit", "other"] },
+      mcpIsError: true, actionSuccessful: false,
+      oneResult: true, totalOne: true, successZero: true, errorOne: true,
+      indexZero: true, calendarListSlug: true, responseAbsentOrNull: true,
+      itemError: error === "CONNECTED_ACCOUNT_NOT_FOUND" ? "exact_known" : "other",
+    });
+    for (const secret of ["private-account", "private-error", "private-log", "private-request", "private_data_key", "private_result_key", "private-session", "private-toolkit", "918273645", "private-credential"]) assert.equal(JSON.stringify(facts).includes(secret), false);
+  }
+});
+
 test("closed compilation diagnostics distinguish definitions, unknown keywords and schema compiler failures", () => {
   for (const [extra, keyword, rejectionReason] of [
     [{ $defs: [] }, "$defs", "schema_structure"],

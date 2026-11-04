@@ -4,6 +4,7 @@ import { checkComposioCalendarRead, publicComposioCalendarReadCheckResult, type 
 import { syntheticCalendarExecutor, syntheticCalendarMetadata, syntheticCalendarSchemas, syntheticCalendarSearch } from "./composio-calendar-test-support.js";
 import type { ComposioCalendarRead } from "./connector-watch-composio.js";
 import { McpError } from "@earendil-works/pi-mcp";
+import { verifyCalendarContract } from "./composio-calendar-contract.js";
 
 const NOW = Date.parse("2026-11-04T15:00:00Z");
 const actualAccount = "ca_syntheticactive00001";
@@ -79,6 +80,26 @@ test("MCP error flag cannot hide an invalid correlation, payload or success behi
     assert.equal(f.reads.length, 1); assert.equal(result.privateProof.calls.calendars, 0); assert.equal(result.privateProof.calls.events, 0); assert.equal(result.privateProof.calls.get, false);
     assert.equal(JSON.stringify(result).includes("default-account-leak"), false);
   }
+});
+
+test("a host rejection before returning the negative reply preserves closed extra-field facts without routing proof", async () => {
+  const f = fixture(); delete f.metadata[2]!.outputSchema;
+  const host = verifyCalendarContract(f.metadata, f.schemas);
+  f.port.readCalendar = async (read) => {
+    f.reads.push(read);
+    const action = { ...syntheticCalendarExecutor(read, undefined, "No active connected account found"), successful: false, error: "private-top-error", log_id: "private-log-id", private_extra: "private-extra-value" };
+    const reply = { isError: true, content: [{ type: "text", text: JSON.stringify(action) }] };
+    host.executorResponse(reply); return reply;
+  };
+  const result = await checkComposioCalendarRead(f.port, options());
+  assert.equal(result.code, "unsupported_contract"); assert.equal(result.privateProof.invalidAccountRejected, false);
+  assert.equal(f.reads.length, 1); assert.equal(result.privateProof.calls.calendars, 0); assert.equal(result.privateProof.negative, undefined);
+  const facts = result.privateProof.contractFailure!.facts!.executorResponse!;
+  assert.deepEqual(facts.extraFields.action, ["log_id", "other"]); assert.equal(facts.mcpIsError, true);
+  assert.equal(facts.oneResult && facts.totalOne && facts.successZero && facts.errorOne && facts.indexZero && facts.calendarListSlug && facts.responseAbsentOrNull, true);
+  assert.equal(facts.itemError, "other");
+  for (const secret of ["private-top-error", "private-log-id", "private_extra", "private-extra-value", "No active connected account found"]) assert.equal(JSON.stringify(result).includes(secret), false);
+  assert.equal("privateProof" in publicComposioCalendarReadCheckResult(result), false);
 });
 
 test("multiple or missing ACTIVE accounts perform no executor read and never choose a default", async () => {
