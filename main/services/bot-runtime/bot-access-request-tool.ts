@@ -248,7 +248,7 @@ export function botAccessRequestCandidate(
           signal: call.signal,
         }); } catch (error) {
           if (!(error instanceof BotAccessRequestStaleError)) throw error;
-          return result("access_changed", "Access changed while this request was waiting. Nothing was allowed or declined. Ask for access again if it is still needed.");
+          return result("access_changed", "Access changed while this request was waiting. Ask for access again if it is still needed.");
         }
         if (answer.choice === "not_now") {
           deps.runAccess.decline(botId, requestIds, key);

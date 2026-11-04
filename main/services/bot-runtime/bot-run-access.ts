@@ -5,6 +5,7 @@ import {
 import type { BotFileToolLocation } from "../bot-file-tool-router.js";
 import type { BotSessionState } from "./bot-session-service.js";
 import path from "node:path";
+import { botRunUnattended } from "./bot-tool-policy.js";
 
 export const BOT_RUN_ACCESS_MAX_AGE_MS = 60 * 60_000;
 export const BOT_RUN_SAVED_LOCATION_ID = "run.saved";
@@ -120,7 +121,12 @@ export function createBotRunAccess(deps: { now(): number }): BotRunAccess {
           now - grant.grantedAt < BOT_RUN_ACCESS_MAX_AGE_MS,
       );
       grants.set(botId, valid);
-      const grant = valid.find((candidate) => joined(candidate.requestIds, requestIds));
+      const unattended = botRunUnattended(requestIds);
+      // Access cards authorize a person's task and joined person steers only.
+      // Explicit plan-owned grants have their own permit enforcement and may
+      // intentionally authorize a Bot turn after the person approves its plan.
+      const grant = valid.find((candidate) => joined(candidate.requestIds, requestIds) &&
+        (candidate.owner.kind === "plan" || !unattended));
       return grant
         ? {
             id: BOT_RUN_ACCESS_LOCATION_ID,

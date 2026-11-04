@@ -2204,8 +2204,9 @@ export class AidenRemoteBotSessionService {
           if (error instanceof BotAccessRequestStaleError) throw new AidenOperationNotExecutedError(
             new AidenRemoteServiceError("operation_stale", error.message, 409, true),
           );
-          // allow_folder is replay-safe by its exact issue/journal operation ID.
-          if (parsed.action.kind === "allow_folder") throw new AidenOperationReplaySafeRetryError(error);
+          // Access settlement is first-action-wins; retries observe not_open.
+          // Folder publication also has its exact issue/journal operation receipt.
+          if (parsed.action.kind === "allow_folder" || parsed.action.kind === "dismiss_access") throw new AidenOperationReplaySafeRetryError(error);
           throw error;
         }
         if (result === "invalid") {

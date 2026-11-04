@@ -2,6 +2,9 @@ import { BotAccessRequestStaleError, createBotAccessRequests } from "./bot-runti
 import { createBotAccessAuthorizer } from "./bot-runtime/bot-access-authorization.js";
 import { createBotRunAccess } from "./bot-runtime/bot-run-access.js";
 import { BotRuntimeAuthorityError } from "./bot-runtime-authority.js";
+import { createBotIssueService } from "./bot-issues/service.js";
+import { createBotIssueStore } from "./bot-issues/store.js";
+import { BOT_ISSUE_STATUS_ENTRY_KIND } from "../../renderer/shared/bot-issues.js";
 import { accessRequestPrompt } from "./bot-runtime/test-support/access-request-fixtures.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -3779,6 +3782,7 @@ test("unknown and desktop-only issue actions are 400 and run nothing", async () 
   try {
     for (const action of [
       { kind: "open_settings", section: "model" },
+      { kind: "open_settings", section: "access" },
       { kind: "stop_run", routineId: "routine_1" },
       { kind: "resume_routine" },
       { kind: "surprise" },
@@ -4072,4 +4076,40 @@ test("ordinary issue failure retains its existing cached rejection rather than g
     await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"ordinary-issue-key-001",{action:{kind:"stop_run"}}),(error:{code?:string})=>error.code==="internal_error");
     assert.equal(attempts,1);
   } finally {await service.close();}
+});
+
+test("access dismissal retries the same ledger key after a transient failure", async () => {
+  const action = {kind:"dismiss_access"} as const;
+  const access: BotIssue = {...ISSUE_CARD,kind:"access_needed",actions:[{kind:"dismiss_access"},{kind:"open_settings",section:"access"}]};
+  const host=issueHost({cards:[access]});let attempts=0;
+  const service=issueSession({...host.service,act:async()=>{if(++attempts===1)throw new Error("access action temporarily unavailable");return "done" as const;}});
+  try {
+    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,access.id,"retry-access-action-key-01",{action},{accessRequests:true}),/temporarily unavailable/u);
+    assert.deepEqual(await service.actIssue(DEVICE_ID,BOT_ID,access.id,"retry-access-action-key-01",{action},{accessRequests:true}),{result:"done"});
+    assert.equal(attempts,2);
+    assert.deepEqual(await service.actIssue(DEVICE_ID,BOT_ID,access.id,"retry-access-action-key-01",{action},{accessRequests:true}),{result:"done"});
+    assert.equal(attempts,2,"successful retry remains cached");
+  } finally {await service.close();}
+});
+
+test("an access dismissal settles despite unrelated failed status writes and its retry observes not_open", {timeout:10_000}, async () => {
+  const profile=mkdtempSync(path.join(os.tmpdir(),"bot-access-dismiss-recovery-"));
+  const store=createBotIssueStore({profileDir:()=>profile});let failing=false,attempts=0;
+  const issues=createBotIssueService({store,now:()=>2000,
+    appendEntry:async(_botId,kind)=>{if(failing&&kind===BOT_ISSUE_STATUS_ENTRY_KIND)throw new Error("transcript status unavailable");},
+    funnel:{deliver:async()=>"sent"},actions:{resumeRoutine:async()=>"missing",stopRun:async()=>{},snoozeStall(){},openSettings(){}}});
+  const issue=await issues.raise({botId:BOT_ID,title:"Use your whole Mac",body:"Needs a broader folder",dedupeKey:"access:whole-mac",kind:"access_needed",actions:[{kind:"dismiss_access"},{kind:"open_settings",section:"access"}]});
+  await store.change(BOT_ID,rows=>({issues:[{...ISSUE_CARD,id:"other-settled",resolvedAt:1000,resolution:"fixed" as const,statusAppended:false},...rows],result:undefined}));
+  const service=issueSession({...issues,act:async(...args)=>{attempts++;return issues.act(...args);}});
+  try {
+    failing=true;
+    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,issue.id,"dismiss-after-write-key-01",{action:{kind:"dismiss_access"}},{accessRequests:true}),/transcript status unavailable/u);
+    assert.equal((await store.read(BOT_ID)).find(row=>row.id===issue.id)?.resolution,"dismissed");
+    assert.deepEqual(await service.actIssue(DEVICE_ID,BOT_ID,issue.id,"dismiss-after-write-key-01",{action:{kind:"dismiss_access"}},{accessRequests:true}),{result:"not_open"});
+    assert.equal(attempts,2);
+    failing=false;
+    const repaired=new Promise<void>(resolve=>{issues.onChange(()=>{void store.read(BOT_ID).then(rows=>{if(rows.every(row=>row.statusAppended!==false))resolve();});});});
+    await issues.list(BOT_ID);await repaired;
+    assert.equal((await store.read(BOT_ID)).every(row=>row.statusAppended!==false),true);
+  } finally {failing=false;await service.close();rmSync(profile,{recursive:true,force:true});}
 });

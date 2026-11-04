@@ -44,8 +44,16 @@ export function createBotAccessAuthorizer(deps: BotAccessAuthorizerDeps) {
   return async (prompt: BotAccessRequestPrompt, choice: BotAccessChoice): Promise<void | BotAccessAuthorizationReceipt> => {
     // A retained prompt may belong to a publication whose receipt read failed.
     // Acknowledge history before consulting today's owner or policy.
-    if (prompt.target === "folder" && prompt.grant && prompt.choices.includes("always") &&
-      await deps.folderCommitted?.(prompt.botId, prompt.waitId)) return { savedForFuture: true };
+    if (prompt.target === "folder" && prompt.grant && prompt.choices.includes("always")) {
+      try {
+        if (await deps.folderCommitted?.(prompt.botId, prompt.waitId)) return { savedForFuture: true };
+      } catch (error) {
+        // Always needs exact history to prevent another publication. Other
+        // choices can proceed only through the live owner/policy/target checks
+        // below, which refuse an earlier publication's changed policy.
+        if (choice === "always") throw error;
+      }
+    }
     const auth = prompt.authorization,
       owner = prompt.owner;
     const assertOwner = () => {

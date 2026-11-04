@@ -35,6 +35,10 @@ import { blockingUntilAborted, countingTool, recordingDeps } from "./test-suppor
 import { QUESTION_ARGS, QUESTION_TOOL_NAME } from "./test-support/question-fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
 
+import { createBotIssueService } from "../bot-issues/service.js";
+import { createBotIssueStore, type BotIssueStore } from "../bot-issues/store.js";
+import { BOT_ISSUE_STATUS_ENTRY_KIND, botIssueStatusOf } from "../../../renderer/shared/bot-issues.js";
+
 const ctx = BACKGROUND_CONTEXT;
 const roots: string[] = [];
 function tempProfile(): string {
@@ -1081,4 +1085,63 @@ test('courier expiry leaves a busy real harness and queued human follow-ups inta
   release();const answers=await Promise.all([first,queued].map(s=>service.awaitReply('bot:b',s.submissionId,new AbortController().signal)));
   assert.deepEqual(answers,[{kind:'completed',text:'first human answer'},{kind:'completed',text:'queued human answer'}]);
  } finally {release();await courier.dispose();await service.shutdown();}
+});
+
+
+test("issue status append remains one durable entry across marker failures and service/runtime restart", async () => {
+  const profile = tempProfile();
+  const faux = createFauxModels([]);
+  let runtime = await serviceFor(profile, faux);
+  let markerFails = true;
+  let failures = 0;
+  const makeIssues = () => {
+    const disk = createBotIssueStore({ profileDir: () => profile });
+    const store: BotIssueStore = {
+      read: id => disk.read(id),
+      forgetBot: id => disk.forgetBot(id),
+      change: (id, apply) => disk.change(id, rows => {
+        const changed = apply(rows);
+        if (markerFails && changed.issues.some(row => row.statusAppended === true && rows.find(old => old.id === row.id)?.statusAppended === false)) throw new Error("marker disk busy");
+        return changed;
+      }),
+    };
+    return { disk, issues: createBotIssueService({
+      store, now: () => 2000,
+      appendEntry: async (id, kind, data) => { await runtime.appendEntry(id, kind, data as import("@earendil-works/chord").JsonValue); },
+      onError: () => { failures++; },
+      funnel: { deliver: async () => "sent" },
+      actions: { resumeRoutine: async () => "missing", stopRun: async () => {}, snoozeStall() {}, openSettings() {} },
+    }) };
+  };
+  const statuses = async () => (await (await runtime.conversation("bot:a")).context(ctx)).entries.filter(entry => entry.kind === BOT_ISSUE_STATUS_ENTRY_KIND);
+  try {
+    let app = makeIssues();
+    const issue = await app.issues.raise({ botId: "bot:a", kind: "access_needed", dedupeKey: "access:taxes", title: "Needs you", body: "Waiting", actions: [{ kind: "dismiss_access" }],
+      access: { label: "Taxes", folderPath: "/Taxes", authorization: { policyRevision: "private-policy", requestIds: ["private-run"], target: "folder", root: "/Taxes", identity: { device: "1", inode: "2" }, choices: ["not_now", "always", "once"] } },
+    });
+    await assert.rejects(app.issues.act("bot:a", issue.id, { kind: "dismiss_access" }), /marker disk busy/u);
+    assert.equal((await statuses()).length, 1, "the append committed before the marker failed");
+    assert.equal((await app.disk.read("bot:a"))[0]!.statusAppended, false);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const before = failures;
+      assert.deepEqual(await app.issues.list("bot:a", { open: true }), []);
+      await waitFor(() => failures > before);
+      assert.equal((await statuses()).length, 1, "read retries must reuse the committed effect");
+    }
+    await runtime.shutdown();
+    runtime = await serviceFor(profile, faux);
+    app = makeIssues();
+    const before = failures;
+    await app.issues.list("bot:a");
+    await waitFor(() => failures > before);
+    assert.equal((await statuses()).length, 1, "a fresh issue service and reopened SQLite session dedupe the same settlement");
+    markerFails = false;
+    await app.issues.list("bot:a");
+    await waitFor(async () => (await app.disk.read("bot:a"))[0]!.statusAppended === true);
+    const entries = await statuses();
+    assert.equal(entries.length, 1);
+    assert.deepEqual(botIssueStatusOf(entries[0]!.data), { issueId: issue.id, resolution: "dismissed", resolvedAt: 2000 });
+    assert.deepEqual(Object.keys(entries[0]!.data as object).sort(), ["effectId", "issueId", "resolution", "resolvedAt"], "host metadata adds only dedupe identity, never private access authorization");
+    assert.equal(faux.calls(), 0, "repairs never run inference");
+  } finally { await runtime.shutdown(); }
 });

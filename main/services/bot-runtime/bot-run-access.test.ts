@@ -319,3 +319,20 @@ test("saved slot rejects stale policy, changed owner, postawait abort, expiratio
     if(reason==="clearBot"||reason==="clearAll") assert.equal(store.location("ada",["r1"],"rev1"),undefined,"the lifecycle fanout clears both slots");
   }
 });
+
+
+test("plan-owned unattended grants still require their own Bot, joined input, current policy and deadline", () => {
+  let now = 1;
+  const store = createBotRunAccess({ now: () => now });
+  const plan: BotRunAccessGrant = { ...grant, requestIds: ["bot:approved:1"], owner: { kind: "plan", id: "plan1" }, expiresAt: 10 };
+  store.grant("ada", plan);
+  assert.equal(store.location("ada", ["bot:approved:1", "routine:joined:1"], "rev1")?.root, "/Taxes");
+  assert.equal(store.location("other", ["bot:approved:1"], "rev1"), undefined);
+  assert.equal(store.location("ada", ["bot:other:1"], "rev1"), undefined);
+  now = 10;
+  assert.equal(store.location("ada", ["bot:approved:1"], "rev1"), undefined);
+  now = 1;
+  store.grant("ada", plan);
+  assert.equal(store.location("ada", ["bot:approved:1"], "rev2"), undefined);
+  assert.equal(store.location("ada", ["bot:approved:1"], "rev1"), undefined);
+});

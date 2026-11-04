@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { BotAccessRequestStaleError, createBotAccessRequests, type BotAccessRequestPrompt } from "./bot-access-requests.js";
 import { createBotAccessAuthorizer, createBotAccessRevalidator } from "./bot-access-authorization.js";
 import { createBotRunAccess } from "./bot-run-access.js";
+import { createBotFolderGrantJournal, BotFolderGrantJournalReadError, BotFolderGrantJournalRepairError, type BotFolderGrantRecord } from "../bot-folder-grant-journal.js";
 import { BotRuntimeAuthorityError } from "../bot-runtime-authority.js";
 
 const prompt: Omit<BotAccessRequestPrompt, "waitId"> = {
@@ -381,24 +382,46 @@ test("runtime admission drift withdraws every choice without a decline, while a 
 });
 
 test("every still-pending choice acknowledges an earlier Always publication after receipt recovery", async () => {
-  for (const choice of ["once", "not_now"] as const) {
-    const bridge = createBotAccessRequests(), store = createBotRunAccess({now:()=>1});
-    let committed = false, readable = true, publications = 0;
-    const authorize = createBotAccessAuthorizer({now:()=>1,audienceId:"desktop",runAccess:store,
-      revalidate:async()=>{if(committed) throw new BotAccessRequestStaleError("old policy");},
-      resolveTarget:async()=>({kind:"folder",root:"/Taxes",label:"Taxes",place:"/Taxes",device:"1",inode:"2",always:{kind:"new"}}),
-      grantFolder:async()=>{publications++;committed=true;readable=false;throw new Error("receipt unavailable");},
-      folderCommitted:async()=>{if(!readable) throw new Error("journal unavailable");return committed;},changed(){}
+  for (const choice of ["once", "not_now", "always"] as const) {
+    const bridge = createBotAccessRequests(), store = createBotRunAccess({ now: () => 1 });
+    let readable = true, publications = 0, temporaryGrants = 0, records: BotFolderGrantRecord[] = [];
+    const journal = createBotFolderGrantJournal({
+      read: async () => {
+        if (!readable) throw Object.assign(new Error("journal unavailable"), { code: "EIO" });
+        return records;
+      },
+      write: async value => { records = value; },
     });
-    const waiting=bridge.request({...prompt,signal:undefined,owner:{signal:new AbortController().signal,deadline:Date.now()+60_000,validate:async()=>{}}});
-    const outcome=waiting.catch(error=>error); const id=bridge.pending()[0]!.waitId;
-    await assert.rejects(bridge.answer("ada",id,"always",authorize),/journal unavailable/u);
-    readable=true;
+    const authorize = createBotAccessAuthorizer({
+      now: () => 1, audienceId: "desktop", runAccess: { ...store, grant: (botId, grant) => { temporaryGrants++; store.grant(botId, grant); } },
+      revalidate: async () => { if (publications) throw new BotAccessRequestStaleError("old policy"); },
+      resolveTarget: async () => ({ kind: "folder", root: "/Taxes", label: "Taxes", place: "/Taxes", device: "1", inode: "2", always: { kind: "new" } }),
+      grantFolder: async input => {
+        publications++;
+        await journal.put({ input, rootId: "taxes", ownsRoot: true, optionId: "option", resultRevision: "rev2", state: "committed" });
+        readable = false;
+        throw new Error("receipt unavailable");
+      },
+      folderCommitted: async (botId, operationId) => (await journal.list()).some(record =>
+        record.state === "committed" && record.input.botId === botId && record.input.operationId === operationId),
+      changed() {},
+    });
+    const waiting = bridge.request({ ...prompt, signal: undefined, owner: { signal: new AbortController().signal, deadline: Date.now() + 60_000, validate: async () => {} } });
+    const outcome = waiting.catch(error => error), id = bridge.pending()[0]!.waitId;
     try {
-      assert.equal(await bridge.answer("ada",id,choice,authorize),"saved_for_future");
-      assert.deepEqual(await outcome,{choice:"always",waitId:id,savedForFuture:true});
-      assert.equal(publications,1);assert.equal(store.location("ada",["r1"],"rev1"),undefined);
-    } finally { if(bridge.pending().length) await bridge.answer("ada",id,"not_now",async()=>{}); await outcome; }
+      await assert.rejects(bridge.answer("ada", id, "always", authorize), BotFolderGrantJournalReadError);
+      assert.equal(bridge.pending()[0]!.waitId, id);
+      readable = true;
+      assert.equal(await bridge.answer("ada", id, choice, authorize), "saved_for_future");
+      assert.deepEqual(await outcome, { choice: "always", waitId: id, savedForFuture: true });
+      assert.equal(publications, 1);
+      assert.equal(temporaryGrants, 0);
+      assert.equal(store.location("ada", ["r1"], "rev2"), undefined);
+      assert.equal(store.declined("ada", ["r1"], "/Taxes"), false);
+    } finally {
+      if (bridge.pending().length) await bridge.answer("ada", id, "not_now", async () => {});
+      await outcome;
+    }
   }
 });
 
@@ -419,3 +442,49 @@ test("cards that cannot offer Always do not read the folder journal for Once or 
     } finally {if(bridge.pending().length) await bridge.answer("ada",id,"not_now",async()=>{});await waiting;}
   }
 });
+
+for (const failure of ["EIO", "schema"] as const) {
+  for (const choice of ["once", "not_now", "always"] as const) {
+    test(`eligible folder ${choice} with ${failure} receipt history validates live authority and remains answerable`, async () => {
+      let unreadable = true, ownerChecks = 0, policyChecks = 0, targetChecks = 0, publications = 0;
+      const journal = createBotFolderGrantJournal({
+        read: async () => {
+          if (!unreadable) return [];
+          if (failure === "EIO") throw Object.assign(new Error("read failed"), { code: "EIO" });
+          return { invalid: "schema" };
+        },
+        write: async () => { throw new Error("unexpected journal write"); },
+      });
+      const bridge = createBotAccessRequests(), store = createBotRunAccess({ now: () => 1 });
+      const waiting = bridge.request({ ...prompt, signal: undefined, owner: {
+        signal: new AbortController().signal, deadline: Date.now() + 60_000,
+        validate: async () => { ownerChecks++; },
+      } });
+      const outcome = waiting.catch(error => error), id = bridge.pending()[0]!.waitId;
+      const authorize = createBotAccessAuthorizer({
+        now: () => 1, audienceId: "desktop", runAccess: store,
+        folderCommitted: async () => (await journal.list()).some(record => record.state === "committed"),
+        revalidate: async () => { policyChecks++; },
+        resolveTarget: async () => { targetChecks++; return { kind: "folder", root: "/Taxes", label: "Taxes", place: "/Taxes", device: "1", inode: "2", always: { kind: "new" } }; },
+        grantFolder: async () => { publications++; return "rev2"; }, changed() {},
+      });
+      try {
+        if (choice === "always") {
+          await assert.rejects(bridge.answer("ada", id, choice, authorize), failure === "EIO" ? BotFolderGrantJournalReadError : BotFolderGrantJournalRepairError);
+          assert.equal(bridge.pending()[0]!.waitId, id);
+          assert.equal(ownerChecks + policyChecks + targetChecks, 0);
+          assert.equal(publications, 0);
+          unreadable = false;
+        }
+        assert.equal(await bridge.answer("ada", id, choice, authorize), "answered");
+        assert.deepEqual(await outcome, { choice, waitId: id });
+        assert.ok(ownerChecks > 0 && policyChecks > 0 && targetChecks > 0);
+        assert.equal(store.location("ada", ["r1"], choice === "always" ? "rev2" : "rev1")?.root, choice === "not_now" ? undefined : "/Taxes");
+        assert.equal(publications, choice === "always" ? 1 : 0);
+      } finally {
+        if (bridge.pending().length) await bridge.answer("ada", id, "not_now", async () => {});
+        await outcome;
+      }
+    });
+  }
+}

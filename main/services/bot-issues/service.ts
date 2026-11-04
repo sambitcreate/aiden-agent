@@ -144,8 +144,10 @@ function buildIssue(
 }
 
 /** The issue the person can still answer, or the settlement they already gave. */
-function statusEntry(issue: BotIssue): BotIssueStatusEntryData {
+function statusEntry(issue: BotIssue): BotIssueStatusEntryData & { effectId: string } {
   return {
+    // Host-only transaction identity. Public status readers whitelist fields.
+    effectId: `bot-issue-status:${JSON.stringify([issue.id, issue.resolution ?? "dismissed", issue.resolvedAt])}`,
     issueId: issue.id,
     resolution: issue.resolution ?? "dismissed",
     ...(issue.resolvedAt === undefined ? {} : { resolvedAt: issue.resolvedAt }),
@@ -192,17 +194,19 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
     }));
   }
 
-  function repairStatuses(botId: string): Promise<void> {
+  function repairStatuses(botId: string, issueId?: string): Promise<void> {
+    // Serialize transcript effects, but an unrelated failed attempt is never a
+    // prerequisite for this settlement. Re-read after the previous attempt so
+    // concurrent repairs cannot append a status whose marker already landed.
     const active = repairing.get(botId);
-    if (active) return active.then(() => repairStatuses(botId));
-    const attempt = (async () => {
+    const attempt = (active ?? Promise.resolve()).catch(() => undefined).then(async () => {
       for (const row of await dependencies.store.read(botId)) {
-        if (isOpen(row) || row.statusAppended !== false) continue;
+        if (isOpen(row) || row.statusAppended !== false || (issueId !== undefined && row.id !== issueId)) continue;
         await dependencies.appendEntry(botId, BOT_ISSUE_STATUS_ENTRY_KIND, statusEntry(row));
         await remember(botId, row.id, { statusAppended: true });
         notify(botId);
       }
-    })();
+    });
     repairing.set(botId, attempt);
     const clear = () => { if (repairing.get(botId) === attempt) repairing.delete(botId); };
     void attempt.then(clear, clear);
@@ -228,7 +232,8 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
       return { issues: next, result: next[index]! };
     });
     if (settled === undefined) return false;
-    await repairStatuses(botId);
+    if (settled.kind === "access_needed") notify(botId);
+    await repairStatuses(botId, settled.id);
     return true;
   }
 
@@ -368,15 +373,15 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
         if (allowingFolders.has(key)) return "not_open";
         allowingFolders.add(key);
         try {
-          await repairStatuses(botId);
+          repairStatusesInBackground(botId);
           const issue = (await dependencies.store.read(botId)).find((row) => row.id === issueId);
           if (!issue || !isOpen(issue)) return "not_open";
           if (action.kind === "dismiss_access") {
             if (issue.kind !== "access_needed") return "invalid";
             const dismissed = await claim(botId, issueId, action, "dismissed");
             if (dismissed === "not_open" || dismissed === "invalid") return dismissed;
-            await repairStatuses(botId);
             notify(botId);
+            await repairStatuses(botId, dismissed.id);
             return "done";
           }
           const access = issue.access;
@@ -392,8 +397,9 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
             const settled = { ...current, resolvedAt: dependencies.now(), resolution: "fixed" as const, statusAppended: false };
             return { issues: issues.map((row) => row.id === issueId ? settled : row), result: settled };
           });
-          if (fixed) await repairStatuses(botId);
-          notify(botId); return "done";
+          notify(botId);
+          if (fixed) await repairStatuses(botId, fixed.id);
+          return "done";
         } finally { allowingFolders.delete(key); }
       }
       // Opening a surface is not a fix and changes no Bot state, so these two
