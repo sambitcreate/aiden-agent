@@ -1027,6 +1027,7 @@ data class AidenBotSession(
      */
     val handoff: AidenBotHandoff? = null,
     val accessRequest: AidenBotAccessRequest? = null,
+    val plan: AidenRemoteBotPlan? = null,
     /**
      * Revision 42 (`bot:issues` devices only): the Bot's "Needs you" cards, oldest first. Null
      * from an older Mac or a device without the grant; an empty list means no card is open.
@@ -1077,6 +1078,7 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
         // A hand-off is written only when one waits, so an older Mac's session reads back as it came.
         val handoff = value.handoff?.let { mapOf("handoff" to it.toJson()) } ?: emptyMap()
         // Revision 42: the list is written only when this session carries one at all.
+        val plan = value.plan?.let { mapOf("plan" to it.toJson()) } ?: emptyMap()
         val accessRequest = value.accessRequest?.let { mapOf("accessRequest" to it.toJson()) } ?: emptyMap()
         val issues = value.issues?.let {
             mapOf("issues" to jsonEncoder.json.encodeToJsonElement(ListSerializer(AidenBotIssue.serializer()), it))
@@ -1084,7 +1086,7 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
         jsonEncoder.encodeJsonElement(
             JsonObject(
                 body + ("question" to (value.question?.toJson() ?: JsonNull)) +
-                    ("approval" to (value.approval?.toJson() ?: JsonNull)) + handoff + accessRequest + issues
+                    ("approval" to (value.approval?.toJson() ?: JsonNull)) + handoff + accessRequest + plan + issues
             )
         )
     }
@@ -1102,12 +1104,13 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
         val readable = JsonArray(rawEntries.filter { AidenBotSessionEntry.unknownType(it) == null })
         // Revision 37: `handoff` reaches only `bot:handoffs` devices, as `null` when nothing waits.
         val handoff = body["handoff"]?.let { if (it is JsonNull) null else AidenBotHandoff.parse(it) }
+        val plan = body["plan"]?.let { if (it is JsonNull) null else AidenRemoteBotPlan.parse(it) }
         val accessRequest = body["accessRequest"]?.let { if (it is JsonNull) null else AidenBotAccessRequest.parse(it) }
         // Revision 42: `issues` reaches only `bot:issues` devices; absent from every other session.
         val issues = body["issues"]?.let { if (it is JsonNull) null else AidenBotIssue.parseList(it) }
         val fields = jsonDecoder.json.decodeFromJsonElement(
             AidenBotSessionFields.serializer(),
-            JsonObject(body - "question" - "approval" - "handoff" - "accessRequest" - "issues" + ("entries" to readable))
+            JsonObject(body - "question" - "approval" - "handoff" - "accessRequest" - "plan" - "issues" + ("entries" to readable))
         )
         return AidenBotSession(
             botId = fields.botId,
@@ -1125,6 +1128,7 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
             queued = fields.queued,
             handoff = handoff,
             accessRequest = accessRequest,
+            plan = plan,
             issues = issues
         )
     }
@@ -1227,6 +1231,7 @@ sealed class AidenBotSessionEventPayload {
     data class Activity(val activity: AidenBotSessionActivity?) : AidenBotSessionEventPayload()
     /** Revision 37: the step the Bot handed back appeared (non-null) or was settled (null). */
     data class Handoff(val handoff: AidenBotHandoff?) : AidenBotSessionEventPayload()
+    data class Plan(val plan: AidenRemoteBotPlan?) : AidenBotSessionEventPayload()
     data class AccessRequest(val accessRequest: AidenBotAccessRequest?) : AidenBotSessionEventPayload()
     /** Revision 42: the Bot's issue cards, oldest first; an empty list clears them. */
     data class Issues(val issues: List<AidenBotIssue>) : AidenBotSessionEventPayload() {
@@ -1277,6 +1282,7 @@ data class AidenBotSessionEvent(
             is AidenBotSessionEventPayload.Activity -> "activity"
             is AidenBotSessionEventPayload.Queued -> "queued"
             is AidenBotSessionEventPayload.Handoff -> "handoff"
+            is AidenBotSessionEventPayload.Plan -> "plan"
             is AidenBotSessionEventPayload.AccessRequest -> "access_request"
             is AidenBotSessionEventPayload.Issues -> "issues"
             AidenBotSessionEventPayload.Closed -> "closed"
@@ -1317,6 +1323,7 @@ object AidenBotSessionEventSerializer : KSerializer<AidenBotSessionEvent> {
             is AidenBotSessionEventPayload.Handoff -> buildJsonObject {
                 put("handoff", p.handoff?.toJson() ?: JsonNull)
             }
+            is AidenBotSessionEventPayload.Plan -> buildJsonObject { put("plan", p.plan?.toJson() ?: JsonNull) }
             is AidenBotSessionEventPayload.AccessRequest -> buildJsonObject { put("accessRequest", p.accessRequest?.toJson() ?: JsonNull) }
             is AidenBotSessionEventPayload.Issues -> buildJsonObject {
                 put("issues", wire.encodeToJsonElement(ListSerializer(AidenBotIssue.serializer()), p.issues))
@@ -1404,6 +1411,11 @@ object AidenBotSessionEventSerializer : KSerializer<AidenBotSessionEvent> {
                 payload.requireKeys(setOf("handoff"))
                 val element = payload.getValue("handoff")
                 AidenBotSessionEventPayload.Handoff(if (element is JsonNull) null else AidenBotHandoff.parse(element))
+            }
+            "plan" -> {
+                payload.requireKeys(setOf("plan"))
+                val element = payload.getValue("plan")
+                AidenBotSessionEventPayload.Plan(if (element is JsonNull) null else AidenRemoteBotPlan.parse(element))
             }
             "access_request" -> {
                 payload.requireKeys(setOf("accessRequest"))

@@ -161,6 +161,116 @@ class AidenBotSessionControllerTest {
         controller.stopFollowing()
     }
 
+    private fun planSection() = fixture.getValue("botPlans").jsonObject
+    private fun planSession() = json.decodeFromJsonElement(AidenBotSession.serializer(), planSection().getValue("session"))
+    private fun planError(status: Int = 409) = AidenRemoteClientException.Server(status,
+        json.decodeFromJsonElement(AidenRemoteErrorEnvelope.serializer(), planSection().getValue("expired")).error.let {
+            if (status >= 500) it.copy(code = AidenRemoteErrorCode.INTERNAL_ERROR) else it
+        })
+    private fun planEvent(plan: AidenRemoteBotPlan?, seq: Long = 1) = AidenBotSessionEvent(planSession().botId, planSession().epoch, seq, AidenBotSessionEventPayload.Plan(plan))
+
+    @Test fun plansRemainHostAuthoritativeAndPendingHoldsSend() = runTest {
+        val initial = planSession()
+        val transport = FakeTransport(initial)
+        val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
+        controller.refetch()
+        assertTrue(controller.state.value.composerHeldForPlan)
+        assertTrue(controller.state.value.composerEnabled)
+        assertFalse(controller.send("Keep this draft"))
+        assertTrue(transport.sends.isEmpty())
+        assertTrue(controller.respondToPlan(AidenBotPlanDecision.APPROVE))
+        assertEquals(initial.plan, controller.state.value.session?.plan)
+        val active = AidenRemoteBotPlan.parse(planSection().getValue("active"))
+        controller.handle(planEvent(active))
+        assertFalse(controller.state.value.composerHeldForPlan)
+        assertEquals(1, controller.state.value.session?.plan?.completedSteps)
+        assertFalse(controller.respondToPlan(AidenBotPlanDecision.APPROVE))
+        transport.planReceipt = AidenBotPlanRespondReceipt(active.planId, AidenBotPlanStatus.STOPPED)
+        assertTrue(controller.respondToPlan(AidenBotPlanDecision.STOP))
+        assertEquals(AidenBotPlanStatus.ACTIVE, controller.state.value.session?.plan?.status)
+        controller.handle(planEvent(null, 2))
+        assertNull(controller.state.value.session?.plan)
+        controller.stopFollowing()
+    }
+    @Test fun sameDecisionUnknownRetryKeepsKeyAndDifferentDecisionSendsNewBody() = runTest {
+        for (failure in listOf(IOException("lost"), planError(503))) {
+            val initial = planSession(); val transport = FakeTransport(initial)
+            val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
+            controller.refetch(); transport.planFailure = failure
+            assertFalse(controller.respondToPlan(AidenBotPlanDecision.APPROVE))
+            assertEquals(initial.plan, controller.state.value.session?.plan)
+            assertTrue(controller.state.value.planError != null)
+            assertTrue(controller.respondToPlan(AidenBotPlanDecision.APPROVE))
+            assertEquals(listOf(AidenBotPlanDecision.APPROVE, AidenBotPlanDecision.APPROVE), transport.planAnswers.map { it.request.decision })
+            assertEquals(transport.planAnswers[0].key, transport.planAnswers[1].key)
+            controller.stopFollowing()
+        }
+        val initial = planSession(); val transport = FakeTransport(initial)
+        val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
+        controller.refetch(); transport.planFailure = IOException("lost")
+        assertFalse(controller.respondToPlan(AidenBotPlanDecision.APPROVE))
+        transport.planReceipt = AidenBotPlanRespondReceipt(initial.plan!!.planId, AidenBotPlanStatus.STOPPED)
+        assertTrue(controller.respondToPlan(AidenBotPlanDecision.NOT_NOW))
+        assertEquals(listOf(AidenBotPlanDecision.APPROVE, AidenBotPlanDecision.NOT_NOW), transport.planAnswers.map { it.request.decision })
+        assertNotEquals(transport.planAnswers[0].key, transport.planAnswers[1].key)
+        assertEquals(AidenBotPlanStatus.PENDING, controller.state.value.session?.plan?.status)
+        controller.stopFollowing()
+    }
+    @Test fun expiredOnlyRemovesMatchingUnchangedPlanAndFreshReplacementAnswers() = runTest {
+        val initial = planSession(); val transport = FakeTransport(initial)
+        val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
+        controller.refetch(); transport.planFailure = planError()
+        assertFalse(controller.respondToPlan(AidenBotPlanDecision.APPROVE))
+        assertNull(controller.state.value.session?.plan)
+        val replacement = initial.plan!!.copy(planId = "replacement-plan")
+        controller.handle(planEvent(replacement))
+        transport.planReceipt = AidenBotPlanRespondReceipt(replacement.planId, AidenBotPlanStatus.ACTIVE)
+        assertTrue(controller.respondToPlan(AidenBotPlanDecision.APPROVE))
+        assertEquals(replacement, controller.state.value.session?.plan)
+        controller.stopFollowing()
+    }
+    @Test fun latePlanFailureConflictAndReceiptCannotAlterReplacementClearOrGeneration() = runTest {
+        for (outcome in listOf("failure", "conflict", "success", "clear", "same-id-active", "generation")) {
+            val initial = planSession(); val transport = FakeTransport(initial)
+            val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
+            controller.refetch(); transport.planGate = CompletableDeferred()
+            if (outcome == "failure") transport.planFailure = IOException("lost")
+            if (outcome == "conflict" || outcome == "same-id-active") transport.planFailure = planError()
+            val answer = async { controller.respondToPlan(AidenBotPlanDecision.APPROVE) }; runCurrent()
+            assertFalse(controller.respondToPlan(AidenBotPlanDecision.NOT_NOW))
+            when (outcome) {
+                "generation" -> controller.reopenFeed()
+                "clear" -> controller.handle(planEvent(null))
+                "same-id-active" -> controller.handle(planEvent(AidenRemoteBotPlan.parse(planSection().getValue("active"))))
+                else -> controller.handle(planEvent(initial.plan!!.copy(planId = "replacement-plan")))
+            }
+            val expected = controller.state.value.session?.plan
+            transport.planGate!!.complete(Unit); answer.await()
+            assertEquals(expected, controller.state.value.session?.plan)
+            assertNull(controller.state.value.planError)
+            assertTrue(controller.state.value.respondingPlanIds.isEmpty())
+            assertEquals(1, transport.planAnswers.size)
+            controller.stopFollowing()
+        }
+    }
+    @Test fun absentCapabilityMakesNoCardOrCallAndWrongReceiptNeverSettlesPlan() = runTest {
+        val initial = planSession(); val oldTransport = FakeTransport(initial)
+        val old = AidenBotSessionController(initial.botId, oldTransport, backgroundScope)
+        old.refetch()
+        assertNull(old.state.value.session?.plan)
+        assertFalse(old.state.value.composerHeldForPlan)
+        assertFalse(old.respondToPlan(AidenBotPlanDecision.APPROVE))
+        assertTrue(oldTransport.planAnswers.isEmpty()); old.stopFollowing()
+        for (receipt in listOf(AidenBotPlanRespondReceipt("wrong-plan", AidenBotPlanStatus.ACTIVE), AidenBotPlanRespondReceipt(initial.plan!!.planId, AidenBotPlanStatus.PENDING))) {
+            val transport = FakeTransport(initial)
+            val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
+            controller.refetch(); transport.planReceipt = receipt
+            assertFalse(controller.respondToPlan(AidenBotPlanDecision.APPROVE))
+            assertEquals(initial.plan, controller.state.value.session?.plan)
+            assertTrue(controller.state.value.planError != null); controller.stopFollowing()
+        }
+    }
+
     @get:Rule
     val tempFolder = TemporaryFolder()
 
@@ -177,6 +287,17 @@ class AidenBotSessionControllerTest {
     }
 
     private class FakeTransport(var session: AidenBotSession) : AidenBotSessionTransport {
+        data class PlanAnswer(val planId: String, val request: AidenBotPlanRespondRequest, val key: UUID)
+        val planAnswers = mutableListOf<PlanAnswer>()
+        var planFailure: Exception? = null
+        var planGate: CompletableDeferred<Unit>? = null
+        var planReceipt = AidenBotPlanRespondReceipt("plan-fixture-56", AidenBotPlanStatus.ACTIVE)
+        override suspend fun respondPlan(botId: String, planId: String, request: AidenBotPlanRespondRequest, key: UUID): AidenBotPlanRespondReceipt {
+            planAnswers += PlanAnswer(planId, request, key)
+            planGate?.await()
+            planFailure?.let { planFailure = null; throw it }
+            return planReceipt
+        }
         data class AccessAnswer(val waitId: String, val request: AidenBotAccessAnswerRequest, val key: UUID)
         val accessAnswers = mutableListOf<AccessAnswer>()
         var accessReceipt = AidenBotAccessAnswerReceipt(true)

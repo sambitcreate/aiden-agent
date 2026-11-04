@@ -825,6 +825,124 @@ struct AidenBotHandoffOpenOnMacReceipt: Codable, Equatable, Sendable {
 
 // MARK: Contract revision 55 (`bot:access-requests`)
 
+// Revision 56: display-only, bounded public plan. No enforcement or proposal identities cross.
+enum AidenBotPlanStatus: String, Codable, Sendable { case pending, active, finished, stopped, expired }
+enum AidenBotPlanStepStatus: String, Codable, Sendable { case pending, done, skipped }
+enum AidenBotPlanDecision: String, Codable, Sendable { case approve, notNow = "not_now", stop }
+
+enum AidenBotPlanWire {
+    static func text(_ value: String, maximum: Int) throws {
+        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              value.unicodeScalars.count <= maximum,
+              !value.unicodeScalars.contains(where: { scalar in
+                  let n = scalar.value
+                  return (0...8).contains(n) || (14...31).contains(n) || (127...159).contains(n)
+                      || [0xAD, 0x61C, 0x180E, 0x200B, 0x200E, 0x200F, 0x2028, 0x2029, 0xFEFF].contains(n)
+                      || (0x202A...0x202E).contains(n) || (0x2060...0x2064).contains(n)
+                      || (0x2066...0x206F).contains(n) || (0xFFF9...0xFFFB).contains(n)
+              }) else { throw AidenBotContractError.invalidField("plan.text") }
+    }
+}
+struct AidenRemoteBotPlan: Codable, Equatable, Sendable {
+    struct Step: Codable, Equatable, Sendable {
+        let text: String
+        let status: AidenBotPlanStepStatus
+        init(from decoder: Decoder) throws {
+            try AidenBotWire.requireOnlyKeys(decoder, allowed: ["text", "status"])
+            let v = try decoder.container(keyedBy: CodingKeys.self)
+            text = try v.decode(String.self, forKey: .text)
+            status = try v.decode(AidenBotPlanStepStatus.self, forKey: .status)
+            try AidenBotPlanWire.text(text, maximum: 200)
+        }
+        private enum CodingKeys: String, CodingKey { case text, status }
+    }
+    struct Item: Codable, Equatable, Sendable {
+        let line: String
+        let details: [String]
+        let used: Int?
+        let max: Int?
+        init(from decoder: Decoder) throws {
+            try AidenBotWire.requireOnlyKeys(decoder, allowed: ["line", "details", "used", "max"])
+            let v = try decoder.container(keyedBy: CodingKeys.self)
+            line = try v.decode(String.self, forKey: .line)
+            details = try v.decode([String].self, forKey: .details)
+            used = try AidenBotWire.optional(Int.self, from: v, forKey: .used)
+            max = try AidenBotWire.optional(Int.self, from: v, forKey: .max)
+            try AidenBotPlanWire.text(line, maximum: 120)
+            guard details.count <= 6 else { throw AidenBotContractError.invalidField("plan.details") }
+            for detail in details { try AidenBotPlanWire.text(detail, maximum: 160) }
+            if v.contains(.used) || v.contains(.max) {
+                guard let used, let max, used >= 0, (1...25).contains(max), used <= max else {
+                    throw AidenBotContractError.invalidField("plan.counts")
+                }
+            }
+        }
+        private enum CodingKeys: String, CodingKey { case line, details, used, max }
+    }
+    let planId: String
+    let status: AidenBotPlanStatus
+    let title: String
+    let why: String
+    let steps: [Step]
+    let items: [Item]
+    let expiresAt: String?
+    let from: String?
+    var completedSteps: Int { steps.filter { $0.status != .pending }.count }
+    var expiry: Date? {
+        guard let expiresAt, let data = try? JSONEncoder().encode(expiresAt) else { return nil }
+        return (try? AidenRemoteJSONDecoder.decode(AidenRemoteTimestamp.self, from: data))?.date
+    }
+    func allows(_ decision: AidenBotPlanDecision) -> Bool {
+        status == .pending ? decision != .stop : status == .active && decision == .stop
+    }
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["planId", "status", "title", "why", "steps", "items", "expiresAt", "from"])
+        let v = try decoder.container(keyedBy: CodingKeys.self)
+        planId = try v.decode(String.self, forKey: .planId)
+        try AidenBotHandoffWire.validateWaitID(planId)
+        status = try v.decode(AidenBotPlanStatus.self, forKey: .status)
+        title = try v.decode(String.self, forKey: .title)
+        why = try v.decode(String.self, forKey: .why)
+        steps = try v.decode([Step].self, forKey: .steps)
+        items = try v.decode([Item].self, forKey: .items)
+        expiresAt = try AidenBotWire.optional(String.self, from: v, forKey: .expiresAt)
+        from = try AidenBotWire.optional(String.self, from: v, forKey: .from)
+        try AidenBotPlanWire.text(title, maximum: 80)
+        try AidenBotPlanWire.text(why, maximum: 300)
+        guard (1...10).contains(steps.count), (1...8).contains(items.count) else {
+            throw AidenBotContractError.invalidField("plan.lists")
+        }
+        if let from { try AidenBotPlanWire.text(from, maximum: 120) }
+        if let expiresAt {
+            guard expiresAt.unicodeScalars.count <= 80 else { throw AidenBotContractError.invalidField("plan.expiry") }
+            _ = try v.decode(AidenRemoteTimestamp.self, forKey: .expiresAt)
+        }
+    }
+    private enum CodingKeys: String, CodingKey { case planId, status, title, why, steps, items, expiresAt, from }
+}
+struct AidenBotPlanRespondRequest: Codable, Equatable, Sendable {
+    let decision: AidenBotPlanDecision
+    init(decision: AidenBotPlanDecision) { self.decision = decision }
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["decision"])
+        decision = try decoder.container(keyedBy: CodingKeys.self).decode(AidenBotPlanDecision.self, forKey: .decision)
+    }
+    private enum CodingKeys: String, CodingKey { case decision }
+}
+struct AidenBotPlanRespondReceipt: Codable, Equatable, Sendable {
+    let planId: String
+    let status: AidenBotPlanStatus
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["planId", "status"])
+        let v = try decoder.container(keyedBy: CodingKeys.self)
+        planId = try v.decode(String.self, forKey: .planId)
+        try AidenBotHandoffWire.validateWaitID(planId)
+        status = try v.decode(AidenBotPlanStatus.self, forKey: .status)
+        guard status != .pending else { throw AidenBotContractError.invalidField("plan.status") }
+    }
+    private enum CodingKeys: String, CodingKey { case planId, status }
+}
+
 enum AidenBotAccessTarget: String, Codable, Sendable { case folder, wholeMac = "whole_mac" }
 enum AidenBotAccessChoice: String, Codable, Sendable, CaseIterable {
     case once, always, notNow = "not_now"
@@ -1188,6 +1306,7 @@ struct AidenBotSession: Codable, Equatable, Sendable {
     /// Revision 37 (`bot:handoffs`): the hand-off the Bot waits on, or nil.
     let handoff: AidenRemoteBotHandoff?
     let accessRequest: AidenRemoteBotAccessRequest?
+    let plan: AidenRemoteBotPlan?
     /// Revision 42 (`bot:issues`): the Bot's issue cards, oldest first. Empty
     /// from a Mac or device without `bot:issues`.
     let issues: [AidenRemoteBotIssue]
@@ -1208,6 +1327,7 @@ struct AidenBotSession: Codable, Equatable, Sendable {
         queued: [AidenBotQueuedMessage] = [],
         handoff: AidenRemoteBotHandoff? = nil,
         accessRequest: AidenRemoteBotAccessRequest? = nil,
+        plan: AidenRemoteBotPlan? = nil,
         issues: [AidenRemoteBotIssue] = []
     ) {
         self.botId = botId
@@ -1223,6 +1343,7 @@ struct AidenBotSession: Codable, Equatable, Sendable {
         self.queued = queued
         self.handoff = handoff
         self.accessRequest = accessRequest
+        self.plan = plan
         self.issues = issues
     }
 
@@ -1231,7 +1352,7 @@ struct AidenBotSession: Codable, Equatable, Sendable {
             decoder,
             allowed: [
                 "botId", "epoch", "seq", "state", "interrupted", "blocked", "partial", "entries", "hasOlder",
-                "question", "approval", "activity", "queued", "handoff", "accessRequest", "issues",
+                "question", "approval", "activity", "queued", "handoff", "accessRequest", "plan", "issues",
             ]
         )
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -1264,6 +1385,7 @@ struct AidenBotSession: Codable, Equatable, Sendable {
         // Present (possibly null) only for a device holding `bot:handoffs`.
         handoff = try values.decodeIfPresent(AidenRemoteBotHandoff.self, forKey: .handoff)
         accessRequest = try values.decodeIfPresent(AidenRemoteBotAccessRequest.self, forKey: .accessRequest)
+        plan = try values.decodeIfPresent(AidenRemoteBotPlan.self, forKey: .plan)
         // Present only for a device holding `bot:issues`.
         if values.contains(.issues) {
             issues = try values.decode([AidenRemoteBotIssue].self, forKey: .issues)
@@ -1292,11 +1414,12 @@ struct AidenBotSession: Codable, Equatable, Sendable {
         if !queued.isEmpty { try values.encode(queued, forKey: .queued) }
         try values.encodeIfPresent(handoff, forKey: .handoff)
         try values.encodeIfPresent(accessRequest, forKey: .accessRequest)
+        try values.encodeIfPresent(plan, forKey: .plan)
         if !issues.isEmpty { try values.encode(issues, forKey: .issues) }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case botId, epoch, seq, partial, entries, hasOlder, question, approval, activity, queued, handoff, accessRequest, issues
+        case botId, epoch, seq, partial, entries, hasOlder, question, approval, activity, queued, handoff, accessRequest, plan, issues
     }
 }
 
@@ -1324,6 +1447,7 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         /// Revision 37: the waiting hand-off appeared (`handoff`) or was settled (nil).
         case handoff(AidenRemoteBotHandoff?)
         case accessRequest(AidenRemoteBotAccessRequest?)
+        case plan(AidenRemoteBotPlan?)
         /// Revision 42: the Bot's issue cards, oldest first; an empty list clears them.
         case issues([AidenRemoteBotIssue])
         /// The host closed this session; reconnect for a new epoch.
@@ -1354,6 +1478,7 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         case .queued: "queued"
         case .handoff: "handoff"
         case .accessRequest: "access_request"
+        case .plan: "plan"
         case .issues: "issues"
         case .closed: "closed"
         }
@@ -1417,6 +1542,10 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
             try AidenBotWire.requireOnlyKeys(payload, allowed: ["handoff"])
             guard fields.contains(.handoff) else { throw AidenBotContractError.invalidField("handoff") }
             kind = .handoff(try fields.decode(AidenRemoteBotHandoff?.self, forKey: .handoff))
+        case "plan":
+            try AidenBotWire.requireOnlyKeys(payload, allowed: ["plan"])
+            guard fields.contains(.plan) else { throw AidenBotContractError.invalidField("plan") }
+            kind = .plan(try fields.decode(AidenRemoteBotPlan?.self, forKey: .plan))
         case "access_request":
             try AidenBotWire.requireOnlyKeys(payload, allowed: ["accessRequest"])
             guard fields.contains(.accessRequest) else { throw AidenBotContractError.invalidField("accessRequest") }
@@ -1457,6 +1586,7 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         case let .queued(list): try fields.encode(list, forKey: .queued)
         case let .handoff(handoff): try fields.encode(handoff, forKey: .handoff)
         case let .accessRequest(request): try fields.encode(request, forKey: .accessRequest)
+        case let .plan(plan): try fields.encode(plan, forKey: .plan)
         case let .issues(issues): try fields.encode(issues, forKey: .issues)
         case .closed: break
         }
@@ -1467,7 +1597,7 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
     }
 
     private enum PayloadKeys: String, CodingKey {
-        case session, text, entry, question, approval, activity, queued, handoff, accessRequest, issues
+        case session, text, entry, question, approval, activity, queued, handoff, accessRequest, plan, issues
     }
 }
 

@@ -124,9 +124,16 @@ internal fun aidenShouldRequestBotImages(server: AidenServer, installation: Aide
     aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_IMAGES, server, installation)
 
 /**
- * Revision 42: a Mac that offers `bot:issues` in `serverCapabilities` is asked for it,
- * in a call of its own after every other negotiation, unless [installation] already holds it.
+ * Revision 56: plans are offered and negotiated alone, preserving the existing grants.
  */
+internal suspend fun aidenRequestBotPlans(
+    client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
+    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_PLANS, server, installation)) listOf(AidenRemoteCapability.BOT_PLANS) else emptyList(),
+    client, stillCurrent
+)
+
 internal fun aidenShouldRequestBotAccessRequests(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ACCESS_REQUESTS, server, installation)
 
@@ -651,11 +658,15 @@ class AidenRemoteCoordinator(
                     generation = generation, installation = installation, client = newClient,
                     server = issuesServer, request = ::aidenRequestBotAccessRequests
                 )
+                val plansServer = negotiateSoloCapability(
+                    generation = generation, installation = installation, client = newClient,
+                    server = accessServer, request = ::aidenRequestBotPlans
+                )
                 val jobsServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
-                    server = accessServer,
+                    server = plansServer,
                     request = ::aidenRequestChatJobs
                 )
                 // Revision 50: `attachments:raw` goes alone too.

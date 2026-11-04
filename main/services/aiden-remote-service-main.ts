@@ -144,6 +144,7 @@ import {
 } from "./aiden-remote-bot-session.js";
 import { botApprovals } from "./bot-runtime/bot-approvals-main.js";
 import { botQuestions } from "./bot-runtime/bot-questions-main.js";
+import { botPlans } from "./bot-plans/plans-main.js";
 import { botAccessRequests, answerBotAccessRequest } from "./bot-runtime/bot-access-requests-main.js";
 import { botHandoffs } from "./bot-runtime/bot-handoffs-main.js";
 import { botRunStarts, botTurnIntents } from "./bot-runtime/bot-turn-intents-main.js";
@@ -975,6 +976,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 // Revision 37: phones answer hand-offs through the desktop's own bridge.
                 handoffs: botHandoffs,
                 accessRequests: botAccessRequests,
+                plans: botPlans,
                 answerAccessRequest: answerBotAccessRequest,
                 // Revision 42: the desktop's own issue service raises, settles and acts.
                 issues: botIssues,

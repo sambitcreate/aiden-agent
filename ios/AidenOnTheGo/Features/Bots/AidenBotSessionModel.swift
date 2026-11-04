@@ -55,7 +55,7 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
 /// the chat reopens a feed that opened without one
 /// (`AidenBotSessionModel.reopenFeed()`; Android parity).
 func aidenBotSessionFeedGrants(_ installation: AidenInstallation?) -> Set<AidenRemoteCapability> {
-    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages, .botAccessRequests].filter { installation?.hasNegotiatedAccess(to: $0) == true })
+    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages, .botAccessRequests, .botPlans].filter { installation?.hasNegotiatedAccess(to: $0) == true })
 }
 
 /// How a Bot chat is opened. A host advertising `bot-durable-session-v1`
@@ -131,7 +131,8 @@ protocol AidenBotSessionTransport: Sendable {
         progress: (@Sendable (Double) -> Void)?
     ) async throws -> AidenAttachmentReference
     func removeBotAttachment(botId: String, attachmentId: String) async throws
-    /// Revision 37 (`bot:handoffs`): Done or Skip for the waiting hand-off.
+    /// Revision 56: answer a plan with no private proposal fields.
+    func respondBotPlan(botId: String, planId: String, request: AidenBotPlanRespondRequest, idempotencyKey: UUID) async throws -> AidenBotPlanRespondReceipt
     func answerBotAccessRequest(botId: String, waitId: String, request: AidenBotAccessAnswerRequest, idempotencyKey: UUID) async throws -> AidenBotAccessAnswerReceipt
     func answerBotHandoff(
         botId: String,
@@ -174,7 +175,10 @@ extension AidenBotSessionTransport {
 
     func removeBotAttachment(botId: String, attachmentId: String) async throws {}
 
-    /// A transport without hand-offs refuses them, as a Mac without `bot:handoffs` does.
+    /// A transport without plans never sends a plan answer.
+    func respondBotPlan(botId: String, planId: String, request: AidenBotPlanRespondRequest, idempotencyKey: UUID) async throws -> AidenBotPlanRespondReceipt {
+        throw AidenRemoteClientError.invalidResponse
+    }
     func answerBotAccessRequest(botId: String, waitId: String, request: AidenBotAccessAnswerRequest, idempotencyKey: UUID) async throws -> AidenBotAccessAnswerReceipt {
         throw AidenRemoteClientError.invalidResponse
     }
@@ -1201,6 +1205,16 @@ final class AidenBotSessionModel {
     /// Revision 37 (`bot:handoffs`): the hand-off the Bot is waiting on, or nil.
     private(set) var handoff: AidenRemoteBotHandoff?
     private(set) var accessRequest: AidenRemoteBotAccessRequest?
+    private(set) var plan: AidenRemoteBotPlan?
+    private(set) var planError: String?
+    private(set) var respondingPlanIds: Set<String> = []
+    var plansSupported = false {
+        didSet { if plansSupported != oldValue { invalidatePlanResponses(); if !plansSupported { adoptPlan(nil) } } }
+    }
+    @ObservationIgnored private var planGeneration = 0
+    @ObservationIgnored private var planWrites = 0
+    @ObservationIgnored private var planKeys: [String: UUID] = [:]
+    @ObservationIgnored private var planTokens: [String: UUID] = [:]
     /// Revision 42 (`bot:issues`): the Bot's "Needs you" cards, oldest first.
     private(set) var issues: [AidenRemoteBotIssue] = []
     /// The card an action is on its way for, so its buttons wait.
@@ -1318,6 +1332,7 @@ final class AidenBotSessionModel {
         botID: String,
         transport: any AidenBotSessionTransport,
         cacheKey: AidenBotSessionKey? = nil,
+        plansSupported: Bool = false,
         cache: AidenBotSessionCache = .shared,
         outboxStore: AidenBotOutboxStore? = .shared,
         retryDelays: [Duration] = [.seconds(1), .seconds(4)],
@@ -1326,6 +1341,7 @@ final class AidenBotSessionModel {
         now: @escaping () -> Date = { Date() }
     ) {
         self.botID = botID
+        self.plansSupported = plansSupported
         self.sharedImages = AidenSharedImageBytes(maxBytes: sharedImageBudget)
         self.transport = transport
         self.cacheKey = cacheKey
@@ -1365,6 +1381,7 @@ final class AidenBotSessionModel {
     /// the latest outbox.
     func release() {
         released = true
+        invalidatePlanResponses()
         attachTask?.cancel()
         backoffTask?.cancel()
         flushTask?.cancel()
@@ -1533,6 +1550,7 @@ final class AidenBotSessionModel {
     /// as they are. Between connections it does nothing: the next one opens
     /// with the grants held then.
     func reopenFeed() {
+        invalidatePlanResponses()
         guard let end = endFeedConnection else { return }
         feedReopenRequested = true
         end()
@@ -1632,6 +1650,8 @@ final class AidenBotSessionModel {
             handoffWrites += 1
             if next?.waitId != handoffMacPrompt?.waitId { handoffMacPrompt = nil }
             if let next, next.waitId != previous { onHandoffArrived?(next) }
+        case let .plan(next):
+            adoptPlan(plansSupported ? next : nil)
         case let .accessRequest(next):
             accessRequest = next
             accessRequestWrites += 1
@@ -1718,6 +1738,7 @@ final class AidenBotSessionModel {
         question = session.question
         approval = session.approval
         handoff = session.handoff
+        adoptPlan(plansSupported ? session.plan : nil)
         accessRequest = session.accessRequest
         accessRequestWrites += 1
         issues = session.issues
@@ -2084,6 +2105,8 @@ final class AidenBotSessionModel {
         let hadUnsent = outbox.contains { $0.submissionId == nil }
         backoffTask?.cancel()
         purgeGeneration += 1
+        invalidatePlanResponses()
+        adoptPlan(nil)
         restoreTask?.cancel()
         outbox = []
         if let cacheKey {
@@ -2263,6 +2286,64 @@ final class AidenBotSessionModel {
             restore()
             if error is CancellationError { return false }
             errorMessage = AidenBotSessionCopy.issueNotSent
+            return false
+        }
+    }
+
+    var composerHeldForPlan: Bool { plansSupported && plan?.status == .pending }
+    func canRespondToPlan(_ shown: AidenRemoteBotPlan) -> Bool {
+        plansSupported && isConnected && !released && plan == shown && !respondingPlanIds.contains(shown.planId)
+    }
+    private func invalidatePlanResponses() {
+        planGeneration += 1
+        planTokens.removeAll()
+        respondingPlanIds.removeAll()
+        planError = nil
+    }
+    private func adoptPlan(_ next: AidenRemoteBotPlan?) {
+        if next?.planId != plan?.planId || next?.status != plan?.status {
+            planKeys.removeAll()
+            planError = nil
+        }
+        plan = next
+        planWrites += 1
+    }
+    /// Keys belong to one plan and decision. No response writes an optimistic plan status.
+    func respondToPlan(_ decision: AidenBotPlanDecision) async -> Bool {
+        guard let shown = plan, canRespondToPlan(shown), shown.allows(decision) else { return false }
+        let action = "\(shown.planId):\(decision.rawValue)"
+        let key = planKeys[action] ?? UUID()
+        planKeys[action] = key
+        let token = UUID()
+        planTokens[shown.planId] = token
+        respondingPlanIds.insert(shown.planId)
+        planError = nil
+        let generation = planGeneration
+        let mark = planWrites
+        defer {
+            if planTokens[shown.planId] == token {
+                planTokens[shown.planId] = nil
+                respondingPlanIds.remove(shown.planId)
+            }
+        }
+        do {
+            let request = AidenBotPlanRespondRequest(decision: decision)
+            let receipt = try await aidenBotWithin(requestLimit) { [transport, botID] in
+                try await transport.respondBotPlan(botId: botID, planId: shown.planId, request: request, idempotencyKey: key)
+            }
+            guard generation == planGeneration, !released else { return false }
+            guard receipt.planId == shown.planId, receipt.status != .pending else { throw AidenRemoteClientError.invalidResponse }
+            if planWrites == mark { planKeys[action] = nil }
+            return true
+        } catch {
+            guard generation == planGeneration, !released, planWrites == mark, plan == shown else { return false }
+            if case let AidenRemoteClientError.server(status, body) = error, status == 409 && body.code.rawValue == "plan_expired" {
+                adoptPlan(nil)
+                return false
+            }
+            // A received refusal is final for this attempt. Network/5xx/invalid receipts keep the key.
+            if case let AidenRemoteClientError.server(status, _) = error, status < 500 { planKeys[action] = nil }
+            planError = "That answer wasn't sent. Please try again."
             return false
         }
     }
@@ -2447,7 +2528,7 @@ final class AidenBotSessionModel {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         // The staged photos and files go with it, and only with it.
         let attachments = pendingAttachments
-        guard canSend, !isAttaching,
+        guard canSend, !composerHeldForPlan, !isAttaching,
               (try? AidenBotMessageRequest(text: text, attachmentIds: attachments.map(\.id))) != nil,
               enqueue(text, mode: offersBusyModes ? mode ?? .queue : nil, retryOf: nil, attachments: attachments) else { return false }
         pendingAttachments = []

@@ -25,6 +25,7 @@ import { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import {
   AidenRemoteBotSessionService,
   projectAidenRemoteBotMemory,
+  projectAidenRemoteBotPlan,
   projectBotSessionActivity,
   projectBotSessionEntries,
   projectBotSessionState,
@@ -1526,7 +1527,7 @@ function activityBots() {
 /** Serve one Bot's SSE stream to a device with these opt-ins; keep the raw data lines too. */
 async function openAudienceStream(
   service: AidenRemoteBotSessionService,
-  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean; accessRequests?: boolean },
+  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean; accessRequests?: boolean; plans?: boolean },
   botId = BOT_ID,
 ) {
   const server = createServer((_request, response) => {
@@ -4112,4 +4113,226 @@ test("an access dismissal settles despite unrelated failed status writes and its
     await issues.list(BOT_ID);await repaired;
     assert.equal((await store.read(BOT_ID)).every(row=>row.statusAppended!==false),true);
   } finally {failing=false;await service.close();rmSync(profile,{recursive:true,force:true});}
+});
+
+// Revision 56: plans share the desktop core and the real Bot idempotency ledger.
+async function planSession() {
+  const { createBotPlans } = await import("./bot-plans/plans.js");
+  const dir = mkdtempSync(path.join(os.tmpdir(), "remote-plan-"));
+  let validator = async () => {};
+  const plans = createBotPlans({ profileDir: dir, knownBot: async () => true, revalidate: async () => validator(), revokeAccess() {} });
+  const runtime = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const service = new AidenRemoteBotSessionService({ bots: botService(), runtime: async () => runtime.runtime, plans });
+  const proposal = { title: "Prepare a draft", why: "Review it together", steps: ["Prepare a draft"], items: [{ id: "i1", kind: "shell" as const }], authorization: { policyRevision: "private-policy", bindingRevision: "private-binding", proposalFingerprint: "private-proposal", rules: [] } };
+  const { botPlanProposalFingerprint } = await import("./bot-plans/validate.js");
+  proposal.authorization.proposalFingerprint = botPlanProposalFingerprint(proposal);
+  const request = (planId = "plan-56") => plans.request({ botId: BOT_ID, planId, toolCallId: "private-tool-call", requestIds: ["private-request"], proposal, signal: undefined });
+  return { plans, service, request, setValidator: (next: typeof validator) => { validator = next; }, cleanup: async () => { await plans.endRuns(BOT_ID, "stopped"); await service.close(); rmSync(dir, { recursive: true, force: true }); } };
+}
+
+test("plan is omitted unless bot:plans is negotiated; pending snapshots, events and reconnect stay public", async () => {
+  const host = await planSession();
+  const holder = await openAudienceStream(host.service, { plans: true });
+  const legacy = await openAudienceStream(host.service, {});
+  try {
+    await holder.until(() => holder.frames.length === 1, "holder attached");
+    await legacy.until(() => legacy.frames.length === 1, "legacy attached");
+    const waiting = host.request();
+    await waitFor(async () => (await host.plans.current(BOT_ID))?.status === "pending");
+    const snapshot = await host.service.session(BOT_ID, { plans: true });
+    assert.equal(snapshot.plan?.status, "pending");
+    assert.equal(Object.prototype.hasOwnProperty.call(await host.service.session(BOT_ID), "plan"), false);
+    await holder.until(() => holder.frames.some(f => f.type === "plan"), "pending plan frame");
+    const wire = JSON.stringify(snapshot.plan);
+    for (const privateText of ["private-", "authorization", "toolCallId", "requestIds", "revision", "shell-1", BOT_ID]) assert.equal(wire.includes(privateText), false, privateText);
+    assert.equal(legacy.frames.some(f => f.type === "plan" || (f.type === "snapshot" && Object.prototype.hasOwnProperty.call(f.payload.session, "plan"))), false);
+    await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-approve-key-0001", { decision: "approve" });
+    assert.equal((await waiting).status, "approved");
+    assert.equal((await host.service.session(BOT_ID, { plans: true })).plan?.status, "active");
+    assert.equal((await host.service.session(BOT_ID, { plans: true })).plan?.expiresAt !== undefined, true);
+  } finally { await holder.close(); await legacy.close(); await host.cleanup(); }
+});
+
+test("respond approve reaches core once per key; settled refusals are forgotten and unknown decisions are 400", async () => {
+  const host = await planSession();
+  try {
+    await assert.rejects(host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-retry-key-0001", { decision: "approve" }), isError("plan_expired", 409));
+    const waiting = host.request();
+    await waitFor(async () => (await host.plans.current(BOT_ID))?.status === "pending");
+    await assert.rejects(host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-bad-key-000001", { decision: "allow" }), isError("invalid_request", 400));
+    const calls: string[] = []; const original = host.plans.respond.bind(host.plans);
+    host.plans.respond = async (...args) => { calls.push(args[2]); return original(...args); };
+    const answer = () => host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-retry-key-0001", { decision: "approve" });
+    assert.deepEqual(await Promise.all([answer(), answer()]), [{ planId: "plan-56", status: "active" }, { planId: "plan-56", status: "active" }]);
+    assert.equal((await waiting).status, "approved");
+    await answer(); assert.deepEqual(calls, ["approve"]);
+    await assert.rejects(host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-retry-key-0001", { decision: "stop" }), error => (error as { code?: string }).code === "idempotency_conflict");
+    await assert.rejects(host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-other-key-0001", { decision: "approve" }), isError("plan_expired", 409));
+    assert.deepEqual(await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-stop-key-00001", { decision: "stop" }), { planId: "plan-56", status: "stopped" });
+  } finally { await host.cleanup(); }
+});
+
+test("plan text is bounded and redacted member by member without projecting private proposal identities", () => {
+  const view = { planId: "plan-56", botId: "private-bot", revision: 78, status: "pending" as const,
+    title: "Read /Users/owner/private/report sk-abcdefghijklmnop and prepare", why: "\u202e" + "😀".repeat(301), from: "COS\u0000",
+    steps: [{ text: "\ud800" + "😀".repeat(201), status: "pending" as const }],
+    items: [{ id: "private-item", line: "Files · change /Users/owner/" + "folder/".repeat(100), details: ["/Users/owner/private/folder", "Tool " + "😀".repeat(200)] }, { id: "private-count", line: "Create events", details: [], used: 3, max: 5 }] };
+  const dto = projectAidenRemoteBotPlan(view);
+  assert.deepEqual(parseAidenRemoteBotSession({ botId: BOT_ID, epoch: "e1", seq: 0, state: "running", interrupted: false, entries: [], hasOlder: false, question: null, approval: null, plan: dto }).plan, dto);
+  assert.equal(dto.title, "Read [path] [redacted] and prepare");
+  assert.equal(dto.items[0]!.line, "Files · change [path]");
+  assert.equal(dto.items[0]!.details[0], "[path]");
+  assert.equal([...dto.items[0]!.details[1]!].length, 160);
+  assert.equal([...dto.why].length, 300);
+  assert.equal([...dto.steps[0]!.text].length, 200);
+  assert.equal(dto.from, "COS");
+  assert.equal(dto.steps[0]!.text.startsWith("�"), true);
+  assert.deepEqual(dto.items[1], { line: "Create events", details: [], used: 3, max: 5 });
+  const wire = JSON.stringify(dto);
+  for (const secret of ["owner", "abcdefghijklmnop", "private-bot", "private-item", "revision", "authorization"]) assert.equal(wire.includes(secret), false, secret);
+});
+
+test("maximum plan members are budgeted before partial, queued messages and transcript", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")], { "pi.live": { run: { inputs: [1] } } });
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  let plan: import("../../renderer/shared/bot-plans.js").BotPlanView | null = {
+    planId: "plan-budget", botId: BOT_ID, revision: 1, status: "pending", title: "界".repeat(80), why: "界".repeat(300), from: "界".repeat(120),
+    steps: Array.from({ length: 10 }, () => ({ text: "界".repeat(200), status: "pending" })),
+    items: Array.from({ length: 8 }, (_, n) => ({ id: `i${n}`, line: "界".repeat(120), details: Array.from({ length: 6 }, () => "界".repeat(160)), used: 25, max: 25 })),
+  };
+  let changed: (id: string) => void = () => {};
+  let off = 0;
+  const service = runningOn(driven, fake, { plans: { current: async () => plan, respond: async () => "not_waiting", onChange: fn => { changed = fn; return () => { off++; }; } } });
+  const holder = await openAudienceStream(service, { activity: true, plans: true });
+  const legacy = await openAudienceStream(service, { activity: true });
+  try {
+    await holder.until(() => holder.frames.length === 1, "holder snapshot");
+    await legacy.until(() => legacy.frames.length === 1, "legacy snapshot");
+    assert.equal(holder.frames[0]!.payload.session.activity.phase, "waiting");
+    assert.equal(legacy.frames[0]!.payload.session.activity.phase, "waiting");
+    await driven.emitView([user(1, "Plan dinners"), assistant(2, ESCAPED.repeat(100_000))], {
+      "pi.live": { generation: { message: { content: [{ type: "text", text: ESCAPED.repeat(100_000) }] } } },
+      ...waitingInbox(Array.from({ length: 3 }, (_, n) => escapedMessage(`m${n}`, 32_000))),
+    });
+    const snapshot = await service.session(BOT_ID, { activity: true, plans: true });
+    assert.deepEqual(snapshot.plan, projectAidenRemoteBotPlan(plan));
+    assert.equal(snapshot.hasOlder, true);
+    assert.ok(Buffer.byteLength(JSON.stringify(snapshot)) < AIDEN_REMOTE_MAX_SSE_FRAME_BYTES);
+    plan = null; changed(BOT_ID);
+    await holder.until(() => holder.frames.some(f => f.type === "plan" && f.payload.plan === null), "plan cleared");
+    await legacy.until(() => legacy.frames[legacy.frames.length - 1]!.seq === holder.frames[holder.frames.length - 1]!.seq, "legacy caught up");
+    assert.equal(legacy.frames.some(f => f.type === "plan"), false);
+    assert.equal(gapless(holder.frames), true); assert.equal(gapless(legacy.frames), true);
+    assertEveryFrameFits(holder.blocks); assertEveryFrameFits(legacy.blocks);
+  } finally { await holder.close(); await legacy.close(); await service.close(); }
+  assert.equal(off, 1);
+});
+
+test("a transient plan read leaves the pending card answerable with the same key", async () => {
+  const host = await planSession();
+  try {
+    const wait = host.request(); await host.plans.current(BOT_ID);
+    const current = host.plans.current.bind(host.plans); let failed = false;
+    host.plans.current = async (...args) => { if (!failed) { failed = true; throw new Error("plan storage temporarily unavailable"); } return current(...args); };
+    const answer = () => host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-transient-key-01", { decision: "approve" });
+    await assert.rejects(answer(), /temporarily unavailable/u);
+    assert.equal((await current(BOT_ID))?.status, "pending");
+    assert.deepEqual(await answer(), { planId: "plan-56", status: "active" });
+    assert.equal((await wait).status, "approved");
+  } finally { await host.cleanup(); }
+});
+
+test("a lost post-effect read never reapproves the same plan; distinct choices use distinct keys", async () => {
+  const host = await planSession();
+  try {
+    const wait = host.request(); await host.plans.current(BOT_ID);
+    const original = host.plans.respond.bind(host.plans); let decisions = 0; let fail = true;
+    host.plans.respond = async (...args) => { decisions++; const result = await original(...args); if (fail) { fail = false; throw new Error("lost after settlement"); } return result; };
+    const answer = () => host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-lost-key-00001", { decision: "approve" });
+    await assert.rejects(answer(), /lost after settlement/u);
+    assert.equal((await wait).status, "approved");
+    await assert.rejects(answer(), isError("plan_expired", 409));
+    assert.equal(decisions, 1);
+    assert.deepEqual(await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-stop-new-key-01", { decision: "stop" }), { planId: "plan-56", status: "stopped" });
+    assert.equal(decisions, 2);
+  } finally { await host.cleanup(); }
+});
+
+test("exact host status survives replacement and a Stop after core settlement", async () => {
+  const host = await planSession(); let next: ReturnType<typeof host.request> | undefined;
+  try {
+    const wait = host.request(); await host.plans.current(BOT_ID);
+    const original = host.plans.respond.bind(host.plans);
+    host.plans.respond = async (...args) => { const result = await original(...args); await original(BOT_ID, "plan-56", "stop"); next = host.request("plan-next"); await host.plans.current(BOT_ID); return result; };
+    assert.deepEqual(await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-race-key-00001", { decision: "approve" }), { planId: "plan-56", status: "stopped" });
+    assert.equal((await wait).status, "approved");
+    assert.equal((await host.plans.current(BOT_ID))?.planId, "plan-next");
+    await original(BOT_ID, "plan-next", "not_now"); await next;
+  } finally { await host.cleanup(); }
+});
+
+test("approval revalidation failure grants nothing and does not poison a later exact same-key attempt", async () => {
+  const host = await planSession();
+  try {
+    host.setValidator(async () => { throw new Error("binding changed"); });
+    const wait = host.request(); const rejected = assert.rejects(wait, /binding changed/u); await host.plans.current(BOT_ID);
+    const answer = () => host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-policy-key-001", { decision: "approve" });
+    await assert.rejects(answer(), /binding changed/u); await rejected;
+    assert.equal(await host.plans.current(BOT_ID), null);
+    await assert.rejects(answer(), isError("plan_expired", 409));
+    host.setValidator(async () => {});
+    const retry = host.request(); await host.plans.current(BOT_ID);
+    assert.deepEqual(await answer(), { planId: "plan-56", status: "active" }); assert.equal((await retry).status, "approved");
+  } finally { await host.cleanup(); }
+});
+
+test("Not now clears the core wait and reconnect reflects ended and missing plans", async () => {
+  const host = await planSession();
+  try {
+    const wait = host.request(); await host.plans.current(BOT_ID);
+    const answer = () => host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-decline-key-01", { decision: "not_now" });
+    assert.deepEqual(await answer(), { planId: "plan-56", status: "stopped" });
+    assert.equal((await wait).status, "declined"); assert.deepEqual(await answer(), { planId: "plan-56", status: "stopped" });
+    const reconnect = await openAudienceStream(host.service, { plans: true });
+    try { await reconnect.until(() => reconnect.frames.length === 1, "reconnect snapshot"); assert.equal(reconnect.frames[0]!.payload.session.plan, null); } finally { await reconnect.close(); }
+  } finally { await host.cleanup(); }
+});
+
+test("opposing plan decisions with independent keys settle exactly once", async () => {
+  const host = await planSession();
+  try {
+    const wait = host.request(); await host.plans.current(BOT_ID);
+    const answers = await Promise.allSettled([
+      host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-race-approve-01", { decision: "approve" }),
+      host.service.respondPlan("other-phone", BOT_ID, "plan-56", "plan-race-not-now-01", { decision: "not_now" }),
+    ]);
+    assert.equal(answers.filter(a => a.status === "fulfilled").length, 1);
+    const loser = answers.find(a => a.status === "rejected") as PromiseRejectedResult;
+    assert.ok(isError("plan_expired", 409)(loser.reason));
+    const result = await wait;
+    const current = await host.plans.current(BOT_ID);
+    assert.equal(current?.status === "active", result.status === "approved");
+    const success = answers.find(a => a.status === "fulfilled") as PromiseFulfilledResult<{ planId: string; status: string }>;
+    assert.equal(success.value.status, result.status === "approved" ? "active" : "stopped");
+  } finally { await host.cleanup(); }
+});
+
+test("host lifecycle changes reach reconnect; a host without plans never advertises or emits them", async () => {
+  const host = await planSession();
+  try {
+    const wait = host.request(); await host.plans.current(BOT_ID);
+    assert.equal(host.service.supportsPlans, true);
+    await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-lifecycle-key-1", { decision: "approve" }); await wait;
+    await host.plans.endRuns(BOT_ID, "finished");
+    const reconnect = await openAudienceStream(host.service, { plans: true });
+    try { await reconnect.until(() => reconnect.frames.length === 1, "ended reconnect"); assert.equal(reconnect.frames[0]!.payload.session.plan.status, "finished"); } finally { await reconnect.close(); }
+    await host.plans.forgetBot(BOT_ID);
+    assert.equal((await host.service.session(BOT_ID, { plans: true })).plan, null);
+  } finally { await host.cleanup(); }
+  const bare = sessionService(fakeRuntime({ kind: "idle" }).runtime);
+  try {
+    assert.equal(bare.supportsPlans, false);
+    assert.equal(Object.prototype.hasOwnProperty.call(await bare.session(BOT_ID, { plans: true }), "plan"), false);
+    await assert.rejects(bare.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-no-host-key-001", { decision: "approve" }), isError("not_found", 404));
+  } finally { await bare.close(); }
 });

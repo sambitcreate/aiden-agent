@@ -285,6 +285,7 @@ async function fixture(options: {
               capability !== "bot:images" &&
               capability !== "bot:issues" &&
               capability !== "bot:access-requests" &&
+              capability !== "bot:plans" &&
               capability !== "schedule:cards" &&
               capability !== "chat:jobs" &&
               capability !== "attachments:raw" &&
@@ -7213,4 +7214,36 @@ test("Bot list and detail counts project only issues visible to the device", asy
       assert.equal(detail.issueCount, access ? 3 : 1);
     } finally { await app.close(); }
   }
+});
+
+test("plan routes advertise only when wired, negotiate separately and require every grant plus a key", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "content-type": "application/json" };
+  const seen: unknown[][] = [];
+  const sessions = { ...recordingIssueSessions([], true), supportsPlans: true, respondPlan: async (...args: unknown[]) => { seen.push(args); return { planId: "plan-56", status: "active" as const }; } };
+  for (const [caps, wired, expected] of [
+    [["server:read", "bot:read", "bot:write", "bot:plans"], true, 200],
+    [["server:read", "bot:read", "bot:write"], true, 403],
+    [["server:read", "bot:read", "bot:plans"], true, 403],
+    [["server:read", "bot:write", "bot:plans"], true, 403],
+    [["server:read", "bot:read", "bot:write", "bot:plans"], false, 404],
+  ] as const) {
+    const app = await fixture({ capabilities: [...caps], acceptsBotCapabilities: true, deviceType: "iphone", botSessions: { ...sessions, supportsPlans: wired } });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.serverCapabilities.includes("bot:plans"), wired);
+      assert.equal(server.features.includes("bot:plans"), false);
+      assert.ok(server.features.length <= AIDEN_REMOTE_MAX_SERVER_FEATURES);
+      const url = `${app.base}/bots/bot:00000000-0000-4000-8000-000000000056/plans/plan-56/respond`;
+      const response = await fetch(url, { method: "POST", headers: { ...headers, "idempotency-key": "plan-answer-route-56" }, body: JSON.stringify({ decision: "approve" }) });
+      assert.equal(response.status, expected);
+      if (expected === 200) {
+        assert.deepEqual(await response.json(), { planId: "plan-56", status: "active" });
+        assert.equal((await fetch(url, { method: "POST", headers, body: JSON.stringify({ decision: "approve" }) })).status, 400);
+      }
+      const negotiated = await fetch(`${app.base}/device/capabilities`, { method: "POST", headers, body: JSON.stringify({ accepts: ["bot:plans"] }) });
+      assert.equal(negotiated.status, wired ? 200 : 404);
+    } finally { await app.close(); }
+  }
+  assert.equal(seen.length, 1);
+  assert.deepEqual(seen[0]!.slice(1), ["bot:00000000-0000-4000-8000-000000000056", "plan-56", "plan-answer-route-56", { decision: "approve" }]);
 });

@@ -27,3 +27,5 @@
 - Task7 first Cua attempt reached the pending card but failed its composer locator: readiness changes the placeholder, so Ask Planner is absent while Send is held. Used the actual textarea for draft/Enter assertions, preserving the behavioral oracle. Failure log /tmp/bot-plan-c-task7-cua.log.
 
 - Task7 max-length Cua acceptance reproduced a clipped review: first step had viewport ratio0 and no scrollable review ancestor. Added a bounded keyboard-scrollable Plan review region keeping heading/actions outside; retained failing log /tmp/bot-plan-c-task7-long-review-red.log.
+
+- Task8 source-ready initial whole types overlapped host final corrections: missing route-label union and widened/nullable paired fixture assertions. Host corrected owned files; parent fresh whole types exited0. Retained initial/final logs /tmp/bot-plan-c-task8-parent-types{,-final}.log.

@@ -481,20 +481,20 @@ The Bot ticks steps with a second, tiny tool, `plan_step({ step, status })`. Onl
   ```
 - Devices without `bot:plans` never receive `plan`. The host's existing `needsYou` and summary signals still count a pending plan, so their Inbox shows the Bot as needing them with no client change. Phones negotiate `bot:plans` in a `POST /device/capabilities` call of its own, only when the host lists it in `serverCapabilities`, and treat a 400 or 404 as not offered. The total stays within `AIDEN_REMOTE_MAX_SERVER_FEATURES` (32).
 
-- [ ] **Step 1: Write the failing host tests:**
+- [x] **Step 1: Write the failing host tests:**
   - `plan is omitted unless bot:plans is negotiated`.
   - `a pending plan reaches holders in the snapshot and as a plan frame`.
   - `respond approve reaches BotPlans.respond once per Idempotency-Key`.
   - `respond on a settled plan is 409 plan_expired and records nothing for its key`.
   - `an unknown decision is 400`.
-- [ ] **Step 2: Implement the host side.** Add the fixture section that both native suites decode.
-- [ ] **Step 3: Native.** iOS and Android decode `plan` and render the card with the same copy as Task 7: Approve plan, Not now, Show details, and the checklist with Stop plan. Tests:
+- [x] **Step 2: Implement the host side.** Add the fixture section that both native suites decode.
+- [x] **Step 3: Native.** iOS and Android decode `plan` and render the card with the same copy as Task 7: Approve plan, Not now, Show details, and the checklist with Stop plan. Tests:
   - decode the fixture's pending and active plans;
   - Approve posts `{decision: "approve"}` with one Idempotency-Key reused while the outcome is unknown;
   - a `409 plan_expired` removes the card;
   - a host without `bot:plans` renders nothing.
-- [ ] **Step 4: Run** `npx tsx --test main/services/aiden-remote-bot-session.test.ts main/services/aiden-remote-protocol.test.ts main/services/aiden-remote-operation-contract.test.ts`, then the iOS focused tests (`xcodebuild test -only-testing:AidenOnTheGoTests/AidenBotPlanTests`, or the command `ios/README.md` documents), then Android (`./gradlew :app:testDebugUnitTest --tests '*AidenBotPlan*'`). Expected: PASS.
-- [ ] **Step 5: Commit:** "Show and approve Bot plans on phones".
+- [x] **Step 4: Run** `npx tsx --test main/services/aiden-remote-bot-session.test.ts main/services/aiden-remote-protocol.test.ts main/services/aiden-remote-operation-contract.test.ts`, then the iOS focused tests (`xcodebuild test -only-testing:AidenOnTheGoTests/AidenBotPlanTests`, or the command `ios/README.md` documents), then Android (`./gradlew :app:testDebugUnitTest --tests '*AidenBotPlan*'`). Expected: PASS.
+- [x] **Step 5: Commit:** "Show and approve Bot plans on phones".
 
 ### Task 9: Docs, onboarding, memory and the plan index
 
@@ -605,3 +605,24 @@ Worker meaningful missing-module and pane behavioral REDs are `/tmp/bot-plan-c-t
 ### Task 7 long-review acceptance, 2026-11-04
 
 A parent max-length Cua case found a genuine review gap after the first Mac card commit331dc9d6b: ten long steps and eight coverage rows pushed the first steps above the clipped fixed footer. RED `/tmp/bot-plan-c-task7-long-review-red.log` records viewport ratio0. The card now has a bounded keyboard-scrollable Plan review region, preserving its title and approval actions outside the scrolling content and the shared neutral focus treatment. Cua checks Home/End traversal, first/last steps and trailing coverage, persistent visible Approve and preserved draft. GREEN1 `/tmp/bot-plan-c-task7-long-review-green.log`; focused UI99 and scoped lint passed, and the long-review dark screenshot was inspected. The E2E build type-check passed. A concurrent whole-root type-check reports only the Task8 host worker's expected missing APIs in its new RED tests; full whole-root green is deferred until that host implementation is ready.
+
+
+### Task 8 started, 2026-11-04
+
+Mac card commits331dc9d6b and8bc007425 include normal and maximum-length Cua acceptance. Task8 host work now owns the capability/DTO/snapshot/SSE/response route, revision56 fixture and OpenAPI in a bounded worker. The native worker is read-only until the host publishes its stable canonical fixture manifest, then implements both platforms against that seam. Root owns registration, integrated verification and status. Tasks9/D and Gate5 remain pending.
+
+
+### Task 8 host complete locally, 2026-11-04
+
+Host revision56 adds bot:plans, strict public plan DTOs, holder-only snapshots/SSE and POST /bots/:botId/plans/:planId/respond with bot:read+bot:write+bot:plans and Idempotency-Key. Exact core identities provide first-answer-wins; settled answers return forgotten409 plan_expired, transient errors remain replay-safe, and post-effect retries cannot approve twice or reinstall authority. Responses use plan-qualified host status through replacement/Stop. Public strings are bounded/redacted before snapshot budgeting; private proposal, binding and input identities stay on the host. Legacy streams remain gapless, paired Macs ignore unsupported frames, and CLI offers no plan tools or capability. The canonical botPlans fixture is shared unchanged with native.
+
+Host final five-file suite335, wholetypes, scopedlint10files and whitespace passed; full handoff `/tmp/aiden-bot-plan-c-task8-host-handoff.md`, final log `/tmp/bot-plan-c-task8-host-final.log`. A final independent schema oracle caught OpenAPI allowing used>max and rejecting valid newline display text; meaningful RED/GREEN3 logs are mapped in the handoff. No fixture/DTO shape changed. Parent broad integration passed plans138/runtime403/Bots997/rules62/access84/messaging89/remote-chat228/registry15 and fullRemote175+1059+7+29 with2existing skips; wholetypes/scopedlint passed. CLIbuild268files27MiB,183pass3existingPTYskips/types passed. Cua production startup/access+plan2 passed13.9s. Parent log map `/tmp/aiden-bot-plan-c-task8-parent-validation.md`. Native validation and Step4/5 remain pending. Task9/Gate5/D remain held. No physical/live/package/hosted-CI claim.
+
+
+### Task 8 complete locally, 2026-11-04
+
+Both native clients consume the same revision56 canonical fixture and strictly decode public plan snapshots/frames, optional clears, bounded paired counters, ISO dates and error receipts. They negotiate bot:plans separately when offered, preserve legacy hosts, gate controls, retain per-plan/per-decision retry identities, and prevent late receipts/errors from changing replacement cards. Pending cards hold Send while drafts remain editable; host feeds own settlement. Plan reviews are bounded/scrollable with reachable decisions and native accessibility labels. No native rendered-UI acceptance is claimed.
+
+Native handoff `/tmp/aiden-bot-plan-c-task8-native-handoff.md`: iOS419 total,414pass/5existing physical/configuration skips/0fail, final exit0 and finalized result `/tmp/bot-plan-c-task8-native-ios-final.xcresult`; Android1169pass/0fail across96classes, lint0errors/51warnings/5hints and instrumented-test compilation passed. Logs `/tmp/bot-plan-c-task8-native-{ios,android}-final.log`. Meaningful native REDs and coordinator/date-boundary corrections are retained in the handoff. New XCTest membership is registered in the Xcode project; Gradle discovers the Kotlin contract test. Existing Xcode compiler/main-thread warnings and unsigned-simulator entitlement limits remain documented, not claimed fixed. Native source edits stopped after final tests.
+
+Host and parent evidence is recorded above and in both handoffs. Parent final protocol/schema and registry reruns passed after the host schema audit. Task8 is complete for source/local tests; Task9 docs/onboarding and full-C Gate5 remain pending. No physical-device, signed-Keychain, live-provider, package/release or hosted-CI acceptance exists. Remote56 still needs main-time revision recheck.
