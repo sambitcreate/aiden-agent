@@ -14,11 +14,19 @@ type Stage = "inventory" | "search" | "schemas" | "account_selection" | "invalid
 type Reason = "accepted" | "not_started" | "shape" | "missing" | "unsupported" | "invalid" | "changed" | "multiple_accounts" | "no_account" | "routing_unverified" | "no_readable_calendar" | "no_timed_event" | "limit" | "access_changed" | "cancelled" | "timed_out" | "failed";
 type ValueType = "missing" | "null" | "object" | "array" | "string" | "number" | "boolean" | "other";
 type NegativeBlock = "none" | "envelope" | "unexpected_action_field" | "unexpected_data_field" | "remote_file_info" | "counts" | "unexpected_result_field" | "correlation" | "response" | "error";
+interface NegativeErrorGrammar {
+  attemptedAccountMention: boolean;
+  curatedToolkitMention: boolean;
+  prefix: "account" | "connected_account" | "unknown_account" | "no_account_with_id" | "invalid_account" | "other" | "missing";
+  grammar: "exact_known" | "account_not_found" | "connected_account_not_found" | "unknown_account" | "no_account_with_id" | "invalid_account" | "other" | "missing";
+  availableAccounts: "none" | "empty" | "bracketed" | "other";
+}
 interface NegativeShape {
   blockedField: NegativeBlock;
   action: { successful: ValueType; data: ValueType; error: ValueType };
   data: { results: ValueType; resultCount?: number; totalCount?: number; successCount?: number; errorCount?: number };
   result: { value: ValueType; response: ValueType; error: ValueType; slugMatches: boolean; indexMatches: boolean; errorCategory: "exact_known" | "account_not_found_text" | "auth_or_permission" | "other" | "missing" };
+  errorGrammar: NegativeErrorGrammar;
 }
 export interface ComposioCalendarReadCheckProof {
   revision: "composio-calendar-read-check-v1";
@@ -68,7 +76,38 @@ function reject(code: ComposioCalendarReadCheckCode, reason: Reason): never { th
 /** Only explicit account-selection failures with ONE correlated failed item
  * and NO response/data establish the negative oracle. Generic errors, client
  * argument refusal, auth failure and timeout are inconclusive. */
-function negativeShape(value: unknown, blockedField: NegativeBlock): NegativeShape {
+/** Classification only: no grammar match is consulted by the account oracle.
+ * Full templates use this attempt's exact generated ID, not a saved account. */
+function negativeErrorGrammar(error: string | undefined, attemptedId: string, exact: boolean): NegativeErrorGrammar {
+  const facts: NegativeErrorGrammar = { attemptedAccountMention: false, curatedToolkitMention: false, prefix: error === undefined ? "missing" : "other", grammar: error === undefined ? "missing" : "other", availableAccounts: "none" };
+  if (error === undefined || error.length > 4_096) return facts;
+  const tokens = error.split(/[^A-Za-z0-9_]/u);
+  facts.attemptedAccountMention = tokens.includes(attemptedId);
+  facts.curatedToolkitMention = tokens.some((token) => token.toLowerCase() === "googlecalendar");
+  let body = error;
+  const availableAt = body.indexOf(" Available accounts: ");
+  if (availableAt !== -1) {
+    const suffix = body.slice(availableAt + " Available accounts: ".length);
+    facts.availableAccounts = suffix === "[]" ? "empty" : suffix.startsWith("[") && suffix.endsWith("]") ? "bracketed" : "other";
+    body = body.slice(0, availableAt);
+  }
+  if (body.endsWith(".")) body = body.slice(0, -1);
+  facts.prefix = /^Connected account(?: |:)/u.test(body) ? "connected_account" : /^Unknown account(?: |:)/u.test(body) ? "unknown_account" : /^No account(?: found)? with id(?: |:)/u.test(body) ? "no_account_with_id" : /^Invalid (?:connected )?account(?: |:)/u.test(body) ? "invalid_account" : /^Account(?: |:)/u.test(body) ? "account" : "other";
+  if (exact) { facts.grammar = "exact_known"; return facts; }
+  if (facts.availableAccounts === "other") return facts;
+  const suffixes = ["", " for toolkit googlecalendar", " for toolkit 'googlecalendar'", ' for toolkit "googlecalendar"'];
+  for (const id of [attemptedId, `'${attemptedId}'`, `"${attemptedId}"`]) {
+    const templates: [NegativeErrorGrammar["grammar"], string][] = [
+      ["account_not_found", `Account ${id} not found`], ["account_not_found", `Account ${id} does not exist`],
+      ["connected_account_not_found", `Connected account ${id} not found`], ["connected_account_not_found", `Connected account ${id} does not exist`],
+      ["unknown_account", `Unknown account ${id}`], ["no_account_with_id", `No account with id ${id}`], ["no_account_with_id", `No account found with id ${id}`],
+      ["invalid_account", `Invalid account ${id}`], ["invalid_account", `Invalid connected account ${id}`],
+    ];
+    for (const [category, template] of templates) if (suffixes.some((suffix) => body === template + suffix)) { facts.grammar = category; return facts; }
+  }
+  return facts;
+}
+function negativeShape(value: unknown, blockedField: NegativeBlock, attemptedId: string): NegativeShape {
   const type = (value: unknown): ValueType => value === undefined ? "missing" : value === null ? "null" : Array.isArray(value) ? "array" : ["object", "string", "number", "boolean"].includes(typeof value) ? typeof value as ValueType : "other";
   const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
   let action: Record<string, unknown> = {}; try { action = calendarContractExecutorAction(value); } catch { /* Shape remains explicitly missing. */ }
@@ -76,12 +115,13 @@ function negativeShape(value: unknown, blockedField: NegativeBlock): NegativeSha
   const count = (value: unknown): number | undefined => Number.isSafeInteger(value) && (value as number) >= 0 ? Math.min(value as number, 12_001) : undefined;
   const error = typeof result.error === "string" ? result.error : undefined;
   const exact = error !== undefined && ["ACCOUNT_NOT_FOUND", "CONNECTED_ACCOUNT_NOT_FOUND", "INVALID_CONNECTED_ACCOUNT", "Connected account not found", "Connected account does not exist"].includes(error);
-  return { blockedField, action: { successful: type(action.successful), data: type(action.data), error: type(action.error) }, data: { results: type(data.results), ...(Array.isArray(data.results) ? { resultCount: Math.min(data.results.length, 12_001) } : {}), ...(count(data.total_count) === undefined ? {} : { totalCount: count(data.total_count) }), ...(count(data.success_count) === undefined ? {} : { successCount: count(data.success_count) }), ...(count(data.error_count) === undefined ? {} : { errorCount: count(data.error_count) }) }, result: { value: type(first), response: type(result.response), error: type(result.error), slugMatches: result.tool_slug === "GOOGLECALENDAR_LIST_CALENDARS", indexMatches: result.index === 0, errorCategory: exact ? "exact_known" : error === undefined ? "missing" : /account.{0,80}(?:not found|does not exist)/iu.test(error) ? "account_not_found_text" : /auth|permission|forbidden/iu.test(error) ? "auth_or_permission" : "other" } };
+  return { blockedField, action: { successful: type(action.successful), data: type(action.data), error: type(action.error) }, data: { results: type(data.results), ...(Array.isArray(data.results) ? { resultCount: Math.min(data.results.length, 12_001) } : {}), ...(count(data.total_count) === undefined ? {} : { totalCount: count(data.total_count) }), ...(count(data.success_count) === undefined ? {} : { successCount: count(data.success_count) }), ...(count(data.error_count) === undefined ? {} : { errorCount: count(data.error_count) }) }, result: { value: type(first), response: type(result.response), error: type(result.error), slugMatches: result.tool_slug === "GOOGLECALENDAR_LIST_CALENDARS", indexMatches: result.index === 0, errorCategory: exact ? "exact_known" : error === undefined ? "missing" : /account.{0,80}(?:not found|does not exist)/iu.test(error) ? "account_not_found_text" : /auth|permission|forbidden/iu.test(error) ? "auth_or_permission" : "other" }, errorGrammar: negativeErrorGrammar(error, attemptedId, exact) };
 }
 function accountSelectionFailure(value: unknown): NegativeBlock {
   try {
     const action = calendarContractExecutorAction(value);
-    if (Object.keys(action).some((key) => !["successful", "data", "error"].includes(key))) return "unexpected_action_field";
+    if (Object.keys(action).some((key) => !["successful", "data", "error", "log_id"].includes(key))) return "unexpected_action_field";
+    if (action.log_id !== undefined && (typeof action.log_id !== "string" || action.log_id.length > 256)) return "envelope";
     if (typeof action.successful !== "boolean" || (action.error !== undefined && action.error !== null && (typeof action.error !== "string" || action.error.length > 4_096))) return "envelope";
     const data = calendarContractObject(action.data);
     if (Object.keys(data).some((key) => !["results", "total_count", "success_count", "error_count", "session", "next_steps", "remote_file_info"].includes(key))) return "unexpected_data_field";
@@ -157,7 +197,7 @@ export async function checkComposioCalendarRead(raw: ComposioCalendarReadCheckPo
     verified.request(negative, sessionId); // Client refusal is not routing proof.
     proof.calls.invalidAccount = true;
     await readCalendar(negative, (reply) => {
-      const blocked = accountSelectionFailure(reply); proof.negative = negativeShape(reply, blocked);
+      const blocked = accountSelectionFailure(reply); proof.negative = negativeShape(reply, blocked, invalidId);
       verified.executorResponse(reply);
       if (blocked !== "none") reject("invalid_account_unverified", "routing_unverified");
     });

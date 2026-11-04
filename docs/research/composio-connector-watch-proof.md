@@ -191,3 +191,10 @@ Closed facts identify Calendar validation of an MCP result with `isError:true`, 
 ### V14 failed-operation shape gate — 2026-11-04
 
 The Calendar-only failed-item decoder (`a3af42a42`) was clear after Sol high review with 156 independent cases. Immutable pre-Open-work snapshot `e5b569ad5` passed its build, 373 focused snapshot cases, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793775930096`) advanced past MCP error decoding and then rejected an additional property in the fixed host executor-output schema. The three installed read schemas still passed; no exact account-rejection proof or real-account Calendar read followed. Additional-property location and known-field classification are diagnostic-only follow-up work. The strict account-error oracle, access settings and Calendar gate remain unchanged.
+
+
+### V15 observed trace metadata — 2026-11-04
+
+The closed executor-shape diagnostic (`eb9f95c40`) was clear after Sol high review with 134 independent cases. Immutable pre-Open-work snapshot `ef51a8c48` passed its full build, 375 focused cases, signed/native preflight and isolated startup. The owner-authorized actual check (`checkedAt:1793776341009`) identifies only `log_id` as an extra action field; data and result have no extra fields. The MCP error contains a single Calendar-list result at index zero, counts1/0/1, no application response, and an error outside the five exact known account-error strings. No identifier, error text or trace value is retained.
+
+This establishes the trace-field compatibility gap, not account rejection. A bounded known-field correction and closed error-pattern diagnostics are being reviewed separately. Calendar remains unavailable; no real-account Calendar-list, event or GET read ran.

@@ -95,11 +95,41 @@ test("a host rejection before returning the negative reply preserves closed extr
   assert.equal(result.code, "unsupported_contract"); assert.equal(result.privateProof.invalidAccountRejected, false);
   assert.equal(f.reads.length, 1); assert.equal(result.privateProof.calls.calendars, 0); assert.equal(result.privateProof.negative, undefined);
   const facts = result.privateProof.contractFailure!.facts!.executorResponse!;
-  assert.deepEqual(facts.extraFields.action, ["log_id", "other"]); assert.equal(facts.mcpIsError, true);
+  assert.deepEqual(facts.extraFields.action, ["other"]); assert.equal(facts.mcpIsError, true);
   assert.equal(facts.oneResult && facts.totalOne && facts.successZero && facts.errorOne && facts.indexZero && facts.calendarListSlug && facts.responseAbsentOrNull, true);
   assert.equal(facts.itemError, "other");
   for (const secret of ["private-top-error", "private-log-id", "private_extra", "private-extra-value", "No active connected account found"]) assert.equal(JSON.stringify(result).includes(secret), false);
   assert.equal("privateProof" in publicComposioCalendarReadCheckResult(result), false);
+});
+
+test("action log metadata permits the unchanged exact oracle, while attempted-ID grammar remains private diagnostics only", async () => {
+  for (const [makeError, grammar, mentionsAttempt, availableAccounts, prefix, toolkitMention] of [
+    [(_id: string) => "CONNECTED_ACCOUNT_NOT_FOUND", "exact_known", false, "none", "other", false],
+    [(id: string) => `Account '${id}' not found for toolkit 'googlecalendar'. Available accounts: []`, "account_not_found", true, "empty", "account", true],
+    [(id: string) => `Connected account "${id}" does not exist`, "connected_account_not_found", true, "none", "connected_account", false],
+    [(id: string) => `Unknown account ${id}`, "unknown_account", true, "none", "unknown_account", false],
+    [(id: string) => `No account found with id '${id}' for toolkit googlecalendar. Available accounts: ['private-other-account']`, "no_account_with_id", true, "bracketed", "no_account_with_id", true],
+    [(id: string) => `Invalid account ${id}`, "invalid_account", true, "none", "invalid_account", false],
+    [(id: string) => `Account ${id}suffix not found`, "other", false, "none", "account", false],
+    [(_id: string) => "Account ca_wrongaccount not found", "other", false, "none", "account", false],
+    [(id: string) => `Account ${id} not found; permission denied`, "other", true, "none", "account", false],
+    [(id: string) => `Account ${id} not found for toolkit gmail`, "other", true, "none", "account", false],
+  ] as const) {
+    const f = fixture(), original = f.port.readCalendar!; delete f.metadata[2]!.outputSchema;
+    f.port.readCalendar = async (read, session) => {
+      if (read.accountId === actualAccount) return original(read, session);
+      f.reads.push(read);
+      return { isError: true, structuredContent: { ...syntheticCalendarExecutor(read, undefined, makeError(read.accountId)), successful: false, error: "Failed", log_id: "private-log-value" } };
+    };
+    const result = await checkComposioCalendarRead(f.port, options());
+    const accepted = grammar === "exact_known";
+    assert.equal(result.code, accepted ? "verified" : "invalid_account_unverified"); assert.equal(result.privateProof.invalidAccountRejected, accepted);
+    const facts = result.privateProof.negative!.errorGrammar;
+    assert.equal(facts.grammar, grammar); assert.equal(facts.attemptedAccountMention, mentionsAttempt); assert.equal(facts.availableAccounts, availableAccounts);
+    assert.equal(facts.prefix, prefix); assert.equal(facts.curatedToolkitMention, toolkitMention);
+    assert.equal(f.reads.length, accepted ? 4 : 1);
+    for (const secret of [f.reads[0]!.accountId, "private-log-value", "private-other-account", "ca_wrongaccount"]) assert.equal(JSON.stringify(result).includes(secret), false);
+  }
 });
 
 test("multiple or missing ACTIVE accounts perform no executor read and never choose a default", async () => {

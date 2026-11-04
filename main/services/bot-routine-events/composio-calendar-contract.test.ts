@@ -149,7 +149,7 @@ test("executor rejection exposes only closed extra-field locations and correlate
     assert.ok(rejected instanceof Error);
     const facts = (rejected as { facts?: { executorResponse?: unknown } }).facts!.executorResponse;
     assert.deepEqual(facts, {
-      extraFields: { action: ["log_id"], data: ["request_id", "other"], result: ["session_id", "execution_time", "toolkit", "other"] },
+      extraFields: { action: [], data: ["request_id", "other"], result: ["session_id", "execution_time", "toolkit", "other"] },
       mcpIsError: true, actionSuccessful: false,
       oneResult: true, totalOne: true, successZero: true, errorOne: true,
       indexZero: true, calendarListSlug: true, responseAbsentOrNull: true,
@@ -157,6 +157,23 @@ test("executor rejection exposes only closed extra-field locations and correlate
     });
     for (const secret of ["private-account", "private-error", "private-log", "private-request", "private_data_key", "private_result_key", "private-session", "private-toolkit", "918273645", "private-credential"]) assert.equal(JSON.stringify(facts).includes(secret), false);
   }
+});
+
+test("only bounded action-level log metadata is inert in the executor contract", () => {
+  const metadata = syntheticCalendarMetadata(); delete metadata[2]!.outputSchema;
+  const verified = verifyCalendarContract(metadata, syntheticCalendarSchemas()), read = { kind: "listCalendars" as const, accountId: "exact-account" };
+  const success = { ...syntheticCalendarExecutor(read, { items: [] }), log_id: "log_synthetic-only" };
+  verified.response(read, success);
+  const failure = { ...syntheticCalendarExecutor(read, undefined, "CONNECTED_ACCOUNT_NOT_FOUND"), successful: false, error: "Failed", log_id: "log_synthetic-only" };
+  verified.executorResponse({ isError: true, structuredContent: failure });
+  verified.executorResponse({ ...failure, log_id: "x".repeat(256) });
+  for (const log_id of [null, 7, {}, "x".repeat(257)]) assert.throws(() => verified.executorResponse({ ...failure, log_id }));
+  for (const location of ["data", "result"] as const) {
+    const changed = structuredClone(failure);
+    Object.assign(location === "data" ? changed.data : changed.data.results[0]!, { log_id: "log_synthetic-only" });
+    assert.throws(() => verified.executorResponse(changed));
+  }
+  assert.throws(() => verified.executorResponse({ ...failure, request_id: "still-unsupported" }));
 });
 
 test("closed compilation diagnostics distinguish definitions, unknown keywords and schema compiler failures", () => {

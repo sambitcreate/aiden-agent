@@ -14,11 +14,14 @@ const EXECUTOR = "COMPOSIO_MULTI_EXECUTE_TOOL";
 const SEARCH = "COMPOSIO_SEARCH_TOOLS";
 const SCHEMAS = "COMPOSIO_GET_TOOL_SCHEMAS";
 export type ComposioCalendarExecutorOutputSource = "declared" | "host_contract";
-const HOST_EXECUTOR_OUTPUT_VERSION = "calendar-single-read-output-v2";
+const HOST_EXECUTOR_OUTPUT_VERSION = "calendar-single-read-output-v3";
 // MCP outputSchema is optional. This fixed contract applies ALWAYS; a declared
 // schema can only narrow it. No vendor schema can enable batching or partial data.
 const hostObject = (properties: ObjectValue, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
 const emptyError = { anyOf: [{ type: "null" }, { type: "string", maxLength: 0 }] };
+// The documented execution response's action metadata is inert, never routing
+// or account authority, and never copied into persisted proof.
+const logMetadata = { log_id: { type: "string", maxLength: 256 } };
 const resultIdentity = { tool_slug: { type: "string", enum: [...CALENDAR_SCHEMA_SLUGS] }, index: { type: "integer", const: 0 } };
 const resultSchema = (success: boolean) => hostObject({ ...resultIdentity, response: { type: success ? "object" : "null" }, error: success ? emptyError : { type: "string", minLength: 1, maxLength: 4_096 } }, ["tool_slug", "index", success ? "response" : "error"]);
 const dataSchema = (success: boolean) => hostObject({
@@ -28,10 +31,10 @@ const dataSchema = (success: boolean) => hostObject({
   session: { anyOf: [{ type: "null" }, hostObject({ id: { type: "string", maxLength: 256 }, instructions: { type: "string", maxLength: 4_096 } })] },
 }, ["results", "total_count", "success_count", "error_count"]);
 const HOST_EXECUTOR_OUTPUT = { type: "object", properties: {}, oneOf: [
-  hostObject({ successful: { type: "boolean", const: true }, error: emptyError, data: dataSchema(true) }, ["successful", "data"]),
+  hostObject({ successful: { type: "boolean", const: true }, error: emptyError, data: dataSchema(true), ...logMetadata }, ["successful", "data"]),
   // A tool-level failure can set successful:false and provide an action error.
   // Only a complete failed item with NO application response is eligible.
-  hostObject({ successful: { type: "boolean" }, error: { anyOf: [{ type: "null" }, { type: "string", maxLength: 4_096 }] }, data: dataSchema(false) }, ["successful", "data"]),
+  hostObject({ successful: { type: "boolean" }, error: { anyOf: [{ type: "null" }, { type: "string", maxLength: 4_096 }] }, data: dataSchema(false), ...logMetadata }, ["successful", "data"]),
 ] };
 type ExecutorExtraField = "log_id" | "request_id" | "session_id" | "execution_time" | "toolkit" | "other";
 interface ExecutorResponseFacts {
@@ -76,7 +79,7 @@ function executorResponseFacts(action: ObjectValue, response: unknown): Executor
   const envelope = calendarContractObject(boundedCalendarContractJson(response));
   return {
     extraFields: {
-      action: extras(action, ["successful", "error", "data"]),
+      action: extras(action, ["successful", "error", "data", "log_id"]),
       data: extras(data, ["results", "total_count", "success_count", "error_count", "remote_file_info", "next_steps", "session"]),
       result: extras(result, ["tool_slug", "index", "response", "error"]),
     },
