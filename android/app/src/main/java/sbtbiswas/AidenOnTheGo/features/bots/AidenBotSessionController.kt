@@ -1660,6 +1660,7 @@ class AidenBotSessionController(
         _state.update { it.copy(respondingPlanIds = emptySet(), planError = null) }
     }
     private fun planWritten(previous: AidenRemoteBotPlan?, next: AidenRemoteBotPlan?) {
+        if (previous == next) return
         planWrites += 1
         if (previous?.planId != next?.planId || previous?.status != next?.status) {
             planKeys.clear()

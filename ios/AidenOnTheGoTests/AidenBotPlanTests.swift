@@ -181,6 +181,32 @@ extension AidenBotPlanTests {
         let accepted = await model.respondToPlan(.approve)
         XCTAssertTrue(accepted)
     }
+    func testIdenticalPendingSnapshotDoesNotDiscardExpiredAnswer() async throws {
+        for decision in [AidenBotPlanDecision.approve, .notNow] {
+            let (model, transport) = try await loaded()
+            let entered = expectation(description: "answer awaiting host")
+            let barrier = PlanTestBarrier(entered: entered)
+            transport.barrier = barrier
+            transport.failure = try serverError()
+            let answer = Task { await model.respondToPlan(decision) }
+            await fulfillment(of: [entered], timeout: 3)
+            var session = try XCTUnwrap(section()["session"] as? [String: Any])
+            session["seq"] = 1
+            let event = try decode(AidenBotSessionEvent.self, [
+                "protocolVersion": 1, "botId": session["botId"]!, "epoch": session["epoch"]!,
+                "seq": 1, "type": "snapshot", "payload": ["session": session],
+            ])
+            _ = await model.apply(event)
+            XCTAssertEqual(model.plan, try plan())
+            XCTAssertTrue(model.composerHeldForPlan)
+            await barrier.release()
+            _ = await answer.value
+            XCTAssertNil(model.plan, "A matching host refusal must clear the unchanged card")
+            XCTAssertFalse(model.composerHeldForPlan)
+            XCTAssertTrue(model.respondingPlanIds.isEmpty)
+            XCTAssertEqual(transport.calls.map(\.decision), [decision])
+        }
+    }
     func testLateFailureConflictOrSuccessCannotAlterReplacementOrClear() async throws {
         for outcome in ["failure", "conflict", "success", "clear", "same-id-active", "generation"] {
             let (model, transport) = try await loaded()
