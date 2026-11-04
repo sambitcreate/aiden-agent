@@ -21,6 +21,7 @@ export const SETTINGS_SECTIONS = [
   "links",
   "shortcut",
   "appearance",
+  "storage",
   "about",
 ] as const;
 
@@ -224,6 +225,29 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     title: "Appearance",
     group: "App",
     keywords: ["theme", "light", "dark", "mode", "system", "chat width", "layout", "wide", "narrow"],
+  },
+  {
+    id: "storage",
+    title: "Storage",
+    group: "App",
+    keywords: [
+      "disk",
+      "disk space",
+      "disk usage",
+      "storage",
+      "gigabytes",
+      "clean up",
+      "cleanup",
+      "worktrees",
+      "unused worktrees",
+      "threads",
+      "delete old chats",
+      "archive",
+      "caches",
+      "logs",
+      "free space",
+      "hard drive",
+    ],
   },
   {
     id: "about",

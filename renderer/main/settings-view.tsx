@@ -30,6 +30,7 @@ import {
   ShieldCheck,
   Hourglass,
   Bot,
+  HardDrive,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -63,6 +64,7 @@ import { useAppCapabilities } from "../lib/app-capabilities";
 import { MemoryCardIcon } from "../components/memory-card-icon";
 import { SettingsPage } from "../components/settings/settings-page";
 import { MemorySettings } from "../components/settings/memory-settings";
+import { StorageSettings } from "../components/settings/storage-settings";
 
 type NavGroup = "Agent" | "App";
 
@@ -97,6 +99,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   links: <Link2 className="size-5" />,
   shortcut: <Keyboard className="size-5" />,
   appearance: <Palette className="size-5" />,
+  storage: <HardDrive className="size-5" />,
   about: <Info className="size-5" />,
 };
 
@@ -131,6 +134,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   links: LinksSettings,
   shortcut: ShortcutSettings,
   appearance: AppearanceSettings,
+  storage: StorageSettings,
   about: AboutSettings,
 };
 
@@ -157,6 +161,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   links: "Choose where links you click open.",
   shortcut: "Customize the keyboard controls for Aiden and the app.",
   appearance: "Pick a theme, choose when Aiden uses its light or dark look, and set how wide conversations read.",
+  storage: "See how much disk Aiden uses on this computer, and clear out what you no longer need.",
   about: "App information, updates, and diagnostics.",
 };
 

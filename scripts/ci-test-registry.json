@@ -386,7 +386,9 @@
         "main/services/peer-project-file-io.test.ts",
         "main/handlers/peer-project-clone.test.ts",
         "renderer/shared/peer-project-clone.test.ts",
-        "renderer/main/peer-project-clone-dialog.test.tsx"
+        "renderer/main/peer-project-clone-dialog.test.tsx",
+        "main/services/storage-usage-core.test.ts",
+        "main/services/storage-usage.test.ts"
       ],
       "preserved": [
         "browser",
@@ -1287,7 +1289,8 @@
         "main/handlers/transcript-images.test.ts",
         "renderer/components/transcript-image.test.tsx",
         "renderer/lib/work-details.test.ts",
-        "renderer/components/chat-preferences.test.tsx"
+        "renderer/components/chat-preferences.test.tsx",
+        "renderer/components/settings/storage-settings.test.tsx"
       ],
       "preserved": [
         "generative-ui-chromium",

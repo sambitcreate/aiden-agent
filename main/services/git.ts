@@ -6479,6 +6479,71 @@ export class GitService {
   }
 
   /**
+   * Commits on the branch that no remote holds, for Settings → Storage's
+   * "safe to remove" check. A branch with no upstream counts every commit it
+   * has that no remote-tracking ref contains; a branch with an upstream counts
+   * only what it is ahead by.
+   */
+  async managedWorktreeUnpushedCommits(
+    cwd: string,
+    branch: string,
+    signal?: AbortSignal,
+  ): Promise<number> {
+    await this.requireRepository(await this.repository(cwd));
+    const branchRef = `refs/heads/${branch}`;
+    const upstream = await this.run(
+      cwd,
+      ["rev-parse", "--abbrev-ref", "--symbolic-full-name", `${branchRef}@{upstream}`],
+      { allowExitCodes: [128], signal },
+    ).catch(() => undefined);
+    if (upstream && upstream.exitCode === 0) {
+      const tracking = upstream.stdout.trim();
+      if (tracking) {
+        const counts = await this.run(
+          cwd,
+          ["rev-list", "--count", `${tracking}..${branchRef}`],
+          { signal },
+        );
+        const ahead = Number(counts.stdout.trim());
+        return Number.isSafeInteger(ahead) && ahead > 0 ? ahead : 0;
+      }
+    }
+    // No upstream: any commit not reachable from a remote-tracking ref is local only.
+    const remotes = await this.run(cwd, ["for-each-ref", "--format=%(refname)", "refs/remotes"], {
+      signal,
+    });
+    const remoteRefs = remotes.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.endsWith("/HEAD"));
+    const count = await this.run(
+      cwd,
+      remoteRefs.length > 0
+        ? ["rev-list", "--count", branchRef, "--not", ...remoteRefs]
+        : ["rev-list", "--count", branchRef],
+      { signal },
+    ).catch(() => undefined);
+    if (!count || count.exitCode !== 0) return 0;
+    const ahead = Number(count.stdout.trim());
+    return Number.isSafeInteger(ahead) && ahead > 0 ? ahead : 0;
+  }
+
+  /** Whether a branch exists in this repository, without failing the read. */
+  async managedWorktreeBranchExists(
+    cwd: string,
+    branch: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    await this.requireRepository(await this.repository(cwd));
+    const result = await this.run(
+      cwd,
+      ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
+      { allowExitCodes: [1], signal },
+    );
+    return result.exitCode === 0;
+  }
+
+  /**
    * Expand `--ignored=matching` status records to file granularity for the
    * service layer's advisory deletion-policy check. Returns undefined when the
    * expansion exceeds the status path cap.
@@ -7280,6 +7345,11 @@ export const gitManagedWorktreeDeletionPending = (
 ) => gitService.managedWorktreeDeletionPending(worktreePath, worktreeGitDir, ownershipToken);
 export const gitManagedWorktreeDirtyState = (folderPath: string, worktreePath: string) =>
   gitService.managedWorktreeDirtyState(folderPath, worktreePath);
+export const gitManagedWorktreeUnpushedCommits = (
+  folderPath: string,
+  branch: string,
+  signal?: AbortSignal,
+) => gitService.managedWorktreeUnpushedCommits(folderPath, branch, signal);
 export const gitCaptureManagedWorktreeSnapshot = (
   folderPath: string,
   worktreePath: string,

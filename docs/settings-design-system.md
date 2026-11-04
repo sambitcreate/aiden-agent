@@ -72,13 +72,23 @@ Settings → Bots (section id `bots`, in the Agent group, before Bot computers) 
 
 Settings → Web Search ends with a "Web pages" `FieldSet` (`renderer/components/settings/web-page-settings.tsx`). **Read web pages** is a trailing switch whose description says the Web Search switch above must be on. While it is on, the group adds **Extract only the values asked for** with a soft status `Badge` (On, Off or Needs setup) beside the label; the switch stays disabled until the Cloudflare account ID and a key are saved. If the setup is removed while the switch is on, the switch keeps showing the saved choice and the row reads "Paused" with Needs setup, so it can still be turned off. The account ID is a vertical field with an inline Save, the key list reuses the Web Search key pool editor, and a last row, "What leaves this device", says what extract mode sends to Cloudflare. Extract mode never turns itself on.
 
+## Storage
+
+Settings → Storage (section id `storage`, in the App group, between Appearance and About) uses one `FieldSet` for the total and three for the actions. **On this computer** puts the total as a large tabular number with "used by Aiden" beside it, the scan caption (when it was measured, or that it is scanning, or that it failed) as the row description, and a stacked bar with a two-column legend of every category and its bytes. The bar segments use the chart series tokens in size order and never a status color; a category with bytes but under 0.8% still gets a visible sliver so nothing disappears. **Measure again** is the trailing action, disabled while a scan runs.
+
+**Largest items** is one expandable card: a header button (`aria-expanded`) with a Show/Hide label, then a Worktrees group and a Threads group, each row naming the item, a secondary line with its branch or age and the reason it is kept, its size in tabular numerals, and a trailing delete button. A kept row shows a soft warning `Badge` reading "Kept" and has no delete button at all rather than a disabled one. The list is capped at eight of each kind.
+
+**Clean up** has three horizontal rows — Remove unused worktrees, Delete inactive threads, and Clear logs and diagnostics — each with one secondary line about what it does and what it always keeps. The worktree and thread rows put an inactivity `Select` (7, 14, 30 or 90 days) before a **Review…** button; the logs row has one **Clear…** button.
+
+Every action opens the shared `AlertDialog` first. Its description states the space freed and how many items are kept; its body lists the items with their sizes and a Kept section naming each reason. The confirm label carries the count and the size (`Remove 3 · 1.2 GB`), and logs use the normal accent button while worktree and thread removal use `destructive`. The per-row delete asks in a second `AlertDialog` that names the item. Nothing is styled with a decorative border; status stays in soft fills, labels, and icons, and every control keeps the neutral focus ring.
+
 ## Icons and illustrations
 
 Use `MemoryCardIcon`, an SD-card silhouette, for Memory. Do not introduce brain glyphs or brain illustrations. The existing onboarding artwork is outside this Settings change.
 
 ## Checks
 
-`npm run test:settings-design` covers preference defaults/migration, path formats and identities, and structural/accessibility contracts. The deterministic Electron suite includes `settings-unification.spec.ts` (path persistence and all settings at 390/600/1280px) and `model-pad-responsive.spec.ts` (Add list toggling into the tray; across window/zoom states the square and tray stay reachable without horizontal overflow, side by side or stacked by card width; keyboard movement and autosave with Undo). Keep layout assertions tied to rendered geometry rather than only source strings.
+`npm run test:settings-design` covers preference defaults/migration, path formats and identities, and structural/accessibility contracts. `npm run test:storage` covers the Storage page, its measurement, and its cleanup safety rules (see [storage.md](storage.md)). The deterministic Electron suite includes `settings-unification.spec.ts` (path persistence and all settings at 390/600/1280px) and `model-pad-responsive.spec.ts` (Add list toggling into the tray; across window/zoom states the square and tray stay reachable without horizontal overflow, side by side or stacked by card width; keyboard movement and autosave with Undo). Keep layout assertions tied to rendered geometry rather than only source strings.
 
 ## Composer context usage
 
