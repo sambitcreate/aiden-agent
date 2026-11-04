@@ -39,3 +39,5 @@ The CLI host does not offer `request_access`. Configure its saved Bot grants thr
 Startup finishes interrupted Bot deletions even when a folder approval still needs cleanup. Removing an unused approval record never deletes the person’s folder. If a permission save cannot finish its storage checkpoint, access changes stay paused until restart can verify the committed state; Aiden keeps the pending approval instead of treating it as absent.
 
 The [implementation plan](plans/bot-messaging-plan.md) tracks phase B review and acceptance. Local tests and simulator checks are separate from physical-device, live-provider and release acceptance.
+
+`npm run test:bot-access` builds its lease and file-write helpers before the behavioral suite, so a prior app build is not required.
