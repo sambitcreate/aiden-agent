@@ -46,6 +46,8 @@ test("late tools cannot recreate messaging during quit; only explicit start reop
   });
   assert.equal(factories, 1);
   assert.equal(posts, 0);
+  assert.equal(await service.announceWaiting("B", [undefined], "Person's action", "person"), undefined);
+  await assert.rejects(service.announceWaiting("B", ["bot:malformed"], "Bot action", "bot"), /shut down/u);
   release();
   await quit;
   assert.equal((await service.post(input)).status, "refused");

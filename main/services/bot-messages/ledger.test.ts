@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile, stat, readFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdtemp, rm, writeFile, stat, readFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
@@ -178,12 +180,79 @@ test("corrupt ledger deletion preserves the file and rolls deferred purges forwa
   await writeFile(f.file, "corrupt private bookkeeping");
   assert.deepEqual(await f.ledger.forgetBot("B"), []);
   assert.equal(await readFile(f.file, "utf8"), "corrupt private bookkeeping");
-  assert.deepEqual(JSON.parse(await readFile(`${f.file}.pending-purges.json`, "utf8")), ["B"]);
+  const directory = path.join(path.dirname(f.file), ".bot-messages.json.pending-purges");
+  const [marker] = await readdir(directory);
+  assert.equal(JSON.parse(await readFile(path.join(directory, marker!), "utf8")), "B");
+  assert.equal((await stat(directory)).mode & 0o777, 0o700);
+  assert.equal((await stat(path.join(directory, marker!))).mode & 0o777, 0o600);
   await assert.rejects(f.ledger.reserve(f.row()), /bookkeeping/);
   await writeFile(f.file, good);
   assert.equal(await f.open().get(row.id), undefined);
   await assert.rejects(f.open().reserve(f.row()), /no longer exists/);
   assert.equal((await f.open().open())[0]?.outcome, "failed");
+});
+test("damaged purge markers preserve evidence without blocking durable concurrent deletions", async (t) => {
+  const f = await fixture(t);
+  const prior = f.row("A", "B"),
+    next = f.row("C", "D"),
+    same = f.row("E", "B"),
+    kept = f.row("F", "G");
+  for (const row of [prior, next, same, kept]) await f.ledger.reserve(row);
+  const good = await readFile(f.file, "utf8");
+  await writeFile(f.file, "damaged main ledger");
+  await f.ledger.forgetBot("B");
+  await writeFile(f.file, good);
+  const directory = path.join(path.dirname(f.file), ".bot-messages.json.pending-purges");
+  const [name] = await readdir(directory);
+  const marker = path.join(directory, name!);
+  const saved = await readFile(marker, "utf8");
+  await writeFile(marker, "{damaged purge intent");
+
+  // A repeated deletion must also preserve its own damaged earlier marker.
+  assert.deepEqual(await Promise.all([f.ledger.forgetBot("D"), f.open().forgetBot("B")]), [[], []]);
+  assert.equal(await readFile(marker, "utf8"), "{damaged purge intent");
+  assert.equal(await readFile(f.file, "utf8"), good, "unreadable bookkeeping never partially rewrites the ledger");
+  const markers = await readdir(directory);
+  assert.equal(markers.length, 3);
+  for (const name of markers) {
+    assert.equal((await stat(path.join(directory, name))).mode & 0o777, 0o600);
+  }
+  assert.ok(markers.some((name) => name.startsWith(createHash("sha256").update("D").digest("hex"))));
+
+  // A fresh process has none of this module's in-memory tombstones.
+  const checkRestart = async (repaired: boolean) => {
+    await promisify(execFile)(process.execPath, [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      `
+      import assert from 'node:assert/strict';
+      import { createBotMessageLedger, BotMessageLedgerUnavailable } from ${JSON.stringify(new URL("./ledger.ts", import.meta.url).href)};
+      const [file, input, repaired] = process.argv.slice(1);
+      const { prior, next, same, kept } = JSON.parse(input);
+      const ledger = createBotMessageLedger({ file: () => file, now: () => kept.createdAt });
+      if (repaired === 'false') {
+        await assert.rejects(ledger.open(), BotMessageLedgerUnavailable);
+        await assert.rejects(ledger.reserve(prior), BotMessageLedgerUnavailable);
+        await assert.rejects(ledger.receipt(next.id), BotMessageLedgerUnavailable);
+      } else {
+        for (const row of [prior, next, same]) {
+          assert.equal(await ledger.get(row.id), undefined);
+          assert.equal(await ledger.receipt(row.id), undefined);
+          await assert.rejects(ledger.reserve(row), /no longer exists/);
+        }
+        assert.equal((await ledger.get(kept.id)).id, kept.id);
+      }
+    `,
+      f.file,
+      JSON.stringify({ prior, next, same, kept }),
+      String(repaired),
+    ]);
+  };
+  await checkRestart(false);
+  await writeFile(marker, saved);
+  await checkRestart(true);
 });
 test("receipts keep hashed replay identity without private messages and collect independently from display rows", async (t) => {
   const f = await fixture(t),

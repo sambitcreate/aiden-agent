@@ -7,9 +7,17 @@ import { test, type TestContext } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import { ToolTask } from "@earendil-works/pi-durable";
-import { createBotSessionService, type BotSendInput } from "../bot-runtime/bot-session-service.js";
+import {
+  createBotSessionService,
+  type BotSendInput,
+  type BotSessionServiceDeps,
+} from "../bot-runtime/bot-session-service.js";
+import {
+  BOT_MESSAGE_STATUS_ENTRY_KIND,
+  type BotMessageStatusEntryData,
+} from "../../../renderer/shared/bot-messages.js";
 import { createBotApprovals } from "../bot-runtime/bot-approvals.js";
-import { recordingDeps } from "../bot-runtime/test-support/fixtures.js";
+import { recordingDeps, countingTool, blockingUntilAborted } from "../bot-runtime/test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor } from "../bot-runtime/test-support/faux.js";
 import { createBotMessageCourier, type BotMessageCourierDeps } from "./courier.js";
 import { createBotMessageLedger } from "./ledger.js";
@@ -28,7 +36,12 @@ function gate(text: string) {
     },
   };
 }
-async function setup(t: TestContext, responses: Record<string, FauxResponseStep[]>, windowMs?: number) {
+async function setup(
+  t: TestContext,
+  responses: Record<string, FauxResponseStep[]>,
+  windowMs?: number,
+  resolveModel?: BotSessionServiceDeps["resolveModel"],
+) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "real-bot-courier-"));
   const models = new Map(Object.entries(responses).map(([id, steps]) => [id, createFauxModels(steps)]));
   const errors: unknown[] = [];
@@ -39,7 +52,7 @@ async function setup(t: TestContext, responses: Record<string, FauxResponseStep[
     profileDir: dir,
     models: (id) => models.get(id)!.models,
     extension,
-    resolveModel: async () => FAUX_MODEL_REF,
+    resolveModel: resolveModel ?? (async () => FAUX_MODEL_REF),
     knownBotIds: async () => new Set(models.keys()),
     onStateChange: (id) => {
       for (const listener of stateChanges) listener(id);
@@ -394,3 +407,64 @@ test("a real ConversationBusy admission race remains pending and wakes on the co
   assert.deepEqual(admissionErrors, ["ConversationBusy"]);
   assert.deepEqual(f.errors, []);
 });
+
+for (const unavailable of ["needs_model", "model_error"] as const) {
+  test(`a real ${unavailable} sender keeps the saved reply and the courier becomes quiescent`, async (t) => {
+    const f = await setup(t, { A: [], B: [fauxAssistantMessage("Saved answer")] }, undefined, async (id) => {
+      if (id === "A") {
+        if (unavailable === "model_error") throw new Error("Sign-in expired");
+        return null;
+      }
+      return FAUX_MODEL_REF;
+    });
+    const accepted = await f.post();
+    await waitFor(async () => (await f.ledger.open()).length === 0);
+    const view = await (await f.runtime.conversation("A")).context(BACKGROUND_CONTEXT);
+    const saved = view.entries
+      .filter((e) => e.kind === BOT_MESSAGE_STATUS_ENTRY_KIND)
+      .map((e) => e.data as unknown as BotMessageStatusEntryData);
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0]!.outcome, "replied_while_paused");
+    assert.equal(saved[0]!.text, "Saved answer");
+    assert.equal(f.models.get("A")!.calls(), 0);
+    assert.equal(f.sends.length, 1);
+    assert.ok((await f.ledger.get(accepted.deliveryId))!.effects.find((e) => e.kind === "reply")!.acknowledgedAt);
+    await waitFor(() => f.timers.size === 0);
+    const counts = f.counts();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.deepEqual(f.counts(), counts);
+    assert.deepEqual(f.errors, []);
+  });
+}
+
+for (const outcome of ["failed", "stopped"] as const) {
+  test(`a real ${outcome} reply turn preserves the received answer without a replacement turn`, async (t) => {
+    const reply =
+      outcome === "failed"
+        ? fauxAssistantMessage("", { stopReason: "error", errorMessage: "401 Unauthorized: invalid API key" })
+        : fauxAssistantMessage([fauxToolCall("hold", { text: "wait" })], { stopReason: "toolUse" });
+    const f = await setup(t, { A: [reply], B: [fauxAssistantMessage("Saved target result")] });
+    const hold = countingTool("hold", (_params, signal) => blockingUntilAborted(signal));
+    f.extension.currentTools = async () => [{ tool: hold, replay: "unsafe" }];
+    await f.post();
+    if (outcome === "stopped") {
+      await waitFor(() => hold.executions.length === 1);
+      await f.runtime.stop("A");
+    }
+    await waitFor(async () => (await f.ledger.open()).length === 0);
+    const view = await (await f.runtime.conversation("A")).context(BACKGROUND_CONTEXT);
+    const saved = view.entries
+      .filter((e) => e.kind === BOT_MESSAGE_STATUS_ENTRY_KIND)
+      .map((e) => e.data as unknown as BotMessageStatusEntryData);
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0]!.outcome, "replied_while_paused");
+    assert.equal(saved[0]!.text, "Saved target result");
+    assert.equal(f.models.get("A")!.calls(), 1);
+    assert.equal(f.sends.length, 2);
+    assert.equal(
+      f.deliveries.some((d) => (d as { dedupeKey: string }).dedupeKey.endsWith(":final")),
+      false,
+    );
+    assert.deepEqual(f.errors, []);
+  });
+}

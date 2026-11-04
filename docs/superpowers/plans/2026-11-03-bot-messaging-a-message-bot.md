@@ -42,7 +42,7 @@
 
 ## Review Focus
 
-1. **The target is busy with a long turn for the person, or paused, when the 30 minutes run out.** Expect one "didn't answer" notice in the sender's chat. The target's running turn, its paused turn and the person's queued messages must be left alone: no `stop`, `withdraw`, `dismiss` or `resume`. Task 6 tests this.
+1. **The target cannot run the accepted message.** Busy work that lasts through the deadline produces one "didn't answer" notice. A target already paused at admission is refused; a pause or availability loss after acceptance but before submission produces one failed notice. If an already submitted target turn is paused, retain its observation until Resume or the original deadline, without resuming it. The target's running turn, its paused turn and the person's queued messages must be left alone: no `stop`, `withdraw`, `dismiss` or `resume`. Task 6 tests this.
 2. **The sender is paused, interrupted or deleted when the reply lands.** Expect no new turn and no resume. A paused sender shows the reply as a "COS replied" status row. A deleted sender gets nothing. Task 6 tests this.
 3. **The app quits mid-wait and restarts, possibly after the window.** Expect exactly one re-attach per open delivery. A row whose window passed while the app was closed gives exactly one notice, even if `start()` runs twice. Task 6 tests this.
 4. **A hop-1 turn issues two `message_bot` calls in one assistant message, or retries one after a restart.** Expect exactly one delivery. The replayed call returns the same `deliveryId`, and a second distinct call gets `limit_reached`. Task 5 tests this.

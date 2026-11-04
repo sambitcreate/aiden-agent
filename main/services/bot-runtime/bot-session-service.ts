@@ -884,27 +884,56 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       if (signal.aborted || deleted.has(botId)) return false;
       const id = Number(taskId) as TaskId;
       if (!Number.isSafeInteger(id)) return false;
-      const opened = await requireHost().open(botId);
+      const owner = requireHost();
+      // Inspection keeps a corrupt-session recovery notice for the next real
+      // open. A task absent from the live graph cannot replay, including after
+      // recovery replaced its session with an empty one.
+      const inspection = await owner.inspect(botId);
+      const live = inspection.tasks.find((task) => task.record.id === id)?.record;
+      if (!live) return true;
+      if (live.kind !== ToolTask.definition.name) return false;
+      if (signal.aborted || deleted.has(botId)) return false;
+      const opened = await owner.open(botId);
+      if (opened.recoveredCorruptFile !== undefined) {
+        await writeNotice(opened.conversation, {
+          notice: "session_reset",
+          movedTo: opened.recoveredCorruptFile,
+        });
+      }
       const record = await opened.harness.getTask(id, ctx);
-      if (!record || record.kind !== ToolTask.definition.name || record.conversationId !== opened.conversation.id) return false;
-      if (record.state.status === "terminal" || record.state.status === "completing") return true;
-      const {context, cancel} = withCancel(ctx);
+      if (live.conversationId !== opened.conversation.id) return false;
+      if (!record) return true;
+      if (
+        record.kind !== ToolTask.definition.name ||
+        record.conversationId !== opened.conversation.id
+      )
+        return false;
+      if (
+        record.state.status === "terminal" ||
+        record.state.status === "completing"
+      )
+        return true;
+      const { context, cancel } = withCancel(ctx);
       const onAbort = () => cancel(signal.reason);
       if (signal.aborted) onAbort();
-      else signal.addEventListener("abort", onAbort, {once: true});
+      else signal.addEventListener("abort", onAbort, { once: true });
       try {
         const watch = await opened.harness.watchTaskGraph(context);
         try {
-          return await new Promise<boolean>(resolve => {
+          return await new Promise<boolean>((resolve) => {
             const check = (graph: typeof watch.value) => {
               const task = graph.tasks[taskId];
               if (!task || task.state.status === "completing") resolve(true);
             };
             check(watch.value);
-            watch.start(async graph => {check(graph);});
+            watch.start(async (graph) => {
+              check(graph);
+            });
             void watch.closed.then(() => resolve(false));
           });
-        } finally { await watch.stop(); }
+        } finally {
+          await watch.stop();
+        }
       } catch (error) {
         if (!signal.aborted) throw error;
         return false;

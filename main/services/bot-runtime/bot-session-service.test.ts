@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import * as os from "node:os";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
+import { readFile, readdir } from "node:fs/promises";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentSystemPrompt, getCurrentTools, type Message } from "@earendil-works/pi-ai";
@@ -12,6 +14,7 @@ import { createBotRoutineExecutor } from "../scheduled-bot-routines.js";
 import type { ScheduledRun, ScheduledTask } from "../types.js";
 import { createBotMemoryService } from "../bot-memory/service.js";
 import { createBotMemoryStore } from "../bot-memory/store.js";
+import { createBotMessageLedger, type BotMessageDelivery } from "../bot-messages/ledger.js";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { ToolResultEntry, type ModelRef } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
@@ -67,6 +70,182 @@ async function notices(service: BotSessionRuntime, botId: string): Promise<unkno
   const view = await (await service.conversation(botId)).context(ctx);
   return view.entries.filter((entry) => entry.kind === BOT_NOTICE_ENTRY_KIND).map((entry) => entry.data);
 }
+
+function messageReceiptRow(taskId: string): BotMessageDelivery {
+  const id = randomUUID();
+  const requestId = `bot:bot:a:1:${id}`;
+  return {
+    id,
+    taskId,
+    fromBotId: "bot:a",
+    toBotId: "bot:b",
+    fromName: "A",
+    toName: "B",
+    hop: 1,
+    targetRequestId: requestId,
+    createdAt: Date.now(),
+    deadline: Date.now() + 60_000,
+    status: "delivered",
+    message: "help",
+    waiting: [],
+    effects: [
+      {
+        id: `${id}:target`,
+        kind: "target",
+        botId: "bot:b",
+        requestId,
+        text: "help",
+      },
+    ],
+  };
+}
+
+test("receipt observation after corrupt-session recovery preserves the next send's reset notice", async () => {
+  const profile = tempProfile();
+  const ledger = createBotMessageLedger({
+    file: () => path.join(profile, "bots", "bot-messages.json"),
+    now: Date.now,
+  });
+  let row: BotMessageDelivery | undefined;
+  const tool = countingTool("save_message");
+  const extension = recordingDeps({
+    tools: [
+      {
+        tool,
+        replay: "safe",
+        bind: (call) => ({
+          ...tool,
+          execute: async (...args) => {
+            assert.ok(call.taskId, "receipt uses the actual durable tool task");
+            row = messageReceiptRow(call.taskId);
+            await ledger.reserve(row);
+            return tool.execute(...args);
+          },
+        }),
+      },
+    ],
+  });
+  const faux = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("save_message", { text: "save" })], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("saved"),
+    fauxAssistantMessage("fresh answer"),
+  ]);
+  const first = await serviceFor(profile, faux, { extension });
+  try {
+    const sent = await first.send("bot:a", {
+      text: "save a message",
+      requestId: "before-corruption",
+    });
+    assert.equal(
+      (
+        await first.awaitReply(
+          "bot:a",
+          sent.submissionId,
+          new AbortController().signal,
+        )
+      ).kind,
+      "completed",
+    );
+  } finally {
+    await first.shutdown();
+  }
+  assert.ok(row?.taskId);
+  assert.equal((await ledger.receipt(row.id))?.taskId, row.taskId);
+  const directory = path.join(profile, "bots", botDirectoryName("bot:a"));
+  const damaged = "not a SQLite session ".repeat(100);
+  writeFileSync(path.join(directory, BOT_SESSION_FILE), damaged);
+  const recovered = await serviceFor(profile, faux);
+  try {
+    assert.equal(
+      await recovered.awaitMessageTaskSettlement(
+        "bot:a",
+        row.taskId,
+        new AbortController().signal,
+      ),
+      true,
+    );
+    await ledger.collectReceipt(row.id, row.taskId);
+    assert.equal(await ledger.receipt(row.id), undefined);
+    assert.equal(
+      faux.calls(),
+      2,
+      "observing and collecting never runs a model",
+    );
+    const [moved] = (await readdir(directory)).filter((name) =>
+      name.startsWith(`${BOT_SESSION_FILE}.corrupt-`),
+    );
+    assert.ok(moved);
+    assert.equal(await readFile(path.join(directory, moved), "utf8"), damaged);
+    const sent = await recovered.send("bot:a", {
+      text: "new question",
+      requestId: "after-corruption",
+    });
+    assert.deepEqual(
+      await recovered.awaitReply(
+        "bot:a",
+        sent.submissionId,
+        new AbortController().signal,
+      ),
+      {
+        kind: "completed",
+        text: "fresh answer",
+      },
+    );
+    assert.deepEqual(await notices(recovered, "bot:a"), [
+      { notice: "session_reset", movedTo: moved },
+    ]);
+    assert.equal(faux.calls(), 3);
+  } finally {
+    await recovered.shutdown();
+  }
+});
+
+test("a damaged peer purge marker does not skip later Bot deletion effects", async () => {
+  const profile = tempProfile();
+  const file = path.join(profile, "bots", "bot-messages.json");
+  const ledger = createBotMessageLedger({ file: () => file, now: Date.now });
+  await ledger.forgetBot("peer");
+  const directory = path.join(
+    path.dirname(file),
+    ".bot-messages.json.pending-purges",
+  );
+  const [marker] = await readdir(directory);
+  const damaged = "{damaged peer purge";
+  writeFileSync(path.join(directory, marker!), damaged);
+  const effects: string[] = [];
+  const faux = createFauxModels([]);
+  const service = await serviceFor(profile, faux, {
+    deleteEffects: [
+      async (id) => {
+        await ledger.forgetBot(id);
+      },
+      async (id) => {
+        effects.push(id);
+      },
+    ],
+  });
+  try {
+    await service.initialize();
+    assert.equal(
+      await readFile(path.join(directory, marker!), "utf8"),
+      damaged,
+      "startup's orphan sweep preserves purge markers",
+    );
+    await service.deleteBot("bot:a");
+    assert.deepEqual(effects, ["bot:a"]);
+    assert.equal(
+      await readFile(path.join(directory, marker!), "utf8"),
+      damaged,
+    );
+    assert.equal((await readdir(directory)).length, 2);
+    await assert.rejects(ledger.open(), /bookkeeping/);
+    assert.equal(faux.calls(), 0);
+  } finally {
+    await service.shutdown();
+  }
+});
 
 /** Leave `bot:killed` with a turn that was streaming when its process died. */
 async function killMidStream(profileDir: string): Promise<string> {

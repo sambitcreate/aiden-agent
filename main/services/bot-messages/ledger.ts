@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { readFile, readdir } from "node:fs/promises";
+import path from "node:path";
 import { writeFileAtomic } from "../durable-fs.js";
 import {
   BOT_MESSAGE_LIMITS as L,
@@ -263,6 +264,8 @@ const dayOf = (n: number) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 const tombstones = new Map<string, Set<string>>();
+// The host's orphan sweep reserves dot-prefixed directories for profile stores.
+const purgeDirectory = (file: string) => path.join(path.dirname(file), `.${path.basename(file)}.pending-purges`);
 export function createBotMessageLedger(options: { file(): string; now(): number }): BotMessageLedger {
   async function read(file: string): Promise<Book> {
     try {
@@ -432,14 +435,18 @@ export function createBotMessageLedger(options: { file(): string; now(): number 
       tombstones.set(file, known);
       known.add(botId); // Fence concurrent writers even if the main file is corrupt.
       return serial(file, async () => {
-        const ids = await deferred(file);
-        ids.add(botId);
-        await writeFileAtomic(`${file}.pending-purges.json`, JSON.stringify([...ids]), {
+        // Immutable independent markers let deletion proceed without reading damaged
+        // peer bookkeeping. A nonce also preserves a damaged marker for this Bot.
+        const hash = createHash("sha256").update(botId).digest("hex");
+        await writeFileAtomic(path.join(purgeDirectory(file), `${hash}.${randomUUID()}.json`), JSON.stringify(botId), {
           mode: 0o600,
           mkdirMode: 0o700,
+          exclusive: true,
         });
         let book: Book;
+        let ids: Set<string>;
         try {
+          ids = await deferred(file);
           book = await read(file);
         } catch (error) {
           if (error instanceof BotMessageLedgerUnavailable) return [];
@@ -460,12 +467,29 @@ export function createBotMessageLedger(options: { file(): string; now(): number 
     const ids = tombstones.get(file) ?? new Set<string>();
     tombstones.set(file, ids);
     try {
-      const saved: unknown = JSON.parse(await readFile(`${file}.pending-purges.json`, "utf8"));
-      if (!Array.isArray(saved) || !saved.every(str))
-        throw new BotMessageLedgerUnavailable("Bot message deletion bookkeeping needs repair.");
-      for (const id of saved) ids.add(id);
+      const directory = purgeDirectory(file);
+      let names: string[];
+      try {
+        names = await readdir(directory);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return ids;
+        throw error;
+      }
+      for (const name of names) {
+        if (name.startsWith(".")) continue; // Unpublished atomic-write staging files.
+        const saved: unknown = JSON.parse(await readFile(path.join(directory, name), "utf8"));
+        if (
+          !str(saved) ||
+          !/^[a-f0-9]{64}\.[a-f0-9-]{36}\.json$/.test(name) ||
+          !name.startsWith(`${createHash("sha256").update(saved).digest("hex")}.`)
+        )
+          throw new BotMessageLedgerUnavailable("Bot message deletion bookkeeping needs repair.");
+        ids.add(saved);
+      }
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+      throw e instanceof BotMessageLedgerUnavailable
+        ? e
+        : new BotMessageLedgerUnavailable("Bot message deletion bookkeeping needs repair.");
     }
     return ids;
   }

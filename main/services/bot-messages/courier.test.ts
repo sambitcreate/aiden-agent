@@ -11,7 +11,6 @@ import { createBotMessageCourier, type BotRosterEntry } from "./courier.js";
 import { waitFor } from "../bot-runtime/test-support/faux.js";
 async function setup(t: TestContext) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "bot-courier-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
   let now = 1000,
     enabled = true;
   const ledger = createBotMessageLedger({
@@ -150,7 +149,11 @@ async function setup(t: TestContext) {
       },
     });
   let courier = create();
-  t.after(() => courier.dispose());
+  t.after(async () => {
+    await courier.dispose();
+    assert.equal(timers.size, 0, "all courier timers are cancelled before removing storage");
+    await rm(dir, { recursive: true, force: true });
+  });
   await courier.start();
   const post = (
     from = "A",
@@ -886,4 +889,116 @@ test("a person's turn may send several requested messages while an incoming turn
   assert.equal((await f.post("B", "C", [parent.input.requestId])).status, "sent");
   assert.equal((await f.post("B", "C", [parent.input.requestId])).status, "refused");
   assert.equal((await f.post("A", "C", [])).status, "refused");
+});
+
+for (const outcome of [
+  { kind: "failed", error: "provider failed" },
+  { kind: "interrupted", settled: true },
+] as const) {
+  test(`a ${outcome.kind} settled reply turn preserves the target answer once`, async (t) => {
+    const f = await setup(t);
+    const accepted = await f.post();
+    assert.equal(accepted.status, "sent");
+    await f.until(() => f.sends.length === 1);
+    f.finish(0, "Saved target answer");
+    await f.until(() => f.sends.length === 2);
+    f.finishOutcome(1, outcome);
+    await f.until(() => f.notices.length === 1);
+    assert.equal((f.notices[0] as { outcome: string }).outcome, "replied_while_paused");
+    assert.equal((f.notices[0] as { text: string }).text, "Saved target answer");
+    await f.until(async () => (await f.ledger.open()).length === 0);
+    await f.restart();
+    assert.equal(f.notices.length, 1);
+    assert.equal(f.sends.length, 2, "fallback never starts another model turn");
+    assert.equal(
+      f.deliveries.some((d) => (d as { dedupeKey: string }).dedupeKey.endsWith(":final")),
+      false,
+    );
+  });
+}
+
+for (const turn of ["request", "reply"] as const) {
+  test(`a withdrawn ${turn} approval can reappear under its durable wait id`, async (t) => {
+    const f = await setup(t);
+    const accepted = await f.post();
+    if (accepted.status !== "sent") throw new Error("not admitted");
+    await f.until(() => f.sends.length === 1);
+    if (turn === "reply") {
+      f.finish(0, "Answer");
+      await f.until(() => f.sends.length === 2);
+    }
+    const sent = f.sends[turn === "reply" ? 1 : 0]!;
+    const request = {
+      botId: sent.botId,
+      waitId: "same",
+      toolCallId: "call",
+      toolName: "change",
+      summary: "Change event",
+      owner: {
+        runId: "run",
+        inputs: [
+          { submissionId: sent.submissionId, requestId: sent.input.requestId, botMessage: sent.input.botMessage },
+        ],
+      },
+    };
+    const controller = new AbortController();
+    const first = f.approvals.requestOutcome({ ...request, signal: controller.signal });
+    await f.until(async () => (await f.ledger.get(accepted.deliveryId))!.waiting.length === 1);
+    const withdrawn = assert.rejects(first, /withdrawn|abort/iu);
+    controller.abort();
+    await withdrawn;
+    await f.until(async () => (await f.ledger.get(accepted.deliveryId))!.waiting.length === 0);
+    const window = await f.courier.announceWaiting(sent.botId, [sent.input.requestId], request.summary, request.waitId);
+    assert.equal(window?.expired, false);
+    const second = f.approvals.requestOutcome({ ...request, signal: undefined });
+    await f.until(
+      async () =>
+        f.approvals.pending(sent.botId).length === 1 && (await f.ledger.get(accepted.deliveryId))!.waiting.length === 1,
+    );
+    const row = (await f.ledger.get(accepted.deliveryId))!;
+    assert.equal(row.effects.filter((e) => e.kind === "notice" && e.data?.waitId === "same").length, 1);
+    await f.advance(1800001);
+    assert.deepEqual(await second, { decision: "deny", decisionSource: "expiry" });
+    if (turn === "request")
+      await f.until(() => f.notices.some((n) => (n as { outcome: string }).outcome === "gave_up"));
+  });
+}
+
+test("parallel approval publication preserves a preannounced second card without duplicate effects", async (t) => {
+  const f = await setup(t);
+  const accepted = await f.post();
+  if (accepted.status !== "sent") throw new Error("not admitted");
+  await f.until(() => f.sends.length === 1);
+  const sent = f.sends[0]!;
+  const request = {
+    botId: "B",
+    toolCallId: "call",
+    toolName: "change",
+    summary: "Change event",
+    signal: undefined,
+    owner: {
+      runId: "run",
+      inputs: [{ submissionId: sent.submissionId, requestId: sent.input.requestId, botMessage: sent.input.botMessage }],
+    },
+  };
+  await f.courier.announceWaiting("B", [sent.input.requestId], request.summary, "two");
+  const one = f.approvals.requestOutcome({ ...request, waitId: "one" });
+  await f.until(async () => {
+    const row = (await f.ledger.get(accepted.deliveryId))!;
+    return row.waiting.some((w) => w.waitId === "one") && !row.waiting.some((w) => w.waitId === "two");
+  });
+  const two = f.approvals.requestOutcome({ ...request, waitId: "two" });
+  await f.until(
+    async () => f.approvals.pending().length === 2 && (await f.ledger.get(accepted.deliveryId))!.waiting.length === 2,
+  );
+  assert.equal(
+    f.approvals.pending().some((p) => p.decisionSource === "expiry"),
+    false,
+  );
+  await f.advance(1800001);
+  assert.deepEqual(await Promise.all([one, two]), [
+    { decision: "deny", decisionSource: "expiry" },
+    { decision: "deny", decisionSource: "expiry" },
+  ]);
+  await f.until(() => f.notices.some((n) => (n as { outcome: string }).outcome === "gave_up"));
 });

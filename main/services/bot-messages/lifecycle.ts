@@ -1,4 +1,5 @@
 import type { BotMessageCourier } from "./courier.js";
+import { isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 
 /** Keep quit closed even when a late tool asks for the process-wide service. */
 export function createBotMessageLifecycle(deps: {
@@ -28,7 +29,10 @@ export function createBotMessageLifecycle(deps: {
         deps.report(error);
       }
     },
-    announceWaiting: (...args) => requireCurrent().announceWaiting(...args),
+    async announceWaiting(...args) {
+      if (closed && !args[1].some(isBotMessageRequestId)) return undefined;
+      return requireCurrent().announceWaiting(...args);
+    },
     forgetBot: (id) => requireCurrent().forgetBot(id),
     async dispose() {
       closed = true;
