@@ -32,6 +32,8 @@ import type {
 import {
   createBotToolAssembly,
   type BotAdmission,
+  type BotAllowListPort,
+  type BotToolAssembly,
   type BotLiveApproval,
   type BotToolCandidate,
 } from "../bot-tool-assembly.js";
@@ -255,6 +257,7 @@ export function testAdmit(state: AssemblyState): (botId: string) => Promise<BotA
 }
 
 export interface AssemblyDepsOptions {
+  allowList?: BotAllowListPort;
   plans?: Pick<BotPlans, "cover" | "admit">;
   /** Candidate tools for the current authority (stand-ins for discovered tools). */
   candidates: (authority: BotRuntimeEffectiveAuthority) => BotToolCandidate[];
@@ -270,6 +273,7 @@ export interface AssemblyDepsOptions {
 }
 
 export interface AssemblyDeps extends BotExtensionDeps {
+  approvalRequirements: BotToolAssembly["approvalRequirements"];
   approvals: BotApprovalRequest[];
   /** Rule hand-off cards asked, in order. */
   handoffs: BotRuleHandoffRequest[];
@@ -283,6 +287,7 @@ export function assemblyDeps(state: AssemblyState, options: AssemblyDepsOptions)
   const assembly = createBotToolAssembly({
     admit,
     ...(options.plans ? { plans: options.plans } : {}),
+    ...(options.allowList ? { allowList: options.allowList } : {}),
     sources: {
       facts: async (_botId, admission) =>
         createBotToolFacts({
@@ -309,6 +314,7 @@ export function assemblyDeps(state: AssemblyState, options: AssemblyDepsOptions)
   });
   const deps: AssemblyDeps = {
     approvals: [],
+    approvalRequirements: (...args) => assembly.approvalRequirements(...args),
     handoffs: [],
     records: [],
     loadBot: async (botId) => fakeBot(botId),

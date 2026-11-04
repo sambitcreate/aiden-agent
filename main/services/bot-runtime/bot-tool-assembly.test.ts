@@ -27,7 +27,10 @@ import { handoffSkippedText, ruleAskUnattendedBlock, ruleHandoffDoneBlock, ruleU
 import { createBotHandoffs, recordRuleHandoffEntry, ruleHandoffRequest } from "./bot-handoffs.js";
 import { createBotRegistry, type BotExtensionDeps, type BotRegistry } from "./bot-extension.js";
 import { BOT_SHARED_IMAGE_ENTRY_KIND, botImageReference } from "./bot-images.js";
-import type { BotToolCandidate } from "./bot-tool-assembly.js";
+import type { BotAllowListPort, BotToolCandidate } from "./bot-tool-assembly.js";
+import type { BotToolCallCheck } from "./bot-extension.js";
+import type { BotApprovalRuleTarget } from "../../../renderer/shared/tool-approval-scope.js";
+import { emptyToolApprovalRulesDocument, ToolApprovalRuleBook, type ToolApprovalRuleStore } from "../tool-approval-rules.js";
 import { shareImageCandidate, visionCandidate } from "./bot-tool-candidates.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
 import { projectBotTranscript } from "./live-projection.js";
@@ -1754,4 +1757,383 @@ test("plan: a same-URL browser reload cannot reuse a reservation for the old doc
     assert.equal(await check(), undefined);
     assert.equal((await f.plans.current(PLAN_BOT))?.items[0]?.used, 1);
   } finally { await f.plans.endRuns(PLAN_BOT, "finished"); }
+});
+
+// Phase D exercises the real policy, extension and authority fence.
+const ALLOW_MAIL: BotApprovalRuleTarget = { kind: "connection", serverId: MAIL_SERVER.id, tool: "send_email" };
+function allowBook() {
+  const calls: string[] = [], uses: Array<[string, string]> = [];
+  let revision = "consent-1", hit = true;
+  const port: BotAllowListPort = {
+    consentRevision: async () => { calls.push("revision"); return revision; },
+    match: async () => { calls.push("match"); return hit ? { id: "r1" } : undefined; },
+    offer: async () => { calls.push("offer"); return { count: 3 }; },
+    used: async (bot, id) => { calls.push("used"); uses.push([bot, id]); },
+  };
+  return { port, calls, uses, remove() { hit = false; revision = "consent-2"; }, setRevision(value: string) { revision = value; } };
+}
+function allowFixture(book = allowBook(), options: {
+  rules?: () => readonly BotRule[];
+  approvalFor?: Parameters<typeof assemblyDeps>[1]["approvalFor"];
+  plans?: Parameters<typeof assemblyDeps>[1]["plans"];
+  toolName?: string;
+  routinesGoAhead?: () => boolean;
+} = {}) {
+  const state = assemblyState(testAuthority({ mode: "full", home: botHome(), ...FULL_GRANTS, other: [...FULL_GRANTS.other, "browser"] }));
+  state.liveMailTools[0]!.annotations = { readOnlyHint: false, destructiveHint: false, title: "Send email" };
+  const tool = countingTool(options.toolName ?? SEND_EMAIL_TOOL);
+  const deps = assemblyDeps(state, { allowList: book.port, candidates: () => [{ tool, mcp: tool.name === SEND_EMAIL_TOOL }], rules: options.rules ?? (() => []),
+    ...(options.approvalFor ? { approvalFor: options.approvalFor } : {}), ...(options.plans ? { plans: options.plans } : {}),
+    ...(options.routinesGoAhead ? { routinesGoAhead: options.routinesGoAhead } : {}), requestHandoff: async () => ({ outcome: "skipped" }) });
+  const check: BotToolCallCheck = { executionId: "host-tool-1", callId: "provider-call", args: { text: "hi" },
+    requestIds: ["plan-run"], authorizationIds: ["plan-run"], signal: undefined };
+  return { book, state, tool, deps, check };
+}
+async function runAllowed(f: ReturnType<typeof allowFixture>, calls = 1) {
+  const faux = createFauxModels([
+    ...Array.from({ length: calls }, () => fauxAssistantMessage([fauxToolCall(f.tool.name, { text: "hi" }, { id: "reused-provider-id" })], { stopReason: "toolUse" })),
+    fauxAssistantMessage("done"),
+  ]);
+  const { harness, root } = await memoryHarness(f.deps, faux);
+  try {
+    await (await root.submit({ type: "input", content: "go", requestId: "plan-run" }, ctx)).wait(ctx);
+    return await toolResults(root);
+  } finally { await harness.close(ctx); }
+}
+
+test("allow list: a connection entry executes without a card and records one use", async () => {
+  const f = allowFixture();
+  await runAllowed(f);
+  assert.equal(f.tool.executions.length, 1);
+  assert.deepEqual(f.deps.approvals, []);
+  assert.deepEqual(f.book.uses, [["bot-1", "r1"]]);
+});
+
+test("allow list: a browser binding failure blocks before recording use", async () => {
+  const f = allowFixture(allowBook(), { toolName: "browser_click", approvalFor: async () => ({
+    approval: { summary: "Click Save", onAllow() { throw new Error("The page changed."); } },
+    action: { surface: "browser", tool: "browser_click", url: "https://docs.example/edit" },
+    browserTarget: { workspaceId: "bot-browser", tabId: "t1", url: "https://docs.example/edit", documentRevision: "d1", controlRevision: 0 },
+  }) });
+  const results = await runAllowed(f);
+  assert.equal(f.tool.executions.length, 0);
+  assert.deepEqual(f.book.uses, []);
+  assert.match(resultText(results[0]), /The page changed/u);
+});
+
+for (const kind of ["purchase", "custom", "locked", "handoff", "computer_use"] as const) {
+  test(`allow list: ${kind} never consults remembered consent`, async () => {
+    const custom: BotRule = { id: "custom.create", text: "send email", behavior: "ask", locked: false };
+    const action: BotClassifiableAction = kind === "locked"
+      ? { surface: "browser", tool: "browser_type", url: "https://docs.example/", field: { type: "password" } }
+      : kind === "custom" || kind === "handoff"
+      ? { surface: "mcp", modelName: SEND_EMAIL_TOOL, serverId: MAIL_SERVER.id, remoteName: "send_email", summary: "Send email", destructive: "additive" }
+      : kind === "computer_use" ? { surface: "computer_use", action: "click", element: { label: "Save", role: "AXButton" } } : PLACE_ORDER;
+    const f = allowFixture(allowBook(), { toolName: kind === "locked" ? "browser_type" : kind === "custom" || kind === "handoff" ? SEND_EMAIL_TOOL : "computer_use",
+      rules: () => kind === "custom" ? [custom] : kind === "handoff" ? [{ ...custom, behavior: "hand_off" }] : rulesWith("ask"),
+      approvalFor: async () => ({ approval: { summary: "Pending action" }, action }) });
+    await runAllowed(f);
+    assert.deepEqual(f.book.calls, []);
+    if (kind === "locked" || kind === "handoff") {
+      assert.equal(f.tool.executions.length, 0);
+      assert.equal(f.deps.handoffs.length, 1);
+    } else {
+      assert.equal(f.deps.approvals.length, 1);
+      if (kind !== "computer_use") assert.match(f.deps.approvals[0]!.summary, /^Rule · /u);
+    }
+  });
+}
+
+test("allow list: ordinary approvals retain the target with and without an offer", async () => {
+  const f = allowFixture(); f.book.remove();
+  for (const offered of [true, false]) {
+    f.book.port.offer = async () => offered ? { count: 3 } : undefined;
+    const decision = await f.deps.checkPolicy("bot-1", SEND_EMAIL_TOOL, f.check);
+    assert.ok(decision.allowed && decision.approval);
+    assert.deepEqual(decision.approval.remember, { target: ALLOW_MAIL, title: "Send email", ...(offered ? { offer: { count: 3 } } : {}) });
+    assert.ok(decision.approval.requirements?.authorizationFingerprint);
+  }
+});
+
+for (const failure of ["match", "revision", "missing revision", "offer"] as const) {
+  test(`allow list: ${failure} failure asks normally without an offer`, async () => {
+    const f = allowFixture(); f.book.remove();
+    if (failure === "match") f.book.port.match = async () => { throw new Error("book unreadable"); };
+    if (failure === "revision") f.book.port.consentRevision = async () => { throw new Error("receipts unreadable"); };
+    if (failure === "missing revision") Object.assign(f.book.port, { consentRevision: undefined });
+    if (failure === "offer") f.book.port.offer = async () => { throw new Error("tallies unreadable"); };
+    let atCard = -1;
+    const request = f.deps.requestApproval;
+    f.deps.requestApproval = async input => { atCard = f.tool.executions.length; return request(input); };
+    await runAllowed(f);
+    assert.equal(f.deps.approvals.length, 1);
+    assert.equal(atCard, 0);
+    const decision = await f.deps.checkPolicy("bot-1", SEND_EMAIL_TOOL, f.check);
+    assert.ok(decision.allowed && decision.approval);
+    assert.equal(decision.approval.remember?.offer, undefined);
+  });
+}
+
+test("allow list: Remove takes effect on the next call in the same reply", async () => {
+  const f = allowFixture();
+  const used = f.book.port.used;
+  f.book.port.used = async (...args) => { await used(...args); };
+  const execute = f.tool.execute;
+  f.tool.execute = async (...args) => { const result = await execute(...args); f.book.remove(); return result; };
+  await runAllowed(f, 2);
+  assert.equal(f.tool.executions.length, 2);
+  assert.equal(f.deps.approvals.length, 1);
+  assert.deepEqual(f.book.uses, [["bot-1", "r1"]]);
+});
+
+test("allow list: pure routine go-ahead does not query consent or offers", async () => {
+  const f = allowFixture(allowBook(), { routinesGoAhead: () => true });
+  const decision = await f.deps.checkPolicy("bot-1", SEND_EMAIL_TOOL, { ...f.check, requestIds: ["routine:daily:fire-1"], hasRoutineInputs: async () => true });
+  assert.ok(decision.allowed && decision.approval?.preapproved);
+  assert.deepEqual(f.book.calls, []);
+});
+
+test("allow list: concurrent real plan cap uses the entry only for the uncovered call", async () => {
+  const p = await approvedRuntimePlan([planConnector(1)]);
+  let covers = 0;
+  const f = allowFixture(allowBook(), { plans: { cover: (...args) => { covers++; return p.plans.cover(...args); }, admit: p.plans.admit } });
+  try {
+    const decisions = await Promise.all(["host-tool-1", "host-tool-2"].map(executionId => f.deps.checkPolicy(PLAN_BOT, SEND_EMAIL_TOOL, { ...f.check, executionId })));
+    assert.equal(covers, 2, "one coverage evaluation per call, including the cap fallback");
+    assert.equal(decisions.filter(d => d.allowed && d.approval?.planPermit).length, 1);
+    const entry = decisions.find(d => d.allowed && d.approval?.preapproved && !d.approval.planPermit);
+    assert.ok(entry?.allowed && entry.approval);
+    await entry.approval.onAllow?.();
+    assert.equal((await p.plans.current(PLAN_BOT))?.items[0]?.used, 1);
+    assert.deepEqual(f.book.uses, [[PLAN_BOT, "r1"]]);
+  } finally { await p.plans.endRuns(PLAN_BOT, "finished"); }
+});
+
+test("allow list: plan-covered calls never query the list and uncovered rule asks still need a card", async () => {
+  const p = await approvedRuntimePlan([planConnector(1)]);
+  const f = allowFixture(allowBook(), { plans: p.plans });
+  try {
+    const first = await f.deps.checkPolicy(PLAN_BOT, SEND_EMAIL_TOOL, f.check);
+    assert.ok(first.allowed && first.approval?.planPermit);
+    assert.deepEqual(f.book.calls, []);
+    const ruled = allowFixture(f.book, { plans: p.plans, rules: () => defaultBotRules() });
+    const second = await ruled.deps.checkPolicy(PLAN_BOT, SEND_EMAIL_TOOL, { ...f.check, executionId: "host-tool-2" });
+    assert.ok(second.allowed && second.approval && !second.approval.preapproved);
+    assert.match(second.approval.summary, /^Rule · /u);
+    assert.deepEqual(f.book.calls, []);
+    assert.equal((await p.plans.current(PLAN_BOT))?.items[0]?.used, 1);
+  } finally { await p.plans.endRuns(PLAN_BOT, "finished"); }
+});
+
+test("allow list: requirements probes reserve no plan, record no use and never bind", async () => {
+  const p = await approvedRuntimePlan([planConnector(1)]);
+  let binds = 0;
+  const f = allowFixture(allowBook(), { plans: p.plans, approvalFor: async () => ({ approval: { summary: "Send email", onAllow() { binds++; } },
+    action: { surface: "mcp", modelName: SEND_EMAIL_TOOL, serverId: MAIL_SERVER.id, remoteName: "send_email", summary: "Send email", destructive: "additive" } }) });
+  try {
+    const proof = await f.deps.approvalRequirements(PLAN_BOT, SEND_EMAIL_TOOL, f.check);
+    assert.equal(proof?.matchedRuleId, "r1");
+    assert.equal((await p.plans.current(PLAN_BOT))?.items[0]?.used, 0);
+    assert.deepEqual(f.book.uses, []);
+    assert.equal(binds, 0);
+    assert.equal(f.book.calls.includes("offer"), false);
+  } finally { await p.plans.endRuns(PLAN_BOT, "finished"); }
+});
+
+test("allow list: canonical requirements bind execution, arguments, full rules, browser binding and ingress, but not usage or summary", async () => {
+  let summary = "Click Save", documentRevision = "doc-1";
+  let rules: BotRule[] = [];
+  const f = allowFixture(allowBook(), { toolName: "browser_click", rules: () => rules, approvalFor: async () => ({
+    approval: { summary }, action: { surface: "browser", tool: "browser_click", url: "https://docs.example/edit" },
+    browserTarget: { workspaceId: "b", tabId: "t", url: "https://docs.example/edit", documentRevision, controlRevision: 0 },
+  }) });
+  const original = await f.deps.approvalRequirements("bot-1", f.tool.name, f.check);
+  assert.ok(original);
+  summary = "New display text";
+  await f.book.port.used("bot-1", "r1");
+  assert.deepEqual(await f.deps.approvalRequirements("bot-1", f.tool.name, { ...f.check, args: { text: "hi" } }), original);
+  for (const check of [{ ...f.check, executionId: "other-task" }, { ...f.check, args: { text: "different" } },
+    { ...f.check, requestIds: ["other-input"] }, { ...f.check, authorizationIds: ["host-other"] }]) {
+    assert.notEqual((await f.deps.approvalRequirements("bot-1", f.tool.name, check))?.requirementsFingerprint, original.requirementsFingerprint);
+  }
+  documentRevision = "doc-2";
+  assert.notEqual((await f.deps.approvalRequirements("bot-1", f.tool.name, f.check))?.requirementsFingerprint, original.requirementsFingerprint);
+  documentRevision = "doc-1";
+  rules = [{ id: "custom.unmatched", text: "book flights", behavior: "ask", locked: false }];
+  assert.notEqual((await f.deps.approvalRequirements("bot-1", f.tool.name, f.check))?.requirementsFingerprint, original.requirementsFingerprint);
+  rules = [];
+  f.book.setRevision("consent-2");
+  const revised = await f.deps.approvalRequirements("bot-1", f.tool.name, f.check);
+  assert.equal(revised?.requirementsFingerprint, original.requirementsFingerprint);
+  assert.notEqual(revised?.authorizationFingerprint, original.authorizationFingerprint);
+});
+
+for (const drift of ["generation", "authority", "rules", "page", "ingress", "abort"] as const) {
+  test(`allow list: requirements probe refuses ${drift} changing during a book read`, async () => {
+    let documentRevision = "d1", rules: BotRule[] = [];
+    const controller = new AbortController();
+    const f = allowFixture(allowBook(), { toolName: "browser_click", rules: () => rules, approvalFor: async () => ({
+      approval: { summary: "Save" }, action: { surface: "browser", tool: "browser_click", url: "https://docs.example/edit" },
+      browserTarget: { workspaceId: "b", tabId: "t", url: "https://docs.example/edit", documentRevision, controlRevision: 0 },
+    }) });
+    f.check.signal = controller.signal;
+    f.book.port.match = async () => {
+      if (drift === "generation") f.book.setRevision("consent-2");
+      if (drift === "authority") f.state.revoked = true;
+      if (drift === "rules") rules = [{ id: "custom.new", text: "unrelated edited rule", behavior: "ask", locked: false }];
+      if (drift === "page") documentRevision = "d2";
+      if (drift === "ingress") f.check.requestIds = ["intro:bot-1"];
+      if (drift === "abort") controller.abort();
+      return { id: "r1" };
+    };
+    assert.equal(await f.deps.approvalRequirements("bot-1", f.tool.name, f.check), undefined);
+    assert.deepEqual(f.book.uses, []);
+  });
+}
+
+for (const at of ["onAllow", "used", "execution fence"] as const) {
+  test(`allow list: revocation at ${at} prevents the actual execution`, async () => {
+    const f = allowFixture();
+    if (at === "onAllow") {
+      const policy = f.deps.checkPolicy;
+      f.deps.checkPolicy = async (...args) => { const decision = await policy(...args); f.book.remove(); return decision; };
+    } else if (at === "used") {
+      f.book.port.used = async () => { f.book.remove(); };
+    } else {
+      const policy = f.deps.checkPolicy;
+      f.deps.checkPolicy = async (...args) => {
+        const decision = await policy(...args);
+        if (decision.allowed && decision.approval?.onAllow) {
+          const allow = decision.approval.onAllow;
+          decision.approval.onAllow = async () => { await allow(); f.book.remove(); };
+        }
+        return decision;
+      };
+    }
+    const results = await runAllowed(f);
+    assert.equal(f.tool.executions.length, 0);
+    assert.equal(results[0]?.isError, true);
+  });
+}
+
+test("allow list: the real consent ledger preserves proof through use and unrelated grants, and changes it on Remove", async () => {
+  let document = emptyToolApprovalRulesDocument(), nextId = 0;
+  const store: ToolApprovalRuleStore = { load: async () => structuredClone(document), update: async mutation => {
+    const draft = structuredClone(document), result = await mutation(draft); document = draft; return result;
+  } };
+  const rules = new ToolApprovalRuleBook(store, () => new Date("2026-11-04T12:00:00Z"), () => `rule${++nextId}`, { knownBot: async () => true });
+  const grant = await rules.grantBot("bot-1", ALLOW_MAIL, "Mail · Send email", "person-1");
+  assert.equal(grant.status, "published");
+  const book = allowBook();
+  book.port = { consentRevision: (...args) => rules.botConsentRevision(...args), match: (...args) => rules.matchBot(...args),
+    offer: async () => undefined, used: (...args) => rules.recordBotUse(...args) };
+  const f = allowFixture(book);
+  const before = await f.deps.approvalRequirements("bot-1", SEND_EMAIL_TOOL, f.check);
+  assert.ok(before?.matchedRuleId);
+  await rules.recordBotUse("bot-1", before.matchedRuleId);
+  await rules.grantBot("bot-1", { ...ALLOW_MAIL, tool: "archive_email" }, "Mail · Archive", "person-2");
+  assert.deepEqual(await f.deps.approvalRequirements("bot-1", SEND_EMAIL_TOOL, f.check), before);
+  await rules.revokeBot("bot-1", before.matchedRuleId);
+  const after = await f.deps.approvalRequirements("bot-1", SEND_EMAIL_TOOL, f.check);
+  assert.equal(after?.requirementsFingerprint, before.requirementsFingerprint);
+  assert.notEqual(after?.authorizationFingerprint, before.authorizationFingerprint);
+  assert.equal(after?.matchedRuleId, undefined);
+});
+
+for (const drift of ["rules", "page"] as const) {
+  test(`allow list: ${drift} changing inside the actual binding prevents use and execution`, async () => {
+    let rules: BotRule[] = [], documentRevision = "d1";
+    const f = allowFixture(allowBook(), { toolName: "browser_click", rules: () => rules, approvalFor: async () => ({
+      approval: { summary: "Click Save", onAllow: () => {
+        if (drift === "rules") rules = [{ id: "custom.save", text: "save", behavior: "ask", locked: false }];
+        else documentRevision = "d2";
+      } },
+      action: { surface: "browser", tool: "browser_click", url: "https://docs.example/edit", field: { accessibleName: "Save" } },
+      browserTarget: { workspaceId: "b", tabId: "t", url: "https://docs.example/edit", documentRevision, controlRevision: 0 },
+    }) });
+    const results = await runAllowed(f);
+    assert.equal(f.tool.executions.length, 0);
+    assert.deepEqual(f.book.uses, []);
+    assert.equal(results[0]?.isError, true);
+  });
+}
+
+test("allow list: caller mutation during an await cannot change the captured operation", async () => {
+  const f = allowFixture();
+  f.book.port.match = async () => { (f.check.args as { text: string }).text = "changed"; return { id: "r1" }; };
+  assert.equal(await f.deps.approvalRequirements("bot-1", SEND_EMAIL_TOOL, f.check), undefined);
+});
+
+test("allow list: missing execution/input/browser proof and failed live owner checks never authorize", async () => {
+  const f = allowFixture();
+  for (const check of [{ ...f.check, executionId: undefined }, { ...f.check, requestIds: [] },
+    { ...f.check, requestIds: [undefined], authorizationIds: undefined },
+    { ...f.check, assertCurrent: async () => { throw new Error("owning run expired"); } }]) {
+    assert.equal(await f.deps.approvalRequirements("bot-1", SEND_EMAIL_TOOL, check), undefined);
+  }
+  const browser = allowFixture(allowBook(), { toolName: "browser_click", approvalFor: async () => ({ approval: { summary: "Save" },
+    action: { surface: "browser", tool: "browser_click", url: "https://docs.example/edit" } }) });
+  assert.equal(await browser.deps.approvalRequirements("bot-1", "browser_click", browser.check), undefined);
+});
+
+for (const behavior of ["ask", "hand_off"] as const) {
+  test(`allow list: a rule added during the book read falls back to fresh ${behavior} policy`, async () => {
+    let rules: BotRule[] = [];
+    const f = allowFixture(allowBook(), { rules: () => rules });
+    f.book.port.match = async () => {
+      rules = [{ id: "custom.send", text: "send email", behavior, locked: false }];
+      return { id: "r1" };
+    };
+    await runAllowed(f);
+    assert.deepEqual(f.book.uses, []);
+    if (behavior === "hand_off") {
+      assert.equal(f.tool.executions.length, 0);
+      assert.equal(f.deps.handoffs.length, 1);
+      assert.deepEqual(f.deps.approvals, []);
+    } else {
+      assert.equal(f.deps.approvals.length, 1);
+      assert.match(f.deps.approvals[0]!.summary, /^Rule · /u);
+    }
+  });
+}
+
+test("allow list: owner expiry during fresh classification refuses the requirements proof", async () => {
+  let reads = 0, ownerCurrent = true;
+  const f = allowFixture(allowBook(), { approvalFor: async () => {
+    if (++reads === 2) ownerCurrent = false;
+    return { approval: { summary: "Send email" }, action: { surface: "mcp", modelName: SEND_EMAIL_TOOL,
+      serverId: MAIL_SERVER.id, remoteName: "send_email", summary: "Send email", destructive: "additive" } };
+  } });
+  f.check.assertCurrent = async () => { if (!ownerCurrent) throw new Error("delivery expired"); };
+  assert.equal(await f.deps.approvalRequirements("bot-1", SEND_EMAIL_TOOL, f.check), undefined);
+});
+
+test("allow list: unreadable consent at a real exhausted plan cap never reserves again", async () => {
+  const p = await approvedRuntimePlan([planConnector(1)]);
+  let covers = 0;
+  const f = allowFixture(allowBook(), { plans: { cover: (...args) => { covers++; return p.plans.cover(...args); }, admit: p.plans.admit } });
+  try {
+    const first = await f.deps.checkPolicy(PLAN_BOT, SEND_EMAIL_TOOL, f.check);
+    assert.ok(first.allowed && first.approval?.planPermit);
+    f.book.port.consentRevision = async () => { throw new Error("receipts unreadable"); };
+    const second = await f.deps.checkPolicy(PLAN_BOT, SEND_EMAIL_TOOL, { ...f.check, executionId: "second-host-tool" });
+    assert.ok(second.allowed && second.approval && !second.approval.preapproved);
+    assert.equal(second.approval.remember?.offer, undefined);
+    assert.equal(covers, 2);
+    assert.equal((await p.plans.current(PLAN_BOT))?.items[0]?.used, 1);
+    assert.deepEqual(f.book.uses, []);
+  } finally { await p.plans.endRuns(PLAN_BOT, "finished"); }
+});
+
+test("allow list: an unavailable browser capability refuses before probing the page or the book", async () => {
+  let probes = 0;
+  const f = allowFixture(allowBook(), { toolName: "browser_click", approvalFor: async () => {
+    probes++;
+    return { approval: { summary: "Click Save" }, action: { surface: "browser", tool: "browser_click", url: "https://docs.example/" },
+      browserTarget: { workspaceId: "b", tabId: "t", url: "https://docs.example/", documentRevision: "d1", controlRevision: 0 } };
+  } });
+  f.state.authority = { ...f.state.authority, otherCapabilities: f.state.authority.otherCapabilities.filter(capability => capability.kind !== "browser") };
+  assert.equal(await f.deps.approvalRequirements("bot-1", "browser_click", f.check), undefined);
+  assert.equal(probes, 0);
+  assert.deepEqual(f.book.calls, []);
 });

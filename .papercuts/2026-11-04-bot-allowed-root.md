@@ -12,3 +12,5 @@
 - Task2 follow-up used aligned private receipt IDs rather than subtracting an ambiguous timestamp. Registered suite48pass, types/lint/diff0. New files are not live-wired, so no migration of shipped tally data is required.
 
 - Task2 staging reported ignored .memory/.papercuts paths after staging the tracked files; the unique worker log needed explicit force-add. Included it in the local unpublished task commit before releasing Task3.
+
+- Task3 changed-book fallback must recompute ordinary rules without another C reservation. Worker actual REDs caught stale Ask and hand-off execution; fresh ordinary fallback and initial browser verdict now pass. Registered target test with existing tallies, official51 and registry15 pass.

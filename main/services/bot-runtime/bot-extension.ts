@@ -46,6 +46,7 @@ import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
 //   the flush by the current run; the compacted conversation is handed over
 //   too, so the flush also reads each historical entry's own ingress.
 
+import type { BotApprovalRuleTarget } from "../../../renderer/shared/tool-approval-scope.js";
 import type { BrowserApprovalTarget } from "../browser/approval.js";
 import type { BotPlanPermit, BotPlans } from "../bot-plans/plans.js";
 import type { BotApprovalRequestOutcome } from "./bot-approvals.js";
@@ -104,7 +105,8 @@ export const BOT_SECTION_KEYS = ["aiden-base", "aiden-persona", "aiden-authority
 /** The tool whose offer decides how the memory section reads. */
 const MEMORY_TOOL_NAME = "bot_memory";
 const APPROVAL_MEMO = "aiden.approval";
-const EXECUTION_ID_MEMO = "aiden.execution.id";
+export const BOT_EXECUTION_ID_MEMO = "aiden.execution.id";
+const EXECUTION_ID_MEMO = BOT_EXECUTION_ID_MEMO;
 const PLAN_EXECUTION_MEMO = "aiden.execution.plan";
 const NESTED_EXECUTION_MEMO = "aiden.execution.nested";
 const INPUT_IDENTITY_ENTRY = "aiden.bot-input-identity";
@@ -129,7 +131,18 @@ export function scriptHandoffBlock(toolName: string): string {
   return `A rule hands ${toolName} to the person. Call ${toolName} directly, not from codemode, so they get the card.`;
 }
 
+/** Private authorization evidence. Never projected into renderer/Remote prompts. */
+export interface BotApprovalRequirements {
+  target: BotApprovalRuleTarget;
+  requirementsFingerprint: string;
+  consentRevision: string;
+  authorizationFingerprint: string;
+  matchedRuleId?: string;
+}
+
 export interface BotApprovalRequirement {
+  remember?: { target: BotApprovalRuleTarget; title: string; offer?: { count: number } };
+  requirements?: BotApprovalRequirements;
   summary: string;
   /**
    * Runs after the person allows, before the tool executes (for example to
@@ -203,11 +216,16 @@ export interface BotRuleHandoffRowTarget {
 
 /** The call being checked. */
 export interface BotToolCallCheck {
+  /** Optional live owner fence for pure requirements reads; never hashed as a callback. */
+  assertCurrent?(): Promise<void>;
+  owner?: BotApprovalOwner;
   executionId?: string;
   /** Stable host-owned input identities for plan binding; ingress still uses requestIds. */
   authorizationIds?: readonly string[];
   /** Stale permits fall back to ordinary policy without reserving again. */
   skipPlanCoverage?: true;
+  /** Internal ordinary-policy fallback after an unreadable or changed allow-list proof. */
+  skipAllowList?: true;
   callId: string;
   args: unknown;
   signal: AbortSignal | undefined;

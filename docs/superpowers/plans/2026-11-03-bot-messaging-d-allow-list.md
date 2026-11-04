@@ -237,11 +237,11 @@ The runtime also exposes a main-only, read-only `approvalRequirements(botId, too
 
 The precedence is authority/ingress, rules, existing routine go-ahead, plan coverage, allow list, then ordinary card/block. When a plan cap runs out, an otherwise eligible persistent entry may handle the call; there is no plan reservation for that call and only the entry usage increases. A rule-made ask still requires a card if the plan does not cover all matching rules. Do not call C's side-effecting coverage function through both `asBaseline` and `ask`.
 
-- [ ] **Step 1: Write the failing target tests** in `bot-allow-target.test.ts`:
+- [x] **Step 1: Write the failing target tests** in `bot-allow-target.test.ts`:
   - `a mutating connection call is its server and tool`: `{surface:"mcp", serverId:"gcal", remoteName:"create_event", annotations:{title:"Create event"}, …}` gives `target {kind:"connection", serverId:"gcal", tool:"create_event"}` and `title "Create event"`. Without a title, `title === "create_event"`.
   - `hosts ignore case and a leading www.` (Review Focus 5): browser_click on `https://WWW.Amazon.com/cart` and on `https://amazon.com/` give the same `botApprovalRuleKey`, with `host "amazon.com"` and `action "click"`. `browser_type` gives `"type"`.
   - `no class`: `computer_use`, `computer`, `mcp` with `serverId: ""`, and a browser URL of `file:///x` or `about:blank` all give `undefined`.
-- [ ] **Step 2: Write the failing policy tests** in `bot-tool-assembly.test.ts`. Use a fake `allowList` that records calls and build on the existing helpers: `ruledTurn`, `rulesWith`, `PLACE_ORDER`, and the connection fixture from `a mutating connection tool asks for approval…` (line ~413). For browser cases, add `"browser"` to the test authority's other grants the way `BOT_COMPUTER_TOOL_NAME` adds `"computer"`.
+- [x] **Step 2: Write the failing policy tests** in `bot-tool-assembly.test.ts`. Use a fake `allowList` that records calls and build on the existing helpers: `ruledTurn`, `rulesWith`, `PLACE_ORDER`, and the connection fixture from `a mutating connection tool asks for approval…` (line ~413). For browser cases, add `"browser"` to the test authority's other grants the way `BOT_COMPUTER_TOOL_NAME` adds `"computer"`.
   - `an entry lets a matching connection call run without a card and counts its use`: `match → {id:"r1"}`. Expect `deps.approvals` to be `[]`, one execution, and `used` called with `["bot", "r1"]`.
   - `an entry's browser call still checks its page binding`: browser_click on a site with a match, and an `onAllow` that throws `"The page changed."`. Expect the call blocked with that text and `used` not called.
   - `an entry never covers a rule-made ask, a locked rule or Computer Use` (Review Focus 1): with `match` always hitting:
@@ -255,10 +255,10 @@ The precedence is authority/ingress, rules, existing routine go-ahead, plan cove
   - `Remove takes effect on the very next call` (Review Focus 4): two connection calls in one reply, with `match` hitting for the first and missing after a flag flips between them. Expect one execution without a card, then one card.
   - `a plan and entry match the same call`: only the plan reservation increases and the list is not queried. At the plan cap, a no-rule call can use the entry; a rule-made ask cannot. Test concurrent calls at the cap with the real plan store.
   - `a routine run that goes ahead neither matches nor offers`: `routinesGoAhead: () => true` on `routine:daily:fire-1`. Expect `match` and `offer` not called.
-- [ ] **Step 3: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-allow-target.test.ts main/services/bot-runtime/bot-tool-assembly.test.ts`. Expected: FAIL.
-- [ ] **Step 4: Implement** `botApprovalTargetOf` and the `checkPolicy` branch above. Hosts come from `new URL(url).hostname`.
-- [ ] **Step 5: Run the tests.** The same files, then `npm run test:bot-runtime` and `npm run test:bot-rules`. Expected: PASS.
-- [ ] **Step 6: Register and commit.** Add `bot-allow-target.test.ts` to `test:bot-allowed` and the registry. Commit: "Let a Bot's allow list skip a plain approval, never a rule".
+- [x] **Step 3: Run and see them fail.** `npx tsx --test main/services/bot-runtime/bot-allow-target.test.ts main/services/bot-runtime/bot-tool-assembly.test.ts`. Expected: FAIL.
+- [x] **Step 4: Implement** `botApprovalTargetOf` and the `checkPolicy` branch above. Hosts come from `new URL(url).hostname`.
+- [x] **Step 5: Run the tests.** The same files, then `npm run test:bot-runtime` and `npm run test:bot-rules`. Expected: PASS.
+- [x] **Step 6: Register and commit.** Add `bot-allow-target.test.ts` to `test:bot-allowed` and the registry. Commit: "Let a Bot's allow list skip a plain approval, never a rule".
 
 ### Task 4: The card's Always allow and the Bot's hint
 
@@ -268,6 +268,9 @@ The precedence is authority/ingress, rules, existing routine go-ahead, plan cove
 - Modify: `main/services/bot-runtime/bot-extension.ts:200-209` (`BotApprovalRequest`), the `BotExtensionDeps` block (~`:259`), `:619-655` (`beforeTool` approval branch), the `ToolTask` hook (~`:538`) for `afterTool`
 - Modify: `packages/cli/src/bot-durable.ts:150` only if the type change requires it (no behavior)
 - Test: `main/services/bot-runtime/bot-extension.test.ts` (extend)
+- Modify as required for the structured decision migration: `main/services/bot-runtime/test-support/fixtures.ts`, `test-support/assembly-fixtures.ts`, `test-support/extension-scenario.ts`, `main/services/bot-runtime/bot-session-main.ts` (approval request/provenance adapter only), `main/services/bot-messages/courier.ts` and its provenance tests, plus existing attention fixtures.
+- Task 4 may extend assembly's private fingerprint/revalidation evidence for all ordinary and rule-made approval attempts. The eligible baseline-only requirements probe remains read-only; do not reserve C coverage while rechecking a saved decision or sibling release.
+
 
 **Interfaces:**
 - Consumes: `remember` from Task 3, and `botApprovalRuleKey` from Task 1.
@@ -619,3 +622,12 @@ Per-Bot approval tallies now atomically persist immutable decisions, provenance,
 Historical recovery uses original decidedAt. First publication completion is durable and idempotent, removes earlier history and the exact completed Always event, and preserves other equal-time events, later history and weekly hint ownership. Revoked completion clears nothing. Aligned private allowedDecisionIds prevent guesses when an event was capped, forgotten or evicted. No public contract or file version changed; these new files are not wired into live approvals yet.
 
 The original missing-module RED and recovery RED32pass6fail are retained. Parent official suite initially38passed; inspection then found the own-Always reset gap. Follow-up RED38pass7fail became registered test:bot-allowed48pass0fail. Whole types, scoped lint and diff checks passed. Logs: /tmp/bot-allowed-d-task2-own-reset-{red,green,official,types,lint}.log. Root registered the test script/pretest and CI lane, with registry15pass at /tmp/bot-allowed-d-task2-parent-registry.log. Task3 follows this commit; Tasks4–8 remain held. D source review, native, Cua, package, live-provider and hosted-CI acceptance remain pending.
+
+
+### Task 3 complete locally, 2026-11-04
+
+Exact connection/server/tool and normalized site/action classes now feed D only after fresh rules, eligible routine go-ahead and C's single coverage attempt. Remembered entries skip eligible baseline approvals only; rule-made asks, locked hand-offs and Computer Use stay outside. Actual page binding precedes use recording. Consent, full effective rules, authority, operation, browser binding and live input ownership are rechecked through execution. Unstable or unreadable book evidence re-admits ordinary policy with both C and D lookup disabled, so it cannot reuse stale Ask/hand-off classification or spend another plan reservation.
+
+The required target-specific consentRevision port and private read-only approvalRequirements probe are available for Task4. Usage and display changes do not change the authorization identity; Remove and binding/rule changes do. The probe never reserves a plan, records a use, offers consent or invokes a binding callback. Main singleton wiring remains deferred to Task5.
+
+Worker focused target/assembly123pass, runtime441pass, rules62pass, wholetypes/scopedlint/diff0. Initial RED95pass16fail includes missing module/API; two later genuine drift REDs caught stale Ask/hand-off fallback, and a separate RED caught probing a browser page before initial authority refusal. Logs: /tmp/bot-allowed-d-task3-{red,drift-red,probe-order-red}.log and /tmp/bot-allowed-d-task3-{focused,runtime,rules,types,lint,diff}-final.log. Parent registered the target suite in test:bot-allowed and the rules CI lane: official51pass and registry15pass at /tmp/bot-allowed-d-task3-parent-{allowed,registry}.log. Task4 follows this commit; Tasks5–8 remain held. No fullD/native/Cua/live/package/CI acceptance.
