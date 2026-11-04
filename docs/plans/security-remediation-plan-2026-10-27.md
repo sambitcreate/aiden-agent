@@ -1,6 +1,6 @@
 # Security remediation plan
 
-Status: Merged. Implementation and stacked PR delivery authorized October 27, 2026. #604 and #606 to #614 merged by November 3, 2026 (#605 closed); #604, #606 and #607 shipped in 0.63.0, the rest is unreleased. Release and device acceptance remain separate.
+Status: Merged. Implementation and stacked PR delivery authorized October 27, 2026. #604 and #606 to #614 merged by November 3, 2026 (#605 closed); #604, #606 and #607 shipped in 0.63.0 and #608 to #614 in 0.64.0. Packaged-app and device acceptance remain separate.
 
 Owner decisions, October 29, 2026, after a review of the draft stack:
 
@@ -434,7 +434,7 @@ After a slice lands, update this plan and its index row with the PR/head and out
   | #613 | W11 diagnostic credential redaction | 5882b8299 | 4b43dd8d | 2026-11-03 |
   | #614 | W12 production renderer CSP | 388c21c6e | 49497480 | 2026-11-03 |
 
-  #604, #606 and #607 shipped in 0.63.0; #608 to #614 are unreleased. Still open for every slice that changes the app: packaged-app acceptance, physical-device acceptance (#607, #608), live-network and proxy/custom-TLS acceptance (#611, #612), and the release itself. The W12 renderer custom-protocol work stays deferred in [its own plan](renderer-protocol-compatibility-plan.md), and publisher verification in the AppImage updater stays an open design question. The checklist below stays unticked until those gates are recorded.
+  #604, #606 and #607 shipped in 0.63.0 and #608 to #614 in 0.64.0. Still open for every slice that changes the app: packaged-app acceptance, physical-device acceptance (#607, #608), and live-network and proxy/custom-TLS acceptance (#611, #612). The W12 renderer custom-protocol work stays deferred in [its own plan](renderer-protocol-compatibility-plan.md), and publisher verification in the AppImage updater stays an open design question. The checklist below stays unticked until those gates are recorded.
 
 ## Completion checklist
 
