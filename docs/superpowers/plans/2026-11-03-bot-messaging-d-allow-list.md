@@ -39,7 +39,7 @@ This plan extends those pieces. It does not invent a parallel store:
   - The list is `/bots/<encodeURIComponent(botId)>?page=allowed`, a new `BotSubpage`. Settings is `/settings?section=bots`.
   - A Bot's reply can't carry an in-app link: assistant markdown opens `https:` only (`markdown.tsx` `RestrictedLink`). So the link lives on Aiden's own UI: a toast after Always allow, and the profile row. The Bot's hint names the place in words.
 - Phones show the list, can Remove from it, and get the Always choice (owner pick 10). The shared `POST /approvals/{id}/respond` route already takes `scope`; `aiden-remote-bot-session.ts:1906` accepts `"always"` only for a device with `bot:allowed` on a card that offers it.
-- Remote: claim the next contract revision after `main`'s at merge, provisionally 54 (this branch's tip is `AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION = 53`, `main/services/aiden-remote-protocol.ts:282`). Plans A–C may claim revisions first. Update these together: iOS, Android, `protocol/aiden-remote/v1/fixtures/contract.json`, `protocol/aiden-remote/v1/openapi.json`, `docs/aiden-remote-api-v1.md`, and the revision assertion in `ios/AidenOnTheGoTests/AidenRemotePhase0Tests.swift`.
+- Remote: claim the next contract revision after `main`'s at merge, provisionally 57 after this stack's A54/B55/C56. Recheck `main` and the complete stack before merge. Update these together: iOS, Android, `protocol/aiden-remote/v1/fixtures/contract.json`, `protocol/aiden-remote/v1/openapi.json`, `docs/aiden-remote-api-v1.md`, and the revision assertion in `ios/AidenOnTheGoTests/AidenRemotePhase0Tests.swift`.
 - Use an opt-in capability (`bot:allowed`), not a feature token. Phones already hear the most feature tokens shipped clients accept (see revision 49's note).
 - New tests go in a new `"test:bot-allowed"` script, with `"pretest:bot-allowed": "npm run build:lease-flock"`. Append it to the `test:serial` chain, and if `main` changed the chain, resolve by union. Register every new test file in `scripts/ci-test-registry.json` too. Extended existing test files stay in their scripts.
 - Modules under `main/services/` don't import `electron`, except `*-main.ts` wiring. The CLI bundles `bot-tool-assembly.ts`, `bot-extension.ts` and `bot-approvals.ts`. The CLI passes no allow-list port, so it never offers or matches. Run `npm run test:cli`.
@@ -478,7 +478,7 @@ The precedence is authority/ingress, rules, existing routine go-ahead, plan cove
 - [ ] **Step 6: Update the docs** listed above. Settings → Bots gains its third group. The help topic adds one sentence: after you approve the same thing three times, the card offers Always allow for that Bot, and you can remove it from the Bot's profile or Settings → Bots. Mark Plan D's row in `docs/plans/README.md`.
 - [ ] **Step 7: Register and commit.** Add the two new test files to `test:bot-allowed` and the registry. Commit: "Show what each Bot may do without asking".
 
-### Task 7: Remote: the list on phones (contract revision 54, provisional)
+### Task 7: Remote: the list on phones (contract revision 57, provisional)
 
 **Files:**
 - Modify: `main/services/aiden-remote-protocol.ts`: revision constant after `:282`; capability block near `:509-605`; DTOs and parsers near `:1700`; fixture interface near `:2155`
@@ -492,7 +492,7 @@ The precedence is authority/ingress, rules, existing routine go-ahead, plan cove
 **Interfaces:**
 - Produces:
   ```ts
-  export const AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION = 54 as const; // re-claim at merge; becomes AIDEN_REMOTE_CONTRACT_REVISION
+  export const AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION = 57 as const; // re-claim at merge; becomes AIDEN_REMOTE_CONTRACT_REVISION
   export const AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES = ["bot:allowed"] as const; // in OPT_IN, NEGOTIABLE and CAPABILITIES lists
   export interface AidenRemoteBotAllowedEntry { id: string; kind: "rule" | "folder"; what: string; addedAt: string; uses?: number; lastUsedAt?: string }
   // AidenRemoteBotApproval gains `alwaysCount?: number`, sent only to a device with bot:allowed and only when the card offers Always.
@@ -534,9 +534,9 @@ The precedence is authority/ingress, rules, existing routine go-ahead, plan cove
 - [ ] **Step 4: Update the contract artifacts.**
   - `contract.json` gets `botAllowed`: a list with a folder entry, a paginated maximum-rule-plus-folders example, the first page after a remove, the capability refusal, and an approval with `alwaysCount`.
   - `openapi.json` gets both paths.
-  - `docs/aiden-remote-api-v1.md` gets a "Revision 54 (`bot:allowed`)" section.
+  - `docs/aiden-remote-api-v1.md` gets a "Revision 57 (`bot:allowed`)" section.
 - [ ] **Step 5: Run the tests.** `npm run test:aiden-remote`. Expected: PASS.
-- [ ] **Step 6: Register and commit.** Add `aiden-remote-bot-allowed.test.ts` to `test:aiden-remote` and the registry. Commit: "Show a Bot's allow list on phones (Remote rev 54)".
+- [ ] **Step 6: Register and commit.** Add `aiden-remote-bot-allowed.test.ts` to `test:aiden-remote` and the registry. Commit: "Show a Bot's allow list on phones (Remote rev 57)".
 
 ### Task 8: iOS and Android
 
@@ -584,3 +584,8 @@ The precedence is authority/ingress, rules, existing routine go-ahead, plan cove
   - Never skipping locked rules or rule-made asks: Task 3.
   - Phones: Tasks 7 and 8.
 - Deliberately out of scope: CLI parity (no allow-list port); a Bot-shell class (the shell isn't approval-gated).
+
+
+### Phase D started, 2026-11-04
+
+Both Gate5R4 reviewers accepted C at55678558e; C status commit69662649f is the phase-D base. Work is on feature/bot-allow-list. Follow Tasks1–8 in order, with real behavioral RED/GREEN evidence and parent-owned commits. Task1 starts with the shared rule types and existing remembered-approval store; Task2 waits for Task1 validation/commit. Root owns registration, integration, docs/status and review gates. Provisional Remote revision57 follows A54/B55/C56 and must be reclaimed against main before PR merge. No network/catalog changes, dependency/pin changes, CLI allow-list port or analytics expansion. D source acceptance, final Astra review, four stacked PRs and exact-head CI remain pending. No merge is authorized.
