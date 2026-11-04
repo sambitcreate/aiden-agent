@@ -6,6 +6,7 @@ import type { BotFileToolLocation } from "../bot-file-tool-router.js";
 import type { BotSessionState } from "./bot-session-service.js";
 import path from "node:path";
 import { botRunUnattended } from "./bot-tool-policy.js";
+import { BotAccessRequestStaleError } from "./bot-access-requests.js";
 
 export const BOT_RUN_ACCESS_MAX_AGE_MS = 60 * 60_000;
 export const BOT_RUN_SAVED_LOCATION_ID = "run.saved";
@@ -102,9 +103,14 @@ export function createBotRunAccess(deps: { now(): number }): BotRunAccess {
         deps.now() >= grant.grantedAt && deps.now() < Math.min(grant.expiresAt, owner.deadline);
       if (!valid()) { publications.delete(botId); return undefined; }
       if (!joined(grant.requestIds, requestIds)) return undefined;
-      try { await current.validate(); } catch {
-        if (publications.get(botId) === record) publications.delete(botId);
-        return undefined;
+      try { await current.validate(); } catch (error) {
+        if (error instanceof BotAccessRequestStaleError || !valid()) {
+          if (publications.get(botId) === record) publications.delete(botId);
+          return undefined;
+        }
+        // An operational read failure denies this call, without revoking the
+        // original publication. The next call must validate it again.
+        throw error;
       }
       if (publications.get(botId) !== record) return undefined;
       if (!valid()) { publications.delete(botId); return undefined; }
