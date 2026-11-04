@@ -127,7 +127,7 @@ test("a cleanup preview lists what will be removed, what is kept, and the space 
   mount();
   const reviewButton = (await screen.findAllByRole("button", { name: "Review…" }))[0]!;
   fireEvent.click(reviewButton);
-  const dialog = await screen.findByRole("dialog");
+  const dialog = await screen.findByRole("alertdialog");
   assert.match(dialog.textContent ?? "", /Remove unused worktrees\?/u);
   assert.match(dialog.textContent ?? "", /3\.00 GB/u, "the dialog names what will be freed");
   assert.match(dialog.textContent ?? "", /aiden · feature/u);
@@ -142,7 +142,7 @@ test("a cleanup preview lists what will be removed, what is kept, and the space 
 test("confirming a cleanup sends only the ids the preview listed", async () => {
   const calls = mount();
   fireEvent.click((await screen.findAllByRole("button", { name: "Review…" }))[0]!);
-  const dialog = await screen.findByRole("dialog");
+  const dialog = await screen.findByRole("alertdialog");
   fireEvent.click(within(dialog).getByRole("button", { name: /Remove 1/u }));
   await waitFor(() => {
     const call = calls.find((entry) => entry.channel === "storage:cleanup");
@@ -194,7 +194,7 @@ test("deleting one item asks first, then removes exactly that item", async () =>
   const calls = mount();
   const deleteButton = await screen.findByRole("button", { name: "Delete aiden · feature" });
   fireEvent.click(deleteButton);
-  const dialog = await screen.findByRole("dialog");
+  const dialog = await screen.findByRole("alertdialog");
   assert.match(dialog.textContent ?? "", /Remove this worktree\?/u);
   fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
   await waitFor(() => {
