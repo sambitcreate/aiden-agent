@@ -50,3 +50,5 @@ Startup finishes interrupted Bot deletions even when a folder approval still nee
 The [implementation plan](plans/bot-messaging-plan.md) tracks phase B review and acceptance. Local tests and simulator checks are separate from physical-device, live-provider and release acceptance.
 
 On supported paired iOS and Android clients, a repeated folder card shows its approval count only while the host grants both `bot:access-requests` and `bot:allowed`. Older clients keep the same access choices without that count. A live Allow once can earn a short weekly hint even when settlement happens after the original choice. Historical recovery never earns a new hint; retrying an exact choice retains its original result.
+
+`npm run test:bot-access` builds its lease and file-write helpers before the behavioral suite, so a prior app build is not required.
