@@ -58,6 +58,7 @@ async function harness(options: {
   workspaces?: Workspace[];
   chats?: ChatMeta[];
   pinned?: string[];
+  pinnedReadFails?: boolean;
   gitState?: { uncommitted?: number; unpushed?: number; fail?: boolean };
   profileFiles?: Record<string, number>;
 } = {}): Promise<Harness> {
@@ -82,7 +83,10 @@ async function harness(options: {
     listChats: async () => options.chats ?? [],
     isChatBusy: (chatId) => busy.has(chatId),
     isWorkspaceChanging: (workspaceId) => changing.has(workspaceId),
-    pinnedChatIds: async () => pinned,
+    pinnedChatIds: async () => {
+      if (options.pinnedReadFails) throw new Error("triage store unreadable");
+      return pinned;
+    },
     removeWorktree: async (workspaceId) => {
       removed.worktrees.push(workspaceId);
     },
@@ -345,6 +349,28 @@ test("a chat that starts generating after the preview is kept", async () => {
   );
 });
 
+test("an unreadable Inbox pin state protects every thread instead of unpinning them", async () => {
+  // Losing a pinned chat to a transient triage read is not recoverable, so an
+  // unknown pin state must fail closed: nothing is planned and nothing deleted.
+  const h = await harness({
+    chats: [chat("chat-old", { updatedAt: NOW - 200 * DAY })],
+    pinnedReadFails: true,
+  });
+  try {
+    const report = await h.service.refresh();
+    assert.equal(report.threads[0]?.protectionReason, "pinned");
+    const preview = await h.service.preview({ action: "delete-threads", inactiveDays: 30 });
+    assert.equal(preview.items.length, 0);
+    const result = await h.service.cleanup({ action: "delete-threads", inactiveDays: 30 });
+    assert.deepEqual(h.removed.chats, [], "no chat is deleted while pins are unknown");
+    assert.equal(result.removed.length, 0);
+    assert.equal(result.skipped[0]?.reason, "pinned");
+  } finally {
+    h.service.dispose();
+    await fs.rm(h.root, { recursive: true, force: true });
+  }
+});
+
 test("a failed scan reports failure without losing the last good numbers", async () => {
   await withHarness({ profileFiles: { "chats/index.json": 900 } }, async (h) => {
     await h.service.refresh();
@@ -354,8 +380,43 @@ test("a failed scan reports failure without losing the last good numbers", async
   });
 });
 
-test("chat images are attributed by content hash once per transcript", () => {
-  const hash = "b".repeat(64);
+test("the image pass stops when the scan budget runs out", async () => {
+  // A large image store must not outlive the documented scan limit, and the
+  // report has to admit it stopped early rather than presenting a total.
+  const hashes = Array.from({ length: 40 }, (_, index) => `${index}`.padStart(64, "0"));
+  const files: Record<string, number> = {};
+  for (const hash of hashes) files[`chats/images/${hash.slice(0, 2)}/${hash}`] = 1_000;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-storage-budget-"));
+  try {
+    for (const [relativePath, bytes] of Object.entries(files)) {
+      const target = path.join(root, relativePath);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, Buffer.alloc(bytes, 0x61));
+    }
+    const service = createStorageUsageService({
+      profileRoot: () => root,
+      listWorkspaces: async () => [],
+      listChats: async () => [chat("chat-1")],
+      isChatBusy: () => false,
+      isWorkspaceChanging: () => false,
+      pinnedChatIds: async () => new Set<string>(),
+      removeWorktree: async () => undefined,
+      removeChat: async () => undefined,
+      worktreeGitState: async () => ({ uncommitted: 0, unpushed: 0 }),
+      readTranscript: async () => undefined,
+      clearLogs: async () => undefined,
+      now: () => NOW,
+      limits: { maxEntries: 5, maxBytes: 1_000_000_000, maxDurationMs: 60_000 },
+    });
+    const report = await service.refresh();
+    assert.equal(report.scan.truncated, true, "the scan admits it stopped early");
+    service.dispose();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("chat images are attributed by content hash once per transcript", () => {  const hash = "b".repeat(64);
   const sizes = new Map([[hash, 700]]);
   assert.equal(attributedImageBytes(`"sha256": "${hash}"`, sizes), 700);
   assert.equal(attributedImageBytes(`"sha256": "${hash}"`, sizes), 700);

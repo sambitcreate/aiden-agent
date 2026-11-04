@@ -61,6 +61,15 @@ export interface WorktreeGitState {
   unpushed: number;
 }
 
+/**
+ * A pin read that failed is `unknown`, not empty. Cleanup must treat that as
+ * "every thread may be pinned": losing a pinned chat to a transient triage
+ * read is not recoverable, while skipping cleanup is.
+ */
+export type ThreadPinState =
+  | { kind: "known"; pinned: ReadonlySet<string> }
+  | { kind: "unknown" };
+
 export interface StorageCleanupScope {
   action: "remove-worktrees" | "delete-threads" | "clear-logs";
   inactiveDays: StorageInactiveDays;
@@ -75,7 +84,7 @@ export interface StorageServiceDependencies {
   isChatBusy(chatId: string): boolean;
   /** Workspaces with an in-flight create or remove. */
   isWorkspaceChanging(workspaceId: string): boolean;
-  /** Chats the person pinned in the Inbox. */
+  /** Chats the person pinned in the Inbox; a rejection means the state is unknown. */
   pinnedChatIds(): Promise<ReadonlySet<string>>;
   /** Remove one managed worktree through Aiden's own transactional path. */
   removeWorktree(workspaceId: string): Promise<void>;
@@ -128,10 +137,10 @@ export function createStorageUsageService(
     const budget = createStorageScanBudget({ limits, now });
     const profileRoot = dependencies.profileRoot();
 
-    const [workspaces, chats, pinned] = await Promise.all([
+    const [workspaces, chats, pins] = await Promise.all([
       dependencies.listWorkspaces(),
       dependencies.listChats(),
-      dependencies.pinnedChatIds().catch(() => new Set<string>() as ReadonlySet<string>),
+      readPinState(),
     ]);
 
     // Every category total comes from measuring the profile's own directories,
@@ -149,7 +158,7 @@ export function createStorageUsageService(
     }
 
     const worktrees = await measureWorktrees(profileRoot, workspaces, chats, budget);
-    const threads = await measureThreads(profileRoot, chats, pinned, budget);
+    const threads = await measureThreads(profileRoot, chats, pins, budget);
 
     const scan: StorageScanState = {
       status: "ready",
@@ -227,11 +236,14 @@ export function createStorageUsageService(
   async function measureThreads(
     profileRoot: string,
     chats: readonly ChatMeta[],
-    pinned: ReadonlySet<string>,
+    pinState: ThreadPinState,
     budget: StorageScanBudget,
   ): Promise<StorageThreadView[]> {
     const chatsDir = path.join(profileRoot, "chats");
-    const imageSizes = await imageFileSizes(path.join(chatsDir, "images"));
+    // The image pass shares the scan budget, so a large store cannot outlive the
+    // documented limit. When it runs out, attribution stops and the thread's own
+    // bytes still count.
+    const imageSizes = await imageFileSizes(path.join(chatsDir, "images"), budget);
     const views: StorageThreadView[] = [];
     for (const chat of chats) {
       if (budget.exhausted()) break;
@@ -246,7 +258,7 @@ export function createStorageUsageService(
       }
       budget.spendEntries(1);
       bytes += size;
-      if (size > 0 && size <= MAX_TRANSCRIPT_ATTRIBUTION_BYTES) {
+      if (size > 0 && size <= MAX_TRANSCRIPT_ATTRIBUTION_BYTES && !budget.exhausted()) {
         const contents = await dependencies
           .readTranscript(transcript, MAX_TRANSCRIPT_ATTRIBUTION_BYTES)
           .catch(() => undefined);
@@ -258,7 +270,9 @@ export function createStorageUsageService(
         bytes,
         lastUsedAt: chat.updatedAt,
         active: dependencies.isChatBusy(chat.id),
-        pinned: pinned.has(chat.id),
+        // An unreadable triage store protects every chat instead of unpinning
+        // the whole Inbox: a failed read must never allow a pinned chat's delete.
+        pinned: pinState.kind === "unknown" || pinState.pinned.has(chat.id),
         owned: chat.owner !== undefined || chat.botId !== undefined,
       };
       views.push(classifyThread(facts, now()));
@@ -308,6 +322,16 @@ export function createStorageUsageService(
       }
     })();
     return inFlight;
+  }
+
+  /** Read the Inbox pins, treating a failure as unknown rather than empty. */
+  async function readPinState(): Promise<ThreadPinState> {
+    try {
+      return { kind: "known", pinned: await dependencies.pinnedChatIds() };
+    } catch (error) {
+      dependencies.logError?.("storage", "Aiden could not read Inbox pins for cleanup.", error);
+      return { kind: "unknown" };
+    }
   }
 
   /** A report fresh enough to decide a deletion, scanning now when needed. */
@@ -441,14 +465,16 @@ export function createStorageUsageService(
         }
         const thread = report.threads.find((entry) => entry.chatId === item.id);
         if (!thread) continue;
-        const pinnedNow = await dependencies.pinnedChatIds().catch(() => new Set<string>() as ReadonlySet<string>);
+        // Re-read the pins here too: a chat pinned since the preview is kept, and
+        // an unreadable triage store keeps every thread rather than unpinning them.
+        const pinsNow = await readPinState();
         const reason = threadProtectionReason({
           chatId: thread.chatId,
           title: thread.title,
           bytes: thread.bytes,
           lastUsedAt: thread.lastUsedAt,
           active: dependencies.isChatBusy(thread.chatId),
-          pinned: pinnedNow.has(thread.chatId),
+          pinned: pinsNow.kind === "unknown" || pinsNow.pinned.has(thread.chatId),
           owned: thread.protected === true && thread.protectionReason === "owned",
         });
         if (reason) {
@@ -514,7 +540,10 @@ function clampDays(value: number): StorageInactiveDays {
 }
 
 /** Sizes of chat images by content hash, from `chats/images/<2 hex>/<sha256>`. */
-async function imageFileSizes(imagesDir: string): Promise<Map<string, number>> {
+async function imageFileSizes(
+  imagesDir: string,
+  budget: StorageScanBudget,
+): Promise<Map<string, number>> {
   const sizes = new Map<string, number>();
   let shards;
   try {
@@ -522,7 +551,9 @@ async function imageFileSizes(imagesDir: string): Promise<Map<string, number>> {
   } catch {
     return sizes;
   }
+  budget.spendEntries(shards.length);
   for (const shard of shards) {
+    if (budget.exhausted()) break;
     if (!shard.isDirectory() || !SHAARD_NAME.test(shard.name)) continue;
     let files;
     try {
@@ -530,7 +561,9 @@ async function imageFileSizes(imagesDir: string): Promise<Map<string, number>> {
     } catch {
       continue;
     }
+    budget.spendEntries(files.length);
     for (const file of files) {
+      if (budget.exhausted()) break;
       if (!file.isFile() || !IMAGE_FILE_NAME.test(file.name)) continue;
       try {
         const stats = await fs.lstat(path.join(imagesDir, shard.name, file.name));

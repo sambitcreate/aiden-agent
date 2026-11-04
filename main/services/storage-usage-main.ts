@@ -17,6 +17,7 @@ import {
 import { gitManagedWorktreeDirtyState, gitManagedWorktreeUnpushedCommits } from "./git.js";
 import { llmClient } from "./llm-client.js";
 import { readRegularFile } from "./regular-file-read.js";
+import { terminalService } from "./terminal.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { chatTriage } from "./chat-triage-main.js";
 import { workspaceWorktreeApplicationService } from "./workspace-worktree-application-service-main.js";
@@ -75,7 +76,10 @@ export const storageUsageService = createStorageUsageService({
       crashDumpsPath: profile.crashDumpsPath,
     });
     await pruneExpiredDiagnosticCrashDumps(profile.crashDumpsPath);
-    // Scrollback is app output too: one file per workspace, always regenerable.
+    // Scrollback is app output too. Clear it through the live store so pending
+    // debounced writes cannot recreate what this just reported as freed; only
+    // fall back to files when no store is installed (no terminal has opened).
+    if (await terminalService.clearAllHistory()) return;
     const historyDir = path.join(app.getPath("userData"), "terminal-history");
     let names: string[];
     try {
