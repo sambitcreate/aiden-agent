@@ -803,7 +803,12 @@
         "main/handlers/bot-peers.test.ts",
         "main/services/aiden-remote-bot-peers.test.ts",
         "main/services/bot-peers/actor.test.ts",
-        "main/services/bot-peers/runtime.test.ts"
+        "main/services/bot-peers/runtime.test.ts",
+        "main/services/bot-routine-events/connector-watch-composio.test.ts",
+        "main/services/bot-routine-events/composio-calendar-contract.test.ts",
+        "main/services/bot-routine-events/composio-calendar-read-check.test.ts",
+        "main/services/bot-routine-events/composio-calendar-transport.test.ts",
+        "main/services/bot-routine-events/composio-settings-calendar-check.test.ts"
       ],
       "preserved": [
         "worktree-remover-native",
