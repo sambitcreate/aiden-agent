@@ -1779,8 +1779,14 @@ export const botsApi = {
       submissionId,
     }),
   /** Answer a Bot tool approval by its wait id; the first answer wins. */
-  approve: (waitId: string, decision: "allow" | "deny") =>
-    invoke<{ decided: boolean }>("bots:approve", { waitId, decision }),
+  approve: (waitId: string, decision: "allow" | "deny", scope?: "always") =>
+    invoke<{ decided: boolean }>("bots:approve", { waitId, decision, ...(scope === undefined ? {} : { scope }) }),
+  allowedList: (botId?: string) =>
+    invoke<import("../shared/tool-approval-scope").BotAllowedEntry[]>("bots:allowed:list", botId === undefined ? {} : { botId }),
+  removeAllowed: (botId: string, entryId: string) =>
+    invoke<{ removed: boolean }>("bots:allowed:remove", { botId, entryId }),
+  onAllowedChanged: (handler: (payload: { botId: string }) => void) =>
+    onNotification("bots:allowed:changed", handler),
   /**
    * Answer the Bot's A–E question by its wait id; `answered` is false once the
    * question is no longer waiting (answered elsewhere or withdrawn).

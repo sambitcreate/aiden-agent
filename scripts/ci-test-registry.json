@@ -548,6 +548,8 @@
         "main/services/bot-runtime/bot-allow-target.test.ts",
         "main/services/bot-runtime/bot-approvals.test.ts",
         "main/services/bot-runtime/bot-allow-list.test.ts",
+        "main/handlers/bot-allowed.test.ts",
+        "renderer/components/bots/bot-allowed-list.test.tsx",
         "main/services/bot-rules/classify.test.ts",
         "main/services/bot-plans/authority.test.ts",
         "main/services/bot-plans/lifecycle.test.ts",

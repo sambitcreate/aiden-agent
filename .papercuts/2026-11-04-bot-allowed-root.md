@@ -24,3 +24,15 @@
 - Store parent audit requested final live publication validation after the last awaited known-Bot read, with a synchronous deletion-intent check. Otherwise owner expiry/Stop during that final read could occur after the live guard but before mutation.
 
 - Task5 integrated parent official95allowed/109storage/15registry/types0 pass. Root storage and both workers are source-frozen. Acknowledgement failures keep current one-time authority; future consent is reported only from historical/current proofs, never from an incoming retry choice.
+
+- Task6: the planned saved-consent toast would claim publication on a choice-only IPC acknowledgement. Use “Always allow requested.” and refresh the authoritative list on host change events.
+- Task6 main RED initially stopped at missing planned parser/module exports. The separate real application observer RED reproduced the missing saved-access notification; GREEN covers save, folder removal, refusal, observer failure and teardown.
+- Explicit staging must force ignored .memory/.papercuts paths separately. The normal Task5 add returned 1 for ignored directories after staging tracked files; inspected the index and forced only the intended notes before commit.
+
+- Task6 registry first run caught the worker’s new list test before its registration. Added it to test:bot-allowed and the CI lane; no production or test assertion was weakened.
+
+- Task6 whole types caught the new root approval-handler fixture omitting required signal. Added explicit undefined; runtime behavior assertions were unchanged. Task6 keeps Remove rows disabled until host response per the task contract, with inline failure, rather than an optimistic list disappearance.
+
+- Task6 Cua first run passed Always, truthful toast, Manage, list and rule removal, then timed out on Settings because 600px collapses the sidebar. Screenshot confirmed the intended narrow layout. Corrected the test to reopen navigation before Settings; no timeout/retry/production change. /tmp/bot-allowed-d-task6-cua.log retains the first run.
+
+- Task6 second Cua navigation failure revealed Bots uses a separate sidebar even when expanded. The screenshot and BotSidebar showed its Back to Aiden action; added that real navigation step before Settings. This was a second test setup correction, not a passing rerun/flakiness classification. Preserve /tmp/bot-allowed-d-task6-cua-final.log.

@@ -48,3 +48,16 @@ test("every choice is disabled while busy", () => {
   }
   assert.deepEqual(answers, []);
 });
+
+test("a repeated folder request shows its safe approval count", () => {
+  mount({ ...REQUEST, approvalCount: 3 });
+  screen.getByText("You’ve allowed this folder 3 times in the last 2 weeks.");
+});
+
+test("Whole Mac and a folder without an eligible count show no repeat-approval line", () => {
+  mount({ ...REQUEST, target: "whole_mac", approvalCount: 3, choices: ["not_now", "once"] });
+  assert.ok(!screen.queryByText(/You’ve allowed this folder/u));
+  cleanup();
+  mount();
+  assert.ok(!screen.queryByText(/You’ve allowed this folder/u));
+});

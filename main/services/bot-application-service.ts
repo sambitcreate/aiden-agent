@@ -313,6 +313,7 @@ export function newBotId(): string {
 }
 
 export function createBotApplicationService(deps: BotApplicationDependencies) {
+  const accessListeners = new Set<(botId: string) => void>();
   const mintBotId = deps.mintBotId ?? newBotId;
   const mintChatId = deps.mintChatId ?? (() => newChatUuid(randomUUID));
   const mintOperationId = deps.mintOperationId ?? mintBotLifecycleOperationId;
@@ -1358,6 +1359,10 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
               });
             }
           }
+          for (const listener of accessListeners) {
+            try { listener(input.botId); }
+            catch { /* A closed reader cannot turn a saved policy into a failed mutation. */ }
+          }
           return result;
         });
       }),
@@ -1816,6 +1821,10 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     },
 
     updateBotAccess: (input: UpdateBotAccessInput) => saveBotAccess(input),
+    onAccessChange(listener: (botId: string) => void): () => void {
+      accessListeners.add(listener);
+      return () => { accessListeners.delete(listener); };
+    },
 
     /**
      * Hard-delete the Bot's photo, managed home, access, chat rows and record

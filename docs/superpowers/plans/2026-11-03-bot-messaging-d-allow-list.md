@@ -477,14 +477,14 @@ B's optional journal approvalTally stores version1, the original authorization f
   - Empty page: `${name} asks before changes in your apps and on websites. Choose ${botAlwaysAllowLabel(name)} on a card to stop a question you keep answering.`
   - Settings → Bots: a third `FieldSet`, "Allowed without asking", with one group per Bot that has entries (the Bot's name as the group label). With no entries anywhere: `No Bot does anything without asking yet.` Its `Always comes to you` rows stay unchanged.
 
-- [ ] **Step 1: Write the failing main tests.**
+- [x] **Step 1: Write the failing main tests.**
   - `bot-params.test.ts`: `{waitId, decision:"allow", scope:"always"}` parses. `scope` with `deny`, `scope:"chat"` and an extra key throw `Invalid bot approval fields.` `parseBotAllowedRemove` rejects an `entryId` outside `[A-Za-z0-9_-]{1,80}`.
   - `bot-allowed.test.ts` (register-and-invoke with a `Map` of handlers and a real rule book on a memory store):
     - `list` with no Bot returns both Bots' entries, and with `"bot:a"` only its own;
     - `remove` returns `{removed: true}`, then `list` is empty;
     - an unknown Bot throws `This Bot no longer exists.`;
     - a `grantBot` broadcasts `bots:allowed:changed` with `{botId}`.
-- [ ] **Step 2: Write the failing renderer tests.**
+- [x] **Step 2: Write the failing renderer tests.**
   - `bot-chat-pane.test.tsx`: `a repeated approval offers Always allow for Ada and answers with that scope`. Push a `bots:approval` prompt with `always: {key:"k", count: 3}`, and expect:
     - the text `You’ve allowed this 3 times in the last 2 weeks.`;
     - clicking `Always allow for Ada` invokes `bots:approve` with `{waitId, decision:"allow", scope:"always"}`;
@@ -494,13 +494,13 @@ B's optional journal approvalTally stores version1, the original authorization f
   - `bot-allowed-list.test.tsx`: two entries render their `describeBotApprovalRule` text and `Added 3 Nov 2026 · Used 12 times`. `Remove` on the second calls `onRemove` with it, and the button is disabled while `removing` names it.
   - `bot-profile.test.tsx`: the `Allowed without asking` row shows `2` and navigates to `/bots/bot%3Aa?page=allowed`. `bots-view.test.tsx`: that URL renders the page heading `Allowed without asking`, and its back button returns to Profile.
   - `bots-settings.test.tsx`: entries for Ada and Jo render under their names. Remove on Jo's entry invokes `bots:allowed:remove` with `{botId:"bot:jo", entryId}`. No entries shows `No Bot does anything without asking yet.`
-- [ ] **Step 3: Run and see them fail.** `npx tsx --test main/handlers/bot-params.test.ts main/handlers/bot-allowed.test.ts renderer/main/bots/bot-chat-pane.test.tsx renderer/components/bots/bot-allowed-list.test.tsx renderer/main/bots/bot-profile.test.tsx renderer/main/bots-view.test.tsx renderer/components/settings/bots-settings.test.tsx`. Expected: FAIL.
-- [ ] **Step 4: Implement.**
+- [x] **Step 3: Run and see them fail.** `npx tsx --test main/handlers/bot-params.test.ts main/handlers/bot-allowed.test.ts renderer/main/bots/bot-chat-pane.test.tsx renderer/components/bots/bot-allowed-list.test.tsx renderer/main/bots/bot-profile.test.tsx renderer/main/bots-view.test.tsx renderer/components/settings/bots-settings.test.tsx`. Expected: FAIL.
+- [x] **Step 4: Implement.**
   - `use-bot-allowed.ts` is a query on `queryKeys.botAllowed(botId)`, invalidated on `bots:allowed:changed` (all Bots when the key's id is `"all"`).
   - Before styling the card button and the list rows, review `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-specimen.html` (AGENTS.md). Rows reuse the profile's `FieldSet`/`Field` inset-row treatment, and Remove uses the shared small transparent button.
-- [ ] **Step 5: Run the tests.** The same command, then `npm run test:bots`, `npm run test:bot-rules` and `npm run type-check`. Expected: PASS.
-- [ ] **Step 6: Update the docs** listed above. Settings → Bots gains its third group. The help topic adds one sentence: after you approve the same thing three times, the card offers Always allow for that Bot, and you can remove it from the Bot's profile or Settings → Bots. Mark Plan D's row in `docs/plans/README.md`.
-- [ ] **Step 7: Register and commit.** Add the two new test files to `test:bot-allowed` and the registry. Commit: "Show what each Bot may do without asking".
+- [x] **Step 5: Run the tests.** The same command, then `npm run test:bots`, `npm run test:bot-rules` and `npm run type-check`. Expected: PASS.
+- [x] **Step 6: Update the docs** listed above. Settings → Bots gains its third group. The help topic adds one sentence: after you approve the same thing three times, the card offers Always allow for that Bot, and you can remove it from the Bot's profile or Settings → Bots. Mark Plan D's row in `docs/plans/README.md`.
+- [x] **Step 7: Register and commit.** Add the two new test files to `test:bot-allowed` and the registry. Commit: "Show what each Bot may do without asking".
 
 ### Task 7: Remote: the list on phones (contract revision 57, provisional)
 
@@ -661,3 +661,15 @@ Runtime/service and book/tally changes have separate bounded ownership; root own
 The desktop service now wires exact per-class offers, immutable decisions/hints, atomic consent publication, validated sibling release, combined rule/folder listing/removal, deletion fencing and bounded historical reconciliation. First publication's final awaited authorization is its live guard, followed by synchronous deletion intent before mutation. An original committed operation bypasses stale guards only to acknowledge history. Pending original consent/title/label survives renames and acknowledgement loss; missing history never publishes a grant at startup. A corrupt Bot's tally does not stop later Bots from reconciling. B records only validated effective decisions at its private settle boundary, using original journal context for earlier Always and never incoming retry choice. Whole Mac never counts; folders without Always never offer a nudge. Safe desktop approvalCount is bounded3..20, and private hints remain tool output. Remote55 DTOs did not change.
 
 Root application suite74pass; book/settings35pass after actual final-guard Stop/expiry REDs. Runtime/service focused92, runtime474, rules62, access96, messaging89, plans144, Bots1003 and affected host adapters147 passed. Root registered the new service test: official allowed95pass, storage/settings109pass, registry15pass and current wholetypes0 at /tmp/bot-allowed-d-task5-parent-{allowed,storage,registry,types}.log. Scoped root5files, store4files and runtime12files lint passed; whitespace clean. Worker handoff /tmp/aiden-bot-allow-d-task5-runtime-handoff.md separates actual REDs from setup failures. Root initial storageRED4, snapshotRED1 and schema-coercionRED1 are retained; all new tests extend existing registered modules except the explicitly registered service pair. Task6 follows this commit, with Tasks7–8 still held. No fullD source/native/Cua/live/package/hosted-CI acceptance.
+
+### 2026-11-04 — Task 6 implementation started
+
+Task5 committed50d834881 after parent95allowed/109storage/15registry/types0. Root main IPC and saved-access change events are implemented; desktop renderer work is in progress. The planned toast “<Bot> won’t ask about this again” is replaced with “Always allow requested.” because bots:approve acknowledges the bridge choice before asynchronous grant publication, which may fail while preserving the current one-time allowance. The authoritative saved list and host change events confirm persistence. Settings now has four groups, including Other Bots from A, rather than the older three-group count. B’s safe approvalCount is rendered by its existing access card during Task6. No new DTO or native contract is introduced here.
+
+### 2026-11-04 — Task 6 source ready, verification in progress
+
+Desktop Always/count, private strict main handlers, profile/list/settings routing and host-ID-only invalidations are implemented. Shared B access cards show their safe count. Remove keeps a disabled row until the host responds; failure retains and re-enables it with an inline error. A process-lifetime application access listener covers all successful selection saves, including Remote and folder paths, while failed saves emit nothing. Focused renderer135, Bots1010, rules66, rootmain/application89, registeredallowed102 andregistry15 passed. Whole types and Cua final acceptance are pending. The initial Cua flow reached rule removal, then exposed a test navigation mistake at narrow width, where the sidebar was intentionally collapsed. The corrected test reopens navigation; no retry/timeout/production behavior was changed.
+
+### 2026-11-04 — Task 6 complete locally
+
+Task6 source is frozen and all planned files/tests are registered. Focused renderer135, Bots1010, rules66, parentmain/application89, registeredallowed102, registry15, wholetypes0 and scopedlint/diff0 passed. Final type log is /tmp/bot-allowed-d-task6-renderer-types-after-root-fix.log. Parent Cua /tmp/bot-allowed-d-task6-cua-final2.log passed2 tests with retries0 in11.4s, covering existing B access cards and the complete repeated-approval→Manage→profile removal→Settings removal path. Light1280/dark600 card screenshots, dark list and Settings screenshots were inspected. Two earlier runs exposed test-navigation setup mistakes, not product failures: narrow sidebar collapse, then the distinct Bots sidebar’s Back to Aiden step. Both logs and corrective details remain in the root papercut. No assertion or timeout was weakened. Truthful acknowledgement copy and pending Remove behavior are recorded above. Task7 host may start after this commit; native implementation waits for its stable fixture manifest. No wholeD/Gate6, physical/rendered-native/live/package/hostedCI acceptance.

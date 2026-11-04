@@ -132,6 +132,8 @@ for <Bot>**. A class is one exact connected app tool, or one website host and
 action such as click, type or press. Website names ignore letter case and a
 leading `www.`; other subdomains and actions remain separate.
 
+On the desktop, use **Allowed without asking** on a Bot's Profile or in Settings → Bots to review and remove app actions, website actions and selected Custom folders. Each row names its scope.
+
 Choosing Always saves that allowance for this Bot. Allow once keeps the card
 for next time; when an offer was present, the Bot may mention the option in
 one short sentence, at most once a week for that class. Expiry and automatic

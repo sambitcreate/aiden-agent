@@ -252,6 +252,7 @@ export const botAllowList = createBotAllowList({
   log: (message, error) => logger.warn("bots", message, error),
 });
 configureBotApprovalDecisionLookup((...args) => botAllowList.decision(...args));
+botApplicationService.onAccessChange(botId => botAllowList.changed(botId));
 
 /** Called after the application journal recovered and before runtime initialization.
  * Only known committed history is reconciled; this never publishes new access. */

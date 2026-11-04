@@ -2621,3 +2621,24 @@ test("disabled Full Bot catalog retains only its own saved chat-reduction skill 
   assert.deepEqual((await app.service.capabilityCatalog("device:a")).skills, []);
   assert.doesNotMatch(JSON.stringify(result), /other-bot|sourceId|instructions/u);
 });
+
+
+test("access changes notify allowed-list readers only after successful saves and unsubscribe cleanly", async t => {
+  const app = await folderFixture(t), observed: string[] = [];
+  const unsubscribe = app.service.onAccessChange(botId => { observed.push(botId); });
+  const badObserver = app.service.onAccessChange(() => { throw new Error("window closed"); });
+  await app.service.grantBotFolder(app.input);
+  assert.deepEqual(observed, [app.owner.id]);
+  const root = (await app.state.snapshot()).approvedRoots[0]!;
+  assert.equal(await app.service.revokeBotFolder({ audienceId: "device:a", botId: app.owner.id, sourceId: root.id }), true);
+  assert.deepEqual(observed, [app.owner.id, app.owner.id]);
+  assert.equal(await app.service.revokeBotFolder({ audienceId: "device:a", botId: app.owner.id, sourceId: root.id }), false);
+  assert.deepEqual(observed, [app.owner.id, app.owner.id]);
+  await assert.rejects(app.service.updateBotAccess({ audienceId: "device:a", botId: app.owner.id, expectedRevision: app.input.expectedRevision,
+    access: { accessMode: "full", catalogRevision: CATALOG_REVISION, confirmedForeground: true } }));
+  assert.equal(observed.length, 2);
+  unsubscribe(); badObserver();
+  await app.service.updateBotAccess({ audienceId: "device:a", botId: app.owner.id, expectedRevision: app.policies.get(app.owner.id)!.revision,
+    access: { accessMode: "full", catalogRevision: CATALOG_REVISION, confirmedForeground: true } });
+  assert.equal(observed.length, 2);
+});
