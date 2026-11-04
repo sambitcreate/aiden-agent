@@ -269,6 +269,14 @@ export const onboardingFeatures: OnboardingFeature[] = [
     size: "standard",
   },
   {
+    id: "botRoutineModels",
+    group: "control",
+    title: "Models for each routine",
+    description: "Choose a model, thinking level and optional fallback for each Bot routine. Each accepted run keeps its choice, including after a restart. Manage these choices from desktop or a paired phone.",
+    icon: Blocks,
+    size: "standard",
+  },
+  {
     id: "schedules",
     group: "control",
     title: "Scheduled Automations",

@@ -146,6 +146,8 @@ unlock or configure the keyring and restart Aiden to restore Bot access.
 
 [Open work](bot-open-work.md) is available on the Linux desktop and its paired phones, with the same records, Undo and linked Stop controls as macOS. Connected-app watches currently use trusted iMCP Mail on a Mac; their setup and tour tile are unavailable on Linux. Calendar remains gated pending a verified exact-account adapter.
 
+[Routine models](bot-routine-models.md), thinking and explicitly chosen fallback are also available wherever Linux Bots are enabled. The owning host binds each accepted run’s selection across queues and recovery; phones manage choices through the negotiated `bot:routine-models` surface. Unconfirmed provider cost requires the same explicit Resume confirmation as on macOS.
+
 Computer Use and Apple Foundation Models are not included in the Linux
 build. Their settings, navigation, onboarding promises, helper bundles, and
 chat controls are omitted. Bot computers (a macOS VM per Bot) need a Mac with

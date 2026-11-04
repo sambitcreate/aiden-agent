@@ -1,3 +1,4 @@
+import { assertBotCanSavePendingChanges } from "../../lib/bot-local-pending";
 import { parseBotOpenWorkMutation, type BotOpenWorkMutation, type BotOpenWorkSnapshot } from "../../shared/bot-open-work";
 
 const PREFIX = "aiden:open-work:pending:";
@@ -33,6 +34,7 @@ export function pendingOpenWork(botId: string): PendingOpenWork[] {
 }
 
 export function recordOpenWorkAttempt(botId: string, mutation: BotOpenWorkMutation, retry = false): PendingOpenWork {
+  assertBotCanSavePendingChanges(botId);
   const current = pendingOpenWork(botId);
   const previous = current.find((request) => request.mutation.mutationId === mutation.mutationId);
   if (!retry && current.length) throw new Error("Confirm the saved Open work change before making another.");

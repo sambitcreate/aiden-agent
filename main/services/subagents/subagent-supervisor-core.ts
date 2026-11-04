@@ -1,6 +1,7 @@
 import { parseCompactionModelOverrides } from "../../../renderer/shared/compaction.js";
 import type { CompactionEngine, CompactionModelOverrides } from "../../../renderer/shared/compaction.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
+import type { SubagentRuntimeTransform } from "./subagent-runtime-authority.js";
 import type { WorkspacePermission } from "../types.js";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { createHash, randomUUID } from "node:crypto";
@@ -118,6 +119,8 @@ export interface SubagentSupervisorInput {
   chatId: string;
   workspaceId: string;
   runtime: ResolvedModelRuntime;
+  /** Parent-owned binding applied after isolated transport construction. */
+  transformRuntime?: SubagentRuntimeTransform;
   thinkingLevel: ThinkingLevel;
   workspaceRoot: string;
   permission: WorkspacePermission;
@@ -720,6 +723,7 @@ export class SubagentSupervisor {
                   childId: identity.childId,
                   groupId,
                   runtime: childModels[index]?.runtime ?? this.input.runtime,
+                  transformRuntime: this.input.transformRuntime,
                   thinkingLevel: authority.thinkingLevel,
                   compactionEngine: this.input.compactionEngine,
                   compactionModelOverrides: this.input.compactionModelOverrides,
@@ -1321,6 +1325,7 @@ export class SubagentSupervisor {
               childId: identity.childId,
               groupId,
               runtime: childModels[index]?.runtime ?? this.input.runtime,
+              transformRuntime: this.input.transformRuntime,
               thinkingLevel:
                 childModels[index]?.selection.effort ?? this.input.thinkingLevel,
               compactionEngine: this.input.compactionEngine,

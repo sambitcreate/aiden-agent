@@ -21,4 +21,6 @@ Edits use the saved revision. A conflicting change returns the current state and
 
 Each Bot keeps at most 64 active and 128 terminal records. Applicable Undo and pending Stop records are protected from history pruning. Full history or retry capacity refuses a change rather than dropping unfinished work. Unreadable storage is reported and is not replaced with an empty list.
 
+Desktop pending changes are removed after confirmed Bot deletion, including saved Resume requests and when a window reopens after deletion. Cleanup requires the Bot to be absent from both the host’s stored identities and its authenticated authority state; a filtered list, missing row or storage error cannot trigger it. Pending changes for other Bots remain intact, and late callbacks cannot recreate requests for the deleted Bot. Phones also invalidate that Bot’s pending controllers on confirmed deletion and clear their host-scoped journals when their pairing is removed.
+
 The owning desktop stores the records privately. Phones need the negotiated **bot:open-work** capability with Bot and chat read access; mutations also require Bot write access. An older or unsupported host cannot offer management. The standalone **aiden serve** host does not advertise these optional management ports yet. Open work is available on macOS and Linux desktops wherever Bots are available.

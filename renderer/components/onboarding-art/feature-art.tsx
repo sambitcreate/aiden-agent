@@ -4,6 +4,7 @@ import type { KeyboardPlatform } from "../../shared/keybindings";
 import type { ArtProps } from "./art-kit";
 import { BotWatchesArt } from "./bot-watches-art";
 import { BotOpenWorkArt } from "./bot-open-work-art";
+import { BotRoutineModelsArt } from "./bot-routine-models-art";
 import {
   BrowserArt,
   ComputerUseArt,
@@ -79,6 +80,7 @@ export const FEATURE_ART = {
   bots: { tint: "peach", Art: BotsArt },
   botWatches: { tint: "rose", Art: BotWatchesArt },
   botOpenWork: { tint: "lilac", Art: BotOpenWorkArt },
+  botRoutineModels: { tint: "sun", Art: BotRoutineModelsArt },
   botComputers: { tint: "aqua", Art: BotComputersArt },
   schedules: { tint: "mint", Art: ScheduledAutomationsArt },
   voice: { tint: "coral", Art: VoiceDictationArt },

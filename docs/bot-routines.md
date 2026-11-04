@@ -59,6 +59,10 @@ The standalone CLI records failure kinds but does not yet retry, pause routines,
   - **Failures.** A failed check is never a change and leaves the saved output alone. Three failed checks in a row turn the watch off and raise one "Needs you" card; turning it back on tries again soon. Fixing the address or script and turning it back on starts over with a fresh first check, and that check clears the card. An open profile updates its rows as checks finish. The row shows when it last checked ("No change since …") or why it couldn't.
   - **When it runs.** Only while Aiden is open and the Bot isn't paused; nothing is checked at startup beyond scheduling the next check. Each address or script is one the person added or accepted on the Bot's suggestion card.
 
+## Models and thinking
+
+Use **Model** beside a desktop routine or **Profile → Routine models** on a paired phone to choose a model, supported thinking level and optional explicit fallback for a scheduled, event or watch routine. Each accepted run keeps its choice, source restrictions, original due time and timezone across queueing and restart. Future edits do not change claimed work. An unavailable explicit model raises Needs you unless a configured fallback applies before any effects. See [routine models](bot-routine-models.md) for grants, recovery and unconfirmed-cost Resume.
+
 ## Open work
 
 With Tasks enabled, a Bot can record explicit responsibilities from an accepted routine, including Run now, in **Profile → Open work**. The host ties the item to its actual input, and every client can edit its state, view its request/reply, dismiss it or undo a recent change. Open work does not schedule itself or automatically mark every successful turn done. Its linked Stop preserves unrelated queued inputs and waits for acknowledgement before Stop and dismiss. See [Open work](bot-open-work.md).

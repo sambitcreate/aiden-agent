@@ -209,6 +209,11 @@ data class AidenServer(
         get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_OPEN_WORK) == true &&
             capabilities.containsAll(listOf(AidenRemoteCapability.BOT_OPEN_WORK, AidenRemoteCapability.BOT_READ, AidenRemoteCapability.CHAT_READ))
 
+    /** Routine configuration and run facts require Bot and chat visibility (revision 56). */
+    val supportsBotRoutineModels: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_ROUTINE_MODELS) == true &&
+            capabilities.containsAll(listOf(AidenRemoteCapability.BOT_ROUTINE_MODELS, AidenRemoteCapability.BOT_READ, AidenRemoteCapability.CHAT_READ))
+
     /** Offered and held (revision 54): this phone can inspect connector watches. */
     val supportsBotWatches: Boolean
         get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_WATCHES) == true &&

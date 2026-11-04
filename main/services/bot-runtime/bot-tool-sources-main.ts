@@ -81,6 +81,7 @@ import { createBotComputerToolState, type BotComputerToolState } from "../bot-co
 import { BOT_COMPUTER_SHELL_TOOL_NAME, BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
 import { botOwnWrites } from "../bot-routine-events/own-writes.js";
 import { botFileCandidates } from "./bot-file-candidates.js";
+import { botExecutionScope } from "./bot-execution.js";
 
 const BOT_HOME_LOCATION_ID = "builtin.bot_home.v1";
 
@@ -266,12 +267,11 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
           ...schema,
           async execute(toolCallId, params, signal, onUpdate) {
             const settings = await configStore.getSettings();
-            const runtime = await resolveBotModelRuntime(
-              authority.provider.sourceProviderId,
-              authority.provider.sourceModelId,
-              signal,
-              authority.chatId,
-            );
+            const execution = botExecutionScope(botId);
+            const helpers = execution ? await import("./bot-session-main.js") : undefined;
+            const runtime = helpers
+              ? await helpers.resolveBotExecutionHelperRuntime(botId, "primary", authority.provider.sourceProviderId, authority.provider.sourceModelId, signal)
+              : await resolveBotModelRuntime(authority.provider.sourceProviderId, authority.provider.sourceModelId, signal, authority.chatId);
             // Children belong to this exact parent call, in the Bot's own chat
             // and folder. Nothing is persisted that could relaunch them: the
             // tool is `unsafe`, so a replayed parent call never reruns.
@@ -282,7 +282,8 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
               chatId: await deps.canonicalChatId(botId),
               workspaceId: authority.managedHome.workspaceId,
               runtime,
-              thinkingLevel: "off",
+              ...(helpers ? { transformRuntime: (isolated, context) => helpers.bindBotExecutionHelperRuntime(botId, `subagent:${context.childId}`, isolated, runtime) } : {}),
+              thinkingLevel: execution ? (execution.claim.actual === "fallback" ? execution.claim.fallback! : execution.claim.primary).thinkingLevel : "off",
               workspaceRoot: authority.workingDirectory,
               permission: "full",
               inheritedCeiling: authority.files.botHome ? inheritedSubagentReadToolCeiling(undefined) : [],
@@ -428,7 +429,9 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         if (shell) tools.push({ tool: shell });
       }
       if (!facts.supportsImages) {
-        const vision = visionCandidate(authority, {
+        const execution = botExecutionScope(botId), savedVision = execution?.claim.vision, currentVision = authority.visionProvider;
+        const matchingVision = !execution || Boolean(savedVision && currentVision && savedVision.sourceProviderId === currentVision.sourceProviderId && savedVision.sourceModelId === currentVision.sourceModelId && savedVision.connectionFingerprint === currentVision.connectionFingerprint && savedVision.providerExactFingerprint === currentVision.providerExactFingerprint && savedVision.modelExactFingerprint === currentVision.modelExactFingerprint);
+        const vision = matchingVision ? visionCandidate(authority, {
           revalidateBeforeEffect: async () => {
             const fresh = await deps.admit(botId);
             try {
@@ -438,13 +441,18 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
             }
           },
           dependencies: {
-            resolveRuntime: (providerId, modelId, signal) => resolveBotModelRuntime(providerId, modelId, signal, authority.chatId),
+            resolveRuntime: async (providerId, modelId, signal) => {
+              if (!botExecutionScope(botId)) return resolveBotModelRuntime(providerId, modelId, signal, authority.chatId);
+              const helpers = await import("./bot-session-main.js");
+              const runtime = await helpers.resolveBotExecutionHelperRuntime(botId, "vision", providerId, modelId, signal);
+              return helpers.bindBotExecutionHelperRuntime(botId, "vision", runtime);
+            },
             recordUsage: async (record) => {
               const { usageStore } = await import("../usage-store.js");
               await usageStore.record(record);
             },
           },
-        });
+        }) : undefined;
         if (vision) tools.push(vision);
       }
       // Both are always installed; ingress (`botIngressAllowsTool`) keeps

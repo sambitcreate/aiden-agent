@@ -237,3 +237,5 @@ From this directory, after the root install: `npm install && npm run build`. `np
 History: the CLI started as a rebranded Pi terminal app ([`docs/plans/aiden-cli-plan.md`](../../docs/plans/aiden-cli-plan.md), [parity checklist](../../docs/plans/aiden-cli-parity-checklist.md)) and became serve-only on 2026-10-30 ([`docs/plans/aiden-serve-only-cli.md`](../../docs/plans/aiden-serve-only-cli.md)).
 
 The optional Open work management API is currently wired by the Electron desktop host, not `aiden serve`. The CLI does not advertise `bot:open-work`; paired clients keep that management surface unavailable for this host. The shared runtime’s request-scoped Stop and evidence helpers remain portable. See [Open work](../../docs/bot-open-work.md).
+
+The per-routine model/thinking/fallback API (`bot:routine-models`) and its protected execution grants are likewise desktop-host features. `aiden serve` retains its existing Bot model defaults and does not advertise those optional management routes or the desktop’s unconfirmed-cost Resume controls. See [routine models](../../docs/bot-routine-models.md).

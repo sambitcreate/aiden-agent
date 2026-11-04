@@ -2505,11 +2505,7 @@
           "required": false,
           "content": {
             "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "maxProperties": 0
-              }
+              "schema": {"$ref": "#/components/schemas/BotResumeRequest"}
             }
           }
         }
@@ -7741,6 +7737,320 @@
           }
         }
       }
+    },
+    "/bots/{botId}/routine-models/{routineId}": {
+      "get": {
+        "operationId": "botRoutineModelSettings",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "routineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:routine-models"
+        ],
+        "responses": {
+          "200": {
+            "description": "Routine model response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRoutineModelSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "botRoutineModelSave",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "routineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:routine-models",
+          "bot:write"
+        ],
+        "responses": {
+          "200": {
+            "description": "Routine model response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRoutineModelResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotRoutineModelSave"
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/routine-models/{routineId}/catalog": {
+      "get": {
+        "operationId": "botRoutineModelCatalog",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "routineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:routine-models",
+          "bot:write"
+        ],
+        "responses": {
+          "200": {
+            "description": "Routine model response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRoutineModelCatalog"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/routine-models/{routineId}/runs": {
+      "get": {
+        "operationId": "botRoutineModelRuns",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "routineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:routine-models"
+        ],
+        "responses": {
+          "200": {
+            "description": "Routine model response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRoutineModelRuns"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/routine-resume-status": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "botExecutionResumeStatus",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:write",
+          "bot:routine-models"
+        ],
+        "responses": {
+          "200": {
+            "description": "Passive status for the person choosing Resume; it never acknowledges a charge or starts work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotExecutionResumeStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/routine-models": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "botRoutineModelDirectory",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:routine-models"
+        ],
+        "responses": {
+          "200": {
+            "description": "Owned routine identities only; no executable source configuration or private grants.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRoutineModelDirectory"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -8502,6 +8812,7 @@
                 "bot:issues",
                 "bot:watches",
                 "bot:open-work",
+                "bot:routine-models",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -8550,6 +8861,7 @@
                 "bot:issues",
                 "bot:watches",
                 "bot:open-work",
+                "bot:routine-models",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -8701,6 +9013,7 @@
                 "bot:issues",
                 "bot:watches",
                 "bot:open-work",
+                "bot:routine-models",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -8758,6 +9071,7 @@
                 "bot:issues",
                 "bot:watches",
                 "bot:open-work",
+                "bot:routine-models",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -20678,6 +20992,600 @@
             ]
           }
         ]
+      },
+      "BotRoutineModelChoice": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "providerId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "modelId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "thinkingLevel": {
+            "type": "string",
+            "enum": [
+              "off",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        },
+        "required": [
+          "providerId",
+          "modelId",
+          "thinkingLevel"
+        ]
+      },
+      "BotRoutineModelSelection": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "const": "inherit"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "const": "selected"
+              },
+              "primary": {
+                "$ref": "#/components/schemas/BotRoutineModelChoice"
+              },
+              "fallback": {
+                "$ref": "#/components/schemas/BotRoutineModelChoice"
+              }
+            },
+            "required": [
+              "mode",
+              "primary"
+            ]
+          }
+        ]
+      },
+      "BotRoutineModelSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "routineId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "selection": {
+            "$ref": "#/components/schemas/BotRoutineModelSelection"
+          },
+          "updatedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "lastMutationId": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+            "minLength": 36,
+            "maxLength": 36
+          }
+        },
+        "required": [
+          "botId",
+          "routineId",
+          "revision",
+          "selection",
+          "updatedAt"
+        ]
+      },
+      "BotRoutineModelSave": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "routineId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "mutationId": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+            "minLength": 36,
+            "maxLength": 36
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "catalogRevision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "selection": {
+            "$ref": "#/components/schemas/BotRoutineModelSelection"
+          }
+        },
+        "required": [
+          "botId",
+          "routineId",
+          "mutationId",
+          "expectedRevision",
+          "catalogRevision",
+          "selection"
+        ]
+      },
+      "BotRoutineModelOption": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "x-aiden-max-utf8-bytes": 640
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "supportsImages": {
+            "type": "boolean"
+          },
+          "thinkingLevels": {
+            "type": "array",
+            "maxItems": 7,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "off",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "available",
+          "supportsImages",
+          "thinkingLevels"
+        ]
+      },
+      "BotRoutineModelProvider": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "x-aiden-max-utf8-bytes": 640
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "models": {
+            "type": "array",
+            "maxItems": 512,
+            "items": {
+              "$ref": "#/components/schemas/BotRoutineModelOption"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "available",
+          "models"
+        ]
+      },
+      "BotRoutineModelCatalog": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "providers": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/BotRoutineModelProvider"
+            }
+          }
+        },
+        "required": [
+          "revision",
+          "providers"
+        ]
+      },
+      "BotRoutineRunModel": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "chosen": {
+            "$ref": "#/components/schemas/BotRoutineModelChoice"
+          },
+          "actual": {
+            "$ref": "#/components/schemas/BotRoutineModelChoice"
+          },
+          "providerLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "x-aiden-max-utf8-bytes": 640
+          },
+          "modelLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "x-aiden-max-utf8-bytes": 640
+          },
+          "chosenProviderLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "x-aiden-max-utf8-bytes": 640
+          },
+          "chosenModelLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "x-aiden-max-utf8-bytes": 640
+          },
+          "fallbackReason": {
+            "enum": [
+              "model_unavailable",
+              "credentials_unavailable"
+            ]
+          }
+        },
+        "required": [
+          "chosen",
+          "actual",
+          "providerLabel",
+          "modelLabel",
+          "chosenProviderLabel",
+          "chosenModelLabel"
+        ]
+      },
+      "BotRoutineModelRun": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "runId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "submissionId": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,31}$",
+            "maxLength": 32
+          },
+          "admittedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "startedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "scheduledFor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "x-aiden-max-utf8-bytes": 640
+          },
+          "triggerKind": {
+            "enum": [
+              "scheduled",
+              "manual",
+              "event",
+              "retry",
+              "catch_up"
+            ]
+          },
+          "model": {
+            "$ref": "#/components/schemas/BotRoutineRunModel"
+          }
+        },
+        "required": [
+          "runId",
+          "admittedAt",
+          "triggerKind",
+          "model"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "scheduledFor"
+              ]
+            },
+            "then": {
+              "required": [
+                "timezone"
+              ]
+            }
+          }
+        ]
+      },
+      "BotRoutineModelRuns": {
+        "type": "array",
+        "maxItems": 64,
+        "items": {
+          "$ref": "#/components/schemas/BotRoutineModelRun"
+        }
+      },
+      "BotRoutineModelResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "settings": {
+                "$ref": "#/components/schemas/BotRoutineModelSettings"
+              },
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$",
+                "minLength": 36,
+                "maxLength": 36
+              },
+              "replayed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "ok",
+              "settings",
+              "mutationId",
+              "replayed"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "code": {
+                "enum": [
+                  "conflict",
+                  "invalid",
+                  "unavailable",
+                  "not_found",
+                  "history_full"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "x-aiden-max-utf8-bytes": 640
+              },
+              "settings": {
+                "$ref": "#/components/schemas/BotRoutineModelSettings"
+              }
+            },
+            "required": [
+              "ok",
+              "code",
+              "error"
+            ]
+          }
+        ]
+      },
+      "BotExecutionResumeStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requiresUnknownCostAcknowledgement"
+        ],
+        "properties": {
+          "requiresUnknownCostAcknowledgement": {
+            "type": "boolean"
+          },
+          "interruptedSubmissionId": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,31}$",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "costReceiptId": {
+            "type": "string",
+            "pattern": "^cost_[a-f0-9]{64}$",
+            "minLength": 69,
+            "maxLength": 69
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "requiresUnknownCostAcknowledgement": {
+                  "const": true
+                }
+              },
+              "required": [
+                "requiresUnknownCostAcknowledgement"
+              ]
+            },
+            "then": {
+              "required": [
+                "interruptedSubmissionId",
+                "costReceiptId"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "costReceiptId"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "BotResumeRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "maxProperties": 0
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "acknowledgeUnknownCost",
+              "expectedSubmissionId",
+              "expectedCostReceiptId"
+            ],
+            "properties": {
+              "acknowledgeUnknownCost": {
+                "const": true
+              },
+              "expectedSubmissionId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "minLength": 1,
+                "maxLength": 32
+              },
+              "expectedCostReceiptId": {
+                "type": "string",
+                "pattern": "^cost_[a-f0-9]{64}$",
+                "minLength": 69,
+                "maxLength": 69
+              }
+            }
+          }
+        ],
+        "description": "Confirmed unknown-cost Resume requires bot:routine-models, the exact interrupted input and opaque cost receipt returned by status. Ordinary Resume keeps an empty body. A stale token cannot acknowledge a later receipt, including on the same input."
+      },
+      "BotRoutineModelDirectory": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "botId",
+          "routines"
+        ],
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "routines": {
+            "type": "array",
+            "maxItems": 1024,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "name",
+                "kind"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160,
+                  "x-aiden-max-utf8-bytes": 640
+                },
+                "kind": {
+                  "enum": [
+                    "scheduled",
+                    "event",
+                    "watch"
+                  ]
+                }
+              }
+            }
+          }
+        }
       }
     }
   }

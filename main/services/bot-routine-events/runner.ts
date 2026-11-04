@@ -8,7 +8,7 @@ import { botRoutineRequestId, type BotRoutineExecutor, type BotRoutineExecutorDe
 import type { ScheduledRun, ScheduledTask } from "../types.js";
 import type { BotRoutineTriggerKind } from "../../../renderer/shared/bot-routine-trigger.js";
 import type { BotEventRoutine } from "./store.js";
-import { withBotConnectorInventoryScope } from "../bot-connector-inventory-scope.js";
+import { withBotConnectorExecutionRestriction } from "../bot-connector-inventory-scope.js";
 
 /** An event routine as the executor's task: read-only, notify, never scheduled by cron. */
 export function eventRoutineTask(routine: BotEventRoutine): ScheduledTask {
@@ -80,7 +80,7 @@ export function createBotEventRunner(dependencies: BotEventRunnerDependencies) {
           runId: requestId,
           signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
         });
-        const run = await (routine.connector ? withBotConnectorInventoryScope(routine.connector.binding.serverId, execute) : execute());
+        const run = await (routine.connector ? withBotConnectorExecutionRestriction({ routineId: routine.id, revision: routine.updatedAt, binding: routine.connector.binding }, execute) : execute());
         // Only a run recorded under the event's own id, and handed to the
         // delivery log, is settled; anything else is replayed on next start
         // (the replay reads the saved run and only retries its delivery).

@@ -5,12 +5,14 @@ import {
   botCustomSelectionIsSubset,
   botCustomSelectionsEqual,
   validateSelectionAgainstCatalog,
+  assertBotIdentity,
   type BotAccessView,
   type BotCapabilityCatalog,
   type BotChatAccessView,
   type BotNoticeStatus,
 } from "../../renderer/shared/bot-capabilities.js";
 import { DataStore } from "./data-store.js";
+import { inspectBotRoutineModelGrant, type BotRoutineModelGrant } from "./bot-routine-models.js";
 import {
   BotCapabilityCatalogConflictError,
   BotCapabilityRevisionConflictError,
@@ -42,6 +44,7 @@ import {
 } from "./bot-capability-store-core.js";
 import {
   boundBotProviderModelFingerprint,
+  assertBoundBotProviderModelCurrent,
   parseBoundBotProviderModel,
   parseBoundBotCustomSelection,
   type BoundBotCustomSelection,
@@ -331,6 +334,31 @@ export class BotCapabilityStore {
     );
   }
 
+  /** Host-private document; public catalog/policy projections never include it. */
+  async getRoutineModelsState(): Promise<string | null> {
+    this.requireInitialized();
+    return this.serialized(async () => (await this.persistence.load()).routineModels ?? null);
+  }
+
+  /** Owner-only journal cleanup proof; corrupt or unverified authority never means absent. */
+  async absentBotAuthorities(botIds: readonly string[]): Promise<string[]> {
+    this.requireInitialized();
+    if (botIds.length > 256) throw new BotCapabilityUnavailableError("Too many Bot identities to inspect.");
+    for (const id of botIds) assertBotIdentity(id, "bot");
+    return this.serialized(async () => { const state = await this.persistence.load(); return [...new Set(botIds)].filter((id) => !state.policies.some((row) => row.botId === id) && !state.chats.some((row) => row.botId === id)); });
+  }
+
+  async saveRoutineModelsState(previous: string | null, next: string, assertCurrent: () => Promise<void>, isCurrent: () => boolean): Promise<void> {
+    this.requireInitialized();
+    if (Buffer.byteLength(next) > 4 * 1024 * 1024) throw new BotCapabilityUnavailableError("Saved routine model history is full. No admitted work was discarded.");
+    await this.serialized(async () => this.persistence.update(async (state) => {
+      await assertCurrent();
+      if ((state.routineModels ?? null) !== previous) throw new BotCapabilityUnavailableError("Routine model authority changed concurrently.");
+      if (state.sequence >= Number.MAX_SAFE_INTEGER) throw new BotCapabilityUnavailableError();
+      state.sequence++; state.routineModels = next;
+    }, isCurrent));
+  }
+
   async createBotPolicy(input: {
     botId: string;
     catalog: BotCapabilityCatalog;
@@ -586,14 +614,18 @@ export class BotCapabilityStore {
     snapshot?: BotCapabilityCatalogSnapshot;
     /** A closed global gate preserves durable grants while excluding them from runtime authority. */
     skillsEnabled?: boolean;
+    routineModelGrant?: BotRoutineModelGrant;
   }): Promise<BotCapabilityAdmission> {
     this.requireInitialized();
+    const routine = input.routineModelGrant ? inspectBotRoutineModelGrant(input.routineModelGrant) : undefined;
+    if (routine && routine.claim.botId !== input.botId) throw new BotCapabilityUnavailableError();
+    await routine?.assertCurrent();
     return this.serialized(async () => {
       let state = await this.persistence.load();
       let editor = this.editor(state);
       editor.assertBotMayAct(input);
       if (
-        input.snapshot &&
+        !routine && input.snapshot &&
         editor.hasStaleModelBindings({ botId: input.botId, snapshot: input.snapshot })
       ) {
         const snapshot = input.snapshot;
@@ -604,8 +636,12 @@ export class BotCapabilityStore {
         editor = this.editor(state);
       }
       const authority = editor.assertBotMayAct(input);
-      const modelAuthority = editor.getBotModelAuthority(input.botId);
-      const visionModelAuthority = editor.getBotVisionModelAuthority(input.botId);
+      const modelAuthority = routine ? { selection: { providerId: routine.binding.providerOption.id, modelId: routine.binding.modelOption.id }, binding: routine.binding } : editor.getBotModelAuthority(input.botId);
+      let visionModelAuthority = editor.getBotVisionModelAuthority(input.botId);
+      if (routine && visionModelAuthority && input.snapshot) {
+        try { assertBoundBotProviderModelCurrent(visionModelAuthority.binding, input.snapshot); }
+        catch { visionModelAuthority = undefined; }
+      }
       if (authority.effectiveCustom || modelAuthority || visionModelAuthority) {
         if (!input.snapshot) {
           throw new BotCapabilityUnavailableError(
@@ -617,6 +653,7 @@ export class BotCapabilityStore {
           ...(input.chatId ? { chatId: input.chatId } : {}),
           snapshot: input.snapshot,
           skillsEnabled: input.skillsEnabled,
+          routineModelGrant: input.routineModelGrant,
         });
       }
       const lease = this.leases.acquire({
@@ -654,6 +691,7 @@ export class BotCapabilityStore {
     chatId?: string;
     snapshot: BotCapabilityCatalogSnapshot;
     skillsEnabled?: boolean;
+    routineModelGrant?: BotRoutineModelGrant;
   }): Promise<BoundBotCustomSelection | undefined> {
     this.requireInitialized();
     return this.serialized(async () =>

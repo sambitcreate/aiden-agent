@@ -1,3 +1,7 @@
+import { parseBotRoutineModelDirectory, type BotRoutineModelDirectory } from "../../renderer/shared/bot-routine-model-directory.js";
+import { parseBotExecutionResumeStatus, type BotExecutionResumeStatus } from "../../renderer/shared/bot-execution-resume.js";
+import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, parseBotRoutineModelSave } from "../../renderer/shared/bot-routine-models.js";
+import type { createBotRoutineModelService } from "./bot-routine-models.js";
 import { parseBotOpenWorkMutation, type BotOpenWorkMutation, type BotOpenWorkSnapshot, type BotOpenWorkResult, type BotOpenWorkEvidence } from "../../renderer/shared/bot-open-work.js";
 import type { BotConnectorWatchService } from "./bot-routine-events/connector-service.js";
 import { BotConnectorWatchError, connectorFields } from "./bot-routine-events/connector-service.js";
@@ -53,6 +57,7 @@ import {
   AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
   AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
+  AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
   AIDEN_REMOTE_BOT_ACTIVITY_FEATURE,
   AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE,
   AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
@@ -278,6 +283,7 @@ export interface AidenRemoteRouterDependencies {
     >;
   files?: Pick<AidenRemoteFileService, "list" | "read" | "write"> & Partial<Pick<AidenRemoteFileService, "children">>;
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
+  botRoutineModels?: Pick<ReturnType<typeof createBotRoutineModelService>, "read" | "catalog" | "save" | "readRuns"> & { resumeStatus(botId: string): Promise<BotExecutionResumeStatus>; listRoutines(botId: string): Promise<BotRoutineModelDirectory> };
   botOpenWork?: { snapshot(botId: string): Promise<BotOpenWorkSnapshot>; mutateByPerson(botId: string, mutation: BotOpenWorkMutation): Promise<BotOpenWorkResult>; evidence(botId: string, id: string, kind: "source" | "result"): Promise<BotOpenWorkEvidence | undefined> };
   botWatches?: Pick<BotConnectorWatchService, "list" | "discoverSources" | "create" | "update" | "setEnabled" | "remove" | "testCheck" | "runNow">;
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
@@ -443,6 +449,7 @@ export type AidenRemoteRouteLabel =
   | "botPause"
   | "botIssueAct"
   | "botWatches"
+  | "botRoutineModels"
   | "botOpenWork"
   | "botRoutines"
   | "botConnectionRequests"
@@ -544,6 +551,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   botHandoffOpenOnMac: ["/bots/:botId/handoffs/:waitId/open-on-mac"],
   botPause: ["/bots/:botId/pause"],
   botIssueAct: ["/bots/:botId/issues/:issueId/act"],
+  botRoutineModels: ["/bots/:botId/routine-models", "/bots/:botId/routine-resume-status", "/bots/:botId/routine-models/:routineId", "/bots/:botId/routine-models/:routineId/catalog", "/bots/:botId/routine-models/:routineId/runs"],
   botOpenWork: ["/bots/:botId/open-work", "/bots/:botId/open-work/:itemId/evidence/:kind"],
   botWatches: ["/bots/:botId/watches", "/bots/:botId/watches/sources", "/bots/:botId/watches/test", "/bots/:botId/watches/:watchId", "/bots/:botId/watches/:watchId/enabled", "/bots/:botId/watches/:watchId/run"],
   botRoutines: ["/bots/:botId/routines", "/bots/:botId/routines/:routineId"],
@@ -2094,6 +2102,10 @@ function writeBotDetail(
   writeJson(response, status, visible);
 }
 
+function botRoutineModelsWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  const port = dependencies.botRoutineModels;
+  return !!port && (["read", "catalog", "save", "readRuns", "resumeStatus", "listRoutines"] as const).every((method) => typeof port[method] === "function");
+}
 function botOpenWorkWired(dependencies: AidenRemoteRouterDependencies): boolean {
   return typeof dependencies.botOpenWork?.snapshot === "function" && typeof dependencies.botOpenWork?.mutateByPerson === "function" && typeof dependencies.botOpenWork?.evidence === "function";
 }
@@ -2136,6 +2148,7 @@ function advertisedServerCapabilities(
     ...(device.acceptsBotCapabilities === true && botImagesWired(dependencies)
       ? AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES
       : []),
+    ...(device.acceptsBotCapabilities === true && botRoutineModelsWired(dependencies) ? AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES : []),
     ...(device.acceptsBotCapabilities === true && botOpenWorkWired(dependencies) ? AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES : []),
     ...(device.acceptsBotCapabilities === true && botWatchesWired(dependencies) ? AIDEN_REMOTE_BOT_WATCH_CAPABILITIES : []),
     // Revision 42: offered only while the issue act route is wired.
@@ -2982,9 +2995,11 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "bot:write");
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read"]);
+        if (body && typeof body === "object" && "acknowledgeUnknownCost" in body) requireDeviceCapabilities(device, ["chat:read", "bot:routine-models"]);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
         writeJson(response, 200, await botSessionsOrNotFound(dependencies).resume(device.id, botResumeMatch[1]!, key, body, {
           handoffs: holdsBotHandoffs(device, dependencies),
+          routineModels: device.acceptsBotCapabilities === true && device.capabilities.has("bot:routine-models") && botRoutineModelsWired(dependencies),
         }));
         return;
       }
@@ -3130,6 +3145,76 @@ export function createAidenRemoteRequestHandler(
         writeJson(response, 200, await botSessionsOrNotFound(dependencies).stop(device.id, botStopMatch[1]!, key, body, {
           handoffs: holdsBotHandoffs(device, dependencies),
         }));
+        return;
+      }
+      const routineModelDirectoryMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-models$/u.exec(path);
+      if (routineModelDirectoryMatch && request.method === "GET") {
+        requireNoQuery(query); route = "botRoutineModels";
+        if (!botRoutineModelsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Routine models are not served by this host.", 404);
+        const device = await authenticate(request, dependencies.devices, "bot:read"); deviceIdSuffix = device.id.slice(-8);
+        requireDeviceCapabilities(device, ["chat:read", "bot:routine-models"]);
+        if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
+        const result = parseBotRoutineModelDirectory(await dependencies.botRoutineModels!.listRoutines(routineModelDirectoryMatch[1]!));
+        dependencies.devices.acquireDeviceAuthorization(device.id, false)();
+        const current = await authenticateCredential(request, dependencies.devices, "bot:read");
+        if (current.id !== device.id || current.acceptsBotCapabilities !== true || result.botId !== routineModelDirectoryMatch[1]) throw new AidenRemoteServiceError("capability_denied", "Device authorization changed.", 403);
+        requireDeviceCapabilities(current, ["chat:read", "bot:routine-models"]);
+        writeJson(response, 200, result); return;
+      }
+      const routineResumeStatusMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-resume-status$/u.exec(path);
+      if (routineResumeStatusMatch && request.method === "GET") {
+        requireNoQuery(query); route = "botRoutineModels";
+        if (!botRoutineModelsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Routine resume status is not served by this host.", 404);
+        const device = await authenticate(request, dependencies.devices, "bot:write"); deviceIdSuffix = device.id.slice(-8);
+        requireDeviceCapabilities(device, ["bot:read", "chat:read", "bot:routine-models"]);
+        if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
+        const result = parseBotExecutionResumeStatus(await dependencies.botRoutineModels!.resumeStatus(routineResumeStatusMatch[1]!));
+        dependencies.devices.acquireDeviceAuthorization(device.id, false)();
+        const current = await authenticateCredential(request, dependencies.devices, "bot:write");
+        if (current.id !== device.id || current.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Device authorization changed.", 403);
+        requireDeviceCapabilities(current, ["bot:read", "chat:read", "bot:routine-models"]);
+        writeJson(response, 200, result); return;
+      }
+      const routineModelSettingsMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-models\/([A-Za-z0-9._:-]{1,160})$/u.exec(path);
+      const routineModelCatalogMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-models\/([A-Za-z0-9._:-]{1,160})\/catalog$/u.exec(path);
+      const routineModelRunsMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-models\/([A-Za-z0-9._:-]{1,160})\/runs$/u.exec(path);
+      const routineModelMatch = routineModelSettingsMatch ?? routineModelCatalogMatch ?? routineModelRunsMatch;
+      if (routineModelMatch && (request.method === "GET" || request.method === "POST" && routineModelSettingsMatch)) {
+        requireNoQuery(query); route = "botRoutineModels";
+        if (!botRoutineModelsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Routine models are not served by this host.", 404);
+        const editing = request.method === "POST", catalog = Boolean(routineModelCatalogMatch);
+        const device = await authenticate(request, dependencies.devices, editing || catalog ? "bot:write" : "bot:read");
+        deviceIdSuffix = device.id.slice(-8);
+        requireDeviceCapabilities(device, ["bot:read", "chat:read", "bot:routine-models"]);
+        if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
+        const botId = routineModelMatch[1]!, routineId = routineModelMatch[2]!, service = dependencies.botRoutineModels!;
+        const assertCurrent = async () => {
+          dependencies.devices.acquireDeviceAuthorization(device.id, false)();
+          const current = await authenticateCredential(request, dependencies.devices, editing || catalog ? "bot:write" : "bot:read");
+          if (current.id !== device.id || current.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Device authorization changed.", 403);
+          requireDeviceCapabilities(current, ["bot:read", "chat:read", "bot:routine-models"]);
+        };
+        if (!editing) {
+          if (catalog) { const result = parseBotRoutineModelCatalog(await service.catalog(botId, routineId)); await assertCurrent(); writeJson(response, 200, result); }
+          else if (routineModelRunsMatch) { const result = parseBotRoutineModelRuns(await service.readRuns(botId, routineId)); await assertCurrent(); writeJson(response, 200, result); }
+          else {
+            const settings = parseBotRoutineModelSettings(await service.read(botId, routineId));
+            if (settings.botId !== botId || settings.routineId !== routineId) throw new Error("Invalid routine model response identity.");
+            await assertCurrent(); writeJson(response, 200, settings);
+          }
+          return;
+        }
+        let input;
+        try { input = parseBotRoutineModelSave(await readJsonBody(request, 16 * 1024)); if (input.botId !== botId || input.routineId !== routineId) throw new Error("Identity mismatch."); }
+        catch { throw new AidenRemoteServiceError("invalid_request", "Invalid routine model change.", 400); }
+        const controller = new AbortController();
+        try {
+          await assertCurrent();
+          const result = parseBotRoutineModelResult(await service.save(input, { signal: controller.signal, assertCurrent }));
+          await assertCurrent();
+          if (result.settings && (result.settings.botId !== botId || result.settings.routineId !== routineId) || result.ok && result.mutationId !== input.mutationId) throw new Error("Invalid routine model response identity.");
+          writeJson(response, 200, result);
+        } finally { controller.abort(); }
         return;
       }
       const openWorkEvidenceMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/open-work\/([A-Za-z0-9._:-]{1,160})\/evidence\/(source|result)$/u.exec(path);

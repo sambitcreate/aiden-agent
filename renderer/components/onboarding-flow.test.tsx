@@ -517,6 +517,7 @@ test("platform feature filtering preserves classifier consent and unavailable-fe
     { id: "botComputers", description: "Give a Bot a computer." },
     { id: "botWatches", description: "Watch a supported connector." },
     { id: "botOpenWork", description: "Track accepted Bot tasks." },
+    { id: "botRoutineModels", description: "Choose a routine model." },
   ];
   const linux = visibleOnboardingFeatures(features, { platform: "linux", computerUse: false, bots: false, botComputers: false });
   assert.deepEqual(linux.map(({ id }) => id), ["models", "commands"]);
@@ -526,7 +527,7 @@ test("platform feature filtering preserves classifier consent and unavailable-fe
   assert.match(linux[1]!.description, /Ctrl-K/u);
   assert.equal(features[1]!.description, "Use Command-K to open commands.");
   const mac = visibleOnboardingFeatures(features, { platform: "darwin", computerUse: true, bots: true, botComputers: true });
-  assert.equal(mac.length, 7);
+  assert.equal(mac.length, 8);
   assert.match(mac[0]!.description, /Apple models/u);
   assert.match(mac[0]!.description, /classifiers.*approve sending it; provider charges/u);
   assert.match(mac[0]!.description, /Enable local llama.cpp classification.*More options/u);

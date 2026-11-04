@@ -356,6 +356,8 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   }
 
   return {
+    claimRoutineExecution: (task: ScheduledTask, trigger: ScheduledRunTrigger) =>
+      import("./scheduled-bot-routines-main.js").then(({ claimBotRoutineExecution }) => claimBotRoutineExecution(task, trigger)),
     async run(
       task: ScheduledTask,
       runId?: string,

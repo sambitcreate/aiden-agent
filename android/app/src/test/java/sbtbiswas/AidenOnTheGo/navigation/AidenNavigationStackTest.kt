@@ -12,6 +12,13 @@ import org.junit.Test
 class AidenNavigationStackTest {
     private val root = AidenNavigationStack.Root
 
+    @Test fun routineModelProfileRouteRestoresAndReturnsToItsProfile() {
+        val original=root.push(AidenScreen.BotProfile("bot-model")).push(AidenScreen.BotRoutineModels("bot-model"))
+        val restored=AidenNavigationStack.decode(original.encode())
+        assertEquals(AidenScreen.BotRoutineModels("bot-model"),restored.current)
+        assertEquals(AidenScreen.BotProfile("bot-model"),restored.pop()!!.current)
+    }
+
     @Test
     fun backReturnsToTheScreenThatOpenedTheCurrentOne() {
         val stack = root

@@ -12,7 +12,8 @@ import { eventRoutineAfterRun } from "./after-run.js";
 import { createBotRoutineEventDispatcher } from "./dispatcher.js";
 import { createBotFolderWatches } from "./folder-watch.js";
 import { botOwnWrites } from "./own-writes.js";
-import { createBotEventRunner, eventRoutineRunStore } from "./runner.js";
+import { createBotEventRunner, eventRoutineRunStore, eventRoutineTask } from "./runner.js";
+import { withBotConnectorExecutionRestriction } from "../bot-connector-inventory-scope.js";
 import { createBotEventRoutineStore, type BotEventRoutine } from "./store.js";
 import { createBotWatches } from "./watch.js";
 import { productionConnectorWatchService } from "./connector-host-main.js";
@@ -96,6 +97,10 @@ const runner = createBotEventRunner({
 
 const dispatcher = createBotRoutineEventDispatcher({
   store: botEventRoutines,
+  claimRoutineExecution: async (routine, event) => {
+    const claim = async () => (await import("../scheduled-bot-routines-main.js")).claimBotRoutineExecution(eventRoutineTask(routine), { kind: "event", ...event });
+    return routine.connector ? withBotConnectorExecutionRestriction({ routineId: routine.id, revision: routine.updatedAt, binding: routine.connector.binding }, claim) : claim();
+  },
   run: (routine, event, signal) => runner.run(routine, event, signal),
   authorizeRun: async (routine) => {
     const grant = await admitWatchDispatch(routine);

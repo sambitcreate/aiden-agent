@@ -1,0 +1,199 @@
+{
+  "contractRevision": 56,
+  "settings": {
+    "botId": "bot_model",
+    "routineId": "routine_model",
+    "revision": "model_settings_2",
+    "selection": {
+      "mode": "selected",
+      "primary": {
+        "providerId": "provider_1",
+        "modelId": "model_a",
+        "thinkingLevel": "high"
+      },
+      "fallback": {
+        "providerId": "provider_2",
+        "modelId": "model_b",
+        "thinkingLevel": "off"
+      }
+    },
+    "updatedAt": 1793741400000,
+    "lastMutationId": "9d70736e-eae9-4cad-a042-48f614d499d3"
+  },
+  "inherit": {
+    "botId": "bot_model",
+    "routineId": "routine_model",
+    "revision": "model_settings_2",
+    "selection": {
+      "mode": "inherit"
+    },
+    "updatedAt": 1793741400000,
+    "lastMutationId": "9d70736e-eae9-4cad-a042-48f614d499d3"
+  },
+  "save": {
+    "botId": "bot_model",
+    "routineId": "routine_model",
+    "mutationId": "9d70736e-eae9-4cad-a042-48f614d499d3",
+    "expectedRevision": "model_settings_1",
+    "catalogRevision": "catalog_1",
+    "selection": {
+      "mode": "selected",
+      "primary": {
+        "providerId": "provider_1",
+        "modelId": "model_a",
+        "thinkingLevel": "high"
+      },
+      "fallback": {
+        "providerId": "provider_2",
+        "modelId": "model_b",
+        "thinkingLevel": "off"
+      }
+    }
+  },
+  "catalog": {
+    "revision": "catalog_1",
+    "providers": [
+      {
+        "id": "provider_1",
+        "label": "Primary service",
+        "available": true,
+        "models": [
+          {
+            "id": "model_a",
+            "label": "Reasoner",
+            "available": true,
+            "supportsImages": true,
+            "thinkingLevels": [
+              "low",
+              "high"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "provider_2",
+        "label": "Fallback service",
+        "available": true,
+        "models": [
+          {
+            "id": "model_b",
+            "label": "Writer",
+            "available": true,
+            "supportsImages": false,
+            "thinkingLevels": [
+              "off"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "result": {
+    "ok": true,
+    "settings": {
+      "botId": "bot_model",
+      "routineId": "routine_model",
+      "revision": "model_settings_2",
+      "selection": {
+        "mode": "selected",
+        "primary": {
+          "providerId": "provider_1",
+          "modelId": "model_a",
+          "thinkingLevel": "high"
+        },
+        "fallback": {
+          "providerId": "provider_2",
+          "modelId": "model_b",
+          "thinkingLevel": "off"
+        }
+      },
+      "updatedAt": 1793741400000,
+      "lastMutationId": "9d70736e-eae9-4cad-a042-48f614d499d3"
+    },
+    "mutationId": "9d70736e-eae9-4cad-a042-48f614d499d3",
+    "replayed": false
+  },
+  "conflict": {
+    "ok": false,
+    "code": "conflict",
+    "error": "This routine changed on another device.",
+    "settings": {
+      "botId": "bot_model",
+      "routineId": "routine_model",
+      "revision": "model_settings_2",
+      "selection": {
+        "mode": "selected",
+        "primary": {
+          "providerId": "provider_1",
+          "modelId": "model_a",
+          "thinkingLevel": "high"
+        },
+        "fallback": {
+          "providerId": "provider_2",
+          "modelId": "model_b",
+          "thinkingLevel": "off"
+        }
+      },
+      "updatedAt": 1793741400000,
+      "lastMutationId": "9d70736e-eae9-4cad-a042-48f614d499d3"
+    }
+  },
+  "runs": [
+    {
+      "runId": "routine:scheduled:model_demo",
+      "submissionId": "9007199254740993",
+      "admittedAt": 1793741400000,
+      "scheduledFor": 1793737800000,
+      "startedAt": 1793741401000,
+      "timezone": "America/New_York",
+      "triggerKind": "catch_up",
+      "model": {
+        "chosen": {
+          "providerId": "provider_1",
+          "modelId": "model_a",
+          "thinkingLevel": "high"
+        },
+        "actual": {
+          "providerId": "provider_2",
+          "modelId": "model_b",
+          "thinkingLevel": "off"
+        },
+        "providerLabel": "Fallback service",
+        "modelLabel": "Writer",
+        "chosenProviderLabel": "Primary service",
+        "chosenModelLabel": "Reasoner",
+        "fallbackReason": "model_unavailable"
+      }
+    }
+  ],
+  "resumeStatus": {
+    "requiresUnknownCostAcknowledgement": true,
+    "interruptedSubmissionId": "9007199254740993",
+    "costReceiptId": "cost_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "resume": {
+    "acknowledgeUnknownCost": true,
+    "expectedSubmissionId": "9007199254740993",
+    "expectedCostReceiptId": "cost_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "directory": {
+    "botId": "bot_model",
+    "routines": [
+      {
+        "id": "routine_model",
+        "name": "Morning review",
+        "kind": "scheduled"
+      },
+      {
+        "id": "event_model",
+        "name": "Page monitor",
+        "kind": "event"
+      },
+      {
+        "id": "watch_model",
+        "name": "Work inbox",
+        "kind": "watch"
+      }
+    ]
+  }
+}

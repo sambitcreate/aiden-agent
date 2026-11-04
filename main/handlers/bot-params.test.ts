@@ -140,6 +140,11 @@ test("Resume and Dismiss take an exact Bot id and a bounded request id", () => {
   assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "x".repeat(201) }, "resume"), /request id/u);
   assert.throws(() => parseBotSessionAction({ botId: "../x", requestId: "r" }, "resume"), /bot id/u);
   assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", extra: true }, "resume"), /fields/u);
+  assert.deepEqual(parseBotSessionAction({ botId: "bot:1", requestId: "consent", acknowledgeUnknownCost: true, expectedSubmissionId: "9007199254740993", expectedCostReceiptId: "cost_" + "a".repeat(64) }, "resume"), { botId: "bot:1", requestId: "consent", acknowledgeUnknownCost: true, expectedSubmissionId: "9007199254740993", expectedCostReceiptId: "cost_" + "a".repeat(64) });
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", acknowledgeUnknownCost: false }, "resume"));
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", acknowledgeUnknownCost: true, expectedSubmissionId: "10" }, "resume"));
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", acknowledgeUnknownCost: true, expectedSubmissionId: "10", expectedCostReceiptId: "another receipt" }, "resume"));
+  assert.throws(() => parseBotSessionAction({ botId: "bot:1", requestId: "r", acknowledgeUnknownCost: true }, "dismiss"));
   assert.throws(() => parseBotSessionAction(null, "dismiss"), /fields/u);
 });
 

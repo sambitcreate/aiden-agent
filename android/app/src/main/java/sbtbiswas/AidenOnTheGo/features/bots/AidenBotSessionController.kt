@@ -27,6 +27,11 @@ interface AidenBotSessionTransport {
     fun events(botId: String): Flow<AidenBotSessionEvent>
     /** `whenBusy` is Steer or Queue while the Bot works; only a Mac announcing `bot-activity-v1` takes it. */
     suspend fun send(botId: String, text: String, key: UUID, whenBusy: AidenStreamInputMode? = null): AidenBotSessionSendResponse
+    suspend fun resumeStatus(botId: String): AidenBotResumeStatus = throw AidenRemoteClientException.InvalidResponse()
+    suspend fun resumeWithAcknowledgement(botId: String, key: UUID, request: AidenBotResumeRequest): AidenBotSessionStateView {
+        if(request.acknowledgeUnknownCost == true) throw AidenRemoteClientException.InvalidResponse()
+        return resume(botId,key)
+    }
     suspend fun resume(botId: String, key: UUID): AidenBotSessionStateView
     suspend fun dismiss(botId: String, key: UUID): AidenBotSessionStateView
     suspend fun stop(botId: String, key: UUID): AidenBotSessionStateView
@@ -88,6 +93,8 @@ class AidenRemoteBotSessionTransport(private val client: AidenRemoteClient) : Ai
     override fun events(botId: String) = client.botSessionEvents(botId)
     override suspend fun send(botId: String, text: String, key: UUID, whenBusy: AidenStreamInputMode?) =
         client.sendBotMessage(botId, text, key, whenBusy, supportsBotActivity = whenBusy != null)
+    override suspend fun resumeStatus(botId: String) = client.botRoutineResumeStatus(botId)
+    override suspend fun resumeWithAcknowledgement(botId: String, key: UUID, request: AidenBotResumeRequest) = client.resumeBotSession(botId,key,request)
     override suspend fun resume(botId: String, key: UUID) = client.resumeBotSession(botId, key)
     override suspend fun dismiss(botId: String, key: UUID) = client.dismissBotSession(botId, key)
     override suspend fun stop(botId: String, key: UUID) = client.stopBotSession(botId, key)
@@ -247,6 +254,9 @@ class AidenBotActionKeys(private val newKey: () -> UUID = UUID::randomUUID) {
 
     @Synchronized
     fun key(action: String): UUID = keys.getOrPut(action, newKey)
+
+    @Synchronized
+    fun hasPending(action: String): Boolean = keys.containsKey(action)
 
     @Synchronized
     fun complete(action: String) {
@@ -561,7 +571,11 @@ class AidenBotSessionController(
     private val unheldGraceMillis: Long = UNHELD_GRACE_MILLIS,
     /** Revision 45: how many bytes of shared images this chat keeps in memory. */
     sharedImageBudgetBytes: Long = AidenSharedImageBytes.DEFAULT_MAX_BYTES,
-    private val nowMs: () -> Long = System::currentTimeMillis
+    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val routineModelsSupported: () -> Boolean = { false },
+    private val mayResume: () -> Boolean = { true },
+    private val resumeLifetime: () -> String = { "active" },
+    resumeJournal: sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournal? = null
 ) {
     private val _state: MutableStateFlow<AidenBotSessionUiState>
     val state: StateFlow<AidenBotSessionUiState>
@@ -579,6 +593,7 @@ class AidenBotSessionController(
     /** Bumped by every access-loss purge: a disk restore that started before it is stale and is dropped, not merged. */
     private var purgeGeneration = 0
     private var released = false
+    private var resumeVisitGeneration = 0
     private var isFlushing = false
     private val inFlight = mutableSetOf<String>()
     private var pendingAnswer: Pair<String, AidenQuestionRespondRequest>? = null
@@ -597,6 +612,7 @@ class AidenBotSessionController(
     private var stopStartedAt: Long? = null
     /** Revision 45: images the Bot shared, kept in memory within a budget while this chat is open; never written to disk. */
     private val sharedImages = AidenSharedImageBytes(sharedImageBudgetBytes)
+    val resumeController: AidenBotResumeController?
 
     init {
         val cached = sessionKey?.let { store?.transcript(it) }.orEmpty()
@@ -616,6 +632,12 @@ class AidenBotSessionController(
         )
         state = _state.asStateFlow()
         if (held != null && adopted != held && sessionKey != null) store?.storeOutbox(sessionKey, this, adopted)
+        resumeController = resumeJournal?.let { journal -> AidenBotResumeController(object:AidenBotResumeTransport {
+            override suspend fun status() = bounded { transport.resumeStatus(botId) }
+            override suspend fun resume(key:UUID,request:AidenBotResumeRequest) = bounded { transport.resumeWithAcknowledgement(botId,key,request) }
+        },mayResume={mayResume() && !released && !_state.value.isAccessBlocked && !_state.value.accessLost && !_state.value.botMissing},
+            supportsPreflight=routineModelsSupported,version={"$resumeVisitGeneration|${resumeLifetime()}|$stateWrites|${_state.value.session?.entries?.lastOrNull()?.id.orEmpty()}"},journal=journal,now=nowMs) }
+
     }
 
     /**
@@ -645,6 +667,8 @@ class AidenBotSessionController(
      * messages stay, key and body, for the next visit.
      */
     fun stopFollowing() {
+        resumeVisitGeneration++
+        resumeController?.cancelConsent()
         released = true
         feedJob?.cancel()
         feedJob = null
@@ -826,7 +850,7 @@ class AidenBotSessionController(
     }
 
     /** A snapshot replaces everything, and means the Mac is reachable: the outbox goes out. */
-    private fun applySnapshot(session: AidenBotSession) {
+    private fun applySnapshot(session: AidenBotSession, wakesOutbox: Boolean = true) {
         val previous = _state.value.session
         _state.update { it.copy(session = session, isLoading = false, loadFailed = false, hasLoaded = true, accessLost = false) }
         settleCards(session)
@@ -837,7 +861,7 @@ class AidenBotSessionController(
         afterStateWrite(previous)
         storeTranscript()
         reconcileOutbox(snapshot = true)
-        wakeOutbox()
+        if(wakesOutbox) wakeOutbox()
     }
 
     /** The Mac wrote the hand-off: another card's Mac prompt goes, and a new card is announced once. */
@@ -1382,15 +1406,31 @@ class AidenBotSessionController(
 
     /** Resume shows "Picking up where it left off" at once and goes back if the Mac didn't take it. A second tap sends nothing. */
     suspend fun resume(): Boolean {
+        resumeController?.let { control ->
+            if(!mayResume() || (!_state.value.isInterrupted && control.state.value.pending==null)) return false
+            if(RESUME in inFlight) return false
+            val replayingUnknown=control.state.value.pending!=null
+            val writes=stateWrites;val visit=resumeVisitGeneration;val lifetime=resumeLifetime();val purge=purgeGeneration
+            inFlight+=RESUME
+            _state.update{it.copy(isResuming=true)}
+            try {
+                val view=control.request() ?: return false
+                if(replayingUnknown) reconcileResumeReplay(visit,lifetime,purge)
+                else if(resumeVisitIsCurrent(visit,lifetime,purge) && stateWrites==writes) { applyStateView(view); _state.update { it.copy(resumeIntent=AidenBotTurnIntent.ACKNOWLEDGED) } }
+                return true
+            } finally { inFlight-=RESUME;_state.update{it.copy(isResuming=false)} }
+        }
         val current = _state.value
         val before = current.session ?: return false
         if (!current.isInterrupted || current.isAccessBlocked || RESUME in inFlight) return false
+        val replayingUnknown=keys.hasPending(RESUME)
+        val visit=resumeVisitGeneration;val lifetime=resumeLifetime();val purge=purgeGeneration
         inFlight += RESUME
         val writes = stateWrites
         _state.update {
             it.copy(
-                session = it.session?.copy(state = AidenBotSessionState.RUNNING, interrupted = false, blocked = null, activity = null),
-                resumeIntent = AidenBotTurnIntent.REQUESTED,
+                session = if(replayingUnknown)it.session else it.session?.copy(state = AidenBotSessionState.RUNNING, interrupted = false, blocked = null, activity = null),
+                resumeIntent = if(replayingUnknown)AidenBotTurnIntent.NONE else AidenBotTurnIntent.REQUESTED,
                 isResuming = true,
                 actionError = null
             )
@@ -1398,15 +1438,18 @@ class AidenBotSessionController(
         return try {
             val view = bounded { transport.resume(botId, keys.key(RESUME)) }
             keys.complete(RESUME)
-            if (stateWrites == writes) applyStateView(view)
-            _state.update {
-                if (it.resumeIntent == AidenBotTurnIntent.REQUESTED) it.copy(resumeIntent = AidenBotTurnIntent.ACKNOWLEDGED) else it
+            if(replayingUnknown) reconcileResumeReplay(visit,lifetime,purge)
+            else if(resumeVisitIsCurrent(visit,lifetime,purge)) {
+                if (stateWrites == writes) applyStateView(view)
+                _state.update {
+                    if (it.resumeIntent == AidenBotTurnIntent.REQUESTED) it.copy(resumeIntent = AidenBotTurnIntent.ACKNOWLEDGED) else it
+                }
             }
             true
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            keys.failed(RESUME, error)
+            if(!replayingUnknown && !aidenBotResumeFailureIsAmbiguous(error)) keys.complete(RESUME)
             _state.update {
                 it.copy(
                     session = if (stateWrites == writes) it.session?.restoringState(before) else it.session,
@@ -1421,8 +1464,43 @@ class AidenBotSessionController(
         }
     }
 
+    private fun resumeVisitIsCurrent(visit: Int, lifetime: String, purge: Int): Boolean =
+        !released && mayResume() && resumeController?.hasCurrentScope()!=false && resumeVisitGeneration==visit && resumeLifetime()==lifetime && purgeGeneration==purge &&
+            !_state.value.accessLost && !_state.value.botMissing
+
+    /** A replay settles an action, but the ledger's cached state may predate another interruption. */
+    private suspend fun reconcileResumeReplay(visit: Int, lifetime: String, purge: Int) {
+        if(!resumeVisitIsCurrent(visit,lifetime,purge)) return
+        val before=_state.value.session
+        try {
+            val session=bounded{transport.session(botId)}
+            if(!resumeVisitIsCurrent(visit,lifetime,purge)) return
+            if(session.botId!=botId) throw AidenRemoteClientException.InvalidResponse()
+            val current=_state.value.session
+            // Same-epoch stale reads and a read from an epoch replaced while it was held cannot win.
+            if(current!=null && (session.epoch==current.epoch && session.seq<current.seq ||
+                before?.epoch!=current.epoch && session.epoch!=current.epoch)) return
+            _state.update{it.copy(actionError=null)}
+            applySnapshot(session,wakesOutbox=false)
+        } catch(error: CancellationException) { throw error }
+        catch(error: Exception) {
+            if(!resumeVisitIsCurrent(visit,lifetime,purge)) return
+            if(aidenBotLostAccess(error)) purgeForAccessLoss()
+            _state.update{it.copy(actionError=RESUME_REFRESH_FAILED)}
+        }
+    }
+
+    suspend fun confirmResume(): Boolean {
+        val control=resumeController ?: return false
+        val writes=stateWrites;val visit=resumeVisitGeneration;val lifetime=resumeLifetime();val purge=purgeGeneration
+        val view=control.confirm() ?: return false
+        if(resumeVisitIsCurrent(visit,lifetime,purge) && stateWrites==writes) { applyStateView(view); _state.update { it.copy(resumeIntent=AidenBotTurnIntent.ACKNOWLEDGED) } }
+        return true
+    }
+
     /** Dismiss clears the paused card at once and brings it back if the Mac didn't take it. */
     suspend fun dismiss(): Boolean {
+        if(resumeController?.state?.value?.pending!=null || resumeController?.state?.value?.busy==true) return false
         val current = _state.value
         val before = current.session ?: return false
         if (!current.isInterrupted || DISMISS in inFlight) return false
@@ -1885,6 +1963,7 @@ class AidenBotSessionController(
         copy(state = before.state, interrupted = before.interrupted, blocked = before.blocked, activity = before.activity)
 
     companion object {
+        const val RESUME_REFRESH_FAILED = "The earlier Resume was confirmed, but the current chat state could not be refreshed."
         const val RESUME = "resume"
         const val DISMISS = "dismiss"
         const val STOP = "stop"

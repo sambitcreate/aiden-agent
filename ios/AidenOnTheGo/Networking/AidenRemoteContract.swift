@@ -678,6 +678,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 53 adds `chat:new-worktree`, asked for alone.
     /// Contract revision 54 adds `bot:watches`, asked for alone.
     /// Contract revision 55 adds `bot:open-work`, asked for alone.
+    /// Contract revision 56 adds `bot:routine-models`, asked for alone.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
@@ -691,6 +692,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "chat:new-worktree"),
         Self(rawValue: "bot:watches"),
         Self(rawValue: "bot:open-work"),
+        Self(rawValue: "bot:routine-models"),
     ]
 
     /// Revision 27: the device renders `memory_update` and `routine_proposal`
@@ -763,6 +765,9 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
 
     /// Open work metadata and owned evidence; also needs Bot and chat read.
     static let botOpenWork = Self(rawValue: "bot:open-work")
+
+    /// Revision 56: routine-only models, run facts and explicit unknown-cost Resume.
+    static let botRoutineModels = Self(rawValue: "bot:routine-models")
 
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode(String.self)

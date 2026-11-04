@@ -1,4 +1,5 @@
 import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
+import { botExecutionScope } from "./bot-execution.js";
 // The `aiden-bot` Pi Durable extension: everything a Bot turn needs from
 // Aiden, installed in a Bot harness's registry before anything can run.
 //
@@ -332,6 +333,8 @@ export interface BotRegistry extends Registry {
    * aborts the generation task instead.
    */
   attachHarness(harness: Harness): void;
+  /** Independent prompt/tool closures for one task phase; shares only its sandbox. */
+  fork(): BotRegistry;
 }
 
 interface ApprovalMemo {
@@ -455,6 +458,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId },
     context: Context,
   ): Promise<(string | undefined)[]> {
+    const execution = botExecutionScope(botId); if (execution) return execution.requestIds;
     const live = await api.snapshot(LiveDoc, api.conversationId, context);
     const inputs = live?.run?.inputs ?? [];
     if (inputs.length === 0) return [];
@@ -730,6 +734,11 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     },
     attachHarness(next: Harness) {
       harness = next;
+    },
+    fork() {
+      const child = createBotRegistry(botId, { ...deps, codemodeSandbox: () => sandbox ??= deps.codemodeSandbox?.() ?? new CodemodeSandbox({ memoryLimitBytes: BOT_SCRIPT_MEMORY_BYTES }) });
+      if (harness) child.attachHarness(harness);
+      return child;
     },
   });
 }

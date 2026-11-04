@@ -434,12 +434,12 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
     },
 
     /** Read-modify-write one routine's bookkeeping under the Bot's lock. */
-    mutate<T>(botId: string, id: string, change: (routine: BotEventRoutine, routines: readonly BotEventRoutine[]) => { next?: BotEventRoutine; result: T }): Promise<T | undefined> {
+    mutate<T>(botId: string, id: string, change: (routine: BotEventRoutine, routines: readonly BotEventRoutine[]) => { next?: BotEventRoutine; result: T } | Promise<{ next?: BotEventRoutine; result: T }>): Promise<T | undefined> {
       return serial(botId, async () => {
         const routines = await load(botId);
         const index = routines.findIndex((routine) => routine.id === id);
         if (index < 0) return undefined;
-        const { next, result } = change(structuredClone(routines[index]!), routines);
+        const { next, result } = await change(structuredClone(routines[index]!), routines);
         if (next) {
           routines[index] = next;
           await save(botId, routines);

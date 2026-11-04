@@ -99,6 +99,8 @@ export function installBotTestDom(): Window {
 
 /** Answers for reads every Bot surface makes, unless a test overrides them. */
 const BOT_TEST_IPC_DEFAULTS: Record<string, (...args: unknown[]) => unknown> = {
+  "bots:pendingChanges:retired": () => [],
+  "bots:routineModels:resumeStatus": () => ({ requiresUnknownCostAcknowledgement: false }),
   "bots:openWork:snapshot": (input) => ({ botId: String((input as { botId?: unknown })?.botId ?? "bot-test"), revision: "empty", items: [], undo: [] }),
   "bots:connectorWatches:list": () => ({ supported: true, templates: [], watches: [] }),
   "bots:getCanonicalPhoto": () => null,

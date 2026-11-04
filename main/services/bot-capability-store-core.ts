@@ -29,6 +29,8 @@ import {
 } from "../../renderer/shared/bot-capabilities.js";
 import {
   assertBoundBotCustomSelectionCurrent,
+  botCustomSelectionDrift,
+  BotCapabilityBindingDriftError,
   assertBoundBotProviderModelCurrent,
   boundBotProviderModelFingerprint,
   boundBotCustomSelectionFingerprint,
@@ -41,6 +43,7 @@ import {
   type BoundBotCustomSelection,
 } from "./bot-capability-bindings.js";
 import type { BotCapabilityCatalogSnapshot } from "./bot-capability-catalog-core.js";
+import { inspectBotRoutineModelGrant, type BotRoutineModelGrant } from "./bot-routine-models.js";
 
 const MAX_DATE_MILLISECONDS = 8_640_000_000_000_000;
 const MAX_INCARNATIONS_PER_NAMESPACE = 4_096;
@@ -157,6 +160,8 @@ export interface BotCapabilityState {
   notices: StoredBotNoticeAcceptance[];
   incarnations: StoredBotCapabilityIncarnations;
   legacyMigration?: StoredBotLegacyMigration;
+  /** Private routine grants/claims, authenticated by the same rollback checkpoint. */
+  routineModels?: string;
 }
 
 export type BotCapabilityRevisionKind = "policy" | "chat" | "notice" | "migration";
@@ -545,7 +550,7 @@ export function parseBotCapabilityState(value: unknown): BotCapabilityState {
     !exactKeys(
       value,
       ["version", "sequence", "policies", "chats", "notices", "incarnations"],
-      ["legacyMigration"],
+      ["legacyMigration", "routineModels"],
     ) ||
     value.version !== BOT_CAPABILITY_STORE_VERSION ||
     !safeInteger(value.sequence) ||
@@ -565,6 +570,7 @@ export function parseBotCapabilityState(value: unknown): BotCapabilityState {
   const notices = value.notices.map((entry) => parseNotice(entry, value.sequence as number));
   const incarnations = parseIncarnations(value.incarnations);
   const legacyMigration = parseLegacyMigration(value.legacyMigration, value.sequence as number);
+  if (value.routineModels !== undefined && (typeof value.routineModels !== "string" || Buffer.byteLength(value.routineModels) > 4 * 1024 * 1024 || value.sequence === 0)) throw new BotCapabilityUnavailableError("Routine model authority storage is invalid.");
   if (new Set(policies.map(({ botId }) => botId)).size !== policies.length) {
     throw new BotCapabilityUnavailableError(
       "Bot access storage contains duplicate Bot identities.",
@@ -618,6 +624,7 @@ export function parseBotCapabilityState(value: unknown): BotCapabilityState {
     notices,
     incarnations,
     ...(legacyMigration ? { legacyMigration } : {}),
+    ...(value.routineModels === undefined ? {} : { routineModels: value.routineModels as string }),
   };
 }
 
@@ -1760,26 +1767,32 @@ export class BotCapabilityStateEditor {
     chatId?: string;
     snapshot: BotCapabilityCatalogSnapshot;
     skillsEnabled?: boolean;
+    routineModelGrant?: BotRoutineModelGrant;
   }): BoundBotCustomSelection | undefined {
     const policy = this.policy(input.botId);
+    const routine = input.routineModelGrant ? inspectBotRoutineModelGrant(input.routineModelGrant) : undefined;
+    if (routine && routine.claim.botId !== input.botId) throw new BotCapabilityUnavailableError();
     const model = storedBotModelAuthority(policy);
-    if (model) {
+    if (routine) assertBoundBotProviderModelCurrent(routine.binding, input.snapshot);
+    if (model && !routine) {
       assertBoundBotProviderModelCurrent(model.binding, input.snapshot);
     }
-    if (policy.visionModel) {
+    if (policy.visionModel && !routine) {
       assertBoundBotProviderModelCurrent(policy.visionModel.binding, input.snapshot);
     }
     if (policy.accessMode === "custom") {
-      assertBoundBotCustomSelectionCurrent(policy.binding, input.snapshot, {
-        skillsEnabled: input.skillsEnabled ?? input.snapshot.catalog.skillsEnabled,
-      });
+      const choices = { skillsEnabled: input.skillsEnabled ?? input.snapshot.catalog.skillsEnabled };
+      if (routine) {
+        const drift = botCustomSelectionDrift(policy.binding, input.snapshot, choices).filter((issue) => issue.group !== "provider" && issue.group !== "model");
+        if (drift.length) throw new BotCapabilityBindingDriftError(drift);
+      } else assertBoundBotCustomSelectionCurrent(policy.binding, input.snapshot, choices);
     }
     if (input.chatId) {
       const chat = this.chat(input.chatId);
       if (chat.botId !== policy.botId) throw new BotCapabilityUnavailableError();
       if (chat.mode === "custom") {
         validateSelectionAgainstCatalog(
-          (input.skillsEnabled ?? input.snapshot.catalog.skillsEnabled) === false ? { ...chat.custom, skillIds: [] } : chat.custom,
+          { ...chat.custom, ...(routine ? { providerId: routine.binding.providerOption.id, modelId: routine.binding.modelOption.id } : {}), ...((input.skillsEnabled ?? input.snapshot.catalog.skillsEnabled) === false ? { skillIds: [] } : {}) },
           input.snapshot.catalog,
         );
       }

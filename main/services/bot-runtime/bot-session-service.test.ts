@@ -33,6 +33,7 @@ import { QUESTION_ARGS, QUESTION_TOOL_NAME } from "./test-support/question-fixtu
 import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
 
 import { issueBotRoutineInputOrigin } from "./bot-input-entry.js";
+import { BotResumeOperationsDoc } from "./bot-resume-operations.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const roots: string[] = [];
@@ -168,8 +169,8 @@ test("Resume called twice at once makes one fresh provider request", async () =>
     assert.deepEqual(second, first);
     await waitFor(async () => (await service.state("bot:killed")).kind === "idle", { what: "resumed turn to finish" });
     assert.equal(fauxModels.calls(), 1);
-    // A retried request replays its first answer.
-    assert.deepEqual(await service.resume("bot:killed", "phone-1"), first);
+    // A retried control observes fresh state without running Resume again.
+    assert.deepEqual(await service.resume("bot:killed", "phone-1"), { kind: "idle" });
     assert.equal(fauxModels.calls(), 1);
   } finally {
     await service.shutdown();
@@ -206,6 +207,22 @@ test("Resume reports it resumed only for the call that did: not for a replay, a 
   } finally {
     await refused.shutdown();
   }
+});
+
+test("paused Resume refusals do not consume the control key; accepted replay remains read-only while paused", async () => {
+  const profile = tempProfile(); await killMidStream(profile);
+  const fauxModels = createFauxModels([async (_messages, options) => { await new Promise<void>((resolve) => { if (options?.signal?.aborted) resolve(); else options?.signal?.addEventListener("abort", () => resolve(), { once: true }); }); return fauxAssistantMessage("interrupted again", { stopReason: "aborted" }); }, fauxAssistantMessage("fresh explicit Resume")]);
+  const service = await serviceFor(profile, fauxModels);
+  try {
+    await service.initialize(); await service.pause("bot:killed", "mac");
+    for (let attempt = 0; attempt < 2; attempt++) await assert.rejects(service.resume("bot:killed", "paused-first-admission"), (error: unknown) => error instanceof BotSessionError && error.reason === "paused_by_person");
+    assert.equal(fauxModels.calls(), 0);
+    const conversation = await service.conversation("bot:killed"); const receiptCount = await conversation.commit(async (tx) => (await tx.doc(BotResumeOperationsDoc, conversation.id)).receipts.length, ctx); assert.equal(receiptCount, 0);
+    await service.unpause("bot:killed"); assert.equal((await service.resume("bot:killed", "paused-first-admission")).kind, "running"); await waitFor(() => fauxModels.calls() === 1);
+    await service.pause("bot:killed", "mac"); assert.equal((await service.resume("bot:killed", "paused-first-admission")).kind, "paused"); assert.equal(fauxModels.calls(), 1);
+    await service.unpause("bot:killed"); assert.equal((await service.resume("bot:killed", "paused-first-admission")).kind, "interrupted"); assert.equal(fauxModels.calls(), 1);
+    await service.resume("bot:killed", "fresh-explicit-after-pause"); await waitFor(async () => (await service.state("bot:killed")).kind === "idle"); assert.equal(fauxModels.calls(), 2);
+  } finally { await service.shutdown(); }
 });
 
 test("Dismiss after a restart makes no provider request and keeps the partial as interrupted", async () => {

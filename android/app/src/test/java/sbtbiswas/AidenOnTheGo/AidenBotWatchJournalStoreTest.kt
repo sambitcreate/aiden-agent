@@ -44,7 +44,14 @@ class AidenBotWatchJournalStoreTest {
             oldHandle.write("saved draft and exact request")
             val work = AidenBotWatchJournalStore(secure,"bot-open-work").journal(pairing.instanceId,pairing.deviceId,pairing.createdAt,"bot-a"){ installations.activeInstallation?.createdAt == pairing.createdAt }
             work.write("Open work attempt")
+            val models=AidenBotWatchJournalStore(secure,"bot-routine-controls",1088).journal(pairing.instanceId,pairing.deviceId,pairing.createdAt,"bot-a|routine|routine-a"){true}
+            models.write("Exact routine model save")
+            val resume=AidenBotWatchJournalStore(secure,"bot-routine-controls",1088).journal(pairing.instanceId,pairing.deviceId,pairing.createdAt,"bot-a|resume"){true}
+            resume.write("Exact source acknowledgement and UUID")
             installations.removeInstallation(pairing.id)
+            assertNull(models.read());assertNull(resume.read())
+            assertTrue(runCatching{models.write("late save")}.isFailure)
+            assertTrue(runCatching{resume.write("late consent")}.isFailure)
             assertNull(AidenBotWatchJournalStore(secure).journal(pairing.instanceId, pairing.deviceId, pairing.createdAt, "bot-a") { true }.read())
             assertNull(secure.getCredential(pairing.credentialScope))
             assertNull(work.read())
@@ -64,6 +71,21 @@ class AidenBotWatchJournalStoreTest {
         AidenBotWatchJournalStore(secure,"bot-open-work").purge("host","device",Instant.EPOCH)
         assertNull(other.read());assertEquals("watch request",watches.read())
         assertTrue("another window cannot resurrect a purged scope",runCatching { other.write("late callback") }.isFailure)
+    }
+
+    @Test fun temporaryPairingInactivityKeepsGenerationButConfirmedBotPurgeInvalidatesIt() {
+        val secure=InMemoryAidenSecureStore();val store=AidenBotWatchJournalStore(secure,"bot-routine-controls",1088)
+        var active=true
+        val journal=store.journal("host","device",Instant.EPOCH,"bot-a|resume"){active}
+        journal.write("Exact pending request");var invalidations=0;journal.onInvalidated{invalidations++}
+        active=false
+        assertTrue(journal.isCurrent);assertNull(journal.read())
+        assertTrue(runCatching{journal.write("Wrong active pairing")}.isFailure)
+        active=true
+        assertEquals("Exact pending request",journal.read());assertEquals(0,invalidations)
+        AidenBotWatchJournalStore(secure,"bot-routine-controls",1088).purgeBot("host","device",Instant.EPOCH,"bot-a")
+        assertFalse(journal.isCurrent);assertNull(journal.read());assertEquals(1,invalidations)
+        assertTrue(runCatching{journal.write("Late callback")}.isFailure)
     }
 
     @Test fun aggregateCapacityRefusesInsteadOfEvictingExistingPendingIdentity() {

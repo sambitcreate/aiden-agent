@@ -1,6 +1,6 @@
 import { BOT_INTRO_REQUEST_PREFIX } from "../bot-runtime/bot-intro.js";
 import type { BotToolCall } from "../bot-runtime/tool-adapter.js";
-import { BOT_ROUTINE_INPUT_KIND, parseBotRoutineInputOrigin, type BotRoutineInputOrigin } from "../bot-runtime/bot-input-entry.js";
+import { BOT_PERSON_INPUT_KIND, BOT_ROUTINE_INPUT_KIND, parseBotRoutineInputOrigin, type BotRoutineInputOrigin } from "../bot-runtime/bot-input-entry.js";
 import type { BotOpenWorkOrigin } from "./store.js";
 export type BotOpenWorkRoutineOrigin = (botId: string, requestId: string, submissionId: string, origin?: BotRoutineInputOrigin) => Promise<{ routineId: string; runId: string } | undefined>;
 /** Resolve only current placed host inputs. Transcript notices and arbitrary request prefixes confer no authority. */
@@ -29,7 +29,7 @@ export async function resolveBotOpenWorkOrigin(botId: string, call: BotToolCall,
     const accepted = await routine(botId, requestId, String(record.id), stored);
     if (!accepted) throw new Error("This input does not belong to an accepted person-created routine.");
     origin = { requestId, source: { kind: "routine", submissionId: String(record.id), entryId: String(entry.id), ...accepted } };
-  } else if (entry.kind === "pi.user") {
+  } else if (entry.kind === "pi.user" || entry.kind === BOT_PERSON_INPUT_KIND) {
     // Reserved unattended prefixes cannot gain person authority by a forged plain entry.
     if (requestId.startsWith(BOT_INTRO_REQUEST_PREFIX) || /^(?:routine:|wake:|peer:)/u.test(requestId)) throw new Error("This input's host provenance is not a person request.");
     origin = { requestId, source: { kind: "person", submissionId: String(record.id), entryId: String(entry.id) } };

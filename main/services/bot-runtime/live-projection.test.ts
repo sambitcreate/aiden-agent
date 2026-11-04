@@ -1569,6 +1569,7 @@ test("Resume is announced only for a Resume the session carried out, and before 
     heard.length = 0;
     // Nothing to pick up: an idle Bot's Resume announces nothing.
     assert.equal((await live.service.resume("bot:a", "desk-1")).kind, "idle");
+    assert.equal((await live.service.resume("bot:a", "desk-1")).kind, "idle");
     assert.equal(heard.length, 0, heard.join(", "));
 
     await live.service.resume("bot:killed", "desk-2");
@@ -1577,6 +1578,9 @@ test("Resume is announced only for a Resume the session carried out, and before 
     assert.deepEqual(heard.slice(0, 2), ["resuming bot:killed", "running bot:killed"]);
     await waitFor(async () => (await live.service.state("bot:killed")).kind === "idle", { what: "the resumed turn to finish" });
     assert.equal(heard.filter((line) => line.startsWith("resuming")).length, 1, heard.join(", "));
+    heard.length = 0;
+    assert.equal((await live.service.resume("bot:killed", "desk-2")).kind, "idle");
+    assert.equal(heard.length, 0, "an observed Resume receipt publishes no new transition");
   } finally {
     unwire();
     await live.close();

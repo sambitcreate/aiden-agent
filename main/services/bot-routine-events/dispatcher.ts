@@ -25,6 +25,8 @@ export interface BotRoutineEventDispatcherDependencies {
    * stays for the next start to replay.
    */
   run(routine: BotEventRoutine, event: { eventId: string; source: BotRoutineTriggerKind; payload: string }, signal?: AbortSignal): Promise<{ settled: boolean } | void>;
+  /** Write-ahead protected choice, before this event acquires a running receipt. */
+  claimRoutineExecution?(routine: BotEventRoutine, event: { eventId: string; source: BotRoutineTriggerKind; payload: string }): Promise<unknown>;
   /** Re-admit watch source access at actual startup, including held/replayed work. */
   authorizeRun?(routine: BotEventRoutine): Promise<{ signal: AbortSignal; release(): void } | { error: string }>;
   isPaused(botId: string): Promise<boolean>;
@@ -133,7 +135,7 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
     const now = dependencies.now();
     const today = dayKey(now, dependencies.timeZone());
     let retryAt: number | undefined;
-    const claimed = await dependencies.store.mutate(botId, routineId, (routine) => {
+    const claimed = await dependencies.store.mutate(botId, routineId, async (routine) => {
       if (!routine.held || !routine.enabled) return { result: undefined };
       // Still inside the 5-minute gap (a newer event ran since this was held),
       // or every receipt slot is busy: wait for whichever ends later.
@@ -145,6 +147,7 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
       const count = routine.day?.key === today ? routine.day.count : 0;
       if (count >= BOT_ROUTINE_EVENT_LIMITS.perDay) return { next: { ...routine, held: undefined }, result: undefined };
       const event = routine.held;
+      await dependencies.claimRoutineExecution?.(routine, { ...event, source: routine.trigger.kind });
       return {
         next: { ...routine, held: undefined, running: withRunning(routine, event, now), lastRunAt: now, day: { key: today, count: count + 1 } },
         result: { routine, event },
@@ -165,7 +168,7 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
       | { kind: "disabled" | "duplicate" | "daily_limit" }
       | { kind: "held"; at: number }
       | { kind: "queued"; routine: BotEventRoutine };
-    const decision = await dependencies.store.mutate<Decision>(botId, routineId, (routine) => {
+    const decision = await dependencies.store.mutate<Decision>(botId, routineId, async (routine) => {
       if (!routine.enabled || event.isCurrent?.() === false || (event.watchRevision !== undefined && !live(armedFor))) return { result: { kind: "disabled" as const } };
       if (event.watchRevision !== undefined && (routine.trigger.kind !== "watch" ||
         routine.updatedAt !== event.watchRevision || routine.watch?.pending?.eventId !== event.eventId)) {
@@ -191,6 +194,8 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
       }
       // The receipt is written with the claim, before the caller hears
       // "queued": a quit before the run is recorded replays it.
+      await dependencies.claimRoutineExecution?.(routine, { ...event, payload, source: routine.trigger.kind });
+      if (event.isCurrent?.() === false || (event.watchRevision !== undefined && !live(armedFor))) return { result: { kind: "disabled" as const } };
       return {
         next: { ...routine, seenEventIds, running: withRunning(routine, { ...event, payload }, now), lastRunAt: now, day: { key: today, count: count + 1 } },
         result: { kind: "queued" as const, routine },

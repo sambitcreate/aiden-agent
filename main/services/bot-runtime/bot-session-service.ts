@@ -1,4 +1,10 @@
-import { BOT_ROUTINE_INPUT_KIND, isIssuedBotRoutineInputOrigin, type BotRoutineInputOrigin } from "./bot-input-entry.js";
+import { BOT_PERSON_INPUT_KIND, BOT_ROUTINE_INPUT_KIND, isIssuedBotRoutineInputOrigin, type BotRoutineInputOrigin } from "./bot-input-entry.js";
+import { BOT_EXECUTION_INPUT_KEY, BotExecutionDoc, botCostApprovalFacts, createBotExecutionRegistry, reconcileBotExecutionResponses, stampBotExecutionTask, withBotExecutionAdmission, type BotExecutionPort } from "./bot-execution.js";
+import type { BotExecutionClaim } from "../bot-routine-models.js";
+import { botConnectorExecutionRestriction, botConnectorInventoryServer } from "../bot-connector-inventory-scope.js";
+import { randomUUID } from "node:crypto";
+import { botCostReceiptScope, consumeBotResumeOperation } from "./bot-resume-operations.js";
+import type { BotExecutionResumeStatus, BotResumeAcknowledgement } from "../../../renderer/shared/bot-execution-resume.js";
 // The Bot turn path: every ingress (desktop, Remote, Telegram, routines)
 // reaches a Bot's one durable conversation through this service.
 //
@@ -31,6 +37,8 @@ import {
   type Conversation,
   type Cursor,
   GenerationTask,
+  CompactionTask,
+  LiveDoc,
   type Harness,
   HarnessInspection,
   HarnessSettings,
@@ -130,6 +138,9 @@ export interface BotSendInput {
   ifNotInterrupted?: boolean;
   /** Internal host-issued accepted routine provenance; never accepted from IPC or Remote. */
   routineOrigin?: BotRoutineInputOrigin;
+  /** Internal immutable occurrence facts from the admitted scheduler fire. */
+  routineTiming?: { scheduledFor?: number; timezone?: string };
+  retryOf?: string;
   /** Label shown on the turn, such as the routine name. */
   label?: string;
   /** An Aiden-written prompt (the self-intro): its reply shows, the prompt does not. */
@@ -137,6 +148,7 @@ export interface BotSendInput {
 }
 
 export type BotSessionErrorReason =
+  | "spending_unconfirmed"
   | "needs_model"
   | "model_error"
   | "unavailable"
@@ -170,6 +182,7 @@ function authorityOf(error: unknown): string | undefined {
 
 function defaultMessage(reason: BotSessionErrorReason): string {
   switch (reason) {
+    case "spending_unconfirmed": return "The prior provider request may have incurred charges, but its cost is unknown. Confirm that you accept this uncertainty before resuming; a new attempt may incur charges again.";
     case "needs_model":
       return "This Bot needs an AI model.";
     case "model_error":
@@ -197,7 +210,8 @@ export interface BotSessionService {
   canRetryRoutineRequest(botId: string, requestId: string): Promise<boolean>;
   submissionForRequest(botId: string, requestId: string): Promise<string | undefined>;
   send(botId: string, input: BotSendInput): Promise<{ submissionId: string; deduped: boolean }>;
-  resume(botId: string, requestId: string): Promise<BotSessionState>;
+  resume(botId: string, requestId: string, options?: BotResumeAcknowledgement): Promise<BotSessionState>;
+  executionResumeStatus(botId: string): Promise<BotExecutionResumeStatus>;
   dismiss(botId: string, requestId: string): Promise<BotSessionState>;
   /**
    * Stop the reply that is running now (the composer's Stop). What was already
@@ -235,6 +249,8 @@ export interface BotSessionService {
 }
 
 export interface BotSessionRuntime extends BotSessionService {
+  /** Routine admission inspects lifecycle without resolving an unrelated default model. */
+  routineState(botId: string): Promise<BotSessionState>;
   /** Startup: remove orphaned Bot sessions and record interrupted Bots. Never resumes. */
   initialize(): Promise<{ removedOrphans: string[]; interrupted: string[] }>;
   /** The Bot's conversation, opened lazily (for live projection). */
@@ -268,6 +284,9 @@ export interface BotSessionRuntime extends BotSessionService {
 }
 
 export interface BotSessionServiceDeps {
+  execution?: BotExecutionPort;
+  /** Persist a host Needs-you explanation before a blocked invocation is suspended. */
+  executionBlocked?(botId: string, claim: BotExecutionClaim, message: string, kind: "spending_unknown" | "unavailable"): Promise<void>;
   leaseHelperPath?: string;
   profileDir: string;
   /**
@@ -366,6 +385,8 @@ async function readPendingDeletes(file: string): Promise<string[]> {
   }
   return parsed.botIds as string[];
 }
+/** Main-only deletion fence for independently stored routine grants. */
+export async function botSessionDeletionPending(profileDir: string, botId: string): Promise<boolean> { return (await readPendingDeletes(path.join(profileDir, "bots", PENDING_DELETES_FILE))).includes(botId); }
 
 /** A keyed promise chain: one operation per Bot at a time. */
 function createKeyedQueue() {
@@ -393,7 +414,9 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       const registry = createBotRegistry(botId, deps.extension);
       registries.set(botId, registry);
       deps.onSessionOpen?.(botId);
-      return registry;
+      if (!deps.execution) return registry;
+      const execution = createBotExecutionRegistry(botId, registry, deps.execution, { onBlocked: executionBlocked, prepareRegistry: async () => { const owned = registry.fork(); await owned.refresh(); return owned.snapshot(); } });
+      return { ...execution, attachHarness(harness: Harness) { registry.attachHarness(harness); execution.attachHarness(harness); } };
     },
     ...(deps.settings === undefined ? {} : { settings: deps.settings }),
     ...(deps.idleCloseMs === undefined ? {} : { idleCloseMs: deps.idleCloseMs }),
@@ -404,11 +427,23 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   const serialize = createKeyedQueue();
   /** Submissions sent with `hidden`, whatever their request id. */
   const hiddenSubmissions = new Set<string>();
-  /** Outcomes of resume/dismiss requests, so a retried request replays its answer. */
+  /** Dismiss outcomes; Resume controls have a durable per-conversation receipt. */
   const answered = new Map<string, BotSessionState>();
   /** Interrupted turns whose Resume was refused because the Bot's access changed. */
   const blocked = new Map<string, "access_changed" | "bot_missing">();
   const deleted = new Set<string>();
+  const executionSuspends = new Set<string>();
+  async function executionBlocked(claim: BotExecutionClaim, message: string, kind: "spending_unknown" | "unavailable"): Promise<void> {
+    const botId = claim.botId;
+    await deps.executionBlocked?.(botId, claim, message, kind);
+    if (executionSuspends.has(botId)) return;
+    executionSuspends.add(botId);
+    // Do not join close from the invocation close must join. Let this phase
+    // wait on its signal while the host independently suspends the Bot.
+    queueMicrotask(() => {
+      void requireHost().suspend(botId).then(async () => { if (!deleted.has(botId) && !shuttingDown) { await requireHost().open(botId); publish(botId, await currentState(botId, false)); } }).catch((error: unknown) => deps.onReport?.(botId, error)).finally(() => executionSuspends.delete(botId));
+    });
+  }
   const pauses = deps.pauses ?? createBotPauseStore({ root: () => path.join(deps.profileDir, "bot-service") });
   /**
    * Bots a pause could not close within its bound: the close keeps running in
@@ -469,6 +504,16 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     return { conversation: opened.conversation, registry };
   }
 
+  async function executionSourceClaim(botId: string, opened: { harness: Harness; conversation: Conversation }, submissionId: string): Promise<BotExecutionClaim> {
+    const id = Number(submissionId) as SubmissionId;
+    if (!deps.execution || !Number.isSafeInteger(id) || id <= 0) throw new BotSessionError("spending_unconfirmed", "The interrupted work could not be verified.");
+    const input = await (await opened.harness.submission(id, ctx))?.status(ctx);
+    if (!input || input.type !== "input" || input.conversationId !== opened.conversation.id || input.status !== "placed" || !input.requestId || input.entry === undefined) throw new BotSessionError("spending_unconfirmed", "The interrupted work is not a placed accepted input.");
+    const entry = await opened.conversation.commit((tx) => tx.entry(input.entry!), ctx), data = entry?.data as { executionClaimId?: unknown } | undefined;
+    if (typeof data?.executionClaimId !== "string") throw new BotSessionError("spending_unconfirmed", "The interrupted work has no saved execution authority.");
+    return deps.execution.getClaim(botId, data.executionClaimId, input.requestId);
+  }
+
   async function writeNotice(conversation: Conversation, notice: BotNotice): Promise<void> {
     await conversation.submit({ type: "write", entry: { kind: BOT_NOTICE_ENTRY_KIND, data: notice } }, ctx);
   }
@@ -500,7 +545,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   }
 
   /** Current state without taking the per-Bot queue. */
-  async function currentState(botId: string): Promise<BotSessionState> {
+  async function currentState(botId: string, resolveDefault = true): Promise<BotSessionState> {
     if (host === null) return { kind: "unavailable", reason: "held_by_live_process" };
     if (deleted.has(botId)) return { kind: "idle" };
     const pause = await pauseOf(botId);
@@ -520,6 +565,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         return { kind: "running", submissionId };
       }
     }
+    if (!resolveDefault) return { kind: "idle" };
     const model = await modelFor(botId);
     if (model.kind === "none") return { kind: "needs_model" };
     if (model.kind === "error") return { kind: "model_error", message: model.message };
@@ -700,6 +746,8 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       return currentState(botId);
     },
 
+    routineState(botId) { return currentState(botId, false); },
+
     canRetryRoutineRequest(botId, requestId) {
       return serialize(botId, async () => {
         const { conversation } = await openBot(botId);
@@ -749,6 +797,9 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       if (routineOrigin && (!isIssuedBotRoutineInputOrigin(routineOrigin) || routineOrigin.botId !== botId || routineOrigin.runId !== input.requestId || input.hidden === true)) {
         return Promise.reject(new BotSessionError("access_changed", "The routine input origin could not be verified."));
       }
+      if (input.routineTiming && (!routineOrigin || input.routineTiming.scheduledFor !== undefined && (!Number.isSafeInteger(input.routineTiming.scheduledFor) || input.routineTiming.scheduledFor < 0))) return Promise.reject(new BotSessionError("access_changed", "The routine occurrence could not be verified."));
+      if (input.retryOf && routineOrigin?.kind !== "retry") return Promise.reject(new BotSessionError("access_changed", "The retry origin could not be verified."));
+      if (deps.execution && input.whenBusy === "steer") return Promise.reject(new BotSessionError("model_error", "Send this message as a follow-up. Steering cannot mix independently bound model choices."));
       return serialize(botId, async () => {
         const { conversation, registry } = await openBot(botId);
         const existing = await lookupRequest(conversation, input.requestId);
@@ -758,9 +809,11 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         const spendingRefusal = await deps.spendingRefusal?.(botId);
         if (spendingRefusal !== undefined) throw new BotSessionError("spending_limit", spendingRefusal);
 
-        const before = await currentState(botId);
+        const before = await currentState(botId, !deps.execution);
         if (before.kind === "interrupted" && input.ifNotInterrupted) throw new BotSessionError("bot_paused");
-        await prepareToRun(botId, conversation, registry);
+        const execution = await deps.execution?.claim(botId, { requestId: input.requestId, ...(routineOrigin ? { routineOrigin } : {}), ...(input.routineTiming ?? {}), ...(input.retryOf ? { retryOf: input.retryOf } : {}), ...(botConnectorInventoryServer() ? { connectorServerId: botConnectorInventoryServer() } : {}), ...(botConnectorExecutionRestriction() ? { connectorRestriction: botConnectorExecutionRestriction() } : {}) });
+        if (execution && deps.execution) await withBotExecutionAdmission(botId, execution, deps.execution, () => registry.refresh(), { allowFallback: true });
+        else await prepareToRun(botId, conversation, registry);
         if (before.kind === "interrupted") {
           await dismissPaused(conversation, before.submissionId);
           blocked.delete(botId);
@@ -775,12 +828,13 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
           {
             type: "input",
             content: userContent(input),
-            ...((routineOrigin || input.label !== undefined) && { entry: { kind: BOT_ROUTINE_INPUT_KIND, ...(routineOrigin ? { data: { routineOrigin: { ...routineOrigin } } } : {}) } }),
+            ...((execution || routineOrigin || input.label !== undefined) && { entry: { kind: routineOrigin || input.label !== undefined ? BOT_ROUTINE_INPUT_KIND : BOT_PERSON_INPUT_KIND, data: { ...(routineOrigin ? { routineOrigin: { ...routineOrigin } } : {}), ...(execution ? { [BOT_EXECUTION_INPUT_KEY]: execution.id } : {}) } } }),
             requestId: input.requestId,
             whenBusy: input.whenBusy ?? "followUp",
           },
           ctx,
         );
+        if (execution) await deps.execution?.recordSubmission?.(botId, execution.id, String(submission.id));
         if (input.hidden === true) hiddenSubmissions.add(String(submission.id));
         requireHost().touch(botId);
         publish(botId, await currentState(botId));
@@ -788,28 +842,112 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       });
     },
 
-    resume(botId, requestId) {
-      const key = `resume:${botId}:${requestId}`;
-      return serialize(botId, async () => {
-        const replay = answered.get(key);
-        if (replay !== undefined) return replay;
-        await assertNotPaused(botId);
-        const before = await currentState(botId);
-        if (before.kind !== "interrupted") return remember(key, before);
+    async executionResumeStatus(botId) {
+      if (!deps.execution) return { requiresUnknownCostAcknowledgement: false };
+      const opened = await requireHost().open(botId), tasks = (await opened.harness.inspect(ctx)).tasks;
+      const before = await currentState(botId, false); if (before.kind !== "interrupted") return { requiresUnknownCostAcknowledgement: false };
+      if (tasks.length > 256) throw new BotSessionError("access_changed");
+      const scopeId = await botCostReceiptScope(opened.conversation);
+      for (const { record } of tasks) await reconcileBotExecutionResponses(botId, String(record.id), scopeId, record.memos, deps.execution);
+      const source = await executionSourceClaim(botId, opened, before.submissionId);
+      const receipt = await deps.execution.unknownCostReceipt?.(botId, source, before.submissionId, scopeId);
+      if (await deps.execution.hasUnknown?.(botId, source) && !receipt) throw new BotSessionError("spending_unconfirmed", "The unknown provider cost changed. Review it again before resuming.");
+      const after = await currentState(botId, false); if (after.kind !== "interrupted" || after.submissionId !== before.submissionId) throw new BotSessionError("spending_unconfirmed", "The interrupted request changed. Review it again before resuming.");
+      if (receipt) {
+        const fresh = await deps.execution.unknownCostReceipt?.(botId, source, before.submissionId, scopeId);
+        if (!/^cost_[a-f0-9]{64}$/u.test(receipt.costReceiptId) || fresh?.costReceiptId !== receipt.costReceiptId || fresh.dispatchId !== receipt.dispatchId) throw new BotSessionError("spending_unconfirmed", "The unknown provider cost changed. Review it again before resuming.");
+        return { requiresUnknownCostAcknowledgement: true, interruptedSubmissionId: before.submissionId, costReceiptId: receipt.costReceiptId };
+      }
+      return { requiresUnknownCostAcknowledgement: false, interruptedSubmissionId: before.submissionId };
+    },
 
+    resume(botId, requestId, options) {
+      return serialize(botId, async () => {
+        const { conversation: controlConversation } = await openBot(botId);
+        const current = await currentState(botId, false);
+        let decision: "new" | "replayed";
+        try { decision = await consumeBotResumeOperation(controlConversation, requestId, options, current.kind === "interrupted" ? current.submissionId : current.kind === "paused" ? current.interrupted : undefined, (deps.now ?? Date.now)(), () => assertNotPaused(botId)); }
+        catch (error) { if (error instanceof BotSessionError) throw error; throw new BotSessionError("model_error", error instanceof Error ? error.message : "This Resume decision could not be confirmed."); }
+        if (decision === "replayed") return currentState(botId, false);
+        const before = await currentState(botId, false);
+        if (current.kind !== "interrupted" || before.kind !== "interrupted" || before.submissionId !== current.submissionId) return before;
+        if (options?.acknowledgeUnknownCost === true && (!options.expectedSubmissionId || !/^[1-9][0-9]{0,31}$/u.test(options.expectedSubmissionId) || options.expectedSubmissionId !== before.submissionId || !options.expectedCostReceiptId || !/^cost_[a-f0-9]{64}$/u.test(options.expectedCostReceiptId))) throw new BotSessionError("spending_unconfirmed", "The interrupted request or cost receipt changed. Review it before resuming.");
+
+        const opened = await requireHost().open(botId);
+        if (deps.execution) {
+          const { conversation, registry } = await openBot(botId);
+          const tasks = (await opened.harness.inspect(ctx)).tasks;
+          const scopeId = await botCostReceiptScope(opened.conversation);
+          for (const { record } of tasks) await reconcileBotExecutionResponses(botId, String(record.id), scopeId, record.memos, deps.execution);
+          if (tasks.length > 256) throw new BotSessionError("access_changed", "Too much unfinished work is waiting for review.");
+          const bindings = await Promise.all(tasks.map(async ({ record }) => ({ id: record.id, kind: record.kind, binding: await opened.harness.snapshot(BotExecutionDoc, record.id, ctx) })));
+          const live = await opened.harness.snapshot(LiveDoc, conversation.id, ctx);
+          const source = await executionSourceClaim(botId, opened, before.submissionId);
+          const verifiedConsent = async (item: typeof bindings[number], consent: NonNullable<typeof item.binding>["costConsent"]) => Boolean(consent && item.binding?.claimId && consent.version === 1 && consent.submissionId === before.submissionId && consent.sourceClaimId === source.id && consent.sourceRequestId === source.requestId && consent.scopeId === scopeId && consent.fromGeneration === (item.binding.dispatchGeneration ?? 0) && consent.toGeneration === consent.fromGeneration + 1 && /^cost_[a-f0-9]{64}$/u.test(consent.costReceiptId) && consent.approvalId && await deps.execution!.verifyCostApproval?.(consent.approvalId, botCostApprovalFacts(botId, String(item.id), item.binding.claimId, consent)));
+          if (options?.acknowledgeUnknownCost === true) {
+            const receipt = await deps.execution.unknownCostReceipt?.(botId, source, before.submissionId, scopeId);
+            let prior = false; for (const item of bindings) { const candidate = item.binding?.costConsent; if (candidate && candidate.costReceiptId === options.expectedCostReceiptId && await verifiedConsent(item, candidate)) prior = true; }
+            if (receipt?.costReceiptId !== options.expectedCostReceiptId && !prior) throw new BotSessionError("spending_unconfirmed", "The unknown provider cost changed. Review the current receipt before resuming.");
+          }
+          const waitingForCostOwner: TaskId[] = [];
+          for (const item of bindings) {
+            let binding = item.binding;
+            if (!binding?.claimId && item.kind === GenerationTask.definition.name && live?.run?.taskId === item.id && live.run.inputs.length === 1) {
+              const input = await (await opened.harness.submission(live.run.inputs[0]!, ctx))?.status(ctx);
+              const entry = input?.entry === undefined ? undefined : await conversation.commit((tx) => tx.entry(input.entry!), ctx);
+              const data = entry?.data as { executionClaimId?: unknown } | undefined;
+              if (typeof data?.executionClaimId === "string" && input?.requestId) {
+                binding = { claimId: data.executionClaimId, requestId: input.requestId, sourceInputs: [...live.run.inputs] };
+                await conversation.commit(async (tx) => { const target = await tx.doc(BotExecutionDoc, item.id); Object.assign(target, binding); }, ctx);
+              }
+            }
+            if (!binding?.claimId || !binding.requestId) throw new BotSessionError("access_changed", "This unfinished task has no saved model choice. Dismiss it and send the request again.");
+            const claim = await deps.execution.getClaim(botId, binding.claimId, binding.requestId);
+            await withBotExecutionAdmission(botId, claim, deps.execution, () => registry.refresh());
+            const unknown = deps.execution.hasUnknown ? await deps.execution.hasUnknown(botId, claim) : binding.blocked?.kind === "spending_unknown";
+            let consent = binding.costConsent;
+            if (consent && !await verifiedConsent({ ...item, binding }, consent)) { if (options?.acknowledgeUnknownCost !== true) throw new BotSessionError("spending_unconfirmed", "The saved cost decision has no protected owner approval. Review the current receipt before resuming."); consent = undefined; }
+            if (unknown && !consent) {
+              const receipt = await deps.execution.unknownCostReceipt?.(botId, source, before.submissionId, scopeId), dispatchId = receipt?.dispatchId;
+              if (!dispatchId || !receipt || !/^cost_[a-f0-9]{64}$/u.test(receipt.costReceiptId)) throw new BotSessionError("spending_unconfirmed", "The earlier provider request could not be identified. Review the work before resuming.");
+              const owner = bindings.find((candidate) => candidate.binding?.dispatchIds?.includes(dispatchId));
+              if (owner && owner.id !== item.id) { if (options?.acknowledgeUnknownCost !== true && (owner.binding?.costConsent?.dispatchId !== dispatchId || !await verifiedConsent(owner, owner.binding.costConsent))) throw new BotSessionError("spending_unconfirmed"); waitingForCostOwner.push(item.id); continue; }
+              if (options?.acknowledgeUnknownCost !== true) throw new BotSessionError("spending_unconfirmed");
+              if (options.expectedCostReceiptId !== receipt.costReceiptId) throw new BotSessionError("spending_unconfirmed", "The unknown provider cost changed. Review the current receipt before resuming.");
+              const proposed = { version: 1 as const, requestId, submissionId: before.submissionId, dispatchId, costReceiptId: receipt.costReceiptId, sourceClaimId: source.id, sourceRequestId: source.requestId, scopeId, fromGeneration: binding.dispatchGeneration ?? 0, toGeneration: (binding.dispatchGeneration ?? 0) + 1 };
+              const approvalId = await deps.execution.approveCost?.(botCostApprovalFacts(botId, String(item.id), binding.claimId, proposed));
+              if (!approvalId) throw new BotSessionError("spending_unconfirmed", "The owner cost approval could not be protected. Retry with the current receipt.");
+              consent = { ...proposed, approvalId };
+              const accepted = consent;
+              await conversation.commit(async (tx) => { const current = await tx.doc(BotExecutionDoc, item.id); if (current.claimId !== binding!.claimId || current.requestId !== binding!.requestId || (current.dispatchGeneration ?? 0) !== accepted.fromGeneration || JSON.stringify(current.costConsent) !== JSON.stringify(binding!.costConsent)) throw new BotSessionError("spending_unconfirmed"); current.costConsent = accepted; }, ctx);
+            }
+            if (consent) {
+              // A protected owner approval anchors this exact source-bound
+              // intent. Recover only its original ledger acknowledgement;
+              // never select another pending receipt.
+              if (!await verifiedConsent({ ...item, binding }, consent)) throw new BotSessionError("spending_unconfirmed", "The protected owner cost approval is unavailable.");
+              const outcome = await deps.execution.acknowledgeUnknown?.(botId, claim, consent.dispatchId);
+              if (!outcome) throw new BotSessionError("spending_unconfirmed", "The saved cost decision could not be reconciled. Retry this action to check its outcome.");
+              const accepted = consent;
+              await conversation.commit(async (tx) => { const current = await tx.doc(BotExecutionDoc, item.id); if (current.claimId !== binding!.claimId || current.requestId !== binding!.requestId || JSON.stringify(current.costConsent) !== JSON.stringify(accepted) || (current.dispatchGeneration ?? 0) !== accepted.fromGeneration) throw new BotSessionError("spending_unconfirmed"); current.dispatchGeneration = outcome === "recorded" ? accepted.fromGeneration : accepted.toGeneration; current.costDecision = accepted; delete current.costConsent; delete current.blocked; }, ctx);
+            } else if (binding.blocked) await conversation.commit(async (tx) => { delete (await tx.doc(BotExecutionDoc, item.id)).blocked; }, ctx);
+          }
+          for (const taskId of waitingForCostOwner) await conversation.commit(async (tx) => { delete (await tx.doc(BotExecutionDoc, taskId)).blocked; }, ctx);
+          blocked.delete(botId); opened.harness.resume(); deps.onResumed?.(botId); requireHost().touch(botId);
+          return publish(botId, await currentState(botId, false));
+        }
         const readmission: BotReadmission = await deps.extension.readmit(botId);
         if (!readmission.ok) {
           blocked.set(botId, readmission.reason);
-          return remember(key, publish(botId, await currentState(botId)));
+          return publish(botId, await currentState(botId));
         }
         blocked.delete(botId);
         const { conversation, registry } = await openBot(botId);
-        await prepareToRun(botId, conversation, registry);
-        const opened = await requireHost().open(botId);
+        if (!deps.execution) await prepareToRun(botId, conversation, registry);
         opened.harness.resume();
         deps.onResumed?.(botId);
         requireHost().touch(botId);
-        return remember(key, publish(botId, await currentState(botId)));
+        return publish(botId, await currentState(botId));
       });
     },
 
@@ -823,7 +961,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         if (before.kind !== "interrupted") return remember(key, before);
         const { conversation, registry } = await openBot(botId);
         // Pending tool calls settle against the Bot's tools while aborting.
-        await registry.refresh().catch(() => undefined);
+        if (!deps.execution) await registry.refresh().catch(() => undefined);
         await dismissPaused(conversation, before.submissionId);
         blocked.delete(botId);
         return remember(key, publish(botId, await currentState(botId)));
@@ -931,8 +1069,19 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         // Compaction starts the scheduler, which would run an interrupted turn.
         await assertNotPaused(botId);
         const { conversation, registry } = await openBot(botId);
-        await prepareToRun(botId, conversation, registry);
-        await conversation.compact(deps.compactionInstructions, ctx);
+        if (deps.execution) {
+          const execution = await deps.execution.claim(botId, { requestId: `compaction:${randomUUID()}` });
+          await withBotExecutionAdmission(botId, execution, deps.execution, () => registry.refresh());
+          await conversation.commit(async (tx) => {
+            const taskId = await tx.createTask(CompactionTask, { reason: "manual" as const, ...(deps.compactionInstructions ? { instructions: deps.compactionInstructions } : {}) }, { ownership: { kind: "conversation" }, conversationId: conversation.id });
+            await stampBotExecutionTask(tx, taskId, execution);
+            const live = await tx.doc(LiveDoc, conversation.id); live.compactions = [...live.compactions ?? [], { taskId, reason: "manual" as const, blocking: false, attempt: 1 }].sort((a, b) => a.taskId - b.taskId);
+          }, ctx);
+          (await requireHost().open(botId)).harness.resume();
+        } else {
+          await prepareToRun(botId, conversation, registry);
+          await conversation.compact(deps.compactionInstructions, ctx);
+        }
         requireHost().touch(botId);
       });
     },

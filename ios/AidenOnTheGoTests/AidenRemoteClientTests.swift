@@ -6741,6 +6741,105 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertTrue(grants.contains(.botOpenWork))
     }
 
+    func testRoutineModelRoutesCarryFullCASBodyAndTypedHTTP200Conflict() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-routine-models", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let request = try AidenRemoteJSONDecoder.decode(AidenRoutineModelSave.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(fixture["save"])))
+        var paths: [String] = []; var saves = 0
+        AidenRemoteMockURLProtocol.handler = { wire in
+            paths.append(wire.url!.path)
+            XCTAssertNil(wire.url?.query)
+            let key: String
+            if wire.httpMethod == "POST" {
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.bodyData(wire)) as? [String: Any])
+                XCTAssertEqual(Set(object.keys), ["botId", "routineId", "mutationId", "expectedRevision", "catalogRevision", "selection"])
+                XCTAssertEqual(object["botId"] as? String, "bot_model")
+                XCTAssertEqual(object["routineId"] as? String, "routine_model")
+                XCTAssertEqual(object["catalogRevision"] as? String, "catalog_1")
+                XCTAssertEqual(object["expectedRevision"] as? String, "model_settings_1")
+                saves += 1; key = saves == 1 ? "result" : "conflict"
+            } else if wire.url!.path.hasSuffix("/catalog") { key = "catalog" }
+            else if wire.url!.path.hasSuffix("/runs") { key = "runs" }
+            else { key = "settings" }
+            return (HTTPURLResponse(url: wire.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, try JSONSerialization.data(withJSONObject: XCTUnwrap(fixture[key])))
+        }
+        let client = makeClient()
+        let settings = try await client.routineModelSettings(botId: "bot_model", routineId: "routine_model")
+        XCTAssertEqual(settings.selection.primary?.thinkingLevel, .high)
+        let catalog = try await client.routineModelCatalog(botId: "bot_model", routineId: "routine_model")
+        XCTAssertEqual(catalog.providers.count, 2)
+        let runs = try await client.routineModelRuns(botId: "bot_model", routineId: "routine_model")
+        XCTAssertEqual(runs.first?.submissionId, "9007199254740993")
+        guard case .accepted = try await client.saveRoutineModel(request) else { return XCTFail("Accepted bare result") }
+        guard case .rejected(.conflict, _) = try await client.saveRoutineModel(request) else { return XCTFail("Business conflict remains HTTP200") }
+        XCTAssertEqual(paths, ["/api/aiden/v1/bots/bot_model/routine-models/routine_model", "/api/aiden/v1/bots/bot_model/routine-models/routine_model/catalog", "/api/aiden/v1/bots/bot_model/routine-models/routine_model/runs", "/api/aiden/v1/bots/bot_model/routine-models/routine_model", "/api/aiden/v1/bots/bot_model/routine-models/routine_model"])
+    }
+
+    func testRoutineModelRejectsCrossRoutineReceiptAndAggregateOverflow() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-routine-models", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var object = try XCTUnwrap(fixture["settings"] as? [String: Any]); object["routineId"] = "other"
+        var body = try JSONSerialization.data(withJSONObject: object)
+        AidenRemoteMockURLProtocol.handler = { wire in (HTTPURLResponse(url: wire.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, body) }
+        do { _ = try await makeClient().routineModelSettings(botId: "bot_model", routineId: "routine_model"); XCTFail("Wrong routine") } catch {}
+        object = try XCTUnwrap(fixture["settings"] as? [String: Any]); object["safeFuture"] = String(repeating: "x", count: 900 * 1024)
+        body = try JSONSerialization.data(withJSONObject: object)
+        do { _ = try await makeClient().routineModelSettings(botId: "bot_model", routineId: "routine_model"); XCTFail("Budget") } catch {}
+        let request = try AidenRemoteJSONDecoder.decode(AidenRoutineModelSave.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(fixture["save"])))
+        var result = try XCTUnwrap(fixture["result"] as? [String: Any]); result["mutationId"] = UUID().uuidString
+        body = try JSONSerialization.data(withJSONObject: result)
+        do { _ = try await makeClient().saveRoutineModel(request); XCTFail("Wrong nonce") } catch {}
+    }
+
+    func testResumeStatusAndExplicitAcknowledgementUseExactBodyAndStableKey() async throws {
+        let key = UUID(); var bodies: [[String: Any]] = []
+        AidenRemoteMockURLProtocol.handler = { wire in
+            if wire.httpMethod == "GET" {
+                XCTAssertEqual(wire.url!.path, "/api/aiden/v1/bots/bot_model/routine-resume-status")
+                return (HTTPURLResponse(url: wire.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"requiresUnknownCostAcknowledgement":true,"interruptedSubmissionId":"9007199254740993","costReceiptId":"cost_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#.utf8))
+            }
+            XCTAssertEqual(wire.url!.path, "/api/aiden/v1/bots/bot_model/resume")
+            XCTAssertEqual(wire.value(forHTTPHeaderField: "Idempotency-Key"), key.uuidString.lowercased())
+            bodies.append(try XCTUnwrap(JSONSerialization.jsonObject(with: Self.bodyData(wire)) as? [String: Any]))
+            return (HTTPURLResponse(url: wire.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"state":"running","interrupted":false}"#.utf8))
+        }
+        let client = makeClient(); let status = try await client.botRoutineResumeStatus(botId: "bot_model")
+        XCTAssertTrue(status.requiresUnknownCostAcknowledgement)
+        _ = try await client.resumeBotSession(botId: "bot_model", idempotencyKey: key, acknowledgeUnknownCost: true, expectedSubmissionId: "9007199254740993", expectedCostReceiptId: "cost_" + String(repeating: "a", count: 64))
+        _ = try await client.resumeBotSession(botId: "bot_model", idempotencyKey: key, acknowledgeUnknownCost: false)
+        XCTAssertEqual(bodies[0].count, 3); XCTAssertEqual(bodies[0]["expectedCostReceiptId"] as? String, "cost_" + String(repeating: "a", count: 64)); XCTAssertEqual(bodies[0]["expectedSubmissionId"] as? String, "9007199254740993"); XCTAssertEqual(bodies[0]["acknowledgeUnknownCost"] as? Bool, true)
+        XCTAssertTrue(bodies[1].isEmpty)
+        do {
+            _ = try await client.resumeBotSession(botId: "bot_model", idempotencyKey: UUID(), acknowledgeUnknownCost: true, expectedSubmissionId: "9007199254740993")
+            XCTFail("A missing receipt must fail before transmission")
+        } catch {}
+        XCTAssertEqual(bodies.count, 2)
+    }
+
+    func testRoutineModelDirectoryIsPassiveAndRejectsCrossBotOwnership() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-routine-models", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var directory = try XCTUnwrap(fixture["directory"] as? [String: Any])
+        AidenRemoteMockURLProtocol.handler = { wire in
+            XCTAssertEqual(wire.httpMethod, "GET"); XCTAssertNil(wire.httpBody)
+            XCTAssertEqual(wire.url!.path, "/api/aiden/v1/bots/bot_model/routine-models")
+            return (HTTPURLResponse(url: wire.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, try JSONSerialization.data(withJSONObject: directory))
+        }
+        let listed = try await makeClient().routineModelDirectory(botId: "bot_model")
+        XCTAssertEqual(listed.routines.map(\.kind), [.scheduled, .event, .watch])
+        directory["botId"] = "other"
+        do { _ = try await makeClient().routineModelDirectory(botId: "bot_model"); XCTFail("Other Bot’s directory") } catch {}
+    }
+
+    func testRoutineModelCapabilityIsNegotiatedAlone() async throws {
+        AidenRemoteMockURLProtocol.handler = { request in
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.bodyData(request)) as? [String: Any])
+            XCTAssertEqual(body["accepts"] as? [String], ["bot:routine-models"])
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"capabilities":["server:read","chat:read","bot:read","bot:write","bot:routine-models"]}"#.utf8))
+        }
+        let grants = try await makeClient().updateDeviceCapabilities(accepts: [.botRoutineModels]); XCTAssertTrue(grants.contains(.botRoutineModels))
+    }
+
     private func makeClient() -> AidenRemoteClient {
         AidenRemoteClient(
             endpoint: URL(string: "https://aiden.test/api/aiden/v1")!,

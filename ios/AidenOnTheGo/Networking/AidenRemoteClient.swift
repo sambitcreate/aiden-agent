@@ -487,6 +487,11 @@ struct AidenServer: Codable, Equatable, Sendable {
             && capabilities.contains(.botWatches) && capabilities.contains(.botRead)
     }
 
+    var supportsBotRoutineModels: Bool {
+        let required: Set<AidenRemoteCapability> = [.botRead, .chatRead, .botRoutineModels]
+        return required.isSubset(of: Set(capabilities)) && required.isSubset(of: Set(serverCapabilities ?? []))
+    }
+
     var supportsBotOpenWork: Bool {
         let required: Set<AidenRemoteCapability> = [.botRead, .chatRead, .botOpenWork]
         return required.isSubset(of: Set(capabilities)) && required.isSubset(of: Set(serverCapabilities ?? []))
@@ -1574,7 +1579,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
-            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues, .botWatches, .botOpenWork,
+            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues, .botWatches, .botOpenWork, .botRoutineModels,
             .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw, .chatNewWorktree,
         ])
         guard !accepts.isEmpty,
@@ -2638,6 +2643,48 @@ final class AidenRemoteClient: @unchecked Sendable {
             headers: idempotencyHeaders(idempotencyKey),
             acceptedStatus: [200, 202]
         )
+    }
+
+    // MARK: Routine-only model choices (`bot:routine-models`)
+
+    func routineModelDirectory(botId: String) async throws -> AidenRoutineModelDirectory {
+        try AidenRoutineModelWire.id(botId)
+        let directory: AidenRoutineModelDirectory = try await send(method: "GET", path: ["bots", botId, "routine-models"], maximumResponseBytes: 900 * 1024)
+        guard directory.botId == botId else { throw AidenRemoteClientError.invalidResponse }
+        return directory
+    }
+
+    func routineModelSettings(botId: String, routineId: String) async throws -> AidenRoutineModelSettings {
+        try AidenRoutineModelWire.id(botId); try AidenRoutineModelWire.id(routineId)
+        let settings: AidenRoutineModelSettings = try await send(method: "GET", path: ["bots", botId, "routine-models", routineId], maximumResponseBytes: 900 * 1024)
+        guard settings.botId == botId, settings.routineId == routineId else { throw AidenRemoteClientError.invalidResponse }
+        return settings
+    }
+    func routineModelCatalog(botId: String, routineId: String) async throws -> AidenRoutineModelCatalog {
+        try AidenRoutineModelWire.id(botId); try AidenRoutineModelWire.id(routineId)
+        return try await send(method: "GET", path: ["bots", botId, "routine-models", routineId, "catalog"], maximumResponseBytes: 900 * 1024)
+    }
+    func routineModelRuns(botId: String, routineId: String) async throws -> [AidenRoutineModelRun] {
+        try AidenRoutineModelWire.id(botId); try AidenRoutineModelWire.id(routineId)
+        let runs: [AidenRoutineModelRun] = try await send(method: "GET", path: ["bots", botId, "routine-models", routineId, "runs"], maximumResponseBytes: 900 * 1024)
+        guard runs.count <= 64, Set(runs.map(\.runId)).count == runs.count else { throw AidenRemoteClientError.invalidResponse }
+        return runs
+    }
+    func saveRoutineModel(_ request: AidenRoutineModelSave) async throws -> AidenRoutineModelResult {
+        try request.validate()
+        guard try JSONEncoder().encode(request).count <= 16 * 1024 else { throw AidenRemoteContractError.payloadTooLarge }
+        let result: AidenRoutineModelResult = try await send(method: "POST", path: ["bots", request.botId, "routine-models", request.routineId], body: request, maximumResponseBytes: 900 * 1024)
+        if let settings = result.settings { guard settings.botId == request.botId, settings.routineId == request.routineId else { throw AidenRemoteClientError.invalidResponse } }
+        if case let .accepted(_, nonce, _) = result, nonce != request.mutationId { throw AidenRemoteClientError.invalidResponse }
+        return result
+    }
+    func botRoutineResumeStatus(botId: String) async throws -> AidenBotResumeStatus {
+        try AidenRoutineModelWire.id(botId)
+        return try await send(method: "GET", path: ["bots", botId, "routine-resume-status"], maximumResponseBytes: 1024)
+    }
+    func resumeBotSession(botId: String, idempotencyKey: UUID, acknowledgeUnknownCost: Bool, expectedSubmissionId: String? = nil, expectedCostReceiptId: String? = nil) async throws -> AidenBotSessionStateView {
+        try validateBotIdentifier(botId)
+        return try await send(method: "POST", path: ["bots", botId, "resume"], body: AidenBotResumeRequest(acknowledgeUnknownCost: acknowledgeUnknownCost, expectedSubmissionId: expectedSubmissionId, expectedCostReceiptId: expectedCostReceiptId), headers: idempotencyHeaders(idempotencyKey), acceptedStatus: [200, 202])
     }
 
     // MARK: Open work (`bot:open-work`)

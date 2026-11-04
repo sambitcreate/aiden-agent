@@ -1173,6 +1173,19 @@ final class AidenBotSessionModel {
     }
 
     let botID: String
+    var resumeModel: AidenBotResumeModel? {
+        didSet { resumeModel?.setForegroundVisit(active: resumeVisitIsActive) }
+    }
+    private var resumeVisitIsActive = true
+    private var resumeVisitGeneration: UInt = 0
+    func setResumeForegroundVisit(active: Bool) {
+        if resumeVisitIsActive != active { resumeVisitGeneration &+= 1 }
+        resumeVisitIsActive = active
+        resumeModel?.setForegroundVisit(active: active)
+    }
+    var routineModelsSupported: @MainActor () -> Bool = { false }
+    var canResumeExecution: Bool { resumeVisitIsActive && isInterrupted && !isAccessBlocked && !released }
+    var resumeConfirmationVersion: String { "\(stateWrites)|\(entries.last?.id ?? "")" }
     private let transport: any AidenBotSessionTransport
 
     private(set) var entries: [AidenBotSessionEntry] = []
@@ -1252,6 +1265,7 @@ final class AidenBotSessionModel {
     var restoreNotice: String?
 
     @ObservationIgnored private var retainedKeys: [Action: UUID] = [:]
+    @ObservationIgnored private var retainedKeyDates: [Action: Date] = [:]
     @ObservationIgnored private let cache: AidenBotSessionCache
     @ObservationIgnored private let cacheKey: AidenBotSessionKey?
     @ObservationIgnored private let outboxStore: AidenBotOutboxStore?
@@ -1357,6 +1371,7 @@ final class AidenBotSessionModel {
     /// the latest outbox.
     func release() {
         released = true
+        setResumeForegroundVisit(active: false)
         attachTask?.cancel()
         backoffTask?.cancel()
         flushTask?.cancel()
@@ -1694,7 +1709,7 @@ final class AidenBotSessionModel {
     /// A stream snapshot is authoritative. A `GET /session` response is not:
     /// one that arrives after newer frames of the same epoch is dropped so it
     /// cannot roll the transcript back.
-    private func apply(snapshot session: AidenBotSession, authoritative: Bool = false) {
+    private func apply(snapshot session: AidenBotSession, authoritative: Bool = false, wakesOutbox: Bool = true) {
         guard session.botId == botID else { return }
         if !authoritative, session.epoch == epoch, session.seq < seq { return }
         epoch = session.epoch
@@ -1718,8 +1733,8 @@ final class AidenBotSessionModel {
         hasLoaded = true
         if let cacheKey { cache.store(entries, for: cacheKey) }
         reconcileOutbox(snapshot: true)
-        // A snapshot is a connection: what waits in the outbox goes out now.
-        wakeOutbox()
+        // A passive control reconciliation does not flush pending messages.
+        if wakesOutbox { wakeOutbox() }
     }
 
     /// A turn that is no longer running takes its Stop and Resume with it, so the
@@ -2623,16 +2638,70 @@ final class AidenBotSessionModel {
     /// Resume shows "Picking up where it left off" at once and goes back if the
     /// Mac didn't take it (R18).
     func resume() async {
-        guard isInterrupted, !isAccessBlocked, !inFlight.contains(.resume) else { return }
-        resumeIntent = .requested
-        let resumed = await perform(.resume, optimistic: try? AidenBotSessionStateView(state: .running)) { [transport, botID] key in
+        guard canResumeExecution, !inFlight.contains(.resume) else { return }
+        let modelsSupported = routineModelsSupported()
+        if !modelsSupported, resumeModel?.preventsLegacyResume == true {
+            errorMessage = "The earlier Resume request is kept. Restore routine model access before retrying it."
+            return
+        }
+        if modelsSupported {
+            guard let resumeModel else { return }
+            if let key = retainedKeys[.resume] { resumeModel.adoptOrdinaryPending(key: key, createdAt: retainedKeyDates[.resume] ?? .distantPast) }
+            let replayingUnknown = resumeModel.pending != nil
+            let writes = stateWrites
+            if let view = await resumeModel.request() {
+                retainedKeys[.resume] = nil
+                retainedKeyDates[.resume] = nil
+                if replayingUnknown { await reconcileResumeReplay() }
+                else if stateWrites == writes { setStateView(view); resumeIntent = .acknowledged }
+            }
+            if let message = resumeModel.message { errorMessage = message; resumeModel.message = nil }
+            return
+        }
+        let replayingUnknown = retainedKeys[.resume] != nil
+        resumeIntent = replayingUnknown ? .none : .requested
+        let resumed = await perform(.resume,
+            optimistic: replayingUnknown ? nil : (try? AidenBotSessionStateView(state: .running)),
+            appliesReply: !replayingUnknown) { [transport, botID] key in
             try await transport.resumeBotSession(botId: botID, idempotencyKey: key)
         }
-        if !resumed {
-            resumeIntent = .none
-        } else if resumeIntent == .requested {
-            resumeIntent = .acknowledged
+        if resumed, replayingUnknown { await reconcileResumeReplay() }
+        else if !resumed { resumeIntent = .none }
+        else if resumeIntent == .requested { resumeIntent = .acknowledged }
+    }
+
+    /// A replay proves the original action settled, but its cached state can
+    /// predate later work. Read current state without issuing another control
+    /// or waking the outbox, and keep the normal epoch/sequence fences.
+    private func reconcileResumeReplay() async {
+        guard resumeVisitIsActive, !released else { return }
+        inFlight.insert(.resume)
+        defer { inFlight.remove(.resume) }
+        let visit = resumeVisitGeneration
+        let purge = purgeGeneration
+        do {
+            let session = try await aidenBotWithin(requestLimit) { [transport, botID] in
+                try await transport.botSession(botId: botID)
+            }
+            guard resumeVisitIsActive, !released, resumeVisitGeneration == visit, purgeGeneration == purge else { return }
+            guard session.botId == botID else { throw AidenRemoteClientError.invalidResponse }
+            errorMessage = nil
+            apply(snapshot: session, wakesOutbox: false)
+        } catch {
+            guard resumeVisitIsActive, !released, resumeVisitGeneration == visit, purgeGeneration == purge else { return }
+            if Self.isAccessLoss(error) { purgeForAccessLoss(); return }
+            errorMessage = "The earlier Resume was confirmed, but the current chat state couldn’t be refreshed."
         }
+    }
+
+    func confirmUnknownCostResume() async {
+        guard canResumeExecution, routineModelsSupported(), !inFlight.contains(.resume), let resumeModel else {
+            resumeModel?.cancelConsent()
+            return
+        }
+        let writes = stateWrites
+        if let view = await resumeModel.confirm(), stateWrites == writes { setStateView(view); resumeIntent = .acknowledged }
+        if let message = resumeModel.message { errorMessage = message; resumeModel.message = nil }
     }
 
     /// Dismiss clears the paused card at once and brings it back if the Mac didn't take it (R18).
@@ -2666,11 +2735,14 @@ final class AidenBotSessionModel {
     private func perform(
         _ action: Action,
         optimistic: AidenBotSessionStateView? = nil,
+        appliesReply: Bool = true,
         _ request: @escaping @Sendable (UUID) async throws -> AidenBotSessionStateView
     ) async -> Bool {
         guard !inFlight.contains(action) else { return false }
+        let replayingUnknown = retainedKeys[action] != nil
         let key = retainedKeys[action] ?? UUID()
         retainedKeys[action] = key
+        if retainedKeyDates[action] == nil { retainedKeyDates[action] = now() }
         let previous = stateView
         let writes = stateWrites
         if let optimistic { stateView = optimistic }
@@ -2679,14 +2751,19 @@ final class AidenBotSessionModel {
         do {
             let view = try await aidenBotWithin(requestLimit) { try await request(key) }
             // The Mac's answer stands unless it has written the state again since.
-            if stateWrites == writes { setStateView(view) }
+            if appliesReply, stateWrites == writes { setStateView(view) }
             retainedKeys[action] = nil
+            retainedKeyDates[action] = nil
             return true
         } catch {
             // Only what the Mac hasn't written since the tap goes back.
             if optimistic != nil, stateWrites == writes { stateView = previous }
             if error is CancellationError { return false }
-            if !aidenBotSessionFailureIsAmbiguous(error) { retainedKeys[action] = nil }
+            let ambiguous = action == .resume ? aidenBotResumeFailureIsAmbiguous(error) : aidenBotSessionFailureIsAmbiguous(error)
+            if !ambiguous, !(action == .resume && replayingUnknown) {
+                retainedKeys[action] = nil
+                retainedKeyDates[action] = nil
+            }
             errorMessage = "That didn’t work. Please try again."
             return false
         }

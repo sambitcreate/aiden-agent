@@ -1,3 +1,4 @@
+import { parseBotResumeAcknowledgement } from "../../renderer/shared/bot-execution-resume.js";
 import {
   BOT_LIMITS,
   isBotAvatar,
@@ -205,18 +206,19 @@ export function parseBotSend(input: unknown): {
 export function parseBotSessionAction(
   input: unknown,
   action: "resume" | "dismiss",
-): { botId: string; requestId: string } {
+): { botId: string; requestId: string; acknowledgeUnknownCost?: true; expectedSubmissionId?: string; expectedCostReceiptId?: string } {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error(`Invalid bot ${action} fields.`);
   }
   const fields = input as Record<string, unknown>;
-  if (!Object.keys(fields).every((key) => key === "botId" || key === "requestId")) {
+  if (!Object.keys(fields).every((key) => key === "botId" || key === "requestId" || action === "resume" && (key === "acknowledgeUnknownCost" || key === "expectedSubmissionId" || key === "expectedCostReceiptId"))) {
     throw new Error(`Invalid bot ${action} fields.`);
   }
   if (typeof fields.requestId !== "string" || !BOT_SESSION_REQUEST_ID.test(fields.requestId)) {
     throw new Error(`Invalid bot ${action} request id.`);
   }
-  return { botId: parseBotId(fields.botId), requestId: fields.requestId };
+  const confirmation = parseBotResumeAcknowledgement({ ...(fields.acknowledgeUnknownCost === undefined ? {} : { acknowledgeUnknownCost: fields.acknowledgeUnknownCost }), ...(fields.expectedSubmissionId === undefined ? {} : { expectedSubmissionId: fields.expectedSubmissionId }), ...(fields.expectedCostReceiptId === undefined ? {} : { expectedCostReceiptId: fields.expectedCostReceiptId }) });
+  return { botId: parseBotId(fields.botId), requestId: fields.requestId, ...confirmation };
 }
 
 /** At most 15 digits, so `Number()` stays exact (below 2^53). */

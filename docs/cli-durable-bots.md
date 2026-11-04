@@ -54,3 +54,5 @@ The bundled parity suite exercises preservation, failed-backup recovery, duplica
 Accepted scheduled inputs retain host-issued routine provenance verified against the CLI scheduler’s task/run store; a public send cannot claim that origin.
 
 Open work’s protected store/tool and linked execution helpers are shared-core code, but the Electron host owns the current Open work management integration. The standalone CLI does not advertise `bot:open-work` or serve its optional routes. This does not add an interactive CLI or a second scheduler.
+
+Routine-model configuration and its `bot:routine-models` management capability are also wired by the Electron host only. Shared scheduler claim hooks remain optional so the CLI keeps its current model defaults and existing durable routine flow. The standalone CLI does not offer the desktop’s protected routine grants or unconfirmed-cost acknowledgement controls.

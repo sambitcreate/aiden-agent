@@ -9,16 +9,20 @@ struct AidenBotWatchesView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var model: AidenBotWatchModel?
     @State private var capturedContext: AidenRemoteRequestContext?
+    @State private var modelRoutineID: String?
 
     var body: some View {
         Group {
             if let model, capturedContext.map(coordinator.isCurrent) == true,
                coordinator.server?.supportsBotWatches == true {
-                AidenBotWatchListView(model: model)
+                AidenBotWatchListView(model: model, onModel: coordinator.server?.supportsBotRoutineModels == true ? { modelRoutineID = $0 } : nil)
             } else {
                 ContentUnavailableView("Watches unavailable", systemImage: "bell.badge",
                     description: Text("Connect to a paired host that supports Bot watches."))
             }
+        }
+        .sheet(isPresented: Binding(get: { modelRoutineID != nil }, set: { if !$0 { modelRoutineID = nil } })) {
+            if let modelRoutineID { AidenBotRoutineModelsView(coordinator: coordinator, botID: botID, routineID: modelRoutineID) }
         }
         .navigationTitle("Watches")
         .navigationBarTitleDisplayMode(.inline)
@@ -53,6 +57,7 @@ struct AidenBotWatchesView: View {
 
 struct AidenBotWatchListView: View {
     @Bindable var model: AidenBotWatchModel
+    var onModel: ((String) -> Void)?
     @Environment(\.aidenPalette) private var palette
     @State private var showingEditor = false
     @State private var deleting: AidenBotWatch?
@@ -99,6 +104,7 @@ struct AidenBotWatchListView: View {
                                     Button(watch.enabled ? "Pause" : "Resume", systemImage: watch.enabled ? "pause" : "play") {
                                     Task { await model.setEnabled(watch, !watch.enabled) }
                                 }
+                                if let onModel { Button("Model", systemImage: "slider.horizontal.3") { onModel(watch.id) } }
                                 Button("Test check", systemImage: "checkmark.circle") { Task { await model.testSaved(watch) } }
                                 Button("Run now", systemImage: "play.circle") { running = watch }
                                 Button("Delete watch", systemImage: "trash", role: .destructive) { deleting = watch }
@@ -107,6 +113,10 @@ struct AidenBotWatchListView: View {
                             }
                             .disabled(model.isBusy || model.uncertain)
                             .listRowBackground(palette.raised)
+                            if let onModel {
+                                Button("Model for \(watch.name)", systemImage: "slider.horizontal.3") { onModel(watch.id) }
+                                    .listRowBackground(palette.raised)
+                            }
                         }
                     }
                 } else if list.supported {

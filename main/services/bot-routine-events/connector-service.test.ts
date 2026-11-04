@@ -14,7 +14,7 @@ import { createBotEventRunner, eventRoutineTask } from "./runner.js";
 import { eventRoutinesToolSource } from "../bot-runtime/bot-tool-candidates.js";
 import { createBotRoutinesTool } from "../schedule-tool.js";
 import type { ScheduledRun } from "../types.js";
-import { botConnectorInventoryServer } from "../bot-connector-inventory-scope.js";
+import { botConnectorExecutionRestriction, botConnectorInventoryServer, withBotConnectorExecutionRestriction } from "../bot-connector-inventory-scope.js";
 import { createBotMcpScopeCache, resolveBotMcpInventory } from "../bot-mcp-inventory.js";
 
 const BOT = "bot_test";
@@ -295,6 +295,13 @@ test("connector event model execution inherits the selected scope across awaits 
   const runner = createBotEventRunner({ undelivered: () => false, executor: { run: async (task, options) => {
     await Promise.resolve();
     assert.equal(botConnectorInventoryServer(), binding.serverId);
+    const restriction = botConnectorExecutionRestriction()!;
+    assert.equal(restriction.routineId, routine.id);
+    assert.equal(restriction.revision, routine.updatedAt);
+    assert.equal(restriction.binding.account, "private-account-id");
+    restriction.binding.mailbox = "forged-other-mailbox";
+    assert.equal(botConnectorExecutionRestriction()?.binding.mailbox, "V10:12", "callers cannot mutate the task's captured source");
+    await assert.rejects(withBotConnectorExecutionRestriction({ ...restriction, binding: { ...restriction.binding, account: "other-account" } }, async () => undefined), /cannot switch its accepted account/u);
     const scopes = await resolveBotMcpInventory(new AbortController().signal, { scopeCache: createBotMcpScopeCache(),
       listServers: async () => [binding.serverId, "unrelated-connector"].map((id) => ({ id, name: id, transport: "stdio", command: "synthetic-only", enabled: true })), credentialSignature: async () => "c".repeat(64),
       incarnations: { reconcileNamespace: async (_namespace, resources) => resources.map(({ sourceId }) => ({ sourceId, resourceIncarnation: "a".repeat(43), credentialIncarnation: "b".repeat(43) })) },
@@ -304,5 +311,5 @@ test("connector event model execution inherits the selected scope across awaits 
   } } });
   assert.equal((await runner.run(routine, { eventId: "synthetic-change", source: "watch", payload: "New mail" })).settled, true);
   assert.deepEqual(inspected, [binding.serverId], "model admission inventory cannot incidentally connect the unrelated server");
-  assert.equal(botConnectorInventoryServer(), undefined); assert.equal(view.id, routine.id);
+  assert.equal(botConnectorInventoryServer(), undefined); assert.equal(botConnectorExecutionRestriction(), undefined); assert.equal(view.id, routine.id);
 });

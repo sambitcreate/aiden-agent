@@ -1837,8 +1837,15 @@ class AidenRemoteClient(
         }
     }
 
-    suspend fun resumeBotSession(botId: String, idempotencyKey: UUID): AidenBotSessionStateView =
-        botSessionControl(botId, "resume", idempotencyKey)
+    suspend fun resumeBotSession(botId: String, idempotencyKey: UUID, request: AidenBotResumeRequest = AidenBotResumeRequest()): AidenBotSessionStateView {
+        AidenRoutineModelWire.id(botId)
+        return executeRequest("/bots/$botId/resume", method = "POST",
+            bodyJson = botJson.encodeToString(AidenBotResumeRequest.serializer(), request),
+            idempotencyKey = idempotencyKey, retryConnectionFailure = false, acceptedStatus = setOf(200,202),
+            botScope = AidenBotPrivateResponseScope.Root("botSessionResume")) { bytes ->
+            decodeBotWire(AidenBotSessionStateView.serializer(), String(bytes, Charsets.UTF_8))
+        }
+    }
 
     suspend fun dismissBotSession(botId: String, idempotencyKey: UUID): AidenBotSessionStateView =
         botSessionControl(botId, "dismiss", idempotencyKey)
@@ -2042,6 +2049,54 @@ class AidenRemoteClient(
             retryConnectionFailure = false,
             acceptedStatus = setOf(204)
         ) { }
+    }
+
+    private fun routineModelPath(botId: String, routineId: String? = null): String {
+        AidenRoutineModelWire.id(botId); routineId?.let(AidenRoutineModelWire::id)
+        return "/bots/$botId/routine-models" + (routineId?.let { "/$it" } ?: "")
+    }
+    suspend fun botRoutineModelDirectory(botId: String): AidenRoutineModelDirectory = executeRequest(
+        routineModelPath(botId), maximumResponseBytes = AidenRoutineModelWire.PUBLIC_BYTES,
+        botScope = AidenBotPrivateResponseScope.Root("botRoutineModels")) { bytes ->
+        AidenRoutineModelWire.decode(AidenRoutineModelDirectory.serializer(), String(bytes, Charsets.UTF_8)).also {
+            if(it.botId != botId) throw AidenRemoteClientException.InvalidResponse()
+        }
+    }
+    suspend fun botRoutineModelSettings(botId: String, routineId: String): AidenRoutineModelSettings = executeRequest(
+        routineModelPath(botId,routineId), maximumResponseBytes = AidenRoutineModelWire.PUBLIC_BYTES,
+        botScope = AidenBotPrivateResponseScope.Root("botRoutineModels")) { bytes ->
+        AidenRoutineModelWire.decode(AidenRoutineModelSettings.serializer(), String(bytes, Charsets.UTF_8)).also {
+            if(it.botId != botId || it.routineId != routineId) throw AidenRemoteClientException.InvalidResponse()
+        }
+    }
+    suspend fun botRoutineModelCatalog(botId: String, routineId: String): AidenRoutineModelCatalog = executeRequest(
+        routineModelPath(botId,routineId)+"/catalog", maximumResponseBytes = AidenRoutineModelWire.PUBLIC_BYTES,
+        botScope = AidenBotPrivateResponseScope.Root("botRoutineModels")) { bytes ->
+        AidenRoutineModelWire.decode(AidenRoutineModelCatalog.serializer(), String(bytes, Charsets.UTF_8))
+    }
+    suspend fun botRoutineModelRuns(botId: String, routineId: String): List<AidenRoutineModelRun> = executeRequest(
+        routineModelPath(botId,routineId)+"/runs", maximumResponseBytes = AidenRoutineModelWire.PUBLIC_BYTES,
+        botScope = AidenBotPrivateResponseScope.Root("botRoutineModels")) { bytes ->
+        AidenRoutineModelWire.runs(AidenRoutineModelWire.decode(kotlinx.serialization.builtins.ListSerializer(AidenRoutineModelRun.serializer()), String(bytes, Charsets.UTF_8)))
+    }
+    suspend fun saveBotRoutineModel(request: AidenRoutineModelSave): AidenRoutineModelResult {
+        val body = botJson.encodeToString(AidenRoutineModelSave.serializer(),request)
+        require(body.toByteArray(Charsets.UTF_8).size <= AidenRoutineModelWire.MUTATION_BYTES)
+        return executeRequest(routineModelPath(request.botId,request.routineId),method="POST",bodyJson=body,
+            retryConnectionFailure=false,maximumResponseBytes=AidenRoutineModelWire.PUBLIC_BYTES,
+            botScope=AidenBotPrivateResponseScope.Root("botRoutineModels")) { bytes ->
+            AidenRoutineModelWire.decode(AidenRoutineModelResult.serializer(),String(bytes,Charsets.UTF_8)).also {
+                if(it.settings?.let { row -> row.botId != request.botId || row.routineId != request.routineId } == true ||
+                    it.ok && it.mutationId != request.mutationId) throw AidenRemoteClientException.InvalidResponse()
+            }
+        }
+    }
+    suspend fun botRoutineResumeStatus(botId: String): AidenBotResumeStatus {
+        AidenRoutineModelWire.id(botId)
+        return executeRequest("/bots/$botId/routine-resume-status",maximumResponseBytes=1024,
+            botScope=AidenBotPrivateResponseScope.Root("botRoutineModels")) { bytes ->
+            AidenRoutineModelWire.decode(AidenBotResumeStatus.serializer(),String(bytes,Charsets.UTF_8))
+        }
     }
 
     private fun openWorkPath(botId: String): String {

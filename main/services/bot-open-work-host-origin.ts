@@ -2,7 +2,7 @@ import type { ScheduledRun, ScheduledTask } from "./types.js";
 import type { BotEventRoutine } from "./bot-routine-events/store.js";
 import { botRoutineRequestId, botRoutineTaskIdOf } from "./scheduled-bot-routines.js";
 import { issueBotRoutineInputOrigin, parseBotRoutineInputOrigin, type BotRoutineInputOrigin } from "./bot-runtime/bot-input-entry.js";
-import type { BotRoutineSessionPort } from "./bot-routines-port.js";
+import { parseBotRoutineTiming, type BotRoutineSessionPort } from "./bot-routines-port.js";
 
 export function createBotOpenWorkRoutineOrigin(ports: {
   task(id: string): Promise<ScheduledTask | undefined>;
@@ -34,12 +34,17 @@ export function createBotOpenWorkRoutineOrigin(ports: {
 /** Production executor adapter: ordinary senders cannot issue this private token. */
 export function createBotRoutineOriginSender(ports: {
   resolveOrigin: ReturnType<typeof createBotOpenWorkRoutineOrigin>;
+  resolveRetry?(botId: string, requestId: string, retryOf: string): Promise<boolean>;
   send: BotRoutineSessionPort["send"];
 }): BotRoutineSessionPort["send"] {
   return async (botId, input) => {
-    if (!input.routineOrigin) return ports.send(botId, input);
+    if (!input.routineOrigin) {
+      if (input.routineTiming || input.retryOf) throw new Error("This input has no verified routine occurrence.");
+      return ports.send(botId, input);
+    }
     const origin = input.routineOrigin;
     if (origin.botId !== botId || origin.runId !== input.requestId || !await ports.resolveOrigin(botId, input.requestId, "1", origin)) throw new Error("This input is not an accepted Bot routine.");
-    return ports.send(botId, { ...input, routineOrigin: issueBotRoutineInputOrigin(origin) });
+    if (origin.kind === "retry" ? !input.retryOf || !await ports.resolveRetry?.(botId, input.requestId, input.retryOf) : input.retryOf !== undefined) throw new Error("This input is not a verified retry of an accepted Bot routine.");
+    return ports.send(botId, { ...input, routineOrigin: issueBotRoutineInputOrigin(origin), ...(input.routineTiming ? { routineTiming: parseBotRoutineTiming(input.routineTiming) } : {}) });
   };
 }

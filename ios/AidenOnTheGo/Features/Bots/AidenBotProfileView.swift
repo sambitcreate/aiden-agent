@@ -390,6 +390,25 @@ struct AidenBotProfileView: View {
                     .buttonStyle(.plain).padding(.top, 8)
                 }
 
+                if coordinator.server?.supportsBotRoutineModels == true {
+                    NavigationLink {
+                        AidenBotRoutineModelDirectoryView(coordinator: coordinator, botID: detail.id)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "slider.horizontal.3").foregroundStyle(palette.secondary).accessibilityHidden(true)
+                            Text("Routine models").foregroundStyle(palette.foreground)
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
+                                .foregroundStyle(palette.secondary).accessibilityHidden(true)
+                        }
+                        .padding(16)
+                        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .accessibilityElement(children: .combine)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 8)
+                }
+
                 if coordinator.server?.supportsBotWatches == true {
                     NavigationLink {
                         AidenBotWatchesView(coordinator: coordinator, botID: detail.id)

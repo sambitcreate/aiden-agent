@@ -1,3 +1,4 @@
+import { parseBotResumeAcknowledgement } from "../../renderer/shared/bot-execution-resume.js";
 // Remote surface of the durable Bot runtime (contract revision 25).
 //
 // - `GET /bots/{id}/session` and its SSE stream project the Bot's one Pi Durable
@@ -202,7 +203,7 @@ export interface AidenRemoteBotSessionRuntime {
       attachments?: Array<{ type: "image"; mimeType: string; data: string }>;
     },
   ): Promise<{ submissionId: string; deduped: boolean }>;
-  resume(botId: string, requestId: string): Promise<BotSessionState>;
+  resume(botId: string, requestId: string, options?: { acknowledgeUnknownCost?: true; expectedSubmissionId?: string; expectedCostReceiptId?: string }): Promise<BotSessionState>;
   dismiss(botId: string, requestId: string): Promise<BotSessionState>;
   /** Ends a running turn (serialized with send/resume/dismiss); a paused turn is left for Dismiss. */
   stop(botId: string): Promise<BotSessionState>;
@@ -1169,7 +1170,7 @@ class BotLiveProjector {
 
   /**
    * The submission ids of the person's messages, by entry id (revision 30).
-   * Looked up on the serial lane when a new `pi.user` entry appears: its input
+   * Looked up on the serial lane when a new hosted input entry appears: its input
    * is placed in the same commit, so the session still lists it unless its
    * turn already ended. An id that can't be found is left out; phones then
    * match the bubble by its text.
@@ -1178,7 +1179,7 @@ class BotLiveProjector {
     if (!this.activityDeps) return this.submissionOf;
     let newest = this.placedThrough;
     for (const record of entries) {
-      if (record.kind === "pi.user" && Number(record.id) > newest) newest = Number(record.id);
+      if (isBotInputEntryKind(record.kind) && Number(record.id) > newest) newest = Number(record.id);
     }
     if (newest <= this.placedThrough) return this.submissionOf;
     this.placedThrough = newest;
@@ -1392,6 +1393,7 @@ const REFUSED_BEFORE_RUNNING: ReadonlySet<BotSessionErrorReason> = new Set([
   "bot_paused",
   "paused_by_person",
   "spending_limit",
+  "spending_unconfirmed",
 ]);
 
 /**
@@ -1452,6 +1454,7 @@ function mapSessionError(error: unknown, audience: AidenRemoteBotHandoffAudience
       case "unavailable":
       case "bot_paused":
       case "spending_limit":
+      case "spending_unconfirmed":
         throw new AidenRemoteServiceError("operation_stale", error.message, 409);
     }
   }
@@ -2381,23 +2384,27 @@ export class AidenRemoteBotSessionService {
     botId: string,
     key: string,
     input: unknown,
-    options: { handoffs?: boolean },
+    options: { handoffs?: boolean; routineModels?: boolean },
   ): Promise<AidenRemoteBotSessionStateView> {
     if (action === "pause" || action === "unpause") this.handoffService();
-    parseOrInvalid((value) => parseAidenRemoteEmptyRequest(value, "Bot request"), input ?? {}, "The Bot request is invalid.");
+    let acknowledgeUnknownCost: true | undefined, expectedSubmissionId: string | undefined, expectedCostReceiptId: string | undefined;
+    if (action === "resume" && options.routineModels) {
+      const parsed = parseOrInvalid(parseBotResumeAcknowledgement, input ?? {}, "Invalid Bot resume acknowledgement.");
+      acknowledgeUnknownCost = parsed.acknowledgeUnknownCost; expectedSubmissionId = parsed.expectedSubmissionId; expectedCostReceiptId = parsed.expectedCostReceiptId;
+    } else parseOrInvalid((value) => parseAidenRemoteEmptyRequest(value, "Bot request"), input ?? {}, "The Bot request is invalid.");
     const audience = this.audience(options);
     const bot = await this.options.bots.bot(botId);
     try {
       // Recorded in the holder's view, so a replay to any device projects the same truth.
       const view = await this.options.bots.executeIdempotent(
         { deviceId, route: CONTROL_ROUTES[action], resourceId: bot.id, key },
-        {},
+        acknowledgeUnknownCost ? { acknowledgeUnknownCost: true, expectedSubmissionId, expectedCostReceiptId } : {},
         async () => {
           const runtime = await this.options.runtime();
           const requestId = `remote:${deviceId}:${key}`;
           const holderView = (state: BotSessionState) => projectBotSessionState(state, HOLDER_AUDIENCE);
           if (action === "resume") {
-            return holderView(await unlessRefusedBeforeRunning(() => runtime.resume(bot.id, requestId)));
+            return holderView(await unlessRefusedBeforeRunning(() => runtime.resume(bot.id, requestId, { acknowledgeUnknownCost, expectedSubmissionId, expectedCostReceiptId })));
           }
           if (action === "dismiss") {
             return holderView(await unlessRefusedBeforeRunning(() => runtime.dismiss(bot.id, requestId)));
@@ -2424,7 +2431,7 @@ export class AidenRemoteBotSessionService {
     }
   }
 
-  resume(deviceId: string, botId: string, key: string, input: unknown, options: { handoffs?: boolean } = {}) {
+  resume(deviceId: string, botId: string, key: string, input: unknown, options: { handoffs?: boolean; routineModels?: boolean } = {}) {
     return this.control("resume", deviceId, botId, key, input, options);
   }
 
@@ -2636,3 +2643,4 @@ function presetRoutineSchedule(
     ? { kind: "weekly", days: [...schedule.days], time }
     : { kind: schedule.frequency, time };
 }
+import { isBotInputEntryKind } from "./bot-runtime/bot-input-entry.js";

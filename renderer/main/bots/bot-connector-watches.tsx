@@ -1,3 +1,5 @@
+import { assertBotCanSavePendingChanges } from "../../lib/bot-local-pending";
+import { BotRoutineModelButton } from "./bot-routine-models";
 import * as React from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Button, Field, FieldSet, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, Text, Textarea } from "../../components/ui";
@@ -122,6 +124,7 @@ function WatchManager({ bot, api }: { bot: { id: string; name: string }; api: Bo
         return;
       }
       // Save the identity before crossing IPC. A lost response can only be retried with this same input.
+      assertBotCanSavePendingChanges(bot.id);
       localStorage.setItem(storageKey(bot.id), JSON.stringify(operation));
       setPending(operation);
       const reply = await (operation.action === "create" ? api.create(operation.input)
@@ -208,6 +211,7 @@ function WatchManager({ bot, api }: { bot: { id: string; name: string }; api: Bo
         <Switch aria-label={`${watch.name} on`} checked={watch.enabled} disabled={disabled} onCheckedChange={(enabled) => void perform({ action: "setEnabled", input: { ...identity(watch), enabled } })} />
         <Button size="small" variant="transparent" disabled={disabled} onClick={() => void readAction(() => api.testCheck({ botId: bot.id, id: watch.id, expectedRevision: watch.revision }))}>Test {watch.name}</Button>
         <Button size="small" variant="transparent" disabled={disabled} onClick={() => void perform({ action: "runNow", input: identity(watch) })}>Run {watch.name} now</Button>
+        <BotRoutineModelButton botId={bot.id} routineId={watch.id} routineName={watch.name} disabled={disabled} />
         <Button iconOnly size="small" variant="transparent" aria-label={`Edit watch ${watch.name}`} disabled={disabled} onClick={() => edit(watch)}><Pencil /></Button>
         <Button iconOnly size="small" variant="transparent" aria-label={`Remove watch ${watch.name}`} disabled={disabled} onClick={() => setRemoving(watch.id)}><Trash2 /></Button>
         {removing === watch.id && <><Text variant="small">Remove this watch?</Text><Button size="small" disabled={disabled} onClick={() => void perform({ action: "remove", input: identity(watch) })}>Remove watch</Button><Button size="small" variant="transparent" disabled={disabled} onClick={() => setRemoving(null)}>Keep watch</Button></>}

@@ -28,6 +28,7 @@ sealed class AidenScreen {
     /** Profile → Memory (revision 27, `bot-memory-v1`). */
     data class BotMemory(val botId: String) : AidenScreen()
     data class BotWatches(val botId: String) : AidenScreen()
+    data class BotRoutineModels(val botId: String) : AidenScreen()
     data class BotOpenWork(val botId: String) : AidenScreen()
     data class WorkspaceFiles(val workspaceId: String) : AidenScreen()
     data class WorkspaceGit(val workspaceId: String) : AidenScreen()
@@ -52,6 +53,7 @@ sealed class AidenScreen {
             is BotEditor -> screen.botId?.let { "bot-edit$SEPARATOR$it" } ?: "bot-new"
             is BotMemory -> "bot-memory$SEPARATOR${screen.botId}"
             is BotWatches -> "bot-watches$SEPARATOR${screen.botId}"
+            is BotRoutineModels -> "bot-routine-models$SEPARATOR${screen.botId}"
             is BotOpenWork -> "bot-open-work$SEPARATOR${screen.botId}"
             is WorkspaceFiles -> "files$SEPARATOR${screen.workspaceId}"
             is WorkspaceGit -> "git$SEPARATOR${screen.workspaceId}"
@@ -76,6 +78,7 @@ sealed class AidenScreen {
                 kind == "bot-edit" -> BotEditor(id)
                 kind == "bot-memory" -> BotMemory(id)
                 kind == "bot-watches" -> BotWatches(id)
+                kind == "bot-routine-models" -> BotRoutineModels(id)
                 kind == "bot-open-work" -> BotOpenWork(id)
                 kind == "files" -> WorkspaceFiles(id)
                 kind == "git" -> WorkspaceGit(id)

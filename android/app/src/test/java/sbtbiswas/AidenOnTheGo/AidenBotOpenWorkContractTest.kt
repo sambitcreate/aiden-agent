@@ -10,9 +10,9 @@ internal fun openWorkFixture(): JsonObject = requireNotNull(AidenBotOpenWorkCont
 internal fun openWorkSnapshot() = AidenBotWireJson.json.decodeFromJsonElement(AidenOpenWorkSnapshot.serializer(),openWorkFixture().getValue("snapshot"))
 internal const val OPEN_NONCE="44444444-4444-4444-8444-444444444444"
 class AidenBotOpenWorkContractTest {
-    @Test fun canonicalRevision55DtosAndEveryMutationDecode() {
+    @Test fun canonicalRevision56DtosAndEveryMutationDecode() {
         val fixture=openWorkFixture(); val wire=AidenBotWireJson.json
-        assertEquals(55,fixture.getValue("contractRevision").jsonPrimitive.int)
+        assertEquals(56,fixture.getValue("contractRevision").jsonPrimitive.int)
         assertEquals("bot:open-work",fixture.getValue("capability").jsonPrimitive.content)
         val snapshot=openWorkSnapshot()
         assertEquals("10",snapshot.items.single().source.submissionId)

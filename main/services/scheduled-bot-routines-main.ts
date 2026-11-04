@@ -5,12 +5,38 @@ import { scheduleService } from "./schedule-service.js";
 import { scheduleStore, systemTimezone } from "./schedule-store.js";
 import { botRunStalls } from "./bot-runtime/bot-run-watchdog.js";
 import { createBotRoutineOriginSender } from "./bot-open-work-host-origin.js";
+import { botConnectorExecutionRestriction, botConnectorInventoryServer } from "./bot-connector-inventory-scope.js";
+import { issueBotRoutineInputOrigin } from "./bot-runtime/bot-input-entry.js";
+import { parseBotRoutineTiming } from "./bot-routines-port.js";
 import {
   createBotRoutineCatchUp,
   createBotRoutineCatchUpTrigger,
   createBotRoutineService,
+  botRoutineExecutionInput,
   type BotRoutineExecutorPorts,
 } from "./scheduled-bot-routines.js";
+import type { ScheduledTask } from "./types.js";
+import type { ScheduledRunTrigger } from "./schedule-service-core.js";
+
+async function resolveRetry(botId: string, requestId: string, retryOf: string): Promise<boolean> {
+  const task = await scheduleStore.get((await import("./scheduled-bot-routines.js")).botRoutineTaskIdOf(requestId) ?? "");
+  return task?.botId === botId && task.pendingRoutineFires?.some(fire => fire.requestId === requestId && fire.retry?.failedRunId === retryOf) === true;
+}
+
+/** No host/runtime opening: protected model choice precedes ownership receipt publication. */
+export async function claimBotRoutineExecution(task: ScheduledTask, trigger: ScheduledRunTrigger): Promise<{ claimId: string }> {
+  if (!task.botId || task.wakeUp) throw new Error("This task is not a person-accepted Bot routine.");
+  return claimBotRoutineInputExecution(task.botId, botRoutineExecutionInput(task, trigger));
+}
+
+async function claimBotRoutineInputExecution(botId: string, input: Parameters<NonNullable<BotRoutineExecutorPorts["claimExecution"]>>[1]): Promise<{ claimId: string }> {
+  const resolveOrigin = (await import("./bot-open-work/service-main.js")).resolveBotOpenWorkRoutineOrigin;
+  if (input.routineOrigin.botId !== botId || input.routineOrigin.runId !== input.requestId || !await resolveOrigin(botId, input.requestId, "1", input.routineOrigin)) throw new Error("This input is not an accepted Bot routine.");
+  if (input.routineOrigin.kind === "retry" ? !input.retryOf || !await resolveRetry(botId, input.requestId, input.retryOf) : input.retryOf !== undefined) throw new Error("This input is not a verified routine retry.");
+  const { botRoutineModels } = await import("./bot-routine-models-main.js");
+  const claim = await botRoutineModels.claim(botId, { requestId: input.requestId, routineOrigin: issueBotRoutineInputOrigin(input.routineOrigin), ...(input.routineTiming ? parseBotRoutineTiming(input.routineTiming) : {}), ...(input.retryOf ? { retryOf: input.retryOf } : {}), ...(botConnectorInventoryServer() ? { connectorServerId: botConnectorInventoryServer() } : {}), ...(botConnectorExecutionRestriction() ? { connectorRestriction: botConnectorExecutionRestriction() } : {}) });
+  return { claimId: claim.id };
+}
 
 /** Each routine's notepad, next to its Bot's session (`routine_notes`). */
 export const botRoutineNotes = createBotRoutineNotesStore({ profileDir: () => app.getPath("userData") });
@@ -30,8 +56,9 @@ export async function botRoutinePorts(): Promise<BotRoutineExecutorPorts> {
     },
     canRetryRoutineRequest: (botId, requestId) => runtime.canRetryRoutineRequest(botId, requestId),
     submissionForRequest: (botId, requestId) => runtime.submissionForRequest(botId, requestId),
-    send: createBotRoutineOriginSender({ send: (botId, input) => runtime.send(botId, input), resolveOrigin: async (...args) => (await import("./bot-open-work/service-main.js")).resolveBotOpenWorkRoutineOrigin(...args) }),
-    state: (botId) => runtime.state(botId),
+    claimExecution: claimBotRoutineInputExecution,
+    send: createBotRoutineOriginSender({ send: (botId, input) => runtime.send(botId, input), resolveRetry, resolveOrigin: async (...args) => (await import("./bot-open-work/service-main.js")).resolveBotOpenWorkRoutineOrigin(...args) }),
+    state: (botId) => runtime.routineState(botId),
     awaitReply: (botId, submissionId, signal) => runtime.awaitReply(botId, submissionId, signal),
     markSilent: (botId, submissionId) => runtime.markSilent(botId, submissionId),
     // Notes, then the lessons the person kept for this routine.
