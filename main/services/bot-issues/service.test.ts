@@ -639,6 +639,9 @@ for (const kind of ["dismiss_access", "allow_folder"] as const) {
       let storageRecovered = false;
       let grants = 0;
       const errors: unknown[] = [];
+      let failed!: () => void;
+      const nextFailure = () => new Promise<void>(resolve => { failed = resolve; });
+      const initialFailure = nextFailure();
       const service = createBotIssueService({
         store: app.store, now: () => 3000,
         appendEntry: async (botId, entryKind, data) => {
@@ -646,7 +649,7 @@ for (const kind of ["dismiss_access", "allow_folder"] as const) {
           if (!storageRecovered && entryKind === BOT_ISSUE_STATUS_ENTRY_KIND && (id === other.id || ownStatusFails)) throw new Error("status disk busy");
           app.appends.push({ botId, kind: entryKind, data });
         },
-        onError: error => { errors.push(error); },
+        onError: error => { errors.push(error); failed(); },
         funnel: { deliver: async () => "sent" },
         actions: { allowFolder: async () => { grants++; return "added"; }, resumeRoutine: async () => "missing", stopRun: async () => { throw new Error("must not stop"); }, snoozeStall() { throw new Error("must not snooze"); }, openSettings() {} },
       });
@@ -654,6 +657,7 @@ for (const kind of ["dismiss_access", "allow_folder"] as const) {
       service.onChange(id => { changes.push(id); });
       if (ownStatusFails) await assert.rejects(service.act(BOT_ID, current.id, { kind }), /status disk busy/u);
       else assert.equal(await service.act(BOT_ID, current.id, { kind }), "done");
+      await initialFailure;
       const rows = await app.store.read(BOT_ID);
       const settled = rows.find(row => row.id === current.id)!;
       assert.equal(settled.resolution, kind === "dismiss_access" ? "dismissed" : "fixed");
@@ -662,23 +666,23 @@ for (const kind of ["dismiss_access", "allow_folder"] as const) {
       assert.equal(rows.find(row => row.id === other.id)?.statusAppended, false);
       assert.ok(changes.includes(BOT_ID), "a durable settlement notifies the host even if its transcript write fails");
       assert.equal(grants, kind === "allow_folder" ? 1 : 0);
+      // Observe each explicitly requested background attempt at its error
+      // callback, after its file reads and serializer cleanup have completed.
+      const listingFailure = nextFailure();
       assert.deepEqual(await service.list(BOT_ID, { open: true }), []);
+      await listingFailure;
+      const retryFailure = nextFailure();
       assert.equal(await service.act(BOT_ID, current.id, { kind }), "not_open");
+      await retryFailure;
       assert.equal(grants, kind === "allow_folder" ? 1 : 0, "retry cannot regrant");
-      // Flush the one active background attempt. Failure never schedules itself.
-      await new Promise<void>(resolve => setImmediate(resolve));
-      const before = errors.length;
-      await new Promise<void>(resolve => setImmediate(resolve));
-      assert.equal(errors.length, before, "no hot automatic repair loop");
+      assert.equal(errors.length, 3, "only the three requested repairs failed");
       storageRecovered = true;
-      const repaired = new Promise<void>(resolve => service.onChange(() => resolve()));
+      let remainingMarkers = ownStatusFails ? 2 : 1;
+      const repaired = new Promise<void>(resolve => {
+        service.onChange(() => { if (--remainingMarkers === 0) resolve(); });
+      });
       await service.list(BOT_ID);
       await repaired;
-      // Wait for the entire serialized repair, including both markers.
-      for (let attempt = 0; attempt < 100; attempt++) {
-        if ((await app.store.read(BOT_ID)).every(row => row.statusAppended === true)) break;
-        await new Promise<void>(resolve => setImmediate(resolve));
-      }
       assert.equal((await app.store.read(BOT_ID)).every(row => row.statusAppended === true), true);
       assert.equal(statusEntries(app.appends).filter(entry => (entry.data as { issueId: string }).issueId === current.id).length, 1);
     });
