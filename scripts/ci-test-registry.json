@@ -775,7 +775,10 @@
         "main/services/bot-messages/framing.test.ts",
         "main/services/bot-messages/ledger.test.ts",
         "main/services/bot-messages/courier.test.ts",
-        "main/services/bot-messages/tool.test.ts"
+        "main/services/bot-messages/tool.test.ts",
+        "main/services/bot-messages/lifecycle.test.ts",
+        "main/services/bot-messages/roster.test.ts",
+        "main/services/bot-messages/real-courier.test.ts"
       ],
       "preserved": [
         "worktree-remover-native",

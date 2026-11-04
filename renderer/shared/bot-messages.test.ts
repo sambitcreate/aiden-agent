@@ -54,3 +54,11 @@ test("switches default on and status copy is stable", () => {
       line,
     );
 });
+
+test("empty run inputs deny messaging while an actual unlabelled person input permits it", () => {
+  assert.deepEqual(botMessageChainOf([]), {
+    canSend: false,
+    code: "chain_too_deep",
+  });
+  assert.deepEqual(botMessageChainOf([undefined]), { canSend: true, hop: 1, chain: [] });
+});

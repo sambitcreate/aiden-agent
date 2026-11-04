@@ -23,6 +23,8 @@ export type ToolReplay = "safe" | "unsafe";
 
 /** What a per-call tool may use of the conversation it runs in. */
 export interface BotToolCall {
+  /** Host-owned durable tool identity, used to end replay receipts after settlement. */
+  readonly taskId?: string;
   assertRunActive?(): Promise<void>;
   readonly callId: string;
   readonly signal: AbortSignal;
@@ -62,6 +64,7 @@ function callApi(api: ToolExecutionApi, context: Context, signal: AbortSignal, o
     ...(opts.assertRunActive ? {assertRunActive: () => opts.assertRunActive!(api, context)} : {}),
     ...(runRequestIds === undefined ? {} : { runRequestIds: () => runRequestIds(api, context) }),
     callId: api.callId,
+    taskId: String(api.taskId),
     signal,
     entries: () =>
       api.commit(async (tx) => {

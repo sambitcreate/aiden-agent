@@ -47,6 +47,7 @@ import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
 //   too, so the flush also reads each historical entry's own ingress.
 
 import type { BrowserApprovalTarget } from "../browser/approval.js";
+import type { BotApprovalRequestOutcome } from "./bot-approvals.js";
 import { randomUUID } from "node:crypto";
 import type { Context, JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -278,6 +279,8 @@ export interface BotExtensionDeps {
    * and is re-asked with the same `waitId` after Resume.
    */
   requestApproval(request: BotApprovalRequest): Promise<"allow" | "deny">;
+  /** Main-owned decision provenance, preferred over the legacy answer-only request. */
+  requestApprovalOutcome?(request: BotApprovalRequest): Promise<BotApprovalRequestOutcome>;
   /**
    * Show a rule hand-off card. Resolves with the person's answer; rejects
    * when `signal` aborts, so the call stays unanswered and Resume asks again
@@ -476,12 +479,14 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     const conversation = await harness.conversation(api.conversationId, context);
     const inputs = await Promise.all((live?.run?.inputs ?? []).map(async id => {
       const submission = submissions.find(s => s.id === id);
-      const entry = submission?.type === "input" && submission.entry !== undefined && conversation
+      if (submission?.type !== "input") return undefined;
+      const entry = submission.entry !== undefined && conversation
         ? await conversation.commit(tx => tx.entry(submission.entry!), context) : undefined;
       return {submissionId: String(id), ...(submission?.requestId !== undefined ? {requestId: submission.requestId} : {}),
         ...(entry?.kind === BOT_MESSAGE_INPUT_KIND ? {botMessage: entry.data as unknown as BotMessageInputMetadata} : {})};
     }));
-    return {runId: String(live?.run?.taskId ?? api.conversationId), inputs};
+    return {runId: String(live?.run?.taskId ?? api.conversationId), inputs: inputs.some(input => input === undefined)
+      ? [] : inputs.filter((input): input is NonNullable<typeof input> => input !== undefined)};
   }
 
   function expired(owner: BotApprovalOwner): boolean {
@@ -489,7 +494,9 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       (!input.botMessage || !Number.isFinite(input.botMessage.deadline) || input.botMessage.deadline <= (deps.now?.() ?? Date.now())));
   }
   async function assertLive(api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId }, context: Context): Promise<void> {
-    if (expired(await runOwner(api, context))) throw new Error("This Bot message expired. No further actions can run.");
+    const owner = await runOwner(api, context);
+    if (owner.inputs.length === 0) throw new Error("This tool is not available without an active input.");
+    if (expired(owner)) throw new Error("This Bot message expired. No further actions can run.");
   }
 
   /** Whether the run being served may use `bot_memory`. */
@@ -498,8 +505,10 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     context: Context,
   ): Promise<boolean> {
     if (!installedToolNames.has(MEMORY_TOOL_NAME)) return false;
+    const requestIds = await runRequestIds(api, context);
+    if (requestIds.length === 0) return false;
     if (deps.turnAllows === undefined) return true;
-    return deps.turnAllows(MEMORY_TOOL_NAME, await runRequestIds(api, context));
+    return deps.turnAllows(MEMORY_TOOL_NAME, requestIds);
   }
 
   const hooks = [
@@ -523,7 +532,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           const refusal = await deps.spending.refusal(botId, await runRequestIds(api, context));
           if (refusal !== undefined) return failClosed(api.taskId, context, new BotSpendingLimitError(refusal));
         }
-        let messages = messageExpired ? withoutTools(request.messages, () => true) : request.messages;
+        let messages = messageExpired || owner.inputs.length === 0 ? withoutTools(request.messages, () => true) : request.messages;
         const turnAllows = deps.turnAllows;
         if (turnAllows !== undefined) {
           const requestIds = await runRequestIds(api, context);
@@ -535,8 +544,9 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         messages = withNewestToolImages(messages, BOT_COMPUTER_TOOL_NAME, BOT_COMPUTER_CAPTURE_IMAGES_KEPT, BOT_OLDER_COMPUTER_CAPTURE_NOTE);
         if (deps.imageInput !== undefined && !(await deps.imageInput(botId))) messages = withImageReferences(messages);
         const finalOwner = await runOwner(api, context);
-        if (expired(finalOwner)) {
-          if (finalOwner.inputs.every(input => isBotMessageRequestId(input.requestId))) return failClosed(api.taskId, context, new Error("This Bot message expired."));
+        const finalExpired = expired(finalOwner);
+        if (finalExpired || finalOwner.inputs.length === 0) {
+          if (finalExpired && finalOwner.inputs.every(input => isBotMessageRequestId(input.requestId))) return failClosed(api.taskId, context, new Error("This Bot message expired."));
           messages = withoutTools(messages, () => true);
         }
         return messages === request.messages ? undefined : { messages };
@@ -575,6 +585,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     hook(ToolTask, {
       beforeTool: async (call, api, context) => {
         const owner = await runOwner(api, context);
+        if (owner.inputs.length === 0) return {block: "This tool is not available without an active input."};
         if (expired(owner)) return {block: "This Bot message expired. No further actions can run."};
         // A rule hand-off the person already answered is applied as answered,
         // whatever the rules say now: re-deciding could run a call the person
@@ -680,7 +691,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         // today's summary under the same wait id.
         const summary = memo.kind === "handoff" ? decision.approval.summary : memo.summary;
         await assertLive(api, context);
-        const answer = await deps.requestApproval({
+        const request: BotApprovalRequest = {
           botId,
           waitId: memo.waitId,
           toolCallId: memo.toolCallId,
@@ -688,9 +699,18 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           summary,
           owner: await runOwner(api, context),
           signal: context.abortSignal,
-        });
+        };
+        const answer = deps.requestApprovalOutcome
+          ? await deps.requestApprovalOutcome(request)
+          : { decision: await deps.requestApproval(request), decisionSource: "person" as const };
         if (expired(await runOwner(api, context))) return {block: "This Bot message expired. The approval window ended."};
-        if (answer !== "allow") return { block: "The person declined this action." };
+        if (answer.decision !== "allow") {
+          return {
+            block: answer.decisionSource === "expiry"
+              ? "The approval window expired. Nobody approved this action."
+              : answer.decisionSource === "person" ? "The person declined this action." : "This action was not approved.",
+          };
+        }
         try {
           await assertLive(api, context);
             await decision.approval.onAllow?.();

@@ -18,7 +18,7 @@ const parameters = Type.Object(
 export function createMessageBotTool(
   botId: string,
   deps: MessageBotToolDeps,
-  call?: Pick<BotToolCall, "memo" | "runRequestIds" | "signal">,
+  call?: Pick<BotToolCall, "memo" | "runRequestIds" | "signal" | "taskId">,
 ): AgentTool {
   const roster = (deps.descriptionRoster ?? [])
     .filter((b) => b.id !== botId && b.acceptsMessages)
@@ -34,7 +34,11 @@ export function createMessageBotTool(
     ].join("\n"),
     async execute(_id, args) {
       if (!call?.runRequestIds) throw new Error("The owning Bot run is unavailable.");
-      const { deliveryId } = await call.memo(BOT_MESSAGE_MEMO, { deliveryId: randomUUID() });
+      const memo = await call.memo(BOT_MESSAGE_MEMO, {
+        deliveryId: randomUUID(),
+        ...(call.taskId ? { taskId: call.taskId } : {}),
+      });
+      const { deliveryId } = memo;
       const { bot, message } = args as {
         bot: string;
         message: string;
@@ -44,6 +48,7 @@ export function createMessageBotTool(
         target: bot,
         message,
         deliveryId,
+        ...(memo.taskId ? { taskId: memo.taskId } : {}),
         runRequestIds: await call.runRequestIds(),
         signal: call.signal,
       });

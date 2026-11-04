@@ -148,6 +148,7 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
         return { allowed: true, ...(mcpAgentToolDescriptor(tool) ? { approval: { summary: `Allow ${tool.label ?? name}?` } } : {}) };
       }),
       requestApproval: approvals.request,
+      requestApprovalOutcome: approvals.requestOutcome,
       codemodeSandbox: botCodemodeSandbox,
       turnAllows: withBotMemoryIngress(botIngressAllowsTool),
       readmit: async (botId) => {

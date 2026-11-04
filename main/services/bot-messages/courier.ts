@@ -13,7 +13,12 @@ import {
 import type { BotSessionRuntime, BotReplyOutcome } from "../bot-runtime/bot-session-service.js";
 import type { BotApprovals } from "../bot-runtime/bot-approvals.js";
 import type { BotDeliveryInput } from "../bot-delivery/funnel.js";
-import type { BotMessageDelivery, BotMessageEffect, BotMessageLedger } from "./ledger.js";
+import {
+  botMessageReplayHash,
+  type BotMessageDelivery,
+  type BotMessageEffect,
+  type BotMessageLedger,
+} from "./ledger.js";
 import { botMessageInputText, botReplyInputText } from "./framing.js";
 export interface BotRosterEntry {
   id: string;
@@ -21,7 +26,7 @@ export interface BotRosterEntry {
   purpose: string;
   acceptsMessages: boolean;
   sendsMessages: boolean;
-  unavailable?: "bot_paused" | "needs_model" | "spending_limit";
+  unavailable?: "bot_paused" | "needs_model" | "spending_limit" | "unavailable";
 }
 export type BotMessageRefusal =
   | "switched_off"
@@ -41,6 +46,7 @@ export interface BotMessagePost {
   target: string;
   message: string;
   deliveryId: string;
+  taskId?: string;
   runRequestIds: readonly (string | undefined)[];
   signal?: AbortSignal;
 }
@@ -65,7 +71,8 @@ export interface BotMessageCourierDeps {
   sessions: Pick<
     BotSessionRuntime,
     "send" | "awaitReply" | "markSilent" | "appendEntry" | "state" | "submissionForRequest"
-  >;
+  > &
+    Partial<Pick<BotSessionRuntime, "awaitMessageTaskSettlement">>;
   roster(): Promise<readonly BotRosterEntry[]>;
   enabled(): Promise<boolean>;
   approvals: Pick<BotApprovals, "pending" | "decide" | "onChange">;
@@ -111,6 +118,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     }
   >();
   const dirty = new Set<string>();
+  const approvalUpdates = new Map<string, Promise<void>>();
   const timers = new Map<
     string,
     {
@@ -124,6 +132,15 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     }
   >();
   const deleted = new Set<string>();
+  const waits = new Map<
+    string,
+    {
+      controller: AbortController;
+      promise: Promise<BotReplyOutcome>;
+      users: Set<symbol>;
+    }
+  >();
+  const receiptWatches = new Map<string, { controller: AbortController; promise: Promise<void> }>();
   const publications = new Map<string, Promise<void>>();
   const background = new Set<Promise<unknown>>();
   const posts = new Set<Promise<BotMessagePostResult>>();
@@ -156,6 +173,12 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
       .catch(report)
       .finally(() => {
         workers.delete(id);
+        track(
+          (async () => {
+            const row = await deps.ledger.get(id);
+            if (row) arm(row);
+          })(),
+        );
         if (dirty.delete(id)) queue(id);
       });
     workers.set(id, { controller, promise });
@@ -165,18 +188,27 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
       roster = await deps.roster();
     return !disposed && !deleted.has(botId) && !!row && roster.some((b) => b.id === botId);
   }
+  function liveDeadline(row: BotMessageDelivery): boolean {
+    return (
+      unfinished(row) ||
+      row.effects.some((e) => e.kind === "reply" && e.acknowledgedAt === undefined) ||
+      deps.approvals.pending().some((p) => p.owner?.inputs.some((i) => i.botMessage?.deliveryId === row.id))
+    );
+  }
   function arm(row: BotMessageDelivery) {
+    if (!liveDeadline(row) || row.deadline <= deps.now()) {
+      timers.get(row.id)?.cancel();
+      timers.delete(row.id);
+      return;
+    }
     if (timers.has(row.id)) return;
     timers.set(
       row.id,
-      deps.setTimer(
-        () => {
-          timers.delete(row.id);
-          workers.get(row.id)?.controller.abort();
-          track(expire(row.id).then(() => queue(row.id)));
-        },
-        Math.max(0, row.deadline - deps.now()),
-      ),
+      deps.setTimer(() => {
+        timers.delete(row.id);
+        workers.get(row.id)?.controller.abort();
+        track(expire(row.id).then(() => queue(row.id)));
+      }, row.deadline - deps.now()),
     );
   }
   function notice(
@@ -185,11 +217,12 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     text?: string,
     waitId?: string,
     summary?: string,
+    ownerBotId = row.toBotId,
   ): BotMessageEffect[] {
     const data = {
       deliveryId: row.id,
-      botId: row.toBotId,
-      botName: row.toName,
+      botId: ownerBotId,
+      botName: ownerBotId === row.fromBotId ? row.fromName : row.toName,
       outcome,
       ...(text === undefined ? {} : { text }),
       ...(waitId ? { waitId } : {}),
@@ -198,7 +231,12 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     const key = `${row.id}:${outcome}:${waitId ?? "final"}`;
     return [
       { id: `${key}:notice`, kind: "notice", botId: row.fromBotId, data },
-      { id: `${key}:notification`, kind: "notification", botId: row.fromBotId, data },
+      {
+        id: `${key}:notification`,
+        kind: "notification",
+        botId: row.fromBotId,
+        data,
+      },
     ];
   }
   async function quiet(id: string, outcome: BotMessageStatusOutcome): Promise<void> {
@@ -218,17 +256,23 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
         ],
       };
     });
-    if (row?.parentDeliveryId && row.outcome === outcome) await quiet(row.parentDeliveryId, outcome);
+    if (row?.parentDeliveryId && row.outcome === outcome) {
+      await deps.ledger.update(row.parentDeliveryId, (r) => (unfinished(r) ? { ...r, childOutcome: outcome } : r));
+      queue(row.parentDeliveryId);
+    }
     queue(id);
   }
   async function expire(id: string): Promise<void> {
     const row = await deps.ledger.get(id);
     if (!row) return;
-    for (const prompt of deps.approvals.pending()) {
+    const prompts = deps.approvals
+      .pending()
+      .filter((prompt) => prompt.owner?.inputs.some((i) => i.botMessage?.deliveryId === id));
+    for (const prompt of prompts) {
       if (prompt.owner?.inputs.some((i) => i.botMessage?.deliveryId === id))
         deps.approvals.decide(prompt.waitId, "deny", "expiry");
     }
-    if (unfinished(row)) await quiet(id, row.waiting.length ? "gave_up" : "expired");
+    if (unfinished(row)) await quiet(id, prompts.length ? "gave_up" : "expired");
     else queue(id); // An answer already saved falls back to a display row.
   }
   async function ack(id: string, effectId: string, extra: Partial<BotMessageEffect> = {}) {
@@ -242,7 +286,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     if (!row || !unfinished(row)) return;
     if (deps.now() >= row.deadline) return expire(id);
     const bounded = text.trim().slice(0, L.replyChars);
-    if (silent(bounded)) return quiet(id, "silent");
+    if (silent(bounded) && !row.childDeliveryId && !row.childOutcome) return quiet(id, "silent");
     if (row.parentDeliveryId) {
       await deps.ledger.update(id, (r) => (unfinished(r) ? { ...r, initialAnswer: bounded } : r));
       queue(id);
@@ -251,6 +295,12 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     if (row.childDeliveryId) {
       await deps.ledger.update(id, (r) => (unfinished(r) ? { ...r, initialAnswer: bounded } : r));
       queue(row.childDeliveryId);
+      queue(id);
+      return;
+    }
+    if (row.childOutcome) {
+      await deps.ledger.update(id, (r) => (unfinished(r) ? { ...r, initialAnswer: bounded } : r));
+      queue(id);
       return;
     }
     await finalAnswer(id, bounded);
@@ -267,7 +317,13 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
         initialAnswer: text,
         effects: [
           ...r.effects,
-          { id: `${r.id}:reply`, kind: "reply", botId: r.fromBotId, requestId: botReplyRequestId(r.id), text },
+          {
+            id: `${r.id}:reply`,
+            kind: "reply",
+            botId: r.fromBotId,
+            requestId: botReplyRequestId(r.id),
+            text,
+          },
         ],
       };
     });
@@ -277,12 +333,81 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
   }
   async function wait(botId: string, submissionId: string, signal: AbortSignal): Promise<BotReplyOutcome | undefined> {
     if (signal.aborted || disposed) return;
-    const result = await deps.sessions.awaitReply(botId, submissionId, signal);
-    return signal.aborted || disposed ? undefined : result;
+    const key = JSON.stringify([botId, submissionId]);
+    let shared = waits.get(key);
+    if (shared?.controller.signal.aborted) {
+      await shared.promise.catch(() => undefined);
+      shared = undefined;
+    }
+    if (signal.aborted || disposed) return;
+    if (!shared) {
+      const controller = new AbortController();
+      const users = new Set<symbol>();
+      const promise = deps.sessions.awaitReply(botId, submissionId, controller.signal);
+      shared = { controller, promise, users };
+      waits.set(key, shared);
+      const saved = shared;
+      void promise
+        .finally(() => {
+          if (waits.get(key) === saved) waits.delete(key);
+        })
+        .catch(() => undefined);
+    }
+    const user = Symbol();
+    shared.users.add(user);
+    let onAbort: () => void = () => undefined;
+    const canceled = new Promise<undefined>((resolve) => {
+      onAbort = () => resolve(undefined);
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+    try {
+      const result = await Promise.race([shared.promise, canceled]);
+      return signal.aborted || disposed ? undefined : result;
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+      shared.users.delete(user);
+      if (!shared.users.size) shared.controller.abort();
+    }
+  }
+  async function observeBusy(id: string, botId: string, signal: AbortSignal): Promise<void> {
+    const state = await deps.sessions.state(botId);
+    if (state.kind === "running") await wait(botId, state.submissionId, signal);
+    if (!disposed && !signal.aborted) queue(id);
+  }
+  async function collectReceipts(): Promise<void> {
+    if (disposed || !deps.sessions.awaitMessageTaskSettlement) return;
+    for (const receipt of await deps.ledger.receipts()) {
+      if (!receipt.taskId || receiptWatches.has(receipt.id) || deleted.has(receipt.fromBotId)) continue;
+      const controller = new AbortController();
+      const taskId = receipt.taskId;
+      const promise = deps.sessions
+        .awaitMessageTaskSettlement(receipt.fromBotId, taskId, controller.signal)
+        .then(async (settled) => {
+          if (settled && !disposed && !controller.signal.aborted) await deps.ledger.collectReceipt(receipt.id, taskId);
+        })
+        .catch((error) => {
+          if (!controller.signal.aborted) report(error);
+        })
+        .finally(() => receiptWatches.delete(receipt.id));
+      receiptWatches.set(receipt.id, { controller, promise });
+    }
   }
   async function reply(row: BotMessageDelivery, effect: BotMessageEffect, signal: AbortSignal): Promise<void> {
     if (!(await exists(effect.botId, row.id))) {
       if (!disposed) await ack(row.id, effect.id);
+      return;
+    }
+    if (deps.now() >= row.deadline) {
+      await deps.ledger.update(row.id, (r) => ({
+        ...r,
+        effects: [
+          ...r.effects.map((e) => (e.id === effect.id ? { ...e, acknowledgedAt: deps.now() } : e)),
+          ...notice(r, "replied_while_paused", effect.text),
+        ],
+      }));
+      if (row.parentDeliveryId) await quiet(row.parentDeliveryId, "expired");
+      queue(row.id);
       return;
     }
     let submission = effect.submissionId ?? (await deps.sessions.submissionForRequest(effect.botId, effect.requestId!));
@@ -300,11 +425,15 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
         queue(row.id);
         return;
       }
+      if (state.kind === "running") return observeBusy(row.id, effect.botId, signal);
       try {
         if (!(await exists(effect.botId, row.id))) return;
         submission = (
           await deps.sessions.send(effect.botId, {
-            text: botReplyInputText({ fromName: row.toName, reply: effect.text! }),
+            text: botReplyInputText({
+              fromName: row.toName,
+              reply: effect.text!,
+            }),
             requestId: effect.requestId!,
             ifIdle: true,
             ifNotInterrupted: true,
@@ -319,7 +448,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
           })
         ).submissionId;
       } catch (e) {
-        if (reason(e) === "bot_busy") return;
+        if (reason(e) === "bot_busy") return observeBusy(row.id, effect.botId, signal);
         if (["bot_paused", "paused_by_person"].includes(reason(e))) {
           queue(row.id);
           return;
@@ -383,7 +512,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
           botId: effect.botId,
           class: "bot_message",
           dedupeKey: effect.id,
-          title: effect.data ? botMessageStatusLine(effect.data) : `${row.fromName} replied`,
+          title: effect.data ? botMessageStatusLine(effect.data) : `${row.toName} replied`,
           body: effect.text ?? effect.data?.text ?? (effect.data ? botMessageStatusLine(effect.data) : ""),
           status: effect.data?.outcome === "failed" ? "failed" : "info",
         });
@@ -420,6 +549,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     let row = await deps.ledger.get(id);
     if (!row || disposed) return;
     arm(row);
+    await collectReceipts();
     if (row.parentDeliveryId && unfinished(row)) {
       const parent = await deps.ledger.get(row.parentDeliveryId);
       if (!parent || !unfinished(parent)) {
@@ -467,12 +597,17 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
             return;
           }
           if (deps.now() >= row.deadline) return expire(id);
+          if (state.kind === "running") return observeBusy(id, effect.botId, signal);
           try {
             if (!(await exists(effect.botId, id))) return;
             submission = (
               await deps.sessions.send(effect.botId, {
                 requestId: effect.requestId!,
-                text: botMessageInputText({ fromName: row.fromName, hop: row.hop, message: row.message }),
+                text: botMessageInputText({
+                  fromName: row.fromName,
+                  hop: row.hop,
+                  message: row.message,
+                }),
                 ifIdle: true,
                 ifNotInterrupted: true,
                 botMessage: {
@@ -486,7 +621,8 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
               })
             ).submissionId;
           } catch (e) {
-            if (disposed || signal.aborted || reason(e) === "bot_busy") return;
+            if (disposed || signal.aborted) return;
+            if (reason(e) === "bot_busy") return observeBusy(id, effect.botId, signal);
             await quiet(id, "failed");
             return;
           }
@@ -513,6 +649,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
     row = await deps.ledger.get(id);
     if (!row || !unfinished(row) || signal.aborted) return;
     if (row.initialAnswer !== undefined) {
+      if (row.childOutcome) return quiet(id, row.childOutcome);
       if (row.parentDeliveryId) {
         const parent = await deps.ledger.get(row.parentDeliveryId);
         if (!parent || !unfinished(parent)) return quiet(id, "failed");
@@ -549,7 +686,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
         e as {
           reason?: string;
         }
-      )?.reason ?? ""
+      )?.reason ?? ((e as { name?: string })?.name === "ConversationBusy" ? "bot_busy" : "")
     );
   }
   async function wake(botId?: string) {
@@ -569,8 +706,16 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
             }
           >
         > = {},
-      ): BotMessagePostResult => ({ status: "refused", code, message, ...extra });
+      ): BotMessagePostResult => ({
+        status: "refused",
+        code,
+        message,
+        ...extra,
+      });
       try {
+        if (disposed || deleted.has(input.fromBotId)) return refuse("unavailable", "Bot messaging is unavailable.");
+        const chain = botMessageChainOf(input.runRequestIds);
+        if (!chain.canSend) return refuse("chain_too_deep", "Messaging other Bots is off for this turn.");
         const message = typeof input.message === "string" ? input.message.trim() : "";
         if (
           !message ||
@@ -582,15 +727,24 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
         if (receipt) {
           if (
             receipt.fromBotId !== input.fromBotId ||
-            receipt.message !== message ||
-            ![receipt.toBotId, receipt.toName].includes(input.target.trim())
+            receipt.inputHash !==
+              botMessageReplayHash({
+                ...input,
+                message,
+                hop: chain.hop,
+                parentDeliveryId: chain.parentDeliveryId,
+              }) ||
+            receipt.taskId !== input.taskId ||
+            deleted.has(receipt.toBotId)
           )
             return refuse("unavailable", "This replay does not match the accepted message.");
           queue(receipt.id);
-          return { status: "sent", deliveryId: receipt.id, to: { id: receipt.toBotId, name: receipt.toName } };
+          return {
+            status: "sent",
+            deliveryId: receipt.id,
+            to: { id: receipt.toBotId, name: receipt.toName },
+          };
         }
-        const chain = botMessageChainOf(input.runRequestIds);
-        if (!chain.canSend) return refuse("chain_too_deep", "Messaging other Bots is off for this turn.");
         const roster = await deps.roster(),
           sender = roster.find((b) => b.id === input.fromBotId);
         const target = input.target.trim();
@@ -630,6 +784,8 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
           id,
           fromBotId: sender.id,
           toBotId: to.id,
+          replayTarget: input.target.trim(),
+          ...(input.taskId ? { taskId: input.taskId } : {}),
           fromName: sender.name,
           toName: to.name,
           hop: chain.hop,
@@ -640,14 +796,26 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
           status: "delivered",
           message,
           waiting: [],
-          effects: [{ id: `${id}:target`, kind: "target", botId: to.id, requestId, text: message }],
+          effects: [
+            {
+              id: `${id}:target`,
+              kind: "target",
+              botId: to.id,
+              requestId,
+              text: message,
+            },
+          ],
         });
         if ("refused" in result)
           return refuse("limit_reached", "This Bot has reached its messaging limit.", {
             retryAfter: result.refused.retryAfter,
           });
         queue(id);
-        return { status: "sent", deliveryId: id, to: { id: to.id, name: to.name } };
+        return {
+          status: "sent",
+          deliveryId: id,
+          to: { id: to.id, name: to.name },
+        };
       } catch (e) {
         report(e);
         return refuse("unavailable", e instanceof Error ? e.message : "Bot messaging is unavailable.");
@@ -660,19 +828,48 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
         removeState = deps.onStateChange((id) => {
           track(wake(id));
         });
-        removeApprovals = deps.approvals.onChange(() => {
-          for (const prompt of deps.approvals.pending()) {
-            const ids = prompt.owner?.inputs.map((i) => i.requestId) ?? [];
-            if (ids.length)
-              track(
-                courier.announceWaiting(prompt.botId, ids, prompt.summary, prompt.waitId).catch((error) => {
+        removeApprovals = deps.approvals.onChange((botId) => {
+          const task = (approvalUpdates.get(botId) ?? Promise.resolve())
+            .catch(() => undefined)
+            .then(async () => {
+              if (disposed) return;
+              for (const row of await deps.ledger.open()) {
+                if (row.fromBotId !== botId && row.toBotId !== botId) continue;
+                const saved = await deps.ledger.update(row.id, (r) => {
+                  const active = new Set(
+                    deps.approvals
+                      .pending()
+                      .filter((p) => p.owner?.inputs.some((i) => i.botMessage?.deliveryId === row.id))
+                      .map((p) => p.waitId),
+                  );
+                  return {
+                    ...r,
+                    waiting: r.waiting.filter((w) => active.has(w.waitId)),
+                  };
+                });
+                if (saved) arm(saved);
+              }
+              for (const prompt of deps.approvals.pending(botId)) {
+                if (!deps.approvals.pending(botId).some((p) => p.waitId === prompt.waitId)) continue;
+                const ids = prompt.owner?.inputs.map((i) => i.requestId) ?? [];
+                if (!ids.length) continue;
+                try {
+                  await courier.announceWaiting(botId, ids, prompt.summary, prompt.waitId);
+                } catch (error) {
                   deps.approvals.decide(prompt.waitId, "deny", "expiry");
                   report(error);
-                }),
-              );
-          }
+                }
+              }
+            });
+          approvalUpdates.set(botId, task);
+          track(
+            task.finally(() => {
+              if (approvalUpdates.get(botId) === task) approvalUpdates.delete(botId);
+            }),
+          );
         });
       }
+      await collectReceipts();
       await wake();
     },
     async announceWaiting(botId, ids, summary, waitId) {
@@ -708,25 +905,55 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
             : {
                 ...r,
                 waiting: [...r.waiting, { waitId, summary: summary.slice(0, 160), at: deps.now() }],
-                effects: [...r.effects, ...notice(r, "waiting_approval", undefined, waitId, summary.slice(0, 160))],
+                effects: [
+                  ...r.effects,
+                  ...notice(r, "waiting_approval", undefined, waitId, summary.slice(0, 160), botId),
+                ],
               },
         );
         publishWaiting(row.id);
+        const saved = await deps.ledger.get(row.id);
+        if (saved) arm(saved);
         queue(row.id);
       }
       return { deadline, expired: expired || deadline <= deps.now() };
     },
     async forgetBot(botId) {
       deleted.add(botId);
+      // Deny before cancellation removes the pending prompt and its ownership.
+      for (const prompt of deps.approvals.pending()) {
+        if (
+          prompt.botId === botId ||
+          prompt.owner?.inputs.some((i) => i.botMessage?.botId === botId || deleted.has(i.botMessage?.botId ?? ""))
+        )
+          deps.approvals.decide(prompt.waitId, "deny", "expiry");
+      }
       const removed = await deps.ledger.forgetBot(botId);
+      const removedIds = new Set(removed.map((r) => r.id));
+      for (const prompt of deps.approvals.pending()) {
+        if (prompt.owner?.inputs.some((i) => removedIds.has(i.botMessage?.deliveryId ?? "")))
+          deps.approvals.decide(prompt.waitId, "deny", "expiry");
+      }
+      // Abort all observation only if bookkeeping is unavailable; never stop a session.
+      let live: BotMessageDelivery[];
+      try {
+        live = await deps.ledger.open();
+      } catch (error) {
+        report(error);
+        for (const worker of workers.values()) worker.controller.abort();
+        for (const timer of timers.values()) timer.cancel();
+        timers.clear();
+        return;
+      }
       for (const row of removed) {
         workers.get(row.id)?.controller.abort();
         timers.get(row.id)?.cancel();
         timers.delete(row.id);
         scheduled.get(row.id)?.cancel();
         scheduled.delete(row.id);
+        receiptWatches.get(row.id)?.controller.abort();
       }
-      await wake();
+      for (const row of live) queue(row.id);
     },
     async dispose() {
       disposed = true;
@@ -734,6 +961,10 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
       removeApprovals?.();
       for (const timer of [...timers.values(), ...scheduled.values()]) timer.cancel();
       for (const worker of workers.values()) worker.controller.abort();
+      for (const watch of receiptWatches.values()) watch.controller.abort();
+      for (const shared of waits.values()) shared.controller.abort();
+      await Promise.allSettled([...receiptWatches.values()].map((w) => w.promise));
+      await Promise.allSettled([...waits.values()].map((w) => w.promise));
       await Promise.allSettled([...workers.values()].map((w) => w.promise));
       await Promise.allSettled([...publications.values(), ...background, ...posts]);
       timers.clear();

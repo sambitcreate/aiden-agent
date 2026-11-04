@@ -235,6 +235,8 @@ export interface BotSessionService {
 }
 
 export interface BotSessionRuntime extends BotSessionService {
+  /** Read-only task observation for collecting message replay receipts. Never resumes scheduling. */
+  awaitMessageTaskSettlement(botId: string, taskId: string, signal: AbortSignal): Promise<boolean>;
   /** Startup: remove orphaned Bot sessions and record interrupted Bots. Never resumes. */
   initialize(): Promise<{ removedOrphans: string[]; interrupted: string[] }>;
   /** The Bot's conversation, opened lazily (for live projection). */
@@ -876,6 +878,40 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         for (const effect of deps.deleteEffects ?? []) await effect(botId);
         await recordPendingDelete(botId, false);
       });
+    },
+
+    async awaitMessageTaskSettlement(botId, taskId, signal) {
+      if (signal.aborted || deleted.has(botId)) return false;
+      const id = Number(taskId) as TaskId;
+      if (!Number.isSafeInteger(id)) return false;
+      const opened = await requireHost().open(botId);
+      const record = await opened.harness.getTask(id, ctx);
+      if (!record || record.kind !== ToolTask.definition.name || record.conversationId !== opened.conversation.id) return false;
+      if (record.state.status === "terminal" || record.state.status === "completing") return true;
+      const {context, cancel} = withCancel(ctx);
+      const onAbort = () => cancel(signal.reason);
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, {once: true});
+      try {
+        const watch = await opened.harness.watchTaskGraph(context);
+        try {
+          return await new Promise<boolean>(resolve => {
+            const check = (graph: typeof watch.value) => {
+              const task = graph.tasks[taskId];
+              if (!task || task.state.status === "completing") resolve(true);
+            };
+            check(watch.value);
+            watch.start(async graph => {check(graph);});
+            void watch.closed.then(() => resolve(false));
+          });
+        } finally { await watch.stop(); }
+      } catch (error) {
+        if (!signal.aborted) throw error;
+        return false;
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+        cancel();
+      }
     },
 
     async awaitReply(botId, submissionId, signal) {

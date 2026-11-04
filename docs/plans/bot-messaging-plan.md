@@ -1,6 +1,6 @@
 # Bots that work together: implementation plan
 
-Status: implementation in progress (2026-11-03). Phase A Tasks 1–7 are implemented and locally verified; the independent core review gate is pending before Tasks 8–11. No phase has passed its acceptance gate yet. Branch `feature/bot-messaging`, based on `main` at `286969201`.
+Status: implementation in progress (2026-11-03). Phase A Tasks 1–7 are implemented and locally verified; the first independent core reviews required fixes, and the verification round is pending before Tasks 8–11. No phase has passed its acceptance gate yet. Branch `feature/bot-messaging`, with `main` at `a5c5db8b1` merged into it.
 
 This is the master plan. It records the owner's decisions and how the four detailed plans fit together. Research and design: [bot-to-bot-messaging-research.md](bot-to-bot-messaging-research.md).
 

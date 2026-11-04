@@ -648,3 +648,31 @@ test("chat detail, collapse, busy-send and shared link preferences persist witho
   await expect(page.getByRole("combobox", { name: "Send behavior while busy", exact: true })).toHaveText("Steer");
   await expect(page.getByRole("combobox", { name: "Open chat links in", exact: true })).toHaveText("System browser");
 });
+
+test("the Bot messaging switch persists through the real settings handler", async ({ aiden }) => {
+  let page = aiden.page;
+  await finishLmStudioOnboarding(page);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Bots", exact: true }).click();
+  const toggle = () => page.getByRole("switch", { name: "Bots can message each other", exact: true });
+  await expect(toggle()).toBeChecked();
+  await toggle().click();
+  await expect(toggle()).not.toBeChecked();
+  await expect.poll(() => page.evaluate(async () =>
+    (await window.aidenAPI.ipc.invoke("settings:get") as { botMessaging?: boolean }).botMessaging,
+  )).toBe(false);
+  page = await aiden.relaunch();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Bots", exact: true }).click();
+  await expect(toggle()).not.toBeChecked();
+  const invalid = await page.evaluate(async () => {
+    try { await window.aidenAPI.ipc.invoke("settings:set", { botMessaging: "false" }); return "accepted"; }
+    catch (error) { return String(error); }
+  });
+  expect(invalid).toContain("Invalid Bot messaging setting");
+  await toggle().click();
+  await expect(toggle()).toBeChecked();
+  await expect.poll(() => page.evaluate(async () =>
+    (await window.aidenAPI.ipc.invoke("settings:get") as { botMessaging?: boolean }).botMessaging,
+  )).toBeUndefined();
+});

@@ -69,6 +69,7 @@ export type BotMessageChain =
       code: "chain_too_deep";
     };
 export function botMessageChainOf(ids: readonly (string | undefined)[]): BotMessageChain {
+  if (!ids.length) return { canSend: false, code: "chain_too_deep" };
   let parent:
     | Extract<
         BotMessageTurnKind,

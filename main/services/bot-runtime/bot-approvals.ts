@@ -17,6 +17,12 @@ import type { BotApprovalOwner, BotApprovalRequest } from "./bot-extension.js";
 
 export type BotApprovalDecisionSource = "person" | "expiry" | "allow_list";
 
+/** Main-owned provenance; absent when no decision could be obtained. */
+export interface BotApprovalRequestOutcome {
+  decision: "allow" | "deny";
+  decisionSource?: BotApprovalDecisionSource;
+}
+
 export interface BotApprovalPrompt {
   owner?: BotApprovalOwner;
   decisionSource?: BotApprovalDecisionSource;
@@ -28,12 +34,21 @@ export interface BotApprovalPrompt {
 }
 
 /** Renderer prompts never carry the main-only run/input provenance or decision source. */
-export function publicBotApprovalPrompt(prompt: BotApprovalPrompt): Omit<BotApprovalPrompt, "owner" | "decisionSource"> {
-  return {botId: prompt.botId, waitId: prompt.waitId, toolCallId: prompt.toolCallId, toolName: prompt.toolName, summary: prompt.summary};
+export function publicBotApprovalPrompt(
+  prompt: BotApprovalPrompt,
+): Omit<BotApprovalPrompt, "owner" | "decisionSource"> {
+  return {
+    botId: prompt.botId,
+    waitId: prompt.waitId,
+    toolCallId: prompt.toolCallId,
+    toolName: prompt.toolName,
+    summary: prompt.summary,
+  };
 }
 
 export interface BotApprovals {
   request(request: BotApprovalRequest): Promise<"allow" | "deny">;
+  requestOutcome(request: BotApprovalRequest): Promise<BotApprovalRequestOutcome>;
   /** Answer a pending prompt by `waitId`. False when nothing is waiting under that id. */
   decide(waitId: string, decision: "allow" | "deny", source?: BotApprovalDecisionSource): boolean;
   /** Prompts waiting for an answer, oldest first; for one Bot when `botId` is given. */
@@ -54,7 +69,7 @@ function abortReason(signal: AbortSignal): unknown {
 }
 
 export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
-  const owners = new Map<string, BotApprovalOwner>();
+  const requests = new Map<string, { owner?: BotApprovalOwner; prompt?: BotApprovalPrompt }>();
   const waiting = new Map<string, BotApprovalPrompt>();
   const listeners = new Set<(botId: string) => void>();
   const changed = (botId: string) => {
@@ -63,14 +78,16 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
   const coordinator = new ToolApprovalCoordinator(
     (prompt) => {
       const botId = prompt.streamId.slice(STREAM_PREFIX.length);
+      const request = requests.get(prompt.approvalId);
       const published: BotApprovalPrompt = {
-        ...(owners.has(prompt.approvalId) ? {owner: owners.get(prompt.approvalId)} : {}),
+        ...(request?.owner ? { owner: request.owner } : {}),
         botId,
         waitId: prompt.approvalId,
         toolCallId: prompt.toolCallId,
         toolName: prompt.toolName,
         summary: prompt.summary,
       };
+      if (request) request.prompt = published;
       waiting.set(prompt.approvalId, published);
       options.publish(published);
       changed(botId);
@@ -85,10 +102,11 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
     },
   );
 
-  return {
-    async request(request) {
-      if (request.signal?.aborted) throw abortReason(request.signal);
-      if (request.owner) owners.set(request.waitId, request.owner);
+  async function requestOutcome(request: BotApprovalRequest): Promise<BotApprovalRequestOutcome> {
+    if (request.signal?.aborted) throw abortReason(request.signal);
+    const state = { owner: request.owner, prompt: undefined as BotApprovalPrompt | undefined };
+    requests.set(request.waitId, state);
+    try {
       const outcome = await coordinator.request(
         {
           streamId: `${STREAM_PREFIX}${request.botId}`,
@@ -99,11 +117,23 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
         },
         request.signal,
       );
-      owners.delete(request.waitId);
-      if (outcome === "allowed") return "allow";
       if (request.signal?.aborted) throw abortReason(request.signal);
-      return "deny";
+      if (outcome === "cancelled") throw new DOMException("The approval was withdrawn.", "AbortError");
+      const source = state.prompt?.decisionSource;
+      return {
+        decision: outcome === "allowed" ? "allow" : "deny",
+        ...(source === undefined ? {} : { decisionSource: source }),
+      };
+    } finally {
+      if (requests.get(request.waitId) === state) requests.delete(request.waitId);
+    }
+  }
+
+  return {
+    async request(request) {
+      return (await requestOutcome(request)).decision;
     },
+    requestOutcome,
     decide(waitId, decision, source = "person") {
       const prompt = waiting.get(waitId);
       if (prompt) prompt.decisionSource = source;

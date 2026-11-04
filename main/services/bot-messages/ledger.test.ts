@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile, stat } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, stat, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
@@ -22,7 +22,13 @@ export function delivery(from = "A", to = "B", now = 1): BotMessageDelivery {
     message: "hello",
     waiting: [],
     effects: [
-      { id: `${id}:target`, kind: "target", botId: to, requestId: botMessageRequestId(from, 1, id), text: "hello" },
+      {
+        id: `${id}:target`,
+        kind: "target",
+        botId: to,
+        requestId: botMessageRequestId(from, 1, id),
+        text: "hello",
+      },
     ],
   };
 }
@@ -79,7 +85,9 @@ test("one child reservation and three in-flight slots are atomic", async (t) => 
   assert.equal(result.filter((r) => "refused" in r && r.refused.reason === "once_per_turn").length, 1);
   await f.ledger.reserve(f.row("A", "C"));
   await f.ledger.reserve(f.row("A", "D"));
-  assert.deepEqual(await f.ledger.reserve(f.row("A", "E")), { refused: { reason: "in_flight" } });
+  assert.deepEqual(await f.ledger.reserve(f.row("A", "E")), {
+    refused: { reason: "in_flight" },
+  });
 });
 test("the twentieth send starts a durable ten-minute cooldown", async (t) => {
   const f = await fixture(t);
@@ -90,7 +98,9 @@ test("the twentieth send starts a durable ten-minute cooldown", async (t) => {
   }
   f.clock(6 * 60000);
   const refusal = await f.open().reserve(f.row("A", "last"));
-  assert.deepEqual(refusal, { refused: { reason: "burst", retryAfter: 4 * 60000 } });
+  assert.deepEqual(refusal, {
+    refused: { reason: "burst", retryAfter: 4 * 60000 },
+  });
   f.clock(4 * 60000);
   assert.ok("row" in (await f.open().reserve(f.row("A", "last"))));
 });
@@ -105,7 +115,10 @@ test("replay receipts survive display pruning and mismatched replay fails closed
     await f.settle(r.id);
   }
   assert.equal(await f.ledger.get(first.id), undefined);
-  assert.deepEqual(await f.open().reserve(first), { row: first, created: false });
+  assert.deepEqual(await f.open().reserve(first), {
+    row: first,
+    created: false,
+  });
   await assert.rejects(f.ledger.reserve({ ...first, message: "changed" }), /does not match/);
   // The original pair's count remains even though its first display row was pruned.
   for (let i = 0; i < 29; i++) {
@@ -114,12 +127,16 @@ test("replay receipts survive display pruning and mismatched replay fails closed
     assert.ok("row" in (await f.open().reserve(row)));
     await f.settle(row.id);
   }
-  assert.deepEqual(await f.open().reserve(f.row()), { refused: { reason: "pair_daily" } });
+  assert.deepEqual(await f.open().reserve(f.row()), {
+    refused: { reason: "pair_daily" },
+  });
 });
 test("capacity never evicts unfinished work and corruption preserves the file", async (t) => {
   const f = await fixture(t);
   for (let i = 0; i < 500; i++) await f.ledger.reserve(f.row(`A${i}`, `B${i}`));
-  assert.deepEqual(await f.ledger.reserve(f.row()), { refused: { reason: "capacity" } });
+  assert.deepEqual(await f.ledger.reserve(f.row()), {
+    refused: { reason: "capacity" },
+  });
   await writeFile(f.file, "broken");
   await assert.rejects(f.open().open(), /bookkeeping is unavailable/);
 });
@@ -142,4 +159,43 @@ test("terminal compare-and-set retains pending effects and deletion fences write
   assert.equal(await f.ledger.get(row.id), undefined);
   assert.equal(await f.ledger.update(row.id, (r) => r), undefined);
   await assert.rejects(f.ledger.reserve(row), /no longer exists/);
+});
+
+test("unchanged transitions do not rewrite the ledger", async (t) => {
+  const f = await fixture(t),
+    row = f.row();
+  await f.ledger.reserve(row);
+  const before = await stat(f.file);
+  await f.ledger.update(row.id, (r) => r);
+  assert.equal((await stat(f.file)).ino, before.ino);
+  assert.equal((await stat(f.file)).mtimeMs, before.mtimeMs);
+});
+test("corrupt ledger deletion preserves the file and rolls deferred purges forward after repair", async (t) => {
+  const f = await fixture(t),
+    row = f.row();
+  await f.ledger.reserve(row);
+  const good = await readFile(f.file, "utf8");
+  await writeFile(f.file, "corrupt private bookkeeping");
+  assert.deepEqual(await f.ledger.forgetBot("B"), []);
+  assert.equal(await readFile(f.file, "utf8"), "corrupt private bookkeeping");
+  assert.deepEqual(JSON.parse(await readFile(`${f.file}.pending-purges.json`, "utf8")), ["B"]);
+  await assert.rejects(f.ledger.reserve(f.row()), /bookkeeping/);
+  await writeFile(f.file, good);
+  assert.equal(await f.open().get(row.id), undefined);
+  await assert.rejects(f.open().reserve(f.row()), /no longer exists/);
+  assert.equal((await f.open().open())[0]?.outcome, "failed");
+});
+test("receipts keep hashed replay identity without private messages and collect independently from display rows", async (t) => {
+  const f = await fixture(t),
+    row = { ...f.row(), message: "Private receipt text", taskId: "41" };
+  row.effects[0]!.text = row.message;
+  await f.ledger.reserve(row);
+  const receipt = await f.ledger.receipt(row.id);
+  assert.equal(receipt?.taskId, "41");
+  assert.equal(JSON.stringify(receipt).includes(row.message), false);
+  await f.ledger.collectReceipt(row.id, "wrong-task");
+  assert.ok(await f.ledger.receipt(row.id));
+  await f.ledger.collectReceipt(row.id, "41");
+  assert.equal(await f.ledger.receipt(row.id), undefined);
+  assert.equal((await f.ledger.get(row.id))?.message, row.message);
 });

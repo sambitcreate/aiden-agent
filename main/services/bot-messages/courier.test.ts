@@ -14,7 +14,10 @@ async function setup(t: TestContext) {
   t.after(() => rm(dir, { recursive: true, force: true }));
   let now = 1000,
     enabled = true;
-  const ledger = createBotMessageLedger({ file: () => path.join(dir, "bot-messages.json"), now: () => now });
+  const ledger = createBotMessageLedger({
+    file: () => path.join(dir, "bot-messages.json"),
+    now: () => now,
+  });
   let roster: BotRosterEntry[] = ["A", "B", "C"].map((id) => ({
     id,
     name: id,
@@ -49,7 +52,9 @@ async function setup(t: TestContext) {
       if (old) return { submissionId: old, deduped: true };
       const state = states.get(botId);
       if (state && state.kind !== "idle")
-        throw Object.assign(new Error("busy"), { reason: state.kind === "interrupted" ? "bot_paused" : "bot_busy" });
+        throw Object.assign(new Error("busy"), {
+          reason: state.kind === "interrupted" ? "bot_paused" : "bot_busy",
+        });
       const submissionId = randomUUID();
       submissions.set(key, submissionId);
       sends.push({ botId, input, submissionId });
@@ -125,7 +130,11 @@ async function setup(t: TestContext) {
       },
       report: (e) => errors.push(e),
       setTimer: (fn, ms) => {
-        const timer = { at: now + ms, fn, handle: undefined as ReturnType<typeof setTimeout> | undefined };
+        const timer = {
+          at: now + ms,
+          fn,
+          handle: undefined as ReturnType<typeof setTimeout> | undefined,
+        };
         timers.add(timer);
         if (ms === 0)
           timer.handle = setTimeout(() => {
@@ -148,7 +157,14 @@ async function setup(t: TestContext) {
     target = "B",
     ids: readonly (string | undefined)[] = [undefined],
     deliveryId = randomUUID(),
-  ) => courier.post({ fromBotId: from, target, message: "hello", deliveryId, runRequestIds: ids });
+  ) =>
+    courier.post({
+      fromBotId: from,
+      target,
+      message: "hello",
+      deliveryId,
+      runRequestIds: ids,
+    });
   const until = async (predicate: () => boolean | Promise<boolean>) => {
     await waitFor(predicate, { what: "courier transition" });
     assert.deepEqual(errors, []);
@@ -176,6 +192,7 @@ async function setup(t: TestContext) {
     notices,
     deliveries,
     errors,
+    timers,
     approvals,
     post,
     until,
@@ -224,6 +241,7 @@ test("post accepts durably without any session call and later carries one final 
   assert.ok(f.sends[1]!.input.requestId.startsWith("botreply:"));
   f.finish(1, "For the person");
   await f.until(() => f.deliveries.length === 1);
+  assert.equal((f.deliveries[0] as { title: string }).title, "B replied");
   await f.restart();
   assert.equal(f.sends.length, 2);
   assert.equal(f.deliveries.length, 1);
@@ -245,7 +263,10 @@ test("busy targets expire with one notice and no queued session input", async (t
     "expired",
   );
   assert.equal(f.sends.length, 0);
-  assert.deepEqual(f.states.get("B"), { kind: "running", submissionId: "human" });
+  assert.deepEqual(f.states.get("B"), {
+    kind: "running",
+    submissionId: "human",
+  });
   await f.restart();
   assert.equal(f.notices.length, 1);
 });
@@ -327,7 +348,11 @@ test("all owned approvals are denied by expiry, and waiting notices publish whil
     runId: "real",
     inputs: [
       { submissionId: "person", requestId: "human" },
-      { submissionId: f.sends[0]!.submissionId, requestId, botMessage: f.sends[0]!.input.botMessage },
+      {
+        submissionId: f.sends[0]!.submissionId,
+        requestId,
+        botMessage: f.sends[0]!.input.botMessage,
+      },
     ],
   };
   const outcomes = ["one", "two"].map((waitId) =>
@@ -628,9 +653,27 @@ test("caller cancellation cannot erase a durably accepted delivery", async (t) =
 test("current roster resolution and cached availability give precise refusals", async (t) => {
   const f = await setup(t);
   f.setRoster([
-    { id: "A", name: "Ada", purpose: "help", acceptsMessages: true, sendsMessages: true },
-    { id: "B", name: "Bee", purpose: "help", acceptsMessages: true, sendsMessages: true },
-    { id: "C", name: "Bee", purpose: "help", acceptsMessages: false, sendsMessages: true },
+    {
+      id: "A",
+      name: "Ada",
+      purpose: "help",
+      acceptsMessages: true,
+      sendsMessages: true,
+    },
+    {
+      id: "B",
+      name: "Bee",
+      purpose: "help",
+      acceptsMessages: true,
+      sendsMessages: true,
+    },
+    {
+      id: "C",
+      name: "Bee",
+      purpose: "help",
+      acceptsMessages: false,
+      sendsMessages: true,
+    },
   ]);
   const code = (r: Awaited<ReturnType<typeof f.post>>) => (r.status === "refused" ? r.code : "sent");
   assert.equal(code(await f.post("A", "Bee")), "ambiguous_bot");
@@ -638,7 +681,13 @@ test("current roster resolution and cached availability give precise refusals", 
   assert.equal(code(await f.post("A", "A")), "self");
   assert.equal(code(await f.post("A", "B", ["bot:J:2:00112233-4455-4677-8899-aabbccddeeff"])), "chain_too_deep");
   f.setRoster([
-    { id: "A", name: "Ada", purpose: "help", acceptsMessages: true, sendsMessages: true },
+    {
+      id: "A",
+      name: "Ada",
+      purpose: "help",
+      acceptsMessages: true,
+      sendsMessages: true,
+    },
     {
       id: "B",
       name: "New Bee",
@@ -654,4 +703,187 @@ test("current roster resolution and cached availability give precise refusals", 
   assert.equal(code(await f.post("A", "B")), "switched_off");
   assert.equal(f.sends.length, 0);
   assert.deepEqual(await f.ledger.open(), []);
+});
+
+for (const outcome of ["silent", "failed"] as const) {
+  test(`early child ${outcome} waits for the parent's initial turn, including restart`, async (t) => {
+    const f = await setup(t);
+    const root = await f.post();
+    assert.equal(root.status, "sent");
+    if (root.status !== "sent") return;
+    await f.until(() => f.sends.length === 1);
+    await f.post("B", "C", [f.sends[0]!.input.requestId]);
+    await f.until(() => f.sends.length === 2);
+    f.finishOutcome(
+      1,
+      outcome === "silent" ? { kind: "completed", text: "[SILENT]" } : { kind: "failed", error: "failed" },
+    );
+    await f.until(async () => (await f.ledger.get(root.deliveryId))?.childOutcome === outcome);
+    assert.equal((await f.ledger.get(root.deliveryId))?.status, "delivered");
+    await f.restart();
+    assert.equal((await f.ledger.get(root.deliveryId))?.status, "delivered");
+    f.finish(0, "Initial finished");
+    await f.until(async () => (await f.ledger.get(root.deliveryId))?.outcome === outcome);
+    assert.equal(f.sends.length, 2);
+  });
+}
+test("early child failure still respects the ancestor's deadline when its initial turn never ends", async (t) => {
+  const f = await setup(t);
+  const root = await f.post();
+  if (root.status !== "sent") throw new Error("not sent");
+  await f.until(() => f.sends.length === 1);
+  await f.post("B", "C", [f.sends[0]!.input.requestId]);
+  await f.until(() => f.sends.length === 2);
+  f.finishOutcome(1, { kind: "failed", error: "failure" });
+  await f.until(async () => (await f.ledger.get(root.deliveryId))?.childOutcome === "failed");
+  await f.advance(1800001);
+  await f.until(async () => (await f.ledger.get(root.deliveryId))?.outcome === "expired");
+  f.finish(0, "Late initial");
+  await f.restart();
+  assert.equal(f.sends.length, 2);
+});
+test("an interrupted submitted reply expires to saved text and releases its in-flight slot", async (t) => {
+  const f = await setup(t);
+  const root = await f.post();
+  if (root.status !== "sent") throw new Error("not sent");
+  await f.until(() => f.sends.length === 1);
+  f.finish(0, "Saved B answer");
+  await f.until(() => f.sends.length === 2);
+  f.states.set("A", {
+    kind: "interrupted",
+    submissionId: f.sends[1]!.submissionId,
+  });
+  f.finishOutcome(1, { kind: "interrupted" });
+  await f.advance(1800001);
+  await f.until(async () => !(await f.ledger.open()).length);
+  assert.equal(f.sends.length, 2);
+  assert.ok(f.notices.some((n) => (n as { text?: string }).text === "Saved B answer"));
+  assert.equal(f.timers.size, 0);
+});
+test("case-insensitive original target replays after restart and a rename cannot redirect it", async (t) => {
+  const f = await setup(t);
+  f.setRoster(
+    ["A", "B"].map((id) => ({
+      id,
+      name: id === "B" ? "Bee" : "Ada",
+      purpose: "",
+      acceptsMessages: true,
+      sendsMessages: true,
+    })),
+  );
+  const id = randomUUID();
+  const accepted = await f.post("A", "bEe", [undefined], id);
+  await f.until(() => f.sends.length === 1);
+  await f.restart();
+  f.setRoster(
+    ["A", "B", "C"].map((id) => ({
+      id,
+      name: id === "C" ? "Bee" : id,
+      purpose: "",
+      acceptsMessages: true,
+      sendsMessages: true,
+    })),
+  );
+  assert.deepEqual(await f.post("A", "bEe", [undefined], id), accepted);
+  assert.deepEqual(await f.post("A", "BEE", [undefined], id), accepted);
+  assert.equal((await f.post("A", "C", [undefined], id)).status, "refused");
+  assert.equal(f.sends.length, 1);
+});
+test("answered approval history cannot turn an unrelated timeout into gave_up", async (t) => {
+  const f = await setup(t);
+  const root = await f.post();
+  if (root.status !== "sent") throw new Error("not sent");
+  await f.until(() => f.sends.length === 1);
+  const sent = f.sends[0]!;
+  const request = f.approvals.request({
+    botId: "B",
+    waitId: "answered",
+    toolCallId: "call",
+    toolName: "change",
+    summary: "Change it",
+    signal: undefined,
+    owner: {
+      runId: "run",
+      inputs: [
+        {
+          submissionId: sent.submissionId,
+          requestId: sent.input.requestId,
+          botMessage: sent.input.botMessage,
+        },
+      ],
+    },
+  });
+  await f.until(() => f.notices.length === 1);
+  f.approvals.decide("answered", "allow");
+  assert.equal(await request, "allow");
+  await f.until(async () => !(await f.ledger.get(root.deliveryId))?.waiting.length);
+  await f.advance(1800001);
+  await f.until(async () => (await f.ledger.get(root.deliveryId))?.outcome === "expired");
+});
+test("reply approval notice names its actual owner and deletion denies it by expiry", async (t) => {
+  const f = await setup(t);
+  const root = await f.post();
+  if (root.status !== "sent") throw new Error("not sent");
+  await f.until(() => f.sends.length === 1);
+  f.finish(0, "Answer");
+  await f.until(() => f.sends.length === 2);
+  const sent = f.sends[1]!;
+  const sources: string[] = [];
+  const decide = f.approvals.decide;
+  f.approvals.decide = (id, choice, source) => {
+    sources.push(source ?? "person");
+    return decide(id, choice, source);
+  };
+  const request = f.approvals.request({
+    botId: "A",
+    waitId: "reply-card",
+    toolCallId: "call",
+    toolName: "change",
+    summary: "Change",
+    signal: undefined,
+    owner: {
+      runId: "run",
+      inputs: [
+        {
+          submissionId: sent.submissionId,
+          requestId: sent.input.requestId,
+          botMessage: sent.input.botMessage,
+        },
+      ],
+    },
+  });
+  await f.until(() => f.notices.length === 1);
+  assert.equal((f.notices[0] as { botName: string }).botName, "A");
+  f.remove("B");
+  await f.courier.forgetBot("B");
+  assert.equal(await request, "deny");
+  assert.ok(sources.includes("expiry"));
+  await f.until(() => f.notices.length === 2);
+  assert.equal((f.notices[1] as { outcome: string }).outcome, "failed");
+});
+test("deleting an early child repairs the parent and waits for its initial turn", async (t) => {
+  const f = await setup(t);
+  const root = await f.post();
+  if (root.status !== "sent") throw new Error("not sent");
+  await f.until(() => f.sends.length === 1);
+  await f.post("B", "C", [f.sends[0]!.input.requestId]);
+  await f.until(() => f.sends.length === 2);
+  f.remove("C");
+  await f.courier.forgetBot("C");
+  assert.equal((await f.ledger.get(root.deliveryId))?.childOutcome, "failed");
+  assert.equal((await f.ledger.get(root.deliveryId))?.status, "delivered");
+  f.finish(0, "Initial settled");
+  await f.until(async () => (await f.ledger.get(root.deliveryId))?.outcome === "failed");
+  assert.equal(f.sends.length, 2);
+});
+
+test("a person's turn may send several requested messages while an incoming turn has one child", async (t) => {
+  const f = await setup(t);
+  assert.equal((await f.post("A", "B")).status, "sent");
+  assert.equal((await f.post("A", "C")).status, "sent");
+  await f.until(() => f.sends.length === 2);
+  const parent = f.sends.find((s) => s.botId === "B")!;
+  assert.equal((await f.post("B", "C", [parent.input.requestId])).status, "sent");
+  assert.equal((await f.post("B", "C", [parent.input.requestId])).status, "refused");
+  assert.equal((await f.post("A", "C", [])).status, "refused");
 });

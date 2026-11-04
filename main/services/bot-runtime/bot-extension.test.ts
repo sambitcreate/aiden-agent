@@ -9,6 +9,7 @@ import { getCurrentSystemPrompt, getCurrentTools, type Message } from "@earendil
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import {
   defineExtension,
+  GenerationTask,
   Harness,
   hook,
   MemoryStorage,
@@ -16,7 +17,10 @@ import {
   ToolTask,
   type Conversation,
   type Extension,
+  type GenerationHooks,
+  type ToolHooks,
 } from "@earendil-works/pi-durable";
+import { createBotApprovals, publicBotApprovalPrompt } from "./bot-approvals.js";
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
 import { createBotMemoryService, type BotMemoryRuntime } from "../bot-memory/service.js";
 import { createBotMemoryStore } from "../bot-memory/store.js";
@@ -971,3 +975,172 @@ test('host-owned Bot inputs never qualify for routine preapproval',async()=>{
   assert.equal(routine,false);assert.equal(tool.executions.length,1);
  } finally {await harness.close(ctx);}
 });
+
+for (const source of ["person", "expiry", "allow_list"] as const) {
+  test(`host ${source} approval outcomes retain their source before the delivery deadline`, async () => {
+    const change = countingTool("change");
+    const approvals = createBotApprovals({ publish() {} });
+    const deps = {
+      ...recordingDeps({
+        tools: [{ tool: change, replay: "unsafe" }],
+        policy: () => ({ allowed: true, approval: { summary: "Change something" } }),
+      }),
+      now: () => 1,
+      requestApprovalOutcome: approvals.requestOutcome,
+    };
+    const faux = createFauxModels([
+      fauxAssistantMessage([fauxToolCall("change", { text: "x" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("Finished"),
+    ]);
+    const { harness, root } = await memoryHarness(deps, faux);
+    try {
+      const submission = await root.submit(
+        {
+          type: "input",
+          content: "Bot message",
+          requestId: "bot:J:1:00112233-4455-4677-8899-aabbccddeeff",
+          entry: {
+            kind: "aiden.bot-message-input",
+            data: { kind: "request", deliveryId: "00112233-4455-4677-8899-aabbccddeeff", deadline: 100 },
+          },
+        },
+        ctx,
+      );
+      await waitFor(() => approvals.pending().length === 1);
+      const prompt = approvals.pending()[0]!;
+      const decision = source === "allow_list" ? "allow" : "deny";
+      assert.equal(approvals.decide(prompt.waitId, decision, source), true);
+      assert.equal(
+        approvals.decide(prompt.waitId, "allow", "person"),
+        false,
+        "a late responder cannot replace the source",
+      );
+      await submission.wait(ctx);
+      assert.equal(change.executions.length, source === "allow_list" ? 1 : 0);
+      const [result] = await toolResults(root);
+      if (source === "person") assert.match(resultText(result), /The person declined/u);
+      if (source === "expiry") {
+        assert.match(resultText(result), /approval window expired/u);
+        assert.doesNotMatch(resultText(result), /person declined/u);
+      }
+      assert.equal(deps.approvals.length, 0, "the legacy request path is not used");
+    } finally {
+      await harness.close(ctx);
+    }
+  });
+}
+
+test("approval cancellation rejects without a decision, and public/request fields cannot forge its source", async () => {
+  const approvals = createBotApprovals({ publish() {} });
+  const controller = new AbortController();
+  const request = {
+    botId: "bot-1",
+    waitId: "cancelled",
+    toolCallId: "call-1",
+    toolName: "change",
+    summary: "Change",
+    owner: { runId: "host-run", inputs: [{ submissionId: "host-input" }] },
+    signal: controller.signal,
+    decisionSource: "expiry" as const,
+  };
+  const cancelled = approvals.requestOutcome(request);
+  const rejected = assert.rejects(cancelled, /The person stopped the turn/u);
+  controller.abort(new Error("The person stopped the turn"));
+  await rejected;
+  assert.deepEqual(approvals.pending(), []);
+  assert.equal(approvals.decide("cancelled", "deny", "expiry"), false);
+
+  const answer = approvals.requestOutcome({ ...request, waitId: "person", signal: undefined });
+  const hostPrompt = approvals.pending()[0]!;
+  const publicPrompt = publicBotApprovalPrompt(hostPrompt);
+  assert.equal("owner" in publicPrompt, false);
+  assert.equal("decisionSource" in publicPrompt, false);
+  Object.assign(publicPrompt, { decisionSource: "expiry", owner: { runId: "forged", inputs: [] } });
+  approvals.decide("person", "deny");
+  assert.deepEqual(await answer, { decision: "deny", decisionSource: "person" });
+  assert.equal(hostPrompt.owner?.runId, "host-run");
+  assert.equal(hostPrompt.decisionSource, "person");
+  assert.equal("decisionSource" in publicBotApprovalPrompt(hostPrompt), false, "even a settled host source stays private");
+
+  const remembered = approvals.requestOutcome({ ...request, waitId: "remembered", signal: undefined });
+  approvals.decide("remembered", "allow", "allow_list");
+  assert.deepEqual(await remembered, { decision: "allow", decisionSource: "allow_list" });
+});
+
+for (const missingAt of ["request", "tool", "person"] as const) {
+  test(`the extension gates unknown run provenance at ${missingAt} ingress and preserves a person's unnamed input`, async () => {
+    const tools = ["message_bot", "bot_memory", "bot_recall", "wake_up"].map((name) => countingTool(name));
+    const offered: string[][] = [];
+    const deps = {
+      ...recordingDeps({ tools: tools.map((tool) => ({ tool, replay: "unsafe" })) }),
+      turnAllows: withBotMemoryIngress(botIngressAllowsTool),
+    };
+    const faux = createFauxModels([
+      (context) => {
+        offered.push(getCurrentTools(context.messages).map((tool) => tool.name));
+        return fauxAssistantMessage(
+          tools.map((tool) => fauxToolCall(tool.name, { text: "forced" })),
+          { stopReason: "toolUse" },
+        );
+      },
+      fauxAssistantMessage("Done"),
+    ]);
+    const { harness, root, registry } = await memoryHarness(deps, faux);
+    const extension = registry.snapshot().extension("aiden-bot")!;
+    registry.install({
+      ...extension,
+      hooks: extension.hooks!.map((registration) => {
+        if (missingAt === "request" && registration.task === GenerationTask.definition.name) {
+          const handlers = registration.handlers as GenerationHooks;
+          return hook(GenerationTask, {
+            ...handlers,
+            beforeRequest: (request, api, context) =>
+              handlers.beforeRequest(
+                request,
+                {
+                  ...api,
+                  snapshot: async () => undefined,
+                },
+                context,
+              ),
+          });
+        }
+        if (missingAt !== "person" && registration.task === ToolTask.definition.name) {
+          const handlers = registration.handlers as ToolHooks;
+          return hook(ToolTask, {
+            ...handlers,
+            beforeTool: (call, api, context) =>
+              handlers.beforeTool(
+                call,
+                {
+                  ...api,
+                  snapshot: async () => undefined,
+                },
+                context,
+              ),
+          });
+        }
+        return registration;
+      }),
+    });
+    try {
+      await (await root.submit({ type: "input", content: "A person's normal input has no request id" }, ctx)).wait(ctx);
+      assert.equal(offered.length, 1);
+      if (missingAt === "request") assert.deepEqual(offered[0], []);
+      else for (const tool of tools) assert.ok(offered[0]!.includes(tool.name), tool.name);
+      for (const tool of tools) assert.equal(tool.executions.length, missingAt === "person" ? 1 : 0, tool.name);
+      const results = await toolResults(root);
+      assert.equal(results.length, tools.length);
+      assert.equal(
+        results.every((result) => result.isError),
+        missingAt !== "person",
+      );
+      if (missingAt === "tool") {
+        assert.deepEqual(deps.policyChecks, [], "unknown inputs never reach policy or approval");
+        for (const result of results) assert.match(resultText(result), /without an active input/u);
+      }
+    } finally {
+      await harness.close(ctx);
+    }
+  });
+}

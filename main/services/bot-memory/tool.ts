@@ -178,12 +178,16 @@ export function botMemoryToolEntry(botId: string, memory: Pick<BotMemoryRuntime,
 
 /** Whether a run serving inputs with these request ids may save memory: never on routine or self-intro turns. */
 export function botMemoryAllowed(requestIds: readonly (string | undefined)[]): boolean {
-  return !requestIds.some((id) => isBotMessageRequestId(id) || id?.startsWith("routine:") || id?.startsWith(BOT_INTRO_REQUEST_PREFIX));
+  return requestIds.length > 0 && !requestIds.some((id) => isBotMessageRequestId(id) || id?.startsWith("routine:") || id?.startsWith(BOT_INTRO_REQUEST_PREFIX));
 }
 
-/** Wrap the ingress rule so `bot_memory` follows `botMemoryAllowed` and every other tool `base`. */
+/** Withhold memory writes and recall on Bot-message inputs; otherwise recall follows the base policy. */
 export function withBotMemoryIngress(
   base: (name: string, requestIds: readonly (string | undefined)[]) => boolean,
 ): (name: string, requestIds: readonly (string | undefined)[]) => boolean {
-  return (name, requestIds) => ((name === BOT_MEMORY_TOOL_NAME || name === "bot_recall") ? botMemoryAllowed(requestIds) : base(name, requestIds));
+  return (name, requestIds) => {
+    if (name === BOT_MEMORY_TOOL_NAME) return botMemoryAllowed(requestIds);
+    if (name === "bot_recall" && (requestIds.length === 0 || requestIds.some(isBotMessageRequestId))) return false;
+    return base(name, requestIds);
+  };
 }
