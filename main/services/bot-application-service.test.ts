@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -14,9 +15,15 @@ import {
   type BotAccessView,
   type BotCapabilityCatalog,
   type BotChatAccessView,
+  type BotCustomSelection,
 } from "../../renderer/shared/bot-capabilities.js";
 import type { BotDefinition, BotUpdateInput } from "../../renderer/shared/bots.js";
-import type { BotCapabilityCatalogSnapshot } from "./bot-capability-catalog-core.js";
+import { buildBotCapabilityCatalogSnapshot, type BotCapabilityCatalogSnapshot } from "./bot-capability-catalog-core.js";
+import { bindBotCustomSelection, createBotCapabilityOpaqueIdMint } from "./bot-capability-bindings.js";
+import { createBotCapabilityStore } from "./bot-capability-store.js";
+import { createBotCapabilityStateCheckpoint, type BotCapabilityBootstrapMarker, type BotCapabilityBootstrapMarkerState, type BotCapabilityRollbackAnchor } from "./bot-capability-state-checkpoint.js";
+import { createBotCapabilityOpaqueKeyStore } from "./bot-capability-key-store.js";
+import { BotCapabilityLeaseRegistry } from "./bot-capability-lease.js";
 import { BotCapabilityUnavailableError } from "./bot-capability-store-core.js";
 import type {
   BotLifecycleBeginInput,
@@ -2677,7 +2684,10 @@ for (const deleting of ["grant owner", "another Bot", "binding disappears"] as c
       app.policies.set(other.id, { ...app.policies.get(app.owner.id)!, botId: other.id });
       const binding = app.deps.capabilityStore.getBotBinding.bind(app.deps.capabilityStore);
       app.deps.capabilityStore.getBotBinding = async id => {
-        if (id === deletedId) throw new BotCapabilityUnavailableError("binding removed after policy read");
+        if (id === deletedId) {
+          await app.deps.capabilityStore.deleteBotAuthority(deletedId);
+          throw new BotCapabilityUnavailableError("binding removed after policy read");
+        }
         return binding(id);
       };
     } else {
@@ -2720,3 +2730,79 @@ for (const failure of ["disk read", "named impostor"] as const) {
     assert.equal(app.counts.removes, 0);
   });
 }
+
+
+test("uncertain folder publication keeps its root and recovery fence until the real checkpoint rolls forward", async t => {
+  const app = await folderFixture(t);
+  const capabilityRoot = path.join(app.privateRoot, "authority");
+  let anchorValue: string | null = null, failAnchor = false;
+  let markerValue: BotCapabilityBootstrapMarkerState | null = null;
+  const anchor: BotCapabilityRollbackAnchor = {
+    load: async () => anchorValue,
+    async store(next, expected) {
+      assert.equal(anchorValue, expected);
+      if (failAnchor) { failAnchor = false; throw new Error("Keychain anchor write failed"); }
+      anchorValue = next;
+    },
+  };
+  const marker: BotCapabilityBootstrapMarker = {
+    load: async () => markerValue,
+    async store(next, expected) { assert.deepEqual(markerValue, expected); markerValue = { ...next }; },
+  };
+  const open = () => createBotCapabilityStore({ root: () => capabilityRoot, leases: new BotCapabilityLeaseRegistry(),
+    checkpoint: createBotCapabilityStateCheckpoint({ root: () => capabilityRoot,
+      keyStore: createBotCapabilityOpaqueKeyStore({ root: () => capabilityRoot, randomKey: () => Buffer.alloc(32, 31) }),
+      anchor, bootstrapMarker: marker, inspectInitialBootstrap: () => "clean" }),
+  });
+  const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+  const mintOpaqueId = createBotCapabilityOpaqueIdMint(Buffer.alloc(32, 31));
+  const snapshot = async () => buildBotCapabilityCatalogSnapshot({
+    notice: { version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: true }, mintOpaqueId,
+    inventory: {
+      providers: [{ sourceId: "provider", label: "Provider", available: true, connectionFingerprint: hash("provider"),
+        models: [{ sourceId: "model", label: "Model", available: true, modelFingerprint: hash("model") }] }],
+      fileScopes: [
+        { sourceId: "home", label: "Bot folder", available: true, kind: "bot_home", scopeFingerprint: hash("home") },
+        { sourceId: "mac", label: "This Mac", available: true, kind: "full_mac", scopeFingerprint: hash("mac") },
+        ...(await app.state.snapshot()).approvedRoots.map(root => ({ sourceId: root.id, label: root.label,
+          available: true, kind: "approved_location" as const, scopeFingerprint: hash(root.folderPath) })),
+      ],
+      shell: { available: false, shellFingerprint: hash("shell") }, connections: [], skills: [], otherCapabilities: [],
+    },
+  });
+  const first = open(); await first.initialize();
+  const initial = await snapshot();
+  const selection: BotCustomSelection = { providerId: initial.catalog.providers[0]!.id, modelId: initial.catalog.providers[0]!.models[0]!.id,
+    fileScopeIds: [initial.catalog.fileScopes.find(scope => scope.kind === "bot_home")!.id], shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] };
+  const policy = await first.createBotPolicy({ botId: app.owner.id, catalog: initial.catalog,
+    access: { accessMode: "custom", catalogRevision: initial.catalog.revision, custom: selection },
+    binding: bindBotCustomSelection({ selection, catalogRevision: initial.catalog.revision, snapshot: initial }),
+  });
+  app.deps.capabilityStore = first;
+  app.deps.catalog.snapshot = snapshot;
+  app.deps.catalog.snapshotForRuntime = snapshot;
+  app.deps.catalog.bindCustom = async input => bindBotCustomSelection({ selection: input.selection,
+    catalogRevision: input.catalogRevision, snapshot: input.snapshot ?? await snapshot() });
+  const service = createBotApplicationService(app.deps); await service.initialize();
+  const input = { ...app.input, audienceId: "desktop:local", expectedRevision: policy.revision };
+  failAnchor = true;
+  await assert.rejects(service.grantBotFolder(input), BotCapabilityUnavailableError);
+  const [record] = await app.journal.list();
+  assert.equal(record!.state, "pending", "uncertainty cannot be recorded as a rollback");
+  assert.equal((await app.state.snapshot()).approvedRoots[0]!.id, record!.rootId);
+  assert.equal(app.counts.removes, 0);
+  await assert.rejects(service.getCanonicalChat(app.owner.id), /paused until Aiden restarts/u);
+  await assert.rejects(first.auditBotInventory([app.owner.id]), /paused after an uncertain commit/u);
+  const published = JSON.parse(await fs.readFile(path.join(capabilityRoot, "bot-capabilities.json"), "utf8"));
+  assert.ok(published.policies[0].binding.fileScopes.some((scope: { sourceId: string }) => scope.sourceId === record!.rootId));
+
+  const restartedStore = open(); app.deps.capabilityStore = restartedStore;
+  const restarted = createBotApplicationService(app.deps); await restarted.initialize();
+  assert.equal((await app.journal.list())[0]!.state, "committed");
+  assert.equal((await app.state.snapshot()).approvedRoots[0]!.id, record!.rootId);
+  assert.equal(app.counts.removes, 0);
+  assert.equal(await restarted.botFolderGrantCommitted(app.owner.id, input.operationId), true);
+  assert.equal(await restarted.grantBotFolder(input), "already_allowed");
+  assert.equal((await app.journal.list())[0]!.rootId, record!.rootId);
+  assert.ok((await fs.stat(app.folderPath)).isDirectory());
+});
