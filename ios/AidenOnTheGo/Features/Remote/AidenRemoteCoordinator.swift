@@ -859,6 +859,7 @@ final class AidenRemoteCoordinator {
         [.botWatches],
         [.botOpenWork],
         [.botRoutineModels],
+        [.botPeers],
     ]
 
     /// Existing pairings predate the progress opt-in field. Upgrade them only
@@ -1160,6 +1161,7 @@ final class AidenRemoteCoordinator {
         AidenBotWatchDraftStore.shared.purge(instanceID: installationId)
         AidenBotOpenWorkDraftStore.shared.purge(instanceID: installationId)
         AidenBotRoutineControlStore.shared.purge(instanceID: installationId)
+        AidenBotPeerControlStore.shared.purge(instanceID: installationId)
         await AidenVisualDocumentCache.shared.purge(instanceId: installationId)
         AidenBotSessionCache.shared.purge(instanceId: installationId)
         await AidenBotOutboxStore.shared.purge(instanceId: installationId)

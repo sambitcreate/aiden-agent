@@ -17,6 +17,7 @@ struct AidenBotSessionChatView: View {
     @State private var model: AidenBotSessionModel?
     @State private var summary: AidenBotSummary?
     @State private var draft = ""
+    @State private var peerExchangeID: String?
     @State private var isShowingProfile = false
     /// The profile sheet opens straight to Memory (from "Memory updated").
     @State private var profileOpensMemory = false
@@ -56,7 +57,7 @@ struct AidenBotSessionChatView: View {
 
     private var resumeVisitIsActive: Bool {
         isChatVisible && scenePhase == .active && !isShowingProfile && !isShowingAdvanced
-            && presentedFilesGrant == nil && !isFileImporterPresented && !attachmentPicker.isPresented
+            && peerExchangeID == nil && presentedFilesGrant == nil && !isFileImporterPresented && !attachmentPicker.isPresented
     }
 
     private var bot: AidenBotSummary? { summary ?? initialSummary }
@@ -173,6 +174,14 @@ struct AidenBotSessionChatView: View {
                                 Button("Done") { presentedFilesGrant = nil }
                             }
                         }
+                }
+            }
+        }
+        .sheet(isPresented: Binding(get: { peerExchangeID != nil }, set: { if !$0 { peerExchangeID = nil } })) {
+            if let peerExchangeID {
+                NavigationStack {
+                    AidenBotPeerExchangeView(coordinator: coordinator, botID: botID, exchangeID: peerExchangeID)
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { self.peerExchangeID = nil } } }
                 }
             }
         }
@@ -582,6 +591,10 @@ struct AidenBotSessionChatView: View {
                     Task { await model.respondToProposal(card.proposalId, decision: decision) }
                 }
             )
+        case let .peer(peer):
+            if coordinator.server?.supportsBotPeerExchanges == true {
+                AidenBotPeerTranscriptRow(peer: peer) { peerExchangeID = peer.exchangeId }
+            }
         case let .sharedImage(image):
             // Revision 45: the image the Bot shared, read from the Mac when it is drawn.
             AidenMessageImageAttachmentsView(

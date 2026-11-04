@@ -55,7 +55,7 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
 /// the chat reopens a feed that opened without one
 /// (`AidenBotSessionModel.reopenFeed()`; Android parity).
 func aidenBotSessionFeedGrants(_ installation: AidenInstallation?) -> Set<AidenRemoteCapability> {
-    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages].filter { installation?.hasNegotiatedAccess(to: $0) == true })
+    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages, .botPeers].filter { installation?.hasNegotiatedAccess(to: $0) == true })
 }
 
 /// How a Bot chat is opened. A host advertising `bot-durable-session-v1`

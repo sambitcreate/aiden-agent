@@ -319,7 +319,7 @@ export interface AidenRemoteBotSessionServiceOptions {
   routineNotifications?: {
     list(
       since: number | undefined,
-      options?: { issues?: boolean },
+      options?: { issues?: boolean; peers?: boolean },
     ): Promise<AidenRemoteBotRoutineNotificationList>;
   };
   now?(): number;
@@ -402,6 +402,11 @@ export function projectBotSessionEntries(
   for (const entry of projectBotTranscript(entries)) {
     const id = wireEntryId(entry.id);
     switch (entry.type) {
+      case "peer": {
+        const createdAt = isoOf(entry.at);
+        output.push({ type: "peer", id, exchangeId: entry.exchangeId, direction: entry.direction, peerBotId: entry.peerBotId, peerName: wireText(entry.peerName, 160), messageKind: entry.messageKind, ...(createdAt ? { createdAt } : {}), ...(entry.final === true ? { final: true as const } : {}) });
+        break;
+      }
       case "user":
       case "routine": {
         const createdAt = isoOf(entry.at);
@@ -580,7 +585,8 @@ function withoutSubmissionId(entry: AidenRemoteBotSessionEntry): AidenRemoteBotS
  * `bot:activity`, shared images for `bot:images` (a line for everyone else).
  */
 function entriesFor(entries: readonly AidenRemoteBotSessionEntry[], audience: Audience): AidenRemoteBotSessionEntry[] {
-  const carded = audience.cards ? [...entries] : withoutBotCards(entries);
+  const peered = audience.peers ? [...entries] : entries.filter((entry) => entry.type !== "peer");
+  const carded = audience.cards ? peered : withoutBotCards(peered);
   const shown = audience.images ? carded : carded.map(withoutSharedImage);
   return audience.activity ? shown : shown.map(withoutSubmissionId);
 }
@@ -736,6 +742,8 @@ interface Audience {
   images: boolean;
   /** `bot:issues`: the `issues` frame and snapshot key (revision 42). */
   issues: boolean;
+  /** `bot:peers`: closed peer exchange navigation entries (revision 57). */
+  peers: boolean;
 }
 
 /**
@@ -974,7 +982,7 @@ class BotLiveProjector {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
         subscriber.overflowed = true;
       } else {
-        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}`;
+        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}:${subscriber.peers}`;
         let text = rendered.get(key);
         if (text === undefined) {
           text = render(subscriber);
@@ -1034,6 +1042,7 @@ class BotLiveProjector {
       : undefined;
     this.broadcast((audience) => {
       if ((card && !audience.cards) || (activityOnly && !audience.activity)) return noOp(audience);
+      if (entry?.type === "peer" && !audience.peers) return noOp(audience);
       if (issuesOnly && !audience.issues) return noOp(audience);
       if (imageLine && !audience.images) return imageLine;
       if (handoffOnly && !audience.handoffs) {
@@ -1562,7 +1571,7 @@ function routineError(error: unknown): never {
 const HOLDER_AUDIENCE: AidenRemoteBotHandoffAudience = { handoffs: true };
 
 /** The opt-ins a route was called with, from the device's grants. */
-type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean };
+type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean; peers?: boolean };
 
 /** Ledger route of each session control. */
 const CONTROL_ROUTES = {
@@ -1815,7 +1824,7 @@ export class AidenRemoteBotSessionService {
   /** Finished Bot routine runs a phone should announce, after `since` (ISO). */
   async routineNotificationFeed(
     since: string | undefined,
-    options: { issues?: boolean } = {},
+    options: { issues?: boolean; peers?: boolean } = {},
   ): Promise<AidenRemoteBotRoutineNotificationList> {
     const { routineNotifications } = this.proactive();
     let sinceMs: number | undefined;
@@ -1825,7 +1834,7 @@ export class AidenRemoteBotSessionService {
         throw new AidenRemoteServiceError("invalid_request", "since must be an ISO-8601 time.", 400);
       }
     }
-    return routineNotifications.list(sinceMs, { issues: options.issues === true && this.supportsIssues });
+    return routineNotifications.list(sinceMs, { issues: options.issues === true && this.supportsIssues, peers: options.peers === true });
   }
 
   /** The state as a `bot:handoffs` device sees it; `stateViewForAudience` projects it for the others. */
@@ -2189,6 +2198,7 @@ export class AidenRemoteBotSessionService {
       onMac: options.handoffs === true && options.handoffOnMac === true && this.supportsHandoffs,
       images: options.images === true,
       issues: options.issues === true && this.supportsIssues,
+      peers: options.peers === true,
     };
   }
 

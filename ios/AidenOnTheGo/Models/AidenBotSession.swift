@@ -249,6 +249,13 @@ struct AidenBotSharedImage: Equatable, Sendable {
     }
 }
 
+struct AidenBotPeerEntry: Equatable, Sendable {
+    enum MessageKind: String, Codable, Sendable { case request, question, status, fyi, result }
+    let id: String; let exchangeId: String; let direction: AidenPeerDirection
+    let peerBotId: String; let peerName: String; let messageKind: MessageKind; let createdAt: AidenRemoteTimestamp?; let isFinal: Bool
+    var caption: String { direction == .sent ? "Messaged \(peerName)" : "Message from \(peerName)" }
+}
+
 enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
     case message(AidenBotSessionMessage)
     case connectCard(AidenBotConnectCard)
@@ -260,12 +267,13 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
     case routineProposal(AidenBotRoutineProposalCard)
     /// Revision 45 (`bot:images`): an image the Bot shared.
     case sharedImage(AidenBotSharedImage)
+    case peer(AidenBotPeerEntry)
 
     /// The entry types this client renders. A revision-27 client skips any
     /// other type instead of failing the whole session.
     static let knownTypes: Set<String> = [
         "message", "connect_card", "notice", "failed_turn", "memory_update", "routine_proposal",
-        "shared_image",
+        "shared_image", "peer",
     ]
 
     var id: String {
@@ -277,6 +285,7 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
         case let .memoryUpdate(id, _): id
         case let .routineProposal(card): card.id
         case let .sharedImage(image): image.id
+        case let .peer(peer): peer.id
         }
     }
 
@@ -400,6 +409,16 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
                 routineId: routineId,
                 createdAt: try AidenBotWire.optional(AidenRemoteTimestamp.self, from: values, forKey: .createdAt)
             ))
+        case "peer":
+            try AidenBotWire.requireOnlyKeys(decoder, allowed: ["id", "type", "exchangeId", "direction", "peerBotId", "peerName", "messageKind", "createdAt", "final"])
+            let exchangeId = try values.decode(String.self, forKey: .exchangeId); try AidenPeerWire.id(exchangeId)
+            let peerBotId = try values.decode(String.self, forKey: .peerBotId); try AidenPeerWire.id(peerBotId)
+            let peerName = try values.decode(String.self, forKey: .peerName); try AidenPeerWire.text(peerName)
+            let createdAt = try AidenPeerWire.optional(AidenRemoteTimestamp.self, values, .createdAt)
+            let kind = try values.decode(AidenBotPeerEntry.MessageKind.self, forKey: .messageKind)
+            let final = try AidenPeerWire.optional(Bool.self, values, .finalFlag)
+            guard final == nil || (final == true && kind == .result) else { throw AidenRemoteClientError.invalidResponse }
+            self = .peer(.init(id: id, exchangeId: exchangeId, direction: try values.decode(AidenPeerDirection.self, forKey: .direction), peerBotId: peerBotId, peerName: peerName, messageKind: kind, createdAt: createdAt, isFinal: final == true))
         case "shared_image":
             try AidenBotWire.requireOnlyKeys(decoder, allowed: ["type", "id", "name", "mimeType", "size"])
             let mimeType = try values.decode(String.self, forKey: .mimeType)
@@ -468,6 +487,12 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
             try values.encode(card.status, forKey: .status)
             try values.encodeIfPresent(card.routineId, forKey: .routineId)
             try values.encodeIfPresent(card.createdAt, forKey: .createdAt)
+        case let .peer(peer):
+            try values.encode("peer", forKey: .type); try values.encode(peer.id, forKey: .id)
+            try values.encode(peer.exchangeId, forKey: .exchangeId); try values.encode(peer.direction, forKey: .direction)
+            try values.encode(peer.peerBotId, forKey: .peerBotId); try values.encode(peer.peerName, forKey: .peerName)
+            try values.encode(peer.messageKind, forKey: .messageKind); try values.encodeIfPresent(peer.createdAt, forKey: .createdAt)
+            if peer.isFinal { try values.encode(true, forKey: .finalFlag) }
         case let .sharedImage(image):
             try values.encode("shared_image", forKey: .type)
             try values.encode(image.id, forKey: .id)
@@ -482,6 +507,8 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
         case pluginId, name, iconId, reason, status, notice, retryText
         case proposalId, prompt, routineId
         case mimeType, size
+        case exchangeId, direction, peerBotId, peerName, messageKind
+        case finalFlag = "final"
     }
 }
 

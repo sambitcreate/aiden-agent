@@ -391,6 +391,20 @@ private final class FakeNotificationCenter: AidenRunAlertCenter {
     }
 }
 
+@MainActor
+private final class SuspendingPeerNotificationCenter: AidenRunAlertCenter {
+    var holdNextAdd = false
+    private(set) var heldAdd: CheckedContinuation<Void, Never>?
+    private(set) var posted: [UNNotificationRequest] = []
+    func currentAuthorizationStatus() async -> UNAuthorizationStatus { .authorized }
+    func requestAlertAuthorization() async -> Bool { true }
+    func add(_ request: UNNotificationRequest) async throws {
+        if holdNextAdd { holdNextAdd = false; await withCheckedContinuation { heldAdd = $0 } }
+        posted.append(request)
+    }
+    func releaseAdd() { heldAdd?.resume(); heldAdd = nil }
+}
+
 private final class FakeNotificationFeed: AidenBotRoutineNotificationTransport, @unchecked Sendable {
     private let lock = NSLock()
     private var _feeds: [AidenBotRoutineNotificationFeed] = []
@@ -444,6 +458,70 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
             AidenBotRoutineNotificationFeed.self,
             from: JSONSerialization.data(withJSONObject: ["notifications": notifications, "now": now])
         )
+    }
+
+    private func peerFeed(now: String) throws -> AidenBotRoutineNotificationFeed {
+        try AidenRemoteJSONDecoder.decode(AidenBotRoutineNotificationFeed.self, from: JSONSerialization.data(withJSONObject: ["notifications": [[
+            "id": "peer_root_final_one", "kind": "peer", "botId": "bot_fixture_01", "botName": "Planner", "routineName": "Review complete",
+            "finishedAt": "2026-11-03T12:00:00.000Z", "preview": "The final review includes the peer’s findings."
+        ]], "now": now]))
+    }
+    func testPeerFinalNotificationRequiresCurrentCapabilityDeduplicatesAndOpensInitiatorChat() async throws {
+        let center = FakeNotificationCenter(); let transport = FakeNotificationFeed(); let notifier = AidenBotRoutineNotifier(defaults: defaults, center: center)
+        transport.queue(try feed([], now: "2026-11-03T11:00:00.000Z"))
+        for _ in 0..<3 { transport.queue(try peerFeed(now: "2026-11-03T12:01:00.000Z")) }
+        await notifier.deliver(instanceId: instance, transport: transport, allowsPeers: { true })
+        await notifier.deliver(instanceId: instance, transport: transport, allowsPeers: { false })
+        XCTAssertTrue(center.posted.isEmpty); XCTAssertEqual(defaults.string(forKey: AidenBotRoutineNotifier.cursorKey(instance)), "2026-11-03T11:00:00.000Z", "A late grant loss cannot consume a final update")
+        await notifier.deliver(instanceId: instance, transport: transport, allowsPeers: { true })
+        await notifier.deliver(instanceId: instance, transport: transport, allowsPeers: { true })
+        XCTAssertEqual(center.posted.count, 1); XCTAssertEqual(center.posted.first?.identifier, "aiden.bot-routine.peer_root_final_one")
+        let content = try XCTUnwrap(center.posted.first?.content); XCTAssertEqual(content.threadIdentifier, "aiden.bot-peer.\(instance).bot_fixture_01")
+        XCTAssertEqual(AidenRunAlertNotifier.deepLink(from: content.userInfo), AidenDeepLink.botChatURL(instanceId: instance, botId: "bot_fixture_01"))
+    }
+    func testPeerGrantLossDuringAwaitedNotificationPostDoesNotConsumeCursorOrDeliveredID() async throws {
+        let center = SuspendingPeerNotificationCenter(); let transport = FakeNotificationFeed()
+        let notifier = AidenBotRoutineNotifier(defaults: defaults, center: center); var allowsPeers = true
+        transport.queue(try feed([], now: "2026-11-03T11:00:00.000Z"))
+        await notifier.deliver(instanceId: instance, transport: transport, allowsPeers: { allowsPeers })
+        transport.queue(try peerFeed(now: "2026-11-03T12:01:00.000Z")); center.holdNextAdd = true
+        let posting = Task { await notifier.deliver(instanceId: instance, transport: transport, allowsPeers: { allowsPeers }) }
+        while center.heldAdd == nil { await Task.yield() }
+        allowsPeers = false; center.releaseAdd(); await posting.value
+        XCTAssertEqual(center.posted.count, 1, "The system may already have accepted the banner; no removal API is assumed")
+        XCTAssertEqual(defaults.string(forKey: AidenBotRoutineNotifier.cursorKey(instance)), "2026-11-03T11:00:00.000Z")
+        XCTAssertFalse((defaults.stringArray(forKey: AidenBotRoutineNotifier.deliveredKey(instance)) ?? []).contains("peer_root_final_one"))
+        allowsPeers = true; transport.queue(try peerFeed(now: "2026-11-03T12:01:00.000Z"))
+        await notifier.deliver(instanceId: instance, transport: transport, allowsPeers: { allowsPeers })
+        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.peer_root_final_one", "aiden.bot-routine.peer_root_final_one"])
+        XCTAssertEqual(defaults.stringArray(forKey: AidenBotRoutineNotifier.deliveredKey(instance)), ["peer_root_final_one"])
+    }
+    func testPairingPurgeDuringAwaitedNotificationPostCannotRecreateOldCursorOrReceipts() async throws {
+        let center = SuspendingPeerNotificationCenter(); let transport = FakeNotificationFeed()
+        let notifier = AidenBotRoutineNotifier(defaults: defaults, center: center); var current = true
+        transport.queue(try feed([], now: "2026-11-03T11:00:00.000Z"))
+        await notifier.deliver(instanceId: instance, transport: transport, isCurrent: { current }, allowsPeers: { true })
+        transport.queue(try peerFeed(now: "2026-11-03T12:01:00.000Z")); center.holdNextAdd = true
+        let posting = Task { await notifier.deliver(instanceId: instance, transport: transport, isCurrent: { current }, allowsPeers: { true }) }
+        while center.heldAdd == nil { await Task.yield() }
+        current = false
+        defaults.removeObject(forKey: AidenBotRoutineNotifier.cursorKey(instance)); defaults.removeObject(forKey: AidenBotRoutineNotifier.deliveredKey(instance))
+        center.releaseAdd(); await posting.value
+        XCTAssertEqual(center.posted.count, 1)
+        XCTAssertNil(defaults.object(forKey: AidenBotRoutineNotifier.cursorKey(instance)))
+        XCTAssertNil(defaults.object(forKey: AidenBotRoutineNotifier.deliveredKey(instance)))
+    }
+
+    func testPeerNotificationRejectsRoutineAuthorityFieldsAndStalePairingNeverPosts() async throws {
+        let parsed = try peerFeed(now: "2026-11-03T12:01:00.000Z")
+        var item = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(parsed.notifications[0])) as? [String: Any]); item["routineId"] = "routine_other"
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBotRoutineNotification.self, from: JSONSerialization.data(withJSONObject: item)))
+        item.removeValue(forKey: "routineId"); item["status"] = "succeeded"
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBotRoutineNotification.self, from: JSONSerialization.data(withJSONObject: item)))
+        let center = FakeNotificationCenter(); let transport = FakeNotificationFeed(); let notifier = AidenBotRoutineNotifier(defaults: defaults, center: center)
+        transport.queue(try feed([], now: "2026-11-03T11:00:00.000Z")); await notifier.deliver(instanceId: instance, transport: transport)
+        transport.queue(parsed); await notifier.deliver(instanceId: instance, transport: transport, isCurrent: { false }, allowsPeers: { true })
+        XCTAssertTrue(center.posted.isEmpty); XCTAssertEqual(defaults.string(forKey: AidenBotRoutineNotifier.cursorKey(instance)), "2026-11-03T11:00:00.000Z")
     }
 
     func testFirstPollBaselinesThenPostsEachNewRunOnceAndOpensTheBotChat() async throws {

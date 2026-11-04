@@ -213,4 +213,11 @@ class AidenNavigationStackTest {
         assertEquals(predictiveBackSeekFraction(1f), predictiveBackSeekFraction(3f), 0f)
         assertTrue(predictiveBackSeekFraction(0.25f) < predictiveBackSeekFraction(0.75f))
     }
+    @Test fun peerProfileAndExchangeDestinationsRestoreTheirExactScopedOwner() {
+        val stack=AidenNavigationStack.Root.push(AidenScreen.BotProfile("bot_one")).push(AidenScreen.BotPeers("bot_one","exchange:one"))
+        val restored=AidenNavigationStack.decode(stack.encode())
+        assertEquals(AidenScreen.BotPeers("bot_one","exchange:one"),restored.current)
+        assertEquals(AidenScreen.BotProfile("bot_one"),restored.pop()!!.current)
+    }
+
 }

@@ -201,10 +201,10 @@ final class AidenBotRoutineNotifier {
               AidenBotHostFeature.isAdvertised(AidenBotHostFeature.proactive, coordinator: coordinator),
               let context = try? coordinator.requestContext(),
               let client = try? coordinator.remoteClient(for: context) else { return }
-        await deliver(instanceId: context.instanceId, transport: client)
+        await deliver(instanceId: context.instanceId, transport: client, isCurrent: { coordinator.isCurrent(context) && coordinator.connectionState == .connected }, allowsPeers: { coordinator.server?.supportsBotPeerExchanges == true })
     }
 
-    func deliver(instanceId: String, transport: any AidenBotRoutineNotificationTransport) async {
+    func deliver(instanceId: String, transport: any AidenBotRoutineNotificationTransport, isCurrent: @escaping @MainActor () -> Bool = { true }, allowsPeers: @escaping @MainActor () -> Bool = { false }) async {
         guard !polling.contains(instanceId) else { return }
         polling.insert(instanceId)
         defer { polling.remove(instanceId) }
@@ -220,12 +220,16 @@ final class AidenBotRoutineNotifier {
             // Keep the cursor so the next poll asks again.
             return
         }
+        let requiresPeerAccess = feed.notifications.contains(where: { $0.kind == .peer })
+        func scopeAllowsProgress() -> Bool { isCurrent() && (!requiresPeerAccess || allowsPeers()) }
+        guard scopeAllowsProgress() else { return }
         var deliveredOrder = defaults.stringArray(forKey: Self.deliveredKey(instanceId)) ?? []
         var delivered = Set(deliveredOrder)
         func markDelivered(_ id: String) {
             if delivered.insert(id).inserted { deliveredOrder.append(id) }
         }
         func persist(cursor: String) {
+            guard scopeAllowsProgress() else { return }
             defaults.set(cursor, forKey: Self.cursorKey(instanceId))
             defaults.set(Array(deliveredOrder.suffix(Self.maximumDeliveredIds)), forKey: Self.deliveredKey(instanceId))
         }
@@ -247,12 +251,16 @@ final class AidenBotRoutineNotifier {
         var nextCursor = cursor
         var handledAll = true
         for item in oldestFirst {
+            guard scopeAllowsProgress() else { return }
             if delivered.contains(item.id) {
                 nextCursor = item.finishedAt.rawValue
                 continue
             }
             do {
                 try await center.add(Self.request(for: item, instanceId: instanceId))
+                // The system may already have accepted the banner. Its completion
+                // cannot consume or recreate progress for revoked access or pairing.
+                guard scopeAllowsProgress() else { return }
                 markDelivered(item.id)
                 nextCursor = item.finishedAt.rawValue
             } catch {
@@ -275,7 +283,9 @@ final class AidenBotRoutineNotifier {
         let preview = AidenScheduledRunNotifier.displaySafe(item.preview, limit: 200)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         content.body = preview.isEmpty ? routineName : "\(routineName): \(preview)"
-        content.threadIdentifier = item.kind == .issue
+        content.threadIdentifier = item.kind == .peer
+            ? "aiden.bot-peer.\(instanceId).\(item.botId)"
+            : item.kind == .issue
             ? "aiden.bot-issue.\(instanceId).\(item.botId)"
             : "aiden.bot-routine.\(instanceId).\(item.botId)"
         content.sound = .default

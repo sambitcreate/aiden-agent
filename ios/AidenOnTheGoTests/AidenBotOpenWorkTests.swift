@@ -103,7 +103,7 @@ final class AidenBotOpenWorkTests: XCTestCase {
     func testSharedRevision55FixtureDecodesEveryResponseAndMutation() throws {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-open-work", withExtension: "json"))
         let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        XCTAssertEqual(fixture["contractRevision"] as? Int, 56)
+        XCTAssertEqual(fixture["contractRevision"] as? Int, 57)
         let snapshot = try decode(AidenOpenWorkSnapshot.self, XCTUnwrap(fixture["snapshot"]))
         XCTAssertEqual(snapshot.items.first, try decode(AidenOpenWorkItem.self, XCTUnwrap(fixture["item"])))
         _ = try decode(AidenOpenWorkUndo.self, XCTUnwrap(fixture["undo"]))

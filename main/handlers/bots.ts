@@ -33,6 +33,7 @@ import { registerBotIssueHandlers } from "./bot-issues.js";
 import { registerBotHealthHandlers } from "./bot-health.js";
 import { registerBotConnectorWatchHandlers } from "./bot-connector-watches.js";
 import { registerBotRoutineModels } from "./bot-routine-models.js";
+import { registerBotPeerHandlers } from "./bot-peers.js";
 import { registerBotOpenWorkHandlers } from "./bot-open-work.js";
 import { registerBotEventRoutineHandlers } from "./bot-event-routines.js";
 import { registerBotLearningHandlers } from "./bot-learning.js";
@@ -254,6 +255,11 @@ export function registerBotHandlers(): void {
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     owner: (event) => rendererDocumentOwner(event, () => new Error("This model request came from an inactive application document.")),
     service: async () => ({ ...(await import("../services/bot-routine-models-main.js")).botRoutineModels, resumeStatus: async (botId: string) => (await botSessionRuntime()).executionResumeStatus(botId) }),
+  });
+  registerBotPeerHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => rendererDocumentOwner(event, () => new Error("This Bot messaging request came from an inactive application document.")),
+    service: async () => (await import("../services/bot-peers/service-main.js")).botPeers,
   });
   // Profile → When something happens: event routines and their links.
   registerBotEventRoutineHandlers<Electron.IpcMainInvokeEvent>({

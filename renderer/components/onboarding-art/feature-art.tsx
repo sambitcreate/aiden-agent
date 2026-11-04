@@ -5,6 +5,7 @@ import type { ArtProps } from "./art-kit";
 import { BotWatchesArt } from "./bot-watches-art";
 import { BotOpenWorkArt } from "./bot-open-work-art";
 import { BotRoutineModelsArt } from "./bot-routine-models-art";
+import { BotPeersArt } from "./bot-peers-art";
 import {
   BrowserArt,
   ComputerUseArt,
@@ -81,6 +82,7 @@ export const FEATURE_ART = {
   botWatches: { tint: "rose", Art: BotWatchesArt },
   botOpenWork: { tint: "lilac", Art: BotOpenWorkArt },
   botRoutineModels: { tint: "sun", Art: BotRoutineModelsArt },
+  botPeers: { tint: "aqua", Art: BotPeersArt },
   botComputers: { tint: "aqua", Art: BotComputersArt },
   schedules: { tint: "mint", Art: ScheduledAutomationsArt },
   voice: { tint: "coral", Art: VoiceDictationArt },

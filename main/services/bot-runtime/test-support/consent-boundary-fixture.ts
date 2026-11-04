@@ -7,10 +7,10 @@ import { SpendingDispatchError, SpendingService } from "../../spending-service.j
 import { openProtectedRoutineClaims } from "../../bot-routine-model-claim-test-support.js";
 import { createBotSessionService } from "../bot-session-service.js";
 import { recordingDeps } from "./fixtures.js";
-import { acknowledgeBotExecutionUnknown, botExecutionAccountableResponse, botExecutionSpendingOwner, botExecutionUnknownCostReceipt, recordKnownBotExecutionResponse } from "../bot-execution-spending.js";
+import { acknowledgeBotExecutionUnknown, botExecutionAccountableResponse, botExecutionSpendingOwner, botExecutionUnknownCostReceipt, recordKnownBotExecutionResponse, recordKnownBotExecutionCost } from "../bot-execution-spending.js";
 import { botExecutionScope, type BotExecutionPort } from "../bot-execution.js";
 
-export async function openConsentBoundaryFixture(root: string, options: { firstUnknown?: boolean; crash?: "after-control" | "after-approval" | "before-ack" | "after-ack" | "after-generation" | "before-response-proof" | "after-response-proof" | "after-response-memo"; multiCall?: { failSlot?: number; changedFirstBody?: boolean } } = {}) {
+export async function openConsentBoundaryFixture(root: string, options: { firstUnknown?: boolean; legacyEvidence?: boolean; crash?: "after-control" | "after-approval" | "before-ack" | "after-ack" | "after-generation" | "before-response-proof" | "after-response-proof" | "after-response-memo"; multiCall?: { failSlot?: number; changedFirstBody?: boolean } } = {}) {
   const protectedClaims = await openProtectedRoutineClaims(path.join(root, "protected"), "bot:one", "routine:one");
   const document = new DataStore("spending.json", emptySpendingDocument(), () => root, { fileMode: 0o600, compact: true });
   const spending = new SpendingService({ persistence: { load: () => document.load(), save: (next) => document.save(next) }, settings: async () => ({ botMonthUsd: 1, routineRunUsd: 1 }), broadcast() {} });
@@ -35,6 +35,7 @@ export async function openConsentBoundaryFixture(root: string, options: { firstU
       return actual !== undefined;
     },
     verifyResponse: async (facts) => Boolean(await protectedClaims.service.responseEvidence(facts)),
+    async reconcileResponseCosts(botId, taskId, scopeId) { for (const evidence of await protectedClaims.service.responseCosts(botId, taskId, scopeId)) await recordKnownBotExecutionCost(spending, evidence.dispatch, evidence.reportedCostUsd); },
     async recordKnownResponse(facts, response) { const evidence = await protectedClaims.service.responseEvidence(facts); if (evidence) await recordKnownBotExecutionResponse(spending, facts.botId, facts.dispatchId, response, evidence, facts.responseDigest); },
     async resolve(_botId, claim) {
       if (options.crash === "after-control" && await spending.pendingDispatch(botExecutionSpendingOwner(claim))) await pauseForKill();
@@ -45,7 +46,7 @@ export async function openConsentBoundaryFixture(root: string, options: { firstU
         if (key === "streamSimple") return (() => { providerCalls++; const response = fauxAssistantMessage("accepted attempt completed"); response.usage = { ...response.usage, cost: { ...response.usage.cost, total: options.multiCall ? 0.1 : 0.2 } }; const events = createAssistantMessageEventStream(); queueMicrotask(async () => { await effects.update((history) => { history.push(currentSlot === undefined ? "final answer" : `compaction slot ${currentSlot}`); }); events.push({ type: "done", reason: "stop", message: response }); events.end(response); }); return events; }) as Models["streamSimple"];
         const value = Reflect.get(target, key, target) as unknown; return typeof value === "function" ? value.bind(target) : value;
       } });
-      return { model, models: transport, imageInput: false, revalidate: async () => {}, release() {}, beforeDispatch: async (id) => { await spending.beforeDispatch(dispatch(id)); if (firstUnknown || options.multiCall?.failSlot === currentSlot && currentSlot !== undefined && !slotFailed) { firstUnknown = false; slotFailed = true; throw new SpendingDispatchError("uncertain", "The provider request's cost is unknown. Resume may incur charges again."); } }, reserveResponse: (slot) => protectedClaims.service.reserveResponseEvidence(slot, dispatch(slot.dispatchId)), async sealResponse(facts) { if (options.crash === "before-response-proof") await pauseForKill(); await protectedClaims.service.recordResponseEvidence(facts, dispatch(facts.dispatchId)); if (options.crash === "after-response-proof") await pauseForKill(); }, async afterDispatch(id, response) { if (options.crash === "after-response-memo") await pauseForKill(); await spending.afterDispatch(dispatch(id), botExecutionAccountableResponse(response)); } };
+      return { model, models: transport, imageInput: false, revalidate: async () => {}, release() {}, beforeDispatch: async (id) => { await spending.beforeDispatch(dispatch(id)); if (firstUnknown || options.multiCall?.failSlot === currentSlot && currentSlot !== undefined && !slotFailed) { firstUnknown = false; slotFailed = true; throw new SpendingDispatchError("uncertain", "The provider request's cost is unknown. Resume may incur charges again."); } }, reserveResponse: (slot) => protectedClaims.service.reserveResponseEvidence(slot, dispatch(slot.dispatchId)), async sealResponse(facts, reportedCostUsd) { if (options.crash === "before-response-proof") await pauseForKill(); await protectedClaims.service.recordResponseEvidence(facts, dispatch(facts.dispatchId), options.legacyEvidence ? undefined : reportedCostUsd); if (options.crash === "after-response-proof") await pauseForKill(); }, async afterDispatch(id, response) { if (options.crash === "after-response-memo") await pauseForKill(); await spending.afterDispatch(dispatch(id), botExecutionAccountableResponse(response)); } };
     },
   };
   const extension = recordingDeps();

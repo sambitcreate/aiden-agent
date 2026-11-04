@@ -199,6 +199,7 @@ enum AidenBotDeletion {
     ) async {
         guard coordinator.isCurrent(context) else { return }
         AidenBotRoutineControlStore.shared.purge(instanceID: context.instanceId, deviceID: context.deviceId, botID: botID)
+        AidenBotPeerControlStore.shared.purge(instanceID: context.instanceId, deviceID: context.deviceId, botID: botID)
         _ = await coordinator.withRetainedInstallationData(for: context) {
             _ = try? await AidenBotCache.shared.removeBotAndStore(
                 botId: botID,

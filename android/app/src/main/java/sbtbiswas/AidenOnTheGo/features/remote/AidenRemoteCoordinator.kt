@@ -212,6 +212,11 @@ internal suspend fun aidenRequestBotImages(
         stillCurrent
     )
 
+internal suspend fun aidenRequestBotPeers(client: AidenRemoteClient, server: AidenServer,
+    installation: AidenInstallation, stillCurrent: () -> Boolean = { true }): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_PEERS, server, installation))
+        listOf(AidenRemoteCapability.BOT_PEERS) else emptyList(), client, stillCurrent)
+
 /** Revision 56: routine-only model choices negotiate separately; no feature token. */
 internal suspend fun aidenRequestBotRoutineModels(client: AidenRemoteClient, server: AidenServer,
     installation: AidenInstallation, stillCurrent: () -> Boolean = { true }): AidenSoloCapabilityNegotiation? =
@@ -369,6 +374,7 @@ class AidenRemoteCoordinator(
     val usageCache = AidenUsageCache(File(storageDir, "usage_cache"))
     val botCache = AidenBotCache(storageDir)
     val botWatchJournals = sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournalStore(installationStore.secureStore)
+    val botPeerJournals = sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournalStore(installationStore.secureStore, "bot-peers", 1088)
     val botRoutineControlJournals = sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournalStore(installationStore.secureStore, "bot-routine-controls", 1088)
     val botOpenWorkJournals = sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournalStore(installationStore.secureStore, "bot-open-work")
     /** Bot chats' last transcripts and unsent messages (R14, R17), purged with the pairing. */
@@ -515,9 +521,11 @@ class AidenRemoteCoordinator(
         val pairing=activePairing ?: throw AidenRemoteClientException.InstallationChanged
         if(pairedClient(pairing) !== client) throw AidenRemoteClientException.InstallationChanged
         deleter.delete(client,botId)
+        botPeerJournals.purgeBot(pairing.instanceId,pairing.deviceId,pairing.pairedAt,botId)
         botRoutineControlJournals.purgeBot(pairing.instanceId,pairing.deviceId,pairing.pairedAt,botId)
         pairingMemos.entries.removeAll { entry ->
-            entry.key.first==pairing && (entry.value as? sbtbiswas.AidenOnTheGo.features.bots.AidenBotRoutineModelsController)?.botId==botId
+            entry.key.first==pairing && ((entry.value as? sbtbiswas.AidenOnTheGo.features.bots.AidenBotRoutineModelsController)?.botId==botId ||
+                (entry.value as? sbtbiswas.AidenOnTheGo.features.bots.AidenBotPeersController)?.botId==botId)
         }
     }
 
@@ -693,8 +701,10 @@ class AidenRemoteCoordinator(
                 )
                 val openWorkServer = negotiateSoloCapability(generation = generation, installation = installation,
                     client = newClient, server = watchesServer, request = ::aidenRequestBotOpenWork)
-                val negotiatedServer = negotiateSoloCapability(generation = generation, installation = installation,
+                val modelServer = negotiateSoloCapability(generation = generation, installation = installation,
                     client = newClient, server = openWorkServer, request = ::aidenRequestBotRoutineModels)
+                val negotiatedServer = negotiateSoloCapability(generation = generation, installation = installation,
+                    client = newClient, server = modelServer, request = ::aidenRequestBotPeers)
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(
                     instanceId = installation.instanceId,
@@ -857,6 +867,7 @@ class AidenRemoteCoordinator(
         usageCache.purge(installation.instanceId)
         readSnapshotCache.purge(installation.instanceId)
         botWatchJournals.purge(installation.instanceId, installation.deviceId, installation.createdAt)
+        botPeerJournals.purge(installation.instanceId, installation.deviceId, installation.createdAt)
         botRoutineControlJournals.purge(installation.instanceId, installation.deviceId, installation.createdAt)
         botOpenWorkJournals.purge(installation.instanceId, installation.deviceId, installation.createdAt)
         botCache.purge(installation.instanceId, installation.deviceId)

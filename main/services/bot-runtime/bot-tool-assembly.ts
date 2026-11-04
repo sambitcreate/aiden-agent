@@ -220,10 +220,10 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       try {
         const facts = await ports.sources.facts(botId, admission);
         const set = await ports.sources.candidates(botId, admission, facts, turn);
-        const { telegram, routine } = botTurnOf(turn.requestId);
+        const { telegram, routine, peer } = botTurnOf(turn.requestId);
         const entries: BotToolEntry[] = [];
         for (const candidate of set.tools) {
-          if (!(await botToolVerdict(candidate.tool.name, facts, { telegram, routine })).allowed) continue;
+          if (!(await botToolVerdict(candidate.tool.name, facts, { telegram, routine, peer })).allowed) continue;
           const bind = candidate.bind;
           const guard = (tool: AgentTool) => (candidate.interactive ? tool : fenced(botId, tool, candidate.mcp === true));
           entries.push({
@@ -255,9 +255,12 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         const facts = await ports.sources.facts(botId, admission);
         // The calling run's own ingress, not whoever refreshed the tools last.
         const turns = (call?.requestIds ?? []).map(botTurnOf);
+        const taskIngress = botTurnOf(undefined);
+        if (taskIngress.peer) turns.push(taskIngress);
         const verdict = await botToolVerdict(toolName, facts, {
           telegram: turns.some((turn) => turn.telegram),
           routine: turns.some((turn) => turn.routine),
+          peer: turns.some((turn) => turn.peer),
         }, call?.args);
         if (!verdict.allowed) return verdict;
         if (call === undefined) return { allowed: true };
@@ -271,14 +274,14 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
           baseline = summary === undefined ? undefined : { summary };
         }
         // Only a run every input of which is a routine: a person who joined it is watching.
-        const routineOnly = turns.length > 0 && turns.every((turn) => turn.routine && !turn.telegram);
+        const routineOnly = turns.length > 0 && turns.every((turn) => turn.routine && !turn.telegram && !turn.peer);
         // Computer Use acts on the person's own Mac, so it keeps asking whatever the setting.
         const goAhead =
           routineOnly && toolName !== COMPUTER_USE_TOOL_NAME &&
           (await ports.routinesGoAhead?.().catch(() => false)) === true &&
           (await call.hasRoutineInputs?.()) === true;
         const ask = (approval: BotApprovalRequirement): BotPolicyDecision =>
-          goAhead ? { allowed: true, approval: { ...approval, preapproved: true } } : { allowed: true, approval };
+          turns.some((turn) => turn.peer) ? { allowed: false, reason: "Peer work cannot obtain fresh person approval for this action." } : goAhead ? { allowed: true, approval: { ...approval, preapproved: true } } : { allowed: true, approval };
         const asBaseline: BotPolicyDecision = baseline === undefined ? { allowed: true } : ask(baseline);
         const action = live !== undefined ? live.action : await describeMcpAction(toolName, call.args, facts);
         if (action === undefined || ports.rules === undefined) return asBaseline;
@@ -293,7 +296,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         if (ruled === "allowed" || rule === undefined) return asBaseline;
         const label = botRuleLabel(rule);
         const ruleRef = { id: rule.id, label };
-        const unattended = turns.some((turn) => turn.routine || turn.telegram);
+        const unattended = turns.some((turn) => turn.routine || turn.telegram || turn.peer);
         const ownSummary = baseline?.summary ?? live?.summary ?? summarizeToolCall(toolName, call.args);
         const callSummary = rule.locked ? lockedRuleSummary(action, ownSummary) : ownSummary;
         if (ruled === "ask") {

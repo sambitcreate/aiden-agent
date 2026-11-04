@@ -36,18 +36,23 @@ object AidenOpenWorkWire {
     }
 }
 @Serializable enum class AidenOpenWorkState { @SerialName("open") OPEN, @SerialName("waiting") WAITING, @SerialName("done") DONE, @SerialName("dismissed") DISMISSED }
-@Serializable enum class AidenOpenWorkSourceKind { @SerialName("person") PERSON, @SerialName("routine") ROUTINE }
-@Serializable data class AidenOpenWorkSource(val kind: AidenOpenWorkSourceKind, val submissionId: String? = null, val entryId: String? = null, val routineId: String? = null, val runId: String? = null) {
+@Serializable enum class AidenOpenWorkPeerRole { @SerialName("incoming") INCOMING, @SerialName("outgoing") OUTGOING }
+@Serializable enum class AidenOpenWorkSourceKind { @SerialName("person") PERSON, @SerialName("routine") ROUTINE, @SerialName("peer") PEER }
+@Serializable data class AidenOpenWorkSource(val kind: AidenOpenWorkSourceKind, val submissionId: String? = null, val entryId: String? = null, val routineId: String? = null, val runId: String? = null, val exchangeId:String?=null, val role:AidenOpenWorkPeerRole?=null, val peerBotId:String?=null) {
     init {
         AidenOpenWorkWire.check((submissionId == null) == (entryId == null)); submissionId?.let(AidenOpenWorkWire::decimal); entryId?.let(AidenOpenWorkWire::decimal)
+        if(kind==AidenOpenWorkSourceKind.PEER){AidenOpenWorkWire.check(exchangeId!=null && peerBotId!=null && role!=null && routineId==null && runId==null);AidenOpenWorkWire.id(exchangeId!!);AidenOpenWorkWire.id(peerBotId!!)}
+        else { AidenOpenWorkWire.check(exchangeId==null && peerBotId==null && role==null) }
         if (kind == AidenOpenWorkSourceKind.ROUTINE) { AidenOpenWorkWire.check(submissionId != null && routineId != null && runId != null); AidenOpenWorkWire.id(routineId!!); AidenOpenWorkWire.id(runId!!) }
         else AidenOpenWorkWire.check(routineId == null && runId == null)
     }
 }
-@Serializable enum class AidenOpenWorkLinkKind { @SerialName("source") SOURCE, @SerialName("result") RESULT, @SerialName("routine") ROUTINE, @SerialName("issue") ISSUE }
-@Serializable data class AidenOpenWorkLink(val kind: AidenOpenWorkLinkKind, val submissionId: String? = null, val entryId: String? = null, val routineId: String? = null, val runId: String? = null, val issueId: String? = null) {
+@Serializable enum class AidenOpenWorkLinkKind { @SerialName("source") SOURCE, @SerialName("result") RESULT, @SerialName("routine") ROUTINE, @SerialName("issue") ISSUE, @SerialName("peer") PEER }
+@Serializable data class AidenOpenWorkLink(val kind: AidenOpenWorkLinkKind, val submissionId: String? = null, val entryId: String? = null, val routineId: String? = null, val runId: String? = null, val issueId: String? = null, val exchangeId:String?=null, val peerBotId:String?=null) {
     init {
+        AidenOpenWorkWire.check(kind==AidenOpenWorkLinkKind.PEER || exchangeId==null && peerBotId==null)
         when (kind) {
+            AidenOpenWorkLinkKind.PEER -> {AidenOpenWorkWire.check(exchangeId!=null && peerBotId!=null && submissionId==null && entryId==null && routineId==null && runId==null && issueId==null);AidenOpenWorkWire.id(exchangeId!!);AidenOpenWorkWire.id(peerBotId!!)}
             AidenOpenWorkLinkKind.SOURCE, AidenOpenWorkLinkKind.RESULT -> { AidenOpenWorkWire.check(submissionId != null && entryId != null && routineId == null && runId == null && issueId == null); AidenOpenWorkWire.decimal(submissionId!!); AidenOpenWorkWire.decimal(entryId!!) }
             AidenOpenWorkLinkKind.ROUTINE -> { AidenOpenWorkWire.check(routineId != null && runId != null && submissionId == null && entryId == null && issueId == null); AidenOpenWorkWire.id(routineId!!); AidenOpenWorkWire.id(runId!!) }
             AidenOpenWorkLinkKind.ISSUE -> { AidenOpenWorkWire.check(issueId != null && submissionId == null && entryId == null && routineId == null && runId == null); AidenOpenWorkWire.id(issueId!!) }

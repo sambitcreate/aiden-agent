@@ -17,7 +17,7 @@ export type BotDeliveryDecision =
   | { kind: "suppress"; reason: "daily_limit"; digestKey: string };
 
 /** Classes that count toward, and are limited by, the daily cap. */
-export const BOT_DELIVERY_COUNTED_CLASSES: ReadonlySet<BotDeliveryClass> = new Set(["routine_result", "proposal"]);
+export const BOT_DELIVERY_COUNTED_CLASSES: ReadonlySet<BotDeliveryClass> = new Set(["routine_result", "peer_result", "proposal"]);
 
 interface WallClock { year: number; month: number; day: number; minutes: number }
 

@@ -2184,3 +2184,22 @@ test("a list summary reads a waiting question, hand-off and approval whether or 
     await live.close();
   }
 });
+
+test("peer intermediates stay visible while only the initiating root's sealed final creates attention", async () => {
+  const { parseBotPeerTranscriptData } = await import("../../../renderer/shared/bot-peers.js");
+  const entries: import("../../../renderer/shared/bot-live.js").BotTranscriptEntry[] = [
+    { id: "person", type: "user", text: "Please check the calendar", imageCount: 0, at: 10 },
+    { id: "ack", type: "assistant", text: "I will ask the calendar Bot", toolCalls: [], stopReason: "toolUse", at: 20 },
+    { id: "sent", type: "peer", exchangeId: "exchange", direction: "sent", peerBotId: "B", peerName: "Calendar", messageKind: "request", at: 25 },
+    { id: "waiting", type: "assistant", text: "Waiting for Calendar", toolCalls: [], stopReason: "stop", at: 30 },
+    { id: "received", type: "peer", exchangeId: "exchange", direction: "received", peerBotId: "B", peerName: "Calendar", messageKind: "result", at: 40 },
+    { id: "final-answer", type: "assistant", text: "Your meeting starts at 3pm", toolCalls: [], stopReason: "stop", at: 50 },
+  ];
+  assert.equal(botLastReplyAt(entries), null); assert.deepEqual(botTranscriptPreview(entries), { text: "Please check the calendar", at: 10 }); assert.ok(entries.some((entry) => entry.type === "assistant" && entry.text === "Waiting for Calendar"));
+  entries.push({ id: "another-person-input", type: "user", text: "An unrelated next task", imageCount: 0, at: 55 });
+  entries.push({ id: "sealed-root-result", type: "peer", exchangeId: "exchange", direction: "received", peerBotId: "B", peerName: "Calendar", messageKind: "result", final: true, at: 60 });
+  assert.equal(botLastReplyAt(entries), 60); assert.deepEqual(botTranscriptPreview(entries), { text: "Your meeting starts at 3pm", at: 60 });
+  assert.throws(() => parseBotPeerTranscriptData({ exchangeId: "exchange", direction: "received", peerBotId: "B", peerName: "Calendar", messageKind: "result", final: false }));
+  assert.throws(() => parseBotPeerTranscriptData({ exchangeId: "exchange", direction: "received", peerBotId: "B", peerName: "Calendar", messageKind: "fyi", final: true }));
+  const recipient = entries.slice(4, 6); assert.equal(botLastReplyAt(recipient), null); assert.equal(botTranscriptPreview(recipient), null);
+});

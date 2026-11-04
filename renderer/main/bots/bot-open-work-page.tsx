@@ -11,6 +11,7 @@ import { BotPageShell, BotPageSkeleton, useDiscardChangesGuard } from "./bot-pag
 import { botOpenWorkKey, useBotOpenWork, type BotOpenWorkApi } from "./use-bot-open-work";
 import { clearOpenWorkPending, OPEN_WORK_JOURNAL_EVENT, pendingOpenWork, recordOpenWorkAttempt, settleOpenWorkPending, type PendingOpenWork } from "./open-work-journal";
 import { useQuery } from "@tanstack/react-query";
+import { BotPeerExchangeButton } from "./bot-peers";
 
 type Draft = { id?: string; revision: string; title: string; note: string; state: BotOpenWorkState; waitingReason: string };
 type WorkAction<T = BotOpenWorkMutation> = T extends BotOpenWorkMutation ? Omit<T, "mutationId"> : never;
@@ -65,8 +66,8 @@ function WorkEditor({ draft, disabled, saveDisabled, onChange, onSave, onCancel 
   </FieldSet>;
 }
 
-function WorkRow({ item, botName, disabled, undo, onEdit, onAction, onEvidence }: {
-  item: BotOpenWorkItem; botName: string; disabled: boolean; undo?: BotOpenWorkSnapshot["undo"][number];
+function WorkRow({ item, botId, botName, disabled, undo, onEdit, onAction, onEvidence }: {
+  item: BotOpenWorkItem; botId: string; botName: string; disabled: boolean; undo?: BotOpenWorkSnapshot["undo"][number];
   onEdit(): void; onAction(mutation: WorkAction): void; onEvidence(kind: "source" | "result"): void;
 }) {
   const pendingStop = item.execution.state === "stopping" || Boolean(item.lastStop && PENDING_STOP.has(item.lastStop.state));
@@ -79,7 +80,7 @@ function WorkRow({ item, botName, disabled, undo, onEdit, onAction, onEvidence }
   return <Field orientation="vertical" label={item.title} description={<>
     <span>{STATE_LABELS[item.state]}{item.waitingReason ? " · " + item.waitingReason : ""}{status ? " · " + status : ""}</span>
     {item.note && <span className="mt-1 block whitespace-pre-wrap break-words">{item.note}</span>}
-    <span className="mt-1 block">{item.source.kind === "routine" ? "From an accepted routine" : item.source.submissionId ? "From your request" : "Added here"}</span>
+    <span className="mt-1 block">{item.source.kind === "peer" ? item.source.role === "incoming" ? "From a Bot exchange" : "Waiting on a Bot exchange" : item.source.kind === "routine" ? "From an accepted routine" : item.source.submissionId ? "From your request" : "Added here"}</span>
     {item.completion && <span className="mt-1 block">Marked done by {item.completion.by === "person" ? "you" : botName}{item.completion.result ? " · Supporting reply available" : ""}</span>}
   </>}>
     <div className="flex flex-wrap items-center gap-2">
@@ -90,6 +91,7 @@ function WorkRow({ item, botName, disabled, undo, onEdit, onAction, onEvidence }
       {undo && <Button size="small" variant="transparent" disabled={itemDisabled} aria-label={"Undo last change to " + item.title} onClick={() => onAction({ action: "undo", undoOf: undo.mutationId, expectedRevision: undo.expectedRevision })}>Undo last change</Button>}
       {item.links.some((link) => link.kind === "source") && <Button size="small" variant="transparent" onClick={() => onEvidence("source")}>View request</Button>}
       {item.links.some((link) => link.kind === "result") && <Button size="small" variant="transparent" onClick={() => onEvidence("result")}>View reply</Button>}
+      {[...new Set([...(item.source.kind === "peer" ? [item.source.exchangeId] : []), ...item.links.flatMap((link) => link.kind === "peer" ? [link.exchangeId] : [])])].map((exchangeId) => <BotPeerExchangeButton key={exchangeId} botId={botId} exchangeId={exchangeId} />)}
     </div>
     {item.execution.blockedReason === "mixed_inputs" && <Text variant="small" color="tertiary">This run includes another input, so its work cannot be stopped separately here.</Text>}
     {item.lastStop && PENDING_STOP.has(item.lastStop.state) && <Text variant="small" color="tertiary">Stop is awaiting acknowledgement. Work stays unfinished until the host confirms what stopped.</Text>}
@@ -209,10 +211,10 @@ function OpenWorkBody({ bot, api, onDirtyChange }: { bot: Pick<BotDefinition, "i
     {draft && <WorkEditor draft={draft} disabled={disabled} saveDisabled={!dirty || Boolean(conflict) || editingStop} onChange={setDraft} onSave={save} onCancel={() => { setDraft(null); setConflict(null); }} />}
     <FieldSet title="Open work">
       {!active.length && <Field label="No open work" description={bot.name + " keeps the tasks it accepts here. You can edit, dismiss or undo changes."} />}
-      {active.map((item) => <WorkRow key={item.id} item={item} botName={bot.name} disabled={disabled || draft !== null} undo={snapshot.undo.find((option) => option.itemId === item.id)} onEdit={() => { setDraft(draftOf(item)); setConflict(null); }} onAction={action} onEvidence={(kind) => setEvidence({ id: item.id, kind })} />)}
+      {active.map((item) => <WorkRow key={item.id} item={item} botId={bot.id} botName={bot.name} disabled={disabled || draft !== null} undo={snapshot.undo.find((option) => option.itemId === item.id)} onEdit={() => { setDraft(draftOf(item)); setConflict(null); }} onAction={action} onEvidence={(kind) => setEvidence({ id: item.id, kind })} />)}
       {!draft && <Field label="Add a responsibility"><Button size="small" variant="filled" disabled={disabled || active.length >= limits.active} onClick={() => { setDraft({ revision: snapshot.revision, title: "", note: "", state: "open", waitingReason: "" }); setError(null); }}><Plus /> Add work</Button></Field>}
     </FieldSet>
-    {closed.length > 0 && <><Button size="small" variant="transparent" aria-expanded={history} onClick={() => setHistory(!history)}>{history ? "Hide history" : "History (" + closed.length + ")"}</Button>{history && <FieldSet title="History">{closed.map((item) => <WorkRow key={item.id} item={item} botName={bot.name} disabled={disabled || draft !== null} undo={snapshot.undo.find((option) => option.itemId === item.id)} onEdit={() => { setDraft(draftOf(item)); setConflict(null); }} onAction={action} onEvidence={(kind) => setEvidence({ id: item.id, kind })} />)}</FieldSet>}</>}
+    {closed.length > 0 && <><Button size="small" variant="transparent" aria-expanded={history} onClick={() => setHistory(!history)}>{history ? "Hide history" : "History (" + closed.length + ")"}</Button>{history && <FieldSet title="History">{closed.map((item) => <WorkRow key={item.id} item={item} botId={bot.id} botName={bot.name} disabled={disabled || draft !== null} undo={snapshot.undo.find((option) => option.itemId === item.id)} onEdit={() => { setDraft(draftOf(item)); setConflict(null); }} onAction={action} onEvidence={(kind) => setEvidence({ id: item.id, kind })} />)}</FieldSet>}</>}
     <Evidence botId={bot.id} selection={evidence} api={api} onClose={() => setEvidence(null)} />
   </>;
 }

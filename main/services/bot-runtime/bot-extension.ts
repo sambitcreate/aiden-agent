@@ -244,6 +244,8 @@ export interface BotExtensionDeps {
   memorySection?(botId: string, offer: { memoryOffered: boolean }): Promise<string>;
   /** The Bot gave a final answer. Called without waiting; must not throw. */
   afterReply?(botId: string): void;
+  /** Awaited host peer outcome observation; never creates a new model request. */
+  peerReply?(botId: string, message: AssistantMessage, taskId: string): Promise<void>;
   /**
    * A compaction is about to summarize. Return a summary to use instead of Pi
    * Durable's own, or `undefined` to let it summarize. Errors fall back too.
@@ -516,10 +518,11 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           // Spending that cannot be attributed must never fail the reply.
         }
       },
-      onYield: () => {
+      onYield: async (message, api) => {
+        await deps.peerReply?.(botId, message, String(api.taskId));
         // The review decides later whether to run; the answer never waits on it.
         try {
-          deps.afterReply?.(botId);
+          if (!botExecutionScope(botId)?.claim.peer) deps.afterReply?.(botId);
         } catch {
           // A review that cannot be scheduled must never affect the reply.
         }

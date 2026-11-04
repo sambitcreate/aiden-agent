@@ -351,12 +351,33 @@ export class BotCapabilityStore {
   async saveRoutineModelsState(previous: string | null, next: string, assertCurrent: () => Promise<void>, isCurrent: () => boolean): Promise<void> {
     this.requireInitialized();
     if (Buffer.byteLength(next) > 4 * 1024 * 1024) throw new BotCapabilityUnavailableError("Saved routine model history is full. No admitted work was discarded.");
-    await this.serialized(async () => this.persistence.update(async (state) => {
-      await assertCurrent();
-      if ((state.routineModels ?? null) !== previous) throw new BotCapabilityUnavailableError("Routine model authority changed concurrently.");
-      if (state.sequence >= Number.MAX_SAFE_INTEGER) throw new BotCapabilityUnavailableError();
-      state.sequence++; state.routineModels = next;
-    }, isCurrent));
+    await this.publishPrivateDocument("routineModels",previous,next,assertCurrent,isCurrent);
+  }
+
+  /** Revalidate read-only leases outside the mutex; an unrelated document write can retry safely. */
+  private async publishPrivateDocument(key:"routineModels"|"peerMessaging",previous:string|null,next:string,assertCurrent:()=>Promise<void>,isCurrent:()=>boolean):Promise<void>{
+    for(let attempt=0;attempt<8;attempt++){
+      const sequence=await this.serialized(async()=>(await this.persistence.load()).sequence);
+      await assertCurrent();let invalidated=false;
+      try{await this.serialized(async()=>this.persistence.update(state=>{
+        if((state[key]??null)!==previous)throw new BotCapabilityUnavailableError("Protected Bot authority changed concurrently.");
+        if(state.sequence!==sequence){invalidated=true;throw new BotCapabilityUnavailableError("Bot authority changed during protected publication.");}
+        if(state.sequence>=Number.MAX_SAFE_INTEGER)throw new BotCapabilityUnavailableError();
+        state.sequence++;state[key]=next;
+        if(Buffer.byteLength(JSON.stringify(state))>MAX_BOT_CAPABILITY_STATE_BYTES)throw new BotCapabilityUnavailableError("Protected Bot history is full. No admitted work was discarded.");
+      },isCurrent));return;}catch(error){if(!invalidated||attempt===7)throw error;}
+    }
+  }
+
+  async getPeerMessagingState(): Promise<string | null> {
+    this.requireInitialized();
+    return this.serialized(async () => (await this.persistence.load()).peerMessaging ?? null);
+  }
+
+  async savePeerMessagingState(previous: string | null, next: string, assertCurrent: () => Promise<void>, isCurrent: () => boolean): Promise<void> {
+    this.requireInitialized();
+    if (Buffer.byteLength(next) > 2 * 1024 * 1024) throw new BotCapabilityUnavailableError("Protected Bot messaging history is full. No unfinished exchange was discarded.");
+    await this.publishPrivateDocument("peerMessaging",previous,next,assertCurrent,isCurrent);
   }
 
   async createBotPolicy(input: {

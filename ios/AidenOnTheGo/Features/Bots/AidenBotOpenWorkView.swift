@@ -10,7 +10,7 @@ struct AidenBotOpenWorkView: View {
     var body: some View {
         Group {
             if let model, context.map(coordinator.isCurrent) == true, coordinator.server?.supportsBotOpenWork == true {
-                AidenOpenWorkListView(model: model)
+                AidenOpenWorkListView(coordinator: coordinator, model: model)
             } else {
                 ContentUnavailableView("Open work unavailable", systemImage: "checklist",
                     description: Text("Connect to a paired host that supports Open work and grants Bot and chat access."))
@@ -46,6 +46,7 @@ struct AidenBotOpenWorkView: View {
 }
 
 struct AidenOpenWorkListView: View {
+    @Bindable var coordinator: AidenRemoteCoordinator
     @Bindable var model: AidenBotOpenWorkModel
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -126,7 +127,7 @@ struct AidenOpenWorkListView: View {
         }
         .sheet(isPresented: $showingEditor) { AidenOpenWorkEditorView(model: model) }
         .sheet(isPresented: Binding(get: { selectedID != nil }, set: { if !$0 { selectedID = nil } })) {
-            if let selectedID { AidenOpenWorkDetailView(model: model, itemID: selectedID) }
+            if let selectedID { AidenOpenWorkDetailView(coordinator: coordinator, model: model, itemID: selectedID) }
         }
         .alert("Open work", isPresented: Binding(get: { model.message != nil && selectedID == nil && !showingEditor }, set: { if !$0 { model.message = nil } })) {
             Button("OK", role: .cancel) { model.message = nil }
@@ -157,6 +158,7 @@ private struct AidenOpenWorkEvidenceTarget: Identifiable {
 }
 
 struct AidenOpenWorkDetailView: View {
+    @Bindable var coordinator: AidenRemoteCoordinator
     @Bindable var model: AidenBotOpenWorkModel
     let itemID: String
     @Environment(\.dismiss) private var dismiss
@@ -181,10 +183,17 @@ struct AidenOpenWorkDetailView: View {
                         }
                     }
                     Section("Linked work") {
-                        LabeledContent("Source", value: item.source.kind == .person ? "Person request" : "Routine")
+                        LabeledContent("Source", value: item.source.kind == .peer ? "Peer exchange" : item.source.kind == .person ? "Person request" : "Routine")
                         LabeledContent("Execution", value: item.execution.state.rawValue.capitalized)
                         if let explanation = item.execution.explanation { Text(explanation).foregroundStyle(palette.secondary) }
                         if let stop = item.lastStop { Text(stop.description).foregroundStyle(palette.secondary) }
+                        if coordinator.server?.supportsBotPeerExchanges == true {
+                            ForEach(peerExchangeIDs(item), id: \.self) { exchangeID in
+                                NavigationLink("View peer exchange") {
+                                    AidenBotPeerExchangeView(coordinator: coordinator, botID: model.botID, exchangeID: exchangeID)
+                                }
+                            }
+                        }
                         if item.hasSource {
                             Button("View source", systemImage: "text.bubble") { evidenceTarget = .init(item: item, kind: .source) }
                         }
@@ -243,6 +252,11 @@ struct AidenOpenWorkDetailView: View {
                 Button("OK", role: .cancel) { model.message = nil }
             } message: { Text(model.message ?? "") }
         }
+    }
+    private func peerExchangeIDs(_ item: AidenOpenWorkItem) -> [String] {
+        var ids = item.links.filter { $0.kind == .peer }.compactMap(\.exchangeId)
+        if let source = item.source.exchangeId { ids.insert(source, at: 0) }
+        var seen: Set<String> = []; return ids.filter { seen.insert($0).inserted }
     }
     private var confirmationTitle: String {
         switch confirming { case .stop: "Stop the linked run?"; case .stopAndDismiss: "Stop and dismiss this item?"; default: "Dismiss this item?" }

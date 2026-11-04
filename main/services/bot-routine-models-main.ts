@@ -27,6 +27,7 @@ const service = createBotRoutineModelService({
   },
   snapshot: (retainedProviders) => botCapabilityCatalog.snapshotModelsForRuntime({ retainedProviders }),
   metadata: resolveCompactionModelMetadata,
+  deliveryQuiet: async (botId,routineId) => {const task=await scheduleStore.get(routineId);return task?.botId===botId&&task.notify===false;},
   companionChoice: async (botId) => (await botCapabilityStore.getBotVisionModelAuthority(botId))?.binding,
   defaultChoice: async (botId): Promise<BotExecutionModelChoice> => {
     const chat = await botApplicationService.getCanonicalChat(botId) ?? await botApplicationService.createChat({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId });

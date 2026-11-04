@@ -711,6 +711,12 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/bots/{botId}/routine-models/{routineId}/runs",
     "/bots/{botId}/routine-resume-status",
     "/bots/{botId}/routine-models",
+    "/bots/{botId}/peers",
+    "/bots/{botId}/peers/catalog",
+    "/bots/{botId}/peer-exchanges",
+    "/bots/{botId}/peer-exchanges/{exchangeId}",
+    "/bots/{botId}/peer-exchanges/{exchangeId}/stop",
+    "/bots/{botId}/peer-exchanges/{exchangeId}/evidence/{kind}",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
   assert.deepEqual(document.security, [{ deviceBearer: [], protocolVersion: [] }]);
@@ -3315,8 +3321,8 @@ test("Bot issue OpenAPI schemas accept the shared fixture and refuse what the pa
       ...section.notification,
       notifications: [{ ...section.notification.notifications[0], status: "failed" }],
     }),
-    true,
-    "the schema lets an older routine item keep its kind",
+    false,
+    "issue notifications cannot carry a routine status, matching the runtime parser",
   );
 });
 

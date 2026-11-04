@@ -4252,7 +4252,7 @@ function concreteRequestPath(template: string): string {
         case ":attachmentName":
           return `x${parameterIndex}.png`;
         case ":kind":
-          return template.includes("/open-work/") ? "source" : `x${parameterIndex}`;
+          return template.includes("/open-work/") || template.includes("/peer-exchanges/") ? "source" : `x${parameterIndex}`;
         case ":action":
           if (template.includes("/git/")) return "review";
           return template.includes("/fork-summary/") ? "retry" : "run";

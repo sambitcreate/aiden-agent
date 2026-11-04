@@ -109,6 +109,7 @@ fun AidenBotProfileScreen(
     onNavigateToEditBot: (String) -> Unit,
     onNavigateToMemory: (String) -> Unit = {},
     onNavigateToWatches: (String) -> Unit = {},
+    onNavigateToPeers: (String) -> Unit = {},
     onNavigateToRoutineModels: (String) -> Unit = {},
     onNavigateToOpenWork: (String) -> Unit = {},
     onBotMutated: () -> Unit = {},
@@ -535,6 +536,14 @@ fun AidenBotProfileScreen(
                     }
                 }
 
+                if (serverInfo?.supportsBotPeers == true) {
+                    Surface(onClick={onNavigateToPeers(current.id)},color=palette.raised,shape=MaterialTheme.shapes.large,modifier=Modifier.fillMaxWidth()) {
+                        Row(Modifier.heightIn(min=56.dp).padding(horizontal=16.dp),verticalAlignment=Alignment.CenterVertically) {
+                            Text(stringResource(R.string.bot_peers_title),style=MaterialTheme.typography.bodyLarge,modifier=Modifier.weight(1f))
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight,contentDescription=null,tint=palette.secondary)
+                        }
+                    }
+                }
                 if (serverInfo?.supportsBotRoutineModels == true) {
                     Surface(onClick = { onNavigateToRoutineModels(current.id) }, color = palette.raised,
                         shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {

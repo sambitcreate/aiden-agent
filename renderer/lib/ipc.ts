@@ -1,4 +1,5 @@
 import { parseBotRoutineModelDirectory } from "../shared/bot-routine-model-directory";
+import { createBotPeerApi } from "./bot-peers-api";
 import { parseBotExecutionResumeStatus } from "../shared/bot-execution-resume";
 import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, type BotRoutineModelSave } from "../shared/bot-routine-models";
 import type { PeerProjectSource } from "../shared/peer-project-clone";
@@ -1918,6 +1919,12 @@ export const botsApi = {
     const result = await invoke<unknown>("bots:pendingChanges:retired", ids);
     if (!Array.isArray(result) || result.some((id) => typeof id !== "string" || !ids.includes(id)) || new Set(result).size !== result.length) throw new Error("Invalid saved-change retirement proof.");
     return result as string[];
+  },
+  peers: {
+    ...createBotPeerApi(invoke),
+    onChanged: (listener: (botId: string) => void) => onNotification<{ botId?: unknown }>("bots:peers:changed", (payload) => {
+      if (typeof payload?.botId === "string") listener(payload.botId);
+    }),
   },
   routineModels: {
     directory: async (botId: string) => parseBotRoutineModelDirectory(await invoke<unknown>("bots:routineModels:directory", { botId })),

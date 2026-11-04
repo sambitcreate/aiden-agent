@@ -1,10 +1,10 @@
 import { BOT_INTRO_REQUEST_PREFIX } from "../bot-runtime/bot-intro.js";
 import type { BotToolCall } from "../bot-runtime/tool-adapter.js";
-import { BOT_PERSON_INPUT_KIND, BOT_ROUTINE_INPUT_KIND, parseBotRoutineInputOrigin, type BotRoutineInputOrigin } from "../bot-runtime/bot-input-entry.js";
+import { BOT_PERSON_INPUT_KIND, BOT_ROUTINE_INPUT_KIND, BOT_PEER_INPUT_KIND, parseBotRoutineInputOrigin, type BotRoutineInputOrigin } from "../bot-runtime/bot-input-entry.js";
 import type { BotOpenWorkOrigin } from "./store.js";
 export type BotOpenWorkRoutineOrigin = (botId: string, requestId: string, submissionId: string, origin?: BotRoutineInputOrigin) => Promise<{ routineId: string; runId: string } | undefined>;
 /** Resolve only current placed host inputs. Transcript notices and arbitrary request prefixes confer no authority. */
-export async function resolveBotOpenWorkOrigin(botId: string, call: BotToolCall, sourceIndex: number | undefined, routine: BotOpenWorkRoutineOrigin): Promise<BotOpenWorkOrigin> {
+export async function resolveBotOpenWorkOrigin(botId: string, call: BotToolCall, sourceIndex: number | undefined, routine: BotOpenWorkRoutineOrigin, peer?: (botId:string,call:BotToolCall)=>Promise<BotOpenWorkOrigin>): Promise<BotOpenWorkOrigin> {
   call.signal.throwIfAborted();
   const requests = await call.runRequestIds?.();
   if (!requests?.length || requests.length > 64 || requests.some((request) => typeof request !== "string" || !request)) throw new Error("Open work needs a current accepted person request or routine.");
@@ -21,7 +21,11 @@ export async function resolveBotOpenWorkOrigin(botId: string, call: BotToolCall,
   });
   if (hidden) throw new Error("Hidden and self-generated input cannot create Open work.");
   let origin: BotOpenWorkOrigin;
-  if (entry.kind === BOT_ROUTINE_INPUT_KIND) {
+  if (entry.kind === BOT_PEER_INPUT_KIND) {
+    if (!peer) throw new Error("Peer Open work needs its protected exchange host.");
+    origin = await peer(botId,call);
+    if (origin.requestId !== requestId || origin.source.kind !== "peer" || origin.source.submissionId !== String(record.id) || origin.source.entryId !== String(entry.id)) throw new Error("The peer work source changed.");
+  } else if (entry.kind === BOT_ROUTINE_INPUT_KIND) {
     const rawOrigin = (entry.data as { routineOrigin?: unknown } | undefined)?.routineOrigin;
     const stored = parseBotRoutineInputOrigin(rawOrigin);
     if (rawOrigin !== undefined && !stored) throw new Error("This routine input has invalid host provenance.");

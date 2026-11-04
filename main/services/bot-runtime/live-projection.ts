@@ -1,4 +1,5 @@
-import { isBotInputEntryKind } from "./bot-input-entry.js";
+import { BOT_PEER_MESSAGE_ENTRY_KIND, parseBotPeerTranscriptData } from "../../../renderer/shared/bot-peers.js";
+import { BOT_PEER_INPUT_KIND, isBotInputEntryKind } from "./bot-input-entry.js";
 // Live projection of each Bot's durable conversation to renderer windows
 // (spec §6.5, plan Task 1.4).
 //
@@ -480,6 +481,11 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     const message = firstMessage(record);
+    if (record.kind === BOT_PEER_MESSAGE_ENTRY_KIND || record.kind === BOT_PEER_INPUT_KIND) {
+      if (record.kind === BOT_PEER_INPUT_KIND) { turn = { start: mapped.length, silent: false, retryText: null }; pendingHidden = false; pendingRoutine = undefined; }
+      try { const peer = parseBotPeerTranscriptData(record.kind === BOT_PEER_INPUT_KIND ? (record.data as { peer?: unknown } | undefined)?.peer : record.data); mapped.push({ entry: { id, type: "peer", ...peer, ...(peer.at === undefined && typeof message?.timestamp === "number" ? { at: message.timestamp } : {}) }, turn }); } catch { /* Invalid private peer bookkeeping never becomes a person bubble. */ }
+      continue;
+    }
     if (isBotInputEntryKind(record.kind) && message?.role === "user") {
       const content = message.content as UserContent;
       const text = textOf(content);

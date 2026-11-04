@@ -277,6 +277,14 @@ export const onboardingFeatures: OnboardingFeature[] = [
     size: "standard",
   },
   {
+    id: "botPeers",
+    group: "control",
+    title: "Bot messaging",
+    description: "Approve named Bot pairs to exchange requests. Each Bot keeps its own rules and access. Inspect exchanges and ask the host to stop linked work from desktop or a paired phone.",
+    icon: UsersRound,
+    size: "standard",
+  },
+  {
     id: "schedules",
     group: "control",
     title: "Scheduled Automations",

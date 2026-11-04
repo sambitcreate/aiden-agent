@@ -2,11 +2,13 @@
 export type BotOpenWorkState = "open" | "waiting" | "done" | "dismissed";
 export type BotOpenWorkSource =
   | { kind: "person"; submissionId?: string; entryId?: string }
-  | { kind: "routine"; submissionId: string; entryId: string; routineId: string; runId: string };
+  | { kind: "routine"; submissionId: string; entryId: string; routineId: string; runId: string }
+  | { kind: "peer"; exchangeId: string; role: "incoming" | "outgoing"; peerBotId: string; submissionId?: string; entryId?: string };
 export type BotOpenWorkLink =
   | { kind: "source" | "result"; submissionId: string; entryId: string }
   | { kind: "routine"; routineId: string; runId: string }
-  | { kind: "issue"; issueId: string };
+  | { kind: "issue"; issueId: string }
+  | { kind: "peer"; exchangeId: string; peerBotId: string };
 export interface BotOpenWorkExecution {
   state: "idle" | "queued" | "running" | "interrupted" | "stopping";
   canStop: boolean;
@@ -115,7 +117,8 @@ function submission(value: unknown): { submissionId: string; entryId: string } {
   return { submissionId: decimal(data.submissionId), entryId: decimal(data.entryId) };
 }
 function source(value: unknown): BotOpenWorkSource {
-  const data = fields(value, ["kind", "submissionId", "entryId", "routineId", "runId"]);
+  const data = fields(value, ["kind", "submissionId", "entryId", "routineId", "runId", "exchangeId", "role", "peerBotId"]);
+  if (data.kind === "peer") { fields(data, ["kind", "exchangeId", "role", "peerBotId", "submissionId", "entryId"]); if (data.role !== "incoming" && data.role !== "outgoing") return invalid(); return { kind: "peer", exchangeId: parseBotOpenWorkId(data.exchangeId), role: data.role, peerBotId: parseBotOpenWorkId(data.peerBotId), ...(data.submissionId === undefined && data.entryId === undefined ? {} : { submissionId: decimal(data.submissionId), entryId: decimal(data.entryId) }) }; }
   if (data.kind === "person") {
     fields(data, ["kind", "submissionId", "entryId"]);
     if (data.submissionId === undefined && data.entryId === undefined) return { kind: "person" };
@@ -125,7 +128,8 @@ function source(value: unknown): BotOpenWorkSource {
   return { kind: "routine", submissionId: decimal(data.submissionId), entryId: decimal(data.entryId), routineId: parseBotOpenWorkId(data.routineId), runId: parseBotOpenWorkId(data.runId) };
 }
 function link(value: unknown): BotOpenWorkLink {
-  const data = fields(value, ["kind", "submissionId", "entryId", "routineId", "runId", "issueId"]);
+  const data = fields(value, ["kind", "submissionId", "entryId", "routineId", "runId", "issueId", "exchangeId", "peerBotId"]);
+  if (data.kind === "peer") { fields(data, ["kind", "exchangeId", "peerBotId"]); return { kind: "peer", exchangeId: parseBotOpenWorkId(data.exchangeId), peerBotId: parseBotOpenWorkId(data.peerBotId) }; }
   if (data.kind === "source" || data.kind === "result") { fields(data, ["kind", "submissionId", "entryId"]); return { kind: data.kind, submissionId: decimal(data.submissionId), entryId: decimal(data.entryId) }; }
   if (data.kind === "routine") { fields(data, ["kind", "routineId", "runId"]); return { kind: "routine", routineId: parseBotOpenWorkId(data.routineId), runId: parseBotOpenWorkId(data.runId) }; }
   if (data.kind !== "issue") return invalid();

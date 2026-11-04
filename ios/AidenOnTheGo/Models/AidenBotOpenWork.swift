@@ -63,65 +63,64 @@ struct AidenOpenWorkEntry: Codable, Equatable, Hashable, Sendable {
 }
 
 struct AidenOpenWorkSource: Codable, Equatable, Sendable {
-    enum Kind: String, Codable, Sendable { case person, routine }
+    enum Kind: String, Codable, Sendable { case person, routine, peer }
+    enum Role: String, Codable, Sendable { case incoming, outgoing }
     let kind: Kind
-    let submissionId: String?
-    let entryId: String?
-    let routineId: String?
-    let runId: String?
+    let submissionId: String?; let entryId: String?; let routineId: String?; let runId: String?
+    let exchangeId: String?; let role: Role?; let peerBotId: String?
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         kind = try c.decode(Kind.self, forKey: .kind)
-        submissionId = try c.decodeIfPresent(String.self, forKey: .submissionId)
-        entryId = try c.decodeIfPresent(String.self, forKey: .entryId)
-        routineId = try c.decodeIfPresent(String.self, forKey: .routineId)
-        runId = try c.decodeIfPresent(String.self, forKey: .runId)
+        submissionId = try AidenRoutineModelWire.optional(String.self, c, .submissionId); entryId = try AidenRoutineModelWire.optional(String.self, c, .entryId)
+        routineId = try AidenRoutineModelWire.optional(String.self, c, .routineId); runId = try AidenRoutineModelWire.optional(String.self, c, .runId)
+        exchangeId = try AidenRoutineModelWire.optional(String.self, c, .exchangeId); role = try AidenRoutineModelWire.optional(Role.self, c, .role); peerBotId = try AidenRoutineModelWire.optional(String.self, c, .peerBotId)
         guard (submissionId == nil) == (entryId == nil) else { throw AidenBotContractError.invalidField("Open work source") }
-        if let submissionId { try AidenOpenWorkWire.decimal(submissionId) }
-        if let entryId { try AidenOpenWorkWire.decimal(entryId) }
+        if let submissionId { try AidenOpenWorkWire.decimal(submissionId) }; if let entryId { try AidenOpenWorkWire.decimal(entryId) }
         switch kind {
         case .person:
-            guard routineId == nil, runId == nil else { throw AidenBotContractError.invalidField("person source") }
+            try AidenBotWire.requireOnlyKeys(decoder, allowed: ["kind", "submissionId", "entryId"])
         case .routine:
+            try AidenBotWire.requireOnlyKeys(decoder, allowed: ["kind", "submissionId", "entryId", "routineId", "runId"])
             guard submissionId != nil, let routineId, let runId else { throw AidenBotContractError.invalidField("routine source") }
-            try AidenOpenWorkWire.id(routineId)
-            try AidenOpenWorkWire.id(runId)
+            try AidenOpenWorkWire.id(routineId); try AidenOpenWorkWire.id(runId)
+        case .peer:
+            try AidenBotWire.requireOnlyKeys(decoder, allowed: ["kind", "exchangeId", "role", "peerBotId", "submissionId", "entryId"])
+            guard let exchangeId, let peerBotId, role != nil else { throw AidenBotContractError.invalidField("peer source") }
+            try AidenOpenWorkWire.id(exchangeId); try AidenOpenWorkWire.id(peerBotId)
         }
     }
-    private enum CodingKeys: String, CodingKey { case kind, submissionId, entryId, routineId, runId }
+    private enum CodingKeys: String, CodingKey { case kind, submissionId, entryId, routineId, runId, exchangeId, role, peerBotId }
 }
 
 struct AidenOpenWorkLink: Codable, Equatable, Hashable, Sendable {
-    enum Kind: String, Codable, Sendable { case source, result, routine, issue }
+    enum Kind: String, Codable, Sendable { case source, result, routine, issue, peer }
     let kind: Kind
-    let submissionId: String?
-    let entryId: String?
-    let routineId: String?
-    let runId: String?
-    let issueId: String?
+    let submissionId: String?; let entryId: String?; let routineId: String?; let runId: String?; let issueId: String?
+    let exchangeId: String?; let peerBotId: String?
     init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        kind = try c.decode(Kind.self, forKey: .kind)
-        submissionId = try c.decodeIfPresent(String.self, forKey: .submissionId)
-        entryId = try c.decodeIfPresent(String.self, forKey: .entryId)
-        routineId = try c.decodeIfPresent(String.self, forKey: .routineId)
-        runId = try c.decodeIfPresent(String.self, forKey: .runId)
-        issueId = try c.decodeIfPresent(String.self, forKey: .issueId)
+        let c = try decoder.container(keyedBy: CodingKeys.self); kind = try c.decode(Kind.self, forKey: .kind)
+        submissionId = try AidenRoutineModelWire.optional(String.self, c, .submissionId); entryId = try AidenRoutineModelWire.optional(String.self, c, .entryId)
+        routineId = try AidenRoutineModelWire.optional(String.self, c, .routineId); runId = try AidenRoutineModelWire.optional(String.self, c, .runId); issueId = try AidenRoutineModelWire.optional(String.self, c, .issueId)
+        exchangeId = try AidenRoutineModelWire.optional(String.self, c, .exchangeId); peerBotId = try AidenRoutineModelWire.optional(String.self, c, .peerBotId)
         switch kind {
         case .source, .result:
-            guard let submissionId, let entryId, routineId == nil, runId == nil, issueId == nil else { throw AidenBotContractError.invalidField("entry link") }
-            try AidenOpenWorkWire.decimal(submissionId)
-            try AidenOpenWorkWire.decimal(entryId)
+            try AidenBotWire.requireOnlyKeys(decoder, allowed: ["kind", "submissionId", "entryId"])
+            guard let submissionId, let entryId else { throw AidenBotContractError.invalidField("entry link") }
+            try AidenOpenWorkWire.decimal(submissionId); try AidenOpenWorkWire.decimal(entryId)
         case .routine:
-            guard let routineId, let runId, submissionId == nil, entryId == nil, issueId == nil else { throw AidenBotContractError.invalidField("routine link") }
-            try AidenOpenWorkWire.id(routineId)
-            try AidenOpenWorkWire.id(runId)
+            try AidenBotWire.requireOnlyKeys(decoder, allowed: ["kind", "routineId", "runId"])
+            guard let routineId, let runId else { throw AidenBotContractError.invalidField("routine link") }
+            try AidenOpenWorkWire.id(routineId); try AidenOpenWorkWire.id(runId)
         case .issue:
-            guard let issueId, submissionId == nil, entryId == nil, routineId == nil, runId == nil else { throw AidenBotContractError.invalidField("issue link") }
-            try AidenOpenWorkWire.id(issueId)
+            try AidenBotWire.requireOnlyKeys(decoder, allowed: ["kind", "issueId"])
+            guard let issueId else { throw AidenBotContractError.invalidField("issue link") }; try AidenOpenWorkWire.id(issueId)
+        case .peer:
+            try AidenBotWire.requireOnlyKeys(decoder, allowed: ["kind", "exchangeId", "peerBotId"])
+            guard let exchangeId, let peerBotId else { throw AidenBotContractError.invalidField("peer link") }
+            try AidenOpenWorkWire.id(exchangeId); try AidenOpenWorkWire.id(peerBotId)
         }
     }
-    private enum CodingKeys: String, CodingKey { case kind, submissionId, entryId, routineId, runId, issueId }
+    private enum CodingKeys: String, CodingKey { case kind, submissionId, entryId, routineId, runId, issueId, exchangeId, peerBotId }
 }
 
 struct AidenOpenWorkExecution: Codable, Equatable, Sendable {

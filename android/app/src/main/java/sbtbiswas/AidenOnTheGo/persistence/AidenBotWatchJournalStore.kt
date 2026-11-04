@@ -92,7 +92,7 @@ class AidenBotWatchJournalStore(private val secureStore: AidenSecureStore, priva
     }
 
     // Routine-control keys use a delimiter excluded by their host-owned ASCII ID grammar.
-    private fun ownerBot(key: String) = if(namespace == "bot-routine-controls") key.substringBefore('|') else key
+    private fun ownerBot(key: String) = if(namespace in listOf("bot-routine-controls","bot-peers")) key.substringBefore('|') else key
     private fun invalidateHandles(matches: (JournalLifetime) -> Boolean) {
         liveHandles[storeKey]?.removeAll { handle ->
             val lifetime = handle.get()

@@ -8051,6 +8051,370 @@
           }
         }
       }
+    },
+    "/bots/{botId}/peers": {
+      "get": {
+        "operationId": "botPeerSettings",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:peers"
+        ],
+        "x-aiden-capability": "bot:read",
+        "responses": {
+          "200": {
+            "description": "Bot messaging owner response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPeerSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "botPeerMutate",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:peers",
+          "bot:write"
+        ],
+        "x-aiden-capability": "bot:write",
+        "responses": {
+          "200": {
+            "description": "Bot messaging owner response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPeerMutationResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotPeerMutation"
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/peers/catalog": {
+      "get": {
+        "operationId": "botPeerCatalog",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:peers"
+        ],
+        "x-aiden-capability": "bot:read",
+        "responses": {
+          "200": {
+            "description": "Bot messaging owner response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPeerCatalog"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/peer-exchanges": {
+      "get": {
+        "operationId": "botPeerExchanges",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:peers",
+          "chat:read"
+        ],
+        "x-aiden-capability": "bot:read",
+        "responses": {
+          "200": {
+            "description": "Bot messaging owner response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPeerExchangeList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/peer-exchanges/{exchangeId}": {
+      "get": {
+        "operationId": "botPeerExchange",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "exchangeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:peers",
+          "chat:read"
+        ],
+        "x-aiden-capability": "bot:read",
+        "responses": {
+          "200": {
+            "description": "Bot messaging owner response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPeerExchangeDetail"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/peer-exchanges/{exchangeId}/stop": {
+      "post": {
+        "operationId": "botPeerStop",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "exchangeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:peers",
+          "chat:read",
+          "bot:write"
+        ],
+        "x-aiden-capability": "bot:write",
+        "responses": {
+          "200": {
+            "description": "Bot messaging owner response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPeerStopResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotPeerStopMutation"
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
+    },
+    "/bots/{botId}/peer-exchanges/{exchangeId}/evidence/{kind}": {
+      "get": {
+        "operationId": "botPeerEvidence",
+        "parameters": [
+          {
+            "name": "botId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "exchangeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "source",
+                "result"
+              ]
+            }
+          }
+        ],
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:peers",
+          "chat:read"
+        ],
+        "x-aiden-capability": "bot:read",
+        "responses": {
+          "200": {
+            "description": "Bot messaging owner response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPeerEvidence"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ]
     }
   },
   "components": {
@@ -8813,6 +9177,7 @@
                 "bot:watches",
                 "bot:open-work",
                 "bot:routine-models",
+                "bot:peers",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -8862,6 +9227,7 @@
                 "bot:watches",
                 "bot:open-work",
                 "bot:routine-models",
+                "bot:peers",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -9014,6 +9380,7 @@
                 "bot:watches",
                 "bot:open-work",
                 "bot:routine-models",
+                "bot:peers",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -9072,6 +9439,7 @@
                 "bot:watches",
                 "bot:open-work",
                 "bot:routine-models",
+                "bot:peers",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -17792,6 +18160,9 @@
               }
             },
             "additionalProperties": false
+          },
+          {
+            "$ref": "#/components/schemas/BotPeerSessionEntry"
           }
         ]
       },
@@ -18530,10 +18901,11 @@
                   "maxLength": 160
                 },
                 "kind": {
-                  "description": "Contract revision 42: absent means routine. An issue item carries no routineId or status, and routineName is the card's title.",
+                  "description": "Absent means routine. Issue and peer items carry neither routineId nor status; routineName is the title. Peer requires negotiated bot:peers.",
                   "enum": [
                     "routine",
-                    "issue"
+                    "issue",
+                    "peer"
                   ]
                 },
                 "botId": {
@@ -18573,7 +18945,63 @@
                   "maxLength": 160
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "required": [
+                      "kind"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "issue",
+                          "peer"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "not": {
+                      "anyOf": [
+                        {
+                          "required": [
+                            "routineId"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "status"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "not": {
+                      "required": [
+                        "kind"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "enum": [
+                            "issue",
+                            "peer"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "then": {
+                    "required": [
+                      "routineId",
+                      "status"
+                    ]
+                  }
+                }
+              ]
             }
           },
           "now": {
@@ -19709,6 +20137,84 @@
               "routineId",
               "runId"
             ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "peer"
+              },
+              "exchangeId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "role": {
+                "enum": [
+                  "incoming",
+                  "outgoing"
+                ]
+              },
+              "peerBotId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "kind",
+              "exchangeId",
+              "role",
+              "peerBotId"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "peer"
+              },
+              "exchangeId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "role": {
+                "enum": [
+                  "incoming",
+                  "outgoing"
+                ]
+              },
+              "peerBotId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "submissionId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "maxLength": 32
+              },
+              "entryId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,31}$",
+                "maxLength": 32
+              }
+            },
+            "required": [
+              "kind",
+              "exchangeId",
+              "role",
+              "peerBotId",
+              "submissionId",
+              "entryId"
+            ]
           }
         ]
       },
@@ -19785,6 +20291,32 @@
             "required": [
               "kind",
               "issueId"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "peer"
+              },
+              "exchangeId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "peerBotId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "kind",
+              "exchangeId",
+              "peerBotId"
             ]
           }
         ]
@@ -21586,6 +22118,950 @@
             }
           }
         }
+      },
+      "BotPeerIdentity": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "required": [
+          "botId",
+          "name"
+        ]
+      },
+      "BotPeerPair": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "peer": {
+            "$ref": "#/components/schemas/BotPeerIdentity"
+          },
+          "approvedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "peer",
+          "approvedAt"
+        ]
+      },
+      "BotPeerSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "routingDescription": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 1000
+          },
+          "pairs": {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "$ref": "#/components/schemas/BotPeerPair"
+            }
+          },
+          "updatedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "lastMutationId": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$"
+          }
+        },
+        "required": [
+          "botId",
+          "revision",
+          "routingDescription",
+          "pairs",
+          "updatedAt"
+        ]
+      },
+      "BotPeerCatalog": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "bots": {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "botId": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "available": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "botId",
+                "name",
+                "available"
+              ]
+            }
+          }
+        },
+        "required": [
+          "botId",
+          "revision",
+          "bots"
+        ]
+      },
+      "BotPeerMutation": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "botId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$"
+              },
+              "expectedRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "action": {
+                "const": "describe"
+              },
+              "routingDescription": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 1000
+              }
+            },
+            "required": [
+              "botId",
+              "mutationId",
+              "expectedRevision",
+              "action",
+              "routingDescription"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "botId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$"
+              },
+              "expectedRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "action": {
+                "const": "approve"
+              },
+              "catalogRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "peerBotId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "botId",
+              "mutationId",
+              "expectedRevision",
+              "action",
+              "catalogRevision",
+              "peerBotId"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "botId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$"
+              },
+              "expectedRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "action": {
+                "const": "revoke"
+              },
+              "pairId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "pairRevision": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "required": [
+              "botId",
+              "mutationId",
+              "expectedRevision",
+              "action",
+              "pairId",
+              "pairRevision"
+            ]
+          }
+        ]
+      },
+      "BotPeerMutationResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "snapshot": {
+                "$ref": "#/components/schemas/BotPeerSettings"
+              }
+            },
+            "required": [
+              "ok",
+              "mutationId",
+              "replayed",
+              "snapshot"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "code": {
+                "enum": [
+                  "invalid",
+                  "conflict",
+                  "unavailable",
+                  "history_full",
+                  "access_changed",
+                  "not_found"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "snapshot": {
+                "$ref": "#/components/schemas/BotPeerSettings"
+              }
+            },
+            "required": [
+              "ok",
+              "code",
+              "error"
+            ]
+          }
+        ]
+      },
+      "BotPeerStopReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mutationId": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$"
+          },
+          "state": {
+            "enum": [
+              "requested",
+              "uncertain",
+              "stopped",
+              "not_running",
+              "blocked"
+            ]
+          },
+          "at": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "reason": {
+            "enum": [
+              "mixed_inputs",
+              "host_unavailable",
+              "stale_source"
+            ]
+          }
+        },
+        "required": [
+          "mutationId",
+          "state",
+          "at"
+        ]
+      },
+      "BotPeerExchangeSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "pairId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "sender": {
+            "$ref": "#/components/schemas/BotPeerIdentity"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/BotPeerIdentity"
+          },
+          "direction": {
+            "enum": [
+              "sent",
+              "received"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "request",
+              "question",
+              "status",
+              "fyi"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "state": {
+            "enum": [
+              "waiting",
+              "queued",
+              "running",
+              "interrupted",
+              "stopping",
+              "completed",
+              "failed",
+              "cancelled",
+              "expired",
+              "uncertain"
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "updatedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "expiresAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "canStop": {
+            "type": "boolean"
+          },
+          "returnState": {
+            "enum": [
+              "reserved",
+              "waiting",
+              "queued",
+              "delivered",
+              "not_applicable"
+            ]
+          },
+          "parentExchangeId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "rootExchangeId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "blockedReason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "lastStop": {
+            "$ref": "#/components/schemas/BotPeerStopReceipt"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "pairId",
+          "sender",
+          "recipient",
+          "direction",
+          "kind",
+          "title",
+          "state",
+          "createdAt",
+          "updatedAt",
+          "expiresAt",
+          "canStop",
+          "returnState"
+        ]
+      },
+      "BotPeerExchangeDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "pairId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "sender": {
+            "$ref": "#/components/schemas/BotPeerIdentity"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/BotPeerIdentity"
+          },
+          "direction": {
+            "enum": [
+              "sent",
+              "received"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "request",
+              "question",
+              "status",
+              "fyi"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "state": {
+            "enum": [
+              "waiting",
+              "queued",
+              "running",
+              "interrupted",
+              "stopping",
+              "completed",
+              "failed",
+              "cancelled",
+              "expired",
+              "uncertain"
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "updatedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "expiresAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "canStop": {
+            "type": "boolean"
+          },
+          "returnState": {
+            "enum": [
+              "reserved",
+              "waiting",
+              "queued",
+              "delivered",
+              "not_applicable"
+            ]
+          },
+          "parentExchangeId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "rootExchangeId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "blockedReason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "lastStop": {
+            "$ref": "#/components/schemas/BotPeerStopReceipt"
+          },
+          "request": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              }
+            },
+            "required": [
+              "text"
+            ]
+          },
+          "result": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "completed",
+                  "failed",
+                  "cancelled",
+                  "expired"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 16384
+              },
+              "truncated": {
+                "type": "boolean"
+              },
+              "createdAt": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "outcome",
+              "text",
+              "truncated",
+              "createdAt"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "pairId",
+          "sender",
+          "recipient",
+          "direction",
+          "kind",
+          "title",
+          "state",
+          "createdAt",
+          "updatedAt",
+          "expiresAt",
+          "canStop",
+          "returnState",
+          "request"
+        ]
+      },
+      "BotPeerExchangeList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "exchanges": {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "$ref": "#/components/schemas/BotPeerExchangeSummary"
+            }
+          }
+        },
+        "required": [
+          "botId",
+          "revision",
+          "exchanges"
+        ]
+      },
+      "BotPeerStopMutation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "mutationId": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$"
+          },
+          "expectedRevision": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "exchangeId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "required": [
+          "botId",
+          "mutationId",
+          "expectedRevision",
+          "exchangeId"
+        ]
+      },
+      "BotPeerStopResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "mutationId": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "exchange": {
+                "$ref": "#/components/schemas/BotPeerExchangeDetail"
+              }
+            },
+            "required": [
+              "ok",
+              "mutationId",
+              "replayed",
+              "exchange"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "code": {
+                "enum": [
+                  "invalid",
+                  "conflict",
+                  "unavailable",
+                  "history_full",
+                  "access_changed",
+                  "not_found"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "exchange": {
+                "$ref": "#/components/schemas/BotPeerExchangeDetail"
+              }
+            },
+            "required": [
+              "ok",
+              "code",
+              "error"
+            ]
+          }
+        ]
+      },
+      "BotPeerEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "exchangeId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "kind": {
+            "enum": [
+              "source",
+              "result"
+            ]
+          },
+          "botId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "submissionId": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,31}$",
+            "maxLength": 32
+          },
+          "entryId": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,31}$",
+            "maxLength": 32
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "text": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 32768
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "exchangeId",
+          "kind",
+          "botId",
+          "submissionId",
+          "entryId",
+          "title",
+          "text",
+          "truncated"
+        ]
+      },
+      "BotPeerSessionEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "type": {
+            "const": "peer"
+          },
+          "exchangeId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "direction": {
+            "enum": [
+              "sent",
+              "received"
+            ]
+          },
+          "peerBotId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,160}$",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "peerName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "messageKind": {
+            "enum": [
+              "request",
+              "question",
+              "status",
+              "fyi",
+              "result"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "final": {
+            "const": true
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "exchangeId",
+          "direction",
+          "peerBotId",
+          "peerName",
+          "messageKind"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "final"
+              ]
+            },
+            "then": {
+              "properties": {
+                "messageKind": {
+                  "const": "result"
+                }
+              }
+            }
+          }
+        ]
       }
     }
   }

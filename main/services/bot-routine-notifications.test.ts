@@ -13,6 +13,18 @@ import type { ScheduledRun, ScheduledTask } from "./types.js";
 const NOW = Date.parse("2026-08-19T15:01:00.000Z");
 const HOUR = 60 * 60 * 1_000;
 
+test("peer results join only the negotiated feed, retain root dedupe and respect quiet delivery", async (t) => {
+  const h = await harness(); t.after(h.cleanup);
+  await h.log.append(delivery({ class: "peer_result", dedupeKey: "peer-root", requestId: "peer-root", routineId: undefined, status: "info", title: "🗓".repeat(60) + "X".repeat(80), body: "" }));
+  await h.log.append(delivery({ class: "peer_result", dedupeKey: "peer-quiet", requestId: "peer-quiet", routineId: undefined, quiet: true }));
+  assert.equal((await h.feed.list(undefined)).notifications.length, 0);
+  assert.equal((await h.feed.list(undefined, { issues: true })).notifications.length, 0);
+  const shown = (await h.feed.list(undefined, { peers: true })).notifications;
+  assert.equal(shown.length, 1); assert.equal(shown[0].id, "peer-root"); assert.equal(shown[0].kind, "peer");
+  assert.equal([...shown[0].routineName].length, 120); assert.equal(shown[0].preview, "Bot update ready.");
+  assert.equal(Object.prototype.hasOwnProperty.call(shown[0], "routineId"), false); assert.equal(Object.prototype.hasOwnProperty.call(shown[0], "status"), false);
+});
+
 function delivery(overrides: Partial<Omit<BotDeliveryRow, "id">> = {}): Omit<BotDeliveryRow, "id"> {
   return {
     botId: "bot_fixture_01",

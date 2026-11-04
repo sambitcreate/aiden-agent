@@ -197,6 +197,7 @@ export interface AidenRemoteServiceOptions {
         botWatches?: AidenRemoteRouterDependencies["botWatches"];
         botOpenWork?: AidenRemoteRouterDependencies["botOpenWork"];
         botRoutineModels?: AidenRemoteRouterDependencies["botRoutineModels"];
+        botPeers?: AidenRemoteRouterDependencies["botPeers"];
         bots?: Pick<
           AidenRemoteBotService,
           | "list"
@@ -240,6 +241,7 @@ export interface AidenRemoteServiceOptions {
         botWatches?: AidenRemoteRouterDependencies["botWatches"];
         botOpenWork?: AidenRemoteRouterDependencies["botOpenWork"];
         botRoutineModels?: AidenRemoteRouterDependencies["botRoutineModels"];
+        botPeers?: AidenRemoteRouterDependencies["botPeers"];
         bots?: Pick<
           AidenRemoteBotService,
           | "list"

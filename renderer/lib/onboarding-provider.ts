@@ -151,6 +151,7 @@ export function visibleOnboardingFeatures<T extends { id: string; description: s
     (capabilities.bots || feature.id !== "bots") &&
     (capabilities.bots || feature.id !== "botOpenWork") &&
     (capabilities.bots || feature.id !== "botRoutineModels") &&
+    (capabilities.bots || feature.id !== "botPeers") &&
     ((capabilities.bots && capabilities.platform === "darwin") || feature.id !== "botWatches") &&
     // A Bot's own macOS VM needs Apple silicon, and a Bot to give it to.
     ((capabilities.botComputers && capabilities.bots) || feature.id !== "botComputers"),

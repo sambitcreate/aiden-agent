@@ -24,6 +24,8 @@ export type ToolReplay = "safe" | "unsafe";
 /** What a per-call tool may use of the conversation it runs in. */
 export interface BotToolCall {
   readonly callId: string;
+  /** Host task identity; used only for protected durable peer handoffs. */
+  readonly taskId?: string;
   readonly signal: AbortSignal;
   /** Committed entries of the calling conversation, newest first (the store's default scan order). */
   entries(): Promise<EntryRecord[]>;
@@ -31,6 +33,8 @@ export interface BotToolCall {
   submissions(requestIds: readonly string[]): Promise<Array<SubmissionRecord | undefined>>;
   /** Append a display/bookkeeping entry to the calling conversation. */
   appendEntry(kind: string, data: JsonValue): Promise<void>;
+  /** Atomic metadata write using this task's conversation, without reopening a host or scheduling input. */
+  appendEntryOnce?(requestId:string,kind:string,data:JsonValue):Promise<void>;
   /**
    * The tool task's memo: the first `candidate` for `name` is stored and
    * returned on every later call of the same task, including after a restart.
@@ -59,6 +63,7 @@ function callApi(api: ToolExecutionApi, context: Context, signal: AbortSignal, o
   return {
     ...(runRequestIds === undefined ? {} : { runRequestIds: () => runRequestIds(api, context) }),
     callId: api.callId,
+    taskId: String(api.taskId),
     signal,
     entries: () =>
       api.commit(async (tx) => {
@@ -76,6 +81,7 @@ function callApi(api: ToolExecutionApi, context: Context, signal: AbortSignal, o
     appendEntry: async (kind, data) => {
       await api.commit((tx) => tx.appendEntry(api.conversationId, { kind, data }), context);
     },
+    appendEntryOnce: async (requestId,kind,data) => {await api.commit(async tx=>{if(await tx.submissionByRequest(api.conversationId,requestId))return;const submission=await tx.createSubmission({conversationId:api.conversationId,requestId,type:"write",status:"queued"}),entry=await tx.appendEntry(api.conversationId,{kind,data});await tx.placeSubmission(submission.id,entry.id);},context);},
     memo: (name, candidate) => api.memo(name, candidate, context),
   };
 }

@@ -1,4 +1,5 @@
 import { BOT_UNKNOWN_COST_CONFIRMATION } from "../../shared/bot-execution-resume";
+import { BotPeerExchangeDialog } from "./bot-peers";
 import { BOT_RESUME_JOURNAL_EVENT, pendingBotResumes, recordBotResume, settleBotResume, type BotResumeAttempt } from "./bot-resume-journal";
 // A Bot's one conversation, rendered from the durable projection (`useBotLive`).
 // Sends go through `bots:send` with a fresh request UUID per message, so a retried
@@ -699,6 +700,7 @@ export function TranscriptEntries({
   onReply,
   onRetry,
   onOpenMemory,
+  onViewExchange,
   onRunRoutine,
   onRespondToProposal,
   onNewRoutineLink,
@@ -728,6 +730,7 @@ export function TranscriptEntries({
   onReply(text: string): void;
   onRetry(failedId: string, text: string): void;
   onOpenMemory?(): void;
+  onViewExchange?(exchangeId: string): void;
   /** Run now on a routine skipped while paused; rejects when it didn't start. Absent where routines can't run. */
   onRunRoutine?(routineId: string): Promise<void>;
   onRespondToProposal?(
@@ -800,6 +803,8 @@ export function TranscriptEntries({
                 </BotMessageActions>
               </React.Fragment>
             );
+          case "peer":
+            return <div key={row.id} className="flex flex-wrap items-center gap-2 py-1" role="note"><Text variant="small" color="secondary">{row.messageKind === "result" ? "Exchange update" : row.messageKind === "fyi" ? "FYI" : row.messageKind[0]!.toUpperCase() + row.messageKind.slice(1)} {row.direction === "sent" ? "to" : "from"} {row.peerName}</Text>{onViewExchange && <Button size="small" variant="transparent" onClick={() => onViewExchange(row.exchangeId)}>View exchange</Button>}</div>;
           case "assistant":
             return (
               <BotMessageActions key={row.id} text={row.text} from={name} align="start" onReply={onReply}>
@@ -982,6 +987,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   // that failed keeps its id, so the same words sent again are deduplicated by
   // main instead of delivered twice; Retry reuses one id per failed turn.
   const [pendingSends, setPendingSends] = React.useState<readonly BotPendingSend[]>([]);
+  const [peerExchange, setPeerExchange] = React.useState<{ botId: string; exchangeId: string } | null>(null);
   // Sends whose words are still moving from the composer into their bubble:
   // each keeps its echo until it lands, and the entry that answers it waits unseen.
   const sendMorphs = React.useRef(new Map<string, BotSendMorphOrigin>());
@@ -1700,6 +1706,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           onReply={reply}
           onRetry={(failedId, text) => void retry(failedId, text)}
           onOpenMemory={openMemory}
+          onViewExchange={(exchangeId) => setPeerExchange({ botId: current.id, exchangeId })}
           onRunRoutine={runRoutine}
           wakeUpPending={wakeUpPending}
           onCancelWakeUp={cancelWakeUp}
@@ -1772,6 +1779,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         const consent = costConsent; setCostConsent(null);
         if (consent?.botId === current.id && state?.kind === "interrupted" && consent.submissionId === state.submissionId) void answerInterrupted("resume", true, consent.expectedSubmissionId, consent.expectedCostReceiptId);
       }} />
+      {peerExchange?.botId === current.id && <BotPeerExchangeDialog key={`${peerExchange.botId}:${peerExchange.exchangeId}`} botId={current.id} exchangeId={peerExchange.exchangeId} onClose={() => setPeerExchange(null)} />}
       {/* A new message dismisses the interrupted turn, so the card leaves with the send and comes back if it fails. */}
       {state?.kind === "interrupted" && hiddenInterruptedSubmission !== state.submissionId && !startingTurn ? (
         <BotInterruptedCard

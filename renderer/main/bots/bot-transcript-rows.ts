@@ -30,6 +30,7 @@ export type BotTranscriptRow =
   /** The person's answer to a hand-off card, on their side: "You did this: …" with their note below. */
   | { kind: "handoff_result"; id: string; outcome: BotHandoffOutcome; signedIn: boolean; text: string; note?: string }
   | { kind: "routine"; id: string; label: string; text: string }
+  | { kind: "peer"; id: string; exchangeId: string; direction: "sent" | "received"; peerName: string; messageKind: "request" | "question" | "status" | "fyi" | "result" }
   | { kind: "assistant"; id: string; text: string; streaming?: boolean }
   /** One turn's steps; `live` while the turn runs (Detailed only). */
   | { kind: "recap"; id: string; steps: BotRecapStep[]; durationMs: number; live: boolean }
@@ -124,6 +125,9 @@ export function botTranscriptRows(
           break;
         case "routine":
           rows.push({ kind: "routine", id: entry.id, label: entry.label, text: entry.text });
+          break;
+        case "peer":
+          rows.push({ kind: "peer", id: entry.id, exchangeId: entry.exchangeId, direction: entry.direction, peerName: entry.peerName, messageKind: entry.messageKind });
           break;
         case "assistant":
           if (entry.text.trim()) {

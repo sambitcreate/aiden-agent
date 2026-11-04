@@ -209,6 +209,13 @@ data class AidenServer(
         get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_OPEN_WORK) == true &&
             capabilities.containsAll(listOf(AidenRemoteCapability.BOT_OPEN_WORK, AidenRemoteCapability.BOT_READ, AidenRemoteCapability.CHAT_READ))
 
+    /** Pair metadata does not require chat content permission. */
+    val supportsBotPeers: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_PEERS) == true &&
+            capabilities.containsAll(listOf(AidenRemoteCapability.BOT_PEERS,AidenRemoteCapability.BOT_READ))
+    val supportsBotPeerExchanges: Boolean
+        get() = supportsBotPeers && capabilities.contains(AidenRemoteCapability.CHAT_READ)
+
     /** Routine configuration and run facts require Bot and chat visibility (revision 56). */
     val supportsBotRoutineModels: Boolean
         get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_ROUTINE_MODELS) == true &&

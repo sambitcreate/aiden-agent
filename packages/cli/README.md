@@ -238,4 +238,6 @@ History: the CLI started as a rebranded Pi terminal app ([`docs/plans/aiden-cli-
 
 The optional Open work management API is currently wired by the Electron desktop host, not `aiden serve`. The CLI does not advertise `bot:open-work`; paired clients keep that management surface unavailable for this host. The shared runtime’s request-scoped Stop and evidence helpers remain portable. See [Open work](../../docs/bot-open-work.md).
 
+Routine-model management (`bot:routine-models`) and Bot messaging (`bot:peers`) also require the Electron host. The CLI retains its current routine model defaults and does not install pair authority, the peer delivery actor or `message_bot`. See [CLI durable Bots](../../docs/cli-durable-bots.md).
+
 The per-routine model/thinking/fallback API (`bot:routine-models`) and its protected execution grants are likewise desktop-host features. `aiden serve` retains its existing Bot model defaults and does not advertise those optional management routes or the desktop’s unconfirmed-cost Resume controls. See [routine models](../../docs/bot-routine-models.md).

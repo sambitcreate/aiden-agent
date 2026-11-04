@@ -2051,6 +2051,59 @@ class AidenRemoteClient(
         ) { }
     }
 
+    private fun peerPath(botId:String,exchangeId:String?=null):String {
+        AidenPeerWire.id(botId);exchangeId?.let(AidenPeerWire::id)
+        return "/bots/$botId/"+(exchangeId?.let{"peer-exchanges/$it"} ?: "peers")
+    }
+    suspend fun botPeers(botId:String):AidenPeerSettings=executeRequest(peerPath(botId),maximumResponseBytes=AidenPeerWire.PUBLIC_BYTES,
+        botScope=AidenBotPrivateResponseScope.Root("botPeers")){bytes->
+        AidenPeerWire.decode(AidenPeerSettings.serializer(),String(bytes,Charsets.UTF_8)).also{if(it.botId!=botId)throw AidenRemoteClientException.InvalidResponse()}
+    }
+    suspend fun botPeerCatalog(botId:String):AidenPeerCatalog=executeRequest(peerPath(botId)+"/catalog",maximumResponseBytes=AidenPeerWire.PUBLIC_BYTES,
+        botScope=AidenBotPrivateResponseScope.Root("botPeers")){bytes->
+        AidenPeerWire.decode(AidenPeerCatalog.serializer(),String(bytes,Charsets.UTF_8)).also{if(it.botId!=botId)throw AidenRemoteClientException.InvalidResponse()}
+    }
+    suspend fun mutateBotPeers(request:AidenPeerMutation):AidenPeerMutationResult {
+        val body=botJson.encodeToString(AidenPeerMutation.serializer(),request)
+        require(body.toByteArray(Charsets.UTF_8).size<=AidenPeerWire.MUTATION_BYTES)
+        return executeRequest(peerPath(request.botId),method="POST",bodyJson=body,retryConnectionFailure=false,maximumResponseBytes=AidenPeerWire.PUBLIC_BYTES,
+            botScope=AidenBotPrivateResponseScope.Root("botPeers")){bytes->
+            AidenPeerWire.decode(AidenPeerMutationResult.serializer(),String(bytes,Charsets.UTF_8)).also{
+                if(it.snapshot?.botId?.let{it!=request.botId}==true || it.ok && it.mutationId!=request.mutationId)throw AidenRemoteClientException.InvalidResponse()
+            }
+        }
+    }
+    suspend fun botPeerExchanges(botId:String):AidenPeerExchangeList {
+        AidenPeerWire.id(botId)
+        return executeRequest("/bots/$botId/peer-exchanges",maximumResponseBytes=AidenPeerWire.PUBLIC_BYTES,
+            botScope=AidenBotPrivateResponseScope.Root("botPeers")){bytes->
+            AidenPeerWire.decode(AidenPeerExchangeList.serializer(),String(bytes,Charsets.UTF_8)).also{if(it.botId!=botId)throw AidenRemoteClientException.InvalidResponse()}
+        }
+    }
+    suspend fun botPeerExchange(botId:String,exchangeId:String):AidenPeerExchange=executeRequest(peerPath(botId,exchangeId),maximumResponseBytes=AidenPeerWire.PUBLIC_BYTES,
+        botScope=AidenBotPrivateResponseScope.Root("botPeers")){bytes->
+        AidenPeerWire.decode(AidenPeerExchange.serializer(),String(bytes,Charsets.UTF_8)).detail().also{if(it.id!=exchangeId || !it.belongsTo(botId))throw AidenRemoteClientException.InvalidResponse()}
+    }
+    suspend fun stopBotPeerExchange(request:AidenPeerStopMutation):AidenPeerStopResult {
+        val body=botJson.encodeToString(AidenPeerStopMutation.serializer(),request)
+        return executeRequest(peerPath(request.botId,request.exchangeId)+"/stop",method="POST",bodyJson=body,retryConnectionFailure=false,maximumResponseBytes=AidenPeerWire.PUBLIC_BYTES,
+            botScope=AidenBotPrivateResponseScope.Root("botPeers")){bytes->
+            AidenPeerWire.decode(AidenPeerStopResult.serializer(),String(bytes,Charsets.UTF_8)).also{
+                if(it.exchange?.let{row->row.id!=request.exchangeId || !row.belongsTo(request.botId)}==true || it.ok && it.mutationId!=request.mutationId)throw AidenRemoteClientException.InvalidResponse()
+            }
+        }
+    }
+    suspend fun botPeerEvidence(botId:String,exchange:AidenPeerExchange,kind:AidenOpenWorkEvidenceKind):AidenPeerEvidence {
+        require(exchange.belongsTo(botId))
+        return executeRequest(peerPath(botId,exchange.id)+"/evidence/"+kind.name.lowercase(),maximumResponseBytes=256*1024,
+            botScope=AidenBotPrivateResponseScope.Root("botPeers")){bytes->
+            AidenPeerWire.decode(AidenPeerEvidence.serializer(),String(bytes,Charsets.UTF_8)).also{
+                val owner=if(kind==AidenOpenWorkEvidenceKind.SOURCE)exchange.sender.botId else exchange.recipient.botId
+                if(it.exchangeId!=exchange.id || it.kind!=kind || it.botId!=owner)throw AidenRemoteClientException.InvalidResponse()
+            }
+        }
+    }
+
     private fun routineModelPath(botId: String, routineId: String? = null): String {
         AidenRoutineModelWire.id(botId); routineId?.let(AidenRoutineModelWire::id)
         return "/bots/$botId/routine-models" + (routineId?.let { "/$it" } ?: "")

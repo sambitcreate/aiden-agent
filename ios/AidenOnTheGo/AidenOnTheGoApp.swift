@@ -85,6 +85,7 @@ struct AidenOnTheGoApp: App {
         AidenBotWatchDraftStore.shared.prepareExistingStorage()
         AidenBotOpenWorkDraftStore.shared.prepareExistingStorage()
         AidenBotRoutineControlStore.shared.prepareExistingStorage()
+        AidenBotPeerControlStore.shared.prepareExistingStorage()
         aidenBotImagePlaygroundCleanupAfterProcessLaunch()
         AidenMetricDiagnosticSubscriber.shared.start()
         AidenScheduledRunNotifier.installPresentationDelegate()

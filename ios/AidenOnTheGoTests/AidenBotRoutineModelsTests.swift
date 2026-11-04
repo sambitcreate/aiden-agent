@@ -103,7 +103,7 @@ final class AidenBotRoutineModelsTests: XCTestCase {
     private func store() -> AidenBotRoutineControlStore { AidenBotRoutineControlStore(root: FileManager.default.temporaryDirectory.appending(path: "routine-model-test-\(UUID())")) }
 
     func testNormativeRevision56FixturesDecodeFullModelContractAndLargeSubmission() throws {
-        let f = try fixture(); XCTAssertEqual(f["contractRevision"] as? Int, 56)
+        let f = try fixture(); XCTAssertEqual(f["contractRevision"] as? Int, 57)
         let directory = try decode(AidenRoutineModelDirectory.self, XCTUnwrap(f["directory"]))
         XCTAssertEqual(directory.routines.map(\.kind), [.scheduled, .event, .watch])
         let saved = try decode(AidenRoutineModelSettings.self, XCTUnwrap(f["settings"]))

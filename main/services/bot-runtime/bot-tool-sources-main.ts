@@ -339,6 +339,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       const authority = admission.authority;
       const production = facts as ProductionFacts;
       const routineRun = turn.requestId?.startsWith("routine:") ?? false;
+      const peerRun = botExecutionScope(botId)?.claim.peer !== undefined;
       const telegram = turn.requestId?.startsWith("tg:") ?? false;
       const has = (kind: string) => authority.otherCapabilities.some((grant) => grant.kind === kind);
       const workspace = { id: authority.managedHome.workspaceId, folderPath: authority.workingDirectory };
@@ -346,6 +347,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       const subagentsAllowed =
         has("subagents") &&
         !routineRun &&
+        !peerRun &&
         !telegram &&
         subagentsAllowedForGeneration({
           assistantMode: false,
@@ -395,7 +397,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
           granted: has("computer"),
           hasComputer: facts.hasComputer,
           supportsImages: facts.supportsImages,
-          routine: routineRun,
+          routine: routineRun || peerRun,
           telegram,
           computers: async () => (await botComputerServices()).botComputers(),
           state: (control) => (botComputerToolState ??= createBotComputerToolState(control)),
@@ -404,7 +406,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       );
       // The Bot's own browser. Never on routine or Telegram turns: nobody is
       // there to approve a click or use a held tab (blueprint G12).
-      if (has("browser") && !routineRun && !telegram) {
+      if (has("browser") && !routineRun && !peerRun && !telegram) {
         tools.push(
           ...(await botBrowser.candidates(botId, {
             workspaceId: workspace.id,
@@ -419,7 +421,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       // A routine's own files must not fire its folder trigger again.
       tools.push(
         ...botFileCandidates(await botFileLocations(admission), {
-          routine: routineRun,
+          routine: routineRun || peerRun,
           recordOwnWrite: (written) => botOwnWrites.record(botId, written),
         }),
       );
@@ -461,8 +463,11 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       tools.push(proposeSkillCandidate(botId, async (id, input, append) =>
         (await import("../bot-skills/skill-proposals-main.js")).botSkillProposals.propose(id, input, append)));
       tools.push(routineNotesCandidate(botId, { notes: lazyRoutineNotes, taskIdOf: routineTaskIdOfCall }));
+      const peers = await import("../bot-peers/host-main.js");
+      const { botPeerCandidate } = await import("../bot-peers/tool.js");
+      tools.push(botPeerCandidate(botId, {service:peers.botPeerHost,source:peers.botPeerToolSource,wake:peers.wakeBotPeers}));
       const openWork = await import("../bot-open-work/service-main.js");
-      tools.push(botOpenWorkCandidate(botId, { service: openWork.botOpenWork, routineOrigin: openWork.resolveBotOpenWorkRoutineOrigin }));
+      tools.push(botOpenWorkCandidate(botId, { service: openWork.botOpenWork, routineOrigin: openWork.resolveBotOpenWorkRoutineOrigin, peerOrigin: peers.botPeerOpenWorkOrigin }));
       // This turn's own authority: Custom access (and any chat reduction) that leaves the app out.
       const turnLacksConnection = (sourceId: string) =>
         authority.accessMode === "custom" &&
@@ -489,7 +494,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       // Only in turns a person started (ingress also withholds it on routine,
       // catch-up, wake-up and intro runs), and only while the person's per-Bot
       // switch is on.
-      if (!routineRun && (await (await wakeUpServices()).botSelfWakeUpsEnabled(botId))) {
+      if (!routineRun && !peerRun && (await (await wakeUpServices()).botSelfWakeUpsEnabled(botId))) {
         tools.push(wakeUpCandidate(botId, lazyWakeUps));
       }
       const signInOnComputer = has("computer") && facts.hasComputer;

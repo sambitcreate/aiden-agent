@@ -487,6 +487,12 @@ struct AidenServer: Codable, Equatable, Sendable {
             && capabilities.contains(.botWatches) && capabilities.contains(.botRead)
     }
 
+    var supportsBotPeers: Bool {
+        let required: Set<AidenRemoteCapability> = [.botRead, .botPeers]
+        return required.isSubset(of: Set(capabilities)) && required.isSubset(of: Set(serverCapabilities ?? []))
+    }
+    var supportsBotPeerExchanges: Bool { supportsBotPeers && capabilities.contains(.chatRead) && serverCapabilities?.contains(.chatRead) == true }
+
     var supportsBotRoutineModels: Bool {
         let required: Set<AidenRemoteCapability> = [.botRead, .chatRead, .botRoutineModels]
         return required.isSubset(of: Set(capabilities)) && required.isSubset(of: Set(serverCapabilities ?? []))
@@ -1579,7 +1585,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
-            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues, .botWatches, .botOpenWork, .botRoutineModels,
+            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues, .botWatches, .botOpenWork, .botRoutineModels, .botPeers,
             .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw, .chatNewWorktree,
         ])
         guard !accepts.isEmpty,
@@ -2643,6 +2649,47 @@ final class AidenRemoteClient: @unchecked Sendable {
             headers: idempotencyHeaders(idempotencyKey),
             acceptedStatus: [200, 202]
         )
+    }
+
+    // MARK: Approved Bot pairs (`bot:peers`)
+    func botPeerSettings(botId: String) async throws -> AidenPeerSettings {
+        try AidenPeerWire.id(botId)
+        let value: AidenPeerSettings = try await send(method: "GET", path: ["bots", botId, "peers"], maximumResponseBytes: 900 * 1024)
+        guard value.botId == botId else { throw AidenRemoteClientError.invalidResponse }; return value
+    }
+    func botPeerCatalog(botId: String) async throws -> AidenPeerCatalog {
+        try AidenPeerWire.id(botId)
+        let value: AidenPeerCatalog = try await send(method: "GET", path: ["bots", botId, "peers", "catalog"], maximumResponseBytes: 900 * 1024)
+        guard value.botId == botId else { throw AidenRemoteClientError.invalidResponse }; return value
+    }
+    func mutateBotPeers(_ request: AidenPeerMutation) async throws -> AidenPeerMutationResult {
+        try request.validate(); let body = try JSONEncoder().encode(request)
+        guard body.count <= 16 * 1024 else { throw AidenRemoteContractError.payloadTooLarge }
+        let value: AidenPeerMutationResult = try await send(method: "POST", path: ["bots", request.botId, "peers"], encodedBody: body, maximumResponseBytes: 900 * 1024)
+        if let snapshot = value.snapshot { guard snapshot.botId == request.botId else { throw AidenRemoteClientError.invalidResponse } }
+        if case let .accepted(_, nonce, _) = value { guard nonce == request.mutationId else { throw AidenRemoteClientError.invalidResponse } }; return value
+    }
+    func botPeerExchanges(botId: String) async throws -> AidenPeerExchangeList {
+        try AidenPeerWire.id(botId)
+        let value: AidenPeerExchangeList = try await send(method: "GET", path: ["bots", botId, "peer-exchanges"], maximumResponseBytes: 900 * 1024)
+        guard value.botId == botId else { throw AidenRemoteClientError.invalidResponse }; return value
+    }
+    func botPeerExchange(botId: String, exchangeId: String) async throws -> AidenPeerExchangeDetail {
+        try AidenPeerWire.id(botId); try AidenPeerWire.id(exchangeId)
+        let value: AidenPeerExchangeDetail = try await send(method: "GET", path: ["bots", botId, "peer-exchanges", exchangeId], maximumResponseBytes: 900 * 1024)
+        guard value.id == exchangeId, AidenPeerWire.owns(value.summary, botID: botId) else { throw AidenRemoteClientError.invalidResponse }; return value
+    }
+    func stopBotPeerExchange(_ request: AidenPeerStopMutation) async throws -> AidenPeerStopResult {
+        try request.validate(); let body = try JSONEncoder().encode(request)
+        guard body.count <= 16 * 1024 else { throw AidenRemoteContractError.payloadTooLarge }
+        let value: AidenPeerStopResult = try await send(method: "POST", path: ["bots", request.botId, "peer-exchanges", request.exchangeId, "stop"], encodedBody: body, maximumResponseBytes: 900 * 1024)
+        if let exchange = value.exchange { guard exchange.id == request.exchangeId, AidenPeerWire.owns(exchange.summary, botID: request.botId) else { throw AidenRemoteClientError.invalidResponse } }
+        if case let .accepted(_, nonce, _) = value { guard nonce == request.mutationId else { throw AidenRemoteClientError.invalidResponse } }; return value
+    }
+    func botPeerEvidence(botId: String, exchangeId: String, kind: AidenOpenWorkEvidenceKind) async throws -> AidenPeerEvidence {
+        try AidenPeerWire.id(botId); try AidenPeerWire.id(exchangeId)
+        let value: AidenPeerEvidence = try await send(method: "GET", path: ["bots", botId, "peer-exchanges", exchangeId, "evidence", kind.rawValue], maximumResponseBytes: 256 * 1024)
+        guard value.exchangeId == exchangeId, value.kind == kind else { throw AidenRemoteClientError.invalidResponse }; return value
     }
 
     // MARK: Routine-only model choices (`bot:routine-models`)

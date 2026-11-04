@@ -1185,6 +1185,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   botSessions,
                   botOpenWork: (await import("./bot-open-work/service-main.js")).botOpenWork,
                   botRoutineModels: { ...(await import("./bot-routine-models-main.js")).botRoutineModels, resumeStatus: async (botId: string) => (await (await import("./bot-runtime/bot-session-main.js")).botSessionRuntime()).executionResumeStatus(botId) },
+                  botPeers: (await import("./bot-peers/service-main.js")).botPeers,
                   ...(process.platform === "darwin" ? { botWatches: (await import("./bot-routine-events/sources-main.js")).botConnectorWatches } : {}),
                 }
               : {}),

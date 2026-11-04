@@ -8,6 +8,11 @@ import { createBotOpenWorkRoutineOrigin } from "../bot-open-work-host-origin.js"
 /** Loading records never submits work or resumes the Bot. */
 export const botOpenWork = createBotOpenWorkService({
   store: createBotOpenWorkStore({ profileDir: () => app.getPath("userData"), botExists: async (botId) => await botStore.get(botId) !== null }),
+  peer: {
+    inspect: async (...args) => (await import("../bot-peers/host-main.js")).botPeerHost.exchange(...args),
+    stop: async (...args) => (await import("../bot-peers/host-main.js")).botPeerHost.stopFromOpenWork(...args),
+    evidence: async (...args) => (await import("../bot-peers/host-main.js")).botPeerHost.evidence(...args),
+  },
   execution: {
     inspect: async (botId, submissionId) => (await (await import("../bot-runtime/bot-session-main.js")).botSessionRuntime()).inspectLinkedWork(botId, submissionId),
     evidence: async (botId, submissionId, kind) => (await (await import("../bot-runtime/bot-session-main.js")).botSessionRuntime()).readLinkedWorkEvidence(botId, submissionId, kind),

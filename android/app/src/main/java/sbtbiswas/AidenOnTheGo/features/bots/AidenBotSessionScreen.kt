@@ -132,11 +132,12 @@ fun AidenBotSessionScreen(
     botDeleter: AidenBotDeleter? = AidenRemoteBotDeleter,
     onBotDeleted: () -> Unit = onNavigateBack,
     /** The "Memory updated" caption opens Profile → Memory. */
-    onNavigateToBotMemory: (String) -> Unit = onNavigateToBotProfile
+    onNavigateToBotMemory: (String) -> Unit = onNavigateToBotProfile,
+    onOpenPeerExchange:(String)->Unit = {}
 ) {
     // One battery-saver receiver for the chat's faces, marks and skeletons.
     AidenPowerSaveScope {
-        AidenBotSessionContent(botId, coordinator, onNavigateBack, onNavigateToBotProfile, botDeleter, onBotDeleted, onNavigateToBotMemory)
+        AidenBotSessionContent(botId, coordinator, onNavigateBack, onNavigateToBotProfile, botDeleter, onBotDeleted, onNavigateToBotMemory, onOpenPeerExchange)
     }
 }
 
@@ -148,7 +149,8 @@ private fun AidenBotSessionContent(
     onNavigateToBotProfile: (String) -> Unit,
     botDeleter: AidenBotDeleter?,
     onBotDeleted: () -> Unit,
-    onNavigateToBotMemory: (String) -> Unit
+    onNavigateToBotMemory: (String) -> Unit,
+    onOpenPeerExchange:(String)->Unit
 ) {
     val palette = AidenTheme.palette
     val resources = LocalResources.current
@@ -456,6 +458,10 @@ private fun AidenBotSessionContent(
                         )
                     }
                     if (row is AidenBotSessionRow.Entry) when (val entry = row.entry) {
+                        is AidenBotSessionEntry.Peer -> if(serverInfo?.supportsBotPeerExchanges==true) {
+                            Text(stringResource(if(entry.direction==sbtbiswas.AidenOnTheGo.models.AidenPeerDirection.SENT)R.string.bot_peers_messaged else R.string.bot_peers_message_from,entry.peerName),color=palette.secondary)
+                            if(serverInfo?.supportsBotPeerExchanges==true)AidenTonalButton(stringResource(R.string.bot_peers_view_exchange),onClick={onOpenPeerExchange(entry.exchangeId)})
+                        }
                         is AidenBotSessionEntry.Message -> AidenBotSessionMessageRow(entry)
                         is AidenBotSessionEntry.ConnectCard -> AidenBotConnectCard(
                             card = entry,

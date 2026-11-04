@@ -1,8 +1,11 @@
-import { BOT_PERSON_INPUT_KIND, BOT_ROUTINE_INPUT_KIND, isIssuedBotRoutineInputOrigin, type BotRoutineInputOrigin } from "./bot-input-entry.js";
+import { BOT_PEER_MESSAGE_ENTRY_KIND, parseBotPeerTranscriptData, type BotPeerTranscriptData } from "../../../renderer/shared/bot-peers.js";
+import type { BotPeerRuntimeReceipt, BotPeerPublication } from "../bot-peers/service.js";
+import { inspectBotPeerInputOrigin, type BotPeerInputOrigin } from "../bot-peers/authority.js";
+import { BOT_PERSON_INPUT_KIND, BOT_PEER_INPUT_KIND, BOT_ROUTINE_INPUT_KIND, isIssuedBotRoutineInputOrigin, type BotRoutineInputOrigin } from "./bot-input-entry.js";
 import { BOT_EXECUTION_INPUT_KEY, BotExecutionDoc, botCostApprovalFacts, createBotExecutionRegistry, reconcileBotExecutionResponses, stampBotExecutionTask, withBotExecutionAdmission, type BotExecutionPort } from "./bot-execution.js";
 import type { BotExecutionClaim } from "../bot-routine-models.js";
 import { botConnectorExecutionRestriction, botConnectorInventoryServer } from "../bot-connector-inventory-scope.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { botCostReceiptScope, consumeBotResumeOperation } from "./bot-resume-operations.js";
 import type { BotExecutionResumeStatus, BotResumeAcknowledgement } from "../../../renderer/shared/bot-execution-resume.js";
 // The Bot turn path: every ingress (desktop, Remote, Telegram, routines)
@@ -138,6 +141,8 @@ export interface BotSendInput {
   ifNotInterrupted?: boolean;
   /** Internal host-issued accepted routine provenance; never accepted from IPC or Remote. */
   routineOrigin?: BotRoutineInputOrigin;
+  /** Internal peer host token; IPC/Remote never accept this field. */
+  peerOrigin?: BotPeerInputOrigin;
   /** Internal immutable occurrence facts from the admitted scheduler fire. */
   routineTiming?: { scheduledFor?: number; timezone?: string };
   retryOf?: string;
@@ -220,8 +225,8 @@ export interface BotSessionService {
    */
   stop(botId: string): Promise<BotSessionState>;
   inspectLinkedWork(botId: string, submissionId: string): Promise<BotLinkedWorkInspection>;
-  readLinkedWorkEvidence(botId: string, submissionId: string, kind: "source" | "result"): Promise<BotLinkedWorkEvidence | undefined>;
-  stopLinkedWork(botId: string, submissionId: string, intentId?: string): Promise<BotLinkedWorkStopOutcome>;
+  readLinkedWorkEvidence(botId: string, submissionId: string, kind: "source" | "result", publication?: BotPeerPublication): Promise<BotLinkedWorkEvidence | undefined>;
+  stopLinkedWork(botId: string, submissionId: string, intentId?: string, publication?: BotPeerPublication): Promise<BotLinkedWorkStopOutcome>;
   /**
    * Withdraw one queued message before its turn starts (Pi's
    * `abortSubmission`). A message already placed in a turn keeps running.
@@ -251,6 +256,9 @@ export interface BotSessionService {
 export interface BotSessionRuntime extends BotSessionService {
   /** Routine admission inspects lifecycle without resolving an unrelated default model. */
   routineState(botId: string): Promise<BotSessionState>;
+  /** Passive exact peer receipt; never resumes, resolves a model or admits work. */
+  peerReceipt(botId: string, requestId: string, publication?: BotPeerPublication): Promise<BotPeerRuntimeReceipt | undefined>;
+  appendPeerRow(botId: string, eventId: string, data: BotPeerTranscriptData, publication?: BotPeerPublication): Promise<void>;
   /** Startup: remove orphaned Bot sessions and record interrupted Bots. Never resumes. */
   initialize(): Promise<{ removedOrphans: string[]; interrupted: string[] }>;
   /** The Bot's conversation, opened lazily (for live projection). */
@@ -323,6 +331,9 @@ export interface BotSessionServiceDeps {
   onStateChange?(botId: string, state: BotSessionState): void;
   /** `resume` restarted an interrupted turn (not called for replays, blocked or no-op resumes). */
   onResumed?(botId: string): void;
+  /** Close only this accepted peer source/branch before its exact task is stopped. */
+  hasPeerSource?(botId:string,requestIds:readonly string[]):Promise<boolean>;
+  onSourceStop?(botId: string, requestIds: readonly string[]): Promise<boolean>;
   onReport?(botId: string, error: unknown): void;
   /** Which Bots the person paused. Default: `<profileDir>/bot-service/bot-pauses.json`. */
   pauses?: BotPauseStore;
@@ -474,7 +485,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     // `hiddenSubmissions` is latent: the only hidden sender (the self-intro) already has the
     // `intro:` prefix. Any future hidden sender needs a durable request-id prefix, because this
     // set is lost on restart.
-    return requestId.startsWith("routine:") || requestId.startsWith(BOT_INTRO_REQUEST_PREFIX) || hiddenSubmissions.has(String(record.id));
+    return requestId.startsWith("peer:") || requestId.startsWith("routine:") || requestId.startsWith(BOT_INTRO_REQUEST_PREFIX) || hiddenSubmissions.has(String(record.id));
   }
 
   function requireHost(): BotHarnessHost {
@@ -604,9 +615,13 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   }
 
   /** Abort the paused turn without running it, and mark its partial answer interrupted. */
-  async function dismissPaused(conversation: Conversation, submissionId: string): Promise<void> {
-    await conversation.abort(ctx);
-    await writeNotice(conversation, { notice: "interrupted", submissionId });
+  async function dismissPaused(botId: string, conversation: Conversation, submissionId: string): Promise<void> {
+    const host = await requireHost().open(botId), source = await (await host.harness.submission(Number(submissionId) as SubmissionId, ctx))?.status(ctx);
+    const exact = await inspectLinkedBotWork(host.harness,conversation.id,submissionId);
+    if ((exact.kind === "running" || exact.kind === "interrupted") && exact.inputSubmissionIds.length !== 1 && source?.requestId && await deps.hasPeerSource?.(botId,[source.requestId])) throw new BotSessionError("access_changed","This peer task shares inputs. Its Stop cannot isolate the other work.");
+    const peer = source?.requestId ? await deps.onSourceStop?.(botId, [source.requestId]) : false;
+    if (peer) { await stopLinkedBotWork(host.harness, conversation.id, submissionId); await conversation.commit((tx) => tx.appendEntry(conversation.id, { kind: BOT_NOTICE_ENTRY_KIND, data: { notice: "interrupted", submissionId } }), ctx); }
+    else { await conversation.abort(ctx); await writeNotice(conversation, { notice: "interrupted", submissionId }); }
   }
 
   /**
@@ -714,6 +729,25 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       return { removedOrphans, interrupted: interrupted.map(({ botId }) => botId) };
     },
 
+    async peerReceipt(botId, requestId, publication) {
+      await publication?.assertCurrent();
+      const opened = await openBot(botId), record = await lookupRequest(opened.conversation, requestId);
+      await publication?.assertCurrent();
+      if (!record || record.type !== "input") return undefined;
+      const base = { submissionId: String(record.id), ...(record.entry === undefined ? {} : { entryId: String(record.entry) }) };
+      if (record.status === "queued") return { ...base, state: "queued" };
+      if (record.status === "unanswered") return { ...base, state: record.reason === "aborted" ? "cancelled" : "failed" };
+      if (record.status === "done") { const answer = await opened.conversation.commit((tx) => tx.entry(record.answer), ctx), message = answer?.model?.[0]; return { ...base, state: "completed", resultEntryId: String(record.answer), ...(message?.role === "assistant" ? { responseDigest: createHash("sha256").update(JSON.stringify(message)).digest("hex") } : {}) }; }
+      const host = await requireHost().open(botId), exact = await inspectLinkedBotWork(host.harness, opened.conversation.id, String(record.id));
+      return { ...base, state: exact.kind === "running" ? "running" : exact.kind === "queued" ? "queued" : "interrupted" };
+    },
+
+    async appendPeerRow(botId, eventId, raw, publication) {
+      await publication?.assertCurrent();
+      const data = parseBotPeerTranscriptData(raw), opened = await openBot(botId);
+      await opened.conversation.commit(async (tx) => { await publication?.assertCurrent(); if (await tx.submissionByRequest(opened.conversation.id, eventId)) return; const pending = await tx.createSubmission({ conversationId: opened.conversation.id, requestId: eventId, type: "write", status: "queued" }), entry = await tx.appendEntry(opened.conversation.id, { kind: BOT_PEER_MESSAGE_ENTRY_KIND, data: JSON.parse(JSON.stringify(data)) }); await publication?.assertCurrent(); tx.placeSubmission(pending.id, entry.id); }, ctx);
+    },
+
     async conversation(botId) {
       return (await openBot(botId)).conversation;
     },
@@ -794,6 +828,8 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
     send(botId, input) {
       const routineOrigin = input.routineOrigin;
+      let peer: ReturnType<typeof inspectBotPeerInputOrigin> | undefined;
+      if (input.peerOrigin) { try { peer = inspectBotPeerInputOrigin(input.peerOrigin); if (peer.botId !== botId || peer.requestId !== input.requestId || input.hidden || routineOrigin || input.retryOf || !deps.execution || input.whenBusy === "steer") throw new Error("Invalid peer input"); } catch { return Promise.reject(new BotSessionError("access_changed", "The peer input origin could not be verified.")); } }
       if (routineOrigin && (!isIssuedBotRoutineInputOrigin(routineOrigin) || routineOrigin.botId !== botId || routineOrigin.runId !== input.requestId || input.hidden === true)) {
         return Promise.reject(new BotSessionError("access_changed", "The routine input origin could not be verified."));
       }
@@ -806,29 +842,31 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         if (existing !== undefined) return { submissionId: String(existing.id), deduped: true };
         // After the dedupe lookup, so a redelivered request still reports its submission.
         await assertNotPaused(botId);
+        await peer?.assertCurrent();
         const spendingRefusal = await deps.spendingRefusal?.(botId);
         if (spendingRefusal !== undefined) throw new BotSessionError("spending_limit", spendingRefusal);
 
         const before = await currentState(botId, !deps.execution);
-        if (before.kind === "interrupted" && input.ifNotInterrupted) throw new BotSessionError("bot_paused");
-        const execution = await deps.execution?.claim(botId, { requestId: input.requestId, ...(routineOrigin ? { routineOrigin } : {}), ...(input.routineTiming ?? {}), ...(input.retryOf ? { retryOf: input.retryOf } : {}), ...(botConnectorInventoryServer() ? { connectorServerId: botConnectorInventoryServer() } : {}), ...(botConnectorExecutionRestriction() ? { connectorRestriction: botConnectorExecutionRestriction() } : {}) });
+        if (before.kind === "interrupted" && (input.ifNotInterrupted || peer)) throw new BotSessionError("bot_paused");
+        const execution = await deps.execution?.claim(botId, { requestId: input.requestId, ...(routineOrigin ? { routineOrigin } : {}), ...(input.peerOrigin ? { peerOrigin: input.peerOrigin } : {}), ...(input.routineTiming ?? {}), ...(input.retryOf ? { retryOf: input.retryOf } : {}), ...(botConnectorInventoryServer() ? { connectorServerId: botConnectorInventoryServer() } : {}), ...(botConnectorExecutionRestriction() ? { connectorRestriction: botConnectorExecutionRestriction() } : {}) });
         if (execution && deps.execution) await withBotExecutionAdmission(botId, execution, deps.execution, () => registry.refresh(), { allowFallback: true });
         else await prepareToRun(botId, conversation, registry);
         if (before.kind === "interrupted") {
-          await dismissPaused(conversation, before.submissionId);
+          await dismissPaused(botId, conversation, before.submissionId);
           blocked.delete(botId);
         }
-        if (input.label !== undefined) {
+        if (input.label !== undefined && !peer) {
           await writeNotice(conversation, { notice: "routine", label: input.label, requestId: input.requestId });
         }
         if (input.hidden === true) {
           await writeNotice(conversation, { notice: "hidden_input", requestId: input.requestId });
         }
+        await peer?.assertCurrent();
         const submission = await conversation.submit(
           {
             type: "input",
             content: userContent(input),
-            ...((execution || routineOrigin || input.label !== undefined) && { entry: { kind: routineOrigin || input.label !== undefined ? BOT_ROUTINE_INPUT_KIND : BOT_PERSON_INPUT_KIND, data: { ...(routineOrigin ? { routineOrigin: { ...routineOrigin } } : {}), ...(execution ? { [BOT_EXECUTION_INPUT_KEY]: execution.id } : {}) } } }),
+            ...((execution || routineOrigin || peer || input.label !== undefined) && { entry: { kind: peer ? BOT_PEER_INPUT_KIND : routineOrigin || input.label !== undefined ? BOT_ROUTINE_INPUT_KIND : BOT_PERSON_INPUT_KIND, data: { ...(routineOrigin ? { routineOrigin: { ...routineOrigin } } : {}), ...(peer ? { peerOrigin: { ...peer.origin }, peerRequestId: input.requestId, peer: { exchangeId: peer.binding.exchangeId, direction: "received", peerBotId: peer.binding.senderBotId, peerName: peer.peerName, messageKind: peer.binding.kind === "return" ? "result" : peer.binding.kind } } : {}), ...(execution ? { [BOT_EXECUTION_INPUT_KEY]: execution.id } : {}) } } }),
             requestId: input.requestId,
             whenBusy: input.whenBusy ?? "followUp",
           },
@@ -962,7 +1000,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         const { conversation, registry } = await openBot(botId);
         // Pending tool calls settle against the Bot's tools while aborting.
         if (!deps.execution) await registry.refresh().catch(() => undefined);
-        await dismissPaused(conversation, before.submissionId);
+        await dismissPaused(botId, conversation, before.submissionId);
         blocked.delete(botId);
         return remember(key, publish(botId, await currentState(botId)));
       });
@@ -972,8 +1010,12 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       return serialize(botId, async () => {
         const before = await currentState(botId);
         if (before.kind !== "running") return before;
-        const { conversation } = await openBot(botId);
-        await conversation.abort(ctx);
+        const { conversation } = await openBot(botId), host = await requireHost().open(botId), live = await host.harness.snapshot(LiveDoc, conversation.id, ctx), sources = await Promise.all((live?.run?.inputs ?? []).map(async (id) => (await (await host.harness.submission(id, ctx))?.status(ctx))?.requestId));
+        const requestIds = sources.filter((id):id is string=>id!==undefined);
+        if (live?.run && live.run.inputs.length !== 1 && await deps.hasPeerSource?.(botId,requestIds)) throw new BotSessionError("access_changed","This peer task shares inputs. Use its linked exchange Stop to preserve the other work.");
+        const peer = await deps.onSourceStop?.(botId, requestIds);
+        if (peer) { if (live?.run?.inputs.length !== 1) throw new BotSessionError("access_changed", "This peer task shares inputs. Use its linked exchange Stop to preserve the other work."); await stopLinkedBotWork(host.harness, conversation.id, String(live.run.inputs[0]), { intentId: `peer-source-stop:${live.run.taskId}`, mayContinue: async () => !shuttingDown && !await pauses.get(botId) && !deleted.has(botId) && !suspending.has(botId) }); }
+        else await conversation.abort(ctx);
         return publish(botId, await currentState(botId));
       });
     },
@@ -984,16 +1026,25 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       return inspectLinkedBotWork(host.harness, opened.conversation.id, submissionId);
     },
 
-    async readLinkedWorkEvidence(botId, submissionId, kind) {
+    async readLinkedWorkEvidence(botId, submissionId, kind, publication) {
+      await publication?.assertCurrent();
       const opened = await openBot(botId);
       const host = await requireHost().open(botId);
-      return readLinkedBotWorkEvidence(host.harness, opened.conversation.id, submissionId, kind);
+      await publication?.assertCurrent();
+      const evidence=await readLinkedBotWorkEvidence(host.harness, opened.conversation.id, submissionId, kind);
+      await publication?.assertCurrent();return evidence;
     },
 
-    stopLinkedWork(botId, submissionId, intentId) {
+    stopLinkedWork(botId, submissionId, intentId, publication) {
       return serialize(botId, async () => {
+        await publication?.assertCurrent();
         const opened = await openBot(botId);
-        const host = await requireHost().open(botId);
+        const host = await requireHost().open(botId), sourceId = Number(submissionId), record = /^[1-9][0-9]{0,31}$/u.test(submissionId) && Number.isSafeInteger(sourceId) ? await (await host.harness.submission(sourceId as SubmissionId, ctx))?.status(ctx) : undefined;
+        const exact = await inspectLinkedBotWork(host.harness,opened.conversation.id,submissionId);
+        if ((exact.kind === "running" || exact.kind === "interrupted") && (exact.inputSubmissionIds.length !== 1 || exact.inputSubmissionIds[0] !== submissionId)) return "mixed_inputs";
+        await publication?.assertCurrent();
+        if (record?.conversationId === opened.conversation.id && record.requestId) await deps.onSourceStop?.(botId, [record.requestId]);
+        await publication?.assertCurrent();
         return stopLinkedBotWork(host.harness, opened.conversation.id, submissionId, { intentId, mayContinue: async () => {
           const paused = await pauses.get(botId);
           return !shuttingDown && !paused && !deleted.has(botId) && !suspending.has(botId);

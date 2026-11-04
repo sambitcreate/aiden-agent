@@ -6840,6 +6840,89 @@ final class AidenRemoteClientTests: XCTestCase {
         let grants = try await makeClient().updateDeviceCapabilities(accepts: [.botRoutineModels]); XCTAssertTrue(grants.contains(.botRoutineModels))
     }
 
+    func testPeerRoutesUseBoundedBareDTOsExactFlatBodiesAndStableMutationIDs() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-peers", withExtension: "json"))
+        let f = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let approve = try AidenRemoteJSONDecoder.decode(AidenPeerMutation.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(f["approve"])))
+        let stop = try AidenRemoteJSONDecoder.decode(AidenPeerStopMutation.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(f["stop"])))
+        var paths: [String] = []; var writes = 0
+        AidenRemoteMockURLProtocol.handler = { wire in
+            let path = wire.url!.path; paths.append(path); XCTAssertNil(wire.url?.query)
+            let key: String
+            if wire.httpMethod == "POST" {
+                writes += 1
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.bodyData(wire)) as? [String: Any])
+                XCTAssertEqual(body["botId"] as? String, "bot_planner")
+                if path.hasSuffix("/stop") {
+                    key = "stopAccepted"; XCTAssertEqual(Set(body.keys), ["botId", "exchangeId", "mutationId", "expectedRevision"])
+                    XCTAssertEqual(body["mutationId"] as? String, stop.mutationId.uuidString); XCTAssertEqual(body["exchangeId"] as? String, "exchange_one")
+                } else {
+                    key = "accepted"; XCTAssertEqual(Set(body.keys), ["action", "botId", "mutationId", "expectedRevision", "catalogRevision", "peerBotId"])
+                    XCTAssertEqual(body["mutationId"] as? String, approve.mutationId.uuidString); XCTAssertEqual(body["peerBotId"] as? String, "bot_researcher")
+                }
+            } else {
+                XCTAssertEqual(wire.httpMethod, "GET"); XCTAssertNil(wire.httpBody); XCTAssertNil(wire.httpBodyStream)
+                if path.hasSuffix("/catalog") { key = "catalog" }
+                else if path.hasSuffix("/evidence/source") { key = "evidence" }
+                else if path.hasSuffix("/exchange_one") { key = "detail" }
+                else if path.hasSuffix("/peer-exchanges") { key = "exchanges" }
+                else { key = "settings" }
+            }
+            return (HTTPURLResponse(url: wire.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, try JSONSerialization.data(withJSONObject: XCTUnwrap(f[key])))
+        }
+        let c = makeClient()
+        _ = try await c.botPeerSettings(botId: "bot_planner"); _ = try await c.botPeerCatalog(botId: "bot_planner")
+        _ = try await c.mutateBotPeers(approve); _ = try await c.mutateBotPeers(approve)
+        _ = try await c.botPeerExchanges(botId: "bot_planner"); _ = try await c.botPeerExchange(botId: "bot_planner", exchangeId: "exchange_one")
+        _ = try await c.stopBotPeerExchange(stop); let evidence = try await c.botPeerEvidence(botId: "bot_planner", exchangeId: "exchange_one", kind: .source)
+        XCTAssertEqual(evidence.entryId, "9007199254740995"); XCTAssertEqual(writes, 3)
+        XCTAssertEqual(paths, ["peers", "peers/catalog", "peers", "peers", "peer-exchanges", "peer-exchanges/exchange_one", "peer-exchanges/exchange_one/stop", "peer-exchanges/exchange_one/evidence/source"].map { "/api/aiden/v1/bots/bot_planner/" + $0 })
+    }
+
+    func testPeerWireRejectsCrossBotExchangeNonceAndResponseBudgets() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-peers", withExtension: "json"))
+        let f = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var response = f["settings"] as! [String: Any]; response["botId"] = "unrelated"
+        AidenRemoteMockURLProtocol.handler = { wire in (HTTPURLResponse(url: wire.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, try JSONSerialization.data(withJSONObject: response)) }
+        do { _ = try await makeClient().botPeerSettings(botId: "bot_planner"); XCTFail("Cross Bot") } catch {}
+        response = f["detail"] as! [String: Any]; response["id"] = "another_exchange"
+        do { _ = try await makeClient().botPeerExchange(botId: "bot_planner", exchangeId: "exchange_one"); XCTFail("Cross exchange") } catch {}
+        response = f["accepted"] as! [String: Any]; response["mutationId"] = UUID().uuidString
+        let approve = try AidenRemoteJSONDecoder.decode(AidenPeerMutation.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(f["approve"])))
+        do { _ = try await makeClient().mutateBotPeers(approve); XCTFail("Cross nonce") } catch {}
+        response = f["settings"] as! [String: Any]; response["routingDescription"] = String(repeating: "x", count: 900 * 1024)
+        do { _ = try await makeClient().botPeerSettings(botId: "bot_planner"); XCTFail("Response budget") } catch {}
+        response = f["evidence"] as! [String: Any]; response["kind"] = "result"
+        do { _ = try await makeClient().botPeerEvidence(botId: "bot_planner", exchangeId: "exchange_one", kind: .source); XCTFail("Cross evidence kind") } catch {}
+    }
+
+    func testPeerMalformedPathAndMutationFailBeforeNetworkAndBusinessConflictStaysTyped() async throws {
+        var requests = 0
+        AidenRemoteMockURLProtocol.handler = { wire in
+            requests += 1
+            return (HTTPURLResponse(url: wire.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"ok":false,"code":"conflict","error":"Review current pair settings"}"#.utf8))
+        }
+        let c = makeClient()
+        do { _ = try await c.botPeerExchange(botId: "bot_planner", exchangeId: "../all"); XCTFail() } catch {}
+        do { _ = try await c.mutateBotPeers(.init(action: .approve, botId: "bot_planner", expectedRevision: "r", peerBotId: "peer")); XCTFail() } catch {}
+        XCTAssertEqual(requests, 0)
+        let reply = try await c.mutateBotPeers(.init(action: .describe, botId: "bot_planner", expectedRevision: "r", routingDescription: "A helpful reviewer"))
+        guard case .rejected(.conflict, _, nil) = reply else { return XCTFail("HTTP200 business conflict") }; XCTAssertEqual(requests, 1)
+    }
+
+    func testPeerCapabilityNegotiatedAloneAndPeerNotificationUsesExistingFeed() async throws {
+        AidenRemoteMockURLProtocol.handler = { request in
+            if request.httpMethod == "POST" {
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.bodyData(request)) as? [String: Any]); XCTAssertEqual(body["accepts"] as? [String], ["bot:peers"])
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"capabilities":["bot:read","chat:read","bot:peers"]}"#.utf8))
+            }
+            XCTAssertEqual(request.url!.path, "/api/aiden/v1/bots/routine-notifications"); XCTAssertEqual(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first?.name, "since")
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"notifications":[{"id":"peer_final_one","kind":"peer","botId":"bot_planner","botName":"Planner","routineName":"Review complete","finishedAt":"2026-11-03T12:00:00.000Z","preview":"Researcher supplied a result."}],"now":"2026-11-03T12:00:01.000Z"}"#.utf8))
+        }
+        let c = makeClient(); let grants = try await c.updateDeviceCapabilities(accepts: [.botPeers]); XCTAssertTrue(grants.contains(.botPeers))
+        let feed = try await c.botRoutineNotifications(since: "2026-11-03T11:00:00.000Z"); XCTAssertEqual(feed.notifications.first?.kind, .peer); XCTAssertNil(feed.notifications.first?.routineId)
+    }
+
     private func makeClient() -> AidenRemoteClient {
         AidenRemoteClient(
             endpoint: URL(string: "https://aiden.test/api/aiden/v1")!,

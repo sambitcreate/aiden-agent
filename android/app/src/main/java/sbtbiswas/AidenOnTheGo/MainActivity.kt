@@ -16,6 +16,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotEditorScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotMemoryScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotWatchesScreen
+import sbtbiswas.AidenOnTheGo.features.bots.AidenBotPeersScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotRoutineModelsScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotOpenWorkScreen
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotProfileScreen
@@ -413,15 +414,20 @@ class MainActivity : ComponentActivity() {
                                         botsViewModel.loadBots(force = true)
                                         navigator.navigate(AidenNavigationStack.Root)
                                     },
-                                    onNavigateToBotMemory = { botId -> push(AidenScreen.BotMemory(botId)) }
+                                    onNavigateToBotMemory = { botId -> push(AidenScreen.BotMemory(botId)) },
+                                    onOpenPeerExchange = { id -> push(AidenScreen.BotPeers(screen.botId,id)) }
                                 )
+                            }
+                            is AidenScreen.BotPeers -> {
+                                AidenBotPeersScreen(screen.botId,coordinator,navigator::back,screen.exchangeId)
                             }
                             is AidenScreen.BotRoutineModels -> {
                                 AidenBotRoutineModelsScreen(screen.botId,coordinator,navigator::back)
                             }
                             is AidenScreen.BotOpenWork -> {
                                 AidenBotOpenWorkScreen(screen.botId,coordinator,navigator::back,
-                                    onOpenBotChat = { push(AidenScreen.BotChat(screen.botId)) })
+                                    onOpenBotChat = { push(AidenScreen.BotChat(screen.botId)) },
+                                    onOpenPeerExchange = { id -> push(AidenScreen.BotPeers(screen.botId,id)) })
                             }
                             is AidenScreen.BotWatches -> {
                                 AidenBotWatchesScreen(screen.botId, coordinator, navigator::back,
@@ -443,6 +449,7 @@ class MainActivity : ComponentActivity() {
                                     onNavigateToEditBot = { botId -> push(AidenScreen.BotEditor(botId)) },
                                     onNavigateToMemory = { botId -> push(AidenScreen.BotMemory(botId)) },
                                     onNavigateToWatches = { botId -> push(AidenScreen.BotWatches(botId)) },
+                                    onNavigateToPeers = { botId -> push(AidenScreen.BotPeers(botId)) },
                                     onNavigateToRoutineModels = { botId -> push(AidenScreen.BotRoutineModels(botId)) },
                                     onNavigateToOpenWork = { botId -> push(AidenScreen.BotOpenWork(botId)) },
                                     onBotMutated = { botsViewModel.loadBots(force = true) },

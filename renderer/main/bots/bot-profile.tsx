@@ -27,6 +27,7 @@ import { BotHealthSection } from "./bot-health-section";
 import { BotEventRoutines } from "./bot-event-routines";
 import { BotConnectorWatches } from "./bot-connector-watches";
 import { BotOpenWorkRow } from "./bot-open-work-page";
+import { BotPeersSection } from "./bot-peers";
 import { updateBotIdentity, type BotIdentityPatch } from "./bot-identity";
 import { BotPageShell } from "./bot-page-shell";
 import { setBotPaused } from "./bot-menu";
@@ -333,6 +334,7 @@ export function BotProfile({
       <BotRoutines bot={bot} />
       <BotEventRoutines bot={bot} />
       <BotConnectorWatches bot={bot} />
+      <BotPeersSection key={bot.id} botId={bot.id} botName={bot.name} />
       <BotHealthSection bot={bot} />
       <BotSpendingSection bot={bot} />
       <BotRules bot={bot} />

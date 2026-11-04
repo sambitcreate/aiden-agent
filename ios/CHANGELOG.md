@@ -55,3 +55,15 @@
 - Rebuilt Mac Usage as an Aiden-themed aggregate dashboard with real daily/model data, streaks, a 30-day token heatmap, token/activity breakdowns, and top models; replaced the home list's transparent tail row with a palette-backed safe-area inset to remove the bottom white band.
 - Mirrored Aiden Agent's complete provider-logo catalog in the iOS asset catalog, added provider identity to Usage, chat, and scheduled-task model controls, and added Hermex-style raw-Markdown Copy actions to completed and streaming assistant replies.
 - Repaired approval visibility across Mac and iOS with an authenticated resumable approval snapshot, exact stream-identity fencing, deny-only mobile handling for privileged operations, stale-refresh protection, deterministic cancellation, and bounded crash-safe journals.
+
+### 2026-11-03 — Approved Bot pairs and exchange management
+
+- Added capability-gated Profile peer setup, shared routing description, named bidirectional approvals, revocation and unavailable catalog choices. Each Bot retains its own rules and limits.
+- Added exchange history/detail, host-owned source/result evidence, honest linked Stop acknowledgement, quiet peer transcript rows and peer-linked Open-work navigation. Final peer notifications reuse foreground stable-ID deduplication and open the initiating Bot chat.
+- Added protected, backup-excluded per-resource journals and lifecycle/access/deletion fences. Unknown outcomes keep their exact action and UUID across restart and rejected retries; older Stop checks need a fresh matching host pending receipt.
+
+### 2026-11-03 — Native peer management review fixes
+
+- Keep unsaved routing-description drafts when pair approval/revocation settles directly or after restart and passive receipt recovery.
+- Recheck notification scope after posting so revoked peer access or pairing removal cannot consume or recreate old delivery progress; already accepted system banners may remain.
+- Keep host-pending Stop work in passive-refresh mode when this phone has no local Stop journal, preserving exact original-request replay.

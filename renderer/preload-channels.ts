@@ -96,6 +96,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "bots:eventRoutines:changed",
   "bots:connectorWatches:changed",
   "bots:openWork:changed",
+  /** Pair decisions or exchange state changed: `{botId}`. Read current owner metadata. */
+  "bots:peers:changed",
   /** A paired phone asked to finish connecting an app for a Bot: `{botId, pluginId}`. */
   "bots:live:event",
   "bots:connections:setup",

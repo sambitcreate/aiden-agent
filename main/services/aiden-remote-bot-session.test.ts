@@ -1,6 +1,7 @@
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { AidenOperationContractError } from "./aiden-remote-operation-contract.js";
 import { BOT_PERSON_INPUT_KIND } from "./bot-runtime/bot-input-entry.js";
+import { BOT_PEER_MESSAGE_ENTRY_KIND } from "../../renderer/shared/bot-peers.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -1544,7 +1545,7 @@ function activityBots() {
 /** Serve one Bot's SSE stream to a device with these opt-ins; keep the raw data lines too. */
 async function openAudienceStream(
   service: AidenRemoteBotSessionService,
-  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean },
+  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean; peers?: boolean },
   botId = BOT_ID,
 ) {
   const server = createServer((_request, response) => {
@@ -2499,6 +2500,28 @@ function userBubbles(entries: readonly { type: string; role?: string; text?: str
   return entries.filter((entry) => entry.type === "message" && entry.role === "user").map((entry) => [entry.text, entry.submissionId ?? null]);
 }
 
+test("peer navigation is negotiated in fetch, incremental frames and reconnect snapshots with gapless legacy streams", async () => {
+  const peer: RawEntry = { id: 2, kind: BOT_PEER_MESSAGE_ENTRY_KIND, data: { exchangeId: "exchange_one", direction: "sent", peerBotId: "bot_researcher", peerName: "Researcher", messageKind: "request", at: 1000 } };
+  const driven = drivenConversation([user(1, "Coordinate the review")]);
+  const runtime = fakeRuntime({ kind: "idle" }).runtime; runtime.conversation = async () => driven.conversation as never;
+  const service = sessionService(runtime), holder = await openAudienceStream(service, { peers: true }), legacy = await openAudienceStream(service, {});
+  try {
+    await holder.until(() => holder.frames.length > 0, "peer holder snapshot"); await legacy.until(() => legacy.frames.length > 0, "legacy snapshot");
+    await driven.emit([user(1, "Coordinate the review"), peer, assistant(3, "The review is underway.")]);
+    await holder.until(() => holder.frames.some((frame) => frame.type === "entry" && frame.payload.entry.type === "peer"), "peer navigation frame");
+    await legacy.until(() => legacy.frames.some((frame) => frame.type === "entry" && frame.payload.entry.text === "The review is underway."), "legacy ordinary reply");
+    const entry = holder.frames.find((frame) => frame.type === "entry" && frame.payload.entry.type === "peer")!.payload.entry;
+    assert.equal(entry.exchangeId, "exchange_one"); assert.equal(entry.createdAt, new Date(1000).toISOString()); assert.equal("at" in entry, false);
+    assert.deepEqual(parseAidenRemoteBotSessionEntry(entry), entry);
+    assert.equal((await service.session(BOT_ID)).entries.some((entry) => entry.type === "peer"), false);
+    assert.equal((await service.session(BOT_ID, { peers: true })).entries.some((entry) => entry.type === "peer"), true);
+    const reconnect = await openAudienceStream(service, { peers: true });
+    try { await reconnect.until(() => reconnect.frames.length > 0, "peer reconnect snapshot"); assert.equal(reconnect.frames[0].payload.session.entries.some((entry: { type: string }) => entry.type === "peer"), true); }
+    finally { await reconnect.close(); }
+    assert.equal(legacy.raw.some((data) => data.includes("peerBotId") || data.includes("exchange_one")), false);
+    assert.ok(gapless(holder.frames)); assert.ok(gapless(legacy.frames));
+  } finally { await holder.close(); await legacy.close(); await service.close(); }
+});
 test("a person's send carries its submissionId on its bubble in frames and on a reconnect snapshot, and a routine's input never does", async () => {
   const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-submission-"));
   durableRoots.push(profileDir);

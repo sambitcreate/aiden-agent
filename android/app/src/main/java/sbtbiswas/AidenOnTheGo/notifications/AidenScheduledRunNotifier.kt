@@ -50,6 +50,8 @@ class AidenBotRoutineNotificationDelivery(
     /** Returns how many notifications were posted. */
     suspend fun deliver(
         instanceId: String,
+        isCurrent:()->Boolean={true},
+        mayDeliver:(AidenBotRoutineNotification)->Boolean={true},
         fetch: suspend (since: Instant?) -> AidenBotRoutineNotificationList
     ): Int = lock.withLock {
         val cursor = ledger.cursor(instanceId)
@@ -61,6 +63,7 @@ class AidenBotRoutineNotificationDelivery(
             // Keep the cursor so a later poll retries instead of skipping runs.
             return@withLock 0
         }
+        if(!isCurrent() || feed.notifications.any{!mayDeliver(it)})return@withLock 0
         val delivered = LinkedHashSet(ledger.delivered(instanceId))
         val oldestFirst = feed.notifications.sortedBy { it.finishedAt }
         if (cursor == null) {
@@ -71,6 +74,7 @@ class AidenBotRoutineNotificationDelivery(
         var nextCursor = feed.now
         var posted = 0
         for (item in oldestFirst) {
+            if(!isCurrent() || !mayDeliver(item))return@withLock posted
             if (item.id in delivered) continue
             if (!post(instanceId, item)) {
                 nextCursor = maxOf(cursor, item.finishedAt.minusMillis(1))
@@ -79,6 +83,7 @@ class AidenBotRoutineNotificationDelivery(
             delivered.add(item.id)
             posted += 1
         }
+        if(!isCurrent() || feed.notifications.any{!mayDeliver(it)})return@withLock posted
         ledger.save(instanceId, nextCursor, delivered.toList().takeLast(MAX_DELIVERED_IDS))
         posted
     }
@@ -198,7 +203,10 @@ class AidenScheduledRunNotifier(context: Context) {
         val client = coordinator.client.value ?: return
         val instanceId = coordinator.activeInstanceId ?: return
         if (!notificationsEnabled()) return
-        botDelivery.deliver(instanceId) { since ->
+        val pairing=coordinator.activePairing ?: return
+        botDelivery.deliver(instanceId,
+            isCurrent={coordinator.holdsPairing(pairing) && coordinator.holdsReadAuthority(client,instanceId)},
+            mayDeliver={it.kind!=sbtbiswas.AidenOnTheGo.models.AidenBotNotificationKind.PEER || coordinator.serverInfo.value?.supportsBotPeerExchanges==true}) { since ->
             val feed = client.botRoutineNotifications(since)
             // A pairing switched mid-poll must not advance the other Mac's cursor.
             if (!coordinator.holdsReadAuthority(client, instanceId)) throw IllegalStateException("pairing changed")

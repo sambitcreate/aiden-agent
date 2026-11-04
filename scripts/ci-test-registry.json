@@ -798,7 +798,12 @@
         "main/services/bot-routine-models.test.ts",
         "main/services/bot-runtime/bot-execution.test.ts",
         "main/handlers/bot-pending-changes.test.ts",
-        "main/services/subagents/subagent-bot-runtime.test.ts"
+        "main/services/subagents/subagent-bot-runtime.test.ts",
+        "main/services/bot-peers/service.test.ts",
+        "main/handlers/bot-peers.test.ts",
+        "main/services/aiden-remote-bot-peers.test.ts",
+        "main/services/bot-peers/actor.test.ts",
+        "main/services/bot-peers/runtime.test.ts"
       ],
       "preserved": [
         "worktree-remover-native",
@@ -1317,7 +1322,9 @@
         "renderer/lib/work-details.test.ts",
         "renderer/components/chat-preferences.test.tsx",
         "renderer/main/bots/bot-open-work-page.test.tsx",
-        "renderer/main/bots/bot-routine-models.test.tsx"
+        "renderer/main/bots/bot-routine-models.test.tsx",
+        "renderer/lib/bot-peers-api.test.ts",
+        "renderer/main/bots/bot-peers.test.tsx"
       ],
       "preserved": [
         "generative-ui-chromium",

@@ -63,6 +63,31 @@ function unwrapConstAssertion(expression: ts.Expression): ts.Expression {
     : expression;
 }
 
+/** Resolve a channel template only when every interpolation has a literal, bounded loop domain. */
+function channelValues(expression: ts.Expression | undefined, constants: ReadonlyMap<string, string>): string[] {
+  const literal = literalValue(expression, constants);
+  if (literal !== undefined) return [literal];
+  if (!expression || !ts.isTemplateExpression(expression)) return [];
+  let values = [expression.head.text];
+  for (const span of expression.templateSpans) {
+    let domain: string[] = [];
+    if (ts.isIdentifier(span.expression)) {
+      const name = span.expression.text;
+      for (let parent: ts.Node | undefined = expression.parent; parent; parent = parent.parent) {
+        if (!ts.isForOfStatement(parent) || !ts.isVariableDeclarationList(parent.initializer)) continue;
+        const declaration = parent.initializer.declarations[0];
+        if (!declaration || !ts.isIdentifier(declaration.name) || declaration.name.text !== name) continue;
+        const array = unwrapConstAssertion(parent.expression);
+        if (ts.isArrayLiteralExpression(array) && array.elements.length <= 64 && array.elements.every(ts.isStringLiteralLike)) domain = array.elements.map((entry) => (entry as ts.StringLiteralLike).text);
+        break;
+      }
+    }
+    if (!domain.length || values.length * domain.length > 256) return [];
+    values = values.flatMap((prefix) => domain.map((value) => prefix + value + span.literal.text));
+  }
+  return values;
+}
+
 function collectChannelConstants(sourceFiles: readonly ts.SourceFile[]): Map<string, string> {
   const constants = new Map<string, string>();
   for (const sourceFile of sourceFiles) {
@@ -117,8 +142,7 @@ function collectInventory(
       if (ts.isCallExpression(node)) {
         const name = calleeName(node.expression);
         if (name === "handle") {
-          const channel = literalValue(node.arguments[0], channelConstants);
-          if (channel) inventory.handlers.add(channel);
+          for (const channel of channelValues(node.arguments[0], channelConstants)) inventory.handlers.add(channel);
         } else if (name === "send" || name === "broadcast") {
           const channel = literalValue(node.arguments[0], channelConstants);
           if (channel) inventory.notifications.add(channel);
@@ -144,8 +168,7 @@ function collectRendererInvokes(
   for (const sourceFile of sourceFiles) {
     const visit = (node: ts.Node): void => {
       if (ts.isCallExpression(node) && calleeName(node.expression) === "invoke") {
-        const channel = literalValue(node.arguments[0], channelConstants);
-        if (channel) invokes.add(channel);
+        for (const channel of channelValues(node.arguments[0], channelConstants)) invokes.add(channel);
       }
       ts.forEachChild(node, visit);
     };
@@ -189,6 +212,13 @@ const rendererInvokes = collectRendererInvokes(
       true,
       ts.ScriptKind.TS,
     ),
+    ts.createSourceFile(
+      "bot-peers-api.ts",
+      await fs.readFile(path.join(REPO_ROOT, "renderer/lib/bot-peers-api.ts"), "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    ),
   ],
   sharedSources,
 );
@@ -209,6 +239,11 @@ test("source inventory detects literal handler and notification additions", () =
   const mutation = collectInventory([source]);
   assert.deepEqual(sorted(mutation.handlers), ["new-surface:read"]);
   assert.deepEqual(sorted(mutation.notifications), ["new-surface:changed"]);
+});
+
+test("source inventory expands literal channel families and refuses unbounded caller interpolation", () => {
+  const source = ts.createSourceFile("family.ts", 'for (const action of ["read", "save"] as const) ports.handle(`family:${action}`, () => {}); ports.handle(`family:${caller}`, () => {});', ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  assert.deepEqual(sorted(collectInventory([source]).handlers), ["family:read", "family:save"]);
 });
 
 test("source inventory resolves channel tables and renderer invoke call sites", () => {

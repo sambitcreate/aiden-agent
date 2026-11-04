@@ -458,6 +458,19 @@ final class AidenBotSessionTests: XCTestCase {
 
     // MARK: (epoch, seq) ordering
 
+    func testQuietPeerAndFinalPeerEntriesDoNotReplaceAssistantStreamOrDuplicateOnReplay() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loadedModel(transport, try session(seq: 1, state: .running, partial: "Drafting the final answer", entries: []))
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-peers", withExtension: "json"))
+        let f = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let row = try AidenRemoteJSONDecoder.decode(AidenBotSessionEntry.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(f["peerFinalEntry"])))
+        _ = await model.apply(event(seq: 2, .entry(row)))
+        _ = await model.apply(event(seq: 2, .entry(row)))
+        XCTAssertEqual(model.entries, [row]); XCTAssertEqual(model.partial, "Drafting the final answer")
+        XCTAssertEqual(AidenBotTranscriptRow.rows(for: model.entries).count, 1)
+        XCTAssertTrue(model.inFlight.isEmpty, "The final display flag never dispatches or acknowledges a control")
+    }
+
     func testFramesApplyInOrderAndStaleOrRepeatedFramesAreIgnored() async throws {
         let transport = FakeBotSessionTransport()
         let model = await loadedModel(transport, try session(seq: 4, entries: [message("m1", .user, "Hi")]))

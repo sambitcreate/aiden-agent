@@ -71,7 +71,7 @@ import { createBotDispatchCoordinator } from "./bot-dispatch-coordinator.js";
 import { createBotExecutionIssues } from "./bot-execution-issues.js";
 import { assertBoundBotProviderModelCurrent } from "../bot-capability-bindings.js";
 import type { BotRoutineThinkingLevel } from "../../../renderer/shared/bot-routine-models.js";
-import { acknowledgeBotExecutionUnknown, botExecutionAccountableResponse, botExecutionInputSpendingRefusal, botExecutionSpendingOwner, botExecutionUnknownCostReceipt, isBotExecutionDispatchSettled, recordKnownBotExecutionResponse } from "./bot-execution-spending.js";
+import { acknowledgeBotExecutionUnknown, botExecutionAccountableResponse, botExecutionInputSpendingRefusal, botExecutionSpendingOwner, botExecutionUnknownCostReceipt, isBotExecutionDispatchSettled, recordKnownBotExecutionResponse, recordKnownBotExecutionCost } from "./bot-execution-spending.js";
 import { botStore } from "../bot-store.js";
 import { botRoutineGuidance, withBotManagedWorkspace, withBotPersona, type BotWorkspacePromptAuthority } from "../bot-system-prompt.js";
 import { buildSystemPrompt } from "../chat-system-prompt.js";
@@ -378,36 +378,45 @@ async function buildBotExecutionRuntime(botId: string, claim: BotExecutionClaim,
     model: runtime.model, models, providerRuntime: runtime, thinkingLevel, imageInput: runtimeSupportsImages(runtime.model), signal, revalidate,
     release: () => { for (const id of held.keys()) releaseDispatch(id); release(); },
     beforeDispatch: async (id) => {
+      await reconcileBotPendingKnownCost(claim);
       const scopes = [`bot:${botId}`, ...(owner.budgetScopes ?? []).map((scope) => `${scope.kind}:${scope.id}`)];
       held.set(id, await dispatchCoordinator.acquire(id, scopes, signal));
       try { const prior = await spending.beforeDispatch(dispatch(id)); if (prior.state === "recorded") throw new Error("This request was accounted for but its saved response is unavailable. Review this run before retrying."); }
       catch (error) { releaseDispatch(id); throw error; }
     },
     afterDispatch: async (id, message) => { try { await spending.afterDispatch(dispatch(id), botExecutionAccountableResponse(message)); await executionIssues.settled(botId, claim); } finally { releaseDispatch(id); } },
-    sealResponse: (facts) => botRoutineModels.recordResponseEvidence(facts, dispatch(facts.dispatchId)),
+    sealResponse: (facts,cost) => botRoutineModels.recordResponseEvidence(facts, dispatch(facts.dispatchId), cost),
     reserveResponse: (slot) => botRoutineModels.reserveResponseEvidence(slot, dispatch(slot.dispatchId)),
     isDispatchSettled: (id) => isBotExecutionDispatchSettled(spending, dispatch(id)),
     started: () => botRoutineModels.started(botId, claim.id),
   };
 }
+async function reconcileBotPendingKnownCost(claim: BotExecutionClaim):Promise<void> {
+  const pending=await spending.pendingDispatch(botExecutionSpendingOwner(claim));
+  if(!pending)return;
+  const proof=await botRoutineModels.responseCostForDispatch(claim,pending);
+  if(proof)await recordKnownBotExecutionCost(spending,proof.dispatch,proof.reportedCostUsd);
+}
 const execution: BotExecutionPort = {
+  async reconcileResponseCosts(botId,taskId,scopeId) { for(const proof of await botRoutineModels.responseCosts(botId,taskId,scopeId)) await recordKnownBotExecutionCost(spending,proof.dispatch,proof.reportedCostUsd); },
   verifyResponse: async (facts) => Boolean(await botRoutineModels.responseEvidence(facts)),
   async recordKnownResponse(facts, message) { const dispatch = await botRoutineModels.responseEvidence(facts); if (dispatch) await recordKnownBotExecutionResponse(spending, facts.botId, dispatch.dispatchId, message, dispatch, facts.responseDigest); },
   claim: (botId, input) => botRoutineModels.claim(botId, input),
   getClaim: (botId, id, requestId) => botRoutineModels.getClaim(botId, id, requestId),
   selectFallback: (botId, id, reason) => botRoutineModels.selectFallback(botId, id, reason),
   recordSubmission: (botId, id, submissionId) => botRoutineModels.recordSubmission(botId, id, submissionId),
-  async hasUnknown(_botId, claim) { return Boolean(await spending.pendingDispatch(botExecutionSpendingOwner(claim))); },
-  async unknownDispatch(_botId, claim) { return (await spending.pendingDispatch(botExecutionSpendingOwner(claim)))?.dispatchId; },
-  unknownCostReceipt: (botId, claim, submissionId, scopeId) => botExecutionUnknownCostReceipt(spending, botId, claim, submissionId, scopeId),
+  async hasUnknown(_botId, claim) { await reconcileBotPendingKnownCost(claim); return Boolean(await spending.pendingDispatch(botExecutionSpendingOwner(claim))); },
+  async unknownDispatch(_botId, claim) { await reconcileBotPendingKnownCost(claim); return (await spending.pendingDispatch(botExecutionSpendingOwner(claim)))?.dispatchId; },
+  unknownCostReceipt: async (botId, claim, submissionId, scopeId) => {await reconcileBotPendingKnownCost(claim);return botExecutionUnknownCostReceipt(spending, botId, claim, submissionId, scopeId, botRoutineModels);},
   async approveCost(facts) {
-    const source = await botRoutineModels.getClaim(facts.botId, facts.sourceClaimId, facts.sourceRequestId), receipt = await botExecutionUnknownCostReceipt(spending, facts.botId, source, facts.submissionId, facts.scopeId);
+    const source = await botRoutineModels.getClaim(facts.botId, facts.sourceClaimId, facts.sourceRequestId);await reconcileBotPendingKnownCost(source);const receipt = await botExecutionUnknownCostReceipt(spending, facts.botId, source, facts.submissionId, facts.scopeId, botRoutineModels);
     if (receipt?.costReceiptId !== facts.costReceiptId || receipt.dispatchId !== facts.dispatchId) throw new Error("The provider cost changed before approval could be saved.");
     return botRoutineModels.approveCost(facts);
   },
   verifyCostApproval: (id, facts) => botRoutineModels.verifyCostApproval(id, facts),
   async acknowledgeUnknown(botId, claim, expectedDispatchId) {
-    const pendingId = await acknowledgeBotExecutionUnknown(spending, botId, claim, expectedDispatchId);
+    await reconcileBotPendingKnownCost(claim);
+    const pendingId = await acknowledgeBotExecutionUnknown(spending, botId, claim, expectedDispatchId, botRoutineModels);
     if (pendingId) await executionIssues.acknowledged(botId, pendingId);
     return pendingId && (await spending.dispatchReceipt(pendingId))?.state === "recorded" ? "recorded" : pendingId !== undefined;
   },
@@ -416,25 +425,39 @@ const execution: BotExecutionPort = {
     const grant = await botRoutineModels.grant(botId, claim.id, claim.requestId);
     const proof = inspectBotRoutineModelGrant(grant);
     const chatId = await canonicalChatId(botId);
-    const admission = await botRuntimeAuthority.admit({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, chatId, routineModelGrant: grant });
+    const peerLease = claim.peer ? await (await import("../bot-peers/host-main.js")).botPeerHost.executionLease(claim.peer) : undefined;
+    let admission: BotRuntimeAuthorityAdmission;
+    try { admission = await botRuntimeAuthority.admit({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, chatId, routineModelGrant: grant }); }
+    catch(error) { peerLease?.release(); throw error; }
     try {
-      const boundSignal = AbortSignal.any([signal, admission.signal]); boundSignal.throwIfAborted();
+      const boundSignal = AbortSignal.any([signal, admission.signal, ...(peerLease ? [peerLease.signal] : [])]); boundSignal.throwIfAborted();
       const sourceCurrent = async () => {
         if (!claim.connectorRestriction) { if (claim.connectorServerId) throw new Error("The accepted watch source binding is missing."); return; }
         const restriction = claim.connectorRestriction;
-        const fresh = (await (await import("../bot-routine-events/sources-main.js")).botEventRoutines.list(botId)).find((row) => row.id === restriction.routineId);
+        const watchOwner = claim.peer?.watch?.botId ?? botId;
+        const fresh = (await (await import("../bot-routine-events/sources-main.js")).botEventRoutines.list(watchOwner)).find((row) => row.id === restriction.routineId);
         const current = admission.authority.connections.find((row) => row.sourceId === restriction.binding.serverId);
-        assertBotExecutionConnectorSource(botId, restriction, fresh, current);
+        if (watchOwner === botId) assertBotExecutionConnectorSource(botId, restriction, fresh, current);
+        else {
+          // The originating source keeps its account/credential binding; this
+          // recipient must independently grant that exact connection and reads.
+          const originClaim = await botRoutineModels.claimByRequest(watchOwner,claim.root.requestId);
+          if (!originClaim || !originClaim.connectorRestriction) throw new Error("The original watch admission is unavailable.");
+          const origin = await botRuntimeAuthority.admit({audienceId:BOT_DESKTOP_AUDIENCE_ID,botId:watchOwner,chatId:await canonicalChatId(watchOwner),routineModelGrant:await botRoutineModels.grant(watchOwner,originClaim.id,originClaim.requestId)});
+          try { await origin.revalidateBeforeEffect(); assertBotExecutionConnectorSource(watchOwner,restriction,fresh,origin.authority.connections.find(row=>row.sourceId===restriction.binding.serverId)); }
+          finally {origin.release();}
+          if (!current || current.connectionFingerprint !== restriction.binding.connection.connectionFingerprint || restriction.binding.tools.some(tool=>!current.tools.some(granted=>granted.exactFingerprint===tool.exactFingerprint))) throw new Error("The receiving Bot does not allow the original watch account and read tools.");
+        }
       };
       await sourceCurrent();
       const selected = claim.actual === "fallback" ? claim.fallback! : claim.primary;
       const runtime = await resolveBotModelRuntime(proof.binding.sourceProviderId, proof.binding.sourceModelId, boundSignal, botId);
       if (!botRoutineModelThinkingLevels(runtime.model).includes(selected.thinkingLevel)) throw new Error("This routine's model no longer supports its selected thinking level.");
       return await buildBotExecutionRuntime(botId, claim, runtime, boundSignal,
-        async () => { boundSignal.throwIfAborted(); await proof.assertCurrent(); await sourceCurrent(); await admission.revalidateBeforeEffect(); boundSignal.throwIfAborted(); },
-        () => admission.release(), selected.thinkingLevel);
+        async () => { boundSignal.throwIfAborted(); await peerLease?.revalidate(); await proof.assertCurrent(); await sourceCurrent(); await admission.revalidateBeforeEffect(); boundSignal.throwIfAborted(); },
+        () => {admission.release();peerLease?.release();}, selected.thinkingLevel);
 
-    } catch (error) { admission.release(); throw error; }
+    } catch (error) { admission.release(); peerLease?.release(); throw error; }
   },
 };
 
@@ -558,6 +581,7 @@ const extension: BotExtensionDeps = {
   // Per run: the self-intro uses no tools; routine and Telegram turns get no
   // question card; routine and self-intro turns never save memory.
   turnAllows: withBotMemoryIngress(botIngressAllowsTool),
+  peerReply: async (botId,message,taskId) => (await import("../bot-peers/host-main.js")).observeBotPeerReply(botId,message,taskId),
   afterReply: (botId) => withoutBotExecutionScope(() => memoryReview.afterReply(botId)),
   beforeCompact: compactionSteering,
   requestApproval: (request) => botApprovals.request(request),
@@ -949,12 +973,15 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     spendingRefusal: async (botId) => botExecutionInputSpendingRefusal(spending, botId, (await botStore.get(botId))?.name),
     // No memory review runs or writes its marker while the Bot is paused.
     onPaused: async (botId) => {
+      (await import("../bot-peers/host-main.js")).botPeerHost.abortBotLeases(botId);
       memoryReview.cancel(botId);
       (await import("../bot-routine-events/sources-main.js")).botConnectorWatches.pauseBot(botId);
     },
     afterPaused: afterBotPaused,
     onUnpaused: afterBotUnpaused,
-    beforeDelete: async (botId) => { await botRoutineModels.forgetBot(botId); await (await import("../bot-open-work/service-main.js")).botOpenWork.forgetBot(botId); },
+    hasPeerSource: async (botId,requestIds)=>(await import("../bot-peers/host-main.js")).botPeerHost.hasSource(botId,requestIds),
+    onSourceStop: async (botId, requestIds) => { const peers = await import("../bot-peers/host-main.js"); const owned = await peers.botPeerHost.stopSource(botId,requestIds); peers.wakeBotPeers(); return owned; },
+    beforeDelete: async (botId) => { await (await import("../bot-peers/host-main.js")).botPeerHost.forgetBot(botId); await botRoutineModels.forgetBot(botId); await (await import("../bot-open-work/service-main.js")).botOpenWork.forgetBot(botId); },
     deleteEffects: [
       // Open chats of the deleted Bot stop receiving its live view.
       async (botId) => liveProjection?.close(botId),
@@ -986,6 +1013,7 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     // Announced only here, after the session resumed, never by a route ahead of `resume`.
     onResumed: (botId) => botTurnIntents.announce(botId, "resuming"),
     onStateChange: (botId, state) => {
+      void import("../bot-peers/host-main.js").then(({wakeBotPeers})=>wakeBotPeers());
       broadcastState(botId, state);
       botLiveProjection().notifyState(botId, state);
       for (const listener of stateListeners) {
@@ -1014,6 +1042,7 @@ export function initializeBotSessionRuntime(): Promise<void> {
   initialized ??= botSessionRuntime()
     .then(async (service) => {
       const { removedOrphans, interrupted } = await service.initialize();
+      (await import("../bot-peers/host-main.js")).startBotPeers();
       if (removedOrphans.length > 0) logger.info("bots", `Removed ${removedOrphans.length} orphaned Bot sessions.`);
       if (interrupted.length > 0) logger.info("bots", `${interrupted.length} Bot turns are waiting for Resume.`);
       if (!watchingResume) {
@@ -1033,6 +1062,7 @@ export function initializeBotSessionRuntime(): Promise<void> {
 }
 
 export async function shutdownBotSessionRuntime(): Promise<void> {
+  (await import("../bot-peers/host-main.js")).stopBotPeers();
   if (runtime === undefined) return;
   const service = await runtime.catch(() => undefined);
   runtime = undefined;

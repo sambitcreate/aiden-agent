@@ -114,4 +114,38 @@ class AidenBotRoutineDeletionTest {
         gate.complete(Unit);deletion.join()
         assertNull(journal(phone,key,original).read());assertEquals("New host pending request",current.read())
     }
+    @Test fun acceptedDeletionPurgesPeerSettingsAndStopsAndFencesHeldPeerReplies()=runTest {
+        val phone=phone();val owner=phone.activePairing!!
+        fun peerJournal(key:String)=phone.botPeerJournals.journal(owner.instanceId,owner.deviceId,owner.pairedAt,key){true}
+        var calls=0;var gate:CompletableDeferred<Unit>?=null
+        val host=object:AidenBotPeersTransport {
+            override suspend fun settings()=peerSettings().copy(lastMutationId=null)
+            override suspend fun catalog()=peerCatalog()
+            override suspend fun exchanges()=AidenPeerExchangeList("bot_planner","list",emptyList())
+            override suspend fun detail(id:String)=peerDetail("waiting").copy(lastStop=null,state=AidenPeerExchangeState.RUNNING)
+            override suspend fun evidence(exchange:AidenPeerExchange,kind:AidenOpenWorkEvidenceKind):AidenPeerEvidence=error("No evidence reads")
+            override suspend fun stop(request:AidenPeerStopMutation):AidenPeerStopResult{calls++;throw IOException("Lost Stop response")}
+            override suspend fun mutate(request:AidenPeerMutation):AidenPeerMutationResult {
+                calls++;val held=gate;if(held==null)throw IOException("Lost settings response")
+                held.await();return AidenPeerMutationResult(true,request.mutationId,false,peerSettings().copy(routingDescription="Saved"))
+            }
+        }
+        val controller=phone.pairingMemo("peers:bot_planner") {AidenBotPeersController("bot_planner",host,{true},{true},{true},peerJournal("bot_planner|settings"),{id->peerJournal("bot_planner|stop|$id")},{PEER_NONCE},{1000})}
+        controller.load();controller.setDraft("Saved");controller.saveDescription();controller.openExchange("exchange_one");controller.stop()
+        assertNotNull(controller.state.value.pending);assertNotNull(controller.state.value.pendingStop)
+        val unrelated=peerJournal("bot_planner:other|settings");unrelated.write("Another Bot")
+        val elsewhere=phone.botPeerJournals.journal("other-host",owner.deviceId,owner.pairedAt,"bot_planner|settings"){true};elsewhere.write("Other host")
+        val before=peerJournal("bot_planner|settings").read()
+        assertTrue(runCatching{phone.deleteBot(phone.client.value!!,"bot_planner",AidenBotDeleter{_,_->throw IOException("Unknown delete")})}.isFailure)
+        assertEquals(before,peerJournal("bot_planner|settings").read());assertNotNull(controller.state.value.pendingStop)
+        gate=CompletableDeferred();val held=launch{controller.retry()};testScheduler.runCurrent();assertEquals(3,calls)
+        phone.deleteBot(phone.client.value!!,"bot_planner",AidenBotDeleter{_,_->})
+        assertNull(peerJournal("bot_planner|settings").read());assertNull(peerJournal("bot_planner|stop|exchange_one").read())
+        assertNull(controller.state.value.pending);assertNull(controller.state.value.pendingStop);assertNull(controller.state.value.settings)
+        assertNotSame(controller,phone.pairingMemo("peers:bot_planner"){Any()})
+        assertEquals("Another Bot",unrelated.read());assertEquals("Other host",elsewhere.read())
+        gate!!.complete(Unit);held.join();controller.load();controller.retry();controller.stop();assertEquals(3,calls)
+        assertNull(peerJournal("bot_planner|settings").read());assertNull(controller.state.value.settings)
+    }
+
 }

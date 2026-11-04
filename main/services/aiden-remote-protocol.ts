@@ -1,4 +1,5 @@
 import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
+import { parseBotPeerId } from "../../renderer/shared/bot-peers.js";
 import {
   parseAidenRemoteApprovalSchedule,
   type AidenRemoteApprovalSchedule,
@@ -289,7 +290,8 @@ export const AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION = 53 as const;
 export const AIDEN_REMOTE_BOT_WATCHES_CONTRACT_REVISION = 54 as const;
 export const AIDEN_REMOTE_BOT_OPEN_WORK_CONTRACT_REVISION = 55 as const;
 export const AIDEN_REMOTE_BOT_ROUTINE_MODELS_CONTRACT_REVISION = 56 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_ROUTINE_MODELS_CONTRACT_REVISION;
+export const AIDEN_REMOTE_BOT_PEERS_CONTRACT_REVISION = 57 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_PEERS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -514,6 +516,7 @@ export const AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES = ["bot:issues"] as const;
 export const AIDEN_REMOTE_BOT_WATCH_CAPABILITIES = ["bot:watches"] as const;
 export const AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES = ["bot:open-work"] as const;
 export const AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES = ["bot:routine-models"] as const;
+export const AIDEN_REMOTE_BOT_PEER_CAPABILITIES = ["bot:peers"] as const;
 
 export type AidenRemoteBotIssueCapability = (typeof AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES)[number];
 
@@ -527,6 +530,7 @@ export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
 ] as const;
 
 /**
@@ -592,6 +596,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
@@ -616,6 +621,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_WATCH_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
@@ -1475,6 +1481,8 @@ export type AidenRemoteBotSessionEntry =
    * `retryText` is omitted when there is nothing to resend.
    */
   | { type: "failed_turn"; id: string; createdAt?: string; retryText?: string }
+  /** Revision 57, only for `bot:peers`: quiet exchange navigation, never message authority. */
+  | { type: "peer"; id: string; exchangeId: string; direction: "sent" | "received"; peerBotId: string; peerName: string; messageKind: "request" | "question" | "status" | "fyi" | "result"; createdAt?: string; final?: true }
   /**
    * Contract revision 27, only for devices holding `bot:cards`: the Bot saved
    * something to its memory. Clients show a quiet "Memory updated" line.
@@ -1610,7 +1618,7 @@ export interface AidenRemoteBotRoutineSuggestionList {
   suggestions: AidenRemoteBotRoutineSuggestion[];
 }
 
-export const AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_KINDS = ["routine", "issue"] as const;
+export const AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_KINDS = ["routine", "issue", "peer"] as const;
 export type AidenRemoteBotNotificationKind = (typeof AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_KINDS)[number];
 
 /**
@@ -5927,6 +5935,12 @@ export function parseAidenRemoteBotSessionEntry(value: unknown): AidenRemoteBotS
           ? { retryText: boundedText(value.retryText, "Bot failed turn retryText", AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS) }
           : {}),
       };
+    case "peer": {
+      assertExactKeys(value, ["type", "id", "exchangeId", "direction", "peerBotId", "peerName", "messageKind", "createdAt", "final"], "Bot peer entry");
+      const messageKind = enumMember(value.messageKind, ["request", "question", "status", "fyi", "result"] as const, "Peer message kind");
+      if (hasOwn(value, "final") && (value.final !== true || messageKind !== "result")) throw new Error("Only a final peer result may carry the final flag.");
+      return { type: "peer", id, exchangeId: parseBotPeerId(value.exchangeId), direction: enumMember(value.direction, ["sent", "received"] as const, "Peer direction"), peerBotId: parseBotPeerId(value.peerBotId), peerName: boundedText(value.peerName, "Peer name", 160), messageKind, ...(hasOwn(value, "createdAt") ? { createdAt: dateTimeValue(value.createdAt, "Peer entry createdAt") } : {}), ...(value.final === true ? { final: true as const } : {}) };
+    }
     case "memory_update":
       assertExactKeys(value, ["type", "id", "createdAt"], "Bot memory update");
       return {
@@ -6146,9 +6160,9 @@ export function parseAidenRemoteBotRoutineNotificationList(value: unknown): Aide
       : "routine";
     // A routine result says which routine ran and how it ended; an issue card
     // carries neither, and its `routineName` is the card's own title.
-    if (kind === "issue") {
+    if (kind === "issue" || kind === "peer") {
       if (hasOwn(notification, "routineId") || hasOwn(notification, "status")) {
-        throw new Error("Bot issue notification must not carry routineId or status.");
+        throw new Error("Bot issue and peer notifications must not carry routineId or status.");
       }
     } else if (!hasOwn(notification, "routineId") || !hasOwn(notification, "status")) {
       throw new Error("Bot routine notification must carry routineId and status.");

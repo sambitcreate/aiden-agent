@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F0A100000000000000000006 /* bot-peers.json in Resources */ = {isa = PBXBuildFile; fileRef = F0A100000000000000000106 /* bot-peers.json */; };
+		F0A100000000000000000005 /* AidenBotPeersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A100000000000000000105 /* AidenBotPeersTests.swift */; };
+		F0A100000000000000000004 /* AidenBotPeersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A100000000000000000104 /* AidenBotPeersView.swift */; };
+		F0A100000000000000000003 /* AidenBotPeersModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A100000000000000000103 /* AidenBotPeersModel.swift */; };
+		F0A100000000000000000002 /* AidenBotPeerControlStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A100000000000000000102 /* AidenBotPeerControlStore.swift */; };
+		F0A100000000000000000001 /* AidenBotPeers.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A100000000000000000101 /* AidenBotPeers.swift */; };
 		E0A100000000000000000007 /* bot-routine-models.json in Resources */ = {isa = PBXBuildFile; fileRef = E0A100000000000000000107 /* bot-routine-models.json */; };
 		E0A100000000000000000006 /* AidenBotRoutineModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0A100000000000000000106 /* AidenBotRoutineModelsTests.swift */; };
 		E0A100000000000000000005 /* AidenBotRoutineModelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0A100000000000000000105 /* AidenBotRoutineModelsView.swift */; };
@@ -190,6 +196,12 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		F0A100000000000000000106 /* bot-peers.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = ../protocol/aiden-remote/v1/fixtures/bot-peers.json; sourceTree = SOURCE_ROOT; };
+		F0A100000000000000000105 /* AidenBotPeersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotPeersTests.swift; sourceTree = "<group>"; };
+		F0A100000000000000000104 /* AidenBotPeersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotPeersView.swift; sourceTree = "<group>"; };
+		F0A100000000000000000103 /* AidenBotPeersModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotPeersModel.swift; sourceTree = "<group>"; };
+		F0A100000000000000000102 /* AidenBotPeerControlStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotPeerControlStore.swift; sourceTree = "<group>"; };
+		F0A100000000000000000101 /* AidenBotPeers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotPeers.swift; sourceTree = "<group>"; };
 		E0A100000000000000000107 /* bot-routine-models.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = ../protocol/aiden-remote/v1/fixtures/bot-routine-models.json; sourceTree = SOURCE_ROOT; };
 		E0A100000000000000000106 /* AidenBotRoutineModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotRoutineModelsTests.swift; sourceTree = "<group>"; };
 		E0A100000000000000000105 /* AidenBotRoutineModelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotRoutineModelsView.swift; sourceTree = "<group>"; };
@@ -430,6 +442,7 @@
 				B0E800000000000000000011 /* AidenBotSessionTests.swift */,
 				B0EB00000000000000000011 /* AidenBotMemoryTests.swift */,
 				C0A100000000000000000015 /* AidenBotWatchTests.swift */,
+				F0A100000000000000000105 /* AidenBotPeersTests.swift */,
 				E0A100000000000000000106 /* AidenBotRoutineModelsTests.swift */,
 				D0A100000000000000000017 /* AidenBotOpenWorkTests.swift */,
 				B0E700000000000000000011 /* AidenRemoteContractFixture.swift */,
@@ -457,6 +470,7 @@
 				A0D800000000000000000012 /* AidenAppearanceV1.json */,
 				A0D000000000000000000014 /* AidenRemoteContractV1.json */,
 				C0A100000000000000000016 /* bot-watches.json */,
+				F0A100000000000000000106 /* bot-peers.json */,
 				E0A100000000000000000107 /* bot-routine-models.json */,
 				D0A100000000000000000018 /* bot-open-work.json */,
 				A0D000000000000000000015 /* AidenManualPairingVectorV1.json */,
@@ -494,6 +508,7 @@
 				B0E200000000000000000011 /* AidenBotRoutine.swift */,
 				C0A100000000000000000011 /* AidenBotWatch.swift */,
 				D0A100000000000000000012 /* AidenBotOpenWorkAPI.swift */,
+				F0A100000000000000000101 /* AidenBotPeers.swift */,
 				E0A100000000000000000101 /* AidenBotRoutineModels.swift */,
 				D0A100000000000000000011 /* AidenBotOpenWork.swift */,
 				B0E100000000000000000011 /* AidenBotSession.swift */,
@@ -540,6 +555,8 @@
 				D0A100000000000000000015 /* AidenBotOpenWorkEditorView.swift */,
 				E0A100000000000000000105 /* AidenBotRoutineModelsView.swift */,
 				D0A100000000000000000014 /* AidenBotOpenWorkView.swift */,
+				F0A100000000000000000103 /* AidenBotPeersModel.swift */,
+				F0A100000000000000000104 /* AidenBotPeersView.swift */,
 				E0A100000000000000000103 /* AidenBotRoutineModelsModel.swift */,
 				E0A100000000000000000104 /* AidenBotResumeModel.swift */,
 				D0A100000000000000000013 /* AidenBotOpenWorkModel.swift */,
@@ -655,6 +672,7 @@
 				B07500000000000000000011 /* AidenBotCache.swift */,
 				B07500000000000000000012 /* AidenChatDraftStore.swift */,
 				C0A100000000000000000017 /* AidenBotWatchDraftStore.swift */,
+				F0A100000000000000000102 /* AidenBotPeerControlStore.swift */,
 				E0A100000000000000000102 /* AidenBotRoutineControlStore.swift */,
 				D0A100000000000000000016 /* AidenBotOpenWorkDraftStore.swift */,
 				B0D00000000000000000A011 /* AidenModelPreferenceStore.swift */,
@@ -858,6 +876,7 @@
 			files = (
 				A0D000000000000000000004 /* AidenRemoteContractV1.json in Resources */,
 				C0A100000000000000000006 /* bot-watches.json in Resources */,
+				F0A100000000000000000006 /* bot-peers.json in Resources */,
 				E0A100000000000000000007 /* bot-routine-models.json in Resources */,
 				D0A100000000000000000008 /* bot-open-work.json in Resources */,
 				A0D000000000000000000005 /* AidenManualPairingVectorV1.json in Resources */,
@@ -919,15 +938,19 @@
 				C0A100000000000000000003 /* AidenBotWatchesView.swift in Sources */,
 				C0A100000000000000000002 /* AidenBotWatchModel.swift in Sources */,
 				C0A100000000000000000001 /* AidenBotWatch.swift in Sources */,
+				F0A100000000000000000002 /* AidenBotPeerControlStore.swift in Sources */,
 				E0A100000000000000000002 /* AidenBotRoutineControlStore.swift in Sources */,
 				D0A100000000000000000006 /* AidenBotOpenWorkDraftStore.swift in Sources */,
 				D0A100000000000000000005 /* AidenBotOpenWorkEditorView.swift in Sources */,
 				E0A100000000000000000005 /* AidenBotRoutineModelsView.swift in Sources */,
 				D0A100000000000000000004 /* AidenBotOpenWorkView.swift in Sources */,
+				F0A100000000000000000003 /* AidenBotPeersModel.swift in Sources */,
+				F0A100000000000000000004 /* AidenBotPeersView.swift in Sources */,
 				E0A100000000000000000003 /* AidenBotRoutineModelsModel.swift in Sources */,
 				E0A100000000000000000004 /* AidenBotResumeModel.swift in Sources */,
 				D0A100000000000000000003 /* AidenBotOpenWorkModel.swift in Sources */,
 				D0A100000000000000000002 /* AidenBotOpenWorkAPI.swift in Sources */,
+				F0A100000000000000000001 /* AidenBotPeers.swift in Sources */,
 				E0A100000000000000000001 /* AidenBotRoutineModels.swift in Sources */,
 				D0A100000000000000000001 /* AidenBotOpenWork.swift in Sources */,
 				C0A100000000000000000007 /* AidenBotWatchDraftStore.swift in Sources */,
@@ -1010,6 +1033,7 @@
 				B0E800000000000000000001 /* AidenBotSessionTests.swift in Sources */,
 				B0EB00000000000000000001 /* AidenBotMemoryTests.swift in Sources */,
 				C0A100000000000000000005 /* AidenBotWatchTests.swift in Sources */,
+				F0A100000000000000000005 /* AidenBotPeersTests.swift in Sources */,
 				E0A100000000000000000006 /* AidenBotRoutineModelsTests.swift in Sources */,
 				D0A100000000000000000007 /* AidenBotOpenWorkTests.swift in Sources */,
 				B0E700000000000000000001 /* AidenRemoteContractFixture.swift in Sources */,

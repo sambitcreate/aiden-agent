@@ -162,6 +162,8 @@ export interface BotCapabilityState {
   legacyMigration?: StoredBotLegacyMigration;
   /** Private routine grants/claims, authenticated by the same rollback checkpoint. */
   routineModels?: string;
+  /** Private named pair/delegation authority, authenticated by the same checkpoint. */
+  peerMessaging?: string;
 }
 
 export type BotCapabilityRevisionKind = "policy" | "chat" | "notice" | "migration";
@@ -550,7 +552,7 @@ export function parseBotCapabilityState(value: unknown): BotCapabilityState {
     !exactKeys(
       value,
       ["version", "sequence", "policies", "chats", "notices", "incarnations"],
-      ["legacyMigration", "routineModels"],
+      ["legacyMigration", "routineModels", "peerMessaging"],
     ) ||
     value.version !== BOT_CAPABILITY_STORE_VERSION ||
     !safeInteger(value.sequence) ||
@@ -571,6 +573,7 @@ export function parseBotCapabilityState(value: unknown): BotCapabilityState {
   const incarnations = parseIncarnations(value.incarnations);
   const legacyMigration = parseLegacyMigration(value.legacyMigration, value.sequence as number);
   if (value.routineModels !== undefined && (typeof value.routineModels !== "string" || Buffer.byteLength(value.routineModels) > 4 * 1024 * 1024 || value.sequence === 0)) throw new BotCapabilityUnavailableError("Routine model authority storage is invalid.");
+  if (value.peerMessaging !== undefined && (typeof value.peerMessaging !== "string" || Buffer.byteLength(value.peerMessaging) > 2 * 1024 * 1024 || value.sequence === 0)) throw new BotCapabilityUnavailableError("Peer messaging authority storage is invalid.");
   if (new Set(policies.map(({ botId }) => botId)).size !== policies.length) {
     throw new BotCapabilityUnavailableError(
       "Bot access storage contains duplicate Bot identities.",
@@ -625,6 +628,7 @@ export function parseBotCapabilityState(value: unknown): BotCapabilityState {
     incarnations,
     ...(legacyMigration ? { legacyMigration } : {}),
     ...(value.routineModels === undefined ? {} : { routineModels: value.routineModels as string }),
+    ...(value.peerMessaging === undefined ? {} : { peerMessaging: value.peerMessaging as string }),
   };
 }
 

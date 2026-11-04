@@ -12,6 +12,8 @@ import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import type { BotRoutineThinkingLevel } from "../../../renderer/shared/bot-routine-models.js";
 import { withImageReferences } from "./bot-images.js";
 import { botExecutionAccountableResponse } from "./bot-execution-spending.js";
+import { BOT_PEER_INPUT_KIND } from "./bot-input-entry.js";
+import { parseBotPeerInputOrigin } from "../bot-peers/authority.js";
 import { BotCostReceiptScopeDoc } from "./bot-resume-operations.js";
 
 export const BOT_EXECUTION_INPUT_KEY = "executionClaimId";
@@ -31,20 +33,20 @@ export interface BotExecutionRuntime {
   beforeDispatch?(dispatchId: string): Promise<void>;
   afterDispatch?(dispatchId: string, message: AssistantMessage): Promise<void>;
   /** Called only for a fresh transport observation, before writing a SQL hint. */
-  sealResponse?(facts: BotProviderResponseFacts): Promise<void>;
+  sealResponse?(facts: BotProviderResponseFacts, reportedCostUsd?: number): Promise<void>;
   /** Reserves bounded protected publication capacity before any new I/O. */
   reserveResponse?(slot: BotProviderResponseSlot): Promise<void>;
   /** Exact private receipt; never a budget increase or a new dispatch grant. */
   isDispatchSettled?(dispatchId: string): Promise<boolean>;
   started?(): Promise<void>;
 }
-export interface BotExecutionScope { botId: string; claim: BotExecutionClaim; taskId: string; requestIds: string[]; runtime: BotExecutionRuntime; registrySnapshot?: RegistrySnapshot; active?(): boolean; bindHelperRuntime?(kind: string, runtime: BotExecutionRuntime): Models }
+export interface BotExecutionScope { botId: string; claim: BotExecutionClaim; taskId: string; scopeId?: string; requestIds: string[]; runtime: BotExecutionRuntime; registrySnapshot?: RegistrySnapshot; active?(): boolean; bindHelperRuntime?(kind: string, runtime: BotExecutionRuntime): Models }
 const scope = new AsyncLocalStorage<BotExecutionScope>();
 export function botExecutionScope(botId?: string): BotExecutionScope | undefined { const current = scope.getStore(); return current?.active?.() === false ? undefined : botId === undefined || current?.botId === botId ? current : undefined; }
 /** A detached learning review admits its own default, rather than borrowing a completed task's model lease. */
 export function withoutBotExecutionScope<T>(operation: () => T): T { return scope.exit(operation); }
 export interface BotExecutionPort {
-  claim(botId: string, input: { requestId: string; routineOrigin?: import("./bot-input-entry.js").BotRoutineInputOrigin; connectorServerId?: string; connectorRestriction?: BotConnectorExecutionRestriction; scheduledFor?: number; timezone?: string; retryOf?: string }): Promise<BotExecutionClaim>;
+  claim(botId: string, input: { requestId: string; routineOrigin?: import("./bot-input-entry.js").BotRoutineInputOrigin; peerOrigin?: import("../bot-peers/authority.js").BotPeerInputOrigin; connectorServerId?: string; connectorRestriction?: BotConnectorExecutionRestriction; scheduledFor?: number; timezone?: string; retryOf?: string }): Promise<BotExecutionClaim>;
   getClaim(botId: string, claimId: string, requestId: string): Promise<BotExecutionClaim>;
   resolve(botId: string, claim: BotExecutionClaim, signal: AbortSignal): Promise<BotExecutionRuntime>;
   selectFallback(botId: string, claimId: string, reason: "model_unavailable" | "credentials_unavailable"): Promise<void>;
@@ -58,6 +60,7 @@ export interface BotExecutionPort {
   hasUnknown?(botId: string, claim: BotExecutionClaim): Promise<boolean>;
   dismissed?(botId: string, claim: BotExecutionClaim): Promise<void>;
   verifyResponse?(facts: BotProviderResponseFacts): Promise<boolean>;
+  reconcileResponseCosts?(botId: string, taskId: string, scopeId: string): Promise<void>;
   recordKnownResponse?(facts: BotProviderResponseFacts, message: AssistantMessage): Promise<void>;
 }
 const fingerprint = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -112,6 +115,7 @@ function responseFacts(botId: string, taskId: string, scopeId: string, memoKey: 
   try { return { version: 1, botId, taskId, scopeId, memoKey, claimId: parseBotRoutineModelId(receipt.claimId), requestId: parseBotRoutineModelId(receipt.requestId), dispatchId: parseBotRoutineModelId(receipt.dispatchId), envelopeDigest: fingerprint(raw), responseDigest: fingerprint(receipt.message) }; } catch { return undefined; }
 }
 export async function reconcileBotExecutionResponses(botId: string, taskId: string, scopeId: string, memos: Readonly<Record<string, JsonValue>> | undefined, port: BotExecutionPort): Promise<void> {
+  await port.reconcileResponseCosts?.(botId,taskId,scopeId);
   for (const [key, raw] of Object.entries(memos ?? {})) {
     const facts = responseFacts(botId, taskId, scopeId, key, raw);
     if (facts && await port.verifyResponse?.(facts)) await port.recordKnownResponse?.(facts, (raw as unknown as { message: AssistantMessage }).message);
@@ -159,7 +163,9 @@ function executionModels<I, S, R, H extends object>(runtime: TaskRuntime<I, S, R
     const envelope = JSON.parse(JSON.stringify({ version: 2, claimId: claim.id, requestId: claim.requestId, dispatchId, operationKey, requestFingerprint, memoScope, generation: dispatchGeneration, message })) as JsonValue;
     let receipt: Receipt;
     try {
-      if (observed) { const facts = responseFacts(claim.botId, String(runtime.taskId), responseScopeId, memoKey, envelope); if (!facts || !execution.sealResponse) throw new Error("This provider result has no protected evidence publisher."); await execution.sealResponse(facts); }
+      if (observed) { const facts = responseFacts(claim.botId, String(runtime.taskId), responseScopeId, memoKey, envelope); if (!facts || !execution.sealResponse) throw new Error("This provider result has no protected evidence publisher."); const reported = message.stopReason === "pending" || message.stopReason === "deferred" ? undefined : botExecutionAccountableResponse(message)?.usage?.cost?.total;
+        const amount = typeof reported === "number" && Number.isFinite(reported) && reported >= 0 ? reported : undefined;
+        await execution.sealResponse(facts,amount); }
       const saved = await runtime.memo(memoKey, envelope, context);
       if (!matching(saved) || !await verified(memoKey, saved)) throw new Error("The stored provider result has no authentic evidence for its exact request.");
       receipt = saved;
@@ -257,7 +263,12 @@ export function createBotExecutionRegistry(botId: string, registry: RegistryRead
       if (!input || input.type !== "input" || input.conversationId !== runtime.conversationId || input.status === "queued" || !input.requestId || input.entry === undefined) throw new Error("The execution source does not match its placed input.");
       const entry = await runtime.entry(input.entry, context), data = entry?.data;
       if (!data || typeof data !== "object" || Array.isArray(data) || typeof data[BOT_EXECUTION_INPUT_KEY] !== "string") throw new Error("This input's execution choice is missing. Send it again after reviewing its model.");
-      claims.push(await port.getClaim(botId, data[BOT_EXECUTION_INPUT_KEY], input.requestId));
+      const selected = await port.getClaim(botId, data[BOT_EXECUTION_INPUT_KEY], input.requestId);
+      if (selected.submissionId && selected.submissionId !== String(input.id)) throw new Error("The source input differs from its protected submission receipt.");
+      if (selected.peer) { const origin = parseBotPeerInputOrigin(data.peerOrigin); if (entry?.kind !== BOT_PEER_INPUT_KIND || data.peerRequestId !== input.requestId || !origin || origin.exchangeId !== selected.peer.exchangeId || origin.deliveryId !== selected.peer.deliveryId || origin.kind !== selected.peer.kind) throw new Error("The peer input lost its exact typed host provenance."); }
+      else if (entry?.kind === BOT_PEER_INPUT_KIND || data.peerOrigin !== undefined) throw new Error("This peer input has no protected delegation authority.");
+      if (!selected.submissionId && port.recordSubmission) { await port.recordSubmission(botId, selected.id, String(input.id)); selected.submissionId = String(input.id); }
+      claims.push(selected);
     }
     const claim = claims[0]!;
     if (claims.some((item) => item.id !== claim.id)) throw new Error("Inputs with distinct execution bindings cannot share a model request.");
@@ -334,7 +345,7 @@ export function createBotExecutionRegistry(botId: string, registry: RegistryRead
       let active = true;
       const helpers: BotExecutionRuntime[] = [];
       const helperNames = new Set<string>();
-      const owned: BotExecutionScope = { botId, claim, taskId: String(runtime.taskId), requestIds: [claim.requestId], runtime: { ...execution, models: boundModels }, active: () => active,
+      const owned: BotExecutionScope = { botId, claim, taskId: String(runtime.taskId), scopeId: responseScopeId, requestIds: [claim.requestId], runtime: { ...execution, models: boundModels }, active: () => active,
         bindHelperRuntime(kind, helper) { if (!active || helperNames.has(kind)) throw new Error("The helper's originating task ended or its identity was reused."); helperNames.add(kind); helpers.push(helper); return executionModels(runtime, helper, claim, `${original.definition.name}:${kind}`, phase, task.state.checkpoint, context, binding.dispatchGeneration ?? 0, responseScopeId, port, block, () => { settledTerminal = true; }, verifyCostApproval); },
       };
       const run = () => scope.run(owned, async () => {

@@ -1212,3 +1212,27 @@ Run records retain admitted/start times, optional original `scheduledFor` plus t
 The existing `POST /bots/{botId}/resume` still accepts `{}` for ordinary Resume. An acknowledgement is exactly `{acknowledgeUnknownCost:true,expectedSubmissionId:"<positive decimal>",expectedCostReceiptId:"cost_<64 lowercase hex digits>"}` and requires this capability plus chat read access. False, a missing source or receipt token, extra fields and acknowledgements from old clients are refused. Source IDs are strings of 1–32 decimal digits with no leading zero, so they do not lose precision in JSON clients. The opaque `costReceiptId` matches `^cost_[a-f0-9]{64}$` and binds the exact unknown provider receipt, Bot incarnation, conversation scope and interrupted source without exposing private dispatch or provider IDs. The acknowledgement echoes it as `expectedCostReceiptId`. A stale input or token cannot consume consent; a newer unknown receipt on the same input requires fresh confirmation. The existing idempotency identity freezes this complete body through uncertain retries. An unconfirmed-cost refusal uses `operation_stale` for older clients and never sends another provider request. Profile's separate unpause route has no cost-acknowledgement semantics.
 
 Normative examples live in `protocol/aiden-remote/v1/fixtures/bot-routine-models.json`, with closed OpenAPI schemas and shared parsers in `renderer/shared/bot-routine-models.ts`, `bot-routine-model-directory.ts` and `bot-execution-resume.ts`. See [routine model behavior](bot-routine-models.md) and [unconfirmed cost recovery](usage-limits-and-spending.md#unconfirmed-bot-request-costs).
+
+## Bot messaging, revision 57 (`bot:peers`)
+
+This optional capability is advertised only after the complete protected host service is ready. All routes are Bot-scoped and reject queries. Settings and catalog need Bot-capability negotiation, `bot:read` and `bot:peers`; content adds `chat:read`, and mutations add `bot:write`.
+
+| Route | Response |
+| --- | --- |
+| `GET /bots/{botId}/peers` | `BotPeerSettings`, including routing description and named approved pairs. |
+| `GET /bots/{botId}/peers/catalog` | Read-only `BotPeerCatalog`; opening it performs no provider or connector discovery. |
+| `POST /bots/{botId}/peers` | Bare closed `BotPeerMutation` (`describe`, `approve`, `revoke`), returning `BotPeerMutationResult`. |
+| `GET /bots/{botId}/peer-exchanges` | Content: `BotPeerExchangeList`. |
+| `GET /bots/{botId}/peer-exchanges/{exchangeId}` | Content: `BotPeerExchangeDetail`, or 404. |
+| `POST /bots/{botId}/peer-exchanges/{exchangeId}/stop` | Content/write: bare `BotPeerStopMutation`, returning `BotPeerStopResult`. |
+| `GET /bots/{botId}/peer-exchanges/{exchangeId}/evidence/{kind}` | Content: `BotPeerEvidence`, with `kind` source/result; absent retained evidence returns 404. |
+
+Commands include exact matching path `botId` and, for Stop, `exchangeId`. Mutation bodies are bounded to 16 KiB, public records to 900 KiB. Caller provenance, root budgets, account bindings and delivery authority are never accepted. Current device and document lifetimes are checked across awaited work and before publication. An accepted operation whose response can no longer be published returns the existing 409 `idempotency_in_flight` envelope where transport is still available; clients retain the original request.
+
+Successful transport returns HTTP 200 for `ok:true` or a typed `invalid`, `conflict`, `unavailable`, `history_full`, `access_changed` or `not_found` refusal. Unknown earlier outcomes remain saved through later refusals. Stop `requested`/`uncertain` keeps the original request; terminal `stopped`, `not_running` or `blocked` settles its receipt, without implying task completion. Exact replay returns fresh exchange state with the original request’s own `lastStop` receipt; GET returns the latest actual receipt. Pending Stop receipts stay protected beyond twenty-four hours until settled. Beyond the ordinary twenty-three-hour client retry window, an exact Stop retry requires a fresh matching pending host receipt; no replacement UUID or revision is invented.
+
+A negotiated peer transcript entry is `{id,type:"peer",exchangeId,direction,peerBotId,peerName,messageKind,createdAt?}`. Its optional `final:true` is valid only for `messageKind:"result"`; this is display metadata, never execution authority. Remote time uses ISO `createdAt`, while local projection uses numeric `at`. Older clients receive neither peer entries nor peer Open work sources/Undo; peer links are removed from otherwise visible work. Guessed hidden peer-work mutations and evidence are refused.
+
+The existing `GET /bots/routine-notifications` feed adds `kind:"peer"` only for negotiated peers. These items keep its stable notification ID, initiating `botId`, `botName`, title in `routineName`, `finishedAt` and bounded preview; they carry neither `routineId` nor `status`. Tap opens the initiating Bot’s chat, then View exchange. No new feed or executable provenance is exposed.
+
+IPC uses `bots:peers:settings`, `catalog`, `mutate`, `exchanges`, `exchange`, `stop` and `evidence`. Missing IPC exchange/evidence returns null. Normative examples are in `protocol/aiden-remote/v1/fixtures/bot-peers.json`; parsers are in `renderer/shared/bot-peers.ts`. See [Bot messaging](bot-messaging.md).

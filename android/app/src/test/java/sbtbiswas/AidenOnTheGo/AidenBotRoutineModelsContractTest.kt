@@ -14,8 +14,8 @@ internal const val COST_RECEIPT_A="cost_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 internal const val COST_RECEIPT_B="cost_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 internal const val MODEL_NONCE="9d70736e-eae9-4cad-a042-48f614d499d3"
 class AidenBotRoutineModelsContractTest {
-    @Test fun canonicalRevision56IncludesAllRoutineKindsExactRunIdsAndCostConsent() {
-        val f=routineModelFixture();assertEquals(56,f.getValue("contractRevision").jsonPrimitive.int)
+    @Test fun canonicalRevision57IncludesAllRoutineKindsExactRunIdsAndCostConsent() {
+        val f=routineModelFixture();assertEquals(57,f.getValue("contractRevision").jsonPrimitive.int)
         val dir=AidenRoutineModelWire.decode(AidenRoutineModelDirectory.serializer(),f.getValue("directory").toString())
         assertEquals(listOf(AidenRoutineModelKind.SCHEDULED,AidenRoutineModelKind.EVENT,AidenRoutineModelKind.WATCH),dir.routines.map{it.kind})
         val settings=routineModelSettings();assertEquals(AidenRoutineThinkingLevel.HIGH,settings.selection.primary!!.thinkingLevel)

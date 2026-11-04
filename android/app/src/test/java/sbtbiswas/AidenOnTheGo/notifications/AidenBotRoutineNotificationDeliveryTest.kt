@@ -119,4 +119,24 @@ class AidenBotRoutineNotificationDeliveryTest {
     fun eachRunIsTaggedByItsRunId() {
         assertEquals("aiden.bot-routine.run_fixture_bot_01", AidenBotRoutineNotificationDelivery.tag(fixtureRun))
     }
+    @Test fun peerResultUsesStableDedupAndLateCapabilityOrPairingLossKeepsCursor()=runTest {
+        val item=AidenBotWireJson.json.decodeFromJsonElement(AidenBotRoutineNotification.serializer(),sbtbiswas.AidenOnTheGo.peerFixture().getValue("peerNotification"))
+        val start=item.finishedAt.minusSeconds(1)
+        val ledger=MemoryLedger().apply{cursors["host"]=start}
+        val posted=mutableListOf<String>();var pairing=true;var peers=true
+        val delivery=AidenBotRoutineNotificationDelivery(ledger){_,n->posted+=n.botId+":"+n.id;true}
+        val feed=AidenBotRoutineNotificationList(listOf(item),item.finishedAt.plusSeconds(1))
+        assertEquals(0,delivery.deliver("host",isCurrent={pairing},mayDeliver={peers}){peers=false;feed})
+        assertEquals(start,ledger.cursors["host"]);assertTrue(posted.isEmpty())
+        peers=true
+        assertEquals(0,delivery.deliver("host",isCurrent={pairing},mayDeliver={peers}){pairing=false;feed})
+        assertEquals(start,ledger.cursors["host"]);assertTrue(posted.isEmpty())
+        pairing=true
+        assertEquals(1,delivery.deliver("host",isCurrent={pairing},mayDeliver={peers}){feed})
+        assertEquals(listOf("bot_planner:peer_root_one"),posted)
+        assertEquals(0,delivery.deliver("host",isCurrent={pairing},mayDeliver={peers}){feed})
+        assertEquals(listOf("bot_planner:peer_root_one"),posted)
+        assertEquals("aiden.bot-routine.peer_root_one",AidenBotRoutineNotificationDelivery.tag(item))
+    }
+
 }

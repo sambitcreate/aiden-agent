@@ -179,3 +179,6 @@ test("Open work needs the existing Tasks capability on both person and routine t
   assert.equal((await botToolVerdict("open_work", allowed, { routine: true })).allowed, true);
   assert.equal(await botToolApprovalSummary("open_work", { action: "add", title: "Explicit task" }, { ...allowed, mcpTools: async () => { throw new Error("Task tracking must not inspect unrelated connectors for approval."); } }), undefined);
 });
+test("peer ingress cannot turn a person joined later into approval, sign-in, wake-up or person-memory authority",async()=>{
+ const facts=browserFacts();for(const tool of [QUESTION,HANDOFF,SIGN_IN,"wake_up","routines","routine_notes","bot_memory","subagent","suggest_connection"]){assert.equal(botIngressAllowsTool(tool,["peer:accepted",DESK]),false,tool);assert.equal((await botToolVerdict(tool,facts,{peer:true})).allowed,false,tool);}assert.equal((await botToolVerdict("message_bot",facts,{peer:true})).allowed,true,"the dedicated source/pair host still checks every send");
+});

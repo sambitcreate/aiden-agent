@@ -85,6 +85,7 @@ class AidenInstallationStore(
             AidenBotWatchJournalStore(secureStore).purge(replaced.instanceId, replaced.deviceId, replaced.createdAt)
             AidenBotWatchJournalStore(secureStore, "bot-open-work").purge(replaced.instanceId, replaced.deviceId, replaced.createdAt)
             AidenBotWatchJournalStore(secureStore, "bot-routine-controls", 1088).purge(replaced.instanceId, replaced.deviceId, replaced.createdAt)
+            AidenBotWatchJournalStore(secureStore, "bot-peers", 1088).purge(replaced.instanceId, replaced.deviceId, replaced.createdAt)
         }
         secureStore.setCredential(installation.credentialScope, exchange.credential)
 
@@ -107,6 +108,7 @@ class AidenInstallationStore(
         AidenBotWatchJournalStore(secureStore).purge(target.instanceId, target.deviceId, target.createdAt)
         AidenBotWatchJournalStore(secureStore, "bot-open-work").purge(target.instanceId, target.deviceId, target.createdAt)
         AidenBotWatchJournalStore(secureStore, "bot-routine-controls", 1088).purge(target.instanceId, target.deviceId, target.createdAt)
+        AidenBotWatchJournalStore(secureStore, "bot-peers", 1088).purge(target.instanceId, target.deviceId, target.createdAt)
         secureStore.removeCredential(target.credentialScope)
         _installations.value = _installations.value.filter { it.id != id }
         if (_activeInstallationId.value == id) {

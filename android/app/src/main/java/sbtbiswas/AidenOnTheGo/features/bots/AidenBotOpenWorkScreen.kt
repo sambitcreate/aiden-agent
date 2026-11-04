@@ -39,7 +39,7 @@ private class AidenRemoteOpenWorkTransport(val coordinator: AidenRemoteCoordinat
 }
 @OptIn(ExperimentalMaterial3Api::class,ExperimentalLayoutApi::class)
 @Composable
-fun AidenBotOpenWorkScreen(botId:String,coordinator:AidenRemoteCoordinator,onNavigateBack:()->Unit,onOpenBotChat:()->Unit) {
+fun AidenBotOpenWorkScreen(botId:String,coordinator:AidenRemoteCoordinator,onNavigateBack:()->Unit,onOpenBotChat:()->Unit,onOpenPeerExchange:(String)->Unit={}) {
     val palette=AidenTheme.palette
     val client by coordinator.client.collectAsStateWithLifecycle()
     val server by coordinator.serverInfo.collectAsStateWithLifecycle()
@@ -138,6 +138,9 @@ fun AidenBotOpenWorkScreen(botId:String,coordinator:AidenRemoteCoordinator,onNav
                                         snapshot.undo.find{it.itemId==item.id}?.let{undo->AidenTonalButton(stringResource(R.string.bot_open_work_undo),enabled=itemEditable && undo.expiresAt>System.currentTimeMillis(),onClick={scope.launch{controller.undo(undo)}})}
                                         if(item.source.submissionId!=null || item.links.any{it.kind==AidenOpenWorkLinkKind.SOURCE}) AidenTonalButton(stringResource(R.string.bot_open_work_source),onClick={scope.launch{controller.evidence(item,AidenOpenWorkEvidenceKind.SOURCE)}})
                                         if(item.completion?.result!=null || item.links.any{it.kind==AidenOpenWorkLinkKind.RESULT}) AidenTonalButton(stringResource(R.string.bot_open_work_result),onClick={scope.launch{controller.evidence(item,AidenOpenWorkEvidenceKind.RESULT)}})
+                                        if(coordinator.serverInfo.value?.supportsBotPeerExchanges==true) {
+                                            (item.links.filter{it.kind==AidenOpenWorkLinkKind.PEER}.mapNotNull{it.exchangeId}+listOfNotNull(item.source.exchangeId)).distinct().forEach{id->AidenTonalButton(stringResource(R.string.bot_peers_view_exchange),onClick={onOpenPeerExchange(id)})}
+                                        }
                                         if(item.links.any{it.kind in listOf(AidenOpenWorkLinkKind.ISSUE,AidenOpenWorkLinkKind.ROUTINE)}) AidenTonalButton(stringResource(R.string.bot_open_work_chat),onClick=onOpenBotChat)
                                     }
                                 }
