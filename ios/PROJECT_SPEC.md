@@ -178,4 +178,4 @@ update/setup guidance; there is no silent alternate-model or on-device fallback.
 
 ### Plan response reconciliation
 
-An identical pending-plan snapshot does not supersede an in-flight answer. A matching `409 plan_expired` clears that card and releases its Send hold. A changed plan, changed status or connection generation still prevents a late response from touching newer state. The host remains authoritative for approvals and plan progress.
+An identical pending-plan snapshot does not supersede an in-flight answer. A matching `409 plan_expired` clears that card and releases its Send hold. A changed plan, changed status or explicit response generation still prevents a late response from touching newer state. The host remains authoritative for approvals and plan progress.
