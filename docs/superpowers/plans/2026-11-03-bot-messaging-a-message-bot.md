@@ -420,8 +420,8 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
   - `{ id; type: "bot_message"; kind: "request" | "reply"; botId; botName; text; at? }`;
   - `{ id; type: "bot_message_status"; data: BotMessageStatusEntryData; at? }`.
 - Modify: `main/services/bot-runtime/live-projection.ts`:
-  - `:355-362`: the `bot_message` notice sets a pending marker, like `pendingRoutine`;
-  - `:484-498`: the input it precedes becomes a `bot_message` row with the notice's clean text, and `retryText` is `null`;
+  - `:355-362`: Bot-message notices do not assign the next input's display identity;
+  - `:484-498`: only an input with `BOT_MESSAGE_INPUT_KIND` becomes a `bot_message` row, using its own validated clean metadata, and `retryText` is `null`; a stranded notice never changes a person's input or Retry;
   - the status entries are projected, one per `(deliveryId, outcome, waitId ?? "")`, and added to `OUTLIVES_SILENT_TURN` (`:150`);
   - a `[SILENT]` answer hides its `bot_message` row like a routine label.
 - Modify: `renderer/main/bots/bot-transcript-rows.ts:32,125`, `renderer/main/bots/bot-chat-pane.tsx:790`. A `bot_message` row is a small secondary label (`botMessageRowLabel`) over a bubble wrapped in `BotMessageActions` with `from={botName}`. A status row is one secondary line, plus the reply text for `replied_while_paused`.
@@ -430,7 +430,7 @@ export function createBotMessageCourier(deps: BotMessageCourierDeps): BotMessage
 
 - [x] **Step 1: Write the failing tests:**
   - `live-projection.test.ts`:
-    - `a bot message shows its clean text, not the frame`: a notice plus a framed input give one `bot_message` row whose `text` is the clean message and contains no `<bot_message`.
+    - `a bot message shows its clean text, not the frame`: a framed input with host-owned clean metadata gives one `bot_message` row whose `text` is the clean message and contains no `<bot_message`.
     - `a silent answer hides the bot message row`.
     - `status rows dedupe by delivery, outcome and optional wait id`: two identical status entries give one row.
     - `a bot message turn is not retryable`: a failed answer after it gives `failed_turn.retryText === null`.

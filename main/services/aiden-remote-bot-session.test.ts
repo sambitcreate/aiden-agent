@@ -3818,7 +3818,7 @@ test("a card's desktop-only settings action never crosses the wire, and a settle
 test("Bot messaging projects to existing labelled messages, including bounded saved answers", () => {
   const rows = projectBotSessionEntries([
     {id: 1, kind: "aiden.bot-notice", data: {notice: "bot_message", kind: "request", botId: "j", botName: "Jester", text: "Clean question"}},
-    {id: 2, kind: "aiden.bot-message-input", model: [{role: "user", content: "<bot_message>frame instructions</bot_message>", timestamp: 1}]},
+    {id: 2, kind: "aiden.bot-message-input", data: {kind: "request", deliveryId: "d", botId: "j", botName: "Jester", text: "Clean question", deadline: 100}, model: [{role: "user", content: "<bot_message>frame instructions</bot_message>", timestamp: 1}]},
     {id: 3, kind: "aiden.bot-message-status", data: {deliveryId: "d", botId: "c", botName: "COS", outcome: "waiting_approval", summary: "Create 3 events"}},
     {id: 4, kind: "aiden.bot-message-status", data: {deliveryId: "d", botId: "c", botName: "COS", outcome: "replied_while_paused", text: "Saved answer. ".repeat(900)}},
   ] as never);
@@ -3830,4 +3830,13 @@ test("Bot messaging projects to existing labelled messages, including bounded sa
   assert.ok(rows[2].text.length <= 16000);
   for (const row of rows) assert.deepEqual(parseAidenRemoteBotSessionEntry(row), row);
   assert.equal(JSON.stringify(rows).includes("frame instructions"), false);
+  const afterCrash = projectBotSessionEntries([
+    {id: 5, kind: "aiden.bot-notice", data: {notice: "bot_message", kind: "request", deliveryId: "old", botId: "j", botName: "Jester", text: "Stale Bot text"}},
+    {id: 6, kind: "pi.user", model: [{role: "user", content: "My own message", timestamp: 2}]},
+    {id: 7, kind: "aiden.bot-message-input", data: {kind: "reply", deliveryId: "new", botId: "c", botName: "COS", text: "Current Bot answer", deadline: 100}, model: [{role: "user", content: "<bot_message>private frame</bot_message>", timestamp: 3}]},
+  ] as never);
+  assert.deepEqual(afterCrash, [
+    {type: "message", id: "entry_6", role: "user", text: "My own message", createdAt: new Date(2).toISOString()},
+    {type: "message", id: "entry_7", role: "user", label: "COS replied", text: "Current Bot answer", createdAt: new Date(3).toISOString()},
+  ]);
 });

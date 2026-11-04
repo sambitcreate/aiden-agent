@@ -292,3 +292,12 @@ test("bot_message rows reach only messaging holders as bounded redacted message 
   assert.equal(row.routineId, undefined); assert.equal(row.status, undefined);
   assert.ok(row.preview.length <= 160); assert.equal(row.preview.includes("/Users/sam"), false);
 });
+
+test("Bot status notifications do not repeat the status as both title and body", async (t) => {
+  const h = await harness(); t.after(h.cleanup);
+  await h.log.append(delivery({class: "bot_message", dedupeKey: "status", routineId: undefined, title: "COS couldn't answer.", body: "COS couldn't answer."}));
+  const [row] = (await h.feed.list(undefined, {messaging: true})).notifications;
+  assert.ok(row);
+  assert.equal(row.routineName, "Bot message");
+  assert.equal(row.preview, "COS couldn't answer.");
+});

@@ -147,6 +147,24 @@ function isNotice(entry: EntryRecord): entry is EntryRecord & { data: BotNotice 
   return entry.kind === BOT_NOTICE_ENTRY_KIND && typeof entry.data === "object" && entry.data !== null;
 }
 
+/** Display only the clean metadata committed atomically with the admitted input. */
+function botMessageInputOf(value: unknown): Omit<Extract<BotTranscriptEntry, {type: "bot_message"}>, "id" | "at"> | null {
+  if (typeof value !== "object" || value === null) return null;
+  const data = value as Record<string, unknown>;
+  if (
+    (data.kind !== "request" && data.kind !== "reply") ||
+    typeof data.deliveryId !== "string" || !data.deliveryId ||
+    typeof data.botId !== "string" || !data.botId ||
+    typeof data.botName !== "string" || typeof data.text !== "string" ||
+    typeof data.deadline !== "number" || !Number.isFinite(data.deadline)
+  ) return null;
+  return {
+    type: "bot_message", kind: data.kind, botId: data.botId,
+    botName: data.botName.slice(0, 80),
+    text: data.text.slice(0, data.kind === "request" ? BOT_MESSAGE_LIMITS.messageChars : BOT_MESSAGE_LIMITS.replyChars),
+  };
+}
+
 /** Entries that stay visible when the turn they follow is hidden as `[SILENT]`. */
 const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["bot_message_status", "connect_card", "memory_update", "routine_proposal", "skill_proposal", "lesson_proposal", "lesson_learned", "memory_tidy", "wake_up"]);
 
@@ -300,7 +318,6 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
   /** `retryText`: the typed message Retry resends if this turn fails. */
   type Turn = { start: number; silent: boolean; retryText: string | null };
   const mapped: Array<{ entry: BotTranscriptEntry; turn: Turn | null }> = [];
-  let pendingBotMessage: Extract<BotNotice, {notice: "bot_message"}> | undefined;
   const seenBotStatuses = new Set<string>();
   let pendingRoutine: string | undefined;
   let pendingHidden = false;
@@ -382,8 +399,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
     const id = String(record.id);
     if (isNotice(record)) {
       const notice = record.data;
-      if (notice.notice === "bot_message") pendingBotMessage = notice;
-      else if (notice.notice === "routine") pendingRoutine = notice.label;
+      if (notice.notice === "routine") pendingRoutine = notice.label;
       else if (notice.notice === "hidden_input") pendingHidden = true;
       else if (notice.notice === "interrupted" || notice.notice === "session_reset") {
         mapped.push({ entry: { id, type: "notice", notice: notice.notice }, turn });
@@ -522,14 +538,13 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       turn = {
         start: mapped.length,
         silent: false,
-        retryText: pendingHidden || pendingRoutine !== undefined || pendingBotMessage !== undefined || record.kind === BOT_MESSAGE_INPUT_KIND || !text.trim() ? null : text,
+        retryText: pendingHidden || pendingRoutine !== undefined || record.kind === BOT_MESSAGE_INPUT_KIND || !text.trim() ? null : text,
       };
-      if (record.kind === BOT_MESSAGE_INPUT_KIND || pendingBotMessage) {
-        const notice = pendingBotMessage;
-        pendingBotMessage = undefined;
+      if (record.kind === BOT_MESSAGE_INPUT_KIND) {
+        const input = botMessageInputOf(record.data);
         pendingRoutine = undefined;
         pendingHidden = false;
-        if (notice) mapped.push({entry: {id, type: "bot_message", kind: notice.kind, botId: notice.botId, botName: notice.botName.slice(0, 80), text: notice.text.slice(0, notice.kind === "request" ? BOT_MESSAGE_LIMITS.messageChars : BOT_MESSAGE_LIMITS.replyChars), at: message.timestamp}, turn});
+        if (input) mapped.push({entry: {...input, id, at: message.timestamp}, turn});
         continue;
       }
       if (pendingHidden) {

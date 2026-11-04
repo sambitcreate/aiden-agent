@@ -68,7 +68,7 @@ export function createBotNotificationFeed(dependencies: BotNotificationFeedDepen
             botId: row.botId,
             botName,
             // The card's title: the phone shows "{title}: {body}".
-            routineName: [...row.title.trim()].slice(0, 120).join("") || (message ? "Bot message" : "Needs you"),
+            routineName: (message && row.title === row.body ? "Bot message" : [...row.title.trim()].slice(0, 120).join("")) || (message ? "Bot message" : "Needs you"),
             finishedAt: new Date(row.createdAt).toISOString(),
             preview: redactRemoteText(row.body, AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_PREVIEW_MAX_CHARS),
           });
