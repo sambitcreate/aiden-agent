@@ -2130,6 +2130,7 @@ test("CLI Bot spending stays with the runner, persists limits and refuses unread
 
 test("durable CLI Bots can message each other", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "aiden-cli-messaging-")), daemon = api.createDaemonChats(dir), requests = [];
+  let preparingReply = false, replyRosterReads = 0;
   const original = process.env.AIDEN_CLI_ENTRY;
   process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
   t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
@@ -2140,6 +2141,7 @@ test("durable CLI Bots can message each other", async (t) => {
     const call = last.role === "user" && content.includes("Ask Beta for Ping")
       ? { id: "message-beta", name: "message_bot", arguments: { bot: "Beta", message: "Ping" } } : undefined;
     const text = content.includes("<bot_message") ? "Pong" : content.includes("<bot_reply") ? "Beta says Pong" : "Sent";
+    if (content.includes("<bot_message")) preparingReply = true;
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.write(`data: ${JSON.stringify({ id: "messaging", object: "chat.completion.chunk", choices: [{ index: 0, delta: call ? { role: "assistant", tool_calls: [{ index: 0, id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] } : { role: "assistant", content: text }, finish_reason: null }] })}\n\n`);
     response.write(`data: ${JSON.stringify({ id: "messaging", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: call ? "tool_calls" : "stop" }] })}\n\n`);
@@ -2160,6 +2162,11 @@ test("durable CLI Bots can message each other", async (t) => {
   }
   await host.command(["enable-durable"]); await host.stop();
   host = await api.createCliBots(dir, daemon); daemon.setBots(host);
+  const listBotIdentities = host.botStore.list;
+  host.botStore.list = async () => {
+    if (preparingReply) replyRosterReads++;
+    return listBotIdentities();
+  };
   const sent = await host.durable.runtime.send(bots[0].id, { text: "Ask Beta for Ping", requestId: "ask-beta" });
   assert.equal((await host.durable.runtime.awaitReply(bots[0].id, sent.submissionId, AbortSignal.timeout(20_000))).kind, "completed");
   const entries = async (id) => api.projectBotTranscript((await (await host.durable.runtime.conversation(id)).context(api.BACKGROUND_CONTEXT)).entries);
@@ -2168,6 +2175,8 @@ test("durable CLI Bots can message each other", async (t) => {
     if (Date.now() > deadline) assert.fail(`Bot reply did not arrive: ${JSON.stringify({entries: await entries(bots[0].id), state: await host.durable.runtime.state(bots[0].id), requests: requests.map((request) => request.messages.at(-1)), ledger: JSON.parse(readFileSync(join(dir, "bots/bot-messages.json")))})}`);
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+  preparingReply = false;
+  assert.equal(replyRosterReads, 0, "a reply turn cannot send messages and must not discover the outbound roster");
   const incoming = (await entries(bots[1].id)).find((entry) => entry.type === "bot_message");
   assert.equal(incoming.text, "Ping");
   assert.equal(incoming.botId, bots[0].id);

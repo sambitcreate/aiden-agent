@@ -1144,6 +1144,33 @@ test('idle-only Bot delivery cannot queue behind person work', async () => {
   } finally {release();await service.shutdown();}
 });
 
+test("queued Bot replies preserve the active person's tool inventory", async () => {
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const tool = countingTool("person_tool");
+  const base = recordingDeps({ tools: [{ tool, replay: "unsafe" }] });
+  const faux = createFauxModels([
+    async () => { entered(); await held; return fauxAssistantMessage([fauxToolCall("person_tool", { text: "first" })], { stopReason: "toolUse" }); },
+    fauxAssistantMessage([fauxToolCall("person_tool", { text: "second" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("person complete"), fauxAssistantMessage("reply complete"),
+  ]);
+  const service = await serviceFor(tempProfile(), faux, { extension: { ...base,
+    currentTools: async (bot, turn) => turn.requestId?.startsWith("botreply:") ? [] : base.currentTools(bot, turn),
+  } });
+  try {
+    const person = await service.send("bot:a", { text: "Two actions", requestId: "person" });
+    await started;
+    const deliveryId = "00112233-4455-4677-8899-aabbccddeeff";
+    const reply = await service.send("bot:a", { text: "A later reply", requestId: `botreply:${deliveryId}`,
+      botMessage: { kind: "reply", deliveryId, botId: "J", botName: "Jester", text: "Pong", deadline: Date.now() + 60_000 } });
+    release();
+    assert.deepEqual(await service.awaitReply("bot:a", person.submissionId, new AbortController().signal), { kind: "completed", text: "person complete" });
+    assert.deepEqual(tool.executions, [{ text: "first" }, { text: "second" }]);
+    assert.deepEqual(await service.awaitReply("bot:a", reply.submissionId, new AbortController().signal), { kind: "completed", text: "reply complete" });
+  } finally { release(); await service.shutdown(); }
+});
+
 test('simultaneous cross-message tools remain host-free through pause, delete and shutdown', {timeout:15_000}, async () => {
  const {createBotMessageLedger}=await import('../bot-messages/ledger.js');
  const {createBotMessageCourier}=await import('../bot-messages/courier.js');
