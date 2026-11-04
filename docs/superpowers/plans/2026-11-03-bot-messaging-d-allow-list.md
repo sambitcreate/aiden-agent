@@ -98,12 +98,13 @@ This plan extends those pieces. It does not invent a parallel store:
   revokeBot(botId: string, ruleId: string): Promise<boolean>;
   forgetBot(botId: string): Promise<number>;
   onBotChange(listener: (botId: string) => void): () => void;
+  botConsentRevision(botId: string, target: BotApprovalRuleTarget): Promise<string>; // main-only target-relevant receipt digest, independent of usage
   ```
   `list()`, `revoke()`, `revokeAll()` and `onChange()` keep their meaning: workspace rules only. `grantBot` enforces both the 50-per-Bot and 1,000-profile limits inside one `store.update`, including concurrent grants. Persist an immutable operation-id receipt atomically with publication. A duplicate operation returns its recorded publication, or `revoked`, without granting again. `revokeBot` atomically removes the entry and tombstones every publication operation that referenced it. A replay of an old operation cannot recreate authority even if the target currently has no entry. A later fresh person decision with a new operation id may intentionally grant it again. Retain publication/revocation receipts while their originating tasks can replay, independently of visible entries. The service also rejects grants for deleted/unknown Bots.
 
 - Publication receipts are main-owned records `{ operationId, botId, targetKey, ruleId, status: "published" | "revoked", publishedAt, revokedAt? }` stored with the rule document. Preserve them through normalization and atomic revoke, and never expose them as another visible list entry.
 
-- [ ] **Step 1: Write the failing tests** in `tool-approval-rules.test.ts`. Use the file's in-memory store, a fixed `now`, and `CAL = {kind:"connection", serverId:"gcal", tool:"create_event"}`:
+- [x] **Step 1: Write the failing tests** in `tool-approval-rules.test.ts`. Use the file's in-memory store, a fixed `now`, and `CAL = {kind:"connection", serverId:"gcal", tool:"create_event"}`:
   - `a Bot entry covers only its own Bot and exact target`: after `grantBot("bot:a", CAL, "Google Calendar · Create event", "decision-1")`:
     - `matchBot("bot:a", CAL)?.label === "Google Calendar · Create event"`;
     - `matchBot("bot:b", CAL) === undefined`;
@@ -123,15 +124,15 @@ This plan extends those pieces. It does not invent a parallel store:
     - an empty `label`;
     - a duplicate `(botId, key)`.
   - `onBotChange hears the Bot id on grant, use, revoke and forget`, and `onChange` (the workspace listener) hears none of them.
-- [ ] **Step 2: Run and see them fail.** `npx tsx --test main/services/tool-approval-rules.test.ts`. Expected: FAIL (`grantBot is not a function`).
-- [ ] **Step 3: Implement.**
+- [x] **Step 2: Run and see them fail.** `npx tsx --test main/services/tool-approval-rules.test.ts`. Expected: FAIL (`grantBot is not a function`).
+- [x] **Step 3: Implement.**
   - Reuse `validWorkspaceId`'s checks for `botId`, `serverId` and `tool` (at most 256 characters, no control characters).
   - A stored `host` must already be canonical: lowercase, no leading `www.`, `[a-z0-9.-]`, at most 253 characters. A hand edit can't widen it, the same rule `normalizeRule` uses for patterns.
   - Labels are trimmed and kept to 200 characters.
   - `grantBot` throws `Aiden keeps at most 50 things a Bot can do without asking. Remove some on its profile.`
   - Writes go through the existing `store.update`. `notifyBot(botId)` mirrors `notify()`.
-- [ ] **Step 4: Run the tests.** `npx tsx --test main/services/tool-approval-rules.test.ts renderer/components/settings/tool-approval-settings.test.tsx`. Expected: PASS.
-- [ ] **Step 5: Commit.** "Remember Bot approvals in the tool approval store"
+- [x] **Step 4: Run the tests.** `npx tsx --test main/services/tool-approval-rules.test.ts renderer/components/settings/tool-approval-settings.test.tsx`. Expected: PASS.
+- [x] **Step 5: Commit.** "Remember Bot approvals in the tool approval store"
 
 ### Task 2: The per-Bot approval tally
 
@@ -589,3 +590,12 @@ The precedence is authority/ingress, rules, existing routine go-ahead, plan cove
 ### Phase D started, 2026-11-04
 
 Both Gate5R4 reviewers accepted C at55678558e; C status commit69662649f is the phase-D base. Work is on feature/bot-allow-list. Follow Tasks1–8 in order, with real behavioral RED/GREEN evidence and parent-owned commits. Task1 starts with the shared rule types and existing remembered-approval store; Task2 waits for Task1 validation/commit. Root owns registration, integration, docs/status and review gates. Provisional Remote revision57 follows A54/B55/C56 and must be reclaimed against main before PR merge. No network/catalog changes, dependency/pin changes, CLI allow-list port or analytics expansion. D source acceptance, final Astra review, four stacked PRs and exact-head CI remain pending. No merge is authorized.
+
+
+### Task 1 complete locally, 2026-11-04
+
+The shared Bot target/view/list types and existing ToolApprovalRuleBook are implemented. The optional fourth constructor options argument supplies knownBot; Bot matches/publication fail closed without an authoritative validator, which root wires in Task5. Workspace methods/listeners remain isolated. Atomic50perBot/1000profile admission, exact targets, usage metadata, immutable publication receipts and revocation tombstones survive reopen. botConsentRevision hashes only target-relevant publication/revocation identity/status; usage, unrelated targets/Bots and receipt ordering do not affect it. Every fresh publication emits one Bot change event, including a fresh operation sharing an existing entry; transport replay emits none.
+
+The existing512KiB document ceiling remains. Publication reserves future usage/revocation growth; receipts never prune without authoritative task-settlement GC, so byte capacity can refuse new remembered consent before count limits. Malformed/unreadable receipt state preserves evidence and fences Bot operations while workspace operations may proceed within capacity. No singleton wiring or new user-facing allow-list behavior is active yet.
+
+Worker initial RED8pass10fail, consentRED20pass2fail and API quarantineRED are retained at /tmp/bot-allowed-d-task1-*.log. Parent event-contract RED is /tmp/bot-allowed-d-task1-parent-event-red.log, then final store/settings27pass, wholetypes0, scopedlint0 and diffclean at /tmp/bot-allowed-d-task1-parent-{final,types,lint}.log. Worker final checks also passed. New tests extend existing files, so no registry addition yet. Task2 follows only after this commit; runtime Tasks3–5 preparation is read-only and held. No fullD/native/device/live/package/CI acceptance.

@@ -1,7 +1,11 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   isScopedApprovalToolName,
+  botApprovalRuleKey,
+  BOT_APPROVAL_RULES_PER_BOT_MAX,
+  type BotApprovalRuleTarget,
+  type BotApprovalRuleView,
   type ScopedApprovalToolName,
   type ToolApprovalRuleView,
   type ToolApprovalScope,
@@ -35,9 +39,26 @@ export interface ToolApprovalRuleTarget {
   workspaceId: string;
 }
 
+export interface BotGrantOperation {
+  operationId: string;
+  botId: string;
+  targetKey: string;
+  ruleId: string;
+  status: "published" | "revoked";
+  publishedAt: string;
+  revokedAt?: string;
+}
+
+export const BOT_APPROVAL_RULES_PROFILE_MAX = 1_000;
+
 export interface ToolApprovalRulesDocument {
   version: 1;
   rules: ToolApprovalRuleView[];
+  botRules?: BotApprovalRuleView[];
+  botGrantOperations?: BotGrantOperation[];
+  /** Durable quarantine: never reset replay protection by dropping damaged receipts. */
+  botGrantOperationsUnreadable?: true;
+  botGrantOperationsEvidence?: unknown;
 }
 
 export function emptyToolApprovalRulesDocument(): ToolApprovalRulesDocument {
@@ -151,14 +172,94 @@ function normalizeRule(value: unknown): ToolApprovalRuleView | undefined {
   };
 }
 
-/** Drop malformed or duplicate rules; never throws. */
+function normalizeBotTarget(value: unknown): BotApprovalRuleTarget | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const v = value as Record<string, unknown>;
+  if (v.kind === "connection" && validWorkspaceId(v.serverId) && validWorkspaceId(v.tool)) {
+    return { kind: "connection", serverId: v.serverId, tool: v.tool };
+  }
+  if (v.kind === "site" && typeof v.host === "string" && v.host.length <= 253 &&
+    /^[a-z0-9.-]+$/u.test(v.host) && !v.host.startsWith("www.") &&
+    (v.action === "click" || v.action === "type" || v.action === "press")) {
+    return { kind: "site", host: v.host, action: v.action };
+  }
+  return undefined;
+}
+
+function validRuleId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/u.test(value);
+}
+
+function validDate(value: unknown): value is string {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value));
+}
+
+function normalizeBotRule(value: unknown): BotApprovalRuleView | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const v = value as Record<string, unknown>;
+  const target = normalizeBotTarget(v.target);
+  if (!target || !validRuleId(v.id) || !validWorkspaceId(v.botId) ||
+    typeof v.label !== "string" || !v.label.trim() || v.label.trim().length > 200 ||
+    hasControlCharacter(v.label, false) || !validDate(v.createdAt) ||
+    typeof v.uses !== "number" || !Number.isSafeInteger(v.uses) || v.uses < 0 ||
+    (v.lastUsedAt !== undefined && !validDate(v.lastUsedAt))) return undefined;
+  return { id: v.id, botId: v.botId, target, label: v.label.trim(),
+    createdAt: new Date(v.createdAt).toISOString(), uses: v.uses,
+    ...(v.lastUsedAt !== undefined ? { lastUsedAt: new Date(v.lastUsedAt as string).toISOString() } : {}) };
+}
+
+function normalizeBotOperation(value: unknown): BotGrantOperation | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const v = value as Record<string, unknown>;
+  if (!validWorkspaceId(v.operationId) || !validWorkspaceId(v.botId) || !validRuleId(v.ruleId) ||
+    typeof v.targetKey !== "string" || !validDate(v.publishedAt) ||
+    (v.status !== "published" && v.status !== "revoked") ||
+    (v.status === "revoked" ? !validDate(v.revokedAt) : v.revokedAt !== undefined)) return undefined;
+  try {
+    const tuple: unknown = JSON.parse(v.targetKey);
+    if (!Array.isArray(tuple) || tuple.length !== 3) return undefined;
+    const target = normalizeBotTarget(tuple[0] === "connection"
+      ? { kind: tuple[0], serverId: tuple[1], tool: tuple[2] }
+      : { kind: tuple[0], host: tuple[1], action: tuple[2] });
+    if (!target || botApprovalRuleKey(target) !== v.targetKey) return undefined;
+  } catch { return undefined; }
+  return { operationId: v.operationId, botId: v.botId, targetKey: v.targetKey, ruleId: v.ruleId,
+    status: v.status, publishedAt: new Date(v.publishedAt).toISOString(),
+    ...(v.status === "revoked" ? { revokedAt: new Date(v.revokedAt as string).toISOString() } : {}) };
+}
+
+/** Reserve future tombstones and usage stamps before any publication, without pruning receipts. */
+function assertDocumentBudget(document: ToolApprovalRulesDocument): void {
+  const reserved = structuredClone(document);
+  const longestDate = "+275760-09-13T00:00:00.000Z";
+  for (const operation of reserved.botGrantOperations ?? []) {
+    if (operation.status === "published") {
+      operation.status = "revoked";
+      operation.revokedAt = longestDate;
+    }
+  }
+  for (const rule of reserved.botRules ?? []) {
+    rule.uses = Number.MAX_SAFE_INTEGER;
+    rule.lastUsedAt = longestDate;
+  }
+  if (Buffer.byteLength(JSON.stringify(reserved, null, 2) + "\n", "utf8") > TOOL_APPROVAL_RULES_MAX_BYTES) {
+    throw new Error("Aiden's approval receipt storage is full. New remembered approvals cannot be saved.");
+  }
+}
+
+/** Drop malformed or duplicate rules; retain damaged receipt evidence and fail closed. */
 export function normalizeToolApprovalRulesDocument(value: unknown): ToolApprovalRulesDocument {
   const record =
     value !== null && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : undefined;
   if (!record || record.version !== 1 || !Array.isArray(record.rules)) {
-    return emptyToolApprovalRulesDocument();
+    const empty = emptyToolApprovalRulesDocument();
+    if (record && ("botRules" in record || "botGrantOperations" in record || "botGrantOperationsUnreadable" in record)) {
+      empty.botGrantOperationsUnreadable = true;
+      empty.botGrantOperationsEvidence = record;
+    }
+    return empty;
   }
   const seen = new Set<string>();
   const rules: ToolApprovalRuleView[] = [];
@@ -171,11 +272,58 @@ export function normalizeToolApprovalRulesDocument(value: unknown): ToolApproval
     rules.push(rule);
     if (rules.length >= MAX_PERSISTED_TOOL_APPROVAL_RULES) break;
   }
-  return { version: 1, rules };
+  const document: ToolApprovalRulesDocument = { version: 1, rules };
+  if (record.botRules !== undefined) {
+    document.botRules = [];
+    const ids = new Set<string>();
+    const targets = new Set<string>();
+    const counts = new Map<string, number>();
+    for (const candidate of Array.isArray(record.botRules) ? record.botRules : []) {
+      const rule = normalizeBotRule(candidate);
+      if (!rule) continue;
+      const key = JSON.stringify([rule.botId, botApprovalRuleKey(rule.target)]);
+      if (ids.has(rule.id) || targets.has(key) || (counts.get(rule.botId) ?? 0) >= BOT_APPROVAL_RULES_PER_BOT_MAX ||
+        document.botRules.length >= BOT_APPROVAL_RULES_PROFILE_MAX) continue;
+      ids.add(rule.id); targets.add(key);
+      counts.set(rule.botId, (counts.get(rule.botId) ?? 0) + 1);
+      document.botRules.push(rule);
+    }
+  }
+  if (record.botGrantOperationsUnreadable !== undefined || record.botGrantOperationsEvidence !== undefined) {
+    document.botGrantOperationsUnreadable = true;
+    document.botGrantOperationsEvidence = record.botGrantOperationsEvidence ?? record.botGrantOperationsUnreadable;
+  }
+  if (record.botGrantOperations !== undefined) {
+    const operations: BotGrantOperation[] = [];
+    const ids = new Set<string>();
+    let damaged = !Array.isArray(record.botGrantOperations);
+    for (const candidate of Array.isArray(record.botGrantOperations) ? record.botGrantOperations : []) {
+      const op = normalizeBotOperation(candidate);
+      if (!op || ids.has(op.operationId)) { damaged = true; continue; }
+      ids.add(op.operationId);
+      // A missing/invalid visible rule must never be recreated by its old publication.
+      if (op.status === "published" && !document.botRules?.some((rule) =>
+        rule.id === op.ruleId && rule.botId === op.botId && botApprovalRuleKey(rule.target) === op.targetKey)) {
+        op.status = "revoked"; op.revokedAt = op.publishedAt;
+      }
+      operations.push(op);
+    }
+    document.botGrantOperations = operations;
+    if (damaged) {
+      document.botGrantOperationsUnreadable = true;
+      // Keep the complete original array once. Duplicating its parsed prefix could
+      // fill the shared budget and unnecessarily prevent workspace approvals.
+      document.botGrantOperations = [];
+      document.botGrantOperationsEvidence = record.botGrantOperations;
+    }
+  }
+  return document;
 }
 
 export interface ToolApprovalRuleStore {
   load(): Promise<ToolApprovalRulesDocument>;
+  /** DataStore exposes this after its transaction reload, before draft publication. */
+  loadedFromCorruptFile?(): Promise<boolean>;
   update<R>(mutation: (draft: ToolApprovalRulesDocument) => R | Promise<R>): Promise<R>;
 }
 
@@ -185,11 +333,14 @@ export type ToolApprovalRuleMatch = Exclude<ToolApprovalScope, "once">;
 export class ToolApprovalRuleBook {
   private readonly chatRules = new Map<string, Set<string>>();
   private readonly listeners = new Set<() => void>();
+  private readonly botListeners = new Set<(botId: string) => void>();
+  private readonly forgottenBots = new Set<string>();
 
   constructor(
     private readonly store: ToolApprovalRuleStore,
     private readonly now: () => Date = () => new Date(),
     private readonly newId: () => string = () => randomUUID().split("-").join(""),
+    private readonly options: { knownBot?: (botId: string) => Promise<boolean> } = {},
   ) {}
 
   /** Which remembered scope, if any, already authorizes this exact call. */
@@ -226,7 +377,8 @@ export class ToolApprovalRuleBook {
     }
     const key = targetKey(target);
     const label = workspaceLabel?.trim().slice(0, MAX_WORKSPACE_LABEL_CHARS);
-    const changed = await this.store.update((draft) => {
+    const changed = await this.store.update(async (draft) => {
+      await this.preserveBotReceiptHealth(draft);
       if (draft.rules.some((rule) => targetKey(rule) === key)) return false;
       if (draft.rules.length >= MAX_PERSISTED_TOOL_APPROVAL_RULES) {
         throw new Error(
@@ -241,6 +393,7 @@ export class ToolApprovalRuleBook {
         ...(label ? { workspaceLabel: label } : {}),
         createdAt: this.now().toISOString(),
       });
+      assertDocumentBudget(draft);
       return true;
     });
     if (changed) this.notify();
@@ -253,7 +406,8 @@ export class ToolApprovalRuleBook {
   }
 
   async revoke(ruleId: string): Promise<boolean> {
-    const removed = await this.store.update((draft) => {
+    const removed = await this.store.update(async (draft) => {
+      await this.preserveBotReceiptHealth(draft);
       const index = draft.rules.findIndex((rule) => rule.id === ruleId);
       if (index < 0) return false;
       draft.rules.splice(index, 1);
@@ -264,13 +418,167 @@ export class ToolApprovalRuleBook {
   }
 
   async revokeAll(): Promise<number> {
-    const removed = await this.store.update((draft) => {
+    const removed = await this.store.update(async (draft) => {
+      await this.preserveBotReceiptHealth(draft);
       const count = draft.rules.length;
       draft.rules = [];
       return count;
     });
     if (removed > 0) this.notify();
     return removed;
+  }
+
+  private async preserveBotReceiptHealth(document: ToolApprovalRulesDocument): Promise<void> {
+    if (await this.store.loadedFromCorruptFile?.()) document.botGrantOperationsUnreadable = true;
+  }
+
+  private async assertBotReceipts(document: ToolApprovalRulesDocument): Promise<void> {
+    await this.preserveBotReceiptHealth(document);
+    if (document.botGrantOperationsUnreadable) throw new Error("Bot approval receipts could not be read. Remembered approvals are unavailable.");
+  }
+
+  private async isKnownBot(botId: string): Promise<boolean> {
+    return validWorkspaceId(botId) && !this.forgottenBots.has(botId) &&
+      !!(await this.options.knownBot?.(botId)) && !this.forgottenBots.has(botId);
+  }
+
+  async matchBot(botId: string, target: BotApprovalRuleTarget): Promise<BotApprovalRuleView | undefined> {
+    const canonical = normalizeBotTarget(target);
+    if (!canonical) return undefined;
+    const document = await this.store.load();
+    await this.assertBotReceipts(document);
+    if (!await this.isKnownBot(botId)) return undefined;
+    const rule = document.botRules?.find((r) => r.botId === botId && botApprovalRuleKey(r.target) === botApprovalRuleKey(canonical));
+    return rule ? structuredClone(rule) : undefined;
+  }
+
+  /** Main-only permission generation. Usage and unrelated consent never affect it. */
+  async botConsentRevision(botId: string, target: BotApprovalRuleTarget): Promise<string> {
+    const canonical = normalizeBotTarget(target);
+    if (!canonical || !validWorkspaceId(botId)) throw new Error("Invalid Bot approval target.");
+    const document = await this.store.load();
+    await this.assertBotReceipts(document);
+    if (!await this.isKnownBot(botId)) throw new Error("This Bot no longer exists.");
+    const key = botApprovalRuleKey(canonical);
+    const operations = (document.botGrantOperations ?? [])
+      .filter((operation) => operation.botId === botId && operation.targetKey === key)
+      .sort((a, b) => a.operationId < b.operationId ? -1 : a.operationId > b.operationId ? 1 : 0)
+      .map((operation) => [operation.operationId, operation.ruleId, operation.status,
+        operation.publishedAt, operation.revokedAt ?? null]);
+    return createHash("sha256").update(JSON.stringify(["bot-consent-v1", botId, key, operations])).digest("hex");
+  }
+
+  async grantBot(botId: string, target: BotApprovalRuleTarget, label: string, operationId: string): Promise<
+    { status: "published"; rule: BotApprovalRuleView } | { status: "revoked" }
+  > {
+    const canonical = normalizeBotTarget(target);
+    if (!canonical || !validWorkspaceId(botId) || !validWorkspaceId(operationId) ||
+      typeof label !== "string" || !label.trim() || hasControlCharacter(label, false)) {
+      throw new Error("Invalid Bot approval operation.");
+    }
+    const capturedLabel = label.trim().slice(0, 200);
+    const key = botApprovalRuleKey(canonical);
+    const result = await this.store.update(async (draft) => {
+      await this.assertBotReceipts(draft);
+      const previous = draft.botGrantOperations?.find((op) => op.operationId === operationId);
+      if (previous && (previous.botId !== botId || previous.targetKey !== key)) throw new Error("Bot approval operation changed its target.");
+      // Revoked replay is inert even after deletion. It can never release waiting cards.
+      if (previous?.status === "revoked") return { status: "revoked" as const, changed: false };
+      if (!await this.isKnownBot(botId)) throw new Error("This Bot no longer exists.");
+      const rules = draft.botRules ?? [];
+      if (previous) {
+        const rule = rules.find((r) => r.id === previous.ruleId && r.botId === botId && botApprovalRuleKey(r.target) === key);
+        return rule ? { status: "published" as const, rule: structuredClone(rule), changed: false }
+          : { status: "revoked" as const, changed: false };
+      }
+      let rule = rules.find((r) => r.botId === botId && botApprovalRuleKey(r.target) === key);
+      if (!rule) {
+        if (rules.filter((r) => r.botId === botId).length >= BOT_APPROVAL_RULES_PER_BOT_MAX) {
+          throw new Error("Aiden keeps at most 50 things a Bot can do without asking. Remove some on its profile.");
+        }
+        if (rules.length >= BOT_APPROVAL_RULES_PROFILE_MAX) throw new Error("Aiden keeps at most 1,000 things Bots can do without asking. Remove some on their profiles.");
+        const id = this.newId();
+        if (!validRuleId(id) || rules.some((r) => r.id === id) || draft.botGrantOperations?.some((op) => op.ruleId === id)) {
+          throw new Error("Invalid or reused Bot approval rule id.");
+        }
+        rule = { id, botId, target: canonical, label: capturedLabel, createdAt: this.now().toISOString(), uses: 0 };
+        rules.push(rule);
+      }
+      draft.botRules = rules;
+      (draft.botGrantOperations ??= []).push({ operationId, botId, targetKey: key, ruleId: rule.id,
+        status: "published", publishedAt: this.now().toISOString() });
+      assertDocumentBudget(draft);
+      return { status: "published" as const, rule: structuredClone(rule), changed: true };
+    });
+    if (result.changed) this.notifyBot(botId);
+    return result.status === "published" ? { status: "published", rule: result.rule! } : { status: "revoked" };
+  }
+
+  async listBot(botId?: string): Promise<BotApprovalRuleView[]> {
+    const document = await this.store.load();
+    await this.assertBotReceipts(document);
+    return structuredClone((document.botRules ?? []).filter((r) => botId === undefined || r.botId === botId))
+      .reverse().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async recordBotUse(botId: string, ruleId: string): Promise<void> {
+    const changed = await this.store.update(async (draft) => {
+      await this.assertBotReceipts(draft);
+      if (!await this.isKnownBot(botId)) return false;
+      const rule = draft.botRules?.find((r) => r.id === ruleId && r.botId === botId);
+      if (!rule) return false;
+      rule.uses = Math.min(Number.MAX_SAFE_INTEGER, rule.uses + 1);
+      rule.lastUsedAt = this.now().toISOString();
+      assertDocumentBudget(draft);
+      return true;
+    });
+    if (changed) this.notifyBot(botId);
+  }
+
+  private tombstone(draft: ToolApprovalRulesDocument, botId: string, ruleId?: string): void {
+    const revokedAt = this.now().toISOString();
+    for (const operation of draft.botGrantOperations ?? []) {
+      if (operation.botId === botId && (ruleId === undefined || operation.ruleId === ruleId) && operation.status === "published") {
+        operation.status = "revoked"; operation.revokedAt = revokedAt;
+      }
+    }
+  }
+
+  async revokeBot(botId: string, ruleId: string): Promise<boolean> {
+    const removed = await this.store.update(async (draft) => {
+      await this.assertBotReceipts(draft);
+      const index = draft.botRules?.findIndex((r) => r.botId === botId && r.id === ruleId) ?? -1;
+      if (index < 0) return false;
+      draft.botRules!.splice(index, 1);
+      this.tombstone(draft, botId, ruleId);
+      return true;
+    });
+    if (removed) this.notifyBot(botId);
+    return removed;
+  }
+
+  async forgetBot(botId: string): Promise<number> {
+    this.forgottenBots.add(botId);
+    const removed = await this.store.update(async (draft) => {
+      await this.assertBotReceipts(draft);
+      const count = draft.botRules?.filter((r) => r.botId === botId).length ?? 0;
+      draft.botRules = (draft.botRules ?? []).filter((r) => r.botId !== botId);
+      this.tombstone(draft, botId);
+      return count;
+    });
+    if (removed) this.notifyBot(botId);
+    return removed;
+  }
+
+  onBotChange(listener: (botId: string) => void): () => void {
+    this.botListeners.add(listener);
+    return () => this.botListeners.delete(listener);
+  }
+
+  private notifyBot(botId: string): void {
+    for (const listener of this.botListeners) {
+      try { listener(botId); } catch { /* Observers cannot undo publication. */ }
+    }
   }
 
   /** Forget every "this chat" rule for one chat (for example on deletion). */

@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { DataStore } from "./data-store.js";
+import { botApprovalRuleKey, botAlwaysAllowLabel, describeBotApprovalRule } from "../../renderer/shared/tool-approval-scope.js";
 import {
   emptyToolApprovalRulesDocument,
   MAX_CHAT_TOOL_APPROVAL_RULES,
@@ -11,6 +12,7 @@ import {
   normalizeToolApprovalRulesDocument,
   ToolApprovalRuleBook,
   toolApprovalRuleTarget,
+  TOOL_APPROVAL_RULES_MAX_BYTES,
   type ToolApprovalRulesDocument,
 } from "./tool-approval-rules.js";
 
@@ -22,7 +24,7 @@ async function diskBook(t: test.TestContext) {
       "tool-approval-rules.json",
       emptyToolApprovalRulesDocument(),
       () => dir,
-      { normalize: normalizeToolApprovalRulesDocument, reloadBeforeWrite: true },
+      { normalize: normalizeToolApprovalRulesDocument, reloadBeforeWrite: true, maxBytes: TOOL_APPROVAL_RULES_MAX_BYTES, fileMode: 0o600 },
     );
   let clock = Date.parse("2026-09-01T00:00:00.000Z");
   let ids = 0;
@@ -250,4 +252,319 @@ test("remembered rules reject parent segments and non-whitespace command control
     assert.equal(toolApprovalRuleTarget("run_command", { command: `${control}echo hello` }, "ws1"), undefined);
   }
   assert.ok(toolApprovalRuleTarget("run_command", { command: "echo\thello\nprintf done" }, "ws1"));
+});
+
+const CAL = { kind: "connection", serverId: "gcal", tool: "create_event" } as const;
+const BOT_DATE = "2026-11-04T12:00:00.000Z";
+
+function memoryBotBook(initial: ToolApprovalRulesDocument = emptyToolApprovalRulesDocument()) {
+  let document = structuredClone(initial);
+  let tail = Promise.resolve();
+  let ids = 0;
+  let clock = BOT_DATE;
+  const known = new Set(["bot:a", "bot:b", ...Array.from({ length: 21 }, (_, i) => `bot:${i}`)]);
+  const store = {
+    async load() { return structuredClone(document); },
+    update<R>(mutation: (draft: ToolApprovalRulesDocument) => R | Promise<R>): Promise<R> {
+      const work = tail.then(async () => {
+        const draft = structuredClone(document);
+        const result = await mutation(draft);
+        document = draft;
+        return result;
+      });
+      tail = work.then(() => {}, () => {});
+      return work;
+    },
+  };
+  const open = () => new ToolApprovalRuleBook(store, () => new Date(clock), () => `botrule${++ids}`, {
+    knownBot: async (id: string) => known.has(id),
+  });
+  return { book: open(), open, store, known, setClock: (value: string) => { clock = value; } };
+}
+
+test("a Bot entry covers only its own Bot and exact target with independent public values", async () => {
+  const { book } = memoryBotBook();
+  const grant = await book.grantBot("bot:a", CAL, "  Google Calendar · Create event  ", "decision-1");
+  assert.equal(grant.status, "published");
+  assert.equal((await book.matchBot("bot:a", CAL))?.label, "Google Calendar · Create event");
+  assert.equal(await book.matchBot("bot:b", CAL), undefined);
+  assert.equal(await book.matchBot("bot:a", { ...CAL, tool: "delete_event" }), undefined);
+  assert.equal(await book.matchBot("bot:a", { ...CAL, serverId: "other" }), undefined);
+  const listed = await book.listBot();
+  listed[0]!.target = { kind: "site", host: "evil.example", action: "click" };
+  assert.equal((await book.matchBot("bot:a", CAL))?.target.kind, "connection");
+});
+
+test("distinct operations share one target, preserve creation, and cannot change their binding", async () => {
+  const { book, store, setClock } = memoryBotBook();
+  const changes: string[] = [];
+  book.onBotChange((id) => changes.push(id));
+  const first = await book.grantBot("bot:a", CAL, "Calendar", "d1");
+  setClock("2026-11-05T12:00:00.000Z");
+  assert.deepEqual(await book.grantBot("bot:a", CAL, "Changed label", "d2"), first);
+  assert.equal((await book.listBot())[0]!.createdAt, BOT_DATE);
+  assert.equal((await store.load()).botGrantOperations?.length, 2);
+  assert.deepEqual(changes, ["bot:a", "bot:a"], "each fresh consent operation changes the Bot's consent revision");
+  await book.grantBot("bot:a", CAL, "Changed label", "d2");
+  assert.deepEqual(changes, ["bot:a", "bot:a"], "transport replay emits no new consent change");
+  await assert.rejects(book.grantBot("bot:b", CAL, "Calendar", "d1"), /operation/u);
+  await assert.rejects(book.grantBot("bot:a", { ...CAL, tool: "delete_event" }, "Calendar", "d1"), /operation/u);
+});
+
+test("Remove tombstones every publication, replay is inert after reopen, fresh decisions grant anew", async (t) => {
+  const disk = await diskBook(t);
+  const open = () => new ToolApprovalRuleBook(disk.open(), () => new Date(BOT_DATE), undefined, { knownBot: async () => true });
+  const first = open();
+  const published = await first.grantBot("bot:a", CAL, "Calendar", "d1");
+  assert.equal(published.status, "published");
+  await first.grantBot("bot:a", CAL, "Calendar", "d2");
+  const id = (await first.listBot())[0]!.id;
+  assert.equal(await open().revokeBot("bot:b", id), false);
+  assert.equal(await open().revokeBot("bot:a", id), true);
+  const reopened = open();
+  const events: string[] = [];
+  reopened.onBotChange((botId) => events.push(botId));
+  assert.deepEqual(await reopened.grantBot("bot:a", CAL, "Calendar", "d1"), { status: "revoked" });
+  assert.deepEqual(await reopened.grantBot("bot:a", CAL, "Calendar", "d2"), { status: "revoked" });
+  assert.deepEqual(await reopened.listBot(), []);
+  assert.deepEqual(events, [], "replayed revoked publication cannot release sibling cards through a change event");
+  assert.equal((await reopened.grantBot("bot:a", CAL, "Calendar", "d3")).status, "published");
+  assert.deepEqual(await open().grantBot("bot:a", CAL, "Calendar", "d1"), { status: "revoked" });
+  const raw = JSON.parse(await fs.readFile(disk.file, "utf8"));
+  assert.deepEqual(raw.botGrantOperations.map((r: { status: string }) => r.status), ["revoked", "revoked", "published"]);
+});
+
+test("Bot usage and changes are isolated from workspace rules and listeners", async () => {
+  const { book, setClock } = memoryBotBook();
+  const bots: string[] = [];
+  let workspace = 0;
+  book.onChange(() => { workspace++; });
+  const unsubscribe = book.onBotChange((id) => bots.push(id));
+  book.onBotChange(() => { throw new Error("broken observer"); });
+  await book.grantBot("bot:a", CAL, "Calendar", "d1");
+  const id = (await book.listBot())[0]!.id;
+  setClock("2026-11-05T12:00:00.000Z");
+  await book.recordBotUse("bot:a", id);
+  await book.recordBotUse("bot:a", id);
+  await book.recordBotUse("bot:b", id);
+  await book.recordBotUse("bot:a", "missing");
+  assert.deepEqual((await book.listBot()).map((r) => [r.uses, r.lastUsedAt]), [[2, "2026-11-05T12:00:00.000Z"]]);
+  await book.grantBot("bot:a", { ...CAL, tool: "update_event" }, "Update", "d2");
+  await book.grantBot("bot:b", CAL, "Calendar", "d3");
+  assert.deepEqual(await book.list(), []);
+  await book.grant("always", "chat", { toolName: "run_command", pattern: "npm test", workspaceId: "ws" });
+  assert.equal((await book.list()).length, 1);
+  assert.equal(await book.revoke(id), false);
+  assert.equal(await book.revokeAll(), 1);
+  assert.equal((await book.listBot()).length, 3);
+  assert.equal(await book.forgetBot("bot:a"), 2);
+  assert.deepEqual((await book.listBot()).map((r) => r.botId), ["bot:b"]);
+  assert.deepEqual(await book.grantBot("bot:a", CAL, "Calendar", "d1"), { status: "revoked" });
+  assert.equal(workspace, 2);
+  assert.deepEqual(bots, ["bot:a", "bot:a", "bot:a", "bot:a", "bot:b", "bot:a"]);
+  unsubscribe();
+  await book.revokeBot("bot:b", (await book.listBot())[0]!.id);
+  assert.equal(bots.length, 6);
+});
+
+test("Bot grants fail closed for unknown, deleted, missing validator, and deletion during validation", async () => {
+  const { book, store, known } = memoryBotBook();
+  await assert.rejects(book.grantBot("unknown", CAL, "Calendar", "d0"), /no longer exists/u);
+  await assert.rejects(new ToolApprovalRuleBook(store).grantBot("bot:a", CAL, "Calendar", "d0"), /no longer exists/u);
+  await book.grantBot("bot:a", CAL, "Calendar", "d1");
+  known.delete("bot:a");
+  assert.equal(await book.matchBot("bot:a", CAL), undefined);
+  await assert.rejects(book.grantBot("bot:a", CAL, "Calendar", "d2"), /no longer exists/u);
+  assert.equal(await book.forgetBot("bot:a"), 1);
+  known.add("bot:a");
+  await assert.rejects(book.grantBot("bot:a", CAL, "Calendar", "d3"), /no longer exists/u);
+  let release!: () => void;
+  let entered!: () => void;
+  const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const paused = new ToolApprovalRuleBook(store, undefined, undefined, { knownBot: async () => {
+    entered(); await new Promise<void>((resolve) => { release = resolve; }); return true;
+  } });
+  const pending = paused.grantBot("bot:b", CAL, "Calendar", "race");
+  await ready;
+  const forgotten = paused.forgetBot("bot:b");
+  release();
+  await assert.rejects(pending, /no longer exists/u);
+  assert.equal(await forgotten, 0);
+});
+
+test("concurrent final slots enforce 50 per Bot and 1000 per profile atomically", async () => {
+  const { book } = memoryBotBook();
+  for (let i = 0; i < 49; i++) await book.grantBot("bot:a", { ...CAL, tool: `tool${i}` }, "Calendar", `a${i}`);
+  const finalBot = await Promise.allSettled([50, 51].map((i) => book.grantBot("bot:a", { ...CAL, tool: `tool${i}` }, "Calendar", `a${i}`)));
+  assert.equal(finalBot.filter((r) => r.status === "fulfilled").length, 1);
+  assert.match(String((finalBot.find((r) => r.status === "rejected") as PromiseRejectedResult).reason), /at most 50/u);
+  await book.grantBot("bot:b", CAL, "Calendar", "b1");
+  // Seed independently sized valid rows, then race the final profile slot.
+  const seed = Array.from({ length: 999 }, (_, i) => ({ id: `r${i}`, botId: `bot:${Math.floor(i / 50)}`, target: { ...CAL, tool: `t${i}` }, label: "C", createdAt: BOT_DATE, uses: 0 }));
+  const full = memoryBotBook({ version: 1, rules: [], botRules: seed }).book;
+  const finalProfile = await Promise.allSettled(["bot:19", "bot:20"].map((id, i) => full.grantBot(id, { ...CAL, tool: "last" }, "C", `last${i}`)));
+  assert.equal(finalProfile.filter((r) => r.status === "fulfilled").length, 1);
+  assert.match(String((finalProfile.find((r) => r.status === "rejected") as PromiseRejectedResult).reason), /1,000/u);
+  assert.equal((await full.listBot()).length, 1000);
+});
+
+test("normalization drops malformed or duplicate Bot entries without canonicalizing authority", () => {
+  const valid = { id: "r1", botId: "bot:a", target: { kind: "site", host: "amazon.com", action: "click" }, label: "Amazon", createdAt: BOT_DATE, uses: 0 };
+  const normalized = normalizeToolApprovalRulesDocument({ version: 1, rules: [], botRules: [valid,
+    { ...valid, id: "dup" },
+    { ...valid, id: "badhost", target: { ...valid.target, host: "WWW.Amazon.com" } },
+    { ...valid, id: "shell", target: { kind: "shell", command: "ls" } },
+    { ...valid, id: "uses", uses: -1 },
+    { ...valid, id: "label", label: " " },
+  ] });
+  assert.deepEqual(normalized.botRules, [valid]);
+});
+
+test("malformed receipt evidence blocks Bot publication across normalization and workspace writes", async () => {
+  const evidence = [{ operationId: "d1", status: "nonsense" }];
+  const normalized = normalizeToolApprovalRulesDocument({ version: 1, rules: [], botGrantOperations: evidence });
+  const { book, store, open } = memoryBotBook(normalized);
+  await assert.rejects(book.grantBot("bot:a", CAL, "Calendar", "d1"), /receipt/u);
+  await book.grant("always", "chat", { toolName: "run_command", pattern: "npm test", workspaceId: "ws" });
+  assert.equal((await book.list()).length, 1);
+  assert.ok(JSON.stringify(await store.load()).includes("nonsense"), "retain malformed receipt evidence");
+  await assert.rejects(open().grantBot("bot:a", CAL, "Calendar", "new"), /receipt/u);
+});
+
+test("unreadable disk receipts cannot reset replay authority through workspace writes", async (t) => {
+  const { file, open, dir } = await diskBook(t);
+  const evidence = '{"version":1,"botGrantOperations":[';
+  await fs.writeFile(file, evidence);
+  const storeBook = new ToolApprovalRuleBook(open(), undefined, undefined, { knownBot: async () => true });
+  await assert.rejects(storeBook.grantBot("bot:a", CAL, "Calendar", "d1"), /receipt|no longer exists/u);
+  await storeBook.grant("always", "chat", { toolName: "run_command", pattern: "npm test", workspaceId: "ws" });
+  // Reopen the original disk store after the workspace save repaired its JSON.
+  const recovered = new ToolApprovalRuleBook(open(), undefined, undefined, { knownBot: async () => true });
+  await assert.rejects(recovered.grantBot("bot:a", CAL, "Calendar", "d1"), /receipt/u);
+  assert.equal((await recovered.list()).length, 1);
+  const preserved = await Promise.all((await fs.readdir(dir)).filter((name) => name !== "tool-approval-rules.json")
+    .map((name) => fs.readFile(path.join(dir, name), "utf8")));
+  assert.ok(preserved.includes(evidence), "DataStore preserves the original corrupt bytes");
+});
+
+test("byte admission reserves revocation space and never prunes retained receipts", async (t) => {
+  const { book, store, open } = memoryBotBook();
+  let accepted = 0;
+  for (; accepted < 3000; accepted++) {
+    try { await book.grantBot("bot:a", CAL, "Calendar", `decision-${accepted}-${"x".repeat(180)}`); }
+    catch (error) { assert.match(String(error), /storage|receipt|space/u); break; }
+  }
+  assert.ok(accepted > 100 && accepted < 3000);
+  const before = await store.load();
+  assert.ok(Buffer.byteLength(JSON.stringify(before, null, 2) + "\n") <= TOOL_APPROVAL_RULES_MAX_BYTES);
+  assert.equal(before.botGrantOperations?.length, accepted);
+  assert.equal(await book.revokeBot("bot:a", (await book.listBot())[0]!.id), true);
+  const after = await store.load();
+  assert.ok(Buffer.byteLength(JSON.stringify(after, null, 2) + "\n") <= TOOL_APPROVAL_RULES_MAX_BYTES);
+  assert.equal(after.botGrantOperations?.length, accepted);
+  assert.deepEqual(await open().grantBot("bot:a", CAL, "Calendar", "decision-0-" + "x".repeat(180)), { status: "revoked" });
+  const disk = await diskBook(t);
+  await fs.writeFile(disk.file, JSON.stringify(after, null, 2) + "\n");
+  assert.equal((await disk.book().listBot()).length, 0);
+});
+
+
+test("Bot target keys and descriptions use exact tuples and stable user-facing copy", async () => {
+  assert.equal(botApprovalRuleKey(CAL), '["connection","gcal","create_event"]');
+  assert.equal(botApprovalRuleKey({ kind: "site", host: "amazon.com", action: "click" }), '["site","amazon.com","click"]');
+  assert.equal(describeBotApprovalRule({ target: CAL, label: "Google Calendar · Create event" }), "Google Calendar · Create event");
+  assert.equal(describeBotApprovalRule({ target: { kind: "site", host: "amazon.com", action: "click" }, label: "ignored" }), "Click on amazon.com");
+  assert.equal(describeBotApprovalRule({ target: { kind: "site", host: "amazon.com", action: "type" }, label: "ignored" }), "Type on amazon.com");
+  assert.equal(describeBotApprovalRule({ target: { kind: "site", host: "amazon.com", action: "press" }, label: "ignored" }), "Press keys on amazon.com");
+  assert.equal(botAlwaysAllowLabel("Jester"), "Always allow for Jester");
+  const { book } = memoryBotBook();
+  await book.grantBot("bot:a", { kind: "site", host: "amazon.com", action: "click" }, "Amazon", "site");
+  assert.equal(await book.matchBot("bot:a", { kind: "site", host: "amazon.com", action: "type" }), undefined);
+  assert.equal(await book.matchBot("bot:a", { kind: "site", host: "shop.amazon.com", action: "click" }), undefined);
+  assert.equal(await book.matchBot("bot:a", { kind: "site", host: "WWW.Amazon.com", action: "click" }), undefined);
+  await assert.rejects(book.grantBot("bot:a", { ...CAL, tool: "x\u0000y" }, "C", "bad"), /Invalid/u);
+  await assert.rejects(book.grantBot("bot:a", { ...CAL, serverId: "x".repeat(257) }, "C", "bad"), /Invalid/u);
+  await assert.rejects(book.grantBot("bot:a", CAL, " ", "empty"), /Invalid/u);
+  await book.grantBot("bot:b", CAL, " x".repeat(201), "long");
+  assert.equal((await book.listBot("bot:b"))[0]!.label.length, 200);
+});
+
+test("damaged publication receipts retain evidence and missing visible entries never republish", async () => {
+  const { book, store } = memoryBotBook();
+  await book.grantBot("bot:a", CAL, "Calendar", "d1");
+  const original = await store.load();
+  const missing = normalizeToolApprovalRulesDocument({ ...original, botRules: [] });
+  assert.deepEqual(await memoryBotBook(missing).book.grantBot("bot:a", CAL, "Calendar", "d1"), { status: "revoked" });
+  for (const receipt of [null, {}, [...original.botGrantOperations!, ...original.botGrantOperations!],
+    [{ ...original.botGrantOperations![0], targetKey: '["site","WWW.Amazon.com","click"]' }]]) {
+    const damaged = normalizeToolApprovalRulesDocument({ ...original, botGrantOperations: receipt });
+    const reopened = memoryBotBook(damaged).book;
+    await assert.rejects(reopened.grantBot("bot:a", CAL, "Calendar", "d1"), /receipt/u);
+    await assert.rejects(reopened.matchBot("bot:a", CAL), /receipt/u);
+  }
+});
+
+test("Bot consent revision changes for publication, Remove and fresh consent but remains stable on replay and reopen", async (t) => {
+  const { open } = await diskBook(t);
+  const reopen = () => new ToolApprovalRuleBook(open(), () => new Date(BOT_DATE), undefined, { knownBot: async (id) => id === "bot:a" });
+  const first = reopen();
+  const absent = await first.botConsentRevision("bot:a", CAL);
+  assert.match(absent, /^[a-f0-9]{64}$/u);
+  await first.grantBot("bot:a", CAL, "Calendar", "d1");
+  const published = await first.botConsentRevision("bot:a", CAL);
+  assert.notEqual(published, absent);
+  await first.grantBot("bot:a", CAL, "Calendar", "d1");
+  assert.equal(await first.botConsentRevision("bot:a", CAL), published);
+  assert.equal(await reopen().botConsentRevision("bot:a", CAL), published);
+  await first.revokeBot("bot:a", (await first.listBot())[0]!.id);
+  const removed = await first.botConsentRevision("bot:a", CAL);
+  assert.notEqual(removed, absent, "absence after Remove retains its revocation generation");
+  assert.notEqual(removed, published);
+  assert.deepEqual(await first.grantBot("bot:a", CAL, "Calendar", "d1"), { status: "revoked" });
+  assert.equal(await reopen().botConsentRevision("bot:a", CAL), removed);
+  const next = reopen();
+  await next.grantBot("bot:a", CAL, "Calendar", "d2");
+  const fresh = await next.botConsentRevision("bot:a", CAL);
+  assert.notEqual(fresh, published);
+  assert.notEqual(fresh, removed);
+  assert.equal(await reopen().botConsentRevision("bot:a", CAL), fresh);
+  await next.grantBot("bot:a", CAL, "Calendar", "d2");
+  assert.equal(await next.botConsentRevision("bot:a", CAL), fresh);
+});
+
+test("Bot consent revision ignores usage, unrelated targets and Bots, and receipt array order", async () => {
+  const { book, store, open } = memoryBotBook();
+  await book.grantBot("bot:a", CAL, "Calendar", "d1");
+  const revision = await book.botConsentRevision("bot:a", CAL);
+  await book.recordBotUse("bot:a", (await book.listBot())[0]!.id);
+  await book.recordBotUse("bot:a", (await book.listBot())[0]!.id);
+  await book.grantBot("bot:a", { ...CAL, tool: "delete_event" }, "Delete", "d2");
+  await book.grantBot("bot:b", CAL, "Calendar", "d3");
+  await book.revokeBot("bot:b", (await book.listBot("bot:b"))[0]!.id);
+  await book.revokeBot("bot:a", (await book.listBot("bot:a")).find((r) => r.target.kind === "connection" && r.target.tool === "delete_event")!.id);
+  assert.equal(await book.botConsentRevision("bot:a", CAL), revision);
+  const original = await store.load();
+  await store.update((draft) => { draft.botGrantOperations!.reverse(); });
+  assert.equal(await open().botConsentRevision("bot:a", CAL), revision);
+  assert.equal((await book.listBot("bot:a"))[0]!.uses, 2, "usage changed without changing permission generation");
+  assert.equal(original.botGrantOperations?.length, 3);
+  await assert.rejects(book.botConsentRevision("unknown", CAL), /no longer exists/u);
+  const damaged = memoryBotBook(normalizeToolApprovalRulesDocument({ version: 1, rules: [], botGrantOperations: null })).book;
+  await assert.rejects(damaged.botConsentRevision("bot:a", CAL), /receipt/u);
+});
+
+test("quarantined receipt evidence does not consume workspace capacity twice", async () => {
+  const operations = Array.from({ length: 1100 }, (_, i) => ({ operationId: `d${i}`, botId: "bot:a",
+    targetKey: '["connection","gcal","create_event"]', ruleId: "r1", status: "revoked",
+    publishedAt: BOT_DATE, revokedAt: BOT_DATE }));
+  const raw = { version: 1, rules: [], botGrantOperations: [...operations, { operationId: "damaged", status: "bad" }] };
+  assert.ok(Buffer.byteLength(JSON.stringify(raw, null, 2) + "\n") < 400_000);
+  const normalized = normalizeToolApprovalRulesDocument(raw);
+  const { book, store } = memoryBotBook(normalized);
+  await book.grant("always", "chat", { toolName: "run_command", pattern: "npm test", workspaceId: "ws" });
+  assert.equal((await book.list()).length, 1);
+  const saved = await store.load();
+  assert.ok(Buffer.byteLength(JSON.stringify(saved, null, 2) + "\n") < 400_000);
+  await assert.rejects(book.grantBot("bot:a", CAL, "Calendar", "d0"), /receipt/u);
+  assert.ok(JSON.stringify(saved).includes('"operationId":"d1099"'), "the valid prefix is retained as evidence");
 });
