@@ -7,6 +7,13 @@ import type { BotSessionState } from "./bot-session-service.js";
 import path from "node:path";
 
 export const BOT_RUN_ACCESS_MAX_AGE_MS = 60 * 60_000;
+export const BOT_RUN_SAVED_LOCATION_ID = "run.saved";
+export const BOT_RUN_SAVED_LOCATION_LABEL = "Folder approved in this task";
+export interface BotRunAccessOwner {
+  signal: AbortSignal;
+  deadline: number;
+}
+export interface BotRunAccessCurrentCall { signal: AbortSignal; validate(): Promise<void> }
 export interface BotRunAccessGrant {
   requestIds: readonly string[];
   target: "folder" | "whole_mac";
@@ -22,6 +29,9 @@ export interface BotRunAccessGrant {
 }
 export interface BotRunAccess {
   grant(botId: string, grant: BotRunAccessGrant): void;
+  /** Host-only: record the exact validated Always publication, never a fresh capability read or memo. */
+  recordPublication(botId: string, grant: BotRunAccessGrant, owner: BotRunAccessOwner): void;
+  savedLocation(botId: string, requestIds: readonly (string | undefined)[], policyRevision: string, current: BotRunAccessCurrentCall): Promise<BotFileToolLocation | undefined>;
   location(
     botId: string,
     requestIds: readonly (string | undefined)[],
@@ -38,9 +48,9 @@ const joined = (left: readonly string[], right: readonly (string | undefined)[])
   left.some((id) => right.includes(id));
 export function createBotRunAccess(deps: { now(): number }): BotRunAccess {
   const grants = new Map<string, BotRunAccessGrant[]>();
+  const publications = new Map<string, { grant: BotRunAccessGrant; owner: BotRunAccessOwner }>();
   const declines = new Map<string, { requestIds: readonly string[]; key: string }[]>();
-  return {
-    grant(botId, grant) {
+  const checkedGrant = (grant: BotRunAccessGrant): BotRunAccessGrant => {
       if (
         !grant.requestIds.length ||
         !Number.isFinite(grant.grantedAt) ||
@@ -65,10 +75,40 @@ export function createBotRunAccess(deps: { now(): number }): BotRunAccess {
         throw new Error("A run grant needs its exact target, pinned identity, policy and owner.");
       const copy = structuredClone(grant);
       copy.expiresAt = Math.min(copy.expiresAt, copy.grantedAt + BOT_RUN_ACCESS_MAX_AGE_MS);
+      return copy;
+  };
+  return {
+    grant(botId, grant) {
+      const copy = checkedGrant(grant);
       grants.set(botId, [
         ...(grants.get(botId) ?? []).filter((old) => !joined(old.requestIds, grant.requestIds)),
         copy,
       ]);
+    },
+    recordPublication(botId, grant, owner) {
+      const copy = checkedGrant(grant);
+      if (copy.target !== "folder" || copy.owner.kind !== "access" || copy.access !== "write" ||
+        owner.signal.aborted || !Number.isFinite(owner.deadline))
+        throw new Error("A saved task location needs a live validated folder publication.");
+      copy.expiresAt = Math.min(copy.expiresAt, owner.deadline);
+      publications.set(botId, { grant: copy, owner: { signal: owner.signal, deadline: owner.deadline } });
+    },
+    async savedLocation(botId, requestIds, policyRevision, current) {
+      const record = publications.get(botId);
+      if (!record) return undefined;
+      const { grant, owner } = record;
+      const valid = () => grant.policyRevision === policyRevision && !owner.signal.aborted && !current.signal.aborted &&
+        deps.now() >= grant.grantedAt && deps.now() < Math.min(grant.expiresAt, owner.deadline);
+      if (!valid()) { publications.delete(botId); return undefined; }
+      if (!joined(grant.requestIds, requestIds)) return undefined;
+      try { await current.validate(); } catch {
+        if (publications.get(botId) === record) publications.delete(botId);
+        return undefined;
+      }
+      if (publications.get(botId) !== record) return undefined;
+      if (!valid()) { publications.delete(botId); return undefined; }
+      return { id: BOT_RUN_SAVED_LOCATION_ID, label: BOT_RUN_SAVED_LOCATION_LABEL, root: grant.root,
+        access: grant.access, expectedIdentity: { ...grant.identity! } };
     },
     location(botId, requestIds, policyRevision) {
       const now = deps.now();
@@ -102,6 +142,8 @@ export function createBotRunAccess(deps: { now(): number }): BotRunAccess {
         (entry) => entry.key === key && joined(entry.requestIds, requestIds),
       ),
     revokeOwner(botId, owner) {
+      const publication = publications.get(botId);
+      if (publication?.grant.owner.kind === owner.kind && publication.grant.owner.id === owner.id) publications.delete(botId);
       grants.set(
         botId,
         (grants.get(botId) ?? []).filter(
@@ -111,10 +153,12 @@ export function createBotRunAccess(deps: { now(): number }): BotRunAccess {
     },
     clearBot(botId) {
       grants.delete(botId);
+      publications.delete(botId);
       declines.delete(botId);
     },
     clearAll() {
       grants.clear();
+      publications.clear();
       declines.clear();
     },
   };

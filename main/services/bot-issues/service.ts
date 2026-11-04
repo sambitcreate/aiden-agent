@@ -62,6 +62,8 @@ export interface BotIssueServiceDependencies {
   funnel: Pick<BotDeliveryFunnel, "deliver">;
   actions: BotIssueServiceActions;
   now(): number;
+  /** Reports background transcript repair failures without failing issue reads. */
+  onError?(error: unknown): void;
 }
 
 /** Trimmed, at most `limit` characters (code points, never mid-surrogate). */
@@ -207,6 +209,15 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
     return attempt;
   }
 
+  function repairStatusesInBackground(botId: string): void {
+    // Reads must never wait behind the session serializer. A durable marker
+    // keeps failed appends available for the next read or mutation to retry.
+    if (repairing.has(botId)) return;
+    void repairStatuses(botId).catch((error: unknown) => {
+      try { dependencies.onError?.(error); } catch { /* Reporting cannot change the issue. */ }
+    });
+  }
+
   /** Settle one stored issue by key; false when it is no longer open. */
   async function settle(botId: string, dedupeKey: string, resolution: BotIssueResolution, issueId?: string): Promise<boolean> {
     const settled = await dependencies.store.change(botId, (issues) => {
@@ -283,7 +294,6 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
   async function deliverRaise(
     input: Omit<BotIssue, "id" | "createdAt" | "resolvedAt" | "resolution">,
   ): Promise<BotIssue> {
-    await repairStatuses(input.botId);
     const raised = await dependencies.store.change(input.botId, (issues) => {
       const existing = issues.find((issue) => isOpen(issue) && issue.dedupeKey === input.dedupeKey);
       if (existing && (input.kind !== "access_needed" || accessIdentity(existing) === accessIdentity(input))) return { issues, result: { issue: existing, created: false, superseded: undefined } };
@@ -306,7 +316,6 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
     });
 
     const issue = raised.issue;
-    await repairStatuses(input.botId);
     // The issue is durable before its chat entry and banner are: a raise that
     // failed halfway is repaired here, one missing side effect at a time.
     if (issue.entryAppended !== true) {
@@ -326,6 +335,7 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
       });
       await remember(input.botId, issue.id, { delivered: true });
     }
+    repairStatusesInBackground(input.botId);
     return published(issue);
   }
 
@@ -435,7 +445,7 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
     },
 
     async list(botId, options) {
-      await repairStatuses(botId);
+      repairStatusesInBackground(botId);
       const issues = await dependencies.store.read(botId);
       return (options?.open ? issues.filter(isOpen) : issues).map(published);
     },

@@ -5639,7 +5639,7 @@ final class AidenBotAccessRequestsTests: XCTestCase {
         XCTAssertTrue(saved)
         XCTAssertNil(model.accessRequest)
         XCTAssertNil(model.errorMessage)
-        XCTAssertEqual(model.accessSuccessNotice, "Saved for future tasks.")
+        XCTAssertEqual(model.accessSuccessNotice, "Folder approval recorded.")
         XCTAssertFalse(model.canAnswerAccessRequest)
         let retry = await model.answerAccessRequest(.once)
         XCTAssertFalse(retry)

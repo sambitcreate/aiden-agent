@@ -526,22 +526,73 @@ test("authoritative dismissal wins against later allow; in-flight allow cannot b
   release(); await allowing;
   assert.equal((await app.issues.list(BOT_ID)).find(row => row.id === next.id)?.resolution, "fixed");
 });
-test("restart repairs supersession status before presenting replacement and never mutates old private authority", async () => {
+test("issue reads and unrelated raises survive a failed settlement status append", async () => {
+  const app = setup();
+  const old = await app.issues.raise(ACCESS_ISSUE);
+  await app.store.change(BOT_ID, rows => ({ issues: rows.map(row => row.id === old.id ? { ...row, resolvedAt: 2000, resolution: "superseded" as const, statusAppended: false } : row), result: undefined }));
+  const restarted = createBotIssueService({ store: app.store, now: () => 3000,
+    appendEntry: async (botId, kind, data) => {
+      if (kind === BOT_ISSUE_STATUS_ENTRY_KIND) throw new Error("status disk busy");
+      app.appends.push({ botId, kind, data });
+    },
+    funnel: { deliver: async () => "sent" },
+    actions: { resumeRoutine: async () => "missing", stopRun: async () => {}, snoozeStall() {}, openSettings() {} },
+  });
+  assert.deepEqual(await restarted.list(BOT_ID, { open: true }), []);
+  const ordinary = await restarted.raise(ISSUE);
+  assert.deepEqual((await restarted.list(BOT_ID, { open: true })).map(row => row.id), [ordinary.id]);
+  assert.equal((await app.store.read(BOT_ID)).find(row => row.id === old.id)?.statusAppended, false);
+  assert.equal(app.appends.some(entry => entry.kind === BOT_ISSUE_ENTRY_KIND && (entry.data as { id: string }).id === ordinary.id), true);
+});
+
+test("restart repairs supersession status without withholding replacement and never mutates old private authority", async () => {
   const app = setup(); const old = await app.issues.raise(ACCESS_ISSUE);
   let failStatus = true;
+  let reportFailure!: () => void;
+  const failed = new Promise<void>(resolve => { reportFailure = resolve; });
   const service = () => createBotIssueService({ store: app.store, now: () => 2000,
     appendEntry: async (botId, kind, data) => { if (kind === BOT_ISSUE_STATUS_ENTRY_KIND && failStatus) throw new Error("status disk busy"); app.appends.push({botId, kind, data}); },
+    onError: () => reportFailure(),
     funnel: {deliver: async () => "sent"}, actions: { resumeRoutine: async () => "missing", stopRun: async () => {}, snoozeStall() {}, openSettings() {} } });
   const nextInput = { ...ACCESS_ISSUE, access: { ...ACCESS_ISSUE.access, authorization: {...ACCESS_ISSUE.access.authorization, policyRevision:"rev2"} } };
-  await assert.rejects(service().raise(nextInput), /status disk busy/u);
+  const first = service();
+  const replacement = await first.raise(nextInput);
+  assert.notEqual(replacement.id, old.id);
+  // Wait for the failed background attempt before restoring storage.
+  await failed;
   failStatus = false;
   const restarted = service();
+  const repaired = new Promise<void>(resolve => restarted.onChange(() => resolve()));
   const open = await restarted.list(BOT_ID, {open:true});
+  await repaired;
   assert.equal(open.length, 1); assert.notEqual(open[0]!.id, old.id);
   assert.equal(statusEntries(app.appends).some(entry => (entry.data as {issueId:string}).issueId === old.id), true);
   const fresh = await restarted.raise(nextInput); assert.equal(fresh.id, open[0]!.id);
   assert.equal(app.appends.filter(entry => entry.kind === BOT_ISSUE_ENTRY_KIND && (entry.data as {id:string}).id === fresh.id).length, 1);
   assert.equal((await app.store.read(BOT_ID)).find(row=>row.id===old.id)?.access?.authorization.policyRevision, "original-rev");
+});
+
+test("listing issues does not wait for a held transcript status write", async () => {
+  const app = setup();
+  const issue = await app.issues.raise(ISSUE);
+  await app.store.change(BOT_ID, rows => ({ issues: rows.map(row => ({ ...row, resolvedAt: 2000, resolution: "fixed" as const, statusAppended: false })), result: undefined }));
+  let started!: () => void, release!: () => void;
+  const writing = new Promise<void>(resolve => { started = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const restarted = createBotIssueService({ store: app.store, now: () => 3000,
+    appendEntry: async () => { started(); await held; },
+    funnel: { deliver: async () => "sent" },
+    actions: { resumeRoutine: async () => "missing", stopRun: async () => {}, snoozeStall() {}, openSettings() {} },
+  });
+  const repaired = new Promise<void>(resolve => restarted.onChange(() => resolve()));
+  const listing = restarted.list(BOT_ID, { open: true });
+  await writing;
+  try {
+    assert.deepEqual(await listing, []);
+    assert.equal((await app.store.read(BOT_ID)).find(row => row.id === issue.id)?.statusAppended, false);
+  } finally { release(); }
+  await repaired;
+  assert.equal((await app.store.read(BOT_ID)).find(row => row.id === issue.id)?.statusAppended, true);
 });
 
 test("pending settlement survives retention and restart until its transcript status is repaired", async () => {
@@ -552,7 +603,9 @@ test("pending settlement survives retention and restart until its transcript sta
   assert.equal((await reopened.read(BOT_ID)).some(row=>row.id==="pending-status"&&row.statusAppended===false),true);
   const statuses: unknown[]=[];
   const restarted=createBotIssueService({store:reopened,now:()=>3000,appendEntry:async(_id,kind,data)=>{if(kind===BOT_ISSUE_STATUS_ENTRY_KIND)statuses.push(data);},funnel:{deliver:async()=>"sent"},actions:{resumeRoutine:async()=>"missing",stopRun:async()=>{},snoozeStall(){},openSettings(){}}});
+  const repaired = new Promise<void>(resolve => restarted.onChange(() => resolve()));
   await restarted.list(BOT_ID);
+  await repaired;
   assert.deepEqual(statuses,[{issueId:"pending-status",resolution:"superseded",resolvedAt:2000}]);
   assert.equal((await reopened.read(BOT_ID)).length,50);
 });

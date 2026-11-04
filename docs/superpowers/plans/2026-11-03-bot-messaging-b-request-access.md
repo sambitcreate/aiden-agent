@@ -183,24 +183,31 @@
   export interface BotRunAccess {
     grant(botId: string, grant: BotRunAccessGrant): void;             // the newest grant for an overlapping run replaces the older one
     location(botId: string, requestIds: readonly (string | undefined)[], policyRevision: string): BotFileToolLocation | undefined;
+    /** Separate memory-only alias for this task's own validated Always publication. */
+    recordPublication(botId: string, grant: BotRunAccessGrant, owner: { signal: AbortSignal; deadline: number }): void;
+    savedLocation(botId: string, requestIds: readonly (string | undefined)[], policyRevision: string, current: { signal: AbortSignal; validate(): Promise<void> }): Promise<BotFileToolLocation | undefined>;
     decline(botId: string, requestIds: readonly string[], key: string): void;
     declined(botId: string, requestIds: readonly (string | undefined)[], key: string): boolean;
     revokeOwner(botId: string, owner: { kind: "access" | "plan"; id: string }): void;
     clearBot(botId: string): void;
+    clearAll(): void;
   }
   export function createBotRunAccess(deps: { now(): number }): BotRunAccess;
   export function botRunEnded(state: BotSessionState): boolean; // idle, needs_model, model_error, unavailable, or paused without `interrupted`
   ```
   - `location` returns `{ id: BOT_RUN_ACCESS_LOCATION_ID, label: BOT_RUN_ACCESS_LOCATION_LABEL, root, expectedIdentity }` only when one of the call's request ids is in `grant.requestIds`, the revision matches, and the grant is younger than 60 minutes and before `expiresAt`. A plan grant is also revoked on every Plan C termination path. Sharing an input is only evidence of the same live run; prove with the real harness that a queued follow-up/new run cannot inherit it. Keep steers that actually join the run supported.
-  - The store is in memory only. A quit ends Allow once, and the Bot asks again on Resume.
+  - The store is in memory only. A quit ends Allow once, and the Bot asks again on Resume. The separate `run.saved` alias retains only this live attended task's own exact Always publication, independently of its one `run.access` slot. A new Once folder cannot silently displace that saved-folder route, and a redundant fixed-folder request cannot replace the Once slot. Validate using the currently executing call; never retain the completed request tool's Task API or context as a later call's authority. Original fixed IDs must still match fresh authority. Other fresh fixed scopes are available from a new task.
 - Router (`bot-file-tool-router.ts`):
   ```ts
   readonly lateLocation?: { readonly id: string; readonly label: string; resolve(): Promise<BotFileToolLocation | undefined> };
+  readonly lateLocations?: readonly NonNullable<BotFileToolRouterOptions["lateLocation"]>[];
+  readonly temporaryPrivateRoots?: () => readonly string[];
   ```
   - It is declared in the `location` schema after the fixed locations.
   - A call to it resolves its location on each execution, then runs the underlying tool for that location. Add `BotFileToolLocation.access?: "read" | "write"`, with omitted meaning existing write behavior. Preserve it through `checkedLocation` and reject `write_file`/`edit_file` for a read location before invoking any mutator. The protected-root, skill-directory, expected-identity and root-redaction checks run exactly as for a fixed location. A read grant never narrows independently granted fixed locations.
+  - Both late aliases use the complete app-private-directory read/write fence, including recursive searches and symlinks. Only the default fixed Bot home is excepted. The legacy fixed-location write policy remains separate.
   - An unresolved location throws `"Nothing extra is allowed for this task yet. Ask with request_access first."`.
-- `BotFileCandidateInput.runAccess?: { resolve(call: BotToolCall): Promise<BotFileToolLocation | undefined> }`. The bound tool passes `lateLocation` with `resolve: () => input.runAccess.resolve(call)`.
+- `BotFileCandidateInput.runAccess?: { resolve(call: BotToolCall): Promise<BotFileToolLocation | undefined> }`. The bound tool passes `lateLocation` with `resolve: () => input.runAccess.resolve(call)`. Its separate `savedAccess` resolver supplies `run.saved` through `lateLocations`, validating the current executing call.
 - `BotToolSourceDeps.policyRevision(botId: string): Promise<string>`. In `bot-session-main.ts`, this is `(await botCapabilityStore.getBotPolicy(botId)).revision`.
 - Exported singleton in `bot-tool-sources-main.ts`: `export const botRunAccess = createBotRunAccess({ now: Date.now })`.
 
@@ -500,7 +507,7 @@
   - It sits on `BotNoticeCard`, with the Bot's avatar in the tile and a lucide `FolderOpen` or `Laptop` glyph.
   - The title comes from `botAccessCardTitle`. Below it are `place` (folder only) and `why`.
   - There is one squircle button per choice, in `choices` order. The last is the primary.
-  - All buttons are disabled while an answer is in flight. A transient save failure toasts its message and keeps the card. A definite stale attempt is removed by the host snapshot; the Bot can request fresh authority. A durable Always that outlives its task reports `savedForFuture: true` and the desktop shows "Saved for future tasks.".
+  - All buttons are disabled while an answer is in flight. A transient save failure toasts its message and keeps the card. A definite stale attempt is removed by the host snapshot; the Bot can request fresh authority. A durable Always that outlives its task reports `savedForFuture: true` and the desktop shows "Folder approval recorded.". This records historical publication and does not assert that access remains selected.
   - The composer is unchanged.
 
 - [x] **Step 1: Write the failing tests:**
@@ -962,3 +969,24 @@ The initial frozen checkpoint `f648df31b` was not accepted by either reviewer. T
 Correction evidence is separate from initial-checkpoint evidence above. Storage suites passed 214 broader checks and 92 final affected checks, with real red cases for privacy, journal isolation and overlap behavior. Runtime checks passed 51 access tests, 339 final host/protocol/router/issue checks and 11 final bridge race checks, with explicit red cases for changed authority, durable publication and issue recovery. Native correction checks passed iOS 168 with two environment skips and Android 121; Android lint has zero errors, 51 warnings and five hints, and instrumented tests compiled without an attached emulator. Existing Xcode warnings remain unclaimed as resolved. The actual Cua interaction test passed with the future-save success notice and a transient retryable failure. Parent broader regressions passed runtime 350, Bots 990, Remote 175 plus 1039 plus 7 plus 29 with two existing skips, and CLI 183 with three existing PTY skips. Final handoff and new frozen SHA will be recorded before the next reviews.
 
 Final R1 runtime handoff: `/tmp/aiden-bot-access-runtime-r1-handoff.md`. All three correction workers completed and stopped editing before the corrected freeze. Root type-check and scoped lint passed on the corrected code. No new test files or registry entries were needed; registry still passes all 15 checks. Final root UI/parser/notification tests passed 24, including a red/green ordinary-issue/action mismatch case. CLI type-check also passed. The last bridge-only change cached a successful historical acknowledgement before observing that its prompt had been withdrawn; its 11 behavioral tests passed and no authority or second publication was added.
+
+
+## Gate 3 round 2 correction work, 2026-11-04
+
+Both reviewers rejected `11dfbd556`. The freeze ended after both reports returned. Shared private-root policy, safe access-operation retries and definite runtime-admission staleness are being corrected before a fresh review. The root status-repair correction keeps issue list and unrelated raise operations independent of failed or held transcript-status appends. Background repair keeps its durable marker on failure, reports through the main logger and retries on a later read or raise. Settlements retain their strict status path. The existing supersession test now checks that the replacement remains available during failed repair and that restart repairs the pending status once storage recovers. A held-append case verifies reads return before that write completes.
+
+The historical `savedForFuture` receipt remains unchanged on the wire. The person-facing acknowledgement is "Folder approval recorded." because an old operation can be acknowledged after the person removes the folder. This receipt never restores authority.
+
+Two Low limits are retained for explicit review. A separately approved folder can leave an earlier access issue visible until the Bot requests it again or the person chooses Not now; dismissal does not remove saved access. Pending status obligations remain durable beyond normal resolved-issue retention during a persistent transcript write failure, so the file can grow until storage recovers. Dropping these rows would lose settlement obligations. A bounded quarantine design is outside this correction. Neither limit is represented as resolved. Gate 3 remains unaccepted.
+
+R2 privacy correction evidence: the previous router read a private chat in the failing test. Separate temporary-private-root registration now protects complete userData and config directories, and the only exception comes from the default fixed Bot home. Additional fixed roots do not become exceptions. Direct and nested reads/writes, edit, symlink aliases, recursive list/glob/grep, positive ordinary-file matches and legacy fixed behavior are covered. Storage validation passed 104 broader checks and 18 final checks, including dynamic process registration. The shared root-list helper also feeds all three production target resolvers. Scoped lint, root type-check and whitespace checks passed for that worker.
+
+Root issue and receipt checks passed 41 issue integration tests and 32 focused issue/desktop checks. The actual Cua access-card test passed with the historical receipt wording, transient failure retention, host-driven removal and keyboard/layout checks. Native wording checks passed 170 iOS tests with three physical-configuration skips and 112 Android tests, plus compilation, Android lint and instrumented-test compilation. Existing native warnings and device/UI/live/package limitations are unchanged. This is correction evidence, not Gate 3 acceptance.
+
+The R2 saved-location correction includes a real durable-harness sequence: commit the Always request tool, approve a different Once folder, ask for the Always folder again, read both through the original bound file tools, then verify a queued follow-up inherits neither temporary route. The first version failed because a validator captured the completed request tool's task context. The implementation now retains only original publication scope/signal/deadline and validates through the currently executing call. The captured-context red and corrected harness green are recorded separately from standalone store tests.
+
+All R2 workers have completed and stopped editing. The retry correction adds an access-only replay-safe error class rather than calling an ambiguous publication not executed. Its independent grant receipt survives the Remote ledger admission, allowing the same key to reconcile without a second publication. Ordinary issue actions retain their prior rejection caching. Real runtime-authority errors at pre-effect admission now end the stale attempt without a decline; named impostor errors remain transient. Receipt reconciliation checks every offered choice only for eligible Always prompts. Whole-Mac and Home cards with no Always skip journal reads.
+
+Final correction evidence: access 63 and focused host integration 347 passed, with meaningful red cases for phone retries, classified admission drift, fixed-location replacement, multiple late aliases, completed-task context reuse, journal-independent once-only cards and cancellation after awaited validation. Parent final runtime 350 and Bots 992 passed. The full Remote run passed 175 plus 1044 plus 7 plus 29 with two existing skips. The CLI rebuilt 268 files, passed its full 183 tests with three existing PTY skips, and passed type-check and all eight bundle tests. Root type-check, scoped lint, whitespace and registry 15 passed. Final actual Cua interaction passed 1/1 in 7.7 seconds against the complete source. Native 170/3-skip and Android 112 wording checks above remain simulator/headless checks, with no physical/live/package/hosted-CI claim.
+
+R2 runtime handoff: `/tmp/aiden-bot-access-runtime-r2-handoff.md`. Privacy handoff: `/tmp/aiden-bot-access-r2-private-storage-handoff.md`. The next checkpoint remains subject to both independent Gate 3 reviewers; C and D have not started.

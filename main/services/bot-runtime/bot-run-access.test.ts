@@ -280,3 +280,42 @@ test("read grants block real direct and nested codemode mutations while reads an
     await fs.rm(temp, { recursive: true, force: true });
   }
 });
+
+test("saved publication slot survives Once replacement and revokes only its real owner",async()=>{
+  const store=createBotRunAccess({now:()=>1}),signal=new AbortController().signal;
+  const current={signal,validate:async()=>{}};
+  const published={...grant,policyRevision:"published",expiresAt:100};
+  store.recordPublication("ada",published,{signal,deadline:100});
+  store.grant("ada",{...published,key:"/Other",root:"/Other",owner:{kind:"plan",id:"plan"},access:"read"});
+  assert.equal(store.location("ada",["r1"],"published")?.root,"/Other");
+  assert.equal((await store.savedLocation("ada",["r1"],"published",current))?.root,"/Taxes");
+  store.revokeOwner("ada",{kind:"plan",id:"plan"});
+  assert.equal(store.location("ada",["r1"],"published"),undefined,"the plan really existed and is removed");
+  assert.equal((await store.savedLocation("ada",["r1"],"published",current))?.root,"/Taxes","independent access publication remains");
+  store.grant("ada",{...published,key:"/Once",root:"/Once",owner:{kind:"access",id:"once"}});
+  store.revokeOwner("ada",published.owner);
+  assert.equal(await store.savedLocation("ada",["r1"],"published",current),undefined);
+  assert.equal(store.location("ada",["r1"],"published")?.root,"/Once","removing saved owner preserves a different Once owner");
+});
+
+test("saved slot rejects stale policy, changed owner, postawait abort, expiration, restart and lifecycle clear",async()=>{
+  for(const reason of ["policy","owner","abort","original_abort","expiry","clearBot","clearAll","restart"] as const){
+    let now=1;const store=createBotRunAccess({now:()=>now}),original=new AbortController(),current=new AbortController();
+    const published={...grant,expiresAt:100};
+    store.grant("ada",published);store.recordPublication("ada",published,{signal:original.signal,deadline:10});
+    assert.equal((await store.savedLocation("ada",["r1"],"rev1",{signal:current.signal,validate:async()=>{}}))?.id,"run.saved");
+    assert.equal(await store.savedLocation("ada",["queued"],"rev1",{signal:current.signal,validate:async()=>{throw new Error("must not query old owner for another run");}}),undefined);
+    if(reason==="expiry") now=10;
+    if(reason==="original_abort") original.abort();
+    if(reason==="clearBot") store.clearBot("ada");
+    if(reason==="clearAll") store.clearAll();
+    const actual=reason==="restart"?createBotRunAccess({now:()=>now}):store;
+    const resolved=await actual.savedLocation("ada",["r1"],reason==="policy"?"rev2":"rev1",{signal:current.signal,validate:async()=>{
+      if(reason==="owner") throw new Error("owning task ended");
+      if(reason==="abort") current.abort();
+    }});
+    assert.equal(resolved,undefined,reason);
+    assert.equal(await actual.savedLocation("ada",["r1"],"rev1",{signal:new AbortController().signal,validate:async()=>{}}),undefined,`${reason} cannot revive an old slot`);
+    if(reason==="clearBot"||reason==="clearAll") assert.equal(store.location("ada",["r1"],"rev1"),undefined,"the lifecycle fanout clears both slots");
+  }
+});

@@ -150,7 +150,7 @@ import {
   type AidenRemoteBotHandoffAudience,
 } from "./aiden-remote-bot-handoffs.js";
 import { isComputerUseCapabilityTool } from "./bot-tool-authority.js";
-import { AidenOperationNotExecutedError } from "./aiden-remote-operation-contract.js";
+import { AidenOperationNotExecutedError, AidenOperationReplaySafeRetryError } from "./aiden-remote-operation-contract.js";
 import { BotSessionError, type BotSessionErrorReason, type BotSessionState } from "./bot-runtime/bot-session-service.js";
 import type { BotLiveActivity } from "../../renderer/shared/bot-live.js";
 import { stopWithIntents, type BotTurnIntent, type BotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
@@ -1478,6 +1478,23 @@ async function answerOrRefuseUnchanged<Result>(answer: () => Promise<Result>): P
 }
 
 /**
+ * Access operations alone have a second replay boundary: the exact wait/issue
+ * ID is the durable grant operation ID. The authorizer checks its committed
+ * receipt before revalidation; issue settlement is first-action-wins and its
+ * folder port uses that same journal ID. Even an error after publication can
+ * therefore retry without a second publication or recreating removed access.
+ * Never apply it to unrelated session/issue operations.
+ */
+async function replaySafeAccess<Result>(action: () => Promise<Result>): Promise<Result> {
+  try {
+    return await action();
+  } catch (error) {
+    if (error instanceof AidenOperationNotExecutedError || error instanceof AidenOperationReplaySafeRetryError) throw error;
+    throw new AidenOperationReplaySafeRetryError(error);
+  }
+}
+
+/**
  * A session refusal as one device is told it. A person's pause is
  * `bot_paused` for a device holding `bot:handoffs` (revision 37) and
  * `operation_stale`, a code shipped clients already know, for every other.
@@ -2051,7 +2068,7 @@ export class AidenRemoteBotSessionService {
     return this.options.bots.executeIdempotent(
       { deviceId, route: "POST /bots/{id}/access-requests/{waitId}/answer", resourceId: `${bot.id}:${id}`, key },
       { waitId: id, ...parsed },
-      () => answerOrRefuseUnchanged(async () => {
+      () => replaySafeAccess(async () => {
         const prompt = this.options.accessRequests!.get(bot.id, id);
         const expired = () => new AidenRemoteServiceError("access_request_expired", "This access request is no longer waiting.", 409);
         // An Always retry may acknowledge its exact durable operation even
@@ -2187,6 +2204,8 @@ export class AidenRemoteBotSessionService {
           if (error instanceof BotAccessRequestStaleError) throw new AidenOperationNotExecutedError(
             new AidenRemoteServiceError("operation_stale", error.message, 409, true),
           );
+          // allow_folder is replay-safe by its exact issue/journal operation ID.
+          if (parsed.action.kind === "allow_folder") throw new AidenOperationReplaySafeRetryError(error);
           throw error;
         }
         if (result === "invalid") {

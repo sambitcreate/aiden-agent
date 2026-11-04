@@ -28,7 +28,8 @@ import { botMessages, disposeBotMessages } from "../bot-messages/messages-main.j
 import * as path from "node:path";
 import { app, BrowserWindow, ipcMain, logger, Notification, powerMonitor } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
-import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
+import { setBotFileToolProtectedRoots, setBotFileToolTemporaryPrivateRoots } from "../bot-file-tool-router.js";
+import { botAccessPrivateRoots } from "./bot-access-target.js";
 import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 import { usageLimits } from "../usage-limit-main.js";
 import { spending } from "../spending-main.js";
@@ -135,6 +136,8 @@ setBotFileToolProtectedRoots(() => [
   path.join(profileDir(), PROVIDER_MODEL_CACHE_FILENAME),
   path.join(profileDir(), IMAGE_GENERATION_SETTINGS_FILE),
 ]);
+// Temporary Home/whole-Mac access must not expose any app-private store.
+setBotFileToolTemporaryPrivateRoots(() => botAccessPrivateRoots(profileDir(), aidenConfigDir()));
 // A Bot's replies and routines wait out provider usage limits like a chat's.
 const runtimeModels = createBotRuntimeModels({
   usageLimits: (botId, runtime) =>

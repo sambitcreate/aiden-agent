@@ -12,6 +12,11 @@ import {
 } from "../../../renderer/shared/bot-access-requests.js";
 import { withoutBotHandoffControls } from "../../../renderer/shared/bot-handoffs.js";
 
+/** Whole app-owned directories, shared by target validation and temporary file access. */
+export function botAccessPrivateRoots(userData: string, configDirectory: string): readonly string[] {
+  return [path.resolve(userData), path.resolve(configDirectory)];
+}
+
 export type BotAccessAlways =
   | { kind: "existing"; rootId: string }
   | { kind: "new" }

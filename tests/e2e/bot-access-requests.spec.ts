@@ -123,7 +123,7 @@ test("access cards keep their scope visible and wait for the host's answer", asy
   await expect(futureCard.getByRole("button", {name: "Not now", exact: true})).toBeDisabled();
   await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.release());
   await expect(futureCard).toBeHidden();
-  await expect(page.getByText("Saved for future tasks.", {exact: true})).toBeVisible();
+  await expect(page.getByText("Folder approval recorded.", {exact: true})).toBeVisible();
   expect(await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.answers)).toEqual([
     {botId: bot.id, waitId: request.waitId, choice: "always"},
     {botId: bot.id, waitId: request.waitId, choice: "once"},

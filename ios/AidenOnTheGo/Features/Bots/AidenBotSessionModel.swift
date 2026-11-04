@@ -2291,7 +2291,7 @@ final class AidenBotSessionModel {
             }
             retainedAccessAnswers.removeAll()
             if accessRequest?.waitId == shown.waitId { accessRequest = nil }
-            if receipt.savedForFuture == true { accessSuccessNotice = "Saved for future tasks." }
+            if receipt.savedForFuture == true { accessSuccessNotice = "Folder approval recorded." }
             return true
         } catch {
             if !aidenBotSessionFailureIsAmbiguous(error) { retainedAccessAnswers[action] = nil }

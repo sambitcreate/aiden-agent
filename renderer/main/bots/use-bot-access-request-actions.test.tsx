@@ -63,7 +63,7 @@ test("a server refusal toasts its message and unlocks every copy; an expired ans
 });
 
 
-test("an Always saved after the task ends reports future access instead of a failed answer", async () => {
+test("a historical Always receipt reports its recorded approval instead of claiming current access", async () => {
   installBotTestIpc({"bots:answerAccessRequest": () => ({answered: true, savedForFuture: true})});
   const successes: string[] = [], failures: string[] = [];
   const savedSuccess = toast.success, savedError = toast.error;
@@ -72,7 +72,7 @@ test("an Always saved after the task ends reports future access instead of a fai
   try {
     const hook = renderHook(() => useBotAccessRequestActions("bot:a", "attempt-1"));
     await act(() => hook.result.current.answer(card, "always"));
-    assert.deepEqual(successes, ["Saved for future tasks."]);
+    assert.deepEqual(successes, ["Folder approval recorded."]);
     assert.deepEqual(failures, []);
     assert.equal(hook.result.current.busy, false);
   } finally { toast.success = savedSuccess; toast.error = savedError; }

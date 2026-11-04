@@ -5,10 +5,10 @@ A Bot with Custom access limited to selected folders can ask to read and change 
 The choices are:
 
 - **Allow once** lets the current task use that folder for at most an hour. A new task, quitting Aiden or changing the Bot's access ends the grant. A steer that joins the same task can use it; a queued follow-up starts a new task and cannot inherit it.
-- **Always for this folder** adds that exact folder to the Bot's saved Custom access. It also lets the current task continue. The Bot keeps its other saved choices. If it was saved just as the task ended, Aiden reports **Saved for future tasks** and does not grant temporary access to the ended task.
+- **Always for this folder** adds that exact folder to the Bot's saved Custom access. It also lets the current task continue. The Bot keeps its other saved choices. If it was saved just as the task ended, Aiden reports **Folder approval recorded** and does not grant temporary access to the ended task. This acknowledges the earlier approval; replaying it never restores access you later removed.
 - **Not now** leaves access unchanged. The Bot carries on without that folder and does not ask for it again in the same task.
 
-Each task can have one extra temporary folder at a time. Approving another folder replaces the previous Allow once grant. Saved Always folders remain part of the Bot's Custom access.
+Each task can have one extra temporary folder at a time. Approving another folder replaces the previous Allow once grant. Saved Always folders remain part of the Bot's Custom access. Requesting an already available saved folder does not replace a different Allow once grant. A folder saved from an unattended issue becomes available to later tasks; the original unattended task carries on without it.
 
 A request for **your whole Mac** offers only Allow once and Not now. It is never saved as an Always grant. File access turned off is not a route to requesting more access; change that choice yourself in the Bot's Advanced settings.
 
@@ -24,7 +24,7 @@ If you change the Bot's permissions, replace the folder or change overlapping fo
 
 A routine, Telegram turn or message from another Bot does not open an access card. It leaves a Needs you issue in the Bot's chat and carries on without access.
 
-A persistable folder issue can offer **Allow this folder**. That saves access for future work; it does not resume the original task or restore an expired Allow once grant. A whole-Mac request points you to the Bot's access settings. Every access issue also offers **Not now**, which dismisses it without granting access. A later request with changed permissions or folder identity gets a fresh issue.
+A persistable folder issue can offer **Allow this folder**. That saves access for future work; it does not resume the original task or restore an expired Allow once grant. A whole-Mac request points you to the Bot's access settings. Every access issue also offers **Not now**, which dismisses it without granting access. A later request with changed permissions or folder identity gets a fresh issue. If you grant the folder separately through a card or Settings, an earlier issue can remain until the Bot requests it again. Use Not now to clear that earlier issue; it does not remove the separately saved access.
 
 ## Phones and other hosts
 

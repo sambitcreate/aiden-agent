@@ -1,9 +1,10 @@
 import os from "node:os";
 import { app, ipcMain } from "../../platform.js";
 import type { BotAccessChoice } from "../../../renderer/shared/bot-access-requests.js";
-import { BotAccessRequestStaleError, createBotAccessRequests } from "./bot-access-requests.js";
-import { createBotAccessAuthorizer } from "./bot-access-authorization.js";
-import { resolveBotAccessTarget } from "./bot-access-target.js";
+import { createBotAccessRequests } from "./bot-access-requests.js";
+import { createBotAccessAuthorizer, createBotAccessRevalidator } from "./bot-access-authorization.js";
+import { botAccessPrivateRoots, resolveBotAccessTarget } from "./bot-access-target.js";
+import { aidenConfigDir } from "../aiden-config-dir.js";
 
 export const botAccessRequests = createBotAccessRequests();
 
@@ -33,34 +34,21 @@ export async function answerBotAccessRequest(
     resolveTarget: (requested) =>
       resolveBotAccessTarget(requested, {
         homeDirectory: os.homedir,
-        privateRoots: () => [app.getPath("userData")],
+        privateRoots: () => botAccessPrivateRoots(app.getPath("userData"), aidenConfigDir()),
         approvedRoots: async () =>
           (await (await import("../aiden-remote-service-main.js")).getAidenRemoteRuntime()).state
             .snapshot()
             .then((state) => state.approvedRoots),
       }),
-    revalidate: async (id, expectedRevision) => {
-      if ((await botCapabilityStore.getBotPolicy(id)).revision !== expectedRevision)
-        throw new BotAccessRequestStaleError("This Bot's access changed. Ask for access again.");
-      const chat = await botApplicationService.getCanonicalChat(id);
-      if (!chat) throw new BotAccessRequestStaleError("This Bot's task is no longer available.");
-      const admission = await botRuntimeAuthority.admit({
+    revalidate: createBotAccessRevalidator({
+      policyRevision: async (id) => (await botCapabilityStore.getBotPolicy(id)).revision,
+      canonicalChatId: async (id) => (await botApplicationService.getCanonicalChat(id))?.id,
+      admit: (id, chatId) => botRuntimeAuthority.admit({
         audienceId: BOT_DESKTOP_AUDIENCE_ID,
         botId: id,
-        chatId: chat.id,
-      });
-      try {
-        if (
-          admission.authority.accessMode !== "custom" ||
-          admission.authority.files.mode !== "scoped" ||
-          (await botCapabilityStore.getBotPolicy(id)).revision !== expectedRevision
-        )
-          throw new BotAccessRequestStaleError("This Bot's access changed. Ask for access again.");
-        await admission.revalidateBeforeEffect();
-      } finally {
-        admission.release();
-      }
-    },
+        chatId,
+      }),
+    }),
     grantFolder: async (input, owner) => {
       await botApplicationService.grantBotFolder(input, owner);
       return botApplicationService.botFolderGrantPolicyRevision(input.botId, input.operationId);

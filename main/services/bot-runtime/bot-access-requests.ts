@@ -147,7 +147,9 @@ export function createBotAccessRequests(): BotAccessRequests {
         if (receipt?.savedForFuture) {
           saved.set(waitId, botId);
           if (saved.size > 4096) saved.delete(saved.keys().next().value!);
-          entry.settle(choice, undefined, receipt);
+          // A different tap can recover an earlier Always whose receipt read
+          // failed. Settle the actual published decision, never a new decline.
+          entry.settle("always", undefined, receipt);
           return "saved_for_future";
         }
         if (choice === "always") {

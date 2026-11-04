@@ -9,7 +9,9 @@ import Ajv from "ajv";
 import {
   BOT_FILE_TOOL_NAMES,
   buildBotFileTools,
+  setBotFileToolTemporaryPrivateRoots,
 } from "./bot-file-tool-router.js";
+import { botAccessPrivateRoots } from "./bot-runtime/bot-access-target.js";
 import { botServiceProtectedRoot, cliBotProtectedRoots } from "./bot-protected-settings.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
@@ -157,60 +159,120 @@ test("a full-Mac write into a Bot's session or memory files is refused, however 
 });
 
 test("Home and whole-Mac task grants refuse private reads and writes including aliases and recursive searches", async (t) => {
-  const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "bot-task-private-")));
+  const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "bot-task-fence-")));
   t.after(() => fs.rm(parent, { recursive: true, force: true }));
   const profile = path.join(parent, "profile");
+  const config = path.join(parent, ".aiden");
   const bots = path.join(profile, "bots");
   const service = path.join(profile, "bot-service");
   const home = path.join(service, "homes", "own");
   const otherHome = path.join(service, "homes", "other");
-  await fs.mkdir(path.join(bots, "other", "memory"), { recursive: true });
-  await fs.mkdir(home, { recursive: true }); await fs.mkdir(otherHome);
-  await fs.writeFile(path.join(bots, "other", "memory", "MEMORY.md"), "PRIVATE BOT SECRET");
-  await fs.writeFile(path.join(bots, "..internal-secret"), "PRIVATE INTERNAL SECRET");
-  await fs.writeFile(path.join(otherHome, "secret.txt"), "PRIVATE OTHER HOME");
-  await fs.writeFile(path.join(profile, "settings.json"), "PRIVATE SETTINGS");
+  const privateFiles = [
+    "profile/chats/thread.jsonl", "profile/aiden-remote-identity/key.pem",
+    "profile/pi-provider-credentials.json", "profile/aiden-remote-v1.json",
+    "profile/bot-folder-grants.json", "profile/memory/memory-v1.sqlite",
+    "profile/tool-approval-rules.json", "profile/settings.json",
+    "profile/bots/other/memory/MEMORY.md", "profile/bots/..internal-secret",
+    "profile/bot-service/homes/other/secret.txt", ".aiden/config.json",
+    ".aiden/extra-config.json",
+  ];
+  await fs.mkdir(home, { recursive: true });
+  for (const file of privateFiles) {
+    await fs.mkdir(path.dirname(path.join(parent, file)), { recursive: true });
+    await fs.writeFile(path.join(parent, file), `CONFIDENTIAL BODY ${file}`);
+  }
   await fs.writeFile(path.join(parent, "ordinary.txt"), "ORDINARY readable");
   await fs.writeFile(path.join(home, "own.txt"), "OWN readable");
-  await fs.symlink(bots, path.join(parent, "shortcut"));
-  await fs.symlink(path.join(profile, "settings.json"), path.join(parent, "settings-alias"));
-  for (const root of [parent, "/"]) {
+  await fs.symlink(profile, path.join(parent, "profile-alias"));
+  await fs.symlink(config, path.join(parent, "config-alias"));
+  await fs.symlink(path.join(profile, "chats/thread.jsonl"), path.join(parent, "chat-alias"));
+  await fs.symlink(otherHome, path.join(home, "other-alias"));
+  const readRefusal = "Aiden's private Bot session, memory and settings files cannot be read through temporary access.";
+  const writeRefusal = "Aiden manages Bot session and memory files and its own settings files; file tools cannot change them. Settings change only in Aiden's Settings.";
+  for (const root of [parent, "/"]) for (const alias of ["run.access", "run.saved"]) {
     const tools = buildBotFileTools({
       defaultLocation: { id: "home", label: "Bot folder", root: home },
-      lateLocation: { id: "run.access", label: "Allowed for this task", resolve: async () => ({ id: "run.access", label: "Allowed for this task", root, access: "write" }) },
+      // Even another selected fixed home must not become a temporary exception.
+      additionalLocations: [{ id: "other", label: "Other fixed scope", root: otherHome }],
+      ...(alias === "run.access"
+        ? {lateLocation: {id:alias,label:"Task",resolve:async()=>({id:alias,label:"Task",root,access:"write" as const})}}
+        : {lateLocations: [{id:alias,label:"Saved",resolve:async()=>({id:alias,label:"Saved",root,access:"write" as const})}]}),
       protectedRoots: () => [bots, botServiceProtectedRoot(service), path.join(profile, "settings.json")],
+      temporaryPrivateRoots: () => botAccessPrivateRoots(profile, config),
     });
-    const params = (target: string) => ({ location: "run.access", path: path.relative(root, target) });
-    const read = byName(tools, "read_file"), write = byName(tools, "write_file");
-    for (const target of [path.join(bots, "other", "memory", "MEMORY.md"), path.join(bots, "..internal-secret"), path.join(parent, "shortcut", "other", "memory", "MEMORY.md"), path.join(parent, "settings-alias"), path.join(otherHome, "secret.txt")]) {
-      await assert.rejects(read.execute("read-private", params(target)), /private|Aiden manages/iu, target);
-      await assert.rejects(write.execute("write-private", { ...params(target), content: "changed" }), /private|Aiden manages/iu, target);
+    const params = (target: string) => ({ location: alias, path: path.relative(root, target) });
+    const read = byName(tools, "read_file"), write = byName(tools, "write_file"), edit = byName(tools, "edit_file");
+    const targets = [...privateFiles.map((file) => path.join(parent, file)),
+      path.join(parent, "profile-alias/chats/thread.jsonl"), path.join(parent, "config-alias/extra-config.json"),
+      path.join(parent, "chat-alias"), path.join(home, "other-alias/secret.txt")];
+    for (const target of targets) {
+      await assert.rejects(read.execute("read-private", params(target)), { message: readRefusal }, target);
+      await assert.rejects(write.execute("write-private", { ...params(target), content: "changed" }), { message: writeRefusal }, target);
+      await assert.rejects(edit.execute("edit-private", { ...params(target), old_string: "CONFIDENTIAL", new_string: "changed" }), { message: writeRefusal }, target);
+    }
+    for (const directory of [profile, config, path.join(profile, "chats"), otherHome, path.join(parent, "profile-alias")]) {
+      await assert.rejects(byName(tools, "list_dir").execute("list-private", params(directory)), { message: readRefusal });
+      await assert.rejects(byName(tools, "grep").execute("grep-private", { ...params(directory), pattern: "CONFIDENTIAL" }), { message: readRefusal });
     }
     assert.equal(textContent(await read.execute("ordinary", params(path.join(parent, "ordinary.txt")))), "ORDINARY readable");
+    await write.execute("ordinary-write", { ...params(path.join(parent, "new.txt")), content: "ordinary change" });
     const message = fauxAssistantMessage("Inspect files");
     const codemode = createPiCodemodeTool({ tools: () => tools, executeTool: async (_parent, name, args) => runToolCall({ type: "toolCall", id: "nested", name, arguments: args as JsonObject }, { tools, assistantMessage: message, context: { messages: [message], tools } }) });
-    for (const [name, args] of [
-      ["read_file", params(path.join(bots, "other", "memory", "MEMORY.md"))],
-      ["write_file", { ...params(path.join(otherHome, "secret.txt")), content: "changed" }],
-      ["grep", { ...params(parent), pattern: "PRIVATE|ORDINARY" }],
+    for (const [name, args, refusal] of [
+      ["read_file", params(path.join(profile, "chats/thread.jsonl")), readRefusal],
+      ["write_file", { ...params(path.join(profile, "bot-folder-grants.json")), content: "changed" }, writeRefusal],
+      ["list_dir", params(config), readRefusal],
+      ["grep", { ...params(parent), pattern: "CONFIDENTIAL|ORDINARY" }, undefined],
+      ["glob", { pattern: (path.relative(root, parent) || ".") + "/**/*", location: alias }, undefined],
     ] as const) {
       const result = await codemode.execute("nested-private", { code: `text(await tools.${name}(${JSON.stringify(args)}));` });
       const serialized = JSON.stringify(result);
-      assert.doesNotMatch(serialized, /PRIVATE BOT SECRET|PRIVATE OTHER HOME|PRIVATE SETTINGS/u);
+      assert.doesNotMatch(serialized, /CONFIDENTIAL BODY/u);
+      if (refusal) assert.ok(serialized.includes(refusal), serialized);
       if (name === "grep") assert.match(serialized, /ORDINARY readable/u);
-      else assert.match(serialized, /private|Aiden manages/iu);
+      if (name === "glob") {
+        assert.match(serialized, /ordinary\.txt/u);
+        assert.doesNotMatch(serialized, /thread\.jsonl|key\.pem|memory-v1|extra-config|secret\.txt/u);
+      }
     }
     assert.equal(textContent(await read.execute("own", params(path.join(home, "own.txt")))), "OWN readable");
     await write.execute("own-write", { ...params(path.join(home, "report.txt")), content: "mine" });
     assert.equal(await fs.readFile(path.join(home, "report.txt"), "utf8"), "mine");
-    await assert.rejects(byName(tools, "list_dir").execute("list-private", params(path.join(bots, "other"))), /private|Aiden manages/iu);
-    const grep = textContent(await byName(tools, "grep").execute("recursive", { ...params(parent), pattern: "PRIVATE|ORDINARY" }));
+    // Fixed reads keep their legacy behavior, independently of the temporary guard.
+    assert.equal(textContent(await read.execute("fixed-other", { location: "other", path: "secret.txt" })), "CONFIDENTIAL BODY profile/bot-service/homes/other/secret.txt");
+    const grep = textContent(await byName(tools, "grep").execute("recursive", { ...params(parent), pattern: "CONFIDENTIAL|ORDINARY" }));
     assert.match(grep, /ORDINARY readable/u);
-    assert.doesNotMatch(grep, /PRIVATE BOT SECRET|PRIVATE SETTINGS|PRIVATE OTHER HOME/u);
-    if (root === parent) {
-      const glob = textContent(await byName(tools, "glob").execute("private-glob", { location: "run.access", pattern: "profile/bots/**/*.md" }));
-      assert.doesNotMatch(glob, /MEMORY\.md/u);
-    }
+    assert.doesNotMatch(grep, /CONFIDENTIAL BODY/u);
+    const listing = textContent(await byName(tools, "list_dir").execute("list-home", params(parent)));
+    assert.doesNotMatch(listing, /profile|config-alias|chat-alias|\.aiden/u);
+    const glob = textContent(await byName(tools, "glob").execute("private-glob", { location: alias, pattern: (path.relative(root, parent) || ".") + "/**/*" }));
+    assert.match(glob, /ordinary\.txt/u);
+    assert.doesNotMatch(glob, /thread\.jsonl|key\.pem|memory-v1|extra-config|secret\.txt/u);
+  }
+  for (const file of privateFiles) assert.equal(await fs.readFile(path.join(parent, file), "utf8"), `CONFIDENTIAL BODY ${file}`);
+});
+
+test("process-wide temporary privacy registration protects existing routers without changing fixed access", async () => {
+  const value = await fixture();
+  try {
+    const tools = buildBotFileTools({
+      defaultLocation: { id: "home", label: "Bot folder", root: value.home },
+      additionalLocations: [{ id: "fixed", label: "Fixed folder", root: value.outside }],
+      lateLocation: { id: "run.access", label: "Allowed for this task", resolve: async () => ({ id: "run.access", label: "Allowed for this task", root: value.parent }) },
+    });
+    setBotFileToolTemporaryPrivateRoots(() => botAccessPrivateRoots(value.outside, path.join(value.parent, "config")));
+    const read = byName(tools, "read_file");
+    await assert.rejects(read.execute("temporary", { location: "run.access", path: "outside/private.txt" }), {
+      message: "Aiden's private Bot session, memory and settings files cannot be read through temporary access.",
+    });
+    await assert.rejects(byName(tools, "write_file").execute("temporary-write", { location: "run.access", path: "outside/private.txt", content: "changed" }), {
+      message: "Aiden manages Bot session and memory files and its own settings files; file tools cannot change them. Settings change only in Aiden's Settings.",
+    });
+    assert.equal(textContent(await read.execute("fixed", { location: "fixed", path: "private.txt" })), "outside");
+    assert.equal(await fs.readFile(path.join(value.outside, "private.txt"), "utf8"), "outside");
+  } finally {
+    setBotFileToolTemporaryPrivateRoots(() => []);
+    await fs.rm(value.parent, { recursive: true, force: true });
   }
 });
 
@@ -506,4 +568,18 @@ test("Bot file router rejects ambiguous or unsafe main-owned locations", async (
   } finally {
     await fs.rm(parent, { recursive: true, force: true });
   }
+});
+
+test("multiple late aliases preserve the single lateLocation and reject duplicate opaque IDs", async (t) => {
+  const home=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),"bot-multiple-late-")));
+  t.after(()=>fs.rm(home,{recursive:true,force:true}));
+  await fs.mkdir(path.join(home,"A"));await fs.mkdir(path.join(home,"B"));
+  await fs.writeFile(path.join(home,"A","a.txt"),"saved A");await fs.writeFile(path.join(home,"B","b.txt"),"once B");
+  const options={defaultLocation:{id:"home",label:"Home",root:home},
+    lateLocation:{id:"run.access",label:"Task",resolve:async()=>({id:"run.access",label:"Task",root:path.join(home,"B")})},
+    lateLocations:[{id:"run.saved",label:"Saved",resolve:async()=>({id:"run.saved",label:"Saved",root:path.join(home,"A")})}]};
+  const read=byName(buildBotFileTools(options),"read_file");
+  assert.equal(textContent(await read.execute("saved",{location:"run.saved",path:"a.txt"})),"saved A");
+  assert.equal(textContent(await read.execute("once",{location:"run.access",path:"b.txt"})),"once B");
+  assert.throws(()=>buildBotFileTools({...options,lateLocations:[options.lateLocation]}),/late Bot file location/u);
 });

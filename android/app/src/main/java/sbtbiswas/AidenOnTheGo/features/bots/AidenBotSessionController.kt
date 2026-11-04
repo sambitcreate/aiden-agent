@@ -1615,7 +1615,7 @@ class AidenBotSessionController(
             keys.complete(action)
             _state.update { state -> state.copy(
                 session = if (state.session?.accessRequest?.waitId == shown.waitId) state.session.copy(accessRequest = null) else state.session,
-                accessSuccessNotice = if (receipt.savedForFuture == true) "Saved for future tasks." else null
+                accessSuccessNotice = if (receipt.savedForFuture == true) "Folder approval recorded." else null
             ) }
             true
         } catch (error: CancellationException) {

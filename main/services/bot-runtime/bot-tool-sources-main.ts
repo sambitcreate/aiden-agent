@@ -85,9 +85,10 @@ import { BOT_COMPUTER_SHELL_TOOL_NAME, BOT_COMPUTER_TOOL_NAME } from "../bot-com
 import { botOwnWrites } from "../bot-routine-events/own-writes.js";
 import { botFileCandidates } from "./bot-file-candidates.js";
 import { createBotRunAccess } from "./bot-run-access.js";
-import { botAccessRequestCandidate } from "./bot-access-request-tool.js";
+import { botAccessRequestCandidate, botSavedLocationForCall } from "./bot-access-request-tool.js";
 import { botAccessRequests } from "./bot-access-requests-main.js";
-import { resolveBotAccessTarget } from "./bot-access-target.js";
+import { botAccessPrivateRoots, resolveBotAccessTarget } from "./bot-access-target.js";
+import { aidenConfigDir } from "../aiden-config-dir.js";
 import os from "node:os";
 
 export const botRunAccess = createBotRunAccess({ now: Date.now });
@@ -429,14 +430,16 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       }
 
       // A routine's own files must not fire its folder trigger again.
+      const boundFileLocations = await botFileLocations(admission);
       tools.push(
-        ...botFileCandidates(await botFileLocations(admission), {
+        ...botFileCandidates(boundFileLocations, {
           routine: routineRun,
           recordOwnWrite: (written) => botOwnWrites.record(botId, written),
           ...(authority.accessMode === "custom" && authority.files.mode === "scoped" ? { runAccess: { resolve: async (call: import("./tool-adapter.js").BotToolCall) => {
             await call.assertRunActive?.();
             return botRunAccess.location(botId, await call.runRequestIds?.() ?? [], await deps.policyRevision(botId));
-          } } } : {}),
+          } }, savedAccess: { resolve: (call: import("./tool-adapter.js").BotToolCall) =>
+            botSavedLocationForCall(botId, { runAccess: botRunAccess, policyRevision: deps.policyRevision }, call) } } : {}),
         }),
       );
       if (authority.files.botHome) tools.push(shareImageCandidate(authority));
@@ -509,8 +512,8 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       // A step in the Bot's own browser or on its computer: Open brings that forward, and phones finish it on the Mac.
       tools.push(botHandoffCandidate(botId, botHandoffs, { targets: { browser: has("browser"), computer: signInOnComputer } }));
       if (authority.accessMode === "custom" && authority.files.mode === "scoped") tools.push(botAccessRequestCandidate(botId, {
-        requests: botAccessRequests, runAccess: botRunAccess, policyRevision: deps.policyRevision,
-        resolveTarget: (requested) => resolveBotAccessTarget(requested, { homeDirectory: os.homedir, privateRoots: () => [app.getPath("userData")], approvedRoots: async () => (await (await import("../aiden-remote-service-main.js")).getAidenRemoteRuntime()).state.snapshot().then((state) => state.approvedRoots) }),
+        requests: botAccessRequests, runAccess: botRunAccess, policyRevision: deps.policyRevision, boundLocations: boundFileLocations,
+        resolveTarget: (requested) => resolveBotAccessTarget(requested, { homeDirectory: os.homedir, privateRoots: () => botAccessPrivateRoots(app.getPath("userData"), aidenConfigDir()), approvedRoots: async () => (await (await import("../aiden-remote-service-main.js")).getAidenRemoteRuntime()).state.snapshot().then((state) => state.approvedRoots) }),
         currentLocations: async () => {
           const fresh = await deps.admit(botId);
           try {

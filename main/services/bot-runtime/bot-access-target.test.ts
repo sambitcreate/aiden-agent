@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import {
+  botAccessPrivateRoots,
   coveredByBotLocations,
   resolveBotAccessTarget,
   type BotAccessTargetDeps,
@@ -94,12 +95,20 @@ test("private storage and its parents are refused while Home remains once-only",
   t.after(() => fs.rm(home, { recursive: true, force: true }));
   const parent = path.join(home, "Library", "Application Support");
   const privateRoot = path.join(parent, "Aiden");
+  const configDirectory = path.join(home, ".aiden");
   await fs.mkdir(path.join(privateRoot, "bots", "other"), { recursive: true });
+  await fs.mkdir(configDirectory);
+  await fs.writeFile(path.join(configDirectory, "extra-config.json"), "config outside userData");
+  await fs.mkdir(path.join(home, "Documents"));
   await fs.symlink(parent, path.join(home, "alias"));
-  const deps: BotAccessTargetDeps = { homeDirectory: () => home, privateRoots: () => [privateRoot], approvedRoots: async () => [] };
-  for (const requested of [parent, path.join(home, "Library"), path.join(home, "alias"), privateRoot]) {
+  await fs.symlink(configDirectory, path.join(home, "config-alias"));
+  const deps: BotAccessTargetDeps = { homeDirectory: () => home, privateRoots: () => botAccessPrivateRoots(privateRoot, configDirectory), approvedRoots: async () => [] };
+  for (const requested of [parent, path.join(home, "Library"), path.join(home, "alias"), privateRoot, configDirectory, path.join(configDirectory, "extra-config.json"), path.join(home, "config-alias")]) {
     assert.deepEqual(await resolveBotAccessTarget(requested, deps), { kind: "refused", reason: "private" }, requested);
   }
+  const ordinary = await resolveBotAccessTarget(path.join(home, "Documents"), deps);
+  assert.equal(ordinary.kind, "folder");
+  if (ordinary.kind === "folder") assert.deepEqual(ordinary.always, { kind: "new" });
   const resolved = await resolveBotAccessTarget("~", deps);
   assert.equal(resolved.kind, "folder");
   if (resolved.kind === "folder") assert.deepEqual(resolved.always, { kind: "none", reason: "home" });

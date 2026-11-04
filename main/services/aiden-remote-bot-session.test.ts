@@ -1,6 +1,7 @@
 import { BotAccessRequestStaleError, createBotAccessRequests } from "./bot-runtime/bot-access-requests.js";
 import { createBotAccessAuthorizer } from "./bot-runtime/bot-access-authorization.js";
 import { createBotRunAccess } from "./bot-runtime/bot-run-access.js";
+import { BotRuntimeAuthorityError } from "./bot-runtime-authority.js";
 import { accessRequestPrompt } from "./bot-runtime/test-support/access-request-fixtures.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -3950,11 +3951,11 @@ test("public open issue counts exclude hidden access requests for nonholders", a
 });
 
 test("stale access policy or inode returns retryable 409 on same-key replay without ledger internal_error", async () => {
-  for (const reason of ["policy", "inode"]) {
+  for (const reason of ["policy", "inode", "admission"]) {
     const bridge = createBotAccessRequests(), store = createBotRunAccess({now:Date.now});
-    let revision = "rev-1", inode = "2";
+    let revision = "rev-1", inode = "2", admissionDrift = false;
     const authorize = createBotAccessAuthorizer({now:Date.now,audienceId:"desktop",runAccess:store,
-      revalidate:async (_id,expected)=>{if(expected!==revision) throw new BotAccessRequestStaleError("policy changed");},
+      revalidate:async (_id,expected)=>{if(admissionDrift) throw new BotRuntimeAuthorityError("capability_changed");if(expected!==revision) throw new BotAccessRequestStaleError("policy changed");},
       resolveTarget:async()=>({kind:"folder",root:"/home/person/Documents/Taxes",label:"Taxes",place:"~/Documents/Taxes",device:"1",inode,always:{kind:"new"}}),
       grantFolder:async()=>{throw new Error("must not save");},changed(){}
     });
@@ -3968,12 +3969,13 @@ test("stale access policy or inode returns retryable 409 on same-key replay with
     const waiting = bridge.request(accessRequestPrompt({ botId: BOT_ID, owner }));
     const withdrawn = assert.rejects(waiting, BotAccessRequestStaleError);
     const id = bridge.pending()[0]!.waitId;
-    if(reason==="policy") revision="rev-2"; else inode="3";
+    if(reason==="policy") revision="rev-2"; else if(reason==="inode") inode="3"; else admissionDrift=true;
     try {
       await assert.rejects(service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"stale-access-key-001",{choice:"once"}), (e:{code?:string;status?:number;retryable?:boolean})=>e.code==="access_request_expired"&&e.status===409&&e.retryable===true);
       await assert.rejects(service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"stale-access-key-001",{choice:"once"}), (e:{code?:string;status?:number})=>e.code==="access_request_expired"&&e.status===409);
       await withdrawn; assert.deepEqual(bridge.pending(),[]);
       assert.equal(store.location(BOT_ID,["run-1"],revision),undefined);
+      admissionDrift=false;
       const input=accessRequestPrompt({botId:BOT_ID,owner});
       const fresh=bridge.request({...input,authorization:{...input.authorization,policyRevision:revision,identity:{device:"1",inode}}});
       const freshId=bridge.pending()[0]!.waitId; assert.notEqual(freshId,id);
@@ -4013,5 +4015,61 @@ test("a known pre-grant stale access issue refusal stays typed and its same-key 
     await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"stale-issue-key-001",{action:{kind:"allow_folder"}},{accessRequests:true}),
       (error:{code?:string;status?:number;retryable?:boolean})=>error.code==="operation_stale"&&error.status===409&&error.retryable===true);
     assert.deepEqual(await service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"stale-issue-key-001",{action:{kind:"allow_folder"}},{accessRequests:true}),{result:"not_open"});
+  } finally {await service.close();}
+});
+
+test("transient access failures retry the same ledger key through the real bridge and exact receipt", async () => {
+  for (const failure of ["before_publication", "after_publication"] as const) {
+    const bridge = createBotAccessRequests(), runAccess = createBotRunAccess({now:Date.now});
+    let portCalls=0, publications=0, attempts=0, readable=true, committed=false;
+    const authorize=createBotAccessAuthorizer({now:Date.now,audienceId:"desktop",runAccess,
+      revalidate:async()=>{if(committed) throw new BotAccessRequestStaleError("policy changed");},
+      resolveTarget:async()=>({kind:"folder",root:"/home/person/Documents/Taxes",label:"Taxes",place:"~/Documents/Taxes",device:"1",inode:"2",always:{kind:"new"}}),
+      grantFolder:async()=>{
+        attempts++;
+        if(attempts===1 && failure==="before_publication") throw new Error("disk temporarily unavailable");
+        publications++;committed=true;
+        if(failure==="after_publication") {readable=false;throw new Error("publication receipt lookup unavailable");}
+        return "rev-2";
+      },
+      folderCommitted:async()=>{if(!readable) throw new Error("journal temporarily unavailable");return committed;},changed(){}
+    });
+    const service=new AidenRemoteBotSessionService({bots:botService(),runtime:async()=>fakeRuntime({kind:"running",submissionId:"sub_1"}).runtime,accessRequests:bridge,
+      answerAccessRequest:async(botId,waitId,choice)=>{portCalls++;const result=await bridge.answer(botId,waitId,choice,authorize);return {answered:result==="answered"||result==="saved_for_future",...(result==="saved_for_future"?{savedForFuture:true as const}:{})};}
+    });
+    const waiting=bridge.request(accessRequestPrompt({botId:BOT_ID,owner:{signal:new AbortController().signal,deadline:Date.now()+60_000,validate:async()=>{}}}));
+    const id=bridge.pending()[0]!.waitId;
+    try {
+      await assert.rejects(service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"transient-access-key-001",{choice:"always"}),/temporarily unavailable/u);
+      assert.equal(bridge.pending()[0]!.waitId,id);
+      readable=true;
+      assert.deepEqual(await service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"transient-access-key-001",{choice:"always"}),{answered:true,savedForFuture:true});
+      assert.deepEqual(await service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"transient-access-key-001",{choice:"always"}),{answered:true,savedForFuture:true});
+      await waiting;assert.equal(portCalls,2);assert.equal(publications,1);
+      assert.equal(attempts,failure==="before_publication"?2:1);
+    } finally {
+      if(bridge.pending().length) await bridge.answer(BOT_ID,id,"not_now",async()=>{});
+      await waiting;await service.close();
+    }
+  }
+});
+
+test("a transient allow_folder failure retries the issue port under the same ledger key only for access", async () => {
+  const host=issueHost();let attempts=0;
+  const service=issueSession({...host.service,act:async()=>{if(++attempts===1) throw new Error("grant journal temporarily unavailable");return "done" as const;}});
+  try {
+    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"transient-issue-key-001",{action:{kind:"allow_folder"}},{accessRequests:true}),/temporarily unavailable/u);
+    assert.deepEqual(await service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"transient-issue-key-001",{action:{kind:"allow_folder"}},{accessRequests:true}),{result:"done"});
+    assert.equal(attempts,2);
+  } finally {await service.close();}
+});
+
+test("ordinary issue failure retains its existing cached rejection rather than gaining access retry semantics", async () => {
+  const host=issueHost();let attempts=0;
+  const service=issueSession({...host.service,act:async()=>{attempts++;throw new Error("ordinary action failed");}});
+  try {
+    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"ordinary-issue-key-001",{action:{kind:"stop_run"}}),/ordinary action failed/u);
+    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"ordinary-issue-key-001",{action:{kind:"stop_run"}}),(error:{code?:string})=>error.code==="internal_error");
+    assert.equal(attempts,1);
   } finally {await service.close();}
 });

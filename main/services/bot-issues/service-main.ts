@@ -74,6 +74,7 @@ export const botIssues = createBotIssueService({
     },
   },
   now: Date.now,
+  onError: (error) => logger.warn("bots", "A Bot issue transcript status could not be repaired.", error),
 });
 
 /**

@@ -32,7 +32,7 @@ export function useBotAccessRequestActions(botId: string, waitId: string | undef
     try {
       const { answered, savedForFuture } = await botsApi.answerAccessRequest(botId, pending.waitId, choice);
       if (!answered) toast.error("That card was already answered or closed.");
-      else if (savedForFuture) toast.success("Saved for future tasks.");
+      else if (savedForFuture) toast.success("Folder approval recorded.");
       // Only the host's fresh projection removes a card. A response never
       // fabricates a grant or hides a failed authorization attempt.
     } catch (error) {

@@ -120,7 +120,7 @@ class AidenBotSessionControllerTest {
         assertTrue(controller.answerAccessRequest(AidenBotAccessRequestChoice.ALWAYS))
         assertNull(controller.state.value.actionError)
         assertNull(controller.state.value.session?.accessRequest)
-        assertEquals("Saved for future tasks.", controller.state.value.accessSuccessNotice)
+        assertEquals("Folder approval recorded.", controller.state.value.accessSuccessNotice)
         assertFalse(controller.answerAccessRequest(AidenBotAccessRequestChoice.ONCE))
         assertEquals(2, transport.accessAnswers.size)
         assertEquals(transport.accessAnswers[0].key, transport.accessAnswers[1].key)

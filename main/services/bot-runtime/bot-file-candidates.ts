@@ -10,6 +10,7 @@ import type { BotToolCandidate } from "./bot-tool-assembly.js";
 import type { BotToolCall } from "./tool-adapter.js";
 import { BOT_RUN_ACCESS_LOCATION_ID, BOT_RUN_ACCESS_LOCATION_LABEL } from "../../../renderer/shared/bot-access-requests.js";
 import { botTurnOf } from "./bot-tool-policy.js";
+import { BOT_RUN_SAVED_LOCATION_ID, BOT_RUN_SAVED_LOCATION_LABEL } from "./bot-run-access.js";
 
 export interface BotFileCandidateInput {
   /** The turn the tools were built for is a routine run. */
@@ -17,6 +18,7 @@ export interface BotFileCandidateInput {
   /** Journals one file a routine run wrote with write_file or edit_file, as the write left it. */
   recordOwnWrite(absolutePath: string): void | Promise<void>;
   runAccess?: { resolve(call: BotToolCall): Promise<BotFileToolLocation | undefined> };
+  savedAccess?: { resolve(call: BotToolCall): Promise<BotFileToolLocation | undefined> };
 }
 
 export function botFileCandidates(locations: readonly BotFileToolLocation[], input: BotFileCandidateInput): BotToolCandidate[] {
@@ -26,6 +28,7 @@ export function botFileCandidates(locations: readonly BotFileToolLocation[], inp
       defaultLocation: locations[0]!,
       additionalLocations: locations.slice(1),
       ...(input.runAccess ? { lateLocation: { id: BOT_RUN_ACCESS_LOCATION_ID, label: BOT_RUN_ACCESS_LOCATION_LABEL, resolve: () => call ? input.runAccess!.resolve(call) : Promise.resolve(undefined) } } : {}),
+      ...(input.savedAccess ? { lateLocations: [{ id: BOT_RUN_SAVED_LOCATION_ID, label: BOT_RUN_SAVED_LOCATION_LABEL, resolve: () => call ? input.savedAccess!.resolve(call) : Promise.resolve(undefined) }] } : {}),
       ...(routine ? { onWrite: input.recordOwnWrite } : {}),
     });
   const offered = build(input.routine);
@@ -37,7 +40,7 @@ export function botFileCandidates(locations: readonly BotFileToolLocation[], inp
       async execute(toolCallId, params, signal, onUpdate) {
         const routine =
           input.routine || ((await call.runRequestIds?.()) ?? []).some((requestId) => botTurnOf(requestId).routine);
-        const target = input.runAccess ? build(routine, call)[index]! : routine ? (routineTools ??= build(true))[index]! : tool;
+        const target = input.runAccess || input.savedAccess ? build(routine, call)[index]! : routine ? (routineTools ??= build(true))[index]! : tool;
         return target.execute(toolCallId, params, signal, onUpdate);
       },
     }),

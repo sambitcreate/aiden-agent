@@ -18,6 +18,7 @@ import { BotAccessRequestStaleError, type BotAccessRequests } from "./bot-access
 import { BOT_RUN_ACCESS_MAX_AGE_MS, type BotRunAccess } from "./bot-run-access.js";
 import type { BotToolCandidate } from "./bot-tool-assembly.js";
 import { botRunUnattended } from "./bot-tool-policy.js";
+import type { BotToolCall } from "./tool-adapter.js";
 
 export const BOT_ACCESS_REQUEST_MEMO = "aiden.access-request";
 export interface BotAccessRequestToolDeps {
@@ -25,12 +26,37 @@ export interface BotAccessRequestToolDeps {
   runAccess: BotRunAccess;
   resolveTarget(requested: string): Promise<BotAccessResolution>;
   currentLocations(): Promise<readonly BotFileToolLocation[]>;
+  /** Exact file locations actually installed with these tools, not a run-start clock. */
+  boundLocations: readonly BotFileToolLocation[];
   policyRevision(botId: string): Promise<string>;
   raiseIssue(
     input: Omit<BotIssue, "id" | "createdAt" | "resolvedAt" | "resolution">,
   ): Promise<unknown>;
   resolveIssue?(botId: string, dedupeKey: string, resolution: "fixed"): Promise<unknown>;
   now?(): number;
+}
+/** Validate using the current tool task, never the completed Always task's API. */
+export async function botSavedLocationForCall(
+  botId: string,
+  deps: Pick<BotAccessRequestToolDeps, "runAccess" | "policyRevision">,
+  call: BotToolCall,
+  expectedRevision?: string,
+): Promise<BotFileToolLocation | undefined> {
+  await call.assertRunActive?.();
+  const ids = await call.runRequestIds?.() ?? [];
+  if (call.signal.aborted || botRunUnattended(ids)) return undefined;
+  const revision = await deps.policyRevision(botId);
+  if (expectedRevision !== undefined && expectedRevision !== revision) return undefined;
+  return deps.runAccess.savedLocation(botId, ids, revision, {
+    signal: call.signal,
+    validate: async () => {
+      await call.assertRunActive?.();
+      const currentIds = await call.runRequestIds?.() ?? [];
+      if (botRunUnattended(currentIds) || !ids.some(id => id !== undefined && currentIds.includes(id)) ||
+        await deps.policyRevision(botId) !== revision)
+        throw new BotAccessRequestStaleError("This task's access changed. Ask again.");
+    },
+  });
 }
 function paramsOf(value: unknown): { path: string; why: string } {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -121,20 +147,22 @@ export function botAccessRequestCandidate(
         });
         const run = deps.runAccess.location(botId, ids, revision);
         if (coveredByBotLocations(root, [...fixed, ...(run ? [run] : [])], "write")) {
-          // Bound file-tool schemas may predate a new fixed folder. Refresh
-          // their late location from authority the person already granted.
-          if (!coveredByBotLocations(root, run ? [run] : [], "write")) {
-            await call.assertRunActive?.();
-            if (call.signal.aborted) throw call.signal.reason;
-            if (await deps.policyRevision(botId) !== revision) throw new BotAccessRequestStaleError("This Bot's access changed. Ask again.");
-            const now = deps.now?.() ?? Date.now();
-            deps.runAccess.grant(botId, { requestIds, target: target.kind, key, root, label,
-              ...(target.kind === "folder" ? { identity: { device: target.device, inode: target.inode } } : {}),
-              policyRevision: revision, access: "write", owner: { kind: "access", id: randomUUID() },
-              grantedAt: now, expiresAt: now + BOT_RUN_ACCESS_MAX_AGE_MS });
-          }
           await deps.resolveIssue?.(botId, dedupeKey, "fixed");
-          return result("already_allowed", `You can already read and change ${label}. Use file tools with location "run.access" to reach it.`);
+          if (coveredByBotLocations(root, run ? [run] : [], "write"))
+            return result("already_allowed", `You can already read and change ${label}. Use file tools with location "run.access" to reach it.`);
+          const bound = deps.boundLocations.find(location =>
+            coveredByBotLocations(root, [location], "write") && fixed.some(current =>
+              current.id === location.id && current.root === location.root &&
+              JSON.stringify(current.expectedIdentity) === JSON.stringify(location.expectedIdentity) &&
+              coveredByBotLocations(root, [current], "write")));
+          if (bound)
+            return result("already_allowed", `You can already read and change ${label}. Use file tools with location ${JSON.stringify(bound.id)} to reach it.`);
+          // Only this task's own attended Always publication can supply the
+          // second alias. Fresh Settings/issue approvals are future authority.
+          const saved = await botSavedLocationForCall(botId, deps, call, revision);
+          if (saved && coveredByBotLocations(root, [saved], "write"))
+            return result("already_allowed", `You can already read and change ${label}. Use file tools with location "run.saved" to reach it. Your separate "run.access" folder is unchanged.`);
+          return result("already_allowed", `${label} is approved for future tasks. This task's bound file tools cannot reach that new fixed location. Start a new task to use it.`);
         }
         if (deps.runAccess.declined(botId, ids, key))
           return result(
@@ -233,7 +261,7 @@ export function botAccessRequestCandidate(
         // boundary. Never issue a second grant or adopt another policy revision.
         return result(
           answer.choice,
-          answer.savedForFuture ? `The person saved ${label} for future tasks. This task no longer owns an active access request; no temporary access was granted.` : `The person allowed ${label} for this task. Use the file tools with location "run.access" to reach it.${answer.choice === "always" ? " It stays allowed from your next task." : ""}`,
+          answer.savedForFuture ? `The person approved ${label} for future tasks. This acknowledgement records that earlier approval and does not grant temporary access or restore removed access. Check current access on a new task.` : `The person allowed ${label} for this task. Use the file tools with location "run.access" to reach it.${answer.choice === "always" ? " It stays allowed from your next task." : ""}`,
         );
       },
     }),

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BotAccessRequestStaleError, createBotAccessRequests, type BotAccessRequestPrompt } from "./bot-access-requests.js";
-import { createBotAccessAuthorizer } from "./bot-access-authorization.js";
+import { createBotAccessAuthorizer, createBotAccessRevalidator } from "./bot-access-authorization.js";
 import { createBotRunAccess } from "./bot-run-access.js";
+import { BotRuntimeAuthorityError } from "../bot-runtime-authority.js";
 
 const prompt: Omit<BotAccessRequestPrompt, "waitId"> = {
   botId: "ada",
@@ -337,4 +338,84 @@ test("abort between successful Always authorization and bridge settlement still 
   assert.equal(await bridge.answer("ada",id,"always",async()=>{controller.abort(new Error("stop"));}),"saved_for_future");
   await stopped;
   assert.equal(await bridge.answer("ada",id,"always",async()=>{throw new Error("must not publish twice");}),"saved_for_future");
+});
+
+test("runtime admission drift withdraws every choice without a decline, while a named impostor remains retryable", async () => {
+  for (const choice of ["once", "always", "not_now"] as const) {
+    for (const classification of ["capability_changed", "model_changed", "access_unavailable", "provider_mismatch"] as const) {
+      for (const phase of ["admit", "beforeEffect"] as const) {
+      let released = 0;
+      const bridge = createBotAccessRequests(), store = createBotRunAccess({ now: () => 1 });
+      const waiting = bridge.request({ ...prompt, signal: undefined, owner: { signal: new AbortController().signal, deadline: Date.now()+60_000, validate: async () => {} } });
+      // Observe either outcome before answering, so the failing implementation can be cleaned up safely.
+      const outcome = waiting.catch(error => error);
+      const id = bridge.pending()[0]!.waitId;
+      const authorize = createBotAccessAuthorizer({ now: () => 1, audienceId: "desktop", runAccess: store,
+        revalidate: createBotAccessRevalidator({
+          policyRevision: async () => "rev1", canonicalChatId: async () => "chat",
+          admit: async () => {
+            if (phase === "admit") throw new BotRuntimeAuthorityError(classification);
+            return {authority: {accessMode:"custom",files:{mode:"scoped"}} as import("../bot-runtime-authority.js").BotRuntimeEffectiveAuthority, signal:new AbortController().signal,
+              revalidateBeforeEffect:async()=>{throw new BotRuntimeAuthorityError(classification);},release:()=>{released++;}};
+          },
+        }),
+        resolveTarget: async () => { throw new Error("must not resolve after admission refusal"); },
+        grantFolder: async () => { throw new Error("must not publish"); }, changed() {} });
+      try {
+        await assert.rejects(bridge.answer("ada", id, choice, authorize), BotAccessRequestStaleError);
+        assert.deepEqual(bridge.pending(), []);
+        assert.ok(await outcome instanceof BotAccessRequestStaleError);
+        assert.equal(store.declined("ada", ["r1"], "/Taxes"), false);
+        assert.equal(released, phase === "beforeEffect" ? 1 : 0);
+      } finally {
+        if (bridge.pending().length) await bridge.answer("ada", id, "not_now", async () => {});
+        await outcome;
+      }
+    }
+  }
+  }
+  const impostor = Object.assign(new Error("temporary database outage"), { name: "BotRuntimeAuthorityError", classification: "capability_changed" });
+  const authorize = createBotAccessAuthorizer({ now: () => 1, audienceId: "desktop", runAccess: createBotRunAccess({now:()=>1}),
+    revalidate: async () => { throw impostor; }, resolveTarget: async () => { throw new Error("unreached"); }, grantFolder: async () => "rev2", changed() {} });
+  await assert.rejects(authorize({ ...prompt, waitId: "attempt", owner: {signal:new AbortController().signal,deadline:100,validate:async()=>{}} }, "once"), error => error === impostor);
+});
+
+test("every still-pending choice acknowledges an earlier Always publication after receipt recovery", async () => {
+  for (const choice of ["once", "not_now"] as const) {
+    const bridge = createBotAccessRequests(), store = createBotRunAccess({now:()=>1});
+    let committed = false, readable = true, publications = 0;
+    const authorize = createBotAccessAuthorizer({now:()=>1,audienceId:"desktop",runAccess:store,
+      revalidate:async()=>{if(committed) throw new BotAccessRequestStaleError("old policy");},
+      resolveTarget:async()=>({kind:"folder",root:"/Taxes",label:"Taxes",place:"/Taxes",device:"1",inode:"2",always:{kind:"new"}}),
+      grantFolder:async()=>{publications++;committed=true;readable=false;throw new Error("receipt unavailable");},
+      folderCommitted:async()=>{if(!readable) throw new Error("journal unavailable");return committed;},changed(){}
+    });
+    const waiting=bridge.request({...prompt,signal:undefined,owner:{signal:new AbortController().signal,deadline:Date.now()+60_000,validate:async()=>{}}});
+    const outcome=waiting.catch(error=>error); const id=bridge.pending()[0]!.waitId;
+    await assert.rejects(bridge.answer("ada",id,"always",authorize),/journal unavailable/u);
+    readable=true;
+    try {
+      assert.equal(await bridge.answer("ada",id,choice,authorize),"saved_for_future");
+      assert.deepEqual(await outcome,{choice:"always",waitId:id,savedForFuture:true});
+      assert.equal(publications,1);assert.equal(store.location("ada",["r1"],"rev1"),undefined);
+    } finally { if(bridge.pending().length) await bridge.answer("ada",id,"not_now",async()=>{}); await outcome; }
+  }
+});
+
+test("cards that cannot offer Always do not read the folder journal for Once or Not now",async()=>{
+  for(const target of ["whole_mac","home"] as const) for(const choice of ["once","not_now"] as const){
+    const bridge=createBotAccessRequests(),store=createBotRunAccess({now:()=>1});let journalReads=0;
+    const input={...prompt,grant:undefined,choices:["not_now","once"] as Array<"not_now"|"once">,
+      ...(target==="whole_mac"?{target:"whole_mac" as const,label:"your whole Mac",place:undefined}:{}),
+      authorization:{...prompt.authorization,choices:["not_now","once"] as Array<"not_now"|"once">,
+        ...(target==="whole_mac"?{target:"whole_mac" as const,root:"/",identity:undefined}:{})},
+      signal:undefined,owner:{signal:new AbortController().signal,deadline:Date.now()+60_000,validate:async()=>{}}};
+    const waiting=bridge.request(input),id=bridge.pending()[0]!.waitId;
+    const authorize=createBotAccessAuthorizer({now:()=>1,audienceId:"desktop",runAccess:store,revalidate:async()=>{},
+      resolveTarget:async()=>target==="whole_mac"?{kind:"whole_mac"}:{kind:"folder",root:"/Taxes",label:"Taxes",place:"/Taxes",device:"1",inode:"2",always:{kind:"none",reason:"home"}},
+      folderCommitted:async()=>{journalReads++;throw new Error("corrupt journal");},grantFolder:async()=>{throw new Error("not offered");},changed(){}});
+    try {
+      assert.equal(await bridge.answer("ada",id,choice,authorize),"answered");assert.equal((await waiting).choice,choice);assert.equal(journalReads,0);
+    } finally {if(bridge.pending().length) await bridge.answer("ada",id,"not_now",async()=>{});await waiting;}
+  }
 });

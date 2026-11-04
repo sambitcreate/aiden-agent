@@ -1,8 +1,32 @@
 import type { BotAccessChoice } from "../../../renderer/shared/bot-access-requests.js";
 import type { BotFolderGrantInput } from "../bot-folder-grant-journal.js";
+import { BotRuntimeAuthorityError } from "../bot-runtime-authority.js";
 import type { BotAccessResolution } from "./bot-access-target.js";
 import { BotAccessRequestStaleError, type BotAccessAuthorizationReceipt, type BotAccessRequestPrompt } from "./bot-access-requests.js";
-import { BOT_RUN_ACCESS_MAX_AGE_MS, type BotRunAccess } from "./bot-run-access.js";
+import { BOT_RUN_ACCESS_MAX_AGE_MS, type BotRunAccess, type BotRunAccessGrant } from "./bot-run-access.js";
+import type { BotAdmission } from "./bot-tool-assembly.js";
+
+/** Shared pure wiring so both admission phases are exercised without Electron. */
+export function createBotAccessRevalidator(deps: {
+  policyRevision(botId: string): Promise<string>;
+  canonicalChatId(botId: string): Promise<string | null | undefined>;
+  admit(botId: string, chatId: string): Promise<BotAdmission>;
+}): BotAccessAuthorizerDeps["revalidate"] {
+  return async (botId, expectedRevision) => {
+    const stale = () => new BotAccessRequestStaleError("This Bot's access changed. Ask for access again.");
+    if (await deps.policyRevision(botId) !== expectedRevision) throw stale();
+    const chatId = await deps.canonicalChatId(botId);
+    if (!chatId) throw new BotAccessRequestStaleError("This Bot's task is no longer available.");
+    const admission = await deps.admit(botId, chatId);
+    try {
+      if (admission.authority.accessMode !== "custom" || admission.authority.files.mode !== "scoped" ||
+        await deps.policyRevision(botId) !== expectedRevision) throw stale();
+      await admission.revalidateBeforeEffect();
+    } finally {
+      admission.release();
+    }
+  };
+}
 
 export interface BotAccessAuthorizerDeps {
   now(): number;
@@ -20,7 +44,8 @@ export function createBotAccessAuthorizer(deps: BotAccessAuthorizerDeps) {
   return async (prompt: BotAccessRequestPrompt, choice: BotAccessChoice): Promise<void | BotAccessAuthorizationReceipt> => {
     // A retained prompt may belong to a publication whose receipt read failed.
     // Acknowledge history before consulting today's owner or policy.
-    if (choice === "always" && await deps.folderCommitted?.(prompt.botId, prompt.waitId)) return { savedForFuture: true };
+    if (prompt.target === "folder" && prompt.grant && prompt.choices.includes("always") &&
+      await deps.folderCommitted?.(prompt.botId, prompt.waitId)) return { savedForFuture: true };
     const auth = prompt.authorization,
       owner = prompt.owner;
     const assertOwner = () => {
@@ -46,7 +71,15 @@ export function createBotAccessAuthorizer(deps: BotAccessAuthorizerDeps) {
           prompt.grant.rootId !== auth.rootId))
     )
       throw new Error("That answer doesn't match the card.");
-    await deps.revalidate(prompt.botId, auth.policyRevision);
+    try {
+      // Both admission and revalidateBeforeEffect may detect definite drift.
+      // Only the real classified error has this meaning; I/O stays retryable.
+      await deps.revalidate(prompt.botId, auth.policyRevision);
+    } catch (error) {
+      if (error instanceof BotRuntimeAuthorityError)
+        throw new BotAccessRequestStaleError(error.message);
+      throw error;
+    }
     const target = await deps.resolveTarget(auth.target === "whole_mac" ? "whole_mac" : auth.root);
     if (
       target.kind !== auth.target ||
@@ -107,7 +140,7 @@ export function createBotAccessAuthorizer(deps: BotAccessAuthorizerDeps) {
       }
       assertOwner();
       const now = deps.now();
-      deps.runAccess.grant(prompt.botId, {
+      const grant: BotRunAccessGrant = {
         requestIds: auth.requestIds,
         target: auth.target,
         key: auth.target === "whole_mac" ? "whole_mac" : auth.root,
@@ -119,7 +152,11 @@ export function createBotAccessAuthorizer(deps: BotAccessAuthorizerDeps) {
         owner: { kind: "access", id: prompt.waitId },
         grantedAt: now,
         expiresAt: Math.min(owner!.deadline, now + BOT_RUN_ACCESS_MAX_AGE_MS),
-      });
+      };
+      deps.runAccess.grant(prompt.botId, grant);
+      // Only a successful live Always, at its exact publication revision,
+      // supplies this proof. Receipt recovery and fresh fixed reads never do.
+      if (choice === "always") deps.runAccess.recordPublication(prompt.botId, grant, owner!);
     } catch (error) {
       // Publication is the durable effect. Later owner/policy/path failure
       // must acknowledge the save without creating temporary run authority.
