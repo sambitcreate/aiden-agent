@@ -579,3 +579,8 @@ Integration checkpoint, 2026-11-03: messaging 89, runtime 341, Bots 971, health 
   - `BotMessagePost`, `BotMessagePostResult`, `BotMessageCourier` and `BotRosterEntry` (Task 6);
   - `messageBotCandidate` and `botMessages()` (Task 7).
   Later tasks use these spellings.
+
+
+### 2026-11-04: Hosted onboarding-copy assertion corrected
+
+PR #727's renderer-other job exposed an outdated rendered-gallery assertion. A's Bots description already explains one chat, memory, asking other Bots for help and scheduled check-ins, but the test still expected the pre-messaging sentence. Root reproduced 83 passes and that single failure in `test:onboarding`, then updated the rendered-text assertions to require the shipped one-chat/memory, messaging and schedule promises. No production UI, timeout, retry or assertion removal is involved. The correction is applied on A and merged upward; C keeps its plan-specific description assertions and the shared messaging assertion. Fresh exact-head CI remains required.
