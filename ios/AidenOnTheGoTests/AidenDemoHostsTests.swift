@@ -315,9 +315,12 @@ final class AidenDemoHostsTests: XCTestCase {
             finished.set()
             return server
         }
-        try await Task.sleep(nanoseconds: 300_000_000)
-        XCTAssertFalse(finished.value, "A held request must not complete")
+        let deadline = Date().addingTimeInterval(30)
+        while responder.requests(instanceId: "studio").isEmpty, Date() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         XCTAssertEqual(responder.requests(instanceId: "studio"), ["GET /server"])
+        XCTAssertFalse(finished.value, "A held request must not complete")
 
         release()
         let server = try await task.value
