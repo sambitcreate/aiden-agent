@@ -59,4 +59,5 @@ Nothing here is persisted. A restart empties the leases and the fence. `isAdmitt
 
 - A live lease that has settled may reserve again. Those bytes are refunded at finalize.
 - The reconciliation fence blocks new leases for an owner. It does not revoke that owner's existing leases on other chats, and it does not block their handoff. Their appends still check it through `assertCurrent`.
-- The expiry timer calls the same revoke as `release`. A throwing release callback therefore still surfaces as an uncaught error there.
+- The expiry timer calls the same revoke as `release`. A throwing release callback surfaces as an uncaught error there once preparation has settled.
+- While preparation is pending, a release callback's failure is held and thrown by `settleAsyncWork`. Callers run `release()` and then `settleAsyncWork()` unguarded and the timer is already stopped, so throwing from `release` would leave the turn admitted with nothing left to settle it.
