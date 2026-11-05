@@ -95,6 +95,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChatDetailView.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
   "AidenOnTheGo/Features/Workspace/AidenChatRowStatusView.swift",
+  "AidenOnTheGo/Features/Workspace/AidenNewAgentPopover.swift",
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift",
   "AidenOnTheGo/Features/Remote/AidenInboxViews.swift",
@@ -187,6 +188,7 @@ async function readChatFeatureSources() {
 const workspaceShellSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift",
   "AidenOnTheGo/Features/Workspace/AidenChatRowStatusView.swift",
+  "AidenOnTheGo/Features/Workspace/AidenNewAgentPopover.swift",
 ];
 
 async function readWorkspaceShellSources() {
