@@ -525,12 +525,44 @@ struct AidenBotsHomeView: View {
                 if let loadError {
                     statusBanner(loadError)
                 }
+                messagingControl
                 content
             }
             .padding(.bottom, 12)
         }
         .scrollDismissesKeyboard(.interactively)
         .background(palette.canvas.ignoresSafeArea())
+    }
+
+    @ViewBuilder
+    private var messagingControl: some View {
+        if coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botMessaging) == true,
+           let context = try? coordinator.requestContext(),
+           let value = coordinator.botMessaging.value(for: context) {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Bots can message each other", isOn: Binding(
+                    get: { value.enabled },
+                    set: { enabled in
+                        Task { @MainActor in
+                            guard let client = try? coordinator.remoteClient(for: context) else { return }
+                            await coordinator.botMessaging.save(
+                                enabled: enabled, context: context,
+                                send: { try await client.setBotMessaging(enabled: enabled) },
+                                read: { try await client.bots().messaging },
+                                isCurrent: { coordinator.isCurrent(context) }
+                            )
+                        }
+                    }
+                ))
+                .disabled(coordinator.botMessaging.isSaving || coordinator.connectionState != .connected
+                    || coordinator.installationStore.activeInstallation?.canWriteBots != true)
+                if let error = coordinator.botMessaging.error {
+                    Text(error).font(.footnote).foregroundStyle(palette.secondary)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+        }
     }
 
     private var header: some View {
@@ -952,6 +984,7 @@ struct AidenBotsHomeView: View {
             // Bot identity and chat history are separately granted, so one
             // denied segment must not erase the other. Archived Bots are no
             // longer a phone concept and are not requested.
+            let messagingGeneration = coordinator.botMessaging.generation
             async let listRequest = aidenLoadBotsHomeSegment(enabled: plan.loadsList) {
                 try await client.bots()
             }
@@ -969,7 +1002,9 @@ struct AidenBotsHomeView: View {
             var failures: [Error] = []
             let list: AidenBotList?
             switch listResult {
-            case .success(let value): list = value
+            case .success(let value):
+                list = value
+                coordinator.botMessaging.adopt(value?.messaging, context: context, generation: messagingGeneration)
             case .failure(let error):
                 list = nil
                 failures.append(error)

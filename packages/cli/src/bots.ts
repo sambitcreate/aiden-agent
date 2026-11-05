@@ -1,3 +1,6 @@
+import { botMessagingEnabled } from "../../../renderer/shared/bot-messages.js";
+import { publicBotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals.js";
+import type { AppSettings } from "../../../main/services/types.js";
 import { parseBotSend } from "../../../main/handlers/bot-params.js";
 import { createBotRoutineService } from "../../../main/services/scheduled-bot-routines.js";
 import type { createCliScheduler } from "./schedules.ts";
@@ -81,6 +84,7 @@ function checkpointFile<T>(agentDir: string, name: string) {
 export const CLI_BOT_OWNER_AUDIENCE_ID = "cli:local";
 
 export async function createCliBots(agentDir: string, daemon: ReturnType<typeof createDaemonChats>) {
+  const settings = new JsonStore<AppSettings>(join(agentDir, "aiden.json"), {});
   const cliEntry = process.env.AIDEN_CLI_ENTRY;
   const fileMutatorBinary = cliEntry
     ? join(dirname(cliEntry), "native", "aiden-subagent-file-mutator")
@@ -254,6 +258,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
   const marker = cliDurableBotMarker(agentDir);
   const durable = marker?.state === "enabled" ? await createCliDurableBots(agentDir, {
     application, botStore, capabilities, authority, tools, pauses,
+    messagingEnabled: async () => botMessagingEnabled(await settings.load()),
     instructions: async (admission) => {
       await admission.revalidateBeforeEffect();
       const bot = await botStore.get(admission.authority.botId);
@@ -292,7 +297,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
       try { assertBotRuntimeProviderSelection(lease.authority.provider, input); await lease.revalidateBeforeEffect(); return { supportsCompanionImages: Boolean(lease.authority.visionProvider) }; }
       finally { lease.release(); }
     },
-    async stop() { await durable?.runtime.shutdown(); watcher.close(); inventoryLeases.invalidate("inventory_changed"); await mcp.close(); },
+    async stop() { await durable?.messages.dispose(); await durable?.runtime.shutdown(); watcher.close(); inventoryLeases.invalidate("inventory_changed"); await mcp.close(); },
     async command(args: string[]) {
       const [action = "list", id, input] = args, audienceId = CLI_BOT_OWNER_AUDIENCE_ID;
       switch (action) {
@@ -308,7 +313,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
         case "dismiss": if (!durable || !input) throw new Error("Provide a Bot id and request UUID."); return durable.runtime.dismiss(id, input);
         case "stop": if (!durable) throw new Error("Durable sessions are not enabled."); return durable.runtime.stop(id);
         case "delete": if (!durable) throw new Error("Durable sessions are not enabled."); return durable.runtime.deleteBot(id);
-        case "approvals": return durable?.approvals.pending(id) ?? [];
+        case "approvals": return durable?.approvals.pending(id).map(publicBotApprovalPrompt) ?? [];
         case "approve": if (!durable || !["allow", "deny"].includes(input)) throw new Error("Usage: bots approve <wait-id> allow|deny"); return durable.approvals.decide(id, input as "allow" | "deny");
         case "list": return application.list();
         case "get": return application.get(id);

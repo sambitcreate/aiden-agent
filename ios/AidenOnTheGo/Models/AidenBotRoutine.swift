@@ -606,7 +606,7 @@ enum AidenBotRoutineNotificationStatus: String, Codable, Sendable {
 /// What a phone-feed item is: a routine result (revision 27; `kind` absent) or,
 /// since revision 42, one of the Bot's "Needs you" cards (`bot:issues`).
 enum AidenBotNotificationKind: String, Codable, Sendable {
-    case routine, issue
+    case routine, issue, message
 }
 
 /// One finished Bot routine run the person asked to be told about, or a Bot
@@ -663,7 +663,7 @@ struct AidenBotRoutineNotification: Codable, Equatable, Identifiable, Sendable {
             guard routineId != nil, status != nil else {
                 throw AidenBotContractError.invalidField("notification")
             }
-        case .issue:
+        case .issue, .message:
             guard routineId == nil, status == nil else {
                 throw AidenBotContractError.invalidField("notification")
             }

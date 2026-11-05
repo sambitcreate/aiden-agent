@@ -40,11 +40,13 @@ export function decideBotRule(
   baseline: BotBaseline,
   rules: readonly BotRule[],
   classification: BotActionClassification,
-): { ruled: BotRuled; rule?: BotRule } {
+): { ruled: BotRuled; rule?: BotRule; allMatchingAsk: readonly BotRule[] } {
   const effective = [...BOT_LOCKED_RULES, ...rules.filter((rule) => !rule.locked)];
+  const allMatchingAsk: BotRule[] = [];
   let strictest: BotRule | undefined;
   for (const rule of effective) {
     if (!matches(rule, classification)) continue;
+    if (rule.behavior === "ask") allMatchingAsk.push(rule);
     if (
       strictest === undefined ||
       BOT_RULED_RANK[rule.behavior] > BOT_RULED_RANK[strictest.behavior] ||
@@ -53,7 +55,7 @@ export function decideBotRule(
       strictest = rule;
     }
   }
-  if (strictest === undefined) return { ruled: baseline };
+  if (strictest === undefined) return { ruled: baseline, allMatchingAsk };
   const ruled = BOT_RULED_RANK[strictest.behavior] > BOT_RULED_RANK[baseline] ? strictest.behavior : baseline;
-  return { ruled, rule: strictest };
+  return { ruled, rule: strictest, allMatchingAsk };
 }

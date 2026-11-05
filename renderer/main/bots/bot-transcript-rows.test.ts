@@ -287,3 +287,16 @@ test("the person's answer to a hand-off is their own row, with the note below, a
     assert.equal(done?.kind === "handoff_result" ? done.note : undefined, "It said verified.");
   }
 });
+
+
+test("Bot message rows start separate turns and preserve display-only saved answers", () => {
+  const rows = botTranscriptRows([
+    user("u", "First"), step("a", ""),
+    {id: "b", type: "bot_message", kind: "reply", botId: "c", botName: "COS", text: "Saved reply"},
+    step("b-step", ""), answer("done", "Done"),
+    {id: "s", type: "bot_message_status", data: {deliveryId: "d", botId: "c", botName: "COS", outcome: "replied_while_paused", text: "Read me"}},
+  ], null, {running: false, level: "summary"});
+  assert.equal(rows.filter(r => r.kind === "recap").length, 2);
+  assert.ok(rows.some(r => r.kind === "bot_message" && r.label === "COS replied" && r.botName === "COS"));
+  assert.ok(rows.some(r => r.kind === "bot_message_status" && r.text === "Read me"));
+});

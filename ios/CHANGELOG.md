@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Remote revision 57 (`bot:allowed`): capable hosts offer Always allow for a Bot after repeated approvals, plus an Allowed without asking profile list. The list includes every rule and folder across pages. Remove waits for the host and keeps the row on failure. Unknown-outcome retries keep the exact decision/scope body and key; Always acknowledges “Always allow requested.” The host remains the authority for saved access. Eligible folder cards also show the host’s approval count. Older hosts keep their existing cards.
+
 - Stream recovery keeps a host-requested retry delay across a temporary network loss, counting time asleep toward the wait.
 
 - Leaving a Bot chat while a send is being cancelled keeps the message available to retry with its original key, even if the connection returns a receipt during cancellation.

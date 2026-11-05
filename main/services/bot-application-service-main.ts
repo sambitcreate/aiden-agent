@@ -22,6 +22,12 @@ import { botAvatarStore } from "./bot-avatar-store-main.js";
 import { createBotLegacyTranscriptWipeMarker } from "./bot-legacy-transcript-wipe.js";
 import { piCompactionSessionStore } from "./pi-compaction-session-store.js";
 import { botRuntimeInventoryLeases } from "./bot-runtime-inventory-lease.js";
+import os from "node:os";
+import { fileBotFolderGrantJournal } from "./bot-folder-grant-journal.js";
+import { botAccessPrivateRoots } from "./bot-runtime/bot-access-target.js";
+import { aidenConfigDir } from "./aiden-config-dir.js";
+
+const approvedFolderRuntime = async () => (await import("./aiden-remote-service-main.js")).getAidenRemoteRuntime();
 
 export const botApplicationService = createBotApplicationService({
   botStore,
@@ -33,6 +39,14 @@ export const botApplicationService = createBotApplicationService({
   migrationSeal: botCapabilityMigrationSeal,
   mutationGate: botMutationGate,
   inventoryLeases: botRuntimeInventoryLeases,
+  approvedFolders: {
+    list: async () => (await (await approvedFolderRuntime()).state.snapshot()).approvedRoots,
+    add: async (folderPath, input) => (await approvedFolderRuntime()).approvedRoots.addLocalFolder(folderPath, { ...input, botsOnly: true }),
+    removeOwned: async (rootId, operationId) => (await approvedFolderRuntime()).approvedRoots.removeLocalRoot(rootId, operationId),
+    withInventoryLock: async (action) => (await approvedFolderRuntime()).approvedRoots.withInventoryLock(action),
+    target: { homeDirectory: os.homedir, privateRoots: () => botAccessPrivateRoots(app.getPath("userData"), aidenConfigDir()) },
+    journal: fileBotFolderGrantJournal(() => app.getPath("userData")),
+  },
   deleteChatWithEffects: (chatId, assertCurrent, onDeletionRollForward) =>
     chatApplicationService.remove(chatId, { assertCurrent, onDeletionRollForward }),
   deleteBotPhoto: (botId) => botAvatarStore.deleteBot(botId),
@@ -73,7 +87,13 @@ export function initializeBotApplicationService(): Promise<void> {
       // orphaned sessions and records interrupted turns, and never resumes one.
       // A failure leaves Bots unavailable without blocking the rest of Aiden.
       void import("./bot-runtime/bot-session-main.js")
-        .then(({ initializeBotSessionRuntime }) => initializeBotSessionRuntime())
+        .then(async ({ initializeBotSessionRuntime, reconcileBotAllowList }) => {
+          // Journal recovery is complete. Reconcile historical obligations,
+          // without publishing new consent or restoring ephemeral run access.
+          try { await reconcileBotAllowList(); }
+          catch (error) { logger.warn("bots", "Bot approval history could not be reconciled.", error); }
+          await initializeBotSessionRuntime();
+        })
         .catch((error: unknown) => logger.error("bots", "The Bot runtime could not start.", error));
     })
     .catch((error) => {

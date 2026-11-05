@@ -332,6 +332,7 @@ interface WorkspaceRootGuard {
   canonical: string | null;
   identity: Stats | null;
   exactIdentity: PinnedWorkspaceRootIdentity | null;
+  assertReadPath?: CodingToolOptions["assertReadPath"];
   testObserver?: {
     beforeDirectoryOpen?(directoryPath: string): void | Promise<void>;
     afterDirectoryOpen?(directoryPath: string): void | Promise<void>;
@@ -717,6 +718,7 @@ async function readParentFile(
   await verifyWorkspaceRoot(workspace, signal);
   const canonical = assertRealPathInRoot(root, await fs.realpath(full), full);
   throwIfAborted(signal, "File read cancelled.");
+  await workspace.assertReadPath?.(canonical);
   rejectEnvironmentSecret(root, canonical);
   const handle = await fs.open(canonical, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
   try {
@@ -726,6 +728,7 @@ async function readParentFile(
     if (!stat.isFile()) throw new Error("The requested path is not a regular file.");
     const verified = assertRealPathInRoot(root, await fs.realpath(full), full);
     throwIfAborted(signal, "File read cancelled.");
+    await workspace.assertReadPath?.(verified);
     rejectEnvironmentSecret(root, verified);
     if (!sameFile(stat, await fs.stat(verified))) throw new Error("File changed while opening.");
     throwIfAborted(signal, "File read cancelled.");
@@ -781,6 +784,7 @@ async function parentDirectoryEntries(
   throwIfAborted(signal, "Directory traversal cancelled.");
   const canonical = assertRealPathInRoot(root, await fs.realpath(full), full);
   throwIfAborted(signal, "Directory traversal cancelled.");
+  await workspace.assertReadPath?.(canonical);
   const before = await fs.stat(canonical);
   throwIfAborted(signal, "Directory traversal cancelled.");
   const directory = await fs.opendir(canonical, { bufferSize: 1 });
@@ -790,6 +794,7 @@ async function parentDirectoryEntries(
     await verifyWorkspaceRoot(workspace, signal);
     const after = assertRealPathInRoot(root, await fs.realpath(full), full);
     throwIfAborted(signal, "Directory traversal cancelled.");
+    await workspace.assertReadPath?.(after);
     if (canonical !== after || !sameFile(before, await fs.stat(after))) throw new Error("Directory changed while opening.");
     const entries: Dirent[] = [];
     while (!parentScanStopped(budget, signal)) {
@@ -804,6 +809,15 @@ async function parentDirectoryEntries(
       budget.entries++;
       workspace.testObserver?.onDirectoryEntry?.(path.join(full, entry.name));
       throwIfAborted(signal, "Directory traversal cancelled.");
+      if (workspace.assertReadPath) {
+        try {
+          const entryPath = assertRealPathInRoot(root, await fs.realpath(path.join(full, entry.name)), entry.name);
+          await workspace.assertReadPath(entryPath);
+        } catch {
+          throwIfAborted(signal, "Directory traversal cancelled.");
+          continue;
+        }
+      }
       entries.push(entry);
     }
     // Omit an over-budget directory instead of allowing filesystem enumeration
@@ -1389,6 +1403,7 @@ function makeParentGlob(workspace: WorkspaceRootGuard): AgentTool {
               if (matches.has(candidate)) continue;
               try {
                 const canonical = assertRealPathInRoot(root, await fs.realpath(resolveInRoot(workspace.lexical, candidate)), candidate);
+                await workspace.assertReadPath?.(canonical);
                 if (isEnvironmentSecretPath(candidate) || isEnvironmentSecretPath(path.relative(root, canonical))) continue;
               } catch {
                 throwIfAborted(signal, "File search cancelled.");
@@ -1758,6 +1773,8 @@ function makeParentGrep(workspace: WorkspaceRootGuard): AgentTool {
  * mid-generation drops the directory from the next command.
  */
 export interface CodingToolOptions {
+  /** Main-owned canonical read fence, checked for direct reads and each search entry. */
+  assertReadPath?: (canonicalPath: string) => void | Promise<void>;
   pathPrefix?: string | (() => string | null | undefined);
   /** A shorter deadline for process-lifecycle tests; production uses the fixed limit. */
   commandTimeoutMs?: number;
@@ -1908,6 +1925,7 @@ function withForegroundReadScope(tool: AgentTool): AgentTool {
 }
 
 function buildParentCodingToolSet(workspace: WorkspaceRootGuard, options: CodingToolOptions = {}): AgentTool[] {
+  workspace.assertReadPath = options.assertReadPath;
   return [
     declarePiRuntimeReplay(withForegroundReadScope(makeParentReadFile(workspace)), "safe"),
     declarePiRuntimeReplay(withForegroundReadScope(makeParentListDir(workspace)), "safe"),

@@ -527,4 +527,51 @@ class AidenBotContractTest {
             AidenBotWireJson.json.decodeFromString(AidenBotIdentityPatch.serializer(), """{"openingGreeting":"Hi"}""")
         }
     }
+
+    @Test
+    fun messagingFixturesAndStrictBooleanBounds() {
+        val root = Json.parseToJsonElement(requireNotNull(javaClass.classLoader?.getResourceAsStream("contract.json")).bufferedReader().use { it.readText() }).jsonObject
+        val detail = AidenBotWireJson.json.decodeFromJsonElement(AidenBotDetail.serializer(), root.getValue("botMessagingDetail"))
+        assertEquals(AidenBotMessaging(true, true), detail.botMessaging)
+        val patch = AidenBotWireJson.json.decodeFromJsonElement(AidenBotIdentityPatch.serializer(), root.getValue("botMessagingPatch"))
+        assertEquals(false, patch.botMessaging?.receive)
+        assertNull(patch.botMessaging?.send)
+        assertFalse(AidenBotWireJson.json.decodeFromJsonElement(AidenBotMessagingSettings.serializer(), root.getValue("botMessagingSettings")).enabled)
+        val notification = AidenBotWireJson.json.decodeFromJsonElement(AidenBotRoutineNotification.serializer(), root.getValue("botMessageNotification"))
+        assertEquals(AidenBotNotificationKind.MESSAGE, notification.kind)
+        assertNull(notification.status)
+        assertNull(notification.routineId)
+        assertNull(loadSharedContractFixture().botDetail.botMessaging)
+        assertThrows(Exception::class.java) {
+            AidenBotWireJson.json.decodeFromJsonElement(AidenBotDetail.serializer(), JsonObject(root.getValue("botMessagingDetail").jsonObject + ("botMessaging" to JsonNull)))
+        }
+        assertThrows(Exception::class.java) {
+            AidenBotWireJson.json.decodeFromString(AidenBotIdentityPatch.serializer(), """{"botMessaging":null,"name":"Ada"}""")
+        }
+        assertThrows(Exception::class.java) {
+            AidenBotWireJson.json.decodeFromString(AidenBotList.serializer(), """{"bots":[],"maxBots":256,"messaging":null}""")
+        }
+        for (invalid in listOf("{}", "{\"receive\":null}", "{\"receive\":\"false\"}", "{\"receive\":1}", "{\"send\":true,\"path\":\"private\"}")) {
+            assertThrows(Exception::class.java) { AidenBotWireJson.json.decodeFromString(AidenBotMessagingPatch.serializer(), invalid) }
+        }
+        for (invalid in listOf("{}", "{\"enabled\":null}", "{\"enabled\":\"false\"}", "{\"enabled\":0}")) {
+            assertThrows(Exception::class.java) { AidenBotWireJson.json.decodeFromString(AidenBotMessagingSettings.serializer(), invalid) }
+        }
+        assertThrows(Exception::class.java) { AidenBotWireJson.json.decodeFromString(AidenBotMessaging.serializer(), "{\"receive\":true}") }
+    }
+
+    @Test
+    fun labelledMessagingRowsKeepCleanTextAndBoundedSavedAnswer() {
+        val entry = AidenBotWireJson.json.decodeFromString(AidenBotSessionEntry.serializer(),
+            """{"id":"request_1","type":"message","role":"user","label":"Jester asked","text":"Check the calendar"}""") as AidenBotSessionEntry.Message
+        assertEquals("Jester asked", entry.label)
+        assertEquals("Check the calendar", entry.text)
+        assertFalse(entry.text.contains("<bot_message"))
+        val reply = AidenBotWireJson.json.decodeFromString(AidenBotSessionEntry.serializer(),
+            """{"id":"reply_1","type":"message","role":"user","label":"COS","text":"COS replied while this Bot was paused.\nThere are three events."}""") as AidenBotSessionEntry.Message
+        assertEquals("COS", reply.label)
+        assertTrue(reply.text.contains("There are three events."))
+        val excessive = """{"id":"reply_2","type":"message","role":"user","label":"COS","text":"${"x".repeat(AidenBotSessionWire.MAX_TEXT_LENGTH + 1)}"}"""
+        assertThrows(Exception::class.java) { AidenBotWireJson.json.decodeFromString(AidenBotSessionEntry.serializer(), excessive) }
+    }
 }

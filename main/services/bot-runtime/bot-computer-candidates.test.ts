@@ -148,7 +148,7 @@ async function within<T>(call: Promise<T>, ms: number): Promise<T | "still waiti
 const resultText = (result: AgentToolResult<unknown>) => result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
 
 test("the run a call serves decides how long it waits for Give back, and a routine or Telegram run waits once across both tools", async () => {
-  for (const requestId of ["routine:task-1:2026-10-07T09:00:00.000Z", "tg:bot:1:0:5"]) {
+  for (const requestId of ["routine:task-1:2026-10-07T09:00:00.000Z", "tg:bot:1:0:5", "bot:J:1:00112233-4455-4677-8899-aabbccddeeff", "botreply:00112233-4455-4677-8899-aabbccddeeff"]) {
     const fake = services();
     // Built as the registry builds them: for an attended turn.
     const [computer, shell] = await botComputerCandidates(BOT, turn({ computers: fake.computers, unattendedWaitMs: 300 }));

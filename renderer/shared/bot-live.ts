@@ -1,3 +1,6 @@
+import type { BotPlanView } from "./bot-plans.js";
+import type { BotPendingAccessRequest } from "./bot-access-requests.js";
+import type { BotMessageStatusEntryData } from "./bot-messages.js";
 // The renderer's view of a Bot's one durable conversation (plan Task 1.4).
 //
 // Main projects the Pi Durable transcript into these entries and streams them
@@ -70,6 +73,8 @@ export interface BotTranscriptToolCall {
 export type BotToolResultStatus = "ok" | "failed" | "blocked" | "stopped";
 
 export type BotTranscriptEntry =
+  | { id: string; type: "bot_message"; kind: "request" | "reply"; botId: string; botName: string; text: string; at?: number }
+  | { id: string; type: "bot_message_status"; data: BotMessageStatusEntryData; at?: number }
   | {
       id: string;
       type: "user";
@@ -288,6 +293,10 @@ export interface BotLiveSnapshot {
    * read it as `snapshot.handoff ?? null`.
    */
   handoff?: BotPendingHandoff | null;
+  /** Public access card only; absent snapshots read as no pending request. */
+  accessRequest?: BotPendingAccessRequest | null;
+  /** Public plan card/checklist only; main-only authorization stays on the host. */
+  plan?: BotPlanView | null;
   /** What the Bot is doing in the running turn, or null. */
   activity: BotLiveActivity | null;
   /** Messages waiting for the running turn, oldest first. */
@@ -300,6 +309,8 @@ export type BotLiveEventBody =
   | { type: "state"; state: BotSessionState }
   | { type: "question"; question: BotPendingQuestion | null }
   | { type: "handoff"; handoff: BotPendingHandoff | null }
+  | { type: "access_request"; accessRequest: BotPendingAccessRequest | null }
+  | { type: "plan"; plan: BotPlanView | null }
   | { type: "activity"; activity: BotLiveActivity | null }
   | { type: "queued"; queued: BotQueuedMessage[] }
   /** Replaces everything: after an overflow, a reopen, or a retroactive change. */
@@ -313,7 +324,7 @@ export interface BotLiveSummary {
   preview: string | null;
   updatedAt: number | null;
   state: BotSessionState;
-  /** An approval, an A–E question or a hand-off card is waiting on the person ("Needs you"). */
+  /** An approval, question, hand-off, access card or pending plan is waiting on the person ("Needs you"). */
   needsYou: boolean;
   /** When the newest reply with visible text arrived; the sidebar's unread dot compares it with last-viewed. */
   lastReplyAt: number | null;
@@ -381,6 +392,10 @@ export function applyBotLiveEvent(snapshot: BotLiveSnapshot, event: BotLiveEvent
       return { ...snapshot, seq: event.seq, question: event.question };
     case "handoff":
       return { ...snapshot, seq: event.seq, handoff: event.handoff };
+    case "access_request":
+      return { ...snapshot, seq: event.seq, accessRequest: event.accessRequest };
+    case "plan":
+      return { ...snapshot, seq: event.seq, plan: event.plan };
     case "activity":
       return { ...snapshot, seq: event.seq, activity: event.activity };
     case "queued":

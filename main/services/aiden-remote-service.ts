@@ -205,7 +205,7 @@ export interface AidenRemoteServiceOptions {
           | "createChat"
         > & Partial<Pick<
           AidenRemoteBotService,
-          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete"
+          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete" | "supportsChatActivity" | "supportsBotMessaging" | "updateMessaging"
         >>;
         settle?: () => Promise<void>;
       }
@@ -245,7 +245,7 @@ export interface AidenRemoteServiceOptions {
           | "createChat"
         > & Partial<Pick<
           AidenRemoteBotService,
-          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete"
+          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete" | "supportsChatActivity" | "supportsBotMessaging" | "updateMessaging"
         >>;
         settle?: () => Promise<void>;
       }>;
@@ -1660,7 +1660,7 @@ export class AidenRemoteService {
           ? { tailscaleErrorCode }
           : {}),
       pairedDeviceCount: state.devices.length,
-      approvedRootCount: state.approvedRoots.length,
+      approvedRootCount: state.approvedRoots.filter((root) => !root.botsOnly).length,
       ...(this.options.pairingRequestSettings
         ? { acceptPairingRequests: await this.loadPairingRequestSetting() }
         : {}),
