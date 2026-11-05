@@ -48,10 +48,23 @@ final class AidenMachinePreferencesTests: XCTestCase {
             "-1:a1:b1:c",            // negative length
             "1a1:b1:c",              // missing colon
             "1:a1:b1:",              // truncated payload
+            "9223372036854775808:a1:b1:c",   // Int.max + 1
+            "9223372036854775807:a1:b1:c",   // Int.max, far past the end
+            "99999999999999999999:a1:b1:c",  // many digits, overflows Int
+            "01:a1:b1:c",            // non-canonical leading zero
+            "1:a01:b1:c",            // non-canonical leading zero later on
+            "00:1:b1:c",             // two zeros
+            "1:é1:b1:c",             // length 1 splits a two-byte character
         ]
         for key in malformed {
             XCTAssertNil(AidenHostObjectID(storageKey: key), key)
         }
+    }
+
+    func testAHostObjectIDRoundTripsThroughCodable() throws {
+        let id = AidenHostObjectID(instanceId: "a:b", deviceId: "é", objectId: "bot:1")
+        let data = try JSONEncoder().encode(id)
+        XCTAssertEqual(try JSONDecoder().decode(AidenHostObjectID.self, from: data), id)
     }
 
     func testEmptySegmentsRoundTrip() {
@@ -82,6 +95,17 @@ final class AidenMachinePreferencesTests: XCTestCase {
         let second = store.preferences(for: "m2").color
         XCTAssertEqual(store.preferences(for: "m2").color, second)
         XCTAssertEqual(store.preferences(for: "m1").color, .blue)
+    }
+
+    func testAnAutoAssignedColourSurvivesANewStoreOnTheSameDefaults() {
+        let first = makeStore()
+        _ = first.preferences(for: "m1")
+        let assigned = first.preferences(for: "m2").color
+        XCTAssertEqual(assigned, .teal)
+        let relaunched = makeStore()
+        XCTAssertEqual(relaunched.preferences(for: "m2").color, assigned)
+        XCTAssertEqual(relaunched.preferences(for: "m1").color, .blue)
+        XCTAssertEqual(relaunched.preferences(for: "m3").color, .green)
     }
 
     func testColoursWrapToBlueOnceAllNineAreUsed() {
@@ -128,7 +152,10 @@ final class AidenMachinePreferencesTests: XCTestCase {
         }
     }
 
-    func testEveryColourHasASixDigitHex() {
+    func testEveryColourHexIsTheSpecifiedSixDigitUppercaseValue() {
+        for colour in AidenMachineColor.allCases {
+            XCTAssertNotNil(colour.hex.range(of: "^[0-9A-F]{6}$", options: .regularExpression), colour.hex)
+        }
         let expected = ["2F6FDE", "0E8F8F", "2E8B57", "B9770E", "D2601A", "C93C3C", "C2337F", "7B4FD0", "5A6070"]
         XCTAssertEqual(AidenMachineColor.allCases.map(\.hex), expected)
     }

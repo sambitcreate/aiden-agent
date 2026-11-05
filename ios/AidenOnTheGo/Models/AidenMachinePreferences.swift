@@ -60,6 +60,11 @@ final class AidenMachinePreferencesStore {
     /// Returns the stored preferences. A machine seen for the first time is
     /// assigned the first colour no stored machine uses, wrapping to blue when
     /// all are used, and that assignment is persisted so it stays stable.
+    ///
+    /// This is not a pure read: the first call for an unknown instance assigns
+    /// and persists a colour, which mutates observable state. Do not make that
+    /// first call from a SwiftUI `body`. Model or store code must call it when
+    /// machines load or are added, so views only ever read settled values.
     func preferences(for instanceId: String) -> AidenMachinePreferences {
         if let existing = stored[instanceId] { return existing }
         let used = Set(stored.values.map(\.color))

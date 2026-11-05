@@ -23,7 +23,8 @@ struct AidenHostObjectID: Hashable, Codable, Sendable {
     }
 
     /// Parses a key produced by `storageKey`. Returns nil for a bad length,
-    /// the wrong number of segments, or trailing bytes.
+    /// a non-canonical length (a leading zero), the wrong number of segments,
+    /// or trailing bytes. Never traps, whatever the input.
     init?(storageKey: String) {
         let bytes = Array(storageKey.utf8)
         var cursor = 0
@@ -32,9 +33,11 @@ struct AidenHostObjectID: Hashable, Codable, Sendable {
             var length = 0
             var digits = 0
             while cursor < bytes.count, (0x30...0x39).contains(bytes[cursor]) {
-                let (scaled, overflowed) = length.multipliedReportingOverflow(by: 10)
-                guard !overflowed else { return nil }
-                length = scaled + Int(bytes[cursor] - 0x30)
+                // A length can never exceed the bytes that remain, so stop as
+                // soon as it does. This also rules out integer overflow.
+                guard digits == 0 || bytes[cursor - digits] != 0x30 else { return nil }  // canonical: no leading zero
+                length = length * 10 + Int(bytes[cursor] - 0x30)
+                guard length <= bytes.count else { return nil }
                 cursor += 1
                 digits += 1
             }
