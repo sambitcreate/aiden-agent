@@ -3,7 +3,7 @@ import { scheduledMcpServerBinding } from "../../../main/services/schedule-mcp-b
 import { storeFor } from "./mcp.ts";
 import { runScheduledInference } from "./scheduled-inference.ts";
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { remoteDaemonCommand } from "./daemon-control.ts";
 import { createHash } from "node:crypto";
@@ -126,6 +126,8 @@ export function createCliScheduler(agentDir: string) {
       } finally {
         // Cron callbacks can inherit this async context, but never its one-shot consent.
         current.phase = "closed";
+        // Without the receipt no other scheduler can replay it. A leftover file stays spent here.
+        try { rmSync(approval.approvalFile, { force: true }); } catch { /* The command's own outcome stands. */ }
       }
     }
     const currentApproval = approvedMutation.getStore();

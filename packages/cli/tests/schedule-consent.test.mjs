@@ -48,7 +48,8 @@ test("consent for a new schedule covers the reviewed input, once", async (t) => 
   await save(approved);
   assert.equal(await count(), before + 1);
   await assert.rejects(save(approved), /already used/u);
-  assert.equal(await count(), before + 1, "the receipt was left in place, but consent is spent");
+  await assert.rejects(api.createCliScheduler(f.dir).command(["save", file, JSON.stringify(approved)]), /cancelled/u, "another scheduler cannot replay it");
+  assert.equal(await count(), before + 1);
 });
 
 test("consent for the task as reviewed lets the mutation through", async (t) => {
