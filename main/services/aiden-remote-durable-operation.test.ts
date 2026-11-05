@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { DataStore } from "./data-store.js";
+import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   executeAidenDurableOperation,
   type AidenDurableOperationOwner,
@@ -276,6 +277,104 @@ test("a join or replay during the outcome write learns what the owner learns", a
   await assert.rejects(first, code("idempotency_in_flight"));
   await assert.rejects(joined, code("idempotency_in_flight"));
   await assert.rejects(replay, code("idempotency_in_flight"));
+  assert.equal(effects, 1);
+});
+
+/** A disk whose numbered writes can be held open and then released or failed. */
+function heldWrites(...numbers: number[]) {
+  const held = new Map(
+    numbers.map((number) => {
+      let reached!: () => void;
+      const arrived = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      let release!: () => void;
+      let fail!: (error: Error) => void;
+      const finished = new Promise<void>((resolve, reject) => {
+        release = resolve;
+        fail = reject;
+      });
+      return [number, { reached, arrived, release, fail, finished }] as const;
+    }),
+  );
+  let saves = 0;
+  return {
+    write: (number: number) => held.get(number)!,
+    persist: async () => {
+      saves += 1;
+      const write = held.get(saves);
+      if (!write) return;
+      write.reached();
+      await write.finished;
+    },
+  };
+}
+
+test("a replay of a rejection waits for the owner to record it", async () => {
+  const ledger = new AidenIdempotencyLedger();
+  const disk = heldWrites(2);
+  const durable = owner(ledger, disk.persist);
+  const refused = new AidenRemoteServiceError("not_found", "refused", 403);
+
+  const first = executeAidenDurableOperation(durable, SCOPE, {}, async () => {
+    throw refused;
+  });
+  const firstAnswer = assert.rejects(first, code("idempotency_in_flight"));
+  await disk.write(2).arrived;
+  const replay = executeAidenDurableOperation(durable, SCOPE, {}, async () => "unused");
+  const replayAnswer = assert.rejects(replay, code("idempotency_in_flight"));
+  disk.write(2).fail(new Error("disk lost"));
+
+  await firstAnswer;
+  await replayAnswer;
+});
+
+test("a request with other input still conflicts while a rejection is being recorded", async () => {
+  const ledger = new AidenIdempotencyLedger();
+  const disk = heldWrites(2);
+  const durable = owner(ledger, disk.persist);
+
+  const first = executeAidenDurableOperation(durable, SCOPE, { value: 1 }, async () => {
+    throw new AidenRemoteServiceError("not_found", "refused", 403);
+  });
+  const firstAnswer = assert.rejects(first, code("not_found"));
+  await disk.write(2).arrived;
+  await assert.rejects(
+    executeAidenDurableOperation(durable, SCOPE, { value: 2 }, async () => "unused"),
+    code("idempotency_conflict"),
+  );
+  disk.write(2).release();
+  await firstAnswer;
+});
+
+test("an earlier owner finishing cannot expose a later owner's unrecorded outcome", async () => {
+  const ledger = new AidenIdempotencyLedger();
+  const disk = heldWrites(2, 4);
+  const durable = owner(ledger, disk.persist);
+  const unavailable = new AidenRemoteServiceError("not_found", "not run", 403);
+
+  const earlier = executeAidenDurableOperation(durable, SCOPE, {}, async () => {
+    throw new AidenOperationNotExecutedError(unavailable);
+  });
+  const earlierAnswer = assert.rejects(earlier, code("not_found"));
+  await disk.write(2).arrived;
+
+  let effects = 0;
+  const later = executeAidenDurableOperation(durable, SCOPE, {}, async () => {
+    effects += 1;
+    return "committed";
+  });
+  const laterAnswer = assert.rejects(later, code("idempotency_in_flight"));
+  disk.write(2).release();
+  await earlierAnswer;
+  await disk.write(4).arrived;
+
+  const replay = executeAidenDurableOperation(durable, SCOPE, {}, async () => "unused");
+  const replayAnswer = assert.rejects(replay, code("idempotency_in_flight"));
+  disk.write(4).fail(new Error("disk lost"));
+
+  await laterAnswer;
+  await replayAnswer;
   assert.equal(effects, 1);
 });
 
