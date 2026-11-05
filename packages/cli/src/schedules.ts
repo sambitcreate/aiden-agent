@@ -3,7 +3,7 @@ import { scheduledMcpServerBinding } from "../../../main/services/schedule-mcp-b
 import { storeFor } from "./mcp.ts";
 import { runScheduledInference } from "./scheduled-inference.ts";
 import { join } from "node:path";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync, unlinkSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { remoteDaemonCommand } from "./daemon-control.ts";
 import { createHash } from "node:crypto";
@@ -42,7 +42,14 @@ export function createCliScheduler(agentDir: string) {
           try {
             assertScheduleApproval(agentDir, current.approval, current.phase === "first_write");
             // Consumed just before the write publishes: a crash after it cannot leave consent to replay.
-            if (current.phase === "first_write") rmSync(current.approval.approvalFile, { force: true });
+            // A receipt already gone was revoked since the check above, so this write may not publish.
+            if (current.phase === "first_write") {
+              try { unlinkSync(current.approval.approvalFile); }
+              catch (error) {
+                if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("Scheduled-task approval was cancelled. Review the task again.", { cause: error });
+                throw error;
+              }
+            }
           } catch (error) {
             // A rejected mutation may rearm/restore the unchanged task, never reuse its consent.
             // Aborting lets the shared lifecycle roll back writes this mutation already made.

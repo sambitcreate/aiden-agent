@@ -1,7 +1,8 @@
 // cli-native C15: a schedule mutation carrying consent is bound to what the
 // person reviewed, and is rechecked at the durable write.
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import fs, { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -96,6 +97,26 @@ test("consent revoked at the durable write stops the mutation and is not reused"
   t.after(() => { api.JsonStore.prototype.update = update; });
   await assert.rejects(f.run("pause", approval), /cancelled/u);
   api.JsonStore.prototype.update = update;
+  assert.equal((await f.stored()).enabled, true);
+});
+
+test("a revocation between the last check and consuming the receipt still stops the write", async (t) => {
+  const f = await fixture(t), approval = f.consent("pause");
+  const { readFileSync } = fs, { update } = api.JsonStore.prototype;
+  let armed = false;
+  api.JsonStore.prototype.update = function (...args) {
+    if (this.file.endsWith("schedules.json")) armed = true;
+    return update.apply(this, args);
+  };
+  fs.readFileSync = (path, ...args) => {
+    const value = readFileSync(path, ...args);
+    if (armed && path === approval.approvalFile) rmSync(path);
+    return value;
+  };
+  syncBuiltinESMExports();
+  t.after(() => { fs.readFileSync = readFileSync; api.JsonStore.prototype.update = update; syncBuiltinESMExports(); });
+  await assert.rejects(f.run("pause", approval), /cancelled/u);
+  armed = false;
   assert.equal((await f.stored()).enabled, true);
 });
 
