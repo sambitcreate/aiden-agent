@@ -256,3 +256,28 @@ test("the canvas watches its pages and reloads one when its file changes", async
     "an unchanged image keeps its address",
   );
 });
+
+test("a visual Aiden draws again under the same title replaces the one in its frame", async () => {
+  const chart: DesignFrame = { id: "a1", kind: "artifact", title: "Chart", x: 0, y: 0, w: 640, h: 480, mediaId: "m1", createdBy: "aiden" };
+  let doc = canvasWith(chart);
+  const { calls } = setup(doc, {
+    "designCanvas:get": () => doc,
+    "chats:htmlArtifactSrcdoc": (input) => {
+      const { mediaId } = input as { mediaId: string };
+      return { title: "Chart", src: `aiden-genui://preview/${mediaId}` };
+    },
+  });
+  await mount();
+  fireEvent.doubleClick(screen.getByRole("group", { name: "Chart" }));
+  const src = () => document.querySelector("iframe")?.getAttribute("src");
+  await waitFor(() => assert.equal(src(), "aiden-genui://preview/m1"), SAVE_WAIT);
+
+  // Aiden's next reply swaps the frame's media; main saves and announces it.
+  doc = { ...doc, revision: 2, frames: [{ ...chart, mediaId: "m2" }] };
+  act(() => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 2 }));
+  await waitFor(() => assert.equal(src(), "aiden-genui://preview/m2"), SAVE_WAIT);
+  assert.deepEqual(
+    calls.filter((call) => call.channel === "chats:htmlArtifactSrcdoc").map((call) => (call.args[0] as { mediaId: string }).mediaId),
+    ["m1", "m2"],
+  );
+});

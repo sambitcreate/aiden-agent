@@ -1,5 +1,6 @@
 // An HTML artifact from the chat, drawn with the chat's own artifact preview.
-// P3 is what places these; until then a canvas only shows the ones it has.
+// Aiden places these while design mode is on; drawing a visual again under
+// the same title swaps the frame's media, so the frame shows the new one.
 
 import type { NodeProps } from "@xyflow/react";
 import * as React from "react";
@@ -13,23 +14,34 @@ import { useFrameSnapshot } from "../frame-snapshots";
 import { useDesignNodeContext } from "./design-node-context";
 import { DesignNodeResizer, FrameSkeleton, useRetiringFrame } from "./frame-parts";
 
+/** A snapshot belongs to one visual: a frame's new media is a new snapshot version. */
+function mediaVersion(mediaId: string | undefined): number {
+  let hash = 0;
+  for (const char of mediaId ?? "") hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return hash;
+}
+
 export function ArtifactNode({ id, data, selected }: NodeProps<DesignNode>) {
   const canvas = useDesignNodeContext();
   const { frame } = data;
   const live = canvas.live.has(id);
   const entered = canvas.entered === id;
-  const [src, setSrc] = React.useState<string | null>(null);
+  // Keyed by media, so a swapped visual loads afresh instead of keeping the old one.
+  const [loaded, setLoaded] = React.useState<{ mediaId: string; src: string } | null>(null);
+  const src = loaded && loaded.mediaId === frame.mediaId ? loaded.src : null;
+  const version = mediaVersion(frame.mediaId);
   const contentRef = React.useRef<HTMLDivElement | null>(null);
-  const retiring = useRetiringFrame({ frameId: id, version: 0, live, showing: src !== null, content: contentRef });
-  const { snapshot } = useFrameSnapshot(id, 0);
+  const retiring = useRetiringFrame({ frameId: id, version, live, showing: src !== null, content: contentRef });
+  const { snapshot } = useFrameSnapshot(id, version);
   const wanted = (live || retiring) && frame.mediaId !== undefined;
 
   React.useEffect(() => {
     if (!wanted || src !== null || !frame.mediaId) return;
+    const mediaId = frame.mediaId;
     let cancelled = false;
-    void chatsApi.htmlArtifactSrcdoc(canvas.chatId, frame.mediaId, readGenerativeUiTheme()).then(
+    void chatsApi.htmlArtifactSrcdoc(canvas.chatId, mediaId, readGenerativeUiTheme()).then(
       (preview) => {
-        if (!cancelled && preview) setSrc(preview.src);
+        if (!cancelled && preview) setLoaded({ mediaId, src: preview.src });
       },
       () => undefined,
     );

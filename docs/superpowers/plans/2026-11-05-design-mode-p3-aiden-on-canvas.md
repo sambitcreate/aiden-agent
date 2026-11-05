@@ -1,6 +1,6 @@
 # Design mode P3: Aiden on the canvas
 
-Status: in progress, 2026-11-05. P3a done. Spec: [design mode §6](../specs/2026-10-31-design-mode-design.md#6-aiden-on-the-canvas). Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P2.
+Status: in progress, 2026-11-05. P3a and P3b done. Spec: [design mode §6](../specs/2026-10-31-design-mode-design.md#6-aiden-on-the-canvas). Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P2.
 
 **Goal:** in a chat with design mode on, Aiden can see the canvas, put its own designs on it, and tidy them, without the person adding frames by hand.
 
@@ -37,6 +37,8 @@ Each slice lands as its own commit set with behavioral tests. Screenshots are ne
 ### P3b: visuals become artifact frames
 
 While design mode is on, each `render_artifact` result is placed as an `artifact` frame, keyed by `mediaId`. Placing the same title again replaces the frame's media and keeps its position. Tests cover first placement, a same-title replacement, and design mode off (nothing placed).
+
+As built: frames are placed after the turn's artifacts are committed, so a failed turn never leaves a frame pointing at a discarded visual. Only frames Aiden placed are swapped by title; a person's frame with the same title is left alone. The placement runs only in a turn that got the canvas tools (the same `designCanvasToolsAllowed` gate) and re-checks that design mode is still on. The canvas's artifact frame reloads when its media changes.
 
 ### P3c: the `aiden-design` skill
 

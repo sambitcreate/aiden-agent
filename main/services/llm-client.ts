@@ -497,6 +497,7 @@ import { todoSnapshotDiagnostic } from "./rpiv-todo/diagnostics.js";
 import { todoSnapshotForRenderer } from "../../renderer/shared/todo.js";
 import { chatProgressEvents } from "./chat-progress-events.js";
 import { GenerationDeltaCoalescer } from "./generation-delta-coalescer.js";
+import { randomUUID } from "node:crypto";
 import { designModeEnabled } from "./studio/feature-flags.js";
 import { designCanvasStore } from "./design-canvas/main.js";
 import {
@@ -505,6 +506,7 @@ import {
   designCanvasToolsAllowed,
 } from "./design-canvas/canvas-tools.js";
 import { canvasPromptLine } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { placeArtifactsOnCanvas, type CanvasArtifact } from "./design-canvas/artifact-frames.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
@@ -2210,6 +2212,8 @@ async function prepareGeneration(
       },
     }).filter((tool) => !options.excludeToolNames?.has(tool.name)));
   }
+  /** Set while this turn may use the canvas: puts its committed visuals there. */
+  let placeCanvasArtifacts: ((artifacts: readonly CanvasArtifact[]) => Promise<void>) | undefined;
   if (
     folderPath &&
     designCanvasToolsAllowed({
@@ -2237,6 +2241,16 @@ async function prepareGeneration(
       },
     }).filter((tool) => !options.excludeToolNames?.has(tool.name));
     if (canvasTools.length > 0) {
+      placeCanvasArtifacts = async (artifacts) => {
+        if ((await chatStore.getMeta(params.chatId))?.designMode !== true) return;
+        await placeArtifactsOnCanvas({
+          chatId: params.chatId,
+          artifacts,
+          store: designCanvasStore,
+          broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+          newId: randomUUID,
+        });
+      };
       const canvas = await designCanvasStore.get(params.chatId);
       generationExtensions.push({
         id: "aiden.design-canvas",
@@ -2285,6 +2299,7 @@ async function prepareGeneration(
     lateMcpDiscovery,
     displayedImages,
     displayedHtmlArtifacts,
+    placeCanvasArtifacts,
     appPanels,
     htmlArtifactPlacements,
     imagePlacements,
@@ -2658,6 +2673,7 @@ export const llmClient = {
       lateMcpDiscovery,
       displayedImages,
       displayedHtmlArtifacts,
+      placeCanvasArtifacts,
       appPanels,
       htmlArtifactPlacements,
       imagePlacements,
@@ -2950,6 +2966,16 @@ export const llmClient = {
             );
           } catch (error) {
             logger.warn("pi", `Could not commit HTML artifacts for stream ${streamId}.`, error);
+          }
+        }
+        if (placeCanvasArtifacts && displayedHtmlArtifacts.length > 0) {
+          // Design mode: the turn's visuals land on the canvas too. Never fails the reply.
+          try {
+            await placeCanvasArtifacts(
+              displayedHtmlArtifacts.map(({ mediaId, title }) => ({ mediaId, title })),
+            );
+          } catch (error) {
+            logger.warn("pi", `Could not place visuals on the design canvas for stream ${streamId}.`, error);
           }
         }
         if (messageId && (displayedHtmlArtifacts.length > 0 || displayedUiVisuals.length > 0)) {

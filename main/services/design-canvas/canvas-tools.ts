@@ -78,6 +78,7 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "This chat sits beside an infinite design canvas. The person sees its frames while you talk.",
   "- Call canvas_read before changing the canvas, and again if the person says they moved things.",
   "- To show a design, write a self-contained HTML file in the workspace (for example under design/), then place it with canvas_place_frame. Put each direction in its own group.",
+  "- A visual you draw with render_artifact also lands on the canvas. Drawing it again under the same title replaces it in place.",
   "- Move, resize or retitle your own frames with canvas_update_frame. Remove a frame the person added only when they ask, with confirm: true.",
   "- Coordinates and sizes are canvas units. Say which file you changed.",
 ].join("\n");
