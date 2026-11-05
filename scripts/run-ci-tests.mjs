@@ -12,6 +12,7 @@ import {
   readRegistry,
   validateRegistry,
 } from "./ci-test-registry.mjs";
+import { withRunnerStderr } from "./ci-failure-digest-reporter.mjs";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
@@ -259,30 +260,49 @@ function printPlan(plan, options, validation) {
   }
 }
 
-function prefixLines(stream, prefix, target) {
+function prefixLines(stream, prefix, target, tail) {
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
-  lines.on("line", (line) => target.write(`${prefix} ${line}\n`));
+  lines.on("line", (line) => {
+    target.write(prefix ? `${prefix} ${line}\n` : `${line}\n`);
+    if (!tail) return;
+    tail.push(line);
+    if (tail.length > 80) tail.shift();
+  });
   return new Promise((resolve) => lines.once("close", resolve));
 }
 
 function runCommand(command, label, { prefix } = {}) {
   return new Promise((resolve, reject) => {
+    const stderrTail = [];
+    // Always pipe. An inherited stderr cannot be copied onto the check
+    // annotation, and a load failure's real exception is often only there.
     const child = spawn(command[0], command.slice(1), {
       cwd: PROJECT_ROOT,
       env: process.env,
-      stdio: prefix ? ["ignore", "pipe", "pipe"] : "inherit",
+      stdio: ["ignore", "pipe", "pipe"],
       shell: false,
     });
     // Concurrent lanes share one terminal, so each output line names its lane.
-    const drained = prefix
-      ? Promise.all([prefixLines(child.stdout, prefix, process.stdout), prefixLines(child.stderr, prefix, process.stderr)])
-      : Promise.resolve();
-    child.once("error", reject);
+    const drained = Promise.all([
+      prefixLines(child.stdout, prefix, process.stdout),
+      prefixLines(child.stderr, prefix, process.stderr, stderrTail),
+    ]);
+    const finish = (error) => {
+      if (!error) {
+        resolve();
+        return;
+      }
+      error.stderrTail = stderrTail;
+      reject(error);
+    };
+    child.once("error", (error) => {
+      drained.then(() => finish(error));
+    });
     child.once("exit", (code, signal) => {
       drained.then(() => {
-        if (signal) reject(new Error(`${label} terminated by ${signal}`));
-        else if (code !== 0) reject(new Error(`${label} exited with status ${code}`));
-        else resolve();
+        if (signal) finish(new Error(`${label} terminated by ${signal}`));
+        else if (code !== 0) finish(new Error(`${label} exited with status ${code}`));
+        else finish();
       });
     });
   });
@@ -299,6 +319,7 @@ async function timedRun(command, options, timings, runOptions) {
     record("passed");
   } catch (error) {
     record("failed");
+    command.stderrTail = error.stderrTail;
     throw error;
   }
 }
@@ -349,6 +370,7 @@ function printFailureDigests(commands) {
     }
     rmSync(command.digest, { force: true });
     if (!digest) continue;
+    digest = withRunnerStderr(digest, command.stderrTail);
     console.log(`\nFailed tests in ${command.id}:\n\n${digest}`);
     // The log zip is not always downloadable. One annotation per failure keeps
     // the name and the thrown error on the check run itself. Gated on the step

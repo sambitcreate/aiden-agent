@@ -7,13 +7,31 @@ const MAX_FAILURES = 50;
 const MAX_ERROR_LINES = 40;
 const STDERR_LIMIT = 4000;
 
-/** Recent stderr for each file. A module that fails to load reports only "test failed"; the exception is stderr. */
+/** Recent stderr for each file, plus a process-wide tail. A module that fails to load reports only "test failed"; the exception is stderr, sometimes attributed to the imported file rather than the test. */
 const stderrByFile = new Map();
+let stderrTail = "";
 
 function rememberStderr(file, chunk) {
-  if (!file || typeof chunk !== "string" || chunk.length === 0) return;
+  if (typeof chunk !== "string" || chunk.length === 0) return;
+  stderrTail = `${stderrTail}${chunk}`;
+  if (stderrTail.length > STDERR_LIMIT) stderrTail = stderrTail.slice(-STDERR_LIMIT);
+  if (!file) return;
   const next = `${stderrByFile.get(file) ?? ""}${chunk}`;
   stderrByFile.set(file, next.length > STDERR_LIMIT ? next.slice(-STDERR_LIMIT) : next);
+}
+
+/**
+ * A load failure's digest says only "test failed". The runner keeps the child
+ * process's stderr, which is where tsx prints a transform or import error the
+ * test reporter never receives as an event.
+ */
+export function withRunnerStderr(digest, stderrTailLines) {
+  if (!digest || !Array.isArray(stderrTailLines) || stderrTailLines.length === 0) return digest;
+  if (digest.includes("\n  runner stderr:")) return digest;
+  const unhelpful = digest.split("\n").some((line) => line === "  Error: test failed" || line === "  test failed");
+  if (!unhelpful) return digest;
+  const extra = stderrTailLines.slice(-40).map((line) => `  ${String(line)}`).join("\n");
+  return `${digest}\n  runner stderr:\n${extra}`;
 }
 
 function errorText(error, stderr) {
@@ -45,7 +63,7 @@ export default async function* failureDigest(source) {
     if (failures > MAX_FAILURES) continue;
     const { name, file, line, column, details } = event.data;
     const where = file ? `${file}${line ? `:${line}${column ? `:${column}` : ""}` : ""}` : "(unknown file)";
-    const stderr = file ? stderrByFile.get(file) : undefined;
+    const stderr = (file ? stderrByFile.get(file) : undefined) || stderrTail;
     yield `not ok ${name}\n  at ${where}\n${errorText(details?.error, stderr).map((text) => `  ${text}`).join("\n")}\n\n`;
   }
   if (failures > MAX_FAILURES) yield `…and ${failures - MAX_FAILURES} more failed tests.\n`;
