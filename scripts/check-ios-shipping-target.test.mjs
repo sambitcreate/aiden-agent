@@ -94,6 +94,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChatsView.swift",
   "AidenOnTheGo/Features/Chat/AidenChatDetailView.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
+  "AidenOnTheGo/Features/Workspace/AidenChatRowStatusView.swift",
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift",
   "AidenOnTheGo/Features/Remote/AidenInboxViews.swift",
@@ -177,6 +178,20 @@ const chatFeatureSourcePaths = [
 async function readChatFeatureSources() {
   const sources = await Promise.all(
     chatFeatureSourcePaths.map((path) => readFile(`${iosRoot}${path}`, "utf8")),
+  );
+  return sources.join("\n");
+}
+
+// `AidenWorkspaceShellView.swift` was split into the files below. The source checks that
+// used to read that one file read all of them: the shell first, then the moved code.
+const workspaceShellSourcePaths = [
+  "AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift",
+  "AidenOnTheGo/Features/Workspace/AidenChatRowStatusView.swift",
+];
+
+async function readWorkspaceShellSources() {
+  const sources = await Promise.all(
+    workspaceShellSourcePaths.map((path) => readFile(`${iosRoot}${path}`, "utf8")),
   );
   return sources.join("\n");
 }
@@ -514,7 +529,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     logoArtwork,
     shippingSources,
   ] = await Promise.all([
-    readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift`, "utf8"),
+    readWorkspaceShellSources(),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenProductShellView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenPairingView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/ContentView.swift`, "utf8"),
