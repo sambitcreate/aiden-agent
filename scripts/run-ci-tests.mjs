@@ -350,6 +350,16 @@ function printFailureDigests(commands) {
     rmSync(command.digest, { force: true });
     if (!digest) continue;
     console.log(`\nFailed tests in ${command.id}:\n\n${digest}`);
+    // The log zip is not always downloadable. One annotation per failure keeps
+    // the name and the thrown error on the check run itself. Gated on the step
+    // summary so the runner's own fixture tests do not annotate the job.
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      for (const block of digest.split(/\n\n+/u)) {
+        if (!block.split("\n").some((line) => line.startsWith("not ok "))) continue;
+        const message = block.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+        console.log(`::error title=${command.id}::${message}`);
+      }
+    }
     if (process.env.GITHUB_STEP_SUMMARY) {
       appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Failed tests in ${command.id}\n\n\`\`\`\n${digest}\n\`\`\`\n\n`);
     }

@@ -145,7 +145,9 @@ test("a cleanup preview lists what will be removed, what is kept, and the space 
   const confirm = within(dialog).getByRole("button", { name: /Remove 1/u });
   assert.match(confirm.textContent ?? "", /3\.00 GB/u);
   fireEvent.click(confirm);
-  await waitFor(() => assert.equal(screen.queryByRole("alertdialog"), null));
+  await waitFor(() =>
+    assert.equal(screen.queryByRole("alertdialog", { name: /Remove unused worktrees/u }), null),
+  );
 });
 
 test("confirming a cleanup sends only the ids the preview listed", async () => {
@@ -199,8 +201,10 @@ test("a scan that failed explains itself and offers no cleanup", async () => {
   await flush();
   await screen.findByText("Aiden could not finish measuring local storage. Try again.");
   // A failed measurement must not offer cleanup as if the numbers were known.
-  const review = screen.getAllByRole("button", { name: "Review…" })[0]!;
-  assert.equal(review.hasAttribute("disabled"), true);
+  // Disabled actions stay in the accessibility tree; include them explicitly.
+  const reviews = screen.getAllByRole("button", { name: "Review…", hidden: true });
+  assert.ok(reviews.length >= 1);
+  for (const review of reviews) assert.equal(review.hasAttribute("disabled"), true);
 });
 
 test("a read that throws says the files are unchanged", async () => {
